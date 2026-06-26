@@ -1,0 +1,3 @@
+export const forbiddenAiPhrases = ['contributo garantito','finanziamento garantito','approvazione sicura','ottenimento certo','100% garantito','erogazione garantita','soldi in 72 ore','bando sicuro'];
+export function scanForbiddenPhrases(text: string) { const normalized = text.toLowerCase(); return forbiddenAiPhrases.filter((phrase) => normalized.includes(phrase)); }
+export const legalDisclaimer = 'FAI non eroga finanziamenti, non promette risultati, non garantisce contributi e non opera come intermediario finanziario. Ogni output AI è una bozza interna soggetta a revisione umana obbligatoria.';
