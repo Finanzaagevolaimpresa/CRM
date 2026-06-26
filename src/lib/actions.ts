@@ -1,11 +1,12 @@
 'use server';
+import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { requirePermission } from './auth';
 import { leadSchema, clientSchema, projectSchema, documentSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { createSignedDocumentUrl } from './storage';
 
-async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } }); }
+async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
 export async function createLead(form: FormData) { const s = await requirePermission('lead.write'); const data = leadSchema.parse(Object.fromEntries(form)); const lead = await prisma.lead.create({ data }); await audit(s.userId, 'lead_create', 'Lead', lead.id, lead); return lead; }
 export async function createClient(form: FormData) { const s = await requirePermission('client.write'); const data = clientSchema.parse(Object.fromEntries(form)); const client = await prisma.client.create({ data: data as never }); await audit(s.userId, 'client_create', 'Client', client.id, client); return client; }
 export async function createCompany(form: FormData) { const s = await requirePermission('company.write'); const data = companySchema.parse(Object.fromEntries(form)); const company = await prisma.company.create({ data: data as never }); await audit(s.userId, 'company_create', 'Company', company.id, company); return company; }

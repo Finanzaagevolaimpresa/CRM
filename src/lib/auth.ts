@@ -26,7 +26,7 @@ export async function requireSession(): Promise<Session> {
   return session;
 }
 
-export const rolePermissions: Record<RoleCode, Permission[] | ['*']> = {
+export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*'],
   direzione: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.run', 'ai.review', 'ai.approve', 'audit.read'],
   commerciale: ['lead.read', 'lead.write', 'client.read', 'client.write', 'company.read', 'project.read'],
