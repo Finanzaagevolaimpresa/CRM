@@ -385,6 +385,7 @@ model Document {
   visibilityLevel       String         @default("interno")
   containsSensitiveData Boolean        @default(false)
   createdAt             DateTime       @default(now())
+  validUntil            DateTime?
   deletedAt             DateTime?
 }
 

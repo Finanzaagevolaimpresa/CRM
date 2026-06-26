@@ -1,6 +1,23 @@
 import { z } from 'zod';
-export const leadSchema = z.object({ firstName: z.string().min(1), lastName: z.string().min(1), phone: z.string().optional(), email: z.string().email().optional(), interest: z.string().optional() });
-export const clientSchema = z.object({ type: z.string().min(1), displayName: z.string().min(1), notes: z.string().optional() });
-export const projectSchema = z.object({ clientId: z.string().min(1), title: z.string().min(1), description: z.string().optional(), totalInvestment: z.coerce.number().optional() });
-export const documentSchema = z.object({ title: z.string().min(1), type: z.string().min(1), fileName: z.string().min(1), mimeType: z.string().min(1), sizeBytes: z.coerce.number(), storagePath: z.string().min(1) });
-export const preAnalysisSchema = z.object({ projectId: z.string().min(1), clientId: z.string().min(1), internalSummary: z.string().optional() });
+
+const optionalText = z.string().trim().max(5000).optional().or(z.literal('').transform(() => undefined));
+const id = z.string().trim().min(1).max(128);
+const money = z.coerce.number().finite().nonnegative();
+const date = z.coerce.date();
+const email = z.string().trim().email().optional().or(z.literal('').transform(() => undefined));
+
+export const leadSchema = z.object({
+  firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().min(1).max(100), phone: optionalText, email,
+  source: optionalText, region: optionalText, province: optionalText, interest: optionalText, declaredInvestment: money.optional(), notes: optionalText,
+});
+export const clientSchema = z.object({ type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']), displayName: z.string().trim().min(1).max(200), leadId: id.optional(), notes: optionalText });
+export const companySchema = z.object({ clientId: id, name: z.string().trim().min(1).max(200), vatNumber: optionalText, taxCode: optionalText, pec: email, province: optionalText, city: optionalText, legalForm: optionalText, durcStatus: optionalText, notes: optionalText });
+export const projectSchema = z.object({ clientId: id, companyId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, totalInvestment: money.optional(), requestedAmount: money.optional(), region: optionalText, province: optionalText, sector: optionalText });
+export const projectExpenseSchema = z.object({ projectId: id, category: z.enum(['attrezzature','macchinari','mezzi','ristrutturazione','opere_edili','impianti','software','hardware','marketing','formazione','consulenze','liquidita','acquisto_immobile','affitto','personale','merce','eventi','spese_legali','altro']), description: z.string().trim().min(1).max(500), amount: money, estimated: z.coerce.boolean().optional(), potentiallyEligible: z.coerce.boolean().optional(), eligibilityNotes: optionalText });
+export const documentSchema = z.object({ clientId: id.optional(), companyId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), fileName: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120), sizeBytes: z.coerce.number().int().positive().max(50 * 1024 * 1024), storagePath: z.string().trim().min(1).max(1000).refine((value) => !value.startsWith('http') && !value.includes('..'), 'storagePath must be private and relative'), validUntil: date.optional() });
+export const preAnalysisSchema = z.object({ projectId: id, clientId: id, companyId: id.optional(), internalSummary: optionalText, scenarioA: optionalText, scenarioB: optionalText, blockingConditions: optionalText, requiredDocuments: optionalText });
+export const dossierSchema = z.object({ projectId: id, clientId: id, preAnalysisId: id.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), markdownContent: optionalText, jsonContent: z.unknown().optional() });
+export const contractSchema = z.object({ clientId: id, projectId: id.optional(), contractNumber: z.string().trim().min(1).max(80), serviceName: z.string().trim().min(1).max(200), serviceDescription: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, notes: optionalText });
+export const paymentSchema = z.object({ contractId: id, clientId: id, taxableAmount: money, vatAmount: money, totalAmount: money, method: optionalText, dueDate: date.optional(), collectedAt: date.optional(), notes: optionalText });
+export const aiRunSchema = z.object({ agentCode: z.string().trim().min(1).max(120), input: z.unknown() });
+export const aiOutputApprovalSchema = z.object({ id });
