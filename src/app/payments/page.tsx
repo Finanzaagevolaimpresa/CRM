@@ -1,0 +1,2 @@
+import { Card, Table } from '@/components/ui';
+export default function Page(){ return <><h1 className="text-3xl font-bold text-fai-navy">Pagamenti</h1><p className="mt-2 text-fai-gray">Scadenze e incassi manuali collegati ai contratti.</p><div className="mt-6"><Card title="Vista MVP"><Table headers={['Elemento','Stato','Responsabile']} rows={[[<a className="text-fai-blue underline" href="#" key="a">Record demo</a>,'Bozza interna','Team FAI']]} /></Card></div></>; }

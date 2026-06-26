@@ -1,0 +1,2 @@
+import { Card, Table } from '@/components/ui';
+export default function Page(){ return <><h1 className="text-3xl font-bold text-fai-navy">Output AI da revisionare</h1><p className="mt-2 text-fai-gray">Ogni output nasce needs_review, richiede revisione umana e blocca frasi vietate.</p><div className="mt-6"><Card title="Vista MVP"><Table headers={['Elemento','Stato','Responsabile']} rows={[[<a className="text-fai-blue underline" href="#" key="a">Record demo</a>,'Bozza interna','Team FAI']]} /></Card></div></>; }

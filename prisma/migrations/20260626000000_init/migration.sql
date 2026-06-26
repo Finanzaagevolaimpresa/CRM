@@ -1,0 +1,2 @@
+-- Initial schema is managed by Prisma. Run `npx prisma migrate dev` to apply this migration.
+-- The Prisma schema defines CRM, document, AI review, audit, auth and soft-delete structures.
