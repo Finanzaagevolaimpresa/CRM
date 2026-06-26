@@ -9,13 +9,42 @@ MVP proprietario per Finanza Agevola Impresa S.r.l. basato su Next.js App Router
 - La prima versione non include area cliente pubblica, email/WhatsApp automatici, firma digitale, pagamenti online, scraping bandi o collegamenti bancari automatici.
 
 ## Installazione locale
-1. Copiare `.env.example` in `.env` e configurare `DATABASE_URL`.
-2. Avviare PostgreSQL locale.
-3. Eseguire `npm install`.
-4. Eseguire `npm run prisma:generate`.
-5. Eseguire `npm run prisma:migrate`.
-6. Eseguire `npm run prisma:seed`.
-7. Avviare con `npm run dev` e aprire `/dashboard`.
+
+### Checklist primo avvio locale
+1. Copiare `.env.example` in `.env`.
+2. Valorizzare `DATABASE_URL` con la connessione PostgreSQL locale.
+3. Valorizzare `AUTH_SECRET` con un segreto lungo e non condiviso.
+4. Eseguire `npm install`.
+5. Eseguire `npm run prisma:generate`.
+6. Eseguire `npm run prisma:migrate`.
+7. Eseguire `npm run prisma:seed`.
+8. Avviare con `npm run dev` e aprire `/dashboard`.
+
+### Lockfile npm
+
+In un ambiente con accesso al registry npm non bloccato da proxy/firewall, generare e committare il lockfile con:
+
+```bash
+npm install --package-lock-only
+```
+
+Dopo la generazione verificare che `package-lock.json` sia presente, quindi eseguire il primo avvio locale con la checklist sopra. Nell'ambiente Codex corrente il download di `@prisma/client` da `https://registry.npmjs.org/@prisma%2fclient` può restituire `403 Forbidden` per policy del proxy; in questo caso non forzare workaround e mantenere la CI con `npm install` finché `package-lock.json` non è disponibile nel repository.
+
+## Smoke test interno
+
+Dopo seed e avvio locale, verificare manualmente il flusso MVP interno:
+
+1. Login con un utente seed.
+2. Apertura dashboard.
+3. Creazione lead.
+4. Creazione cliente.
+5. Creazione progetto.
+6. Registrazione documento.
+7. Run AI mock.
+8. Approvazione AI da parte di un utente interno.
+9. Creazione dossier.
+10. Contratto.
+11. Pagamento.
 
 ## Architettura
 - `prisma/schema.prisma`: schema dati per auth, CRM, documenti, AI, audit e soft delete.
@@ -56,4 +85,7 @@ Il workflow `.github/workflows/ci.yml` esegue su push e pull request:
 3. avvio servizio PostgreSQL 16;
 4. `npm install`;
 5. `npm run prisma:generate`;
-6. `npm run build`.
+6. `npm run prisma:migrate:deploy`;
+7. `npm run build`.
+
+La CI passerà a `npm ci` e riattiverà la cache npm in `actions/setup-node` solo dopo il commit di `package-lock.json`.
