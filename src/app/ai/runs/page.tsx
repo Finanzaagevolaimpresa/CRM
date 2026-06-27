@@ -1,2 +1,4 @@
-import { Card, Table } from '@/components/ui';
-export default function Page(){ return <><h1 className="text-3xl font-bold text-fai-navy">AI runs</h1><p className="mt-2 text-fai-gray">Storico run agenti con input, output e messaggi.</p><div className="mt-6"><Card title="Vista MVP"><Table headers={['Elemento','Stato','Responsabile']} rows={[[<a className="text-fai-blue underline" href="#" key="a">Record demo</a>,'Bozza interna','Team FAI']]} /></Card></div></>; }
+export const dynamic = 'force-dynamic';
+import { Card, EmptyState, PageHeader, StatusBadge, Table } from '@/components/ui';
+import { prisma } from '@/lib/prisma';
+export default async function Page(){ const [runs, agents] = await Promise.all([prisma.aiRun.findMany({ orderBy:{createdAt:'desc'}, take:100 }), prisma.aiAgent.findMany()]); const agent = new Map(agents.map(a=>[a.id,a.name])); return <div className="space-y-6"><PageHeader title="AI runs" description="Storico run agenti con stato, input/output conservati internamente e tracciabilità operativa."/><Card title="Run recenti">{runs.length===0?<EmptyState/>:<Table headers={['Agente','Stato','Creato il','Creato da']} rows={runs.map(r=>[agent.get(r.agentId)??r.agentId,<StatusBadge status={r.status} key='s'/>,r.createdAt.toISOString(),r.createdById??'Sistema'])}/>}</Card></div> }
