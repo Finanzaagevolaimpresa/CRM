@@ -152,6 +152,33 @@ enum AiOutputStatus {
   archived
 }
 
+enum ServiceStatus {
+  richiesto
+  pagato
+  raccolta_documenti
+  in_lavorazione
+  bozza_ai
+  revisione_umana
+  consegnabile
+  consegnato
+  sospeso
+  chiuso
+  archiviato
+}
+
+enum ServiceArea {
+  anagrafica
+  bancabilita
+  finanziamento_aziendale
+  bandi_finanza_agevolata
+  progetto_investimento
+  contratti
+  pagamenti
+  dossier
+  output_ai
+  altro
+}
+
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
@@ -297,31 +324,31 @@ model ProjectExpense {
 }
 
 model BankabilityAssessment {
-  id                          String    @id @default(cuid())
-  clientId                    String
-  companyId                   String?
-  projectId                   String?
-  declaredCrif                String?
-  declaredCentralRisk         String?
-  protestsOrLiens             String?
-  paymentDelays               String?
-  activeLoans                 String?
-  taxDebts                    String?
-  socialSecurityDebts         String?
-  revenue                     Decimal?
-  ebitda                      Decimal?
-  netProfit                   Decimal?
-  equity                      Decimal?
-  estimatedCashflow           Decimal?
-  estimatedDscr               Decimal?
-  monthlyRent                 Decimal?
-  existingMonthlyInstalments  Decimal?
-  availableGuarantees         String?
-  riskLevel                   RiskLevel @default(non_valutabile)
-  riskRationale               String?
-  dataCompleteness            Int       @default(0)
-  humanReviewStatus           String    @default("da_revisionare")
-  updatedAt                   DateTime  @updatedAt
+  id                         String    @id @default(cuid())
+  clientId                   String
+  companyId                  String?
+  projectId                  String?
+  declaredCrif               String?
+  declaredCentralRisk        String?
+  protestsOrLiens            String?
+  paymentDelays              String?
+  activeLoans                String?
+  taxDebts                   String?
+  socialSecurityDebts        String?
+  revenue                    Decimal?
+  ebitda                     Decimal?
+  netProfit                  Decimal?
+  equity                     Decimal?
+  estimatedCashflow          Decimal?
+  estimatedDscr              Decimal?
+  monthlyRent                Decimal?
+  existingMonthlyInstalments Decimal?
+  availableGuarantees        String?
+  riskLevel                  RiskLevel @default(non_valutabile)
+  riskRationale              String?
+  dataCompleteness           Int       @default(0)
+  humanReviewStatus          String    @default("da_revisionare")
+  updatedAt                  DateTime  @updatedAt
 }
 
 model GrantAssessment {
@@ -354,7 +381,7 @@ model MeasureMatch {
 }
 
 model CumulabilityAssessment {
-  id                String @id @default(cuid())
+  id                String  @id @default(cuid())
   projectId         String
   grantAssessmentId String?
   summary           String?
@@ -365,7 +392,7 @@ model CumulabilityAssessment {
   doubleFundingRisk String?
   timingConflicts   String?
   conclusion        String?
-  humanReviewStatus String @default("da_revisionare")
+  humanReviewStatus String  @default("da_revisionare")
 }
 
 model Document {
@@ -373,6 +400,9 @@ model Document {
   clientId              String?
   companyId             String?
   projectId             String?
+  clientServiceId       String?
+  serviceArea           ServiceArea    @default(altro)
+  documentCategory      String         @default("altro")
   type                  String
   title                 String
   fileName              String
@@ -489,19 +519,20 @@ model Payment {
 }
 
 model Task {
-  id           String    @id @default(cuid())
-  clientId     String?
-  companyId    String?
-  projectId    String?
-  title        String
-  description  String?
-  type         String?
-  priority     String    @default("media")
-  status       String    @default("aperto")
-  assignedToId String?
-  dueAt        DateTime?
-  completedAt  DateTime?
-  createdById  String?
+  id              String    @id @default(cuid())
+  clientId        String?
+  companyId       String?
+  projectId       String?
+  clientServiceId String?
+  title           String
+  description     String?
+  type            String?
+  priority        String    @default("media")
+  status          String    @default("aperto")
+  assignedToId    String?
+  dueAt           DateTime?
+  completedAt     DateTime?
+  createdById     String?
 }
 
 model Deadline {
@@ -536,6 +567,7 @@ model AiRun {
 model AiOutput {
   id                  String         @id @default(cuid())
   aiRunId             String
+  clientServiceId     String?
   title               String
   content             String
   status              AiOutputStatus @default(needs_review)
@@ -554,6 +586,69 @@ model AiAgentMessage {
   role      String
   content   String
   createdAt DateTime @default(now())
+}
+
+model ServiceCatalog {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  description  String?
+  category     String
+  basePrice    Decimal?
+  active       Boolean  @default(true)
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model ClientService {
+  id               String        @id @default(cuid())
+  clientId         String
+  companyId        String?
+  projectId        String?
+  serviceCatalogId String
+  contractId       String?
+  paymentId        String?
+  status           ServiceStatus @default(richiesto)
+  paymentStatus    PaymentStatus @default(da_incassare)
+  assignedToId     String?
+  purchasedAt      DateTime      @default(now())
+  dueDate          DateTime?
+  completedAt      DateTime?
+  internalNotes    String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+}
+
+model CorporateFinancingAssessment {
+  id                     String   @id @default(cuid())
+  clientId               String
+  companyId              String?
+  projectId              String?
+  clientServiceId        String?
+  requestedAmount        Decimal?
+  purpose                String?
+  timing                 String?
+  ordinaryInstruments    String?
+  mortgage               String?
+  unsecuredLoan          String?
+  leasing                String?
+  factoring              String?
+  invoiceAdvance         String?
+  creditLines            String?
+  mcc                    String?
+  guarantees             String?
+  fundingNeed            String?
+  sustainableInstallment Decimal?
+  dscrCashflow           String?
+  existingDebts          String?
+  criticalIssues         String?
+  scenarioA              String?
+  scenarioB              String?
+  nextAction             String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model ActivityLog {
