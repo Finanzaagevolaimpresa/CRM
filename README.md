@@ -18,7 +18,7 @@ MVP proprietario per Finanza Agevola Impresa S.r.l. basato su Next.js App Router
 5. Eseguire `npm run prisma:generate`.
 6. Eseguire `npm run prisma:migrate`.
 7. Eseguire `npm run prisma:seed`.
-8. Avviare con `npm run dev` e aprire `/dashboard`.
+8. Avviare con `APP_ENV=development npm run dev`, aprire `/login` e accedere con le credenziali demo development.
 
 ### Lockfile npm
 
@@ -30,11 +30,21 @@ npm install --package-lock-only
 
 Dopo la generazione verificare che `package-lock.json` sia presente, quindi eseguire il primo avvio locale con la checklist sopra. Nell'ambiente Codex corrente il download di `@prisma/client` da `https://registry.npmjs.org/@prisma%2fclient` può restituire `403 Forbidden` per policy del proxy; in questo caso non forzare workaround e mantenere la CI con `npm install` finché `package-lock.json` non è disponibile nel repository.
 
+## Login locale development
+
+Il seed crea un utente amministratore interno per sviluppo e test manuali:
+
+- Email: `admin@fai.local`
+- Password: `ChangeMe123!`
+- Ruolo: `admin`
+
+Per usare il pulsante rapido **Accedi come admin demo**, avviare Next.js con `APP_ENV=development npm run dev`. In alternativa, compilare il form di `/login` con email e password sopra. Dopo il login viene creato il cookie firmato `fai_crm_session` (o il nome definito in `AUTH_COOKIE_NAME`) con scadenza e redirect a `/dashboard`. Il logout interno cancella il cookie e riporta a `/login`.
+
 ## Smoke test interno
 
 Dopo seed e avvio locale, verificare manualmente il flusso MVP interno:
 
-1. Login con un utente seed.
+1. Login con l’utente seed `admin@fai.local` / `ChangeMe123!`.
 2. Apertura dashboard.
 3. Creazione lead.
 4. Creazione cliente.
