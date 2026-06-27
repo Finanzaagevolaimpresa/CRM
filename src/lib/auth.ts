@@ -13,6 +13,7 @@ export type Permission =
   | 'document.upload' | 'document.download'
   | 'ai.run' | 'ai.review' | 'ai.approve'
   | 'contract.write' | 'payment.write'
+  | 'service.read' | 'service.write' | 'service.assign' | 'service.close'
   | 'audit.read' | 'settings.manage';
 
 export async function getSession() {
@@ -28,12 +29,12 @@ export async function requireSession(): Promise<Session> {
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*'],
-  direzione: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.run', 'ai.review', 'ai.approve', 'audit.read'],
-  commerciale: ['lead.read', 'lead.write', 'client.read', 'client.write', 'company.read', 'project.read'],
-  consulente: ['lead.read', 'client.read', 'company.read', 'company.write', 'project.read', 'project.write', 'document.upload', 'document.download', 'ai.run', 'ai.review'],
-  revisore: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.review', 'ai.approve'],
-  backoffice: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.upload', 'document.download'],
-  amministrazione: ['client.read', 'company.read', 'project.read', 'document.download', 'contract.write', 'payment.write'],
+  direzione: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.run', 'ai.review', 'ai.approve', 'audit.read', 'service.read', 'service.write', 'service.assign', 'service.close'],
+  commerciale: ['lead.read', 'lead.write', 'client.read', 'client.write', 'company.read', 'project.read', 'service.read'],
+  consulente: ['lead.read', 'client.read', 'company.read', 'company.write', 'project.read', 'project.write', 'service.read', 'service.write', 'service.assign', 'document.upload', 'document.download', 'ai.run', 'ai.review'],
+  revisore: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.review', 'ai.approve', 'service.read'],
+  backoffice: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.upload', 'document.download', 'service.read', 'service.write'],
+  amministrazione: ['client.read', 'company.read', 'project.read', 'document.download', 'contract.write', 'payment.write', 'service.read'],
 };
 
 export function hasPermission(session: Session, permission: Permission) {
