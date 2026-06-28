@@ -1,9 +1,11 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { requirePermission } from './auth';
+import { hasPermission, requirePermission } from './auth';
 import { leadSchema, clientSchema, projectSchema, documentSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
+import { createSignedDocumentUrl } from './storage';
+import { canViewDocument, isSensitiveDocument } from './access-control';
 import { createAuthorizedDocumentDownloadUrl } from './document-download';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
