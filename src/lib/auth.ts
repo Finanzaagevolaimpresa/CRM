@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import type { RoleCode } from '@prisma/client';
+import type { Prisma, RoleCode } from '@prisma/client';
 import { verifySessionCookie, type Session } from './session';
+import { prisma } from './prisma';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
@@ -24,10 +25,20 @@ export async function getSession() {
   return verifySessionCookie(token);
 }
 
+async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
+  await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } });
+}
+
 export async function requireSession(): Promise<Session> {
-  const session = await getSession();
-  if (!session) redirect('/login');
-  return session;
+  const cookieSession = await getSession();
+  if (!cookieSession) redirect('/login');
+  const user = await prisma.user.findUnique({ where: { id: cookieSession.userId }, select: { id: true, role: true, active: true } });
+  if (!user) redirect('/login');
+  if (!user.active) {
+    await audit(user.id, 'blocked_inactive_user_access', 'User', user.id, { cookieExpiresAt: cookieSession.expiresAt });
+    redirect('/login');
+  }
+  return { userId: user.id, role: user.role, expiresAt: cookieSession.expiresAt };
 }
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
