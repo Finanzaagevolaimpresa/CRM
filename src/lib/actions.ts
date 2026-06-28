@@ -1,11 +1,10 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { hasPermission, requirePermission } from './auth';
+import { requirePermission } from './auth';
 import { leadSchema, clientSchema, projectSchema, documentSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
-import { createSignedDocumentUrl } from './storage';
-import { canViewDocument, isSensitiveDocument } from './access-control';
+import { createAuthorizedDocumentDownloadUrl } from './document-download';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
 export async function createLead(form: FormData) { const s = await requirePermission('lead.write'); const data = leadSchema.parse(Object.fromEntries(form)); const lead = await prisma.lead.create({ data }); await audit(s.userId, 'lead_create', 'Lead', lead.id, lead); return lead; }
@@ -14,27 +13,7 @@ export async function createCompany(form: FormData) { const s = await requirePer
 export async function createProject(form: FormData) { const s = await requirePermission('project.write'); const data = projectSchema.parse(Object.fromEntries(form)); const project = await prisma.project.create({ data: data as never }); await audit(s.userId, 'project_create', 'Project', project.id, project); return project; }
 export async function createProjectExpense(form: FormData) { const s = await requirePermission('project.write'); const data = projectExpenseSchema.parse(Object.fromEntries(form)); const expense = await prisma.projectExpense.create({ data: data as never }); await audit(s.userId, 'project_expense_create', 'ProjectExpense', expense.id, expense); return expense; }
 export async function registerDocument(form: FormData) { const s = await requirePermission('document.upload'); const data = documentSchema.parse(Object.fromEntries(form)); const document = await prisma.document.create({ data: { ...data, uploadedById: s.userId } as never }); await audit(s.userId, 'document_upload', 'Document', document.id, document); return document; }
-export async function getDocumentDownloadUrl(id: string) {
-  const s = await requirePermission('document.download');
-  const document = await prisma.document.findUniqueOrThrow({ where: { id } });
-  const [client, project, clientService] = await Promise.all([
-    document.clientId ? prisma.client.findUnique({ where: { id: document.clientId }, select: { salesOwnerId: true, consultantId: true } }) : null,
-    document.projectId ? prisma.project.findUnique({ where: { id: document.projectId }, select: { consultantId: true, clientId: true } }) : null,
-    document.clientServiceId ? prisma.clientService.findUnique({ where: { id: document.clientServiceId }, select: { assignedToId: true, clientId: true, projectId: true } }) : null,
-  ]);
-  const [projectClient, serviceClient, serviceProject] = await Promise.all([
-    project?.clientId ? prisma.client.findUnique({ where: { id: project.clientId }, select: { salesOwnerId: true, consultantId: true } }) : null,
-    clientService?.clientId ? prisma.client.findUnique({ where: { id: clientService.clientId }, select: { salesOwnerId: true, consultantId: true } }) : null,
-    clientService?.projectId ? prisma.project.findUnique({ where: { id: clientService.projectId }, select: { consultantId: true, clientId: true } }) : null,
-  ]);
-  const serviceProjectClient = serviceProject?.clientId ? await prisma.client.findUnique({ where: { id: serviceProject.clientId }, select: { salesOwnerId: true, consultantId: true } }) : null;
-  const canReadSensitive = hasPermission(s, 'document.sensitive.read');
-  const authorizationDocument = { ...document, client: client ?? serviceClient, project: project ? { ...project, client: projectClient } : serviceProject ? { ...serviceProject, client: serviceProjectClient } : null, clientService };
-  if (!canViewDocument(s, authorizationDocument, canReadSensitive)) throw new Error('Documento non autorizzato');
-  if (isSensitiveDocument(document)) await audit(s.userId, 'document_sensitive_access', 'Document', document.id, { category: document.documentCategory });
-  await audit(s.userId, 'document_download', 'Document', document.id, { storagePath: document.storagePath });
-  return createSignedDocumentUrl(document.storagePath);
-}
+export async function getDocumentDownloadUrl(id: string) { const s = await requirePermission('document.download'); return createAuthorizedDocumentDownloadUrl(s, id); }
 export async function createPreAnalysis(form: FormData) { const s = await requirePermission('project.write'); const data = preAnalysisSchema.parse(Object.fromEntries(form)); const pre = await prisma.preAnalysis.create({ data: data as never }); await audit(s.userId, 'preanalysis_create', 'PreAnalysis', pre.id, pre); return pre; }
 export async function createDossier(form: FormData) { const s = await requirePermission('project.write'); const data = dossierSchema.parse(Object.fromEntries(form)); const dossier = await prisma.dossier.create({ data: { ...data, modifiedById: s.userId } as never }); await audit(s.userId, 'dossier_modify', 'Dossier', dossier.id, dossier); return dossier; }
 export async function createContract(form: FormData) { const s = await requirePermission('contract.write'); const data = contractSchema.parse(Object.fromEntries(form)); const contract = await prisma.contract.create({ data: data as never }); await audit(s.userId, 'contract_modify', 'Contract', contract.id, contract); return contract; }
