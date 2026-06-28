@@ -1,0 +1,2 @@
+ALTER TYPE "RoleCode" ADD VALUE IF NOT EXISTS 'collaboratore_limitato';
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "lastLoginAt" TIMESTAMP(3);

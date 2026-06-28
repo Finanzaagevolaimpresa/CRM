@@ -3,15 +3,19 @@ export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { Card, Table } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
+import { requirePermission } from '@/lib/auth';
+import { canViewClient } from '@/lib/access-control';
 
 export default async function Page() {
-  const [clients, users, serviceCounts, documentCounts] = await Promise.all([
+  const session = await requirePermission('client.read');
+  const [clientRows, users, serviceCounts, documentCounts] = await Promise.all([
     prisma.client.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.user.findMany({ where: { active: true } }),
     prisma.clientService.groupBy({ by: ['clientId'], where: { deletedAt: null }, _count: { _all: true } }),
     prisma.document.groupBy({ by: ['clientId'], where: { deletedAt: null, clientId: { not: null } }, _count: { _all: true } }),
   ]);
 
+  const clients = clientRows.filter((client) => canViewClient(session, client));
   const userName = (id?: string | null) => users.find((user) => user.id === id)?.name;
   const serviceCount = (clientId: string) => serviceCounts.find((row) => row.clientId === clientId)?._count._all ?? 0;
   const documentCount = (clientId: string) => documentCounts.find((row) => row.clientId === clientId)?._count._all ?? 0;

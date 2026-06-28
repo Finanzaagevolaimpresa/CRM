@@ -24,7 +24,7 @@ function sessionCookieOptions(expiresAt: number) {
 async function createLoginSession(email: string, password: string) {
   const normalizedEmail = email.trim().toLowerCase();
   const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-  if (!user) return false;
+  if (!user || !user.active) return false;
 
   const passwordMatches = await bcrypt.compare(password, user.passwordHash);
   if (!passwordMatches) return false;
@@ -32,6 +32,8 @@ async function createLoginSession(email: string, password: string) {
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
   const token = await signSessionCookie({ userId: user.id, role: user.role, expiresAt });
   (await cookies()).set(cookieName, token, sessionCookieOptions(expiresAt));
+  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+  await prisma.auditLog.create({ data: { actorId: user.id, event: 'login', entityType: 'User', entityId: user.id } });
   return true;
 }
 
@@ -59,6 +61,10 @@ export async function demoAdminLoginAction() {
 }
 
 export async function logoutAction() {
+  const token = (await cookies()).get(cookieName)?.value;
+  const { verifySessionCookie } = await import('./session');
+  const session = await verifySessionCookie(token);
+  if (session) await prisma.auditLog.create({ data: { actorId: session.userId, event: 'logout', entityType: 'User', entityId: session.userId } });
   (await cookies()).delete(cookieName);
   redirect('/login');
 }
