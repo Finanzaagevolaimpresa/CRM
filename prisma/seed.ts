@@ -1,5 +1,7 @@
 import { PrismaClient, RoleCode } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { mkdir, writeFile } from 'fs/promises';
+import path from 'path';
 
 const prisma = new PrismaClient();
 const agents = ['agente_raccolta_dati','agente_anagrafica_azienda','agente_bancabilita','agente_finanza_agevolata','agente_cumulabilita','agente_commerciale','agente_dossier','agente_revisore','agente_checklist_documentale'];
@@ -52,9 +54,15 @@ async function main() {
     { clientId: client.id, companyId: company.id, projectId: project.id, serviceCatalogId: preCatalog.id, contractId: contract.id, paymentId: payment.id, status: 'raccolta_documenti', paymentStatus: 'parziale', assignedToId: consultant.id, internalNotes: 'Pre-analisi su ammissibilità spese e coerenza progetto.' },
     { clientId: client.id, companyId: company.id, projectId: project.id, serviceCatalogId: ordinaryCatalog.id, contractId: contract.id, paymentId: payment.id, status: 'in_lavorazione', paymentStatus: 'parziale', assignedToId: consultant.id, internalNotes: 'Supporto su scenario finanza ordinaria, senza esiti promessi.' },
   ] });
+  const demoDir = path.join(process.cwd(), 'storage/private/documents', client.id, service.id);
+  await mkdir(demoDir, { recursive: true });
+  const crifPath = path.relative(process.cwd(), path.join(demoDir, 'demo-dichiarazione-crif.txt'));
+  const visuraPath = path.relative(process.cwd(), path.join(demoDir, 'demo-visura.txt'));
+  await writeFile(crifPath, 'File demo development - dichiarazione CRIF/Centrale Rischi. Metadata demo, non documento reale.');
+  await writeFile(visuraPath, 'File demo development - visura camerale. Metadata demo, non documento reale.');
   await prisma.document.createMany({ data: [
-    { clientId: client.id, companyId: company.id, projectId: project.id, clientServiceId: service.id, serviceArea: 'bancabilita', documentCategory: 'centrale_rischi', type: 'metadata', title: 'Dichiarazione CRIF e Centrale Rischi ok', fileName: 'dichiarazione-crif-centrale-rischi.pdf', mimeType: 'application/pdf', sizeBytes: 128000, storagePath: 'demo/eventi-video/dichiarazione-crif.pdf', uploadedById: admin.id, status: 'da_verificare', visibilityLevel: 'interno', containsSensitiveData: true },
-    { clientId: client.id, companyId: company.id, projectId: project.id, clientServiceId: service.id, serviceArea: 'anagrafica', documentCategory: 'visura', type: 'metadata', title: 'Visura camerale demo Eventi & Video Brescia SRL', fileName: 'visura-demo.pdf', mimeType: 'application/pdf', sizeBytes: 256000, storagePath: 'demo/eventi-video/visura.pdf', uploadedById: admin.id, status: 'classificato', visibilityLevel: 'interno', containsSensitiveData: true },
+    { clientId: client.id, companyId: company.id, projectId: project.id, clientServiceId: service.id, serviceArea: 'bancabilita', documentCategory: 'centrale_rischi', type: 'metadata_demo', title: 'Dichiarazione CRIF e Centrale Rischi ok (metadata demo)', fileName: 'demo-dichiarazione-crif.txt', mimeType: 'text/plain', sizeBytes: 91, storagePath: crifPath, uploadedById: admin.id, status: 'da_verificare', visibilityLevel: 'interno', containsSensitiveData: true },
+    { clientId: client.id, companyId: company.id, projectId: project.id, clientServiceId: service.id, serviceArea: 'anagrafica', documentCategory: 'visura', type: 'metadata_demo', title: 'Visura camerale demo Eventi & Video Brescia SRL (metadata demo)', fileName: 'demo-visura.txt', mimeType: 'text/plain', sizeBytes: 76, storagePath: visuraPath, uploadedById: admin.id, status: 'classificato', visibilityLevel: 'interno', containsSensitiveData: true },
   ] });
   const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: 'agente_bancabilita' } });
   const aiRun = await prisma.aiRun.create({ data: { agentId: agent.id, status: 'completed', createdById: admin.id, input: { cliente: client.displayName, richiesta: '40-50K', provincia: 'Brescia' }, output: { sintesi: 'Bozza interna: dati dichiarati coerenti ma da verificare documentalmente.' } } });

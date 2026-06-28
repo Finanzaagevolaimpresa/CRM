@@ -3,13 +3,14 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
 import { requirePermission } from './auth';
-import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService } from './actions';
+import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument } from './actions';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } }); }
 export async function createLeadAndRedirect(form: FormData) { const lead = await createLead(form); revalidatePath('/leads'); redirect(`/leads/${lead.id}`); }
 export async function updateLeadStatus(form: FormData) { const s=await requirePermission('lead.write'); const id=String(form.get('id')||''); const status=String(form.get('status')||''); if(!id||!status) throw new Error('Dati lead mancanti'); const lead=await prisma.lead.update({where:{id},data:{status: status as never}}); await audit(s.userId,'lead_status_change','Lead',id,lead); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); }
 export async function createProjectAndRedirect(form: FormData) { const project = await createProject(form); revalidatePath('/projects'); redirect(`/projects/${project.id}`); }
 export async function registerDocumentAndRefresh(form: FormData) { await registerDocument(form); revalidatePath('/documents'); }
+export async function uploadDocumentAndRefresh(form: FormData) { const document = await uploadDocument(form); revalidatePath('/documents'); if (document.clientId) revalidatePath(`/clients/${document.clientId}`); }
 export async function linkDocumentAndRefresh(form: FormData) { await linkDocumentToService(form); revalidatePath('/documents'); }
 export async function createPreAnalysisAndRedirect(form: FormData) { const pre = await createPreAnalysis(form); revalidatePath('/preanalyses'); redirect(`/preanalyses/${pre.id}`); }
 export async function createDossierAndRedirect(form: FormData) { const dossier = await createDossier(form); revalidatePath('/dossiers'); redirect(`/dossiers/${dossier.id}`); }

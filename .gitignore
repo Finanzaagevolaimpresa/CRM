@@ -4,3 +4,6 @@ node_modules
 .env*.local
 /generated
 .DS_Store
+storage/private/
+uploads/
+*.tmp

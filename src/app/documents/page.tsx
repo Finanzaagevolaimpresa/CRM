@@ -1,21 +1,46 @@
 export const dynamic = 'force-dynamic';
-import Link from 'next/link';
-import { DisabledAction, PrimaryButton, Hint } from '@/components/actions';
-import { linkDocumentAndRefresh, registerDocumentAndRefresh } from '@/lib/form-actions';
-import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table } from '@/components/ui';
+import { DisabledAction, Hint, PrimaryButton, SecondaryLink } from '@/components/actions';
+import { uploadDocumentAndRefresh } from '@/lib/form-actions';
+import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewDocument, isSensitiveDocument } from '@/lib/access-control';
+import { privateDocumentExists } from '@/lib/storage';
+
+const serviceAreas = ['anagrafica','bancabilita','finanziamento_aziendale','bandi_finanza_agevolata','progetto_investimento','contratti','pagamenti','dossier','output_ai','altro'];
+
 export default async function Page() {
   const session = await requirePermission('document.download');
-  const [documentItems, clientRows, projectRows, serviceRows, userRows] = await Promise.all([prisma.document.findMany({ where: { deletedAt: null }, orderBy: { createdAt: 'desc' } }), prisma.client.findMany({ where: { deletedAt: null } }), prisma.project.findMany({ where: { deletedAt: null } }), prisma.clientService.findMany({ where: { deletedAt: null } }), prisma.user.findMany({ where: { active: true } })]);
+  const [documentItems, clientRows, projectRows, serviceRows, userRows] = await Promise.all([
+    prisma.document.findMany({ where: { deletedAt: null }, orderBy: { createdAt: 'desc' } }),
+    prisma.client.findMany({ where: { deletedAt: null } }),
+    prisma.project.findMany({ where: { deletedAt: null } }),
+    prisma.clientService.findMany({ where: { deletedAt: null } }),
+    prisma.user.findMany({ where: { active: true } }),
+  ]);
   const clientById = new Map(clientRows.map((c) => [c.id, c]));
   const projectById = new Map(projectRows.map((p) => [p.id, { ...p, client: clientById.get(p.clientId) }]));
   const serviceById = new Map(serviceRows.map((service) => [service.id, service]));
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
-  const items = documentItems.filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
+  const visible = documentItems.filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
+  const availability = new Map(await Promise.all(visible.map(async (d) => [d.id, await privateDocumentExists(d.storagePath)] as const)));
   const clients = new Map(clientRows.map((c) => [c.id, c.displayName]));
   const projects = new Map(projectRows.map((p) => [p.id, p.title]));
   const users = new Map(userRows.map((u) => [u.id, u.name]));
-  return <div className="space-y-6"><PageHeader title="Documenti" description="Metadati documentali interni: i file restano in storage privato e non sono esposti pubblicamente."/><Card title="Registra documento metadata"><form action={registerDocumentAndRefresh} className="grid gap-3 md:grid-cols-4"><select className="rounded-xl border p-3" name="clientId"><option value="">Cliente facoltativo</option>{clientRows.map(c=><option key={c.id} value={c.id}>{c.displayName}</option>)}</select><select className="rounded-xl border p-3" name="projectId"><option value="">Progetto facoltativo</option>{projectRows.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select><input className="rounded-xl border p-3" name="title" placeholder="Titolo" required/><input className="rounded-xl border p-3" name="type" placeholder="Tipo" required/><input className="rounded-xl border p-3" name="fileName" placeholder="Nome file" required/><input className="rounded-xl border p-3" name="mimeType" placeholder="MIME type" defaultValue="application/pdf" required/><input className="rounded-xl border p-3" name="sizeBytes" type="number" min="1" defaultValue="1" required/><input className="rounded-xl border p-3" name="storagePath" placeholder="storage/privato/file.pdf" required/><PrimaryButton type="submit" className="md:col-span-4">Registra documento</PrimaryButton></form><Hint>Registra solo metadati interni; nessun file viene inviato al cliente.</Hint></Card><Card title="Collega documento a servizio/sezione"><form action={linkDocumentAndRefresh} className="grid gap-3 md:grid-cols-4"><select className="rounded-xl border p-3" name="documentId" required>{items.map(d=><option key={d.id} value={d.id}>{d.title}</option>)}</select><select className="rounded-xl border p-3" name="clientServiceId"><option value="">Fascicolo generale</option>{serviceRows.map(s=><option key={s.id} value={s.id}>{s.id}</option>)}</select><select className="rounded-xl border p-3" name="serviceArea" defaultValue="altro"><option value="anagrafica">anagrafica</option><option value="bancabilita">bancabilita</option><option value="finanziamento_aziendale">finanziamento_aziendale</option><option value="bandi_finanza_agevolata">bandi_finanza_agevolata</option><option value="progetto_investimento">progetto_investimento</option><option value="contratti">contratti</option><option value="pagamenti">pagamenti</option><option value="dossier">dossier</option><option value="output_ai">output_ai</option><option value="altro">altro</option></select><input className="rounded-xl border p-3" name="documentCategory" defaultValue="altro"/><PrimaryButton type="submit" className="md:col-span-4">Collega documento</PrimaryButton></form></Card><Card title="Elenco operativo">{items.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono record da lavorare per questa sezione.</EmptyState> : <Table headers={['Documento', 'Cliente', 'Sezione', 'Categoria', 'Stato', 'Tracciabilità', 'Download']} rows={items.map((x) => [<span className='font-semibold text-fai-navy' key='n'>{x.title}</span>, x.clientId ? clients.get(x.clientId) ?? '—' : '—', x.serviceArea, <span key='c'>{x.documentCategory} {isSensitiveDocument(x) ? <span className='ml-2 rounded-full bg-fai-orange/10 px-2 py-0.5 text-xs font-bold text-fai-orange'>sensibile</span> : null}</span>, <StatusBadge status={x.status} key='s' />, <MetaCell key='m' createdAt={x.createdAt} updatedAt={x.updatedAt} owner={users.get(x.uploadedById)} />, <DisabledAction key='d' reason='Download reale non ancora disponibile: storage privato non esposto nel MVP'>Scarica</DisabledAction>])} />}</Card></div>;
+
+  return <div className="space-y-6"><PageHeader title="Documenti" description="Upload reale in storage locale privato: nessun file è pubblico, ogni download passa da permessi e audit log."/>
+    <Card title="Carica documento reale"><form action={uploadDocumentAndRefresh} className="grid gap-3 md:grid-cols-4">
+      <input className="rounded-xl border p-3 md:col-span-2" type="file" name="file" required />
+      <input className="rounded-xl border p-3 md:col-span-2" name="title" placeholder="Titolo documento" required />
+      <select className="rounded-xl border p-3" name="clientId" required><option value="">Cliente</option>{clientRows.map(c=><option key={c.id} value={c.id}>{c.displayName}</option>)}</select>
+      <select className="rounded-xl border p-3" name="projectId"><option value="">Progetto opzionale</option>{projectRows.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select>
+      <select className="rounded-xl border p-3" name="clientServiceId"><option value="">Servizio opzionale</option>{serviceRows.map(s=><option key={s.id} value={s.id}>{clients.get(s.clientId) ?? 'Cliente'} · {s.id}</option>)}</select>
+      <select className="rounded-xl border p-3" name="serviceArea" defaultValue="altro">{serviceAreas.map(a=><option key={a} value={a}>{a}</option>)}</select>
+      <input className="rounded-xl border p-3" name="documentCategory" placeholder="Categoria" defaultValue="altro" />
+      <input className="rounded-xl border p-3" name="validUntil" type="date" />
+      <label className="flex items-center gap-2 rounded-xl border p-3 text-sm font-bold"><input type="checkbox" name="containsSensitiveData" value="true" /> Sensibile</label>
+      <PrimaryButton type="submit" className="md:col-span-4">Carica in storage privato</PrimaryButton>
+    </form><Hint>I file vengono salvati in <code>storage/private/documents</code> solo lato server; lo storagePath non è esposto all’utente.</Hint></Card>
+    <Card title="Elenco operativo">{visible.length === 0 ? <EmptyState title="Nessun elemento presente" /> : <Table headers={['Documento', 'Cliente/Progetto', 'Sezione', 'Categoria', 'Tracciabilità', 'Scadenza', 'Download']} rows={visible.map((x) => { const ok = availability.get(x.id); return [<span className='font-semibold text-fai-navy' key='n'>{x.title}<br/><span className="text-xs font-normal text-slate-500">{x.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, <span key="cp">{x.clientId ? clients.get(x.clientId) ?? '—' : '—'}<br/>{x.projectId ? projects.get(x.projectId) : ''}</span>, x.serviceArea, <span key='c'>{x.documentCategory} {isSensitiveDocument(x) ? <span className='ml-2 rounded-full bg-fai-orange/10 px-2 py-0.5 text-xs font-bold text-fai-orange'>sensibile</span> : null}<br/><StatusBadge status={x.status} /></span>, <MetaCell key='m' createdAt={x.createdAt} updatedAt={x.updatedAt} owner={users.get(x.uploadedById)} />, formatDateTime(x.validUntil), ok ? <SecondaryLink key="d" href={`/documents/${x.id}/download`}>Scarica</SecondaryLink> : <DisabledAction key='d' reason='File fisico assente nello storage privato'>File non caricato</DisabledAction>]; })} />}</Card>
+  </div>;
 }
