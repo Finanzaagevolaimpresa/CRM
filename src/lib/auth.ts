@@ -1,9 +1,12 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import type { RoleCode } from '@prisma/client';
-import { verifySessionCookie, type Session } from './session';
+import type { RoleCode, User } from '@prisma/client';
+import { prisma } from './prisma';
+import { verifySessionCookie, type SessionCookie } from './session';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
+
+export type AuthSession = SessionCookie & Pick<User, 'role' | 'active'>;
 
 export type Permission =
   | 'user.read' | 'user.write' | 'settings.manage'
@@ -19,12 +22,29 @@ export type Permission =
   | 'payment.read' | 'payment.write'
   | 'audit.read';
 
-export async function getSession() {
-  const token = (await cookies()).get(cookieName)?.value;
-  return verifySessionCookie(token);
+async function auditBlockedInactiveUserAccess(userId: string) {
+  await prisma.auditLog.create({ data: { actorId: userId, event: 'blocked_inactive_user_access', entityType: 'User', entityId: userId } });
 }
 
-export async function requireSession(): Promise<Session> {
+export async function getSession() {
+  const token = (await cookies()).get(cookieName)?.value;
+  const cookieSession = await verifySessionCookie(token);
+  if (!cookieSession) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: cookieSession.userId },
+    select: { id: true, role: true, active: true },
+  });
+  if (!user) return null;
+  if (!user.active) {
+    await auditBlockedInactiveUserAccess(user.id);
+    return null;
+  }
+
+  return { ...cookieSession, role: user.role, active: user.active } satisfies AuthSession;
+}
+
+export async function requireSession(): Promise<AuthSession> {
   const session = await getSession();
   if (!session) redirect('/login');
   return session;
@@ -41,7 +61,7 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
   collaboratore_limitato: ['client.read','project.read','service.read','document.download'],
 };
 
-export function hasPermission(session: Session, permission: Permission) {
+export function hasPermission(session: Pick<AuthSession, 'role'>, permission: Permission) {
   const granted = rolePermissions[session.role] ?? [];
   return granted.includes('*') || granted.includes(permission);
 }
