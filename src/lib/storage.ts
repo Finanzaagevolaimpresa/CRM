@@ -5,6 +5,7 @@ import path from 'path';
 const provider = process.env.STORAGE_PROVIDER ?? 'local';
 const root = path.resolve(process.cwd(), process.env.LOCAL_DOCUMENT_STORAGE_ROOT ?? 'storage/private/documents');
 const maxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? 25 * 1024 * 1024);
+const allowedExtensions = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods', '.p7m', '.xml']);
 const blockedExtensions = new Set(['.exe', '.bat', '.cmd', '.com', '.js', '.mjs', '.sh', '.ps1', '.vbs', '.scr', '.jar', '.php']);
 
 export function sanitizeFileName(name: string) {
@@ -14,7 +15,8 @@ export function sanitizeFileName(name: string) {
 
 export function assertSafeUploadName(fileName: string) {
   if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) throw new Error('Nome file non valido');
-  if (blockedExtensions.has(path.extname(fileName).toLowerCase())) throw new Error('Estensione file non consentita');
+  const extension = path.extname(fileName).toLowerCase();
+  if (!extension || blockedExtensions.has(extension) || !allowedExtensions.has(extension)) throw new Error('Estensione file non consentita');
 }
 
 function assertLocalProvider() {
