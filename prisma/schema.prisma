@@ -15,6 +15,7 @@ enum RoleCode {
   revisore
   backoffice
   amministrazione
+  collaboratore_limitato
 }
 
 enum LeadStatus {
@@ -189,6 +190,7 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
+  lastLoginAt DateTime?
 }
 
 model Lead {

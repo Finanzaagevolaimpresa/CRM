@@ -6,15 +6,18 @@ import { verifySessionCookie, type Session } from './session';
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
 export type Permission =
+  | 'user.read' | 'user.write' | 'settings.manage'
   | 'lead.read' | 'lead.write'
   | 'client.read' | 'client.write'
   | 'company.read' | 'company.write'
   | 'project.read' | 'project.write'
-  | 'document.upload' | 'document.download'
-  | 'ai.run' | 'ai.review' | 'ai.approve'
-  | 'contract.write' | 'payment.write'
+  | 'document.upload' | 'document.download' | 'document.sensitive.read'
   | 'service.read' | 'service.write' | 'service.assign' | 'service.close'
-  | 'audit.read' | 'settings.manage';
+  | 'ai.run' | 'ai.review' | 'ai.approve'
+  | 'dossier.read' | 'dossier.write' | 'dossier.approve'
+  | 'contract.read' | 'contract.write'
+  | 'payment.read' | 'payment.write'
+  | 'audit.read';
 
 export async function getSession() {
   const token = (await cookies()).get(cookieName)?.value;
@@ -29,12 +32,13 @@ export async function requireSession(): Promise<Session> {
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*'],
-  direzione: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.run', 'ai.review', 'ai.approve', 'audit.read', 'service.read', 'service.write', 'service.assign', 'service.close'],
-  commerciale: ['lead.read', 'lead.write', 'client.read', 'client.write', 'company.read', 'project.read', 'service.read'],
-  consulente: ['lead.read', 'client.read', 'company.read', 'company.write', 'project.read', 'project.write', 'service.read', 'service.write', 'service.assign', 'document.upload', 'document.download', 'ai.run', 'ai.review'],
-  revisore: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.download', 'ai.review', 'ai.approve', 'service.read'],
-  backoffice: ['lead.read', 'client.read', 'company.read', 'project.read', 'document.upload', 'document.download', 'service.read', 'service.write'],
-  amministrazione: ['client.read', 'company.read', 'project.read', 'document.download', 'contract.write', 'payment.write', 'service.read'],
+  direzione: ['user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.review','ai.approve','dossier.read','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
+  commerciale: ['lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign'],
+  consulente: ['lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.run','ai.review','dossier.read','dossier.write'],
+  revisore: ['lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.review','ai.approve','dossier.read','dossier.approve','service.read'],
+  backoffice: ['lead.read','client.read','company.read','project.read','document.upload','document.download','service.read','service.write'],
+  amministrazione: ['client.read','company.read','project.read','document.download','document.sensitive.read','contract.read','contract.write','payment.read','payment.write','service.read'],
+  collaboratore_limitato: ['client.read','project.read','service.read','document.download'],
 };
 
 export function hasPermission(session: Session, permission: Permission) {

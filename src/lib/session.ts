@@ -6,7 +6,7 @@ export type Session = {
   expiresAt: number;
 };
 
-const allowedRoles = ['admin', 'direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione'] as const satisfies readonly RoleCode[];
+const allowedRoles = ['admin', 'direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'] as const satisfies readonly RoleCode[];
 const encoder = new TextEncoder();
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 
