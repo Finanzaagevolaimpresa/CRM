@@ -39,6 +39,14 @@ export function TimestampMeta({ createdAt, updatedAt, createdBy, updatedBy }: { 
   </div>;
 }
 
+export function MetaCell({ createdAt, updatedAt, owner }: { createdAt?: Date | string | null; updatedAt?: Date | string | null; owner?: string | null }) {
+  return <div className="space-y-1 text-xs leading-5 text-slate-500">
+    <div><span className="font-black uppercase tracking-wide text-slate-600">Creato il</span> {formatDateTime(createdAt)}</div>
+    <div><span className="font-black uppercase tracking-wide text-slate-600">Aggiornato il</span> {formatDateTime(updatedAt ?? createdAt)}</div>
+    {owner !== undefined && <div><span className="font-black uppercase tracking-wide text-slate-600">Responsabile</span> {owner || 'Da assegnare'}</div>}
+  </div>;
+}
+
 export function ActivityTimeline({ events }: { events: Array<{ id: string; date: Date | string; user?: string | null; type: string; entity?: string | null; description: string; beforeAfter?: string | null }> }) {
   if (events.length === 0) return <EmptyState title="Nessun evento storico">La timeline verrà popolata con gli aggiornamenti operativi e gli audit log disponibili.</EmptyState>;
   return <ol className="relative space-y-4 before:absolute before:left-4 before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-gradient-to-b before:from-fai-lime before:via-fai-blue/30 before:to-transparent">
