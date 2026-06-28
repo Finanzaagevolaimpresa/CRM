@@ -19,7 +19,32 @@ export function statusTone(status?: string | null): 'blue' | 'green' | 'orange' 
 
 export function StatusBadge({ status }: { status?: string | null }) { return <Badge tone={statusTone(status)}>{(status ?? 'non definito').replaceAll('_', ' ')}</Badge>; }
 
-export function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) { return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/70"><div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-lg font-bold text-fai-navy">{title}</h2>{action}</div>{children}</section>; }
+export function formatDateTime(value?: Date | string | null) {
+  if (!value) return '—';
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat('it-IT', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+}
+
+export function TimestampMeta({ createdAt, updatedAt, createdBy, updatedBy }: { createdAt?: Date | string | null; updatedAt?: Date | string | null; createdBy?: string | null; updatedBy?: string | null }) {
+  return <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 text-xs text-fai-gray md:grid-cols-2">
+    <div><span className="font-bold uppercase">Creato il</span><br />{formatDateTime(createdAt)}{createdBy ? ` · da ${createdBy}` : ''}</div>
+    <div><span className="font-bold uppercase">Aggiornato il</span><br />{formatDateTime(updatedAt ?? createdAt)}{updatedBy ? ` · da ${updatedBy}` : ''}</div>
+  </div>;
+}
+
+export function ActivityTimeline({ events }: { events: Array<{ id: string; date: Date | string; user?: string | null; type: string; entity?: string | null; description: string; beforeAfter?: string | null }> }) {
+  if (events.length === 0) return <EmptyState title="Nessun evento storico">La timeline verrà popolata con gli aggiornamenti operativi e gli audit log disponibili.</EmptyState>;
+  return <ol className="space-y-3">
+    {events.map((event) => <li key={event.id} className="rounded-xl border border-slate-200 p-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-fai-gray"><Badge tone="purple">{event.type}</Badge><span>{formatDateTime(event.date)}</span><span>Utente: {event.user ?? 'Sistema'}</span><span>Entità: {event.entity ?? '—'}</span></div>
+      <p className="mt-2 font-semibold text-fai-navy">{event.description}</p>
+      {event.beforeAfter && <p className="mt-1 text-xs text-fai-gray">{event.beforeAfter}</p>}
+    </li>)}
+  </ol>;
+}
+
+
+export function Card({ title, children, action, id }: { title: string; children: React.ReactNode; action?: React.ReactNode; id?: string }) { return <section id={id} className="scroll-mt-36 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/70"><div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-lg font-bold text-fai-navy">{title}</h2>{action}</div>{children}</section>; }
 
 export function EmptyState({ title = 'Nessun dato disponibile', children }: { title?: string; children?: React.ReactNode }) { return <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-6 text-center"><p className="font-semibold text-fai-navy">{title}</p><p className="mt-1 text-sm text-fai-gray">{children ?? 'Quando saranno presenti dati operativi, verranno mostrati in questa sezione.'}</p></div>; }
 
