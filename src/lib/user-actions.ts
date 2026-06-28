@@ -21,7 +21,7 @@ export async function updateInternalUserRole(form: FormData) {
   const data = userRoleSchema.parse(Object.fromEntries(form));
   const before = await prisma.user.findUniqueOrThrow({ where: { id: data.userId } });
   const user = await prisma.user.update({ where: { id: data.userId }, data: { role: data.role } });
-  await audit(s.userId, 'user_role_update', 'User', user.id, { role: user.role }, { role: before.role });
+  await audit(s.userId, 'role_change', 'User', user.id, { role: user.role }, { role: before.role });
   revalidatePath('/settings/users'); revalidatePath('/settings/roles');
 }
 export async function deactivateInternalUser(form: FormData) {

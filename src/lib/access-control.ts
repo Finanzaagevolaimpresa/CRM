@@ -1,7 +1,7 @@
 import type { Client, ClientService, Document, Project, RoleCode, User } from '@prisma/client';
-import type { Session } from './session';
+import type { AuthSession } from './auth';
 
-export type Actor = Pick<User, 'id' | 'role'> | Pick<Session, 'userId' | 'role'>;
+export type Actor = Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>;
 const actorId = (user: Actor) => 'userId' in user ? user.userId : user.id;
 export const allAccessRoles: RoleCode[] = ['admin', 'direzione'];
 export const sensitiveDocumentCategories = ['CRIF', 'Centrale Rischi', 'documenti identità', 'dichiarazioni fiscali', 'bilanci', 'estratti conto', 'contratti', 'contabili pagamento'];

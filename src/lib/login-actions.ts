@@ -30,7 +30,7 @@ async function createLoginSession(email: string, password: string) {
   if (!passwordMatches) return false;
 
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
-  const token = await signSessionCookie({ userId: user.id, role: user.role, expiresAt });
+  const token = await signSessionCookie({ userId: user.id, expiresAt });
   (await cookies()).set(cookieName, token, sessionCookieOptions(expiresAt));
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   await prisma.auditLog.create({ data: { actorId: user.id, event: 'login', entityType: 'User', entityId: user.id } });
