@@ -190,7 +190,7 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
-  lastLoginAt DateTime?
+  lastLoginAt  DateTime?
 }
 
 model Lead {
@@ -252,6 +252,8 @@ model Company {
   durcStatus        String?
   taxRegime         String?
   notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   deletedAt         DateTime?
 }
 
@@ -417,6 +419,7 @@ model Document {
   visibilityLevel       String         @default("interno")
   containsSensitiveData Boolean        @default(false)
   createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
   validUntil            DateTime?
   deletedAt             DateTime?
 }
@@ -466,6 +469,8 @@ model PreAnalysis {
   reviewedById             String?
   approvedById             String?
   approvedAt               DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
 }
 
 model Dossier {
@@ -486,6 +491,8 @@ model Dossier {
   approvedAt      DateTime?
   docxExportPath  String?
   pdfExportPath   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 }
 
 model Contract {
@@ -503,6 +510,8 @@ model Contract {
   signedAt           DateTime?
   signedDocumentId   String?
   notes              String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 }
 
 model Payment {
@@ -518,6 +527,8 @@ model Payment {
   collectedAt          DateTime?
   accountingDocumentId String?
   notes                String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 }
 
 model Task {
@@ -535,6 +546,8 @@ model Task {
   dueAt           DateTime?
   completedAt     DateTime?
   createdById     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
 
 model Deadline {
@@ -580,6 +593,7 @@ model AiOutput {
   reviewedById        String?
   reviewedAt          DateTime?
   createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 }
 
 model AiAgentMessage {
