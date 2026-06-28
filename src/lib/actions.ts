@@ -6,6 +6,7 @@ import { leadSchema, clientSchema, projectSchema, documentSchema, documentUpload
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewDocument, isSensitiveDocument } from './access-control';
+import { UserFacingActionError } from './action-errors';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
@@ -18,18 +19,20 @@ export async function createProjectExpense(form: FormData) { const s = await req
 export async function uploadDocument(form: FormData) {
   const s = await requirePermission('document.upload');
   const file = form.get('file');
-  if (!(file instanceof File) || file.size <= 0) throw new Error('File obbligatorio');
-  const data = documentUploadSchema.parse(clean(form));
+  if (!(file instanceof File) || file.size <= 0) throw new UserFacingActionError('File obbligatorio');
+  const parsed = documentUploadSchema.safeParse(clean(form));
+  if (!parsed.success) throw new UserFacingActionError('Controlla i dati del documento: cliente, progetto e servizio devono essere coerenti.');
+  const data = parsed.data;
   const [client, company, project, clientService] = await Promise.all([
     prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null }, select: { id: true } }),
     data.companyId ? prisma.company.findFirst({ where: { id: data.companyId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
     data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
     data.clientServiceId ? prisma.clientService.findFirst({ where: { id: data.clientServiceId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
   ]);
-  if (!client) throw new Error('Cliente non valido');
-  if (data.companyId && !company) throw new Error('Azienda non collegata al cliente');
-  if (data.projectId && !project) throw new Error('Progetto non collegato al cliente');
-  if (data.clientServiceId && !clientService) throw new Error('Servizio non collegato al cliente');
+  if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (data.companyId && !company) throw new UserFacingActionError('L’azienda selezionata non appartiene al cliente scelto');
+  if (data.projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+  if (data.clientServiceId && !clientService) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
   const fileName = sanitizeFileName(file.name);
   const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
   const document = await prisma.document.create({ data: {
