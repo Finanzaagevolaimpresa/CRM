@@ -20,6 +20,16 @@ export async function uploadDocument(form: FormData) {
   const file = form.get('file');
   if (!(file instanceof File) || file.size <= 0) throw new Error('File obbligatorio');
   const data = documentUploadSchema.parse(clean(form));
+  const [client, company, project, clientService] = await Promise.all([
+    prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null }, select: { id: true } }),
+    data.companyId ? prisma.company.findFirst({ where: { id: data.companyId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
+    data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
+    data.clientServiceId ? prisma.clientService.findFirst({ where: { id: data.clientServiceId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
+  ]);
+  if (!client) throw new Error('Cliente non valido');
+  if (data.companyId && !company) throw new Error('Azienda non collegata al cliente');
+  if (data.projectId && !project) throw new Error('Progetto non collegato al cliente');
+  if (data.clientServiceId && !clientService) throw new Error('Servizio non collegato al cliente');
   const fileName = sanitizeFileName(file.name);
   const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
   const document = await prisma.document.create({ data: {
