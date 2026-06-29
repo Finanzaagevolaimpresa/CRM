@@ -11,7 +11,7 @@ export default async function RootLayout({
     <html lang="it">
       <body>
         <div className="flex">
-          <Nav />
+          <Nav role={session?.role} />
           <div className="min-h-screen flex-1">
             <div className="sticky top-0 z-20 border-b border-white/70 bg-white/78 px-8 py-4 shadow-sm shadow-slate-200/60 backdrop-blur-xl">
               <div className="flex items-center justify-between gap-4">
