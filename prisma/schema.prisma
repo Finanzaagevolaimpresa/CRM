@@ -126,6 +126,18 @@ enum DossierStatus {
   archiviato
 }
 
+enum ClientDossierType {
+  pre_analisi
+  dossier_cliente
+  nota_interna
+}
+
+enum ClientDossierStatus {
+  bozza
+  revisionata
+  archiviata
+}
+
 enum ContractStatus {
   da_preparare
   preparato
@@ -554,6 +566,28 @@ model Dossier {
   pdfExportPath   String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+}
+
+model ClientDossier {
+  id              String              @id @default(cuid())
+  clientId        String
+  clientServiceId String?
+  projectId       String?
+  title           String
+  type            ClientDossierType   @default(pre_analisi)
+  content         String
+  status          ClientDossierStatus @default(bozza)
+  createdById     String
+  updatedById     String?
+  archivedById    String?
+  archivedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([clientId])
+  @@index([clientServiceId])
+  @@index([projectId])
+  @@index([status])
 }
 
 model Contract {

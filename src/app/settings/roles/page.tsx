@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader, Table } from '@/components/ui';
-import { requirePermission, rolePermissions } from '@/lib/auth';
+import { requirePermission, rolePermissions, type Permission } from '@/lib/auth';
 
 const roleDescriptions: Record<string, string> = {
   admin: 'Accesso completo a CRM, settings, utenti, ruoli, audit, documenti anche sensibili e funzioni operative.',
@@ -14,10 +14,23 @@ const roleDescriptions: Record<string, string> = {
   collaboratore_limitato: 'Vede solo elementi assegnati e documenti non sensibili autorizzati; nessun accesso settings/audit.',
 };
 
+const permissionCatalog: Permission[] = [
+  'user.read','user.write','settings.manage',
+  'lead.read','lead.write','client.read','client.write','company.read','company.write','project.read','project.write',
+  'document.upload','document.download','document.sensitive.read',
+  'service.read','service.write','service.assign','service.close',
+  'ai.run','ai.review','ai.approve',
+  'dossier.read','dossier.write','dossier.approve',
+  'contract.read','contract.write','payment.read','payment.write','audit.read',
+];
+
 function describePermissions(perms: readonly string[]) {
-  if (perms.includes('*')) return 'Tutti i permessi effettivi disponibili nel CRM interno.';
-  return perms.map((permission) => permission.replaceAll('.', ' → ')).join(', ');
+  const effective = perms.includes('*') ? ['*', ...permissionCatalog.filter((permission) => !perms.includes(permission))] : perms;
+  return effective.map((permission) => permission === '*' ? 'Tutti i permessi' : permission.replaceAll('.', ' → ')).join(', ');
 }
+
+function hasDossierWrite(perms: readonly string[]) { return perms.includes('*') || perms.includes('dossier.write'); }
+function hasDossierRead(perms: readonly string[]) { return perms.includes('*') || perms.includes('dossier.read'); }
 
 export default async function Page() {
   await requirePermission('settings.manage');
@@ -25,7 +38,7 @@ export default async function Page() {
   const rows = Object.entries(rolePermissions).map(([role, perms]) => [
     <Badge key="role" tone={role === 'admin' ? 'green' : role === 'direzione' ? 'purple' : 'blue'}>{role}</Badge>,
     roleDescriptions[role] ?? 'Ruolo interno configurato nel sistema.',
-    describePermissions(perms),
+    <span key="dossier" className="block"><span className="font-semibold">Dossier:</span> lettura {hasDossierRead(perms) ? 'abilitata' : 'non abilitata'} · scrittura {hasDossierWrite(perms) ? 'abilitata' : 'non abilitata'}<br />{describePermissions(perms)}</span>,
   ]);
 
   return (
@@ -40,7 +53,7 @@ export default async function Page() {
       <Card title="Regole di sicurezza applicate">
         <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-fai-gray">
           <li>Le pagine settings e audit sono protette server-side con permessi dedicati.</li>
-          <li>Admin e direzione possono consultare utenti, ruoli e audit log.</li>
+          <li>Admin e direzione possono consultare utenti, ruoli, audit log e gestire le bozze dossier/pre-analisi.</li>
           <li>Gli altri ruoli non vedono i link in sidebar e, se aprono la rotta diretta, vengono reindirizzati.</li>
           <li>I permessi documentali restano invariati: i percorsi privati di storage non vengono esposti.</li>
         </ul>

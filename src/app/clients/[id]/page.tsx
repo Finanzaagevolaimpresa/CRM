@@ -5,7 +5,8 @@ import { prisma } from '@/lib/prisma';
 import { privateDocumentExists } from '@/lib/storage';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { DocumentUploadForm } from '@/components/document-upload-form';
-import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask } from '@/lib/form-actions';
+import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask, generateClientDossierAndRedirect } from '@/lib/form-actions';
+import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient } from '@/lib/access-control';
 
@@ -38,7 +39,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
-  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, bankability, financing, checklistItems] = await Promise.all([
+  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems] = await Promise.all([
     prisma.client.findUnique({ where: { id } }),
     prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
     prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -49,6 +50,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.task.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.preAnalysis.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.dossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
+    prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
@@ -65,6 +67,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canManageChecklist = hasPermission(session, 'service.write');
   const canAssignServices = hasPermission(session, 'service.assign');
   const canManageTasks = hasPermission(session, 'service.write');
+  const canManageDossiers = hasPermission(session, 'dossier.write');
   const taskStatuses = ['aperta','in_lavorazione','completata','annullata'];
   const taskPriorities = ['bassa','media','alta','urgente'];
   const documentById = new Map(documents.map((document) => [document.id, document]));
@@ -133,7 +136,18 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       })} />}
     </Card>
     <Card id="pre-analisi" title="Pre-analisi">{preAnalyses.length === 0 ? <EmptyState title="Nessuna pre-analisi" /> : <Table headers={['Stato','Sintesi','Creato il','Aggiornato il']} rows={preAnalyses.map((p) => [<StatusBadge status={p.status} key='s' />, p.internalSummary ?? '—', formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card>
-    <Card id="dossier" title="Dossier">{dossiers.length === 0 ? <EmptyState title="Nessun dossier" /> : <Table headers={['Titolo','Tipo','Stato','Creato il','Aggiornato il']} rows={dossiers.map((d) => [d.title, d.type, <StatusBadge status={d.status} key='s' />, formatDateTime(d.createdAt), formatDateTime(d.updatedAt)])} />}</Card>
+    <Card id="dossier" title="Dossier / Pre-analisi">
+      {canManageDossiers ? <form action={generateClientDossierAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-4">
+        <input type="hidden" name="clientId" value={client.id}/>
+        <input className="rounded-xl border p-2 text-sm md:col-span-2" name="title" placeholder="Titolo bozza (opzionale)" />
+        <select className="rounded-xl border p-2 text-sm" name="type" defaultValue="pre_analisi"><option value="pre_analisi">Pre-analisi</option><option value="dossier_cliente">Dossier cliente</option><option value="nota_interna">Nota interna</option></select>
+        <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Tutto il fascicolo</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Tutti i progetti</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
+        <div className="md:col-span-2"><PrimaryButton type="submit">Genera bozza dossier</PrimaryButton></div>
+      </form> : <EmptyState title="Dossier in sola lettura">Il tuo ruolo può consultare le bozze dossier ma non generarne di nuove.</EmptyState>}
+      {clientDossiers.length === 0 ? <EmptyState title="Nessuna bozza dossier/pre-analisi" /> : <Table headers={['Titolo','Tipo','Stato','Contesto','Creato il','Aggiornato il','Azione']} rows={clientDossiers.map((d) => [<span className="font-semibold text-fai-navy" key="t">{d.title}</span>, d.type.replaceAll('_', ' '), <StatusBadge status={d.status} key='s' />, d.clientServiceId ? nameOf(serviceById.get(d.clientServiceId)?.serviceCatalogId ?? '') : 'Fascicolo cliente', formatDateTime(d.createdAt), formatDateTime(d.updatedAt), <Link className="font-bold text-fai-blue underline" href={`/client-dossiers/${d.id}`} key="open">Apri</Link>])} />}
+      {dossiers.length > 0 ? <div className="mt-6"><h3 className="mb-3 text-sm font-black uppercase tracking-wide text-slate-500">Dossier legacy progetto</h3><Table headers={['Titolo','Tipo','Stato','Creato il','Aggiornato il']} rows={dossiers.map((d) => [d.title, d.type, <StatusBadge status={d.status} key='s' />, formatDateTime(d.createdAt), formatDateTime(d.updatedAt)])} /></div> : null}
+    </Card>
     <Card id="contratti" title="Contratti">{contracts.length === 0 ? <EmptyState title="Nessun contratto" /> : <Table headers={['Numero','Servizio','Totale','Stato','Creato il','Aggiornato il']} rows={contracts.map((c) => [c.contractNumber, c.serviceName, `€ ${Number(c.totalAmount).toLocaleString('it-IT')}`, <StatusBadge status={c.status} key='s' />, formatDateTime(c.createdAt), formatDateTime(c.updatedAt)])} />}</Card>
     <Card id="pagamenti" title="Pagamenti">{payments.length === 0 ? <EmptyState title="Nessun pagamento" /> : <Table headers={['Totale','Metodo','Scadenza','Stato','Creato il','Aggiornato il']} rows={payments.map((p) => [`€ ${Number(p.totalAmount).toLocaleString('it-IT')}`, p.method ?? '—', formatDateTime(p.dueDate), <StatusBadge status={p.status} key='s' />, formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card>
     <Card id="task-scadenze" title="Attività e scadenze">
