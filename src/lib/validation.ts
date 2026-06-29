@@ -23,6 +23,13 @@ export const documentServiceLinkSchema = z.object({ documentId: id, clientServic
 
 export const documentSchema = z.object({ clientId: id.optional(), companyId: id.optional(), projectId: id.optional(), clientServiceId: id.optional(), serviceArea: serviceAreaSchema.optional(), documentCategory: documentCategorySchema.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), fileName: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120), sizeBytes: z.coerce.number().int().positive().max(50 * 1024 * 1024), storagePath: z.string().trim().min(1).max(1000).refine((value) => !value.startsWith('http') && !value.includes('..'), 'storagePath must be private and relative'), containsSensitiveData: z.coerce.boolean().optional(), validUntil: date.optional() });
 export const documentUploadSchema = z.object({ clientId: id, companyId: id.optional(), projectId: id.optional(), clientServiceId: id.optional(), serviceArea: serviceAreaSchema.default('altro'), documentCategory: documentCategorySchema.default('altro'), title: z.string().trim().min(1).max(200), containsSensitiveData: z.coerce.boolean().optional(), validUntil: date.optional() });
+
+export const checklistStatusSchema = z.enum(['da_richiedere','richiesto','ricevuto','validato','non_necessario']);
+export const documentChecklistItemSchema = z.object({ clientId: id, clientServiceId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), notes: optionalText, status: checklistStatusSchema.optional(), documentId: id.optional() });
+export const checklistItemIdSchema = z.object({ id });
+export const checklistItemStatusUpdateSchema = z.object({ id, status: checklistStatusSchema });
+export const checklistItemDocumentLinkSchema = z.object({ id, documentId: id });
+
 export const preAnalysisSchema = z.object({ projectId: id, clientId: id, companyId: id.optional(), internalSummary: optionalText, scenarioA: optionalText, scenarioB: optionalText, blockingConditions: optionalText, requiredDocuments: optionalText });
 export const dossierSchema = z.object({ projectId: id, clientId: id, preAnalysisId: id.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), markdownContent: optionalText, jsonContent: z.unknown().optional() });
 export const contractSchema = z.object({ clientId: id, projectId: id.optional(), contractNumber: z.string().trim().min(1).max(80), serviceName: z.string().trim().min(1).max(200), serviceDescription: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, notes: optionalText });
