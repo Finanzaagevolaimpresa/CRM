@@ -5,8 +5,9 @@ import { prisma } from '@/lib/prisma';
 import { privateDocumentExists } from '@/lib/storage';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { DocumentUploadForm } from '@/components/document-upload-form';
-import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, uploadDocumentAndRefresh } from '@/lib/form-actions';
+import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask } from '@/lib/form-actions';
 import { hasPermission, requirePermission } from '@/lib/auth';
+import { canViewClient } from '@/lib/access-control';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -24,7 +25,7 @@ const serviceSections = [
   ['dossier', 'Dossier'],
   ['contratti', 'Contratti'],
   ['pagamenti', 'Pagamenti'],
-  ['task-scadenze', 'Task / Scadenze'],
+  ['task-scadenze', 'Attività e scadenze'],
   ['output-ai', 'Output AI'],
   ['audit-log', 'Audit log'],
 ] as const;
@@ -49,7 +50,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
   ]);
-  if (!client) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato</h1>;
+  if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
   const serviceIds = clientServices.map((service) => service.id);
   const [aiOutputs, auditLogs, catalog, users] = await Promise.all([
@@ -59,6 +60,9 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.user.findMany({ where: { active: true } }),
   ]);
   const canManageChecklist = hasPermission(session, 'service.write');
+  const canManageTasks = hasPermission(session, 'service.write');
+  const taskStatuses = ['aperta','in_lavorazione','completata','annullata'];
+  const taskPriorities = ['bassa','media','alta','urgente'];
   const documentById = new Map(documents.map((document) => [document.id, document]));
   const serviceById = new Map(clientServices.map((service) => [service.id, service]));
   const projectById = new Map(projects.map((project) => [project.id, project]));
@@ -127,7 +131,33 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="dossier" title="Dossier">{dossiers.length === 0 ? <EmptyState title="Nessun dossier" /> : <Table headers={['Titolo','Tipo','Stato','Creato il','Aggiornato il']} rows={dossiers.map((d) => [d.title, d.type, <StatusBadge status={d.status} key='s' />, formatDateTime(d.createdAt), formatDateTime(d.updatedAt)])} />}</Card>
     <Card id="contratti" title="Contratti">{contracts.length === 0 ? <EmptyState title="Nessun contratto" /> : <Table headers={['Numero','Servizio','Totale','Stato','Creato il','Aggiornato il']} rows={contracts.map((c) => [c.contractNumber, c.serviceName, `€ ${Number(c.totalAmount).toLocaleString('it-IT')}`, <StatusBadge status={c.status} key='s' />, formatDateTime(c.createdAt), formatDateTime(c.updatedAt)])} />}</Card>
     <Card id="pagamenti" title="Pagamenti">{payments.length === 0 ? <EmptyState title="Nessun pagamento" /> : <Table headers={['Totale','Metodo','Scadenza','Stato','Creato il','Aggiornato il']} rows={payments.map((p) => [`€ ${Number(p.totalAmount).toLocaleString('it-IT')}`, p.method ?? '—', formatDateTime(p.dueDate), <StatusBadge status={p.status} key='s' />, formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card>
-    <Card id="task-scadenze" title="Task / Scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task" /> : <Table headers={['Task','Priorità','Scadenza','Stato','Creato il','Aggiornato il']} rows={tasks.map((t) => [t.title, t.priority, formatDateTime(t.dueAt), <StatusBadge status={t.status} key='s' />, formatDateTime(t.createdAt), formatDateTime(t.updatedAt)])} />}</Card>
+    <Card id="task-scadenze" title="Attività e scadenze">
+      {canManageTasks ? <form action={createClientTaskAndRefresh} className="mb-5 grid gap-3 rounded-2xl bg-slate-50/80 p-4 ring-1 ring-slate-200 md:grid-cols-2">
+        <input type="hidden" name="clientId" value={client.id}/>
+        <input className="rounded-xl border p-2 text-sm md:col-span-2" name="title" placeholder="Titolo attività" required />
+        <textarea className="rounded-xl border p-2 text-sm md:col-span-2" name="description" placeholder="Descrizione / note opzionali" rows={2} />
+        <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Fascicolo generale cliente</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Nessun progetto/pratica</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="priority" defaultValue="media">{taskPriorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}</select>
+        <input className="rounded-xl border p-2 text-sm" type="date" name="dueAt" />
+        <select className="rounded-xl border p-2 text-sm" name="assignedToId" defaultValue=""><option value="">Nessun assegnatario</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
+        <PrimaryButton type="submit">Crea attività</PrimaryButton>
+      </form> : <EmptyState title="Attività in sola lettura">Il tuo ruolo può consultare le attività ma non modificarle.</EmptyState>}
+      {tasks.length === 0 ? <EmptyState title="Nessuna attività" /> : <Table headers={['Attività','Contesto','Priorità','Scadenza','Stato','Assegnatario','Aggiornato','Azioni']} rows={tasks.map((t) => {
+        const service = t.clientServiceId ? serviceById.get(t.clientServiceId) : null;
+        const project = t.projectId ? projectById.get(t.projectId) : null;
+        return [
+          <span key="title" className="font-semibold text-fai-navy">{t.title}<br/><span className="text-xs font-normal leading-5 text-slate-500">{t.description ?? '—'}</span></span>,
+          <span key="ctx">{service ? nameOf(service.serviceCatalogId) : 'Fascicolo generale'}<br/><span className="text-xs text-slate-500">{project?.title ?? 'Nessun progetto/pratica'}</span></span>,
+          <StatusBadge key="priority" status={t.priority} />,
+          formatDateTime(t.dueAt),
+          <StatusBadge status={t.status} key='s' />,
+          userOf(t.assignedToId),
+          formatDateTime(t.updatedAt),
+          canManageTasks ? <div key="actions" className="space-y-2"><form action={updateClientTaskAndRefresh} className="grid gap-2"><input type="hidden" name="id" value={t.id}/><select name="status" defaultValue={t.status} className="rounded-xl border p-2 text-xs">{taskStatuses.map((status) => <option key={status} value={status}>{status.replaceAll('_', ' ')}</option>)}</select><select name="priority" defaultValue={t.priority} className="rounded-xl border p-2 text-xs">{taskPriorities.map((priority) => <option key={priority} value={priority}>{priority}</option>)}</select><input type="date" name="dueAt" defaultValue={t.dueAt ? t.dueAt.toISOString().slice(0,10) : ''} className="rounded-xl border p-2 text-xs"/><select name="assignedToId" defaultValue={t.assignedToId ?? ''} className="rounded-xl border p-2 text-xs"><option value="">Nessun assegnatario</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select><PrimaryButton type="submit">Salva</PrimaryButton></form>{t.status !== 'completata' ? <form action={completeTask}><input type="hidden" name="id" value={t.id}/><PrimaryButton type="submit">Completa</PrimaryButton></form> : null}</div> : '—'
+        ];
+      })} />}
+    </Card>
     <Card id="output-ai" title="Output AI">{aiOutputs.length === 0 ? <EmptyState title="Nessun output AI" /> : <Table headers={['Titolo','Stato','Revisione umana','Creato il','Aggiornato il']} rows={aiOutputs.map((o) => [o.title, <StatusBadge status={o.status} key='s' />, o.requiresHumanReview ? 'Obbligatoria' : 'Non richiesta', formatDateTime(o.createdAt), formatDateTime(o.updatedAt)])} />}</Card>
     <Card id="audit-log" title="Audit log / Timeline fascicolo"><ActivityTimeline events={timeline} /></Card>
   </div>;

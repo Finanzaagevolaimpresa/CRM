@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
 import { requirePermission } from './auth';
-import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem } from './actions';
+import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask } from './actions';
 import { UserFacingActionError } from './action-errors';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } }); }
@@ -33,7 +33,7 @@ export async function createPreAnalysisAndRedirect(form: FormData) { const pre =
 export async function createDossierAndRedirect(form: FormData) { const dossier = await createDossier(form); revalidatePath('/dossiers'); redirect(`/dossiers/${dossier.id}`); }
 export async function createContractAndRefresh(form: FormData) { await createContract(form); revalidatePath('/contracts'); }
 export async function registerPaymentAndRefresh(form: FormData) { await registerPayment(form); revalidatePath('/payments'); }
-export async function completeTask(form: FormData) { const s=await requirePermission('service.write'); const id=String(form.get('id')||''); if(!id) throw new Error('Task mancante'); const task=await prisma.task.update({where:{id},data:{status:'chiuso',completedAt:new Date()}}); await audit(s.userId,'task_complete','Task',id,task); revalidatePath('/tasks'); }
+export async function completeTask(form: FormData) { const task = await completeClientTask(form); revalidatePath('/tasks'); if (task.clientId) revalidatePath(`/clients/${task.clientId}`); revalidatePath('/dashboard'); }
 export async function runMockAiAndRedirect(form: FormData) { const agentCode=String(form.get('agentCode')||''); const prompt=String(form.get('prompt')||''); const output=await runMockAgent(agentCode,{ prompt, source:'CRM interno FAI', humanReviewRequired:true }); revalidatePath('/ai/outputs-to-review'); redirect('/ai/outputs-to-review'); }
 export async function approveAiOutputAndRefresh(form: FormData) { await approveAiOutput(String(form.get('id')||'')); revalidatePath('/ai/outputs-to-review'); }
 export async function updateServiceStatusAndRefresh(form: FormData) { await updateClientServiceStatus(String(form.get('id')||''), String(form.get('status')||'')); revalidatePath('/clients'); }
@@ -45,3 +45,6 @@ export async function updateChecklistItemStatusAndRefresh(form: FormData) { cons
 export async function linkChecklistItemDocumentAndRefresh(form: FormData) { const item = await linkDocumentToChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
 export async function unlinkChecklistItemDocumentAndRefresh(form: FormData) { const item = await unlinkDocumentFromChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
 export async function deactivateChecklistItemAndRefresh(form: FormData) { const item = await deactivateDocumentChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
+
+export async function createClientTaskAndRefresh(form: FormData) { const task = await createClientTask(form); revalidatePath(`/clients/${task.clientId}`); revalidatePath('/tasks'); revalidatePath('/dashboard'); }
+export async function updateClientTaskAndRefresh(form: FormData) { const task = await updateClientTask(form); if (task.clientId) revalidatePath(`/clients/${task.clientId}`); revalidatePath('/tasks'); revalidatePath('/dashboard'); }

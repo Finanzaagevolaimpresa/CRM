@@ -24,6 +24,13 @@ export const documentServiceLinkSchema = z.object({ documentId: id, clientServic
 export const documentSchema = z.object({ clientId: id.optional(), companyId: id.optional(), projectId: id.optional(), clientServiceId: id.optional(), serviceArea: serviceAreaSchema.optional(), documentCategory: documentCategorySchema.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), fileName: z.string().trim().min(1).max(255), mimeType: z.string().trim().min(1).max(120), sizeBytes: z.coerce.number().int().positive().max(50 * 1024 * 1024), storagePath: z.string().trim().min(1).max(1000).refine((value) => !value.startsWith('http') && !value.includes('..'), 'storagePath must be private and relative'), containsSensitiveData: z.coerce.boolean().optional(), validUntil: date.optional() });
 export const documentUploadSchema = z.object({ clientId: id, companyId: id.optional(), projectId: id.optional(), clientServiceId: id.optional(), serviceArea: serviceAreaSchema.default('altro'), documentCategory: documentCategorySchema.default('altro'), title: z.string().trim().min(1).max(200), containsSensitiveData: z.coerce.boolean().optional(), validUntil: date.optional() });
 
+
+export const taskStatusSchema = z.enum(['aperta','in_lavorazione','completata','annullata']);
+export const taskPrioritySchema = z.enum(['bassa','media','alta','urgente']);
+export const clientTaskSchema = z.object({ clientId: id, clientServiceId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, status: taskStatusSchema.optional(), priority: taskPrioritySchema.default('media'), assignedToId: id.optional(), dueAt: date.optional() });
+export const taskUpdateSchema = z.object({ id, status: taskStatusSchema, priority: taskPrioritySchema, assignedToId: id.optional(), dueAt: date.optional() });
+export const taskIdSchema = z.object({ id });
+
 export const checklistStatusSchema = z.enum(['da_richiedere','richiesto','ricevuto','validato','non_necessario']);
 export const documentChecklistItemSchema = z.object({ clientId: id, clientServiceId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), notes: optionalText, status: checklistStatusSchema.optional(), documentId: id.optional() });
 export const checklistItemIdSchema = z.object({ id });

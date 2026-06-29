@@ -37,7 +37,7 @@ export default async function Page() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Task e scadenze"
+        title="Attività e scadenze"
         description="Attività interne, priorità, assegnazioni e deadline operative."
       />
       <Card title="Elenco operativo">
@@ -48,7 +48,7 @@ export default async function Page() {
         ) : (
           <Table
             headers={[
-              "Task",
+              "Attività",
               "Cliente",
               "Priorità",
               "Scadenza",

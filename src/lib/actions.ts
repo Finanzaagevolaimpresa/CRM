@@ -2,7 +2,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { hasPermission, requirePermission } from './auth';
-import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema } from './validation';
+import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewDocument, isSensitiveDocument } from './access-control';
@@ -125,6 +125,52 @@ export async function deactivateDocumentChecklistItem(form: FormData) {
   const item = await prisma.documentChecklistItem.update({ where: { id: data.id }, data: { active: false, deletedAt: new Date(), updatedById: s.userId } });
   await audit(s.userId, 'document_checklist_item_deactivate', 'DocumentChecklistItem', item.id, { before, after: item });
   return item;
+}
+
+async function assertTaskContext(clientId: string, clientServiceId?: string, projectId?: string, assignedToId?: string) {
+  const [client, service, project, assignee] = await Promise.all([
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true } }),
+    clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    assignedToId ? prisma.user.findFirst({ where: { id: assignedToId, active: true }, select: { id: true } }) : null,
+  ]);
+  if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
+  if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+  if (assignedToId && !assignee) throw new UserFacingActionError('Assegnatario non valido o non attivo');
+}
+
+export async function createClientTask(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = clientTaskSchema.parse(clean(form));
+  await assertTaskContext(data.clientId, data.clientServiceId, data.projectId, data.assignedToId);
+  const task = await prisma.task.create({ data: { ...data, createdById: s.userId } as never });
+  await audit(s.userId, 'client_task_create', 'Task', task.id, task);
+  return task;
+}
+
+export async function updateClientTask(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = taskUpdateSchema.parse(clean(form));
+  const before = await prisma.task.findUniqueOrThrow({ where: { id: data.id } });
+  await assertTaskContext(before.clientId ?? '', before.clientServiceId ?? undefined, before.projectId ?? undefined, data.assignedToId);
+  const nextCompletedAt = data.status === 'completata' ? (before.completedAt ?? new Date()) : null;
+  const task = await prisma.task.update({ where: { id: data.id }, data: { status: data.status, priority: data.priority, assignedToId: data.assignedToId ?? null, dueAt: data.dueAt ?? null, completedAt: nextCompletedAt } });
+  const events = ['client_task_update'];
+  if (before.status !== task.status) events.push(task.status === 'completata' ? 'client_task_complete' : task.status === 'annullata' ? 'client_task_cancel' : 'client_task_status_change');
+  if (before.assignedToId !== task.assignedToId) events.push('client_task_assign');
+  if ((before.dueAt?.toISOString() ?? null) !== (task.dueAt?.toISOString() ?? null)) events.push('client_task_due_date_change');
+  await Promise.all(events.map((event) => audit(s.userId, event, 'Task', task.id, { before, after: task })));
+  return task;
+}
+
+export async function completeClientTask(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = taskIdSchema.parse(clean(form));
+  const before = await prisma.task.findUniqueOrThrow({ where: { id: data.id } });
+  const task = await prisma.task.update({ where: { id: data.id }, data: { status: 'completata', completedAt: new Date() } });
+  await audit(s.userId, 'client_task_complete', 'Task', task.id, { before, after: task });
+  return task;
 }
 
 export async function registerDocument(form: FormData) { const s = await requirePermission('document.upload'); const data = documentSchema.parse(clean(form)); const document = await prisma.document.create({ data: { ...data, uploadedById: s.userId } as never }); await audit(s.userId, 'document_upload', 'Document', document.id, document); return document; }
