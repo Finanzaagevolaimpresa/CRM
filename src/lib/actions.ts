@@ -1,7 +1,7 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema } from './validation';
 import { hasPermission, requirePermission } from './auth';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
@@ -172,6 +172,89 @@ export async function completeClientTask(form: FormData) {
   const task = await prisma.task.update({ where: { id: data.id }, data: { status: 'completata', completedAt: new Date() } });
   await audit(s.userId, 'client_task_complete', 'Task', task.id, { before, after: task });
   return task;
+}
+
+
+const dossierTypeLabel: Record<string, string> = { pre_analisi: 'Pre-analisi', dossier_cliente: 'Dossier cliente', nota_interna: 'Nota interna' };
+function dossierLine(label: string, value: unknown) { return `- ${label}: ${value === null || value === undefined || value === '' ? '—' : String(value)}`; }
+function money(value: unknown) { return value ? `€ ${Number(value).toLocaleString('it-IT')}` : '—'; }
+function dateLabel(value?: Date | null) { return value ? value.toLocaleDateString('it-IT') : '—'; }
+
+async function assertClientDossierContext(clientId: string, clientServiceId?: string, projectId?: string) {
+  const [client, service, project] = await Promise.all([
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true } }),
+    clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
+  ]);
+  if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
+  if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+}
+
+async function buildClientDossierContent(clientId: string, clientServiceId?: string, projectId?: string) {
+  const [client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
+    prisma.client.findUniqueOrThrow({ where: { id: clientId } }),
+    prisma.company.findMany({ where: { clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    prisma.clientService.findMany({ where: { clientId, ...(clientServiceId ? { id: clientServiceId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    prisma.serviceCatalog.findMany(),
+    prisma.project.findMany({ where: { clientId, ...(projectId ? { id: projectId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
+    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, orderBy: { createdAt: 'desc' } }),
+    prisma.task.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
+  ]);
+  const catalogName = (id: string) => serviceCatalog.find((s) => s.id === id)?.name ?? 'Servizio FAI';
+  const mainCompany = companies[0];
+  return [
+    '# Dossier / Pre-analisi', '',
+    '## 1. Dati cliente', dossierLine('Cliente', client.displayName), dossierLine('Tipologia', client.type), dossierLine('Stato fascicolo', client.status), dossierLine('Note cliente', client.notes), mainCompany ? dossierLine('Azienda principale', `${mainCompany.name}${mainCompany.vatNumber ? ` · P.IVA ${mainCompany.vatNumber}` : ''}`) : '- Azienda principale: —', '',
+    '## 2. Inquadramento attività', companies.length ? companies.map((c) => `- ${c.name}: ${[c.legalForm, c.atecoCode, c.atecoDescription, c.city, c.province].filter(Boolean).join(' · ') || 'dati da completare'}`).join('\n') : '- Dati aziendali non ancora completi.', '',
+    '## 3. Obiettivo richiesto', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)} · pratica: ${s.practiceType ?? '—'} · importo richiesto: ${money(s.requestedAmount)} · investimento previsto: ${money(s.plannedInvestment)}`).join('\n') : '- Nessun servizio/pratica collegato.', projects.length ? projects.map((p) => `- Progetto ${p.title}: richiesto ${money(p.requestedAmount)}, investimento ${money(p.totalInvestment)}, stato ${p.status}.`).join('\n') : '- Nessun progetto di investimento collegato.', '',
+    '## 4. Stato documentale', checklist.length ? checklist.map((i) => `- ${i.title}: ${i.status.replaceAll('_', ' ')}${i.documentId ? ' · documento collegato' : ''}${i.notes ? ` · ${i.notes}` : ''}`).join('\n') : '- Checklist documentale non ancora popolata.', documents.length ? documents.map((d) => `- Documento caricato: ${d.title} (${d.documentCategory}, stato ${d.status})`).join('\n') : '- Nessun documento caricato.', '',
+    '## 5. Stato operativo pratica', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)}: pipeline ${String(s.operationalStatus).replaceAll('_', ' ')}, servizio ${String(s.status).replaceAll('_', ' ')}. Note: ${s.operationalNotes ?? s.internalNotes ?? '—'}`).join('\n') : '- Nessuna pipeline servizio presente.', '',
+    '## 6. Attività/scadenze aperte', tasks.length ? tasks.map((t) => `- ${t.title}: ${t.status.replaceAll('_', ' ')} · priorità ${t.priority} · scadenza ${dateLabel(t.dueAt)}${t.description ? ` · ${t.description}` : ''}`).join('\n') : '- Nessuna attività aperta rilevante.', '',
+    '## 7. Prime criticità emerse', '- Verificare completezza documentale, coerenza importi richiesti/investimento e condizioni operative prima della revisione.', '',
+    '## 8. Scenario A - obiettivo massimo realistico', projects.map((p) => p.scenarioA).filter(Boolean).join('\n') || '- Da completare dopo revisione consulente.', '',
+    '## 9. Scenario B - alternativa/ponte', projects.map((p) => p.scenarioB).filter(Boolean).join('\n') || '- Da definire come opzione alternativa o ponte.', '',
+    '## 10. Prossime azioni operative', '- Completare o validare la checklist documentale.', '- Aggiornare note operative e importi della pratica.', '- Revisionare manualmente questa bozza prima di condividerne sintesi interne.', '',
+    '_Bozza generata con provider mock/template server-side. Nessuna AI reale è stata invocata._',
+  ].join('\n');
+}
+
+export async function generateClientDossier(form: FormData) {
+  const s = await requirePermission('dossier.write');
+  const data = clientDossierGenerateSchema.parse(clean(form));
+  await assertClientDossierContext(data.clientId, data.clientServiceId, data.projectId);
+  const content = await buildClientDossierContent(data.clientId, data.clientServiceId, data.projectId);
+  const dossier = await prisma.clientDossier.create({ data: { clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, type: data.type, title: data.title ?? `${dossierTypeLabel[data.type]} — ${new Date().toLocaleDateString('it-IT')}`, content, createdById: s.userId, updatedById: s.userId } as never });
+  await audit(s.userId, 'client_dossier_generate', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId, type: dossier.type, status: dossier.status });
+  return dossier;
+}
+
+export async function updateClientDossier(form: FormData) {
+  const s = await requirePermission('dossier.write');
+  const data = clientDossierUpdateSchema.parse(clean(form));
+  const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+  await assertClientDossierContext(before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { title: data.title, type: data.type, status: data.status, content: data.content, updatedById: s.userId, archivedAt: data.status === 'archiviata' ? (before.archivedAt ?? new Date()) : null, archivedById: data.status === 'archiviata' ? s.userId : null } });
+  await audit(s.userId, before.status !== 'archiviata' && dossier.status === 'archiviata' ? 'client_dossier_archive' : 'client_dossier_update', 'ClientDossier', dossier.id, { before, after: dossier });
+  return dossier;
+}
+
+export async function archiveClientDossier(form: FormData) {
+  const s = await requirePermission('dossier.write');
+  const data = clientDossierIdSchema.parse(clean(form));
+  const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+  await assertClientDossierContext(before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { status: 'archiviata', archivedAt: before.archivedAt ?? new Date(), archivedById: s.userId, updatedById: s.userId } });
+  await audit(s.userId, 'client_dossier_archive', 'ClientDossier', dossier.id, { before, after: dossier });
+  return dossier;
+}
+
+export async function auditClientDossierExport(id: string) {
+  const s = await requirePermission('dossier.read');
+  const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
+  await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format: 'markdown' });
+  return dossier;
 }
 
 export async function registerDocument(form: FormData) { const s = await requirePermission('document.upload'); const data = documentSchema.parse(clean(form)); const document = await prisma.document.create({ data: { ...data, uploadedById: s.userId } as never }); await audit(s.userId, 'document_upload', 'Document', document.id, document); return document; }

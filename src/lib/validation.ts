@@ -42,6 +42,9 @@ export const checklistItemDocumentLinkSchema = z.object({ id, documentId: id });
 
 export const preAnalysisSchema = z.object({ projectId: id, clientId: id, companyId: id.optional(), internalSummary: optionalText, scenarioA: optionalText, scenarioB: optionalText, blockingConditions: optionalText, requiredDocuments: optionalText });
 export const dossierSchema = z.object({ projectId: id, clientId: id, preAnalysisId: id.optional(), title: z.string().trim().min(1).max(200), type: z.string().trim().min(1).max(80), markdownContent: optionalText, jsonContent: z.unknown().optional() });
+export const clientDossierGenerateSchema = z.object({ clientId: id, clientServiceId: id.optional(), projectId: id.optional(), type: z.enum(['pre_analisi','dossier_cliente','nota_interna']).default('pre_analisi'), title: z.string().trim().min(1).max(200).optional() });
+export const clientDossierUpdateSchema = z.object({ id, title: z.string().trim().min(1).max(200), type: z.enum(['pre_analisi','dossier_cliente','nota_interna']), status: z.enum(['bozza','revisionata','archiviata']), content: z.string().trim().min(1).max(50000) });
+export const clientDossierIdSchema = z.object({ id });
 export const contractSchema = z.object({ clientId: id, projectId: id.optional(), contractNumber: z.string().trim().min(1).max(80), serviceName: z.string().trim().min(1).max(200), serviceDescription: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, notes: optionalText });
 export const paymentSchema = z.object({ contractId: id, clientId: id, taxableAmount: money, vatAmount: money, totalAmount: money, method: optionalText, dueDate: date.optional(), collectedAt: date.optional(), notes: optionalText });
 export const aiRunSchema = z.object({ agentCode: z.string().trim().min(1).max(120), input: z.unknown() });

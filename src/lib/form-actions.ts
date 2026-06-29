@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
 import { requirePermission } from './auth';
-import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline } from './actions';
+import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline, generateClientDossier, updateClientDossier, archiveClientDossier } from './actions';
 import { UserFacingActionError } from './action-errors';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } }); }
@@ -49,3 +49,7 @@ export async function deactivateChecklistItemAndRefresh(form: FormData) { const 
 
 export async function createClientTaskAndRefresh(form: FormData) { const task = await createClientTask(form); revalidatePath(`/clients/${task.clientId}`); revalidatePath('/tasks'); revalidatePath('/dashboard'); }
 export async function updateClientTaskAndRefresh(form: FormData) { const task = await updateClientTask(form); if (task.clientId) revalidatePath(`/clients/${task.clientId}`); revalidatePath('/tasks'); revalidatePath('/dashboard'); }
+
+export async function generateClientDossierAndRedirect(form: FormData) { const dossier = await generateClientDossier(form); revalidatePath(`/clients/${dossier.clientId}`); revalidatePath('/dossiers'); redirect(`/client-dossiers/${dossier.id}`); }
+export async function updateClientDossierAndRefresh(form: FormData) { const dossier = await updateClientDossier(form); revalidatePath(`/clients/${dossier.clientId}`); revalidatePath(`/client-dossiers/${dossier.id}`); }
+export async function archiveClientDossierAndRefresh(form: FormData) { const dossier = await archiveClientDossier(form); revalidatePath(`/clients/${dossier.clientId}`); revalidatePath(`/client-dossiers/${dossier.id}`); }
