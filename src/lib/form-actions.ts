@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
 import { requirePermission } from './auth';
-import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument } from './actions';
+import { createLead, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem } from './actions';
 import { UserFacingActionError } from './action-errors';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } }); }
@@ -38,3 +38,10 @@ export async function runMockAiAndRedirect(form: FormData) { const agentCode=Str
 export async function approveAiOutputAndRefresh(form: FormData) { await approveAiOutput(String(form.get('id')||'')); revalidatePath('/ai/outputs-to-review'); }
 export async function updateServiceStatusAndRefresh(form: FormData) { await updateClientServiceStatus(String(form.get('id')||''), String(form.get('status')||'')); revalidatePath('/clients'); }
 export async function assignServiceAndRefresh(form: FormData) { await assignClientService(String(form.get('id')||''), String(form.get('assignedToId')||'')); revalidatePath('/clients'); }
+
+export async function createChecklistItemAndRefresh(form: FormData) { const item = await createDocumentChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
+export async function createStandardChecklistAndRefresh(form: FormData) { await createStandardDocumentChecklist(form); revalidatePath(`/clients/${String(form.get('clientId') || '')}`); }
+export async function updateChecklistItemStatusAndRefresh(form: FormData) { const item = await updateDocumentChecklistItemStatus(form); revalidatePath(`/clients/${item.clientId}`); }
+export async function linkChecklistItemDocumentAndRefresh(form: FormData) { const item = await linkDocumentToChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
+export async function unlinkChecklistItemDocumentAndRefresh(form: FormData) { const item = await unlinkDocumentFromChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }
+export async function deactivateChecklistItemAndRefresh(form: FormData) { const item = await deactivateDocumentChecklistItem(form); revalidatePath(`/clients/${item.clientId}`); }

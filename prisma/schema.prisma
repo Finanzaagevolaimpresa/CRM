@@ -167,6 +167,14 @@ enum ServiceStatus {
   archiviato
 }
 
+enum ChecklistItemStatus {
+  da_richiedere
+  richiesto
+  ricevuto
+  validato
+  non_necessario
+}
+
 enum ServiceArea {
   anagrafica
   bancabilita
@@ -422,6 +430,28 @@ model Document {
   updatedAt             DateTime       @updatedAt
   validUntil            DateTime?
   deletedAt             DateTime?
+}
+
+model DocumentChecklistItem {
+  id              String              @id @default(cuid())
+  clientId        String
+  clientServiceId String?
+  projectId       String?
+  title           String
+  notes           String?
+  status          ChecklistItemStatus @default(da_richiedere)
+  documentId      String?
+  active          Boolean             @default(true)
+  createdById     String?
+  updatedById     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  deletedAt       DateTime?
+
+  @@index([clientId])
+  @@index([clientServiceId])
+  @@index([projectId])
+  @@index([documentId])
 }
 
 model DocumentVersion {

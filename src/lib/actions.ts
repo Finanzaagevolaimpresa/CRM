@@ -2,7 +2,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { hasPermission, requirePermission } from './auth';
-import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema } from './validation';
+import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewDocument, isSensitiveDocument } from './access-control';
@@ -48,6 +48,83 @@ export async function uploadDocument(form: FormData) {
   } as never });
   await audit(s.userId, 'document_upload', 'Document', document.id, { documentId: document.id, fileName, sizeBytes: saved.sizeBytes, checksum: saved.checksum });
   return document;
+}
+
+
+const standardChecklistTitles = ['Visura aggiornata','Documento identità','Codice fiscale','DURC','Ultimo bilancio depositato','Situazione contabile aggiornata','Ultima dichiarazione redditi','Estratti conto ultimi 3 mesi','Centrale Rischi Banca d’Italia','CRIF / report creditizio','Preventivi investimento','Business plan / relazione progetto'];
+
+async function assertChecklistContext(clientId: string, clientServiceId?: string, projectId?: string, documentId?: string) {
+  const [client, service, project, document] = await Promise.all([
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true } }),
+    clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    documentId ? prisma.document.findFirst({ where: { id: documentId, clientId, deletedAt: null }, select: { id: true } }) : null,
+  ]);
+  if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
+  if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+  if (documentId && !document) throw new UserFacingActionError('Il documento selezionato non appartiene al cliente scelto');
+}
+
+export async function createDocumentChecklistItem(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = documentChecklistItemSchema.parse(clean(form));
+  await assertChecklistContext(data.clientId, data.clientServiceId, data.projectId, data.documentId);
+  const item = await prisma.documentChecklistItem.create({ data: { ...data, createdById: s.userId, updatedById: s.userId } as never });
+  await audit(s.userId, 'document_checklist_item_create', 'DocumentChecklistItem', item.id, item);
+  return item;
+}
+
+export async function createStandardDocumentChecklist(form: FormData) {
+  const s = await requirePermission('service.write');
+  const clientId = String(form.get('clientId') || '');
+  const clientServiceId = String(form.get('clientServiceId') || '') || undefined;
+  const projectId = String(form.get('projectId') || '') || undefined;
+  await assertChecklistContext(clientId, clientServiceId, projectId);
+  const existing = await prisma.documentChecklistItem.findMany({ where: { clientId, clientServiceId: clientServiceId ?? null, deletedAt: null }, select: { title: true } });
+  const existingTitles = new Set(existing.map((item) => item.title.toLowerCase()));
+  const toCreate = standardChecklistTitles.filter((title) => !existingTitles.has(title.toLowerCase()));
+  if (toCreate.length === 0) return [];
+  const created = await prisma.$transaction(toCreate.map((title) => prisma.documentChecklistItem.create({ data: { clientId, clientServiceId, projectId, title, createdById: s.userId, updatedById: s.userId } as never })));
+  await Promise.all(created.map((item) => audit(s.userId, 'document_checklist_item_create', 'DocumentChecklistItem', item.id, item)));
+  return created;
+}
+
+export async function updateDocumentChecklistItemStatus(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = checklistItemStatusUpdateSchema.parse(clean(form));
+  const before = await prisma.documentChecklistItem.findUniqueOrThrow({ where: { id: data.id } });
+  const item = await prisma.documentChecklistItem.update({ where: { id: data.id }, data: { status: data.status, updatedById: s.userId } });
+  await audit(s.userId, 'document_checklist_status_change', 'DocumentChecklistItem', item.id, { before, after: item });
+  return item;
+}
+
+export async function linkDocumentToChecklistItem(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = checklistItemDocumentLinkSchema.parse(clean(form));
+  const before = await prisma.documentChecklistItem.findUniqueOrThrow({ where: { id: data.id } });
+  await assertChecklistContext(before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined, data.documentId);
+  const item = await prisma.documentChecklistItem.update({ where: { id: data.id }, data: { documentId: data.documentId, updatedById: s.userId } });
+  await audit(s.userId, 'document_checklist_document_link', 'DocumentChecklistItem', item.id, { before, after: item });
+  return item;
+}
+
+export async function unlinkDocumentFromChecklistItem(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = checklistItemIdSchema.parse(clean(form));
+  const before = await prisma.documentChecklistItem.findUniqueOrThrow({ where: { id: data.id } });
+  const item = await prisma.documentChecklistItem.update({ where: { id: data.id }, data: { documentId: null, updatedById: s.userId } });
+  await audit(s.userId, 'document_checklist_document_unlink', 'DocumentChecklistItem', item.id, { before, after: item });
+  return item;
+}
+
+export async function deactivateDocumentChecklistItem(form: FormData) {
+  const s = await requirePermission('service.write');
+  const data = checklistItemIdSchema.parse(clean(form));
+  const before = await prisma.documentChecklistItem.findUniqueOrThrow({ where: { id: data.id } });
+  const item = await prisma.documentChecklistItem.update({ where: { id: data.id }, data: { active: false, deletedAt: new Date(), updatedById: s.userId } });
+  await audit(s.userId, 'document_checklist_item_deactivate', 'DocumentChecklistItem', item.id, { before, after: item });
+  return item;
 }
 
 export async function registerDocument(form: FormData) { const s = await requirePermission('document.upload'); const data = documentSchema.parse(clean(form)); const document = await prisma.document.create({ data: { ...data, uploadedById: s.userId } as never }); await audit(s.userId, 'document_upload', 'Document', document.id, document); return document; }
