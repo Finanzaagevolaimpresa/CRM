@@ -183,7 +183,33 @@ export async function registerPayment(form: FormData) { const s = await requireP
 export async function createClientService(form: FormData) { const s = await requirePermission('service.write'); const data = clientServiceSchema.parse(clean(form)); const service = await prisma.clientService.create({ data: data as never }); await audit(s.userId, 'client_service_create', 'ClientService', service.id, service); return service; }
 export async function updateClientServiceStatus(id: string, status: string) { const s = await requirePermission('service.write'); const next = serviceStatusSchema.parse(status); const before = await prisma.clientService.findUniqueOrThrow({ where: { id } }); const service = await prisma.clientService.update({ where: { id }, data: { status: next, completedAt: ['chiuso','archiviato','consegnato'].includes(next) ? new Date() : undefined } }); await audit(s.userId, 'client_service_status_change', 'ClientService', id, { before, after: service }); return service; }
 export async function assignClientService(id: string, assignedToId: string) { const s = await requirePermission('service.assign'); const before = await prisma.clientService.findUniqueOrThrow({ where: { id } }); const service = await prisma.clientService.update({ where: { id }, data: { assignedToId: assignedToId || null } }); await audit(s.userId, 'client_service_assign', 'ClientService', id, { before, after: service }); return service; }
-export async function updateClientServicePipeline(form: FormData) { const s = await requirePermission('service.write'); const data = clientServicePipelineSchema.parse(clean(form)); const before = await prisma.clientService.findUniqueOrThrow({ where: { id: data.id } }); const service = await prisma.clientService.update({ where: { id: data.id }, data: { operationalStatus: data.operationalStatus, statusUpdatedAt: before.operationalStatus === data.operationalStatus ? before.statusUpdatedAt : new Date(), practiceType: data.practiceType ?? null, requestedAmount: data.requestedAmount ?? null, plannedInvestment: data.plannedInvestment ?? null, assignedToId: data.assignedToId ?? null, operationalNotes: data.operationalNotes ?? null } }); const events = ['client_service_pipeline_update']; if (before.operationalStatus !== service.operationalStatus) events.push('client_service_operational_status_change'); if (String(before.requestedAmount ?? '') !== String(service.requestedAmount ?? '') || String(before.plannedInvestment ?? '') !== String(service.plannedInvestment ?? '')) events.push('client_service_amounts_change'); if (before.assignedToId !== service.assignedToId) events.push('client_service_assign'); await Promise.all(events.map((event) => audit(s.userId, event, 'ClientService', service.id, { before, after: service }))); return service; }
+export async function updateClientServicePipeline(form: FormData) {
+  const s = await requirePermission('service.write');
+  const assignmentSubmitted = form.has('assignedToId');
+  const data = clientServicePipelineSchema.parse(clean(form));
+  const before = await prisma.clientService.findUniqueOrThrow({ where: { id: data.id } });
+  const nextAssignedToId = assignmentSubmitted ? (data.assignedToId ?? null) : before.assignedToId;
+  const assigneeChanged = before.assignedToId !== nextAssignedToId;
+  if (assigneeChanged) await requirePermission('service.assign');
+  const service = await prisma.clientService.update({
+    where: { id: data.id },
+    data: {
+      operationalStatus: data.operationalStatus,
+      statusUpdatedAt: before.operationalStatus === data.operationalStatus ? before.statusUpdatedAt : new Date(),
+      practiceType: data.practiceType ?? null,
+      requestedAmount: data.requestedAmount ?? null,
+      plannedInvestment: data.plannedInvestment ?? null,
+      assignedToId: nextAssignedToId,
+      operationalNotes: data.operationalNotes ?? null,
+    },
+  });
+  const events = ['client_service_pipeline_update'];
+  if (before.operationalStatus !== service.operationalStatus) events.push('client_service_operational_status_change');
+  if (String(before.requestedAmount ?? '') !== String(service.requestedAmount ?? '') || String(before.plannedInvestment ?? '') !== String(service.plannedInvestment ?? '')) events.push('client_service_amounts_change');
+  if (assigneeChanged) events.push('client_service_assign');
+  await Promise.all(events.map((event) => audit(s.userId, event, 'ClientService', service.id, { before, after: service })));
+  return service;
+}
 export async function linkDocumentToService(form: FormData) { const s = await requirePermission('service.write'); const data = documentServiceLinkSchema.parse(clean(form)); const document = await prisma.document.update({ where: { id: data.documentId }, data: { clientServiceId: data.clientServiceId, serviceArea: data.serviceArea, documentCategory: data.documentCategory } }); await audit(s.userId, 'document_service_link', 'Document', document.id, document); return document; }
 export async function updateDocumentSection(form: FormData) { const s = await requirePermission('document.upload'); const data = documentServiceLinkSchema.parse(clean(form)); const document = await prisma.document.update({ where: { id: data.documentId }, data: { serviceArea: data.serviceArea, documentCategory: data.documentCategory } }); await audit(s.userId, 'document_section_update', 'Document', document.id, document); return document; }
 
