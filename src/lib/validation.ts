@@ -3,6 +3,7 @@ import { z } from 'zod';
 const optionalText = z.string().trim().max(5000).optional().or(z.literal('').transform(() => undefined));
 const id = z.string().trim().min(1).max(128);
 const money = z.coerce.number().finite().nonnegative();
+const optionalMoney = z.preprocess((value) => value === '' || value === null ? undefined : value, money.optional());
 const date = z.coerce.date();
 const email = z.string().trim().email().optional().or(z.literal('').transform(() => undefined));
 
@@ -15,6 +16,8 @@ export const companySchema = z.object({ clientId: id, name: z.string().trim().mi
 export const projectSchema = z.object({ clientId: id, companyId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, totalInvestment: money.optional(), requestedAmount: money.optional(), region: optionalText, province: optionalText, sector: optionalText });
 export const projectExpenseSchema = z.object({ projectId: id, category: z.enum(['attrezzature','macchinari','mezzi','ristrutturazione','opere_edili','impianti','software','hardware','marketing','formazione','consulenze','liquidita','acquisto_immobile','affitto','personale','merce','eventi','spese_legali','altro']), description: z.string().trim().min(1).max(500), amount: money, estimated: z.coerce.boolean().optional(), potentiallyEligible: z.coerce.boolean().optional(), eligibilityNotes: optionalText });
 export const serviceStatusSchema = z.enum(['richiesto','pagato','raccolta_documenti','in_lavorazione','bozza_ai','revisione_umana','consegnabile','consegnato','sospeso','chiuso','archiviato']);
+export const operationalServiceStatusSchema = z.enum(['nuova','pre_analisi','documenti_richiesti','documenti_ricevuti','in_valutazione','proposta_inviata','domanda_in_preparazione','domanda_presentata','in_istruttoria','approvata_deliberata','respinta_non_procedibile','rendicontazione','chiusa','archiviata']);
+export const clientServicePipelineSchema = z.object({ id, operationalStatus: operationalServiceStatusSchema, practiceType: optionalText, requestedAmount: optionalMoney, plannedInvestment: optionalMoney, assignedToId: id.optional(), operationalNotes: optionalText });
 export const serviceAreaSchema = z.enum(['anagrafica','bancabilita','finanziamento_aziendale','bandi_finanza_agevolata','progetto_investimento','contratti','pagamenti','dossier','output_ai','altro']);
 export const documentCategorySchema = z.string().trim().min(1).max(120);
 export const serviceCatalogSchema = z.object({ code: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(200), description: optionalText, category: z.string().trim().min(1).max(120), basePrice: money.optional(), active: z.coerce.boolean().optional(), displayOrder: z.coerce.number().int().nonnegative().optional() });

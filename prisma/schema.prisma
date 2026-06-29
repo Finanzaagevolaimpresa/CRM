@@ -167,6 +167,23 @@ enum ServiceStatus {
   archiviato
 }
 
+enum OperationalServiceStatus {
+  nuova
+  pre_analisi
+  documenti_richiesti
+  documenti_ricevuti
+  in_valutazione
+  proposta_inviata
+  domanda_in_preparazione
+  domanda_presentata
+  in_istruttoria
+  approvata_deliberata
+  respinta_non_procedibile
+  rendicontazione
+  chiusa
+  archiviata
+}
+
 enum ChecklistItemStatus {
   da_richiedere
   richiesto
@@ -669,23 +686,33 @@ model ServiceCatalog {
 }
 
 model ClientService {
-  id               String        @id @default(cuid())
-  clientId         String
-  companyId        String?
-  projectId        String?
-  serviceCatalogId String
-  contractId       String?
-  paymentId        String?
-  status           ServiceStatus @default(richiesto)
-  paymentStatus    PaymentStatus @default(da_incassare)
-  assignedToId     String?
-  purchasedAt      DateTime      @default(now())
-  dueDate          DateTime?
-  completedAt      DateTime?
-  internalNotes    String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  deletedAt        DateTime?
+  id                String                   @id @default(cuid())
+  clientId          String
+  companyId         String?
+  projectId         String?
+  serviceCatalogId  String
+  contractId        String?
+  paymentId         String?
+  status            ServiceStatus            @default(richiesto)
+  operationalStatus OperationalServiceStatus @default(nuova)
+  statusUpdatedAt   DateTime                 @default(now())
+  practiceType      String?
+  requestedAmount   Decimal?
+  plannedInvestment Decimal?
+  openedAt          DateTime                 @default(now())
+  operationalNotes  String?
+  paymentStatus     PaymentStatus            @default(da_incassare)
+  assignedToId      String?
+  purchasedAt       DateTime                 @default(now())
+  dueDate           DateTime?
+  completedAt       DateTime?
+  internalNotes     String?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  deletedAt         DateTime?
+
+  @@index([operationalStatus])
+  @@index([statusUpdatedAt])
 }
 
 model CorporateFinancingAssessment {
