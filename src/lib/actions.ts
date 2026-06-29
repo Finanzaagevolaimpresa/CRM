@@ -2,11 +2,11 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema } from './validation';
-import { hasPermission, requirePermission } from './auth';
+import { requirePermission, type AuthSession } from './auth';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
-import { canViewDocument, isSensitiveDocument } from './access-control';
+import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
 import { UserFacingActionError } from './action-errors';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
@@ -180,13 +180,14 @@ function dossierLine(label: string, value: unknown) { return `- ${label}: ${valu
 function money(value: unknown) { return value ? `€ ${Number(value).toLocaleString('it-IT')}` : '—'; }
 function dateLabel(value?: Date | null) { return value ? value.toLocaleDateString('it-IT') : '—'; }
 
-async function assertClientDossierContext(clientId: string, clientServiceId?: string, projectId?: string) {
+async function assertClientDossierContext(session: Pick<AuthSession, 'userId' | 'role'>, clientId: string, clientServiceId?: string, projectId?: string) {
   const [client, service, project] = await Promise.all([
-    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true } }),
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }),
     clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
     projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
   ]);
   if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (!canViewClient(session, client)) throw new UserFacingActionError('Cliente non accessibile');
   if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
   if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
 }
@@ -223,7 +224,7 @@ async function buildClientDossierContent(clientId: string, clientServiceId?: str
 export async function generateClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierGenerateSchema.parse(clean(form));
-  await assertClientDossierContext(data.clientId, data.clientServiceId, data.projectId);
+  await assertClientDossierContext(s, data.clientId, data.clientServiceId, data.projectId);
   const content = await buildClientDossierContent(data.clientId, data.clientServiceId, data.projectId);
   const dossier = await prisma.clientDossier.create({ data: { clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, type: data.type, title: data.title ?? `${dossierTypeLabel[data.type]} — ${new Date().toLocaleDateString('it-IT')}`, content, createdById: s.userId, updatedById: s.userId } as never });
   await audit(s.userId, 'client_dossier_generate', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId, type: dossier.type, status: dossier.status });
@@ -234,7 +235,7 @@ export async function updateClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierUpdateSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
-  await assertClientDossierContext(before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
   const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { title: data.title, type: data.type, status: data.status, content: data.content, updatedById: s.userId, archivedAt: data.status === 'archiviata' ? (before.archivedAt ?? new Date()) : null, archivedById: data.status === 'archiviata' ? s.userId : null } });
   await audit(s.userId, before.status !== 'archiviata' && dossier.status === 'archiviata' ? 'client_dossier_archive' : 'client_dossier_update', 'ClientDossier', dossier.id, { before, after: dossier });
   return dossier;
@@ -244,7 +245,7 @@ export async function archiveClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierIdSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
-  await assertClientDossierContext(before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
   const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { status: 'archiviata', archivedAt: before.archivedAt ?? new Date(), archivedById: s.userId, updatedById: s.userId } });
   await audit(s.userId, 'client_dossier_archive', 'ClientDossier', dossier.id, { before, after: dossier });
   return dossier;
