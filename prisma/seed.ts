@@ -687,7 +687,7 @@ async function main() {
         "Controllare evidenze su DURC, CRIF/Centrale Rischi, bilanci e preventivi.",
       type: "revisione_documentale",
       priority: "alta",
-      status: "aperto",
+      status: "aperta",
       assignedToId: backoffice.id,
       dueAt: new Date(Date.now() + 7 * 86400000),
       createdById: reviewer.id,
