@@ -580,7 +580,7 @@ async function main() {
     ],
   });
   const agent = await prisma.aiAgent.findUniqueOrThrow({
-    where: { code: "agente_bancabilita" },
+    where: { code: "bancabilita" },
   });
   const aiRun = await prisma.aiRun.create({
     data: {
