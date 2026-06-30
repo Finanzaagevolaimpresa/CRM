@@ -16,7 +16,7 @@ export type Permission =
   | 'project.read' | 'project.write'
   | 'document.upload' | 'document.download' | 'document.sensitive.read'
   | 'service.read' | 'service.write' | 'service.assign' | 'service.close'
-  | 'ai.run' | 'ai.review' | 'ai.approve'
+  | 'ai.run' | 'ai.review' | 'ai.approve' | 'ai_agents.read' | 'ai_agents.write'
   | 'dossier.read' | 'dossier.write' | 'dossier.approve'
   | 'contract.read' | 'contract.write'
   | 'payment.read' | 'payment.write'
@@ -52,7 +52,7 @@ export async function requireSession(): Promise<AuthSession> {
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*','dossier.read','dossier.write'],
-  direzione: ['user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.review','ai.approve','dossier.read','dossier.write','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
+  direzione: ['user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.review','ai.approve','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
   commerciale: ['lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign'],
   consulente: ['lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.run','ai.review','dossier.read','dossier.write'],
   revisore: ['lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.review','ai.approve','dossier.read','dossier.approve','service.read'],

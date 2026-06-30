@@ -53,3 +53,5 @@ export const aiOutputApprovalSchema = z.object({ id });
 export const internalUserSchema = z.object({ name: z.string().trim().min(1).max(120), email: z.string().trim().email().transform((v) => v.toLowerCase()), role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']), password: z.string().min(10).max(200), active: z.coerce.boolean().optional() });
 export const userRoleSchema = z.object({ userId: id, role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']) });
 export const userIdSchema = z.object({ userId: id });
+
+export const aiAgentConfigUpdateSchema = z.object({ id, systemPrompt: z.string().trim().min(1).max(20000), active: z.coerce.boolean().default(false) });

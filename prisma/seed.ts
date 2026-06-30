@@ -1,21 +1,10 @@
 import { PrismaClient, RoleCode, type User } from "@prisma/client";
+import { AI_AGENT_CODES, initialAiAgentConfigs } from "../src/lib/ai-agent-configs";
 import bcrypt from "bcryptjs";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
 const prisma = new PrismaClient();
-const agents = [
-  "agente_raccolta_dati",
-  "agente_anagrafica_azienda",
-  "agente_bancabilita",
-  "agente_finanza_agevolata",
-  "agente_cumulabilita",
-  "agente_commerciale",
-  "agente_dossier",
-  "agente_revisore",
-  "agente_checklist_documentale",
-];
-
 async function main() {
   if ((process.env.APP_ENV ?? process.env.NODE_ENV) !== "development") {
     console.log("Seed demo FAI skipped: APP_ENV/NODE_ENV is not development.");
@@ -88,18 +77,39 @@ async function main() {
     },
   });
 
-  for (const code of agents) {
-    await prisma.aiAgent.upsert({
-      where: { code },
-      update: {},
+  for (const config of initialAiAgentConfigs) {
+    const agent = await prisma.aiAgent.upsert({
+      where: { code: config.code },
+      update: {
+        name: config.name,
+        description: config.description,
+        operationalScope: config.operationalScope,
+        systemPrompt: config.systemPrompt,
+        requiredDataChecklist: config.requiredDataChecklist,
+        expectedOutput: config.expectedOutput,
+        toneStyle: config.toneStyle,
+        active: config.active,
+        provider: config.provider,
+        futureModel: config.futureModel ?? null,
+      },
       create: {
-        code,
-        name: code.replaceAll("_", " "),
+        code: config.code,
+        name: config.name,
+        description: config.description,
+        operationalScope: config.operationalScope,
+        systemPrompt: config.systemPrompt,
+        requiredDataChecklist: config.requiredDataChecklist,
+        expectedOutput: config.expectedOutput,
+        toneStyle: config.toneStyle,
+        active: config.active,
+        provider: config.provider,
+        futureModel: config.futureModel ?? null,
         promptVersion: "v1",
         inputSchema: {},
         outputSchema: { requiresHumanReview: true },
       },
     });
+    await prisma.auditLog.create({ data: { actorId: admin.id, event: 'ai_agent_config_seed', entityType: 'AiAgent', entityId: agent.id, after: { code: agent.code, active: agent.active, provider: agent.provider } } });
   }
 
   const services = [
@@ -570,7 +580,7 @@ async function main() {
     ],
   });
   const agent = await prisma.aiAgent.findUniqueOrThrow({
-    where: { code: "agente_bancabilita" },
+    where: { code: AI_AGENT_CODES.bancabilita },
   });
   const aiRun = await prisma.aiRun.create({
     data: {
