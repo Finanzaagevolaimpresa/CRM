@@ -24,7 +24,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   return <div className="space-y-6">
     <PageHeader title={`Dossier / Pre-analisi — ${dossier.title}`} description="Bozza interna salvata nel CRM. Il contenuto è modificabile manualmente e non espone percorsi di storage privati." />
-    <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${dossier.clientId}#dossier`}>← Torna al fascicolo cliente</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export`}>Esporta .md</SecondaryLink></div>
+    <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${dossier.clientId}#dossier`}>← Torna al fascicolo cliente</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export`}>Esporta .md</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export/docx`}>Esporta Word (.docx)</SecondaryLink></div>
     <Card title="Dati bozza">
       <p>Cliente: {client.displayName}</p>
       <p>Servizio/pratica: {service?.practiceType ?? service?.id ?? 'Fascicolo generale'}</p>
@@ -47,6 +47,6 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       {dossier.status !== 'archiviata' ? <form action={archiveClientDossierAndRefresh} className="mt-3"><input type="hidden" name="id" value={dossier.id}/><button className="rounded-xl border border-red-200 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50" type="submit">Archivia bozza</button></form> : null}
     </Card> : <Card title="Contenuto"><div className="whitespace-pre-wrap text-sm leading-6 text-fai-gray">{dossier.content}</div></Card>}
     {!canWrite ? <EmptyState title="Modifica non disponibile">Il tuo ruolo può leggere il dossier ma non modificarlo.</EmptyState> : null}
-    {!hasPermission(session, 'dossier.read') ? <DisabledAction>Export .md</DisabledAction> : null}
+    {!hasPermission(session, 'dossier.read') ? <DisabledAction>Export .md / Word</DisabledAction> : null}
   </div>;
 }
