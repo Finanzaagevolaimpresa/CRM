@@ -1,7 +1,7 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema } from './validation';
 import { requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
@@ -317,5 +317,45 @@ export async function updateClientServicePipeline(form: FormData) {
 export async function linkDocumentToService(form: FormData) { const s = await requirePermission('service.write'); const data = documentServiceLinkSchema.parse(clean(form)); const document = await prisma.document.update({ where: { id: data.documentId }, data: { clientServiceId: data.clientServiceId, serviceArea: data.serviceArea, documentCategory: data.documentCategory } }); await audit(s.userId, 'document_service_link', 'Document', document.id, document); return document; }
 export async function updateDocumentSection(form: FormData) { const s = await requirePermission('document.upload'); const data = documentServiceLinkSchema.parse(clean(form)); const document = await prisma.document.update({ where: { id: data.documentId }, data: { serviceArea: data.serviceArea, documentCategory: data.documentCategory } }); await audit(s.userId, 'document_section_update', 'Document', document.id, document); return document; }
 
+
+export async function runClientAiAgent(form: FormData) {
+  const s = await requirePermission('ai.run');
+  const data = clientAiRunSchema.parse(clean(form));
+  const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
+  if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.');
+
+  const client = await prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null } });
+  if (!client || !canViewClient(s, client)) throw new UserFacingActionError('Cliente non accessibile');
+
+  const [companies, clientService, project, checklist, tasks, documents, clientDossiers, legacyDossiers] = await Promise.all([
+    prisma.company.findMany({ where: { clientId: data.clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    data.clientServiceId ? prisma.clientService.findFirst({ where: { id: data.clientServiceId, clientId: data.clientId, deletedAt: null } }) : null,
+    data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null } }) : null,
+    prisma.documentChecklistItem.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null, active: true }, orderBy: { updatedAt: 'desc' } }),
+    prisma.task.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null }, orderBy: { dueAt: 'asc' }, take: 25 }),
+    prisma.document.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    prisma.clientDossier.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
+    prisma.dossier.findMany({ where: { clientId: data.clientId, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
+  ]);
+  if (data.clientServiceId && !clientService) throw new UserFacingActionError('La pratica selezionata non appartiene al cliente');
+  if (data.projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente');
+
+  const safeDocuments = documents.map(({ storagePath: _storagePath, checksum: _checksum, ...document }) => document);
+  const input = JSON.parse(JSON.stringify({
+    source: 'CRM interno FAI',
+    humanReviewRequired: true,
+    operationalInstructions: data.operationalInstructions,
+    context: { client, companies, clientService, project, checklist, tasks, documents: safeDocuments, clientDossiers, legacyDossiers },
+  }));
+  const draft = await getAiAdapter().run(agent.code, input);
+  const prepared = prepareAiOutput(draft);
+  const run = await prisma.aiRun.create({ data: { agentId: agent.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, input: input as Prisma.InputJsonValue, output: draft as Prisma.InputJsonValue, operationalInstructions: data.operationalInstructions, createdById: s.userId } });
+  const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
+  await audit(s.userId, 'ai_agent_run', 'AiRun', run.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId });
+  await audit(s.userId, 'ai_output_generation', 'AiOutput', output.id, { outputId: output.id, aiRunId: run.id, agentId: agent.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId });
+  return output;
+}
+
 export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run(agentCode, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
-export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }
+export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_output_status_change', 'AiOutput', id, { before: current, after: output });
+  await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }

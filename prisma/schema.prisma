@@ -682,19 +682,29 @@ model AiAgent {
 }
 
 model AiRun {
-  id          String   @id @default(cuid())
-  agentId     String
-  status      String   @default("completed")
-  input       Json?
-  output      Json?
-  createdById String?
-  createdAt   DateTime @default(now())
+  id                      String   @id @default(cuid())
+  agentId                 String
+  clientId                String?
+  clientServiceId         String?
+  projectId               String?
+  status                  String   @default("completed")
+  input                   Json?
+  output                  Json?
+  operationalInstructions String?
+  createdById             String?
+  createdAt               DateTime @default(now())
+
+  @@index([clientId])
+  @@index([clientServiceId])
+  @@index([projectId])
 }
 
 model AiOutput {
   id                  String         @id @default(cuid())
   aiRunId             String
+  clientId            String?
   clientServiceId     String?
+  projectId           String?
   title               String
   content             String
   status              AiOutputStatus @default(needs_review)
@@ -706,6 +716,10 @@ model AiOutput {
   reviewedAt          DateTime?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
+
+  @@index([clientId])
+  @@index([clientServiceId])
+  @@index([projectId])
 }
 
 model AiAgentMessage {

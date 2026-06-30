@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { privateDocumentExists } from '@/lib/storage';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { DocumentUploadForm } from '@/components/document-upload-form';
-import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask, generateClientDossierAndRedirect } from '@/lib/form-actions';
+import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask, generateClientDossierAndRedirect, runClientAiAgentAndRedirect } from '@/lib/form-actions';
 import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient } from '@/lib/access-control';
@@ -27,7 +27,7 @@ const serviceSections = [
   ['contratti', 'Contratti'],
   ['pagamenti', 'Pagamenti'],
   ['task-scadenze', 'Attività e scadenze'],
-  ['output-ai', 'Output AI'],
+  ['output-ai', 'Agenti AI / Output interni'],
   ['audit-log', 'Audit log'],
 ] as const;
 const checklistStatuses = ['da_richiedere','richiesto','ricevuto','validato','non_necessario'];
@@ -39,7 +39,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
-  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems] = await Promise.all([
+  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents] = await Promise.all([
     prisma.client.findUnique({ where: { id } }),
     prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
     prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -54,12 +54,13 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
+    prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
   ]);
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
   const serviceIds = clientServices.map((service) => service.id);
   const [aiOutputs, auditLogs, catalog, users] = await Promise.all([
-    serviceIds.length > 0 ? prisma.aiOutput.findMany({ where: { clientServiceId: { in: serviceIds } }, orderBy: { createdAt: 'desc' } }) : Promise.resolve([]),
+    prisma.aiOutput.findMany({ where: { OR: [{ clientId: id }, ...(serviceIds.length > 0 ? [{ clientServiceId: { in: serviceIds } }] : [])] }, orderBy: { createdAt: 'desc' }, take: 15 }),
     prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }] }, orderBy: { createdAt: 'desc' }, take: 50 }),
     prisma.serviceCatalog.findMany({ where: { id: { in: clientServices.map((s) => s.serviceCatalogId) } } }),
     prisma.user.findMany({ where: { active: true } }),
@@ -68,6 +69,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canAssignServices = hasPermission(session, 'service.assign');
   const canManageTasks = hasPermission(session, 'service.write');
   const canManageDossiers = hasPermission(session, 'dossier.write');
+  const canRunAiAgents = hasPermission(session, 'ai.run');
+  const outputRuns = aiOutputs.length ? await prisma.aiRun.findMany({ where: { id: { in: aiOutputs.map((output) => output.aiRunId) } } }) : [];
+  const outputAgents = outputRuns.length ? await prisma.aiAgent.findMany({ where: { id: { in: outputRuns.map((run) => run.agentId) } } }) : [];
+  const runById = new Map(outputRuns.map((run) => [run.id, run]));
+  const agentById = new Map(outputAgents.map((agent) => [agent.id, agent]));
   const taskStatuses = ['aperta','in_lavorazione','completata','annullata'];
   const taskPriorities = ['bassa','media','alta','urgente'];
   const documentById = new Map(documents.map((document) => [document.id, document]));
@@ -177,7 +183,17 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         ];
       })} />}
     </Card>
-    <Card id="output-ai" title="Output AI">{aiOutputs.length === 0 ? <EmptyState title="Nessun output AI" /> : <Table headers={['Titolo','Stato','Revisione umana','Creato il','Aggiornato il']} rows={aiOutputs.map((o) => [o.title, <StatusBadge status={o.status} key='s' />, o.requiresHumanReview ? 'Obbligatoria' : 'Non richiesta', formatDateTime(o.createdAt), formatDateTime(o.updatedAt)])} />}</Card>
+    <Card id="output-ai" title="Agenti AI / Output interni">
+      {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
+        <input type="hidden" name="clientId" value={client.id}/>
+        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente attivo</option>{activeAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Fascicolo cliente generale</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Nessun progetto specifico</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
+        <textarea className="rounded-xl border p-2 text-sm md:col-span-2" name="operationalInstructions" rows={3} placeholder="Istruzioni operative opzionali per questa esecuzione" />
+        <div className="md:col-span-2"><PrimaryButton type="submit" disabled={activeAgents.length === 0}>Esegui agente mock</PrimaryButton></div>
+      </form> : <EmptyState title="Esecuzione agenti non autorizzata">Serve il permesso ai.run per lanciare agenti dal fascicolo.</EmptyState>}
+      {aiOutputs.length === 0 ? <EmptyState title="Nessun output AI" /> : <Table headers={['Agente / Titolo','Stato','Sintesi mock','Contesto','Generato il','Dettaglio']} rows={aiOutputs.map((o) => { const run = runById.get(o.aiRunId); const agent = run ? agentById.get(run.agentId) : null; const service = o.clientServiceId ? serviceById.get(o.clientServiceId) : null; const project = o.projectId ? projectById.get(o.projectId) : null; return [<span key="title" className="font-semibold text-fai-navy">{agent?.name ?? 'Agente AI'}<br/><span className="text-xs font-normal text-slate-500">{o.title}</span></span>, <StatusBadge status={o.status} key='s' />, <span key="content" className="line-clamp-3 text-sm">{o.content}</span>, <span key="ctx">{client.displayName}<br/><span className="text-xs text-slate-500">{service ? nameOf(service.serviceCatalogId) : 'Fascicolo cliente'}{project ? ` · ${project.title}` : ''}</span></span>, formatDateTime(o.createdAt), <Link className="font-bold text-fai-blue underline" href={`/ai/outputs/${o.id}`} key="open">Apri</Link>]; })} />}
+    </Card>
     <Card id="audit-log" title="Audit log / Timeline fascicolo"><ActivityTimeline events={timeline} /></Card>
   </div>;
 }
