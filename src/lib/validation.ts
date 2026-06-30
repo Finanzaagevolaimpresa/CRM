@@ -48,6 +48,7 @@ export const clientDossierIdSchema = z.object({ id });
 export const contractSchema = z.object({ clientId: id, projectId: id.optional(), contractNumber: z.string().trim().min(1).max(80), serviceName: z.string().trim().min(1).max(200), serviceDescription: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, notes: optionalText });
 export const paymentSchema = z.object({ contractId: id, clientId: id, taxableAmount: money, vatAmount: money, totalAmount: money, method: optionalText, dueDate: date.optional(), collectedAt: date.optional(), notes: optionalText });
 export const aiRunSchema = z.object({ agentCode: z.string().trim().min(1).max(120), input: z.unknown() });
+export const clientAiRunSchema = z.object({ agentId: id, clientId: id, clientServiceId: id.optional(), projectId: id.optional(), operationalInstructions: optionalText });
 export const aiOutputApprovalSchema = z.object({ id });
 
 export const internalUserSchema = z.object({ name: z.string().trim().min(1).max(120), email: z.string().trim().email().transform((v) => v.toLowerCase()), role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']), password: z.string().min(10).max(200), active: z.coerce.boolean().optional() });
