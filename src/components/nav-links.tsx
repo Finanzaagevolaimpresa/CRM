@@ -24,6 +24,7 @@ const items: NavItem[] = [
   { label: 'AI', href: '/ai' },
   { label: 'Utenti', href: '/settings/users', adminOnly: true },
   { label: 'Ruoli', href: '/settings/roles', adminOnly: true },
+  { label: 'Agenti AI', href: '/settings/ai-agents', adminOnly: true },
   { label: 'Audit log', href: '/audit-log', adminOnly: true },
 ];
 

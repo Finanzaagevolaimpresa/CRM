@@ -1,8 +1,9 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema } from './validation';
 import { requirePermission, type AuthSession } from './auth';
+import { revalidatePath } from 'next/cache';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
@@ -11,6 +12,22 @@ import { UserFacingActionError } from './action-errors';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
+export async function updateAiAgentConfig(form: FormData) {
+  const s = await requirePermission('ai_agents.write');
+  const raw = clean(form);
+  const data = aiAgentConfigUpdateSchema.parse({ ...raw, active: form.has('active') });
+  const before = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.id } });
+  const agent = await prisma.aiAgent.update({ where: { id: data.id }, data: { systemPrompt: data.systemPrompt, active: data.active } });
+  const promptChanged = before.systemPrompt !== agent.systemPrompt;
+  const activeChanged = before.active !== agent.active;
+  const events = ['ai_agent_config_update'];
+  if (promptChanged) events.push('ai_agent_prompt_update');
+  if (activeChanged) events.push(agent.active ? 'ai_agent_activate' : 'ai_agent_deactivate');
+  await Promise.all(events.map((event) => audit(s.userId, event, 'AiAgent', agent.id, { before: { code: before.code, systemPrompt: before.systemPrompt, active: before.active }, after: { code: agent.code, systemPrompt: agent.systemPrompt, active: agent.active } })));
+  revalidatePath('/settings/ai-agents');
+  void agent;
+}
+
 export async function createLead(form: FormData) { const s = await requirePermission('lead.write'); const data = leadSchema.parse(clean(form)); const lead = await prisma.lead.create({ data }); await audit(s.userId, 'lead_create', 'Lead', lead.id, lead); return lead; }
 export async function createClient(form: FormData) { const s = await requirePermission('client.write'); const data = clientSchema.parse(clean(form)); const client = await prisma.client.create({ data: data as never }); await audit(s.userId, 'client_create', 'Client', client.id, client); return client; }
 export async function createCompany(form: FormData) { const s = await requirePermission('company.write'); const data = companySchema.parse(clean(form)); const company = await prisma.company.create({ data: data as never }); await audit(s.userId, 'company_create', 'Company', company.id, company); return company; }
@@ -193,20 +210,21 @@ async function assertClientDossierContext(session: Pick<AuthSession, 'userId' | 
 }
 
 async function buildClientDossierContent(clientId: string, clientServiceId?: string, projectId?: string) {
-  const [client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
+  const [agentConfig, client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
+    prisma.aiAgent.findUnique({ where: { code: 'dossier_cliente' } }),
     prisma.client.findUniqueOrThrow({ where: { id: clientId } }),
     prisma.company.findMany({ where: { clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.clientService.findMany({ where: { clientId, ...(clientServiceId ? { id: clientServiceId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.serviceCatalog.findMany(),
     prisma.project.findMany({ where: { clientId, ...(projectId ? { id: projectId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
-    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, orderBy: { createdAt: 'desc' } }),
+    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, title: true, documentCategory: true, status: true, containsSensitiveData: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
     prisma.task.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
   ]);
   const catalogName = (id: string) => serviceCatalog.find((s) => s.id === id)?.name ?? 'Servizio FAI';
   const mainCompany = companies[0];
   return [
-    '# Dossier / Pre-analisi', '',
+    '# Dossier / Pre-analisi', '', '## Configurazione agente FAI', dossierLine('Agente', agentConfig?.name ?? 'dossier_cliente'), dossierLine('Provider', agentConfig?.provider ?? 'mock'), dossierLine('Stato agente', agentConfig?.active === false ? 'non attivo' : 'attivo'), '### Istruzioni operative agente', agentConfig?.systemPrompt || 'Generazione mock/template con revisione umana obbligatoria.', '',
     '## 1. Dati cliente', dossierLine('Cliente', client.displayName), dossierLine('Tipologia', client.type), dossierLine('Stato fascicolo', client.status), dossierLine('Note cliente', client.notes), mainCompany ? dossierLine('Azienda principale', `${mainCompany.name}${mainCompany.vatNumber ? ` · P.IVA ${mainCompany.vatNumber}` : ''}`) : '- Azienda principale: —', '',
     '## 2. Inquadramento attività', companies.length ? companies.map((c) => `- ${c.name}: ${[c.legalForm, c.atecoCode, c.atecoDescription, c.city, c.province].filter(Boolean).join(' · ') || 'dati da completare'}`).join('\n') : '- Dati aziendali non ancora completi.', '',
     '## 3. Obiettivo richiesto', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)} · pratica: ${s.practiceType ?? '—'} · importo richiesto: ${money(s.requestedAmount)} · investimento previsto: ${money(s.plannedInvestment)}`).join('\n') : '- Nessun servizio/pratica collegato.', projects.length ? projects.map((p) => `- Progetto ${p.title}: richiesto ${money(p.requestedAmount)}, investimento ${money(p.totalInvestment)}, stato ${p.status}.`).join('\n') : '- Nessun progetto di investimento collegato.', '',

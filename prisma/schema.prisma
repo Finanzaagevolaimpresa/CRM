@@ -662,13 +662,23 @@ model Deadline {
 }
 
 model AiAgent {
-  id            String  @id @default(cuid())
-  code          String  @unique
-  name          String
-  promptVersion String
-  inputSchema   Json
-  outputSchema  Json
-  active        Boolean @default(true)
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  description           String   @default("")
+  operationalScope      String   @default("")
+  systemPrompt          String   @default("")
+  requiredDataChecklist Json     @default("[]")
+  expectedOutput        String   @default("")
+  toneStyle             String   @default("")
+  active                Boolean  @default(true)
+  provider              String   @default("mock")
+  futureModel           String?
+  promptVersion         String
+  inputSchema           Json
+  outputSchema          Json
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
 
 model AiRun {
