@@ -1,3 +1,11 @@
+export const AI_AGENT_CODES = {
+  bancabilita: 'bancabilita',
+  preAnalisiAgevolata: 'pre_analisi_agevolata',
+  finanzaOrdinaria: 'finanza_ordinaria',
+  ottimizzazionePratica: 'ottimizzazione_pratica',
+  dossierCliente: 'dossier_cliente',
+} as const;
+
 export type SeedAiAgentConfig = {
   code: string;
   name: string;
@@ -14,7 +22,7 @@ export type SeedAiAgentConfig = {
 
 export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
   {
-    code: 'bancabilita',
+    code: AI_AGENT_CODES.bancabilita,
     name: 'Bancabilità',
     description: 'Valuta in modo preliminare la bancabilità del cliente e le criticità documentali.',
     operationalScope: 'Analisi interna su dati anagrafici, situazione economico-finanziaria, documenti caricati e note operative.',
@@ -26,7 +34,7 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     provider: 'mock',
   },
   {
-    code: 'pre_analisi_agevolata',
+    code: AI_AGENT_CODES.preAnalisiAgevolata,
     name: 'Pre-analisi agevolata',
     description: 'Supporta la pre-analisi di ammissibilità a misure di finanza agevolata.',
     operationalScope: 'Verifica preliminare su progetto, settore, territorio, spese e condizioni note della misura.',
@@ -38,7 +46,7 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     provider: 'mock',
   },
   {
-    code: 'finanza_ordinaria',
+    code: AI_AGENT_CODES.finanzaOrdinaria,
     name: 'Finanza ordinaria',
     description: 'Inquadra ipotesi di finanziamento ordinario e fabbisogno finanziario.',
     operationalScope: 'Analisi interna di fabbisogno, importi, sostenibilità e documenti bancari disponibili.',
@@ -50,7 +58,7 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     provider: 'mock',
   },
   {
-    code: 'ottimizzazione_pratica',
+    code: AI_AGENT_CODES.ottimizzazionePratica,
     name: 'Ottimizzazione pratica',
     description: 'Suggerisce interventi operativi per rendere la pratica più completa e coerente.',
     operationalScope: 'Controllo qualità su checklist, task, pipeline pratica, importi e documentazione.',
@@ -62,7 +70,7 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     provider: 'mock',
   },
   {
-    code: 'dossier_cliente',
+    code: AI_AGENT_CODES.dossierCliente,
     name: 'Dossier cliente',
     description: 'Genera la bozza strutturata del dossier cliente FAI partendo dai dati CRM disponibili.',
     operationalScope: 'Bozze ClientDossier per fascicolo cliente, documenti, checklist, attività, pipeline e progetti collegati.',

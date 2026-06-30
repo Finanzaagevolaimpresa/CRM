@@ -1,5 +1,5 @@
 import { PrismaClient, RoleCode, type User } from "@prisma/client";
-import { initialAiAgentConfigs } from "../src/lib/ai-agent-configs";
+import { AI_AGENT_CODES, initialAiAgentConfigs } from "../src/lib/ai-agent-configs";
 import bcrypt from "bcryptjs";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
@@ -580,7 +580,7 @@ async function main() {
     ],
   });
   const agent = await prisma.aiAgent.findUniqueOrThrow({
-    where: { code: "bancabilita" },
+    where: { code: AI_AGENT_CODES.bancabilita },
   });
   const aiRun = await prisma.aiRun.create({
     data: {

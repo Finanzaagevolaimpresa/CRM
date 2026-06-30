@@ -9,6 +9,7 @@ import { prepareAiOutput, getAiAdapter } from './ai';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
 import { UserFacingActionError } from './action-errors';
+import { AI_AGENT_CODES } from './ai-agent-configs';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
@@ -211,7 +212,7 @@ async function assertClientDossierContext(session: Pick<AuthSession, 'userId' | 
 
 async function buildClientDossierContent(clientId: string, clientServiceId?: string, projectId?: string) {
   const [agentConfig, client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
-    prisma.aiAgent.findUniqueOrThrow({ where: { code: 'dossier_cliente' } }),
+    prisma.aiAgent.findUniqueOrThrow({ where: { code: AI_AGENT_CODES.dossierCliente } }),
     prisma.client.findUniqueOrThrow({ where: { id: clientId } }),
     prisma.company.findMany({ where: { clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.clientService.findMany({ where: { clientId, ...(clientServiceId ? { id: clientServiceId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -221,7 +222,7 @@ async function buildClientDossierContent(clientId: string, clientServiceId?: str
     prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, title: true, documentCategory: true, status: true, containsSensitiveData: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
     prisma.task.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
   ]);
-  if (!agentConfig.active) throw new UserFacingActionError('Agente dossier_cliente disattivato: riattivarlo da Impostazioni > Agenti AI per generare il dossier.');
+  if (!agentConfig.active) throw new UserFacingActionError(`Agente ${AI_AGENT_CODES.dossierCliente} disattivato: riattivarlo da Impostazioni > Agenti AI per generare il dossier.`);
   const catalogName = (id: string) => serviceCatalog.find((s) => s.id === id)?.name ?? 'Servizio FAI';
   const mainCompany = companies[0];
   return [
