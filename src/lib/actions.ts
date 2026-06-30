@@ -251,10 +251,10 @@ export async function archiveClientDossier(form: FormData) {
   return dossier;
 }
 
-export async function auditClientDossierExport(id: string) {
+export async function auditClientDossierExport(id: string, format: 'markdown' | 'docx' = 'markdown') {
   const s = await requirePermission('dossier.read');
   const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
-  await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format: 'markdown' });
+  await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format });
   return dossier;
 }
 
