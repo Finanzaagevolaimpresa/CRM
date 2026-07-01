@@ -430,7 +430,13 @@ export async function runClientAiAgent(form: FormData) {
     operationalInstructions: data.operationalInstructions,
     context: { client, companies, clientService, serviceCatalog, project, checklist, tasks, documents: safeDocuments, clientDossiers, legacyDossiers },
   }));
-  const draft = await getAiAdapter().run(agent.code, input);
+  let draft;
+  try {
+    draft = await getAiAdapter().run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, input);
+  } catch (error) {
+    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: process.env.AI_PROVIDER === 'openai' ? 'openai' : 'mock', error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
+    throw error;
+  }
   const prepared = prepareAiOutput(draft);
   const run = await prisma.aiRun.create({ data: { agentId: agent.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, input: input as Prisma.InputJsonValue, output: draft as Prisma.InputJsonValue, operationalInstructions: data.operationalInstructions, createdById: s.userId } });
   const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
@@ -439,6 +445,6 @@ export async function runClientAiAgent(form: FormData) {
   return output;
 }
 
-export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run(agentCode, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
+export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run({ code: agentCode, role: agent.name, systemPrompt: agent.systemPrompt }, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
 export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_output_status_change', 'AiOutput', id, { before: current, after: output });
   await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }
