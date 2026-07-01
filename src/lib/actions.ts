@@ -6,6 +6,7 @@ import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
+import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
 import { UserFacingActionError } from './action-errors';
@@ -309,7 +310,7 @@ export async function createClientDossierFromAiOutput(form: FormData) {
         agentName,
         agentCode: agent?.code,
         generatedAt: output.createdAt,
-        serviceLabel: service?.practiceType ?? service?.id,
+        serviceLabel: buildClientServiceLabel(service, service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null),
         projectTitle: project?.title,
         outputContent: output.content,
       }),
@@ -408,7 +409,7 @@ export async function runClientAiAgent(form: FormData) {
   const client = await prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null } });
   if (!client || !canViewClient(s, client)) throw new UserFacingActionError('Cliente non accessibile');
 
-  const [companies, clientService, project, checklist, tasks, documents, clientDossiers, legacyDossiers] = await Promise.all([
+  const [companies, clientService, project, checklist, tasks, documents, clientDossiers, legacyDossiers, serviceCatalog] = await Promise.all([
     prisma.company.findMany({ where: { clientId: data.clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     data.clientServiceId ? prisma.clientService.findFirst({ where: { id: data.clientServiceId, clientId: data.clientId, deletedAt: null } }) : null,
     data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null } }) : null,
@@ -417,6 +418,7 @@ export async function runClientAiAgent(form: FormData) {
     prisma.document.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 }),
     prisma.clientDossier.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
     prisma.dossier.findMany({ where: { clientId: data.clientId, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
+    prisma.serviceCatalog.findMany(),
   ]);
   if (data.clientServiceId && !clientService) throw new UserFacingActionError('La pratica selezionata non appartiene al cliente');
   if (data.projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente');
@@ -426,7 +428,7 @@ export async function runClientAiAgent(form: FormData) {
     source: 'CRM interno FAI',
     humanReviewRequired: true,
     operationalInstructions: data.operationalInstructions,
-    context: { client, companies, clientService, project, checklist, tasks, documents: safeDocuments, clientDossiers, legacyDossiers },
+    context: { client, companies, clientService, serviceCatalog, project, checklist, tasks, documents: safeDocuments, clientDossiers, legacyDossiers },
   }));
   const draft = await getAiAdapter().run(agent.code, input);
   const prepared = prepareAiOutput(draft);

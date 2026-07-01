@@ -6,6 +6,7 @@ import { archiveClientDossierAndRefresh, updateClientDossierAndRefresh } from '@
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient } from '@/lib/access-control';
 import { prisma } from '@/lib/prisma';
+import { buildClientServiceLabel } from '@/lib/client-service-label';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -19,6 +20,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     prisma.user.findUnique({ where: { id: dossier.createdById } }),
     dossier.updatedById ? prisma.user.findUnique({ where: { id: dossier.updatedById } }) : null,
   ]);
+  const serviceCatalog = service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null;
+  const serviceLabel = service ? buildClientServiceLabel(service, serviceCatalog) : 'Fascicolo generale';
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Dossier non accessibile</h1>;
   const canWrite = hasPermission(session, 'dossier.write');
 
@@ -27,7 +30,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${dossier.clientId}#dossier`}>← Torna al fascicolo cliente</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export`}>Esporta .md</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export/docx`}>Esporta Word (.docx)</SecondaryLink></div>
     <Card title="Dati bozza">
       <p>Cliente: {client.displayName}</p>
-      <p>Servizio/pratica: {service?.practiceType ?? service?.id ?? 'Fascicolo generale'}</p>
+      <p>Servizio/pratica: {serviceLabel}</p>
       <p>Progetto: {project?.title ?? '—'}</p>
       <p>Tipo: {dossier.type.replaceAll('_', ' ')}</p>
       <p>Stato: <StatusBadge status={dossier.status} /></p>

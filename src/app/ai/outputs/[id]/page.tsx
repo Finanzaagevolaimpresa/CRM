@@ -1,6 +1,7 @@
 import { Card, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { prisma } from '@/lib/prisma';
+import { buildClientServiceLabel } from '@/lib/client-service-label';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient } from '@/lib/access-control';
 import { createClientDossierFromAiOutputAndRedirect } from '@/lib/form-actions';
@@ -17,6 +18,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     output.projectId ? prisma.project.findUnique({ where: { id: output.projectId } }) : null,
     prisma.aiRun.findUnique({ where: { id: output.aiRunId } }).then((r) => r ? prisma.aiAgent.findUnique({ where: { id: r.agentId } }) : null),
   ]);
+  const serviceCatalog = service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null;
+  const serviceLabel = service ? buildClientServiceLabel(service, serviceCatalog) : 'Fascicolo generale';
   if (client && !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Output AI non accessibile</h1>;
   const canCreateDossier = hasPermission(session, 'dossier.write');
   const canCreateFromOutput = canCreateDossier && !!client && output.status === 'approved';
@@ -29,7 +32,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         <p><strong>Agente:</strong> {agent?.name ?? run?.agentId ?? '—'}</p>
         <p><strong>Generato il:</strong> {formatDateTime(output.createdAt)}</p>
         <p><strong>Cliente:</strong> {client?.displayName ?? '—'}</p>
-        <p><strong>Pratica/servizio:</strong> {service?.practiceType ?? service?.id ?? 'Fascicolo generale'}</p>
+        <p><strong>Pratica/servizio:</strong> {serviceLabel}</p>
         <p><strong>Progetto:</strong> {project?.title ?? '—'}</p>
         <p><strong>Revisione umana:</strong> {output.requiresHumanReview ? 'Obbligatoria' : 'Non richiesta'}</p>
       </div>
