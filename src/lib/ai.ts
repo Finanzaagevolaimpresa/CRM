@@ -91,10 +91,12 @@ function buildMockContent(agentCode: string, ctx: AiContext) {
 
 function sanitizeForOpenAi(input: unknown) {
   const ctx = contextFrom(input);
+  const userPrompt = typeof input === 'object' && input ? (input as { prompt?: unknown }).prompt : undefined;
   const max = <T>(items: T[] | undefined, limit: number) => (items ?? []).slice(0, limit);
   const safe = {
     source: 'CRM interno FAI',
     humanReviewRequired: true,
+    prompt: typeof userPrompt === 'string' && userPrompt.trim() ? userPrompt.trim() : undefined,
     operationalInstructions: typeof input === 'object' && input ? (input as { operationalInstructions?: unknown }).operationalInstructions : undefined,
     context: {
       client: ctx.client ? { displayName: ctx.client.displayName, type: ctx.client.type, status: ctx.client.status, notes: ctx.client.notes } : undefined,
@@ -117,6 +119,7 @@ function sanitizeForOpenAi(input: unknown) {
 }
 
 function buildOpenAiPrompt(agent: AiAgentRuntime, input: unknown) {
+  const safeInput = sanitizeForOpenAi(input);
   return [
     `Ruolo agente: ${agent.role || agent.code}.`,
     'Regole FAI obbligatorie:',
@@ -125,9 +128,10 @@ function buildOpenAiPrompt(agent: AiAgentRuntime, input: unknown) {
     '- Quando citi requisiti, bandi, agevolazioni, scadenze, ammissibilità o norme, scrivi "Da verificare su fonte ufficiale".',
     '- Produci testo semplice/Markdown in sezioni chiare: Sintesi, Dati usati, Criticità, Scenari, Documenti da verificare, Prossime azioni.',
     '- Non inventare dati mancanti; segnala cosa richiedere o validare.',
+    safeInput.prompt ? `Prompt quick-run utente (istruzione operativa separata dal systemPrompt agente):\n${safeInput.prompt}` : undefined,
     'Contesto CRM sanificato, senza percorsi storage/checksum:',
-    JSON.stringify(sanitizeForOpenAi(input), null, 2),
-  ].join('\n');
+    JSON.stringify(safeInput, null, 2),
+  ].filter(Boolean).join('\n');
 }
 
 export class MockAiAdapter implements AiProviderAdapter {
