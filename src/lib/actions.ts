@@ -1,8 +1,8 @@
 'use server';
 import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema } from './validation';
-import { requirePermission, type AuthSession } from './auth';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema, aiOutputDossierSchema } from './validation';
+import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter } from './ai';
@@ -239,6 +239,87 @@ async function buildClientDossierContent(clientId: string, clientServiceId?: str
     '## 10. Prossime azioni operative', '- Completare o validare la checklist documentale.', '- Aggiornare note operative e importi della pratica.', '- Revisionare manualmente questa bozza prima di condividerne sintesi interne.', '',
     '_Bozza generata con provider mock/template server-side. Nessuna AI reale è stata invocata._',
   ].join('\n');
+}
+
+function dossierTypeForAgent(agentCode?: string | null) {
+  if (agentCode === 'dossier_cliente') return 'dossier_cliente';
+  if (agentCode && ['pre_analisi_agevolata', 'bancabilita', 'finanza_ordinaria'].includes(agentCode)) return 'pre_analisi';
+  return 'nota_interna';
+}
+
+function buildAiOutputDossierContent(input: {
+  clientName: string;
+  agentName: string;
+  agentCode?: string | null;
+  generatedAt: Date;
+  serviceLabel?: string | null;
+  projectTitle?: string | null;
+  outputContent: string;
+}) {
+  return [
+    '# Bozza dossier da output AI', '',
+    '## Intestazione cliente',
+    dossierLine('Cliente', input.clientName), '',
+    '## Origine AI interna',
+    dossierLine('Agente usato', `${input.agentName}${input.agentCode ? ` (${input.agentCode})` : ''}`),
+    dossierLine('Data generazione output', input.generatedAt.toLocaleString('it-IT')), '',
+    '## Contesto pratica/progetto',
+    dossierLine('Pratica/servizio', input.serviceLabel ?? 'Fascicolo cliente generale'),
+    dossierLine('Progetto', input.projectTitle ?? '—'), '',
+    '## Contenuto output AI',
+    input.outputContent, '',
+    '## Nota interna di revisione',
+    '- Bozza creata dopo revisione umana interna dell’output AI approvato/revisionato. Verificare manualmente contenuti, dati cliente, condizioni operative e completezza documentale prima di ogni uso successivo.', '',
+    '## Disclaimer FAI',
+    'Documento interno di lavoro. Finanza Agevola Impresa S.r.l. non eroga finanziamenti, non promette contributi e non garantisce esiti o erogazioni. Offre consulenza tecnica, strategica e di orientamento.',
+  ].join('\n');
+}
+
+export async function createClientDossierFromAiOutput(form: FormData) {
+  const s = await requirePermission('dossier.write');
+  if (!hasPermission(s, 'ai.review')) throw new UserFacingActionError('Permesso ai.review richiesto per trasformare un output AI in bozza dossier.');
+  const data = aiOutputDossierSchema.parse(clean(form));
+  const output = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } });
+  if (!output.clientId) throw new UserFacingActionError('Output AI non collegato a un cliente: impossibile creare la bozza dossier.');
+  if (output.status !== 'approved') throw new UserFacingActionError('Solo output AI approvati/revisionati possono generare una bozza dossier.');
+
+  const [run, client, service, project] = await Promise.all([
+    prisma.aiRun.findUniqueOrThrow({ where: { id: output.aiRunId } }),
+    prisma.client.findFirst({ where: { id: output.clientId, deletedAt: null } }),
+    output.clientServiceId ? prisma.clientService.findFirst({ where: { id: output.clientServiceId, clientId: output.clientId, deletedAt: null } }) : null,
+    output.projectId ? prisma.project.findFirst({ where: { id: output.projectId, clientId: output.clientId, deletedAt: null } }) : null,
+  ]);
+  if (!client) throw new UserFacingActionError('Cliente collegato all’output non valido.');
+  if (!canViewClient(s, client)) throw new UserFacingActionError('Cliente non accessibile.');
+  if (output.clientServiceId && !service) throw new UserFacingActionError('Servizio collegato all’output non valido o non accessibile.');
+  if (output.projectId && !project) throw new UserFacingActionError('Progetto collegato all’output non valido o non accessibile.');
+
+  const agent = await prisma.aiAgent.findUnique({ where: { id: run.agentId } });
+  const agentName = agent?.name ?? run.agentId;
+  const title = `Bozza da output AI - ${agentName} - ${new Date().toLocaleDateString('it-IT')}`;
+  const dossier = await prisma.clientDossier.create({
+    data: {
+      clientId: output.clientId,
+      clientServiceId: output.clientServiceId,
+      projectId: output.projectId,
+      type: dossierTypeForAgent(agent?.code),
+      title,
+      content: buildAiOutputDossierContent({
+        clientName: client.displayName,
+        agentName,
+        agentCode: agent?.code,
+        generatedAt: output.createdAt,
+        serviceLabel: service?.practiceType ?? service?.id,
+        projectTitle: project?.title,
+        outputContent: output.content,
+      }),
+      createdById: s.userId,
+      updatedById: s.userId,
+    } as never,
+  });
+  await audit(s.userId, 'client_dossier_create_from_ai_output', 'ClientDossier', dossier.id, { outputId: output.id, dossierId: dossier.id, clientId: output.clientId, clientServiceId: output.clientServiceId, projectId: output.projectId, aiRunId: output.aiRunId, agentId: run.agentId, userId: s.userId });
+  await audit(s.userId, 'ai_output_to_client_dossier', 'AiOutput', output.id, { outputId: output.id, dossierId: dossier.id, clientId: output.clientId, clientServiceId: output.clientServiceId, projectId: output.projectId, userId: s.userId });
+  return dossier;
 }
 
 export async function generateClientDossier(form: FormData) {
