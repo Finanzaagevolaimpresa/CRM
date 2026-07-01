@@ -1,7 +1,13 @@
 import { scanForbiddenPhrases } from './compliance';
 import { buildClientServiceLabel, findServiceCatalogLabel } from './client-service-label';
+import { UserFacingActionError } from './action-errors';
+
 export type AiDraft = { title: string; content: string; metadata?: Record<string, unknown> };
-export interface AiProviderAdapter { run(agentCode: string, input: unknown): Promise<AiDraft>; }
+export type AiAgentRuntime = { code: string; role?: string | null; systemPrompt?: string | null };
+export interface AiProviderAdapter { run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft>; }
+
+const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
+const OPENAI_TIMEOUT_MS = 45_000;
 
 type AiContext = {
   client?: { displayName?: string; type?: string; status?: string; notes?: string | null };
@@ -14,6 +20,9 @@ type AiContext = {
   tasks?: Array<{ title?: string; status?: string; priority?: string; description?: string | null }>;
 };
 
+function normalizeAgent(agent: AiAgentRuntime | string): AiAgentRuntime {
+  return typeof agent === 'string' ? { code: agent } : agent;
+}
 function contextFrom(input: unknown): AiContext {
   if (!input || typeof input !== 'object') return {};
   const context = (input as { context?: AiContext }).context;
@@ -80,6 +89,98 @@ function buildMockContent(agentCode: string, ctx: AiContext) {
   return sections.join('\n');
 }
 
-export class MockAiAdapter implements AiProviderAdapter { async run(agentCode: string, input: unknown): Promise<AiDraft> { const ctx = contextFrom(input); return { title: `Bozza interna ${agentCode} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`, content: buildMockContent(agentCode, ctx) }; } }
-export function getAiAdapter(): AiProviderAdapter { if (!process.env.AI_API_KEY || process.env.AI_PROVIDER === 'mock') return new MockAiAdapter(); return new MockAiAdapter(); }
+function sanitizeForOpenAi(input: unknown) {
+  const ctx = contextFrom(input);
+  const max = <T>(items: T[] | undefined, limit: number) => (items ?? []).slice(0, limit);
+  const safe = {
+    source: 'CRM interno FAI',
+    humanReviewRequired: true,
+    operationalInstructions: typeof input === 'object' && input ? (input as { operationalInstructions?: unknown }).operationalInstructions : undefined,
+    context: {
+      client: ctx.client ? { displayName: ctx.client.displayName, type: ctx.client.type, status: ctx.client.status, notes: ctx.client.notes } : undefined,
+      companies: max(ctx.companies, 3).map((c) => ({ name: c.name, revenue: c.revenue ?? c.annualRevenue ?? c.turnover ?? c.fatturato })),
+      clientService: ctx.clientService ? {
+        serviceCatalogId: ctx.clientService.serviceCatalogId,
+        practiceType: ctx.clientService.practiceType,
+        operationalStatus: ctx.clientService.operationalStatus,
+        requestedAmount: ctx.clientService.requestedAmount,
+        plannedInvestment: ctx.clientService.plannedInvestment,
+        operationalNotes: ctx.clientService.operationalNotes,
+      } : undefined,
+      project: ctx.project,
+      checklist: max(ctx.checklist, 30).map((i) => ({ title: i.title, status: i.status, notes: i.notes, hasLinkedDocument: Boolean(i.documentId) })),
+      documents: max(ctx.documents, 30).map((d) => ({ title: d.title, documentCategory: d.documentCategory, status: d.status, serviceArea: d.serviceArea })),
+      tasks: max(ctx.tasks, 15).map((t) => ({ title: t.title, status: t.status, priority: t.priority, description: t.description })),
+    },
+  };
+  return JSON.parse(JSON.stringify(safe));
+}
+
+function buildOpenAiPrompt(agent: AiAgentRuntime, input: unknown) {
+  return [
+    `Ruolo agente: ${agent.role || agent.code}.`,
+    'Regole FAI obbligatorie:',
+    '- FAI non eroga finanziamenti, non garantisce esiti e non promette contributi, finanziamenti o approvazioni.',
+    '- Ogni risposta è una bozza interna soggetta a revisione umana obbligatoria.',
+    '- Quando citi requisiti, bandi, agevolazioni, scadenze, ammissibilità o norme, scrivi "Da verificare su fonte ufficiale".',
+    '- Produci testo semplice/Markdown in sezioni chiare: Sintesi, Dati usati, Criticità, Scenari, Documenti da verificare, Prossime azioni.',
+    '- Non inventare dati mancanti; segnala cosa richiedere o validare.',
+    'Contesto CRM sanificato, senza percorsi storage/checksum:',
+    JSON.stringify(sanitizeForOpenAi(input), null, 2),
+  ].join('\n');
+}
+
+export class MockAiAdapter implements AiProviderAdapter {
+  async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
+    const runtime = normalizeAgent(agent);
+    const ctx = contextFrom(input);
+    return { title: `Bozza interna ${runtime.code} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`, content: buildMockContent(runtime.code, ctx) };
+  }
+}
+
+export class OpenAiAdapter implements AiProviderAdapter {
+  async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
+    const runtime = normalizeAgent(agent);
+    const apiKey = process.env.AI_API_KEY?.trim();
+    if (!apiKey) throw new UserFacingActionError('Provider OpenAI configurato ma AI_API_KEY non è valorizzata. Imposta la chiave lato server o usa AI_PROVIDER=mock.');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+    try {
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL,
+          instructions: runtime.systemPrompt || 'Sei un assistente AI interno FAI. Rispondi in italiano professionale.',
+          input: buildOpenAiPrompt(runtime, input),
+          max_output_tokens: 2500,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
+      const data = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+      const content = data.output_text || data.output?.flatMap((o) => o.content ?? []).map((c) => c.text).filter(Boolean).join('\n') || '';
+      if (!content.trim()) throw new Error('OpenAI empty response');
+      const ctx = contextFrom(input);
+      return {
+        title: `Bozza OpenAI ${runtime.code} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`,
+        content: content.trim(),
+        metadata: { provider: 'openai', model: process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL },
+      };
+    } catch (error) {
+      if (error instanceof UserFacingActionError) throw error;
+      const message = error instanceof Error && error.name === 'AbortError'
+        ? 'Timeout durante la chiamata OpenAI. Riprova più tardi o usa AI_PROVIDER=mock.'
+        : 'Errore operativo durante la chiamata OpenAI. Nessun output AI è stato salvato.';
+      throw new UserFacingActionError(message);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export function getAiAdapter(): AiProviderAdapter {
+  return process.env.AI_PROVIDER === 'openai' ? new OpenAiAdapter() : new MockAiAdapter();
+}
 export function prepareAiOutput(draft: AiDraft) { return { ...draft, status: 'needs_review' as const, requiresHumanReview: true, forbiddenPhrases: scanForbiddenPhrases(draft.content) }; }
