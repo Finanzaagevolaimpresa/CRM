@@ -187,4 +187,74 @@ export class OpenAiAdapter implements AiProviderAdapter {
 export function getAiAdapter(): AiProviderAdapter {
   return process.env.AI_PROVIDER === 'openai' ? new OpenAiAdapter() : new MockAiAdapter();
 }
+
+export type AiProviderDiagnostics = {
+  provider: 'mock' | 'openai';
+  configuredProvider: string;
+  model: string;
+  hasApiKey: boolean;
+  mode: 'mock' | 'openai';
+  configurationStatus: 'ok' | 'incompleta';
+};
+
+export type AiProviderDiagnosticTestResult = { success: boolean; message: string; provider: 'mock' | 'openai'; model: string };
+
+export function getAiProviderDiagnostics(): AiProviderDiagnostics {
+  const configuredProvider = process.env.AI_PROVIDER?.trim() || 'mock';
+  const provider = configuredProvider === 'openai' ? 'openai' : 'mock';
+  const hasApiKey = Boolean(process.env.AI_API_KEY?.trim());
+  const model = process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
+  return {
+    provider,
+    configuredProvider,
+    model,
+    hasApiKey,
+    mode: provider,
+    configurationStatus: provider === 'openai' && !hasApiKey ? 'incompleta' : 'ok',
+  };
+}
+
+export async function testAiProviderDiagnostic(): Promise<AiProviderDiagnosticTestResult> {
+  const diagnostics = getAiProviderDiagnostics();
+  if (diagnostics.provider === 'mock') {
+    await new MockAiAdapter().run({ code: 'diagnostic_test', role: 'Diagnostica provider AI' }, {
+      source: 'CRM interno FAI',
+      humanReviewRequired: true,
+      prompt: 'Test diagnostico interno minimale.',
+      context: {},
+    });
+    return { success: true, message: 'Provider mock raggiungibile: risposta sintetica generata correttamente.', provider: diagnostics.provider, model: diagnostics.model };
+  }
+
+  const apiKey = process.env.AI_API_KEY?.trim();
+  if (!apiKey) {
+    return { success: false, message: 'Provider OpenAI selezionato ma AI_API_KEY non è configurata lato server.', provider: diagnostics.provider, model: diagnostics.model };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: diagnostics.model,
+        instructions: 'Rispondi solo con OK. Test tecnico interno senza dati cliente.',
+        input: 'Test diagnostico provider AI CRM FAI. Non usare dati cliente.',
+        max_output_tokens: 16,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return { success: false, message: `Chiamata OpenAI non riuscita (HTTP ${response.status}). Nessun output AI salvato.`, provider: diagnostics.provider, model: diagnostics.model };
+    return { success: true, message: 'Provider OpenAI raggiungibile: chiamata minima completata. Nessun output AI salvato.', provider: diagnostics.provider, model: diagnostics.model };
+  } catch (error) {
+    const message = error instanceof Error && error.name === 'AbortError'
+      ? 'Timeout durante il test OpenAI. Nessun output AI salvato.'
+      : 'Errore controllato durante il test OpenAI. Nessun output AI salvato.';
+    return { success: false, message, provider: diagnostics.provider, model: diagnostics.model };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function prepareAiOutput(draft: AiDraft) { return { ...draft, status: 'needs_review' as const, requiresHumanReview: true, forbiddenPhrases: scanForbiddenPhrases(draft.content) }; }
