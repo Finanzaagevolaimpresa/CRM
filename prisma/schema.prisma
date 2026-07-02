@@ -309,12 +309,18 @@ model CommercialOffer {
   id            String                @id @default(cuid())
   leadId        String?
   clientId      String?
-  title         String
-  taxableAmount Decimal
-  vatAmount     Decimal
-  totalAmount   Decimal
-  status        CommercialOfferStatus @default(bozza)
-  notes         String?
+  title                 String
+  description           String?
+  services              String?
+  includedActivities    String?
+  taxableAmount         Decimal
+  vatAmount             Decimal
+  totalAmount           Decimal
+  validUntil            DateTime?
+  operationalConditions String?
+  commercialProposal    String?
+  status                CommercialOfferStatus @default(bozza)
+  notes                 String?
   createdById   String?
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
