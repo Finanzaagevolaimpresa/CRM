@@ -184,24 +184,31 @@ export class OpenAiAdapter implements AiProviderAdapter {
   }
 }
 
+export type AiProviderName = 'mock' | 'openai';
+
+export function normalizeAiProvider(value = process.env.AI_PROVIDER): AiProviderName {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'openai' ? 'openai' : 'mock';
+}
+
 export function getAiAdapter(): AiProviderAdapter {
-  return process.env.AI_PROVIDER === 'openai' ? new OpenAiAdapter() : new MockAiAdapter();
+  return normalizeAiProvider() === 'openai' ? new OpenAiAdapter() : new MockAiAdapter();
 }
 
 export type AiProviderDiagnostics = {
-  provider: 'mock' | 'openai';
+  provider: AiProviderName;
   configuredProvider: string;
   model: string;
   hasApiKey: boolean;
-  mode: 'mock' | 'openai';
+  mode: AiProviderName;
   configurationStatus: 'ok' | 'incompleta';
 };
 
-export type AiProviderDiagnosticTestResult = { success: boolean; message: string; provider: 'mock' | 'openai'; model: string };
+export type AiProviderDiagnosticTestResult = { success: boolean; message: string; provider: AiProviderName; model: string };
 
 export function getAiProviderDiagnostics(): AiProviderDiagnostics {
   const configuredProvider = process.env.AI_PROVIDER?.trim() || 'mock';
-  const provider = configuredProvider === 'openai' ? 'openai' : 'mock';
+  const provider = normalizeAiProvider(configuredProvider);
   const hasApiKey = Boolean(process.env.AI_API_KEY?.trim());
   const model = process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
   return {

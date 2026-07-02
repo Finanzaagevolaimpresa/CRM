@@ -6,7 +6,7 @@ import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
-import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic } from './ai';
+import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
@@ -449,7 +449,7 @@ export async function runClientAiAgent(form: FormData) {
   try {
     draft = await getAiAdapter().run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, input);
   } catch (error) {
-    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: process.env.AI_PROVIDER === 'openai' ? 'openai' : 'mock', error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
+    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: normalizeAiProvider(), error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
     throw error;
   }
   const prepared = prepareAiOutput(draft);
