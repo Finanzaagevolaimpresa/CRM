@@ -7,10 +7,18 @@ const optionalMoney = z.preprocess((value) => value === '' || value === null ? u
 const date = z.coerce.date();
 const email = z.string().trim().email().optional().or(z.literal('').transform(() => undefined));
 
+export const leadStatusSchema = z.enum(['nuovo','da_contattare','contattato','qualificato','non_qualificato','appuntamento_fissato','preanalisi_richiesta','offerta_inviata','contratto_inviato','cliente_acquisito','proposta_da_preparare','proposta_inviata','in_trattativa','vinto','perso','archiviato']);
+export const leadSourceSchema = z.enum(['sito','whatsapp','referral','campagna','consulente','manuale','altro']);
+export const leadPrioritySchema = z.enum(['bassa','media','alta','urgente']);
 export const leadSchema = z.object({
-  firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().min(1).max(100), phone: optionalText, email,
-  source: optionalText, region: optionalText, province: optionalText, interest: optionalText, declaredInvestment: money.optional(), notes: optionalText,
+  firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().min(1).max(100), companyName: optionalText, contactPerson: optionalText, phone: optionalText, email,
+  source: optionalText, leadSource: leadSourceSchema.default('manuale'), region: optionalText, province: optionalText, city: optionalText, interest: optionalText, declaredInvestment: optionalMoney, requestedAmount: optionalMoney, availableBudget: optionalMoney,
+  status: leadStatusSchema.default('nuovo'), priority: leadPrioritySchema.default('media'), assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText, clientId: id.optional(),
 });
+export const leadUpdateSchema = leadSchema.extend({ id });
+export const leadCommercialUpdateSchema = z.object({ id, status: leadStatusSchema, priority: leadPrioritySchema, assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText });
+export const leadConvertSchema = z.object({ id, type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']).default('societa') });
+export const commercialOfferSchema = z.object({ leadId: id.optional(), clientId: id.optional(), title: z.string().trim().min(1).max(200), taxableAmount: money, vatAmount: money, totalAmount: money, status: z.enum(['bozza','inviata','accettata','rifiutata','scaduta']).default('bozza'), notes: optionalText });
 export const clientSchema = z.object({ type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']), displayName: z.string().trim().min(1).max(200), leadId: id.optional(), notes: optionalText });
 export const companySchema = z.object({ clientId: id, name: z.string().trim().min(1).max(200), vatNumber: optionalText, taxCode: optionalText, pec: email, province: optionalText, city: optionalText, legalForm: optionalText, durcStatus: optionalText, notes: optionalText });
 export const projectSchema = z.object({ clientId: id, companyId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, totalInvestment: money.optional(), requestedAmount: money.optional(), region: optionalText, province: optionalText, sector: optionalText });
