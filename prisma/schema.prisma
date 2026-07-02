@@ -29,8 +29,37 @@ enum LeadStatus {
   offerta_inviata
   contratto_inviato
   cliente_acquisito
+  proposta_da_preparare
+  proposta_inviata
+  in_trattativa
+  vinto
   perso
   archiviato
+}
+
+enum LeadSource {
+  sito
+  whatsapp
+  referral
+  campagna
+  consulente
+  manuale
+  altro
+}
+
+enum LeadPriority {
+  bassa
+  media
+  alta
+  urgente
+}
+
+enum CommercialOfferStatus {
+  bozza
+  inviata
+  accettata
+  rifiutata
+  scaduta
 }
 
 enum ClientType {
@@ -245,24 +274,51 @@ model User {
 }
 
 model Lead {
-  id                 String     @id @default(cuid())
+  id                 String       @id @default(cuid())
   firstName          String
   lastName           String
+  companyName        String?
+  contactPerson      String?
   phone              String?
   email              String?
   source             String?
+  leadSource         LeadSource   @default(manuale)
   region             String?
   province           String?
+  city               String?
   interest           String?
   declaredInvestment Decimal?
-  status             LeadStatus @default(nuovo)
+  requestedAmount    Decimal?
+  availableBudget    Decimal?
+  status             LeadStatus   @default(nuovo)
+  priority           LeadPriority @default(media)
   commercialStatus   String?
   assignedToId       String?
   nextAction         DateTime?
+  nextActionNote     String?
+  nextActionDate     DateTime?
   notes              String?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  commercialProposal String?
+  clientId           String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
   deletedAt          DateTime?
+}
+
+model CommercialOffer {
+  id            String                @id @default(cuid())
+  leadId        String?
+  clientId      String?
+  title         String
+  taxableAmount Decimal
+  vatAmount     Decimal
+  totalAmount   Decimal
+  status        CommercialOfferStatus @default(bozza)
+  notes         String?
+  createdById   String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  deletedAt     DateTime?
 }
 
 model Client {
