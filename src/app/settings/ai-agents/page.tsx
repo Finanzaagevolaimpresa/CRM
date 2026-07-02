@@ -4,6 +4,7 @@ import { Badge, Card, PageHeader, TimestampMeta } from '@/components/ui';
 import { updateAiAgentConfig } from '@/lib/actions';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getAiAgentCategory, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
 
 function checklist(value: unknown) {
   return Array.isArray(value) ? value.map(String) : [];
@@ -11,7 +12,7 @@ function checklist(value: unknown) {
 
 export default async function Page() {
   await requirePermission('ai_agents.read');
-  const agents = await prisma.aiAgent.findMany({ orderBy: { code: 'asc' } });
+  const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { code: 'asc' } }));
 
   return (
     <div className="space-y-6">
@@ -21,6 +22,7 @@ export default async function Page() {
           <Card key={agent.id} title={`${agent.name} · ${agent.code}`} action={<Badge tone={agent.active ? 'green' : 'gray'}>{agent.active ? 'attivo' : 'non attivo'}</Badge>}>
             <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
               <div className="space-y-3">
+                <p><span className="font-extrabold text-fai-navy">Categoria:</span> <Badge tone="blue">{getAiAgentCategory(agent.code)}</Badge></p>
                 <p><span className="font-extrabold text-fai-navy">Descrizione:</span> {agent.description || '—'}</p>
                 <p><span className="font-extrabold text-fai-navy">Ambito operativo:</span> {agent.operationalScope || '—'}</p>
                 <p><span className="font-extrabold text-fai-navy">Output atteso:</span> {agent.expectedOutput || '—'}</p>
@@ -37,6 +39,7 @@ export default async function Page() {
                 <label className="block text-xs font-black uppercase tracking-wide text-fai-navy" htmlFor={`prompt-${agent.id}`}>Istruzioni / prompt di sistema</label>
                 <textarea id={`prompt-${agent.id}`} name="systemPrompt" defaultValue={agent.systemPrompt} className="min-h-56 w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-none transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20" />
                 <label className="flex items-center gap-2 text-sm font-bold text-fai-navy"><input type="checkbox" name="active" defaultChecked={agent.active} className="h-4 w-4 rounded border-slate-300" /> Agente attivo</label>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><strong>Suggerimento miglioramento prompt:</strong> eventuali proposte, incluse quelle dell’agente governance, devono essere valutate da admin/direzione. Nessun prompt viene modificato automaticamente; il salvataggio manuale resta tracciato in audit log.</div>
                 <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue" type="submit">Salva configurazione</button>
               </form>
             </div>

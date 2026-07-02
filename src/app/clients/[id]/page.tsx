@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
+import { getAiAgentCategory, isPrimaryOperationalAiAgent, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
 import { buildClientServiceLabel } from '@/lib/client-service-label';
 import { privateDocumentExists } from '@/lib/storage';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
@@ -190,7 +191,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="output-ai" title="Agenti AI / Output interni">
       {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
         <input type="hidden" name="clientId" value={client.id}/>
-        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente attivo</option>{activeAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {getAiAgentCategory(agent.code)}</option>)}</select>
         <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Fascicolo cliente generale</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
         <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Nessun progetto specifico</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
         <textarea className="rounded-xl border p-2 text-sm md:col-span-2" name="operationalInstructions" rows={3} placeholder="Istruzioni operative opzionali per questa esecuzione" />
