@@ -4,8 +4,9 @@ import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema, aiOutputDossierSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { leadSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
-import { prepareAiOutput, getAiAdapter } from './ai';
+import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
@@ -14,6 +15,20 @@ import { AI_AGENT_CODES } from './ai-agent-configs';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
+
+export async function runAiProviderDiagnosticTest() {
+  const s = await requirePermission('ai_agents.read');
+  const result = await testAiProviderDiagnostic();
+  await audit(s.userId, 'ai_provider_diagnostic_test', 'AiProvider', result.provider, {
+    provider: result.provider,
+    model: result.model,
+    success: result.success,
+    status: result.success ? 'ok' : 'failure',
+  });
+  const params = new URLSearchParams({ status: result.success ? 'ok' : 'error', message: result.message });
+  redirect(`/settings/ai-diagnostics?${params.toString()}`);
+}
+
 export async function updateAiAgentConfig(form: FormData) {
   const s = await requirePermission('ai_agents.write');
   const raw = clean(form);
@@ -434,7 +449,7 @@ export async function runClientAiAgent(form: FormData) {
   try {
     draft = await getAiAdapter().run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, input);
   } catch (error) {
-    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: process.env.AI_PROVIDER === 'openai' ? 'openai' : 'mock', error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
+    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: normalizeAiProvider(), error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
     throw error;
   }
   const prepared = prepareAiOutput(draft);

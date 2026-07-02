@@ -59,7 +59,7 @@ AI_API_KEY="sk-..."
 AI_MODEL="gpt-4.1-mini"
 ```
 
-`AI_MODEL` è opzionale; se omesso viene usato `gpt-4.1-mini` come default prudente per bozze operative interne. La chiave `AI_API_KEY` non deve mai essere esposta al browser né inserita in variabili `NEXT_PUBLIC_*`. Se `AI_PROVIDER=openai` ma la chiave manca, l'app restituisce un errore operativo chiaro e non salva output fittizi.
+`AI_PROVIDER` viene normalizzato lato server con trim e lowercase: sono ammessi solo `mock` e `openai`; qualsiasi altro valore ricade coerentemente su `mock` sia nella diagnostica sia nelle esecuzioni reali. `AI_MODEL` è opzionale; se omesso viene usato `gpt-4.1-mini` come default prudente per bozze operative interne. La chiave `AI_API_KEY` non deve mai essere esposta al browser né inserita in variabili `NEXT_PUBLIC_*`. Se `AI_PROVIDER=openai` ma la chiave manca, l'app restituisce un errore operativo chiaro e non salva output fittizi.
 
 L'uso di OpenAI può generare costi in base a token/modello. La CI resta su `AI_PROVIDER=mock` e non installa pacchetti OpenAI esterni: il provider reale usa la API HTTPS solo quando configurato lato server. Ogni output AI, sia mock sia OpenAI, nasce come bozza interna `needs_review` o `flagged`, mantiene la revisione umana obbligatoria e non deve promettere contributi, finanziamenti o approvazioni. In questo step non sono previsti streaming, upload file a OpenAI, né invio di `storagePath` o `checksum`.
 
