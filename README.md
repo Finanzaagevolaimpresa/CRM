@@ -123,6 +123,12 @@ Il workflow `.github/workflows/ci.yml` esegue su push e pull request:
 
 La CI passerà a `npm ci` e riattiverà la cache npm in `actions/setup-node` solo dopo il commit di `package-lock.json`.
 
+## Staging/Produzione
+
+Per preparare il CRM FAI a staging o produzione usare la guida dedicata [`docs/deployment-staging-production.md`](docs/deployment-staging-production.md). La guida copre differenze tra locale, staging e produzione, variabili ambiente obbligatorie, requisiti HTTPS, secret server-side, backup database/storage, integrazione WordPress → CRM e health check `GET /api/health`.
+
+Il CRM resta un'applicazione interna protetta: non è prevista un'area cliente pubblica e le credenziali demo non devono essere usate in produzione.
+
 ## Integrazione sito WordPress FAI → CRM lead intake
 
 Il CRM espone un endpoint server-side interno per ricevere lead dal sito WordPress `finanzaagevolaimpresa.it` senza creare un'area cliente pubblica e senza esporre pagine CRM non autenticate.
