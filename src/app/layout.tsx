@@ -10,10 +10,10 @@ export default async function RootLayout({
   return (
     <html lang="it">
       <body>
-        <div className="flex">
+        <div className="flex min-w-0 flex-col md:flex-row">
           <Nav role={session?.role} />
-          <div className="min-h-screen flex-1">
-            <div className="sticky top-0 z-20 border-b border-white/70 bg-white/78 px-8 py-4 shadow-sm shadow-slate-200/60 backdrop-blur-xl">
+          <div className="min-h-screen min-w-0 flex-1">
+            <div className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 px-4 py-3 shadow-sm shadow-slate-200/50 backdrop-blur-xl md:px-6">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-black uppercase tracking-[0.2em] text-fai-green">
@@ -36,7 +36,7 @@ export default async function RootLayout({
                 </div>
               </div>
             </div>
-            <main className="p-8 xl:p-10">{children}</main>
+            <main className="p-4 md:p-6 xl:p-8">{children}</main>
           </div>
         </div>
       </body>
