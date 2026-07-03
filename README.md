@@ -122,3 +122,65 @@ Il workflow `.github/workflows/ci.yml` esegue su push e pull request:
 7. `npm run build`.
 
 La CI passerà a `npm ci` e riattiverà la cache npm in `actions/setup-node` solo dopo il commit di `package-lock.json`.
+
+## Integrazione sito WordPress FAI → CRM lead intake
+
+Il CRM espone un endpoint server-side interno per ricevere lead dal sito WordPress `finanzaagevolaimpresa.it` senza creare un'area cliente pubblica e senza esporre pagine CRM non autenticate.
+
+- Endpoint: `POST /api/integrations/website/leads`
+- Header obbligatorio: `x-fai-webhook-secret: <valore WEBSITE_LEAD_WEBHOOK_SECRET>`
+- Variabile server obbligatoria: `WEBSITE_LEAD_WEBHOOK_SECRET`, da mantenere segreta e non inserire mai in variabili `NEXT_PUBLIC_*`.
+- WordPress/WPForms deve inviare una richiesta `POST` JSON con l'header `x-fai-webhook-secret` valorizzato con lo stesso secret configurato lato CRM.
+- Il CRM salva il lead nella pipeline commerciale con fonte `Sito web`, registra audit log interni e non invia email automatiche.
+
+Esempio `curl`:
+
+```bash
+curl -X POST "https://crm.example.com/api/integrations/website/leads" \
+  -H "content-type: application/json" \
+  -H "x-fai-webhook-secret: $WEBSITE_LEAD_WEBHOOK_SECRET" \
+  -d '{
+    "firstName": "Mario",
+    "lastName": "Rossi",
+    "companyName": "Rossi SRL",
+    "email": "mario.rossi@example.com",
+    "phone": "+390300000000",
+    "city": "Brescia",
+    "region": "Lombardia",
+    "interest": "Finanza agevolata",
+    "requestedAmount": 50000,
+    "message": "Vorrei valutare un bando per investimenti digitali.",
+    "sourcePage": "https://www.finanzaagevolaimpresa.it/contatti/",
+    "serviceInterest": "Pre-Analisi AI Ammissibilità FAI",
+    "privacyAccepted": true,
+    "marketingAccepted": false,
+    "submittedAt": "2026-07-03T10:30:00.000Z"
+  }'
+```
+
+Esempio PowerShell:
+
+```powershell
+$headers = @{
+  "content-type" = "application/json"
+  "x-fai-webhook-secret" = $env:WEBSITE_LEAD_WEBHOOK_SECRET
+}
+$body = @{
+  firstName = "Mario"
+  lastName = "Rossi"
+  companyName = "Rossi SRL"
+  email = "mario.rossi@example.com"
+  phone = "+390300000000"
+  city = "Brescia"
+  region = "Lombardia"
+  interest = "Finanza agevolata"
+  requestedAmount = 50000
+  message = "Vorrei valutare un bando per investimenti digitali."
+  sourcePage = "https://www.finanzaagevolaimpresa.it/contatti/"
+  serviceInterest = "Pre-Analisi AI Ammissibilità FAI"
+  privacyAccepted = $true
+  marketingAccepted = $false
+  submittedAt = "2026-07-03T10:30:00.000Z"
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "https://crm.example.com/api/integrations/website/leads" -Headers $headers -Body $body
+```
