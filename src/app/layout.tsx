@@ -10,9 +10,9 @@ export default async function RootLayout({
   return (
     <html lang="it">
       <body>
-        <div className="flex min-w-0 flex-col md:flex-row">
+        <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
           <Nav role={session?.role} />
-          <div className="min-h-screen min-w-0 flex-1">
+          <div className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
             <div className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 px-4 py-3 shadow-sm shadow-slate-200/50 backdrop-blur-xl md:px-6">
               <div className="flex items-center justify-between gap-4">
                 <div>

@@ -360,48 +360,45 @@ export function Nav({
   role?: import("@prisma/client").RoleCode | null;
 }) {
   return (
-    <aside className="sticky top-0 z-30 flex max-h-screen w-full shrink-0 flex-col overflow-y-auto bg-fai-navy p-4 text-white shadow-xl shadow-fai-navy/20 md:min-h-screen md:w-72">
+    <aside className="relative z-30 flex w-full shrink-0 flex-col overflow-hidden bg-fai-navy p-4 text-white shadow-xl shadow-fai-navy/20 md:h-screen md:w-72">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(128,204,42,.18),transparent_30%),radial-gradient(circle_at_100%_35%,rgba(61,41,116,.32),transparent_30%),linear-gradient(180deg,rgba(5,46,112,.96),rgba(3,31,75,1))]" />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <Link
           href="/dashboard"
-          className="mb-5 flex items-center gap-3 rounded-3xl border border-white/12 bg-white/95 p-3 shadow-lg shadow-fai-navy/20 ring-1 ring-fai-lime/15"
+          className="mb-4 flex shrink-0 items-center gap-3 rounded-3xl border border-white/12 bg-white/95 p-3 shadow-lg shadow-fai-navy/20 ring-1 ring-fai-lime/15"
         >
-          <span className="grid h-14 w-24 shrink-0 place-items-center overflow-hidden rounded-2xl bg-white text-lg font-black tracking-[0.18em] text-fai-navy ring-1 ring-slate-200">
-            <object
-              data="/logo-fai.png"
-              type="image/png"
-              aria-label="Logo Finanza Agevola Impresa"
-              className="h-full w-full p-1.5"
-            >
-              <span>FAI</span>
-            </object>
+          <span
+            aria-label="Logo Finanza Agevola Impresa"
+            className="grid h-14 w-20 shrink-0 place-items-center rounded-2xl bg-white bg-[url('/logo-fai.png')] bg-contain bg-center bg-no-repeat px-2 text-lg font-black tracking-[0.18em] text-fai-navy ring-1 ring-slate-200"
+            role="img"
+          >
+            FAI
           </span>
-          <span className="min-w-0">
-            <span className="block text-sm font-black text-fai-navy">
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-black leading-tight text-fai-navy">
               Gestionale CRM
             </span>
-            <span className="block whitespace-normal text-xs font-bold leading-snug text-slate-500">
+            <span className="block whitespace-normal break-words text-xs font-bold leading-snug text-slate-500">
               Finanza Agevola Impresa
             </span>
           </span>
         </Link>
-        <div className="mb-4 rounded-2xl border border-white/10 bg-white/8 p-3 text-xs leading-5 text-white/72">
+        <div className="mb-4 shrink-0 rounded-2xl border border-white/10 bg-white/8 p-3 text-xs leading-5 text-white/72">
           <span className="font-black uppercase tracking-wide text-fai-lime">
             Control center
           </span>
           <br />
           Pratiche, clienti, AI e compliance in ambiente protetto.
         </div>
-        <div className="min-h-0 flex-1 pr-1">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
           <NavLinks role={role} />
         </div>
         <form
           action={logoutAction}
-          className="mt-5 border-t border-white/15 pt-4"
+          className="mt-4 shrink-0 border-t border-white/15 pt-4"
         >
           <button
-            className="w-full rounded-xl bg-white/10 px-4 py-2.5 text-left text-sm font-bold text-white transition hover:bg-fai-orange focus:outline-none focus:ring-2 focus:ring-fai-lime"
+            className="w-full rounded-xl bg-white/10 px-4 py-3 text-left text-sm font-bold text-white transition hover:bg-fai-orange focus:outline-none focus:ring-2 focus:ring-fai-lime"
             type="submit"
           >
             Logout

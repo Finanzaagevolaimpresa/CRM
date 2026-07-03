@@ -103,7 +103,7 @@ export function NavLinks({ role }: { role?: RoleCode | null }) {
   const canSeeAdmin = Boolean(role && adminRoles.includes(role));
 
   return (
-    <nav className="space-y-4" aria-label="Navigazione principale">
+    <nav className="space-y-4 pb-1" aria-label="Navigazione principale">
       {sections.map((section) => {
         const visibleItems = section.items.filter((item) => {
           if (item.adminOnly && !canSeeAdmin) return false;
@@ -123,15 +123,15 @@ export function NavLinks({ role }: { role?: RoleCode | null }) {
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
-                  className={`group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white text-fai-navy shadow-md shadow-fai-lime/10 ring-white/80" : "text-white/82 ring-transparent hover:bg-white/10 hover:text-white hover:ring-white/10"}`}
+                  className={`group flex min-h-12 items-center justify-between rounded-xl px-3 py-3 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white text-fai-navy shadow-md shadow-fai-lime/10 ring-white/80" : "text-white/82 ring-transparent hover:bg-white/10 hover:text-white hover:ring-white/10"}`}
                   href={href}
                   key={href}
                 >
-                  <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex min-w-0 flex-1 items-center gap-2.5">
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${active ? "bg-fai-orange shadow-sm shadow-fai-orange/40" : "bg-white/18 group-hover:bg-fai-lime"}`}
                     />
-                    <span className="whitespace-normal leading-snug">
+                    <span className="line-clamp-2 whitespace-normal break-words leading-snug">
                       {label}
                     </span>
                   </span>
