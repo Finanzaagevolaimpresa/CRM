@@ -321,6 +321,13 @@ model CommercialOffer {
   commercialProposal    String?
   status                CommercialOfferStatus @default(bozza)
   notes                 String?
+  sentAt                DateTime?
+  followUpAt            DateTime?
+  followUpNote          String?
+  outcomeNote           String?
+  acceptedAt            DateTime?
+  rejectedAt            DateTime?
+  rejectionReason       String?
   createdById   String?
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
