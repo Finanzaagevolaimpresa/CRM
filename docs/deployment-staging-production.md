@@ -41,14 +41,25 @@ Configurare le variabili lato server, senza prefisso `NEXT_PUBLIC_` per secret e
 | `APP_ENV` | Sì | Valori consigliati: `development`, `staging`, `production`. |
 | `AUTH_COOKIE_NAME` | Sì | Nome cookie sessione, ad esempio `fai_crm_session`. |
 | `AUTH_SECRET` | Sì | Deve essere una stringa lunga, casuale e reale; diversa per ogni ambiente. |
-| `STORAGE_PROVIDER` | Sì | Provider storage documenti. Per lo storage locale usare il valore supportato dal codice esistente. |
-| `LOCAL_DOCUMENT_STORAGE_ROOT` | Sì | Percorso filesystem privato per i documenti quando si usa storage locale. Non deve essere dentro una directory pubblica servita dal web server. |
+| `STORAGE_PROVIDER` | Sì | Valore attualmente supportato: `local`. Non configurare `s3`/cloud storage finché non viene implementato nel codice runtime. |
+| `LOCAL_DOCUMENT_STORAGE_ROOT` | Sì | Directory privata e persistente del server per i documenti quando `STORAGE_PROVIDER="local"`. Non deve essere dentro una directory pubblica servita dal web server. |
 | `AI_PROVIDER` | Sì | `mock` per ambienti senza AI reale oppure `openai` quando configurato server-side. |
 | `AI_API_KEY` | Sì se `AI_PROVIDER=openai` | Chiave API mantenuta solo server-side; mai nel browser, mai in `NEXT_PUBLIC_*`, mai nei log. |
 | `AI_MODEL` | Sì | Modello usato dal provider AI configurato. |
 | `WEBSITE_LEAD_WEBHOOK_SECRET` | Sì | Deve essere una stringa lunga, casuale e reale condivisa solo tra WordPress e CRM. |
 
 Generare `AUTH_SECRET` e `WEBSITE_LEAD_WEBHOOK_SECRET` con un generatore crittograficamente sicuro. Non riutilizzare valori demo, brevi o prevedibili.
+
+### Storage documenti supportato in questa versione
+
+In staging e produzione configurare esplicitamente:
+
+```env
+STORAGE_PROVIDER="local"
+LOCAL_DOCUMENT_STORAGE_ROOT="/percorso/privato/persistente/fai-crm/documents"
+```
+
+`LOCAL_DOCUMENT_STORAGE_ROOT` deve puntare a una directory privata e persistente del server, fuori da qualunque root pubblica servita da Nginx, Apache, CDN o static hosting. S3/cloud storage è un TODO futuro: non impostare `STORAGE_PROVIDER="s3"` in staging o produzione finché il provider non viene implementato e abilitato nel codice runtime.
 
 ## Sicurezza produzione
 

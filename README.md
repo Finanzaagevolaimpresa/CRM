@@ -125,7 +125,7 @@ La CI passerà a `npm ci` e riattiverà la cache npm in `actions/setup-node` sol
 
 ## Staging/Produzione
 
-Per preparare il CRM FAI a staging o produzione usare la guida dedicata [`docs/deployment-staging-production.md`](docs/deployment-staging-production.md). La guida copre differenze tra locale, staging e produzione, variabili ambiente obbligatorie, requisiti HTTPS, secret server-side, backup database/storage, integrazione WordPress → CRM e health check `GET /api/health`.
+Per preparare il CRM FAI a staging o produzione usare la guida dedicata [`docs/deployment-staging-production.md`](docs/deployment-staging-production.md). La guida copre differenze tra locale, staging e produzione, variabili ambiente obbligatorie, requisiti HTTPS, secret server-side, backup database/storage, integrazione WordPress → CRM e health check `GET /api/health`. In questa versione lo storage documenti supportato è `STORAGE_PROVIDER="local"`: non usare `s3` in staging/produzione finché non viene implementato nel codice runtime.
 
 Il CRM resta un'applicazione interna protetta: non è prevista un'area cliente pubblica e le credenziali demo non devono essere usate in produzione.
 
