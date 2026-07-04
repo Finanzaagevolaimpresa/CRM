@@ -29,6 +29,7 @@ const serviceSections = [
   ['contratti', 'Contratti'],
   ['pagamenti', 'Pagamenti'],
   ['task-scadenze', 'Attività e scadenze'],
+  ['ufficio-tecnico-pratiche', 'Ufficio Tecnico / Pratiche'],
   ['output-ai', 'Agenti AI / Output interni'],
   ['audit-log', 'Audit log'],
 ] as const;
@@ -41,7 +42,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
-  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents] = await Promise.all([
+  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents, technicalPractices] = await Promise.all([
     prisma.client.findUnique({ where: { id } }),
     prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
     prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -57,6 +58,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
     prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+    prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
   ]);
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
@@ -188,6 +190,18 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         ];
       })} />}
     </Card>
+    <Card id="ufficio-tecnico-pratiche" title="Ufficio Tecnico / Pratiche">
+      <p className="mb-4 rounded-2xl bg-fai-orange/10 p-3 text-xs font-bold text-fai-orange">Gli aggiornamenti al cliente vanno verificati prima dell’invio. Nessuna comunicazione automatica viene inviata dal CRM.</p>
+      {technicalPractices.length === 0 ? <EmptyState title="Nessuna pratica tecnica collegata" /> : <Table headers={['Pratica','Stato interno','Prossimo aggiornamento cliente','Commerciale referente','Stato cliente','Azione']} rows={technicalPractices.map((practice) => [
+        <span key="title" className="font-semibold text-fai-navy">{practice.title}<br/><span className="text-xs font-normal text-slate-500">{practice.practiceType} · {practice.targetEntity}</span></span>,
+        <StatusBadge key="status" status={practice.status} />,
+        formatDateTime(practice.nextClientUpdateAt),
+        userOf(practice.commercialOwnerId),
+        practice.clientVisibleStatus ?? 'Da verificare',
+        <Link key="open" className="font-bold text-fai-blue underline" href={`/technical-office/practices/${practice.id}`}>Apri</Link>
+      ])} />}
+    </Card>
+
     <Card id="output-ai" title="Agenti AI / Output interni">
       {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
         <input type="hidden" name="clientId" value={client.id}/>

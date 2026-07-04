@@ -41,3 +41,17 @@ export function canEditService(user: Actor, service: Pick<ClientService, 'assign
   if (user.role === 'consulente') return service.project?.consultantId === id || service.client?.consultantId === id;
   return false;
 }
+
+export function canViewTechnicalPractice(user: Actor, practice: { commercialOwnerId?: string | null; technicalOwnerId?: string | null; client?: Pick<Client, 'salesOwnerId' | 'consultantId'> | null }) {
+  if (hasGlobalAccess(user)) return true;
+  const id = actorId(user);
+  if (practice.commercialOwnerId === id || practice.technicalOwnerId === id) return true;
+  if (practice.client && canViewClient(user, practice.client)) return true;
+  return ['revisore', 'backoffice', 'amministrazione', 'consulente'].includes(user.role);
+}
+
+export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwnerId?: string | null }) {
+  if (hasGlobalAccess(user)) return true;
+  const id = actorId(user);
+  return ['backoffice', 'consulente'].includes(user.role) || practice?.technicalOwnerId === id;
+}

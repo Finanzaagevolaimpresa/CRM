@@ -246,6 +246,28 @@ enum ServiceArea {
   altro
 }
 
+
+enum TechnicalPracticeStatus {
+  da_progettare
+  in_progettazione
+  documenti_richiesti
+  documenti_completi
+  pronta_presentazione
+  presentata
+  integrazione_richiesta
+  in_istruttoria
+  approvata
+  respinta
+  archiviata
+}
+
+enum TechnicalPracticePriority {
+  bassa
+  media
+  alta
+  urgente
+}
+
 enum TaskStatus {
   aperta
   in_lavorazione
@@ -870,6 +892,40 @@ model CorporateFinancingAssessment {
   nextAction             String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
+}
+
+
+model TechnicalPractice {
+  id                     String                    @id @default(cuid())
+  clientId               String
+  projectId              String?
+  clientServiceId        String?
+  commercialOwnerId      String?
+  technicalOwnerId       String?
+  title                  String
+  practiceType           String
+  targetEntity           String
+  targetPortal           String?
+  status                 TechnicalPracticeStatus   @default(da_progettare)
+  priority               TechnicalPracticePriority @default(media)
+  dueDate                DateTime?
+  submittedAt            DateTime?
+  protocolNumber         String?
+  integrationRequestNote String?
+  internalNotes          String?
+  clientVisibleStatus    String?
+  nextClientUpdateAt     DateTime?
+  lastClientUpdateAt     DateTime?
+  createdById            String
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  deletedAt              DateTime?
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([commercialOwnerId])
+  @@index([technicalOwnerId])
 }
 
 model ActivityLog {
