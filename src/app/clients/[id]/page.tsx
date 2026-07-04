@@ -31,6 +31,7 @@ const serviceSections = [
   ['task-scadenze', 'Attività e scadenze'],
   ['ufficio-tecnico-pratiche', 'Ufficio Tecnico / Pratiche'],
   ['output-ai', 'Agenti AI / Output interni'],
+  ['timeline-operativa', 'Timeline operativa'],
   ['audit-log', 'Audit log'],
 ] as const;
 const checklistStatuses = ['da_richiedere','richiesto','ricevuto','validato','non_necessario'];
@@ -38,7 +39,7 @@ const operationalStatuses = ['nuova','pre_analisi','documenti_richiesti','docume
 const operationalStatusLabel = (status: string) => status.replaceAll('_', ' ');
 const moneyLabel = (value?: unknown) => value ? `€ ${Number(value).toLocaleString('it-IT')}` : '—';
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string }> }) {
+export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string; timelineFilter?: string }> }) {
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
@@ -66,7 +67,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const serviceIds = clientServices.map((service) => service.id);
   const [aiOutputs, auditLogs, catalog, users] = await Promise.all([
     prisma.aiOutput.findMany({ where: { OR: [{ clientId: id }, ...(serviceIds.length > 0 ? [{ clientServiceId: { in: serviceIds } }] : [])] }, orderBy: { createdAt: 'desc' }, take: 15 }),
-    prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }] }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: documents.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 80 }),
     prisma.serviceCatalog.findMany({ where: { id: { in: clientServices.map((s) => s.serviceCatalogId) } } }),
     prisma.user.findMany({ where: { active: true } }),
   ]);
@@ -91,13 +92,25 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? (userId ? 'Utente non attivo' : 'Sistema');
   const documentAvailability = new Map(await Promise.all(documents.map(async (d) => [d.id, await privateDocumentExists(d.storagePath)] as const)));
   const serviceAreas = ['anagrafica','bancabilita','finanziamento_aziendale','bandi_finanza_agevolata','progetto_investimento','contratti','pagamenti','dossier','output_ai','altro'];
-  const timeline = [
-    { id: `client-created-${client.id}`, date: client.createdAt, user: userOf(client.salesOwnerId), type: 'creazione', entity: 'Cliente', description: `Creato fascicolo cliente ${client.displayName}` },
-    { id: `client-updated-${client.id}`, date: client.updatedAt, user: userOf(client.consultantId), type: 'aggiornamento', entity: 'Cliente', description: `Aggiornato fascicolo cliente ${client.displayName}` },
-    ...projects.map((p) => ({ id: `project-${p.id}`, date: p.updatedAt, user: userOf(p.consultantId), type: 'progetto', entity: 'Project', description: `${p.title} · stato ${p.status}` })),
-    ...clientServices.map((svc) => ({ id: `service-status-${svc.id}`, date: svc.statusUpdatedAt, user: userOf(svc.assignedToId), type: 'stato pratica', entity: 'ClientService', description: `${nameOf(svc.serviceCatalogId)} · ${operationalStatusLabel(svc.operationalStatus)}` })),
-    ...auditLogs.map((a) => ({ id: a.id, date: a.createdAt, user: userOf(a.actorId), type: a.event, entity: a.entityType, description: a.event === 'client_service_operational_status_change' ? `Cambio stato pratica/servizio ${a.entityId ?? ''}` : `Evento audit su ${a.entityId ?? 'entità non specificata'}`, beforeAfter: a.before || a.after ? `Before/after registrati nell'audit log` : null })),
-  ].sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 30);
+  const timelineFilters = [['tutti', 'Tutti'], ['stato', 'Stato pratica'], ['comunicazioni', 'Comunicazioni'], ['documenti', 'Documenti'], ['task', 'Task'], ['audit', 'Audit']] as const;
+  const activeTimelineFilter = timelineFilters.some(([value]) => value === query?.timelineFilter) ? query?.timelineFilter : 'tutti';
+  const allTimelineEvents = [
+    { id: `client-created-${client.id}`, date: client.createdAt, user: userOf(client.salesOwnerId), type: 'creazione fascicolo', entity: 'Cliente', category: 'stato', description: `Creato fascicolo cliente ${client.displayName}`, beforeAfter: null },
+    ...clientServices.map((svc) => ({ id: `service-status-${svc.id}`, date: svc.statusUpdatedAt, user: userOf(svc.assignedToId), type: 'stato pratica', entity: 'Servizio cliente', category: 'stato', description: `${nameOf(svc.serviceCatalogId)} · stato operativo ${operationalStatusLabel(svc.operationalStatus)}`, beforeAfter: svc.operationalNotes ?? svc.internalNotes })),
+    ...technicalPractices.map((practice) => ({ id: `technical-practice-${practice.id}`, date: practice.updatedAt, user: userOf(practice.technicalOwnerId ?? practice.commercialOwnerId), type: 'stato pratica tecnica', entity: 'Pratica tecnica', category: 'stato', description: `${practice.title} · ${practice.status.replaceAll('_', ' ')}`, beforeAfter: practice.clientVisibleStatus ?? practice.integrationRequestNote })),
+    ...practiceCommunications.flatMap((c) => [
+      { id: `communication-created-${c.id}`, date: c.createdAt, user: userOf(c.createdById), type: 'comunicazione creata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} · ${c.type}/${c.channel}`, beforeAfter: c.internalNote ?? c.content.slice(0, 180) },
+      ...(c.reviewedAt ? [{ id: `communication-reviewed-${c.id}`, date: c.reviewedAt, user: userOf(c.reviewedById), type: 'comunicazione approvata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} approvata`, beforeAfter: c.internalNote ?? null }] : []),
+      ...(c.usedAt ? [{ id: `communication-used-${c.id}`, date: c.usedAt, user: userOf(c.reviewedById), type: 'comunicazione usata/inviata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} segnata come usata/inviata`, beforeAfter: 'Invio manuale tracciato: nessun automatismo CRM.' }] : []),
+    ]),
+    ...documents.flatMap((d) => [
+      { id: `document-created-${d.id}`, date: d.createdAt, user: userOf(d.uploadedById), type: 'documento caricato', entity: 'Documento', category: 'documenti', description: `${d.title} · ${d.documentCategory}`, beforeAfter: d.status.replaceAll('_', ' ') },
+      ...(d.updatedAt.getTime() !== d.createdAt.getTime() ? [{ id: `document-updated-${d.id}`, date: d.updatedAt, user: userOf(d.uploadedById), type: 'documento aggiornato', entity: 'Documento', category: 'documenti', description: `${d.title} aggiornato`, beforeAfter: `Stato ${d.status.replaceAll('_', ' ')}` }] : []),
+    ]),
+    ...tasks.map((t) => ({ id: `task-${t.id}`, date: t.updatedAt ?? t.createdAt, user: userOf(t.assignedToId ?? t.createdById), type: 'task/scadenza', entity: 'Task', category: 'task', description: `${t.title} · ${t.status.replaceAll('_', ' ')}`, beforeAfter: [t.description, t.dueAt ? `Scadenza ${formatDateTime(t.dueAt)}` : null].filter(Boolean).join(' · ') || null })),
+    ...auditLogs.map((a) => ({ id: `audit-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: 'audit', entity: a.entityType ?? 'AuditLog', category: 'audit', description: a.event.replaceAll('_', ' '), beforeAfter: a.before || a.after ? `Evento collegato a ${a.entityId ?? 'entità non specificata'}; dettagli completi nel registro audit autorizzato.` : null })),
+  ].sort((a, b) => +new Date(b.date) - +new Date(a.date));
+  const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' || event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="space-y-8">
     <PageHeader title={`Fascicolo Cliente Interno — ${client.displayName}`} description="Scheda operativa interna FAI: servizi acquistati, documenti per sezione, output AI in bozza con revisione umana obbligatoria e audit."/><div className="flex flex-wrap items-center justify-between gap-3"><SecondaryLink href="/clients">← Torna alla lista</SecondaryLink><div className="flex flex-wrap gap-2"><StatusBadge status={client.status} /><span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-wide text-fai-navy ring-1 ring-slate-200">Owner: {userOf(client.consultantId)}</span></div></div>
@@ -227,6 +240,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       </form> : <EmptyState title="Esecuzione agenti non autorizzata">Serve il permesso ai.run per lanciare agenti dal fascicolo.</EmptyState>}
       {aiOutputs.length === 0 ? <EmptyState title="Nessun output AI" /> : <Table headers={['Agente / Titolo','Stato','Sintesi mock','Contesto','Generato il','Dettaglio']} rows={aiOutputs.map((o) => { const run = runById.get(o.aiRunId); const agent = run ? agentById.get(run.agentId) : null; const service = o.clientServiceId ? serviceById.get(o.clientServiceId) : null; const project = o.projectId ? projectById.get(o.projectId) : null; const linkedDossierId = dossierByOutputId.get(o.id); return [<span key="title" className="font-semibold text-fai-navy">{agent?.name ?? 'Agente AI'}<br/><span className="text-xs font-normal text-slate-500">{o.title}</span></span>, <StatusBadge status={o.status} key='s' />, <span key="content" className="line-clamp-3 text-sm">{o.content}</span>, <span key="ctx">{client.displayName}<br/><span className="text-xs text-slate-500">{labelOf(service)}{project ? ` · ${project.title}` : ''}</span></span>, formatDateTime(o.createdAt), <span className="grid gap-1" key="open"><Link className="font-bold text-fai-blue underline" href={`/ai/outputs/${o.id}`}>Apri</Link>{linkedDossierId ? <Link className="text-xs font-bold text-fai-green underline" href={`/client-dossiers/${linkedDossierId}`}>Bozza dossier creata</Link> : null}</span>]; })} />}
     </Card>
-    <Card id="audit-log" title="Audit log / Timeline fascicolo"><ActivityTimeline events={timeline} /></Card>
+    <Card id="timeline-operativa" title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/clients/${client.id}?timelineFilter=${value}#timeline-operativa`}>{label}</Link>)}</div>}>
+      <p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM: stati pratica, comunicazioni, documenti, task/scadenze e audit log visibili al ruolo corrente.</p>
+      <ActivityTimeline events={timeline} />
+    </Card>
+    <Card id="audit-log" title="Audit log / Timeline fascicolo"><ActivityTimeline events={auditLogs.map((a) => ({ id: `audit-only-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: a.event, entity: a.entityType, description: a.event.replaceAll('_', ' '), beforeAfter: a.before || a.after ? `Before/after registrati nell'audit log` : null }))} /></Card>
   </div>;
 }
