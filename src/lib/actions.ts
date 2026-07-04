@@ -5,11 +5,11 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
-import { canViewClient, canViewDocument, isSensitiveDocument } from './access-control';
+import { canViewClient, canViewDocument, isSensitiveDocument, canViewTechnicalPractice, canEditTechnicalPractice } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
 
@@ -541,3 +541,63 @@ export async function runClientAiAgent(form: FormData) {
 export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run({ code: agentCode, role: agent.name, systemPrompt: agent.systemPrompt }, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
 export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_output_status_change', 'AiOutput', id, { before: current, after: output });
   await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }
+
+async function assertTechnicalContext(clientId: string, projectId?: string, clientServiceId?: string) {
+  const [client, project, service] = await Promise.all([
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true } }),
+    projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
+    clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
+  ]);
+  if (!client) throw new UserFacingActionError('Cliente non valido');
+  if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+  if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
+}
+
+export async function createTechnicalPractice(form: FormData) {
+  const s = await requirePermission('technical.write');
+  const data = technicalPracticeSchema.parse(clean(form));
+  await assertTechnicalContext(data.clientId, data.projectId, data.clientServiceId);
+  const practice = await prisma.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
+  await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice);
+  return practice;
+}
+
+export async function updateTechnicalPractice(form: FormData) {
+  const s = await requirePermission('technical.write');
+  const data = technicalPracticeUpdateSchema.parse(clean(form));
+  const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
+  if (!canEditTechnicalPractice(s, before)) redirect('/dashboard');
+  await assertTechnicalContext(data.clientId, data.projectId, data.clientServiceId);
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { ...data, id: undefined, createdById: before.createdById } as never });
+  await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice });
+  return practice;
+}
+
+export async function updateTechnicalPracticeStatus(form: FormData) {
+  const s = await requirePermission('technical.status');
+  const data = technicalPracticeStatusUpdateSchema.parse(clean(form));
+  const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
+  if (!canEditTechnicalPractice(s, before)) redirect('/dashboard');
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { status: data.status, clientVisibleStatus: data.clientVisibleStatus, submittedAt: data.submittedAt ?? before.submittedAt, protocolNumber: data.protocolNumber, integrationRequestNote: data.integrationRequestNote, lastClientUpdateAt: data.lastClientUpdateAt, nextClientUpdateAt: data.nextClientUpdateAt } });
+  await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
+  return practice;
+}
+
+export async function assignTechnicalPractice(form: FormData) {
+  const s = await requirePermission('technical.assign');
+  const data = technicalPracticeAssignSchema.parse(clean(form));
+  const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { commercialOwnerId: data.commercialOwnerId ?? null, technicalOwnerId: data.technicalOwnerId ?? null } });
+  await audit(s.userId, 'technical_practice_assign', 'TechnicalPractice', practice.id, { before, after: practice });
+  return practice;
+}
+
+export async function archiveTechnicalPractice(form: FormData) {
+  const s = await requirePermission('technical.write');
+  const data = technicalPracticeIdSchema.parse(clean(form));
+  const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
+  if (!canEditTechnicalPractice(s, before)) redirect('/dashboard');
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
+  await audit(s.userId, 'technical_practice_archive', 'TechnicalPractice', practice.id, { before, after: practice });
+  return practice;
+}

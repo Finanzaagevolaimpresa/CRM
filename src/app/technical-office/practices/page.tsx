@@ -1,11 +1,31 @@
+import Link from 'next/link';
+import { PrimaryButton, SecondaryLink } from '@/components/actions';
+import { Card, EmptyState, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
+import { createTechnicalPracticeAndRedirect } from '@/lib/form-actions';
+
 export const dynamic = 'force-dynamic';
+const statuses = ['da_progettare','in_progettazione','documenti_richiesti','documenti_completi','pronta_presentazione','presentata','integrazione_richiesta','in_istruttoria','approvata','respinta','archiviata'];
+const priorities = ['bassa','media','alta','urgente'];
 
-import { SecondaryLink } from '@/components/actions';
-import { Card, EmptyState, PageHeader, StatusBadge } from '@/components/ui';
-import { requireAuth } from '@/lib/auth';
+export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  const session = await requirePermission('technical.read');
+  const q = await searchParams;
+  const [clients, users, projects, services, practices] = await Promise.all([
+    prisma.client.findMany({ where: { deletedAt: null }, orderBy: { displayName: 'asc' } }),
+    prisma.user.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+    prisma.project.findMany({ where: { deletedAt: null }, orderBy: { title: 'asc' } }),
+    prisma.clientService.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    prisma.technicalPractice.findMany({ where: { deletedAt: q?.status === 'archiviata' ? { not: null } : null, ...(q?.status ? { status: q.status as never } : {}), ...(q?.clientId ? { clientId: q.clientId } : {}), ...(q?.technicalOwnerId ? { technicalOwnerId: q.technicalOwnerId } : {}), ...(q?.commercialOwnerId ? { commercialOwnerId: q.commercialOwnerId } : {}), ...(q?.priority ? { priority: q.priority as never } : {}) }, orderBy: { updatedAt: 'desc' } }),
+  ]);
+  const clientOf = (id: string) => clients.find((c) => c.id === id)?.displayName ?? 'Cliente';
+  const userOf = (id?: string | null) => users.find((u) => u.id === id)?.name ?? '—';
+  const canWrite = hasPermission(session, 'technical.write');
 
-export default async function Page() {
-  await requireAuth(["admin", "direzione", "consulente", "revisore", "backoffice"]);
-
-  return <div className="space-y-6"><PageHeader title="Pratiche tecniche" description="Area in preparazione per la coda delle pratiche tecniche collegate a clienti, progetti e servizi."/><Card title="Stato lavorazione"><div className="space-y-4"><StatusBadge status="in preparazione" /><EmptyState title="Vista in preparazione">Nessuna presentazione verso enti o portali viene eseguita automaticamente dal CRM.</EmptyState><SecondaryLink href="/technical-office">Vai a Ufficio Tecnico</SecondaryLink></div></Card></div>;
+  return <div className="space-y-6"><PageHeader title="Pratiche tecniche" description="Lista filtrabile delle pratiche collegate a cliente, progetto, servizio e referenti commerciali/tecnici." />
+    <Card title="Filtri"><form className="grid gap-3 md:grid-cols-5"><select name="status" defaultValue={q?.status ?? ''} className="rounded-xl border p-2"><option value="">Tutti gli stati</option>{statuses.map((s) => <option key={s} value={s}>{s.replaceAll('_',' ')}</option>)}</select><select name="clientId" defaultValue={q?.clientId ?? ''} className="rounded-xl border p-2"><option value="">Tutti i clienti</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select><select name="technicalOwnerId" defaultValue={q?.technicalOwnerId ?? ''} className="rounded-xl border p-2"><option value="">Tutti i tecnici</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select><select name="commercialOwnerId" defaultValue={q?.commercialOwnerId ?? ''} className="rounded-xl border p-2"><option value="">Tutti i commerciali</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select><select name="priority" defaultValue={q?.priority ?? ''} className="rounded-xl border p-2"><option value="">Tutte le priorità</option>{priorities.map((p) => <option key={p} value={p}>{p}</option>)}</select><PrimaryButton type="submit">Filtra</PrimaryButton></form></Card>
+    {canWrite && q?.new ? <Card title="Crea pratica tecnica"><form action={createTechnicalPracticeAndRedirect} className="grid gap-3 md:grid-cols-3"><input name="title" required placeholder="Titolo" className="rounded-xl border p-2 md:col-span-2"/><input name="practiceType" required placeholder="Tipologia pratica" className="rounded-xl border p-2"/><select name="clientId" required className="rounded-xl border p-2"><option value="">Cliente</option>{clients.map(c=><option key={c.id} value={c.id}>{c.displayName}</option>)}</select><select name="projectId" className="rounded-xl border p-2"><option value="">Progetto opzionale</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select><select name="clientServiceId" className="rounded-xl border p-2"><option value="">Servizio opzionale</option>{services.map(s=><option key={s.id} value={s.id}>{clientOf(s.clientId)} · {s.practiceType ?? s.serviceCatalogId}</option>)}</select><input name="targetEntity" required placeholder="Ente destinatario" className="rounded-xl border p-2"/><input name="targetPortal" placeholder="Portale" className="rounded-xl border p-2"/><select name="priority" defaultValue="media" className="rounded-xl border p-2">{priorities.map(p=><option key={p} value={p}>{p}</option>)}</select><select name="commercialOwnerId" className="rounded-xl border p-2"><option value="">Commerciale referente</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select><select name="technicalOwnerId" className="rounded-xl border p-2"><option value="">Responsabile tecnico</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select><input type="date" name="dueDate" className="rounded-xl border p-2"/><textarea name="clientVisibleStatus" placeholder="Stato comunicabile al cliente" className="rounded-xl border p-2 md:col-span-3"/><textarea name="internalNotes" placeholder="Note interne" className="rounded-xl border p-2 md:col-span-3"/><PrimaryButton type="submit">Crea pratica</PrimaryButton></form></Card> : <SecondaryLink href="/technical-office/practices?new=1">Crea pratica</SecondaryLink>}
+    <Card title="Elenco pratiche">{practices.length === 0 ? <EmptyState title="Nessuna pratica tecnica" /> : <Table headers={['Pratica','Cliente','Stato','Priorità','Scadenza','Referenti','Cliente']} rows={practices.map(p => [<Link key="l" className="font-bold text-fai-blue underline" href={`/technical-office/practices/${p.id}`}>{p.title}</Link>, clientOf(p.clientId), <StatusBadge key="s" status={p.status}/>, <StatusBadge key="p" status={p.priority}/>, formatDateTime(p.dueDate), `${userOf(p.technicalOwnerId)} · ${userOf(p.commercialOwnerId)}`, p.clientVisibleStatus ?? '—'])} />}</Card>
+  </div>;
 }

@@ -66,3 +66,31 @@ export const userRoleSchema = z.object({ userId: id, role: z.enum(['admin','dire
 export const userIdSchema = z.object({ userId: id });
 
 export const aiAgentConfigUpdateSchema = z.object({ id, systemPrompt: z.string().trim().min(1).max(20000), active: z.coerce.boolean().default(false) });
+
+export const technicalPracticeStatusSchema = z.enum(['da_progettare','in_progettazione','documenti_richiesti','documenti_completi','pronta_presentazione','presentata','integrazione_richiesta','in_istruttoria','approvata','respinta','archiviata']);
+export const technicalPracticePrioritySchema = z.enum(['bassa','media','alta','urgente']);
+export const technicalPracticeSchema = z.object({
+  clientId: id,
+  projectId: id.optional(),
+  clientServiceId: id.optional(),
+  commercialOwnerId: id.optional(),
+  technicalOwnerId: id.optional(),
+  title: z.string().trim().min(1).max(200),
+  practiceType: z.string().trim().min(1).max(120),
+  targetEntity: z.string().trim().min(1).max(160),
+  targetPortal: optionalText,
+  status: technicalPracticeStatusSchema.default('da_progettare'),
+  priority: technicalPracticePrioritySchema.default('media'),
+  dueDate: date.optional(),
+  submittedAt: date.optional(),
+  protocolNumber: optionalText,
+  integrationRequestNote: optionalText,
+  internalNotes: optionalText,
+  clientVisibleStatus: optionalText,
+  nextClientUpdateAt: date.optional(),
+  lastClientUpdateAt: date.optional(),
+});
+export const technicalPracticeUpdateSchema = technicalPracticeSchema.extend({ id });
+export const technicalPracticeStatusUpdateSchema = z.object({ id, status: technicalPracticeStatusSchema, clientVisibleStatus: optionalText, submittedAt: date.optional(), protocolNumber: optionalText, integrationRequestNote: optionalText, lastClientUpdateAt: date.optional(), nextClientUpdateAt: date.optional() });
+export const technicalPracticeAssignSchema = z.object({ id, commercialOwnerId: id.optional(), technicalOwnerId: id.optional() });
+export const technicalPracticeIdSchema = z.object({ id });

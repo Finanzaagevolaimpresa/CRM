@@ -1,142 +1,41 @@
-import Link from "next/link";
-import { Badge, Card, EmptyState, PageHeader, Stat } from "@/components/ui";
-import { requireAuth } from "@/lib/auth";
+import Link from 'next/link';
+import { SecondaryLink } from '@/components/actions';
+import { Card, EmptyState, PageHeader, Stat, StatusBadge, Table, formatDateTime } from '@/components/ui';
+import { requirePermission } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
-const allowedRoles = [
-  "admin",
-  "direzione",
-  "consulente",
-  "revisore",
-  "backoffice",
+const buckets = [
+  ['da_progettare', 'Pratiche da progettare'],
+  ['in_progettazione', 'In progettazione'],
+  ['documenti_richiesti', 'Documenti richiesti'],
+  ['pronta_presentazione', 'Pronte per presentazione'],
+  ['presentata', 'Presentate'],
+  ['integrazione_richiesta', 'Integrazioni richieste'],
+  ['in_istruttoria', 'In istruttoria'],
+  ['approvata', 'Approvate'],
+  ['respinta', 'Respinte'],
 ] as const;
-
-const stages = [
-  [
-    "Pratiche da progettare",
-    "0",
-    "Analisi tecnica iniziale e raccolta perimetro intervento.",
-    "blue",
-  ],
-  [
-    "Pratiche in preparazione",
-    "0",
-    "Documenti, dati progetto e allegati in costruzione.",
-    "orange",
-  ],
-  [
-    "Pronte per presentazione",
-    "0",
-    "Checklist interna completata prima del deposito.",
-    "green",
-  ],
-  [
-    "Pratiche presentate",
-    "0",
-    "Presentazioni già effettuate su enti o portali competenti.",
-    "purple",
-  ],
-  [
-    "Integrazioni richieste",
-    "0",
-    "Richieste ente da gestire con responsabilità interna.",
-    "orange",
-  ],
-] as const;
-
-const links = [
-  [
-    "Clienti",
-    "/clients",
-    "Anagrafiche e referenti collegati alle pratiche tecniche.",
-  ],
-  [
-    "Progetti",
-    "/projects",
-    "Contesto operativo, stato e responsabilità di lavorazione.",
-  ],
-  [
-    "Servizi",
-    "/clients",
-    "Servizi FAI acquistati e stati della pipeline operativa.",
-  ],
-  [
-    "Documenti",
-    "/documents",
-    "Archivio interno per allegati e documentazione sensibile.",
-  ],
-];
 
 export default async function Page() {
-  await requireAuth([...allowedRoles]);
+  await requirePermission('technical.read');
+  const [grouped, urgent, clients, users] = await Promise.all([
+    prisma.technicalPractice.groupBy({ by: ['status'], where: { deletedAt: null }, _count: { _all: true } }),
+    prisma.technicalPractice.findMany({ where: { deletedAt: null, OR: [{ priority: 'urgente' }, { dueDate: { lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } }] }, orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }], take: 10 }),
+    prisma.client.findMany({ select: { id: true, displayName: true } }),
+    prisma.user.findMany({ where: { active: true }, select: { id: true, name: true } }),
+  ]);
+  const count = (status: string) => grouped.find((item) => item.status === status)?._count._all ?? 0;
+  const clientOf = (id: string) => clients.find((client) => client.id === id)?.displayName ?? 'Cliente';
+  const userOf = (id?: string | null) => users.find((user) => user.id === id)?.name ?? 'Da assegnare';
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Ufficio Tecnico"
-        description="Area interna per progettazione, gestione e preparazione alla presentazione delle pratiche verso enti e portali competenti. Nessun invio automatico è previsto in questa fase."
-      />
-
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        {stages.map(([label, value, description, tone]) => (
-          <Stat
-            key={label}
-            label={label}
-            value={value}
-            description={description}
-            tone={tone}
-          />
-        ))}
-      </section>
-
-      <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
-        <Card title="Flusso operativo tecnico">
-          <div className="space-y-3">
-            {stages.map(([label, , description], index) => (
-              <div
-                key={label}
-                className="flex gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-fai-lime/20 text-sm font-black text-fai-green">
-                  {index + 1}
-                </span>
-                <div>
-                  <p className="font-extrabold text-fai-navy">{label}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-500">
-                    {description}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card title="Collegamenti concettuali">
-          <div className="grid gap-3">
-            {links.map(([label, href, description]) => (
-              <Link
-                key={label}
-                href={href}
-                className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 transition hover:border-fai-blue/25 hover:bg-white"
-              >
-                <Badge tone="blue">{label}</Badge>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {description}
-                </p>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      <Card title="Prossimi sviluppi">
-        <EmptyState title="Skeleton predisposto">
-          Questa area verrà collegata a clienti, progetti, servizi e documenti
-          esistenti senza modifiche Prisma in questo step. Presentazioni a enti
-          o portali resteranno azioni manuali e tracciate internamente.
-        </EmptyState>
-      </Card>
-    </div>
-  );
+  return <div className="space-y-6">
+    <PageHeader title="Ufficio Tecnico" description="Dashboard operativa per progettare, preparare e monitorare pratiche verso enti e portali. Nessun invio automatico: ogni aggiornamento cliente va verificato prima dell’invio." />
+    <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">Lista pratiche</SecondaryLink><SecondaryLink href="/technical-office/practices?new=1">Nuova pratica</SecondaryLink></div>
+    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{buckets.map(([status, label]) => <Stat key={status} label={label} value={count(status)} description={status.replaceAll('_', ' ')} tone={status.includes('approv') ? 'green' : status.includes('resp') || status.includes('integrazione') ? 'orange' : 'blue'} />)}</section>
+    <Card title="Scadenze urgenti e prossime azioni">
+      {urgent.length === 0 ? <EmptyState title="Nessuna urgenza tecnica" /> : <Table headers={['Pratica','Cliente','Stato','Priorità','Scadenza','Responsabili']} rows={urgent.map((p) => [<Link key="p" className="font-bold text-fai-blue underline" href={`/technical-office/practices/${p.id}`}>{p.title}</Link>, clientOf(p.clientId), <StatusBadge key="s" status={p.status} />, <StatusBadge key="p" status={p.priority} />, formatDateTime(p.dueDate), `${userOf(p.technicalOwnerId)} · Comm.: ${userOf(p.commercialOwnerId)}`])} />}
+    </Card>
+  </div>;
 }
