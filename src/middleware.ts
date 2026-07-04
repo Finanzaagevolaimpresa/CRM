@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { verifySessionCookie } from '@/lib/session';
 
-const publicPaths = ['/login'];
+const publicPaths = ['/login', '/logo-fai.png'];
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
 export async function middleware(request: NextRequest) {

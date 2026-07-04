@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { logoutAction } from "@/lib/login-actions";
 import { NavLinks } from "@/components/nav-links";
+import { SidebarLogo } from "@/components/sidebar-logo";
 
 export function Badge({
   children,
@@ -367,13 +368,7 @@ export function Nav({
           href="/dashboard"
           className="mb-4 flex shrink-0 items-center gap-3 rounded-3xl border border-white/12 bg-white/95 p-3 shadow-lg shadow-fai-navy/20 ring-1 ring-fai-lime/15"
         >
-          <span
-            aria-label="Logo Finanza Agevola Impresa"
-            className="grid h-14 w-20 shrink-0 place-items-center rounded-2xl bg-white bg-[url('/logo-fai.png')] bg-contain bg-center bg-no-repeat px-2 text-lg font-black tracking-[0.18em] text-fai-navy ring-1 ring-slate-200"
-            role="img"
-          >
-            FAI
-          </span>
+          <SidebarLogo />
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-black leading-tight text-fai-navy">
               Gestionale CRM
