@@ -246,7 +246,6 @@ enum ServiceArea {
   altro
 }
 
-
 enum TechnicalPracticeStatus {
   da_progettare
   in_progettazione
@@ -266,6 +265,28 @@ enum TechnicalPracticePriority {
   media
   alta
   urgente
+}
+
+enum PracticeCommunicationType {
+  cliente
+  commerciale
+  interna
+}
+
+enum PracticeCommunicationChannel {
+  whatsapp
+  email
+  telefono
+  pec
+  nota_interna
+}
+
+enum PracticeCommunicationStatus {
+  bozza
+  da_revisionare
+  approvata
+  usata_inviata
+  archiviata
 }
 
 enum TaskStatus {
@@ -328,9 +349,9 @@ model Lead {
 }
 
 model CommercialOffer {
-  id            String                @id @default(cuid())
-  leadId        String?
-  clientId      String?
+  id                    String                @id @default(cuid())
+  leadId                String?
+  clientId              String?
   title                 String
   description           String?
   services              String?
@@ -350,10 +371,10 @@ model CommercialOffer {
   acceptedAt            DateTime?
   rejectedAt            DateTime?
   rejectionReason       String?
-  createdById   String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  deletedAt     DateTime?
+  createdById           String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  deletedAt             DateTime?
 }
 
 model Client {
@@ -894,7 +915,6 @@ model CorporateFinancingAssessment {
   updatedAt              DateTime @updatedAt
 }
 
-
 model TechnicalPractice {
   id                     String                    @id @default(cuid())
   clientId               String
@@ -926,6 +946,35 @@ model TechnicalPractice {
   @@index([dueDate])
   @@index([commercialOwnerId])
   @@index([technicalOwnerId])
+}
+
+model PracticeCommunication {
+  id                  String                       @id @default(cuid())
+  technicalPracticeId String
+  clientId            String
+  projectId           String?
+  clientServiceId     String?
+  commercialOwnerId   String?
+  technicalOwnerId    String?
+  type                PracticeCommunicationType
+  channel             PracticeCommunicationChannel
+  status              PracticeCommunicationStatus  @default(bozza)
+  title               String
+  content             String
+  internalNote        String?
+  reviewedById        String?
+  reviewedAt          DateTime?
+  usedAt              DateTime?
+  createdById         String
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
+  deletedAt           DateTime?
+
+  @@index([technicalPracticeId])
+  @@index([clientId])
+  @@index([commercialOwnerId])
+  @@index([status])
+  @@index([type])
 }
 
 model ActivityLog {

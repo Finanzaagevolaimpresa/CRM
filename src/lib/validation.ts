@@ -94,3 +94,19 @@ export const technicalPracticeUpdateSchema = technicalPracticeSchema.extend({ id
 export const technicalPracticeStatusUpdateSchema = z.object({ id, status: technicalPracticeStatusSchema, clientVisibleStatus: optionalText, submittedAt: date.optional(), protocolNumber: optionalText, integrationRequestNote: optionalText, lastClientUpdateAt: date.optional(), nextClientUpdateAt: date.optional() });
 export const technicalPracticeAssignSchema = z.object({ id, commercialOwnerId: id.optional(), technicalOwnerId: id.optional() });
 export const technicalPracticeIdSchema = z.object({ id });
+
+
+export const practiceCommunicationTypeSchema = z.enum(['cliente','commerciale','interna']);
+export const practiceCommunicationChannelSchema = z.enum(['whatsapp','email','telefono','pec','nota_interna']);
+export const practiceCommunicationStatusSchema = z.enum(['bozza','da_revisionare','approvata','usata_inviata','archiviata']);
+const practiceCommunicationEditableFields = z.object({
+  type: practiceCommunicationTypeSchema,
+  channel: practiceCommunicationChannelSchema,
+  status: practiceCommunicationStatusSchema.default('bozza'),
+  title: z.string().trim().min(1).max(200),
+  content: z.string().trim().min(1).max(20000),
+  internalNote: optionalText,
+}).refine((data) => data.status === 'bozza' || data.status === 'da_revisionare', 'Le bozze possono essere solo bozza o da revisionare');
+export const practiceCommunicationDraftSchema = z.object({ technicalPracticeId: id }).and(practiceCommunicationEditableFields);
+export const practiceCommunicationUpdateSchema = z.object({ id }).and(practiceCommunicationEditableFields);
+export const practiceCommunicationIdSchema = z.object({ id });

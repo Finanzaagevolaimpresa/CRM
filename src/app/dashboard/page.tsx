@@ -67,6 +67,9 @@ export default async function Dashboard() {
     lastPayment,
     lastTask,
     pipelineCounts,
+    commsToReview,
+    overdueClientUpdates,
+    approvedUnusedComms,
   ] = await Promise.all([
     prisma.lead.count({ where: { deletedAt: null, status: "nuovo" } }),
     prisma.lead.count({ where: { deletedAt: null, status: "da_contattare" } }),
@@ -168,6 +171,9 @@ export default async function Dashboard() {
       where: { deletedAt: null },
       _count: { _all: true },
     }),
+    prisma.practiceCommunication.count({ where: { deletedAt: null, status: "da_revisionare" } }),
+    prisma.technicalPractice.count({ where: { deletedAt: null, nextClientUpdateAt: { lt: now } } }),
+    prisma.practiceCommunication.count({ where: { deletedAt: null, status: "approvata", usedAt: null } }),
   ]);
   const priorityStats = [
     [
@@ -204,6 +210,27 @@ export default async function Dashboard() {
       "Bozze AI con human review obbligatoria",
       "/ai/outputs-to-review",
       "purple",
+    ],
+    [
+      "Comunicazioni da revisionare",
+      commsToReview,
+      "Bozze cliente/commerciale in attesa approvazione",
+      "/technical-office/practices",
+      "orange",
+    ],
+    [
+      "Update cliente scaduti",
+      overdueClientUpdates,
+      "Pratiche con prossima comunicazione oltre data",
+      "/technical-office/practices",
+      "orange",
+    ],
+    [
+      "Comunicazioni approvate non usate",
+      approvedUnusedComms,
+      "Pronte per uso manuale, senza invio automatico",
+      "/technical-office/practices",
+      "green",
     ],
   ] as const;
   const businessStats = [

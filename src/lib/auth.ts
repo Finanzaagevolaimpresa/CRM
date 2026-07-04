@@ -21,7 +21,8 @@ export type Permission =
   | 'contract.read' | 'contract.write'
   | 'payment.read' | 'payment.write'
   | 'audit.read'
-  | 'technical.read' | 'technical.write' | 'technical.assign' | 'technical.status' | 'technical.admin';
+  | 'technical.read' | 'technical.write' | 'technical.assign' | 'technical.status' | 'technical.admin'
+  | 'practice_communications.read' | 'practice_communications.write' | 'practice_communications.review' | 'practice_communications.mark_used';
 
 async function auditBlockedInactiveUserAccess(userId: string) {
   await prisma.auditLog.create({ data: { actorId: userId, event: 'blocked_inactive_user_access', entityType: 'User', entityId: userId } });
@@ -53,11 +54,11 @@ export async function requireSession(): Promise<AuthSession> {
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*','dossier.read','dossier.write'],
-  direzione: ['technical.read','technical.write','technical.assign','technical.status','technical.admin','user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.review','ai.approve','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
-  commerciale: ['technical.read','lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign'],
-  consulente: ['technical.read','technical.write','technical.status','lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.run','ai.review','dossier.read','dossier.write'],
-  revisore: ['technical.read','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.review','ai.approve','dossier.read','dossier.approve','service.read'],
-  backoffice: ['technical.read','technical.write','technical.status','lead.read','client.read','company.read','project.read','document.upload','document.download','service.read','service.write','dossier.read'],
+  direzione: ['technical.read','technical.write','technical.assign','technical.status','technical.admin','practice_communications.read','practice_communications.write','practice_communications.review','practice_communications.mark_used','user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.review','ai.approve','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
+  commerciale: ['technical.read','practice_communications.read','lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign'],
+  consulente: ['technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.run','ai.review','dossier.read','dossier.write'],
+  revisore: ['technical.read','practice_communications.read','practice_communications.review','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.review','ai.approve','dossier.read','dossier.approve','service.read'],
+  backoffice: ['technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','project.read','document.upload','document.download','service.read','service.write','dossier.read'],
   amministrazione: ['client.read','company.read','project.read','document.download','document.sensitive.read','contract.read','contract.write','payment.read','payment.write','service.read'],
   collaboratore_limitato: ['client.read','project.read','service.read','document.download'],
 };
