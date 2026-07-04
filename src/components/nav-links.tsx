@@ -36,13 +36,16 @@ const sections: NavSection[] = [
     items: [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Task", href: "/tasks" },
+      { label: "Scadenze", href: "/deadlines" },
       { label: "Documenti", href: "/documents" },
+      { label: "Checklist documentale", href: "/document-checklists" },
     ],
   },
   {
     title: "Commerciale",
     items: [
       { label: "Lead e offerte", href: "/leads" },
+      { label: "Offerte", href: "/commercial-offers" },
       { label: "Contratti", href: "/contracts" },
       { label: "Pagamenti", href: "/payments" },
     ],
@@ -64,11 +67,20 @@ const sections: NavSection[] = [
         href: "/technical-office",
         roles: operationalRoles,
       },
+      { label: "Pratiche tecniche", href: "/technical-office/practices", roles: operationalRoles },
+      { label: "Enti / Portali", href: "/technical-office/portals", roles: operationalRoles },
+      { label: "Integrazioni", href: "/technical-office/integrations", roles: operationalRoles },
+      { label: "Rendicontazioni", href: "/technical-office/reporting", roles: operationalRoles },
     ],
   },
   {
     title: "AI",
-    items: [{ label: "Control center AI", href: "/ai" }],
+    items: [
+      { label: "Control center AI", href: "/ai" },
+      { label: "Output AI", href: "/ai/outputs" },
+      { label: "Dossier AI / Bozze", href: "/client-dossiers" },
+      { label: "Agenti AI", href: "/settings/ai-agents", adminOnly: true },
+    ],
   },
   {
     title: "Legale / Compliance",
@@ -78,6 +90,9 @@ const sections: NavSection[] = [
         href: "/legal-compliance",
         roles: legalComplianceRoles,
       },
+      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", roles: legalComplianceRoles },
+      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", roles: legalComplianceRoles },
+      { label: "Privacy e consensi", href: "/legal-compliance/privacy", roles: legalComplianceRoles },
     ],
   },
   {
@@ -85,7 +100,6 @@ const sections: NavSection[] = [
     items: [
       { label: "Utenti", href: "/settings/users", adminOnly: true },
       { label: "Ruoli", href: "/settings/roles", adminOnly: true },
-      { label: "Agenti AI", href: "/settings/ai-agents", adminOnly: true },
       {
         label: "Diagnostica AI",
         href: "/settings/ai-diagnostics",
