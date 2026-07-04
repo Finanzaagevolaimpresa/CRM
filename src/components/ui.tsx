@@ -172,7 +172,7 @@ export function ActivityTimeline({
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <Badge tone="purple">{event.type}</Badge>
               <span>{formatDateTime(event.date)}</span>
-              <span>Owner: {event.user ?? "Sistema"}</span>
+              <span>Operatore: {event.user ?? "Sistema"}</span>
               <span>Entità: {event.entity ?? "—"}</span>
             </div>
             <p className="mt-2 font-semibold leading-6 text-fai-navy">
