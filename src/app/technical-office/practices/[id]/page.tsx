@@ -20,6 +20,16 @@ const communicationTemplates = [
   ['Aggiornamento commerciale interno', 'Nota per il commerciale: comunicare solo lo stato operativo verificato, senza promettere contributi, finanziamenti, approvazioni o tempistiche non confermate.'],
 ];
 const priorities = ['bassa','media','alta','urgente'];
+const auditEventLabels: Record<string, string> = {
+  technical_practice_update: 'Aggiornamento pratica tecnica',
+  technical_practice_status_change: 'Cambio stato pratica tecnica',
+  practice_communication_draft_create: 'Bozza comunicazione creata',
+  practice_communication_approve: 'Comunicazione approvata',
+  practice_communication_used: 'Comunicazione usata/inviata',
+};
+const auditLabel = (event: string) => auditEventLabels[event] ?? event.replaceAll('_', ' ');
+const isRedundantOperationalAudit = (event: { category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }, events: Array<{ category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }>) => event.category === 'audit' && events.some((candidate) => candidate.category !== 'audit' && candidate.dedupeKey && candidate.dedupeKey === event.dedupeKey && Math.abs(+new Date(candidate.date) - +new Date(event.date)) <= 120000 && ((event.type === 'Cambio stato pratica tecnica' && candidate.type === 'stato pratica tecnica') || (event.type === 'Aggiornamento pratica tecnica' && ['stato pratica tecnica', 'aggiornamento pratica tecnica'].includes(candidate.type))));
+
 
 export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ timelineFilter?: string }> }) {
   const session = await requirePermission('technical.read');
@@ -51,21 +61,21 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const timelineFilters = [['tutti', 'Tutti'], ['stato', 'Stato pratica'], ['comunicazioni', 'Comunicazioni'], ['documenti', 'Documenti'], ['task', 'Task'], ['audit', 'Audit']] as const;
   const activeTimelineFilter = timelineFilters.some(([value]) => value === query?.timelineFilter) ? query?.timelineFilter : 'tutti';
   const allTimelineEvents = [
-    { id: `practice-created-${practice.id}`, date: practice.createdAt, user: userOf(practice.createdById), type: 'pratica tecnica creata', entity: 'Pratica tecnica', category: 'stato', description: `${practice.title} creata`, beforeAfter: practice.practiceType },
-    { id: `practice-status-${practice.id}`, date: practice.updatedAt, user: userOf(practice.technicalOwnerId ?? practice.commercialOwnerId), type: 'stato pratica tecnica', entity: 'Pratica tecnica', category: 'stato', description: `${practice.title} · ${practice.status.replaceAll('_', ' ')}`, beforeAfter: practice.clientVisibleStatus ?? practice.integrationRequestNote },
+    { id: `practice-created-${practice.id}`, date: practice.createdAt, user: userOf(practice.createdById), type: 'pratica tecnica creata', entity: 'Pratica tecnica', dedupeKey: practice.id, category: 'stato', description: `${practice.title} creata`, beforeAfter: practice.practiceType },
+    { id: `practice-status-${practice.id}`, date: practice.updatedAt, user: userOf(practice.technicalOwnerId ?? practice.commercialOwnerId), type: 'stato pratica tecnica', entity: 'Pratica tecnica', dedupeKey: practice.id, category: 'stato', description: `${practice.title} · ${practice.status.replaceAll('_', ' ')}`, beforeAfter: practice.clientVisibleStatus ?? practice.integrationRequestNote },
     ...communications.flatMap((c) => [
-      { id: `communication-created-${c.id}`, date: c.createdAt, user: userOf(c.createdById), type: 'comunicazione creata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} · ${c.type}/${c.channel}`, beforeAfter: c.internalNote ?? c.content.slice(0, 180) },
-      ...(c.reviewedAt ? [{ id: `communication-reviewed-${c.id}`, date: c.reviewedAt, user: userOf(c.reviewedById), type: 'comunicazione approvata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} approvata`, beforeAfter: c.internalNote ?? null }] : []),
-      ...(c.usedAt ? [{ id: `communication-used-${c.id}`, date: c.usedAt, user: userOf(c.reviewedById), type: 'comunicazione usata/inviata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} segnata come usata/inviata`, beforeAfter: 'Invio manuale tracciato: nessun automatismo CRM.' }] : []),
+      { id: `communication-created-${c.id}`, date: c.createdAt, user: userOf(c.createdById), type: 'comunicazione creata', entity: 'Comunicazione pratica', dedupeKey: c.id, category: 'comunicazioni', description: `${c.title} · ${c.type}/${c.channel}`, beforeAfter: c.internalNote ?? c.content.slice(0, 180) },
+      ...(c.reviewedAt ? [{ id: `communication-reviewed-${c.id}`, date: c.reviewedAt, user: userOf(c.reviewedById), type: 'comunicazione approvata', entity: 'Comunicazione pratica', dedupeKey: c.id, category: 'comunicazioni', description: `${c.title} approvata`, beforeAfter: c.internalNote ?? null }] : []),
+      ...(c.usedAt ? [{ id: `communication-used-${c.id}`, date: c.usedAt, user: userOf(c.reviewedById), type: 'comunicazione usata/inviata', entity: 'Comunicazione pratica', dedupeKey: c.id, category: 'comunicazioni', description: `${c.title} segnata come usata/inviata`, beforeAfter: 'Invio manuale tracciato: nessun automatismo CRM.' }] : []),
     ]),
     ...documents.flatMap((d) => [
       { id: `document-created-${d.id}`, date: d.createdAt, user: userOf(d.uploadedById), type: 'documento caricato', entity: 'Documento', category: 'documenti', description: `${d.title} · ${d.documentCategory}`, beforeAfter: d.status.replaceAll('_', ' ') },
       ...(d.updatedAt.getTime() !== d.createdAt.getTime() ? [{ id: `document-updated-${d.id}`, date: d.updatedAt, user: userOf(d.uploadedById), type: 'documento aggiornato', entity: 'Documento', category: 'documenti', description: `${d.title} aggiornato`, beforeAfter: `Stato ${d.status.replaceAll('_', ' ')}` }] : []),
     ]),
     ...tasks.map((t) => ({ id: `task-${t.id}`, date: t.updatedAt ?? t.createdAt, user: userOf(t.assignedToId ?? t.createdById), type: 'task/scadenza', entity: 'Task', category: 'task', description: `${t.title} · ${t.status.replaceAll('_', ' ')}`, beforeAfter: [t.description, t.dueAt ? `Scadenza ${formatDateTime(t.dueAt)}` : null].filter(Boolean).join(' · ') || null })),
-    ...audits.map((a) => ({ id: `audit-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: 'audit', entity: a.entityType ?? 'AuditLog', category: 'audit', description: a.event.replaceAll('_', ' '), beforeAfter: a.before || a.after ? `Evento collegato a ${a.entityId ?? 'entità non specificata'}; dettagli completi nel registro audit autorizzato.` : null })),
+    ...audits.map((a) => ({ id: `audit-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: auditLabel(a.event), entity: a.entityType ?? 'AuditLog', dedupeKey: a.entityId, category: 'audit', description: auditLabel(a.event), beforeAfter: a.before || a.after ? 'Dettaglio disponibile nel registro audit.' : null })),
   ].sort((a, b) => +new Date(b.date) - +new Date(a.date));
-  const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' || event.category === activeTimelineFilter).slice(0, 60);
+  const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' ? !isRedundantOperationalAudit(event, allTimelineEvents) : event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="space-y-6"><PageHeader title={practice.title} description="Dettaglio pratica tecnica interna. Gli aggiornamenti al cliente vanno verificati prima dell’invio: il CRM non invia email, PEC o WhatsApp automatici." />
     <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">← Pratiche</SecondaryLink><SecondaryLink href={`/clients/${client.id}#ufficio-tecnico-pratiche`}>Fascicolo cliente</SecondaryLink><StatusBadge status={practice.status}/><StatusBadge status={practice.priority}/></div>
