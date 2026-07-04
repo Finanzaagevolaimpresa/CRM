@@ -21,9 +21,10 @@ const communicationTemplates = [
 ];
 const priorities = ['bassa','media','alta','urgente'];
 
-export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ timelineFilter?: string }> }) {
   const session = await requirePermission('technical.read');
   const { id } = await params;
+  const query = await searchParams;
   const practice = await prisma.technicalPractice.findUnique({ where: { id } });
   if (!practice) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non trovata</h1>;
   const [client, project, service, users, documents, tasks, checklist, communications, audits] = await Promise.all([
@@ -35,7 +36,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     prisma.task.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { dueAt: 'asc' } }),
     prisma.documentChecklistItem.findMany({ where: { active: true, deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { updatedAt: 'desc' } }),
     prisma.practiceCommunication.findMany({ where: { technicalPracticeId: practice.id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.auditLog.findMany({ where: { entityType: 'TechnicalPractice', entityId: practice.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
+    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityType: 'TechnicalPractice', entityId: practice.id }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 30 }),
   ]);
   if (!client || !canViewTechnicalPractice(session, { ...practice, client })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? '—';
@@ -47,7 +48,24 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');
   const missingDocs = checklist.filter((item) => ['da_richiedere','richiesto'].includes(item.status));
   const nextTask = tasks.find((task) => task.status !== 'completata' && task.status !== 'annullata');
-  const timeline = audits.map((a) => ({ id: a.id, date: a.createdAt, user: userOf(a.actorId), type: a.event, entity: a.entityType, description: `Evento ${a.event.replaceAll('_', ' ')}`, beforeAfter: a.before || a.after ? 'Before/after registrati' : null }));
+  const timelineFilters = [['tutti', 'Tutti'], ['stato', 'Stato pratica'], ['comunicazioni', 'Comunicazioni'], ['documenti', 'Documenti'], ['task', 'Task'], ['audit', 'Audit']] as const;
+  const activeTimelineFilter = timelineFilters.some(([value]) => value === query?.timelineFilter) ? query?.timelineFilter : 'tutti';
+  const allTimelineEvents = [
+    { id: `practice-created-${practice.id}`, date: practice.createdAt, user: userOf(practice.createdById), type: 'pratica tecnica creata', entity: 'Pratica tecnica', category: 'stato', description: `${practice.title} creata`, beforeAfter: practice.practiceType },
+    { id: `practice-status-${practice.id}`, date: practice.updatedAt, user: userOf(practice.technicalOwnerId ?? practice.commercialOwnerId), type: 'stato pratica tecnica', entity: 'Pratica tecnica', category: 'stato', description: `${practice.title} · ${practice.status.replaceAll('_', ' ')}`, beforeAfter: practice.clientVisibleStatus ?? practice.integrationRequestNote },
+    ...communications.flatMap((c) => [
+      { id: `communication-created-${c.id}`, date: c.createdAt, user: userOf(c.createdById), type: 'comunicazione creata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} · ${c.type}/${c.channel}`, beforeAfter: c.internalNote ?? c.content.slice(0, 180) },
+      ...(c.reviewedAt ? [{ id: `communication-reviewed-${c.id}`, date: c.reviewedAt, user: userOf(c.reviewedById), type: 'comunicazione approvata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} approvata`, beforeAfter: c.internalNote ?? null }] : []),
+      ...(c.usedAt ? [{ id: `communication-used-${c.id}`, date: c.usedAt, user: userOf(c.reviewedById), type: 'comunicazione usata/inviata', entity: 'Comunicazione pratica', category: 'comunicazioni', description: `${c.title} segnata come usata/inviata`, beforeAfter: 'Invio manuale tracciato: nessun automatismo CRM.' }] : []),
+    ]),
+    ...documents.flatMap((d) => [
+      { id: `document-created-${d.id}`, date: d.createdAt, user: userOf(d.uploadedById), type: 'documento caricato', entity: 'Documento', category: 'documenti', description: `${d.title} · ${d.documentCategory}`, beforeAfter: d.status.replaceAll('_', ' ') },
+      ...(d.updatedAt.getTime() !== d.createdAt.getTime() ? [{ id: `document-updated-${d.id}`, date: d.updatedAt, user: userOf(d.uploadedById), type: 'documento aggiornato', entity: 'Documento', category: 'documenti', description: `${d.title} aggiornato`, beforeAfter: `Stato ${d.status.replaceAll('_', ' ')}` }] : []),
+    ]),
+    ...tasks.map((t) => ({ id: `task-${t.id}`, date: t.updatedAt ?? t.createdAt, user: userOf(t.assignedToId ?? t.createdById), type: 'task/scadenza', entity: 'Task', category: 'task', description: `${t.title} · ${t.status.replaceAll('_', ' ')}`, beforeAfter: [t.description, t.dueAt ? `Scadenza ${formatDateTime(t.dueAt)}` : null].filter(Boolean).join(' · ') || null })),
+    ...audits.map((a) => ({ id: `audit-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: 'audit', entity: a.entityType ?? 'AuditLog', category: 'audit', description: a.event.replaceAll('_', ' '), beforeAfter: a.before || a.after ? `Evento collegato a ${a.entityId ?? 'entità non specificata'}; dettagli completi nel registro audit autorizzato.` : null })),
+  ].sort((a, b) => +new Date(b.date) - +new Date(a.date));
+  const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' || event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="space-y-6"><PageHeader title={practice.title} description="Dettaglio pratica tecnica interna. Gli aggiornamenti al cliente vanno verificati prima dell’invio: il CRM non invia email, PEC o WhatsApp automatici." />
     <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">← Pratiche</SecondaryLink><SecondaryLink href={`/clients/${client.id}#ufficio-tecnico-pratiche`}>Fascicolo cliente</SecondaryLink><StatusBadge status={practice.status}/><StatusBadge status={practice.priority}/></div>
@@ -83,6 +101,6 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
     <Card title="Documenti collegati / fascicolo">{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Fascicolo']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <Link key="c" className="font-bold text-fai-blue underline" href={`/clients/${client.id}#documenti`}>Apri fascicolo</Link>])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
-    <Card title="Timeline / audit sintetica"><ActivityTimeline events={timeline} /></Card>
+    <Card title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/technical-office/practices/${practice.id}?timelineFilter=${value}`}>{label}</Link>)}</div>}><p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM per questa pratica: stati, comunicazioni, documenti, task/scadenze e audit log autorizzati.</p><ActivityTimeline events={timeline} /></Card>
   </div>;
 }
