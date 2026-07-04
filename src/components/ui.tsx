@@ -302,8 +302,11 @@ export function Table({
       <table className="w-full text-sm">
         <thead className="bg-gradient-to-r from-slate-50 to-fai-bg text-left text-xs uppercase tracking-wider text-slate-500">
           <tr>
-            {headers.map((h) => (
-              <th className="px-4 py-3.5 font-black" key={h}>
+            {headers.map((h, index) => (
+              <th
+                className="px-4 py-3.5 font-black"
+                key={`${String(h)}-${index}`}
+              >
                 {h}
               </th>
             ))}
