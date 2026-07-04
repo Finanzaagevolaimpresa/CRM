@@ -5,7 +5,7 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
@@ -600,4 +600,72 @@ export async function archiveTechnicalPractice(form: FormData) {
   const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
   await audit(s.userId, 'technical_practice_archive', 'TechnicalPractice', practice.id, { before, after: practice });
   return practice;
+}
+
+
+async function getPracticeForCommunication(technicalPracticeId: string, session: AuthSession) {
+  const practice = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: technicalPracticeId } });
+  const client = await prisma.client.findUniqueOrThrow({ where: { id: practice.clientId } });
+  if (!canViewTechnicalPractice(session, { ...practice, client })) redirect('/dashboard');
+  return { practice, client };
+}
+
+export async function createPracticeCommunicationDraft(form: FormData) {
+  const s = await requirePermission('practice_communications.write');
+  const data = practiceCommunicationDraftSchema.parse(clean(form));
+  const { practice } = await getPracticeForCommunication(data.technicalPracticeId, s);
+  if (!canEditTechnicalPractice(s, practice)) redirect('/dashboard');
+  const communication = await prisma.practiceCommunication.create({ data: {
+    technicalPracticeId: practice.id, clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId,
+    commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId, type: data.type, channel: data.channel, status: data.status,
+    title: data.title, content: data.content, internalNote: data.internalNote, createdById: s.userId,
+  } });
+  await audit(s.userId, 'practice_communication_draft_create', 'PracticeCommunication', communication.id, communication);
+  return communication;
+}
+
+export async function updatePracticeCommunicationDraft(form: FormData) {
+  const s = await requirePermission('practice_communications.write');
+  const data = practiceCommunicationUpdateSchema.parse(clean(form));
+  const before = await prisma.practiceCommunication.findUniqueOrThrow({ where: { id: data.id } });
+  if (!['bozza','da_revisionare'].includes(before.status)) throw new UserFacingActionError('Solo bozze o comunicazioni da revisionare possono essere modificate.');
+  const { practice } = await getPracticeForCommunication(before.technicalPracticeId, s);
+  if (!canEditTechnicalPractice(s, practice)) redirect('/dashboard');
+  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { type: data.type, channel: data.channel, status: data.status, title: data.title, content: data.content, internalNote: data.internalNote } });
+  await audit(s.userId, 'practice_communication_draft_update', 'PracticeCommunication', communication.id, { before, after: communication });
+  return communication;
+}
+
+export async function approvePracticeCommunicationDraft(form: FormData) {
+  const s = await requirePermission('practice_communications.review');
+  const data = practiceCommunicationIdSchema.parse(clean(form));
+  const before = await prisma.practiceCommunication.findUniqueOrThrow({ where: { id: data.id } });
+  await getPracticeForCommunication(before.technicalPracticeId, s);
+  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'approvata', reviewedById: s.userId, reviewedAt: new Date() } });
+  await audit(s.userId, 'practice_communication_approve', 'PracticeCommunication', communication.id, { before, after: communication });
+  return communication;
+}
+
+export async function markPracticeCommunicationAsUsed(form: FormData) {
+  const s = await requirePermission('practice_communications.mark_used');
+  const data = practiceCommunicationIdSchema.parse(clean(form));
+  const before = await prisma.practiceCommunication.findUniqueOrThrow({ where: { id: data.id } });
+  if (before.status !== 'approvata') throw new UserFacingActionError('Solo comunicazioni approvate possono essere segnate come usate/inviate manualmente.');
+  const { practice } = await getPracticeForCommunication(before.technicalPracticeId, s);
+  const now = new Date();
+  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'usata_inviata', usedAt: now } });
+  if (communication.type === 'cliente') await prisma.technicalPractice.update({ where: { id: practice.id }, data: { lastClientUpdateAt: now } });
+  await audit(s.userId, 'practice_communication_used', 'PracticeCommunication', communication.id, { before, after: communication });
+  return communication;
+}
+
+export async function archivePracticeCommunication(form: FormData) {
+  const s = await requirePermission('practice_communications.write');
+  const data = practiceCommunicationIdSchema.parse(clean(form));
+  const before = await prisma.practiceCommunication.findUniqueOrThrow({ where: { id: data.id } });
+  const { practice } = await getPracticeForCommunication(before.technicalPracticeId, s);
+  if (!canEditTechnicalPractice(s, practice) && !hasPermission(s, 'practice_communications.review')) redirect('/dashboard');
+  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
+  await audit(s.userId, 'practice_communication_archive', 'PracticeCommunication', communication.id, { before, after: communication });
+  return communication;
 }

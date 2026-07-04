@@ -42,7 +42,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
-  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents, technicalPractices] = await Promise.all([
+  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents, technicalPractices, practiceCommunications] = await Promise.all([
     prisma.client.findUnique({ where: { id } }),
     prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
     prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -59,6 +59,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
     prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
     prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
+    prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }),
   ]);
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
@@ -202,6 +203,19 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       ])} />}
     </Card>
 
+
+    <Card id="comunicazioni-pratica" title="Comunicazioni pratica">
+      <p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Comunicazioni e note collegate alle pratiche tecniche del cliente. Nessun documento privato o percorso storage è esposto; l’invio resta manuale.</p>
+      <div className="mb-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl bg-slate-50 p-4 text-sm"><b>Ultimo aggiornamento cliente:</b> {formatDateTime(technicalPractices.map((p) => p.lastClientUpdateAt).filter(Boolean).sort((a, b) => Number(b) - Number(a))[0])}</div>
+        <div className="rounded-2xl bg-slate-50 p-4 text-sm"><b>Prossima comunicazione prevista:</b> {formatDateTime(technicalPractices.map((p) => p.nextClientUpdateAt).filter(Boolean).sort((a, b) => Number(a) - Number(b))[0])}</div>
+      </div>
+      {practiceCommunications.length === 0 ? <EmptyState title="Nessuna comunicazione pratica collegata" /> : <Table headers={['Pratica','Tipo','Stato','Titolo / contenuto','Date']} rows={practiceCommunications.map((c) => { const practice = technicalPractices.find((p) => p.id === c.technicalPracticeId); return [
+        practice ? <Link key="p" className="font-bold text-fai-blue underline" href={`/technical-office/practices/${practice.id}`}>{practice.title}</Link> : 'Pratica tecnica',
+        `${c.type} · ${c.channel}`, <StatusBadge key="s" status={c.status}/>, <span key="content" className="line-clamp-3 text-sm"><b>{c.title}</b><br/>{c.content}</span>,
+        <span key="dates">Rev: {formatDateTime(c.reviewedAt)}<br/>Uso: {formatDateTime(c.usedAt)}</span>
+      ]; })} />}
+    </Card>
     <Card id="output-ai" title="Agenti AI / Output interni">
       {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
         <input type="hidden" name="clientId" value={client.id}/>
