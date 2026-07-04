@@ -562,14 +562,50 @@ export async function createTechnicalPractice(form: FormData) {
   return practice;
 }
 
+const technicalPracticeComparableFields = [
+  'clientId',
+  'projectId',
+  'clientServiceId',
+  'commercialOwnerId',
+  'technicalOwnerId',
+  'title',
+  'practiceType',
+  'targetEntity',
+  'targetPortal',
+  'status',
+  'priority',
+  'dueDate',
+  'submittedAt',
+  'protocolNumber',
+  'integrationRequestNote',
+  'internalNotes',
+  'clientVisibleStatus',
+  'nextClientUpdateAt',
+  'lastClientUpdateAt',
+] as const;
+
+type TechnicalPracticeComparableField = (typeof technicalPracticeComparableFields)[number];
+
+function comparableValue(value: unknown) {
+  return value instanceof Date ? value.getTime() : value ?? null;
+}
+
+function hasTechnicalPracticeChanges(before: Record<TechnicalPracticeComparableField, unknown>, after: Record<TechnicalPracticeComparableField, unknown>) {
+  return technicalPracticeComparableFields.some((field) => comparableValue(before[field]) !== comparableValue(after[field]));
+}
+
 export async function updateTechnicalPractice(form: FormData) {
   const s = await requirePermission('technical.write');
-  const data = technicalPracticeUpdateSchema.parse(clean(form));
+  const raw = clean(form);
+  const data = technicalPracticeUpdateSchema.parse(raw);
   const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
   if (!canEditTechnicalPractice(s, before)) redirect('/dashboard');
   await assertTechnicalContext(data.clientId, data.projectId, data.clientServiceId);
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { ...data, id: undefined, createdById: before.createdById } as never });
+  const updateData = { ...data, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
+  if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData })) return before;
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: updateData as never });
   await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice });
+  if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
   return practice;
 }
 
@@ -578,8 +614,14 @@ export async function updateTechnicalPracticeStatus(form: FormData) {
   const data = technicalPracticeStatusUpdateSchema.parse(clean(form));
   const before = await prisma.technicalPractice.findUniqueOrThrow({ where: { id: data.id } });
   if (!canEditTechnicalPractice(s, before)) redirect('/dashboard');
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { status: data.status, clientVisibleStatus: data.clientVisibleStatus, submittedAt: data.submittedAt ?? before.submittedAt, protocolNumber: data.protocolNumber, integrationRequestNote: data.integrationRequestNote, lastClientUpdateAt: data.lastClientUpdateAt, nextClientUpdateAt: data.nextClientUpdateAt } });
-  await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
+  const updateData = { status: data.status, clientVisibleStatus: data.clientVisibleStatus, submittedAt: data.submittedAt ?? before.submittedAt, protocolNumber: data.protocolNumber, integrationRequestNote: data.integrationRequestNote, lastClientUpdateAt: data.lastClientUpdateAt, nextClientUpdateAt: data.nextClientUpdateAt };
+  if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData })) return before;
+  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: updateData });
+  if (before.status !== practice.status) {
+    await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
+  } else {
+    await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice });
+  }
   return practice;
 }
 
