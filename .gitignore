@@ -7,3 +7,5 @@ node_modules
 storage/private/
 uploads/
 *.tmp
+
+tsconfig.tsbuildinfo
