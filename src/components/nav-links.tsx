@@ -35,6 +35,7 @@ const sections: NavSection[] = [
     title: "Operatività",
     items: [
       { label: "Dashboard", href: "/dashboard" },
+      { label: "Notifiche", href: "/notifications" },
       { label: "Task", href: "/tasks" },
       { label: "Scadenze", href: "/deadlines" },
       { label: "Documenti", href: "/documents" },
@@ -112,7 +113,13 @@ const sections: NavSection[] = [
 
 const adminRoles: RoleCode[] = ["admin", "direzione"];
 
-export function NavLinks({ role }: { role?: RoleCode | null }) {
+export function NavLinks({
+  role,
+  notificationCount = 0,
+}: {
+  role?: RoleCode | null;
+  notificationCount?: number;
+}) {
   const pathname = usePathname();
   const canSeeAdmin = Boolean(role && adminRoles.includes(role));
 
@@ -149,11 +156,17 @@ export function NavLinks({ role }: { role?: RoleCode | null }) {
                       {label}
                     </span>
                   </span>
-                  <span
-                    className={`ml-2 shrink-0 text-xs transition ${active ? "text-fai-orange" : "text-white/20 group-hover:translate-x-0.5 group-hover:text-fai-lime"}`}
-                  >
-                    ›
-                  </span>
+                  {href === "/notifications" && notificationCount > 0 ? (
+                    <span className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[0.65rem] font-black ${active ? "bg-fai-orange text-white" : "bg-fai-orange text-white"}`}>
+                      {notificationCount > 99 ? "99+" : notificationCount}
+                    </span>
+                  ) : (
+                    <span
+                      className={`ml-2 shrink-0 text-xs transition ${active ? "text-fai-orange" : "text-white/20 group-hover:translate-x-0.5 group-hover:text-fai-lime"}`}
+                    >
+                      ›
+                    </span>
+                  )}
                 </Link>
               );
             })}
