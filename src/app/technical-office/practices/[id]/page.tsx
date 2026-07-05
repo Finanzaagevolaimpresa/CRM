@@ -1,24 +1,15 @@
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
+import { PracticeCommunicationTemplates } from '@/components/practice-communication-templates';
 import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { canViewTechnicalPractice } from '@/lib/access-control';
 import { archivePracticeCommunicationAndRefresh, archiveTechnicalPracticeAndRefresh, approvePracticeCommunicationDraftAndRefresh, assignTechnicalPracticeAndRefresh, createPracticeCommunicationDraftAndRefresh, markPracticeCommunicationAsUsedAndRefresh, updateTechnicalPracticeAndRefresh, updateTechnicalPracticeStatusAndRefresh } from '@/lib/form-actions';
+import { practiceCommunicationTemplates } from '@/lib/practice-communication-templates';
 
 export const dynamic = 'force-dynamic';
 const statuses = ['da_progettare','in_progettazione','documenti_richiesti','documenti_completi','pronta_presentazione','presentata','integrazione_richiesta','in_istruttoria','approvata','respinta','archiviata'];
-const communicationTemplates = [
-  ['Aggiornamento pratica in lavorazione', 'La pratica risulta in lavorazione. Siamo in attesa delle prossime verifiche operative.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Richiesta documenti mancanti', 'Sono necessarie integrazioni documentali per proseguire con la gestione della pratica. L’esito resta soggetto alle valutazioni dell’ente/istituto competente.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Pratica pronta per presentazione', 'La domanda è stata predisposta per la presentazione, salvo ultime verifiche operative. L’esito resta soggetto alle valutazioni dell’ente/istituto competente.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Pratica presentata', 'La domanda è stata presentata/predisposta secondo le informazioni disponibili. Siamo in attesa di riscontro dall’ente/istituto competente.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Integrazione richiesta dall’ente', 'Sono necessarie integrazioni documentali richieste dall’ente/istituto competente. L’esito resta soggetto alle valutazioni dell’ente/istituto competente.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Pratica in istruttoria', 'La pratica risulta in istruttoria. Siamo in attesa di riscontro e l’esito resta soggetto alle valutazioni dell’ente/istituto competente.\n\nLa presente comunicazione è un aggiornamento operativo interno alla gestione della pratica e non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Esito positivo da verificare/gestire', 'È emerso un riscontro positivo da verificare e gestire operativamente prima di qualsiasi comunicazione definitiva. Non costituisce promessa di contributo, finanziamento, approvazione o erogazione.'],
-  ['Esito negativo / non procedibile', 'Dalle verifiche disponibili la pratica risulta non procedibile o con esito negativo. È opportuno condividere con il cliente i prossimi passaggi gestionali con formula prudente.'],
-  ['Aggiornamento commerciale interno', 'Nota per il commerciale: comunicare solo lo stato operativo verificato, senza promettere contributi, finanziamenti, approvazioni o tempistiche non confermate.'],
-];
 const priorities = ['bassa','media','alta','urgente'];
 const auditEventLabels: Record<string, string> = {
   technical_practice_update: 'Aggiornamento pratica tecnica',
@@ -53,6 +44,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canWrite = hasPermission(session, 'technical.write');
   const canStatus = hasPermission(session, 'technical.status');
   const canAssign = hasPermission(session, 'technical.assign');
+  const canCommRead = hasPermission(session, 'practice_communications.read');
   const canCommWrite = hasPermission(session, 'practice_communications.write');
   const canCommReview = hasPermission(session, 'practice_communications.review');
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');
@@ -91,13 +83,13 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <form action={createPracticeCommunicationDraftAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
           <input type="hidden" name="technicalPracticeId" value={practice.id}/><input type="hidden" name="type" value="cliente"/>
           <select name="channel" defaultValue="email" className="rounded-xl border p-2"><option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="telefono">Telefono</option><option value="pec">PEC</option></select>
-          <select name="title" className="rounded-xl border p-2">{communicationTemplates.filter((t) => !t[0].includes('commerciale')).map(([title]) => <option key={title} value={title}>{title}</option>)}</select>
-          <textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={communicationTemplates[0][1]} />
+          <select name="title" className="rounded-xl border p-2">{practiceCommunicationTemplates.filter((template) => template.category === 'cliente').map((template) => <option key={template.id} value={template.suggestedTitle}>{template.name}</option>)}</select>
+          <textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates[0]?.suggestedText ?? ''} />
           <select name="status" defaultValue="da_revisionare" className="rounded-xl border p-2"><option value="bozza">Bozza</option><option value="da_revisionare">Da revisionare</option></select><PrimaryButton type="submit">Crea bozza cliente</PrimaryButton>
         </form>
         <form action={createPracticeCommunicationDraftAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
           <input type="hidden" name="technicalPracticeId" value={practice.id}/><input type="hidden" name="type" value="commerciale"/><input type="hidden" name="channel" value="nota_interna"/>
-          <input name="title" className="rounded-xl border p-2" defaultValue="Aggiornamento commerciale interno"/><textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={communicationTemplates[8][1]} /><textarea name="internalNote" rows={2} className="rounded-xl border p-2" placeholder="Nota interna opzionale"/>
+          <input name="title" className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates.find((template) => template.category === 'commerciale')?.suggestedTitle ?? 'Aggiornamento commerciale interno'}/><textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates.find((template) => template.category === 'commerciale')?.suggestedText ?? ''} /><textarea name="internalNote" rows={2} className="rounded-xl border p-2" placeholder="Nota interna opzionale"/>
           <select name="status" defaultValue="da_revisionare" className="rounded-xl border p-2"><option value="bozza">Bozza</option><option value="da_revisionare">Da revisionare</option></select><PrimaryButton type="submit">Crea nota per commerciale</PrimaryButton>
         </form>
       </div> : <EmptyState title="Comunicazioni in sola lettura" />}
@@ -109,6 +101,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       ])} />}
       <p className="mt-4 text-xs text-slate-500">Integrazione AI futura: eventuali bozze assistite resteranno non attive e sempre da revisionare manualmente.</p>
     </Card>
+    {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={canCommWrite} /></Card> : null}
+
     <Card title="Documenti collegati / fascicolo">{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Fascicolo']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <Link key="c" className="font-bold text-fai-blue underline" href={`/clients/${client.id}#documenti`}>Apri fascicolo</Link>])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
     <Card title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/technical-office/practices/${practice.id}?timelineFilter=${value}`}>{label}</Link>)}</div>}><p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM per questa pratica: stati, comunicazioni, documenti, task/scadenze e audit log autorizzati.</p><ActivityTimeline events={timeline} /></Card>
