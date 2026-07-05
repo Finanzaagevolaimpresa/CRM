@@ -36,6 +36,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Notifiche", href: "/notifications" },
+      { label: "Ricerca", href: "/search" },
       { label: "Task", href: "/tasks" },
       { label: "Scadenze", href: "/deadlines" },
       { label: "Documenti", href: "/documents" },
