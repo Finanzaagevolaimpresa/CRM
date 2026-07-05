@@ -1,18 +1,59 @@
-import { Card, Stat, PageHeader, formatDateTime } from "@/components/ui";
+import Link from "next/link";
+import {
+  Badge,
+  Card,
+  EmptyState,
+  Stat,
+  PageHeader,
+  formatDateTime,
+} from "@/components/ui";
 import { legalDisclaimer } from "@/lib/compliance";
 import { prisma } from "@/lib/prisma";
-import { requireSession } from "@/lib/auth";
+import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
   const now = new Date();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
   const next7 = new Date(now);
   next7.setDate(next7.getDate() + 7);
+  const canReadServices = hasPermission(session, "service.read");
+  const canReadTechnical = hasPermission(session, "technical.read");
+  const canReadPracticeCommunications = hasPermission(
+    session,
+    "practice_communications.read",
+  );
+  const canReviewPracticeCommunications = hasPermission(
+    session,
+    "practice_communications.review",
+  );
+  const canReadLeads = hasPermission(session, "lead.read");
+  const canSeeAllTasks = [
+    "admin",
+    "direzione",
+    "revisore",
+    "backoffice",
+  ].includes(session.role);
   const openTaskWhere = {
     deletedAt: null,
     status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] },
+    ...(canSeeAllTasks
+      ? {}
+      : {
+          OR: [
+            { assignedToId: session.userId },
+            { createdById: session.userId },
+          ],
+        }),
   };
+  const leadAccessWhere =
+    session.role === "admin" || session.role === "direzione"
+      ? {}
+      : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
     "pre_analisi",
@@ -70,64 +111,118 @@ export default async function Dashboard() {
     commsToReview,
     overdueClientUpdates,
     approvedUnusedComms,
+    todayTasksCount,
+    activeTechnicalPracticesCount,
+    operationalTasks,
+    operationalCommsToReview,
+    operationalActivePractices,
+    operationalLeadFollowUps,
+    operationalOfferFollowUps,
+    operationalClients,
   ] = await Promise.all([
-    prisma.lead.count({ where: { deletedAt: null, status: "nuovo" } }),
-    prisma.lead.count({ where: { deletedAt: null, status: "da_contattare" } }),
-    prisma.lead.count({
-      where: {
-        deletedAt: null,
-        status: { in: ["proposta_inviata", "offerta_inviata"] },
-      },
-    }),
-    prisma.lead.count({ where: { deletedAt: null, status: "in_trattativa" } }),
-    prisma.lead.count({
-      where: {
-        deletedAt: null,
-        status: { in: ["vinto", "cliente_acquisito"] },
-      },
-    }),
-    prisma.lead.count({ where: { deletedAt: null, status: "perso" } }),
-    prisma.lead.count({
-      where: {
-        deletedAt: null,
-        nextActionDate: { lt: now },
-        status: {
-          notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"],
-        },
-      },
-    }),
-    prisma.lead.count({
-      where: {
-        deletedAt: null,
-        nextActionDate: { gte: now, lte: next7 },
-        status: {
-          notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"],
-        },
-      },
-    }),
-    prisma.commercialOffer.count({
-      where: { deletedAt: null, status: "inviata" },
-    }),
-    prisma.commercialOffer.count({
-      where: { deletedAt: null, status: "accettata" },
-    }),
-    prisma.commercialOffer.count({
-      where: { deletedAt: null, status: "rifiutata" },
-    }),
-    prisma.commercialOffer.count({
-      where: {
-        deletedAt: null,
-        followUpAt: { lt: now },
-        status: { notIn: ["accettata", "rifiutata"] },
-      },
-    }),
-    prisma.commercialOffer.count({
-      where: {
-        deletedAt: null,
-        followUpAt: { gte: now, lte: next7 },
-        status: { notIn: ["accettata", "rifiutata"] },
-      },
-    }),
+    canReadLeads
+      ? prisma.lead.count({
+          where: { deletedAt: null, status: "nuovo", ...leadAccessWhere },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            status: "da_contattare",
+            ...leadAccessWhere,
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            ...leadAccessWhere,
+            status: { in: ["proposta_inviata", "offerta_inviata"] },
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            status: "in_trattativa",
+            ...leadAccessWhere,
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            ...leadAccessWhere,
+            status: { in: ["vinto", "cliente_acquisito"] },
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: { deletedAt: null, status: "perso", ...leadAccessWhere },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            ...leadAccessWhere,
+            nextActionDate: { lt: now },
+            status: {
+              notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"],
+            },
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.lead.count({
+          where: {
+            deletedAt: null,
+            ...leadAccessWhere,
+            nextActionDate: { gte: now, lte: next7 },
+            status: {
+              notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"],
+            },
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.commercialOffer.count({
+          where: { deletedAt: null, status: "inviata" },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.commercialOffer.count({
+          where: { deletedAt: null, status: "accettata" },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.commercialOffer.count({
+          where: { deletedAt: null, status: "rifiutata" },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.commercialOffer.count({
+          where: {
+            deletedAt: null,
+            followUpAt: { lt: now },
+            status: { notIn: ["accettata", "rifiutata"] },
+          },
+        })
+      : 0,
+    canReadLeads
+      ? prisma.commercialOffer.count({
+          where: {
+            deletedAt: null,
+            followUpAt: { gte: now, lte: next7 },
+            status: { notIn: ["accettata", "rifiutata"] },
+          },
+        })
+      : 0,
     prisma.client.count({ where: { deletedAt: null, status: "attivo" } }),
     prisma.project.count({
       where: { deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
@@ -145,14 +240,20 @@ export default async function Dashboard() {
     prisma.payment.count({
       where: { status: { notIn: ["incassato", "stornato", "rimborsato"] } },
     }),
-    prisma.task.count({ where: openTaskWhere }),
-    prisma.task.count({ where: { ...openTaskWhere, dueAt: { lt: now } } }),
-    prisma.task.count({
-      where: { ...openTaskWhere, dueAt: { gte: now, lte: next7 } },
-    }),
-    prisma.task.count({
-      where: { ...openTaskWhere, assignedToId: session.userId },
-    }),
+    canReadServices ? prisma.task.count({ where: openTaskWhere }) : 0,
+    canReadServices
+      ? prisma.task.count({ where: { ...openTaskWhere, dueAt: { lt: now } } })
+      : 0,
+    canReadServices
+      ? prisma.task.count({
+          where: { ...openTaskWhere, dueAt: { gte: now, lte: next7 } },
+        })
+      : 0,
+    canReadServices
+      ? prisma.task.count({
+          where: { ...openTaskWhere, assignedToId: session.userId },
+        })
+      : 0,
     prisma.aiOutput.count({
       where: {
         status: { in: ["needs_review", "flagged"] },
@@ -165,15 +266,103 @@ export default async function Dashboard() {
       orderBy: { createdAt: "desc" },
     }),
     prisma.payment.findFirst({ orderBy: { createdAt: "desc" } }),
-    prisma.task.findFirst({ where: openTaskWhere, orderBy: { dueAt: "asc" } }),
-    prisma.clientService.groupBy({
-      by: ["operationalStatus"],
+    canReadServices
+      ? prisma.task.findFirst({
+          where: openTaskWhere,
+          orderBy: { dueAt: "asc" },
+        })
+      : null,
+    canReadServices
+      ? prisma.clientService.groupBy({
+          by: ["operationalStatus"],
+          where: { deletedAt: null },
+          _count: { _all: true },
+        })
+      : [],
+    canReviewPracticeCommunications
+      ? prisma.practiceCommunication.count({
+          where: { deletedAt: null, status: "da_revisionare" },
+        })
+      : 0,
+    canReadTechnical
+      ? prisma.technicalPractice.count({
+          where: { deletedAt: null, nextClientUpdateAt: { lt: now } },
+        })
+      : 0,
+    canReadPracticeCommunications
+      ? prisma.practiceCommunication.count({
+          where: { deletedAt: null, status: "approvata", usedAt: null },
+        })
+      : 0,
+    canReadServices
+      ? prisma.task.count({
+          where: {
+            ...openTaskWhere,
+            dueAt: { gte: startOfToday, lte: endOfToday },
+          },
+        })
+      : 0,
+    canReadTechnical
+      ? prisma.technicalPractice.count({
+          where: {
+            deletedAt: null,
+            status: { notIn: ["approvata", "respinta", "archiviata"] },
+          },
+        })
+      : 0,
+    canReadServices
+      ? prisma.task.findMany({
+          where: { ...openTaskWhere, dueAt: { lte: endOfToday } },
+          orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
+          take: 20,
+        })
+      : [],
+    canReviewPracticeCommunications
+      ? prisma.practiceCommunication.findMany({
+          where: { deletedAt: null, status: "da_revisionare" },
+          orderBy: { createdAt: "asc" },
+          take: 20,
+        })
+      : [],
+    canReadTechnical
+      ? prisma.technicalPractice.findMany({
+          where: {
+            deletedAt: null,
+            status: { notIn: ["approvata", "respinta", "archiviata"] },
+          },
+          orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
+          take: 20,
+        })
+      : [],
+    canReadLeads
+      ? prisma.lead.findMany({
+          where: {
+            deletedAt: null,
+            ...leadAccessWhere,
+            nextActionDate: { lte: next7 },
+            status: {
+              notIn: ["vinto", "perso", "archiviato", "cliente_acquisito"],
+            },
+          },
+          orderBy: { nextActionDate: "asc" },
+          take: 20,
+        })
+      : [],
+    canReadLeads
+      ? prisma.commercialOffer.findMany({
+          where: {
+            deletedAt: null,
+            followUpAt: { lte: next7 },
+            status: { notIn: ["accettata", "rifiutata"] },
+          },
+          orderBy: { followUpAt: "asc" },
+          take: 20,
+        })
+      : [],
+    prisma.client.findMany({
       where: { deletedAt: null },
-      _count: { _all: true },
+      select: { id: true, displayName: true },
     }),
-    prisma.practiceCommunication.count({ where: { deletedAt: null, status: "da_revisionare" } }),
-    prisma.technicalPractice.count({ where: { deletedAt: null, nextClientUpdateAt: { lt: now } } }),
-    prisma.practiceCommunication.count({ where: { deletedAt: null, status: "approvata", usedAt: null } }),
   ]);
   const priorityStats = [
     [
@@ -408,6 +597,111 @@ export default async function Dashboard() {
       "purple",
     ],
   ];
+
+  const clientNames = new Map(
+    operationalClients.map((client) => [client.id, client.displayName]),
+  );
+  const operationalCards = [
+    [
+      "Task in scadenza oggi",
+      todayTasksCount,
+      "Da completare entro oggi",
+      "/tasks",
+      "blue",
+    ],
+    [
+      "Task scaduti",
+      overdueTasks,
+      "Attività aperte oltre scadenza",
+      "/tasks",
+      "orange",
+    ],
+    [
+      "Pratiche tecniche attive",
+      activeTechnicalPracticesCount,
+      "Stati operativi ancora aperti",
+      "/technical-office/practices",
+      "green",
+    ],
+    [
+      "Comunicazioni in approvazione",
+      canReviewPracticeCommunications ? commsToReview : 0,
+      "Bozze da validare prima dell'uso",
+      "/technical-office/practices",
+      "purple",
+    ],
+    [
+      "Comunicazioni approvate non usate",
+      approvedUnusedComms,
+      "Pronte per l'invio o uso manuale",
+      "/technical-office/practices",
+      "lime",
+    ],
+    [
+      "Lead/offerte da ricontattare",
+      commercialActionsOverdue +
+        commercialActionsDueSoon +
+        offerFollowUpsOverdue +
+        offerFollowUpsDueSoon,
+      "Follow-up commerciali prossimi o scaduti",
+      "/leads",
+      "orange",
+    ],
+  ] as const;
+  const priorityItems = [
+    ...operationalTasks.map((task) => ({
+      id: `task-${task.id}`,
+      rank: task.dueAt && task.dueAt < startOfToday ? 0 : 1,
+      title: task.title,
+      related: task.clientId ? clientNames.get(task.clientId) : null,
+      type:
+        task.dueAt && task.dueAt < startOfToday ? "Task scaduto" : "Task oggi",
+      date: task.dueAt,
+      href: "/tasks",
+    })),
+    ...operationalCommsToReview.map((communication) => ({
+      id: `communication-${communication.id}`,
+      rank: 2,
+      title: communication.title,
+      related: clientNames.get(communication.clientId),
+      type: "Comunicazione da approvare",
+      date: communication.createdAt,
+      href: `/technical-office/practices/${communication.technicalPracticeId}`,
+    })),
+    ...operationalActivePractices.map((practice) => ({
+      id: `practice-${practice.id}`,
+      rank: 3,
+      title: practice.title,
+      related: clientNames.get(practice.clientId),
+      type: "Pratica tecnica aperta",
+      date: practice.dueDate ?? practice.updatedAt,
+      href: `/technical-office/practices/${practice.id}`,
+    })),
+    ...operationalLeadFollowUps.map((lead) => ({
+      id: `lead-${lead.id}`,
+      rank: 4,
+      title: lead.companyName ?? `${lead.firstName} ${lead.lastName}`,
+      related: lead.clientId ? clientNames.get(lead.clientId) : null,
+      type: "Follow-up lead",
+      date: lead.nextActionDate,
+      href: `/leads/${lead.id}`,
+    })),
+    ...operationalOfferFollowUps.map((offer) => ({
+      id: `offer-${offer.id}`,
+      rank: 4,
+      title: offer.title,
+      related: offer.clientId ? clientNames.get(offer.clientId) : null,
+      type: "Follow-up offerta",
+      date: offer.followUpAt,
+      href: `/commercial-offers/${offer.id}`,
+    })),
+  ]
+    .sort(
+      (a, b) =>
+        a.rank - b.rank || (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0),
+    )
+    .slice(0, 10);
+
   const toneClasses = {
     blue: "border-fai-blue/20 bg-fai-blue/5 text-fai-blue",
     green: "border-fai-green/20 bg-fai-teal/5 text-fai-green",
@@ -445,6 +739,67 @@ export default async function Dashboard() {
           />
         ))}
       </section>
+      <Card title="Operatività di oggi">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {operationalCards.map(([l, v, d, h, t]) => (
+            <Stat
+              key={String(l)}
+              label={String(l)}
+              value={Number(v)}
+              description={String(d)}
+              href={String(h)}
+              tone={t}
+            />
+          ))}
+        </div>
+      </Card>
+      <Card title="Priorità operative">
+        {priorityItems.length === 0 ? (
+          <EmptyState title="Nessuna priorità operativa">
+            Non ci sono attività, comunicazioni, pratiche o follow-up da
+            lavorare subito.
+          </EmptyState>
+        ) : (
+          <div className="space-y-3">
+            {priorityItems.map((item) => (
+              <div
+                key={item.id}
+                className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm md:grid-cols-[1.4fr_1fr_0.9fr_0.8fr_auto] md:items-center"
+              >
+                <div>
+                  <p className="font-extrabold text-fai-navy">{item.title}</p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {item.related ?? "Nessun cliente collegato"}
+                  </p>
+                </div>
+                <Badge
+                  tone={
+                    item.rank === 0
+                      ? "orange"
+                      : item.rank === 2
+                        ? "purple"
+                        : "blue"
+                  }
+                >
+                  {item.type}
+                </Badge>
+                <span className="text-xs font-bold text-slate-600">
+                  {formatDateTime(item.date)}
+                </span>
+                <span className="text-xs text-slate-500">
+                  Priorità #{priorityItems.indexOf(item) + 1}
+                </span>
+                <Link
+                  className="text-xs font-black uppercase tracking-wide text-fai-green underline"
+                  href={item.href}
+                >
+                  Apri
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {businessStats.map(([l, v, d, h, t]) => (
           <Stat
