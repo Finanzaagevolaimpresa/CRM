@@ -109,7 +109,9 @@ Script non distruttivo disponibile:
 DATABASE_URL="$DATABASE_URL" LOCAL_DOCUMENT_STORAGE_ROOT="/var/lib/fai-crm/documents" ./scripts/backup-local.sh
 ```
 
-Produce un dump PostgreSQL custom e un archivio tar.gz dei documenti se la directory esiste.
+Produce un dump PostgreSQL custom e un archivio tar.gz dei documenti se la directory esiste. I backup contengono dati clienti e documenti riservati: conservarli cifrati o in storage protetto, non lasciarli in cartelle pubbliche/condivise e limitare i permessi di accesso agli amministratori autorizzati.
+
+Se `LOCAL_DOCUMENT_STORAGE_ROOT` non esiste, lo script mostra un warning pulito, non interrompe il backup database già completato e salta solo l'archivio documenti.
 
 Restore database su database vuoto/preparato:
 
@@ -124,7 +126,7 @@ mkdir -p /var/lib/fai-crm/documents
 tar -xzf ./backups/documents-YYYYMMDDTHHMMSSZ.tar.gz -C /var/lib/fai-crm/documents
 ```
 
-Prima di restore in produzione fermare l'applicazione, verificare di avere un backup recente e validare il piano su ambiente staging.
+Prima di restore in produzione fermare l'applicazione, verificare di avere un backup recente e validare il piano su ambiente staging. Testare periodicamente il restore database/documenti per confermare che i backup siano realmente utilizzabili.
 
 ## Health check
 
