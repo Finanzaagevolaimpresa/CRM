@@ -29,14 +29,18 @@ function bullet(text: string) {
   return `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
+function plainMarkdownText(value: string) {
+  return value.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/__([^_]+)__/g, '$1').replace(/`([^`]+)`/g, '$1');
+}
+
 function markdownToWordXml(markdown: string) {
   return markdown.split(/\r?\n/).map((line) => {
     const trimmed = line.trim();
     if (!trimmed) return paragraph('');
     if (trimmed.startsWith('## ')) return paragraph(trimmed.slice(3).trim(), 'Heading2');
     if (trimmed.startsWith('# ')) return paragraph(trimmed.slice(2).trim(), 'Heading1');
-    if (trimmed.startsWith('- ')) return bullet(trimmed.slice(2).trim());
-    return paragraph(trimmed);
+    if (trimmed.startsWith('- ')) return bullet(plainMarkdownText(trimmed.slice(2).trim()));
+    return paragraph(plainMarkdownText(trimmed));
   }).join('');
 }
 
