@@ -50,6 +50,13 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');
   const missingDocs = checklist.filter((item) => ['da_richiedere','richiesto'].includes(item.status));
   const nextTask = tasks.find((task) => task.status !== 'completata' && task.status !== 'annullata');
+  const templatePlaceholderContext = {
+    clientName: client.displayName,
+    practiceName: practice.title,
+    practiceStatus: practice.status.replaceAll('_', ' '),
+    nextAction: nextTask?.title ?? practice.integrationRequestNote ?? null,
+    missingDocuments: missingDocs.map((item) => item.title),
+  };
   const timelineFilters = [['tutti', 'Tutti'], ['stato', 'Stato pratica'], ['comunicazioni', 'Comunicazioni'], ['documenti', 'Documenti'], ['task', 'Task'], ['audit', 'Audit']] as const;
   const activeTimelineFilter = timelineFilters.some(([value]) => value === query?.timelineFilter) ? query?.timelineFilter : 'tutti';
   const allTimelineEvents = [
@@ -101,7 +108,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       ])} />}
       <p className="mt-4 text-xs text-slate-500">Integrazione AI futura: eventuali bozze assistite resteranno non attive e sempre da revisionare manualmente.</p>
     </Card>
-    {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={canCommWrite} /></Card> : null}
+    {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={canCommWrite} placeholderContext={templatePlaceholderContext} /></Card> : null}
 
     <Card title="Documenti collegati / fascicolo">{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Fascicolo']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <Link key="c" className="font-bold text-fai-blue underline" href={`/clients/${client.id}#documenti`}>Apri fascicolo</Link>])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
