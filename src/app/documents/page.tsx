@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient, canViewDocument, isSensitiveDocument } from '@/lib/access-control';
 import { privateDocumentExists } from '@/lib/storage';
+import { isMissingChecklistDocument } from '@/lib/document-checklist';
 
 const serviceAreas = ['anagrafica','bancabilita','finanziamento_aziendale','bandi_finanza_agevolata','progetto_investimento','contratti','pagamenti','dossier','output_ai','altro'];
 
@@ -35,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
   const visibleClientIds = new Set(visible.map((document) => document.clientId).filter(Boolean));
   const accessibleClientIds = new Set(clientRows.filter((client) => canViewClient(session, client)).map((client) => client.id));
   const relevantChecklist = checklistRows.filter((item) => accessibleClientIds.has(item.clientId) && (visibleClientIds.has(item.clientId) || !item.documentId));
-  const missingChecklist = relevantChecklist.filter((item) => !item.documentId && !['ricevuto','validato','non_necessario'].includes(item.status));
+  const missingChecklist = relevantChecklist.filter(isMissingChecklistDocument);
   const missingChecklistByClient = Array.from(new Set(missingChecklist.map((item) => item.clientId))).map((clientId) => {
     const items = missingChecklist.filter((item) => item.clientId === clientId);
     return {
