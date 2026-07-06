@@ -76,14 +76,27 @@ export async function buildOperationalReportMarkdown(session: AuthSession, input
     ...aiOutputs.map((o) => ({ text: `Output AI: ${o.title} · ${clean(o.status)} · creato ${fmt(o.createdAt)}` })),
   ];
   const noDossierAiMessage = practice ? '- Nessun dossier o output AI collegato direttamente alla pratica.' : '- Nessun dato presente.';
-  const communicationReplacements = {
-    '[NOME_PRATICA]': practice?.title ?? 'pratica tecnica',
-    '[NOME_CLIENTE]': client.displayName,
-    '[DOCUMENTI_MANCANTI]': missing.map((item) => item.title).join(', ') || 'documentazione da verificare',
-    '[STATO_PRATICA]': practice ? clean(practice.status) : 'stato da verificare',
-    '[PROSSIMA_AZIONE]': practice?.integrationRequestNote ?? practice?.clientVisibleStatus ?? 'prossima azione da verificare',
-  };
+  const visibleTechnicalPracticeById = new Map(visibleTechnicalPractices.map((item) => [item.id, item]));
   const practiceIdentifier = (item: typeof visibleTechnicalPractices[number]) => item.protocolNumber ? `protocollo ${item.protocolNumber}` : `ID ${item.id}`;
+  const linkedToPractice = (item: { clientServiceId?: string | null; projectId?: string | null }, itemPractice: typeof visibleTechnicalPractices[number]) =>
+    (!!item.clientServiceId && item.clientServiceId === itemPractice.clientServiceId) || (!!item.projectId && item.projectId === itemPractice.projectId);
+  const missingForPractice = (itemPractice?: typeof visibleTechnicalPractices[number]) => itemPractice ? missing.filter((item) => linkedToPractice(item, itemPractice)) : [];
+  const nextActionForPractice = (itemPractice?: typeof visibleTechnicalPractices[number]) => {
+    if (!itemPractice) return 'prossima azione da verificare';
+    const linkedOpenTask = tasks.find((task) => task.status !== 'completata' && linkedToPractice(task, itemPractice));
+    return itemPractice.integrationRequestNote ?? itemPractice.clientVisibleStatus ?? linkedOpenTask?.title ?? 'prossima azione da verificare';
+  };
+  const communicationReplacements = (communication: typeof communications[number]) => {
+    const itemPractice = communication.technicalPracticeId ? visibleTechnicalPracticeById.get(communication.technicalPracticeId) : undefined;
+    const communicationMissing = missingForPractice(itemPractice);
+    return {
+      '[NOME_PRATICA]': itemPractice?.title ?? 'pratica non verificata',
+      '[NOME_CLIENTE]': client.displayName,
+      '[DOCUMENTI_MANCANTI]': communicationMissing.map((item) => item.title).join(', ') || 'documentazione da verificare',
+      '[STATO_PRATICA]': itemPractice ? clean(itemPractice.status) : 'stato da verificare',
+      '[PROSSIMA_AZIONE]': nextActionForPractice(itemPractice),
+    };
+  };
   return { title, markdown: [
     `# ${title}`,
     `Generato il ${fmt(new Date())}. Report interno per controllo qualità, passaggio operativo e riepilogo pratica.`,
@@ -97,8 +110,9 @@ export async function buildOperationalReportMarkdown(session: AuthSession, input
     '', '## Comunicazioni pratica', list(communications, (c) => {
       const originalText = `${c.title} ${c.content}`;
       const historicalDraft = hasRawPlaceholders(originalText);
-      const renderedTitle = renderCommunicationText(c.title, communicationReplacements);
-      const renderedContent = renderCommunicationText(c.content, communicationReplacements).slice(0, 240);
+      const replacements = communicationReplacements(c);
+      const renderedTitle = renderCommunicationText(c.title, replacements);
+      const renderedContent = renderCommunicationText(c.content, replacements).slice(0, 240);
       return `- ${renderedTitle} · ${clean(c.type)}/${clean(c.channel)} · stato ${clean(c.status)} · creata ${fmt(c.createdAt)} · revisione ${fmt(c.reviewedAt)} · uso ${fmt(c.usedAt)}${historicalDraft ? ' · bozza storica da verificare' : ''}${c.internalNote ? ` · nota: ${c.internalNote}` : ''} · testo: ${renderedContent}`;
     }),
     '', '## Dossier e output AI autorizzati', dossierAndAiRows.length ? list(dossierAndAiRows, (x) => `- ${x.text}`) : noDossierAiMessage,
