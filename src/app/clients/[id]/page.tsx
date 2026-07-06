@@ -11,6 +11,7 @@ import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardC
 import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewClient, canViewDocument } from '@/lib/access-control';
+import { isMissingChecklistDocument } from '@/lib/document-checklist';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -105,7 +106,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const labelOf = (service: { serviceCatalogId: string; practiceType?: string | null; operationalStatus?: string | null; requestedAmount?: unknown; plannedInvestment?: unknown } | null | undefined) => service ? buildClientServiceLabel(service, catalog.find((item) => item.id === service.serviceCatalogId) ?? null) : 'Fascicolo cliente';
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? (userId ? 'Utente non attivo' : 'Sistema');
   const documentAvailability = new Map(await Promise.all(visibleDocuments.map(async (d) => [d.id, await privateDocumentExists(d.storagePath)] as const)));
-  const missingChecklistItems = checklistItems.filter((item) => !item.documentId && !['ricevuto','validato','non_necessario'].includes(item.status));
+  const missingChecklistItems = checklistItems.filter(isMissingChecklistDocument);
   const receivedChecklistItems = checklistItems.filter((item) => item.documentId || ['ricevuto','validato'].includes(item.status));
   const requestText = missingChecklistItems.length ? `Gentile cliente, per proseguire con la lavorazione della pratica abbiamo necessità di ricevere i seguenti documenti: ${missingChecklistItems.map((item) => item.title).join('; ')}. Restiamo a disposizione per eventuali chiarimenti.` : 'Nessun documento mancante risulta richiesto in checklist.';
   const documentCenterGroups = [

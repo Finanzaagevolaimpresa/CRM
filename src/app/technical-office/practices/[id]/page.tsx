@@ -7,6 +7,7 @@ import { prisma } from '@/lib/prisma';
 import { canViewTechnicalPractice } from '@/lib/access-control';
 import { archivePracticeCommunicationAndRefresh, archiveTechnicalPracticeAndRefresh, approvePracticeCommunicationDraftAndRefresh, assignTechnicalPracticeAndRefresh, createPracticeCommunicationDraftAndRefresh, markPracticeCommunicationAsUsedAndRefresh, updateTechnicalPracticeAndRefresh, updateTechnicalPracticeStatusAndRefresh } from '@/lib/form-actions';
 import { practiceCommunicationTemplates } from '@/lib/practice-communication-templates';
+import { isMissingChecklistDocument } from '@/lib/document-checklist';
 
 export const dynamic = 'force-dynamic';
 const statuses = ['da_progettare','in_progettazione','documenti_richiesti','documenti_completi','pronta_presentazione','presentata','integrazione_richiesta','in_istruttoria','approvata','respinta','archiviata'];
@@ -48,7 +49,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canCommWrite = hasPermission(session, 'practice_communications.write');
   const canCommReview = hasPermission(session, 'practice_communications.review');
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');
-  const missingDocs = checklist.filter((item) => ['da_richiedere','richiesto'].includes(item.status));
+  const missingDocs = checklist.filter(isMissingChecklistDocument);
   const nextTask = tasks.find((task) => task.status !== 'completata' && task.status !== 'annullata');
   const templatePlaceholderContext = {
     clientName: client.displayName,
