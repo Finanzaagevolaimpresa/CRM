@@ -36,13 +36,31 @@ function authSecretStatus(): ReadinessCheck {
     };
   }
 
-  const weakSamples = new Set(['changeme', 'change-me', 'secret', 'password', 'auth_secret', 'development']);
-  const robust = secret.length >= 32 && !weakSamples.has(secret.toLowerCase());
+  const normalizedSecret = secret.toLowerCase().trim();
+  const weakSamples = new Set([
+    'replace-with-a-long-random-secret',
+    '<generate-a-long-random-secret-at-least-32-bytes>',
+    'generate-a-long-random-secret-at-least-32-bytes',
+    'changeme',
+    'change-me',
+    'secret',
+    'password',
+    'auth_secret',
+    'development',
+    'default',
+    'placeholder',
+  ]);
+  const weakFragments = ['replace', 'generate', 'placeholder', 'changeme', 'secret', 'password'];
+  const looksLikePublicPlaceholder = weakSamples.has(normalizedSecret) || weakFragments.some((fragment) => normalizedSecret.includes(fragment));
+  const robust = secret.length >= 32 && !looksLikePublicPlaceholder;
   return {
     title: 'AUTH_SECRET',
     status: robust ? 'OK' : 'Attenzione',
     summary: robust ? 'Presente e apparentemente robusto' : 'Presente ma da rafforzare',
-    details: [`Lunghezza rilevata: ${secret.length} caratteri. Il valore non viene mai mostrato.`],
+    details: [
+      `Lunghezza rilevata: ${secret.length} caratteri. Il valore non viene mai mostrato.`,
+      looksLikePublicPlaceholder ? 'Il valore sembra un placeholder pubblico o prevedibile: sostituirlo con un segreto casuale.' : 'Non sono stati rilevati placeholder pubblici noti.',
+    ],
   };
 }
 
@@ -102,6 +120,42 @@ function aiStatus(): ReadinessCheck {
   };
 }
 
+function storageProviderStatus(provider: string | undefined, localStorage: ReadinessCheck): ReadinessCheck {
+  if (!provider) {
+    return {
+      title: 'Storage provider',
+      status: 'Non configurato',
+      summary: 'STORAGE_PROVIDER non impostato',
+      details: ['Il runtime usa local come default, ma per readiness produzione è preferibile configurarlo esplicitamente.'],
+    };
+  }
+
+  if (provider === 'local') {
+    return {
+      title: 'Storage provider',
+      status: localStorage.status === 'Errore' ? 'Errore' : localStorage.status === 'OK' ? 'OK' : 'Attenzione',
+      summary: localStorage.status === 'OK' ? 'local supportato dal runtime' : 'local configurato, verificare storage locale',
+      details: ['Provider supportato attualmente dal runtime storage: local.'],
+    };
+  }
+
+  if (provider === 's3') {
+    return {
+      title: 'Storage provider',
+      status: 'Attenzione',
+      summary: 'S3 predisposto ma non attivo nel runtime storage',
+      details: ['Le variabili S3 possono essere verificate, ma il runtime documentale attuale accetta solo local.'],
+    };
+  }
+
+  return {
+    title: 'Storage provider',
+    status: 'Errore',
+    summary: `Provider non supportato: ${provider}`,
+    details: ['Correggere STORAGE_PROVIDER. Il runtime storage attuale supporta solo local.'],
+  };
+}
+
 function appUrlStatus(): ReadinessCheck {
   const publicUrl = configuredValue('NEXT_PUBLIC_APP_URL');
   const appUrlValue = configuredValue('APP_URL');
@@ -128,17 +182,18 @@ async function backupStatus(): Promise<ReadinessCheck> {
 }
 
 export async function getSystemReadinessChecks() {
-  const storageProvider = configuredValue('STORAGE_PROVIDER', 'local') ?? 'local';
+  const storageProvider = process.env.STORAGE_PROVIDER?.trim();
   const localRoot = configuredValue('LOCAL_DOCUMENT_STORAGE_ROOT', 'storage/private/documents') ?? 'storage/private/documents';
   const database = await databaseStatus();
   const localStorage = await localStorageStatus(localRoot);
   const backup = await backupStatus();
+  const storageProviderCheck = storageProviderStatus(storageProvider, localStorage);
 
   return [
     { title: 'Ambiente', status: appEnv() === 'production' ? 'OK' : 'Attenzione', summary: `APP_ENV/NODE_ENV: ${appEnv()}`, details: ['Valutare production per il deploy online.'] } satisfies ReadinessCheck,
     database,
     { title: '/api/health', status: database.status === 'OK' ? 'OK' : 'Errore', summary: database.status === 'OK' ? 'Status atteso: 200 ok' : 'Status atteso: 503 degraded', details: ['Il controllo usa la stessa verifica database esposta da /api/health senza mostrare configurazioni sensibili.'] } satisfies ReadinessCheck,
-    { title: 'Storage provider', status: storageProvider ? 'OK' : 'Non configurato', summary: storageProvider, details: ['Provider supportato attualmente: local; S3 predisposto via variabili.'] } satisfies ReadinessCheck,
+    storageProviderCheck,
     localStorage,
     s3Status(),
     authSecretStatus(),
