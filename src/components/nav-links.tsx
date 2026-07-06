@@ -102,6 +102,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Utenti", href: "/settings/users", adminOnly: true },
       { label: "Ruoli", href: "/settings/roles", adminOnly: true },
+      { label: "Diagnostica sistema", href: "/settings/system", adminOnly: true },
       {
         label: "Diagnostica AI",
         href: "/settings/ai-diagnostics",
