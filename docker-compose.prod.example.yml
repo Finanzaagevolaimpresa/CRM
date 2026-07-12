@@ -1,0 +1,56 @@
+# Example production Docker Compose stack for CRM FAI.
+# Copy .env.production.example to .env.production, fill placeholders with real server-only values,
+# then run commands with: docker compose --env-file .env.production -f docker-compose.prod.example.yml ...
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod.example
+    image: fai-crm:prod
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      # For this compose example, DATABASE_URL should point to the postgres service, for example:
+      # postgresql://fai_crm:<db_password>@postgres:5432/fai_crm?schema=public
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_PROVIDER: local
+      LOCAL_DOCUMENT_STORAGE_ROOT: /var/lib/fai-crm/documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - crm_documents:/var/lib/fai-crm/documents
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fai_crm}
+      POSTGRES_USER: ${POSTGRES_USER:-fai_crm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  crm_documents:

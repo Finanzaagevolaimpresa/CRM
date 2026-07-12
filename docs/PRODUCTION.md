@@ -156,3 +156,156 @@ Prima di restore in produzione fermare l'applicazione, verificare di avere un ba
 6. Consultare audit log dopo login, upload/download e azioni principali.
 7. Eseguire un backup manuale e controllare che i file siano creati nella destinazione attesa.
 8. Confermare che `.env.production.example` e la documentazione non contengano segreti reali.
+
+## Deploy con Docker Compose
+
+Questa repository include esempi separati per il deploy su VPS senza sovrascrivere il flusso di sviluppo locale:
+
+- `Dockerfile.prod.example`: build production Next.js con `npm ci`, `npm run prisma:generate`, `npm run build` e avvio con `npm run start`.
+- `docker-compose.prod.example.yml`: stack con app CRM, PostgreSQL, volume database persistente e volume documenti locale persistente.
+- `Caddyfile.example`: reverse proxy HTTPS automatico verso l'app in ascolto su `127.0.0.1:3000`.
+
+Preparazione iniziale sul server:
+
+```bash
+cp .env.production.example .env.production
+```
+
+Modificare `.env.production` solo sul server e non committarlo. Per lo stack Compose, impostare almeno:
+
+```env
+DATABASE_URL="postgresql://fai_crm:<db_password>@postgres:5432/fai_crm?schema=public"
+POSTGRES_DB="fai_crm"
+POSTGRES_USER="fai_crm"
+POSTGRES_PASSWORD="<generate-a-strong-database-password>"
+AUTH_SECRET="<generate-a-long-random-secret-at-least-32-bytes>"
+NEXT_PUBLIC_APP_URL="https://desk.finanzaagevolaimpresa.it"
+STORAGE_PROVIDER="local"
+LOCAL_DOCUMENT_STORAGE_ROOT="/var/lib/fai-crm/documents"
+```
+
+I valori sopra sono placeholder: sostituire password e segreti con valori forti generati sul server. Non inserire `DATABASE_URL`, `AUTH_SECRET`, chiavi S3, `AI_API_KEY` o password reali nel repository.
+
+Build e avvio:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml build
+docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d
+```
+
+Il Dockerfile esegue già `npm run prisma:generate` durante la build. Applicare le migration solo se esistono migration committate in `prisma/migrations`:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml exec app npm run prisma:migrate:deploy
+```
+
+Non usare `prisma migrate dev` in produzione e non generare nuove migration dal server.
+
+## Reverse proxy HTTPS con Caddy
+
+Il file `Caddyfile.example` configura il dominio di esempio `desk.finanzaagevolaimpresa.it` e inoltra il traffico all'app CRM su `127.0.0.1:3000`. Caddy può ottenere e rinnovare automaticamente i certificati TLS quando:
+
+- il record DNS punta già all'IP pubblico della VPS;
+- le porte 80 e 443 sono aperte verso la VPS;
+- nessun altro processo occupa le porte 80/443;
+- l'app Compose espone Next.js solo su localhost tramite `127.0.0.1:3000:3000`.
+
+Esempio di installazione del Caddyfile sul server:
+
+```bash
+sudo cp Caddyfile.example /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Non configurare Caddy per servire direttamente la directory `LOCAL_DOCUMENT_STORAGE_ROOT`: upload e download dei documenti devono passare dalle route applicative protette.
+
+## DNS sottodominio
+
+Per pubblicare il CRM sul sottodominio di esempio:
+
+1. Nel pannello DNS del dominio creare un record `A` per `desk.finanzaagevolaimpresa.it` verso l'IP pubblico della VPS.
+2. Non inserire IP inventati nella documentazione o nel repository: usare l'IP reale solo nel pannello DNS del provider.
+3. Attendere la propagazione DNS prima di richiedere o validare HTTPS.
+4. Verificare la risoluzione dal server o dalla propria postazione:
+
+```bash
+dig +short desk.finanzaagevolaimpresa.it
+```
+
+Avviare Caddy/HTTPS solo dopo che il DNS restituisce l'IP corretto della VPS; in caso contrario l'emissione automatica del certificato può fallire.
+
+## Volumi persistenti
+
+Lo stack Compose usa due volumi Docker nominati:
+
+- `postgres_data`: contiene i dati PostgreSQL e non deve essere eliminato durante deploy ordinari.
+- `crm_documents`: contiene i documenti caricati quando `STORAGE_PROVIDER=local` e `LOCAL_DOCUMENT_STORAGE_ROOT=/var/lib/fai-crm/documents` dentro il container.
+
+Prima di qualsiasi operazione distruttiva (`down -v`, rimozione volumi, reinstallazione host), eseguire e verificare un backup completo di database e documenti. Un normale aggiornamento applicativo dovrebbe usare `docker compose up -d --build` senza rimuovere i volumi.
+
+## Backup database e documenti in Docker
+
+Esempio backup database dal servizio PostgreSQL:
+
+```bash
+mkdir -p backups
+docker compose --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
+  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner \
+  > backups/postgres-$(date -u +%Y%m%dT%H%M%SZ).dump
+```
+
+Esempio backup volume documenti:
+
+```bash
+docker run --rm \
+  -v crm_crm_documents:/documents:ro \
+  -v "$PWD/backups:/backups" \
+  alpine tar -czf /backups/documents-$(date -u +%Y%m%dT%H%M%SZ).tar.gz -C /documents .
+```
+
+Il nome effettivo del volume può includere il prefisso del progetto Compose. Verificarlo con:
+
+```bash
+docker volume ls
+```
+
+Conservare i backup cifrati o in storage protetto, perché contengono dati clienti e documenti riservati. Testare periodicamente restore database e documenti in staging prima di affidarsi al piano di backup.
+
+## Checklist primo deploy Docker
+
+- [ ] Copiare `.env.production.example` in `.env.production` sul server.
+- [ ] Compilare `AUTH_SECRET` con un valore forte, casuale e lungo almeno 32 byte.
+- [ ] Configurare `DATABASE_URL` verso il servizio `postgres` dello stack Compose o verso un database privato equivalente.
+- [ ] Configurare `POSTGRES_DB`, `POSTGRES_USER` e `POSTGRES_PASSWORD` se si usa il PostgreSQL incluso nel Compose.
+- [ ] Configurare `STORAGE_PROVIDER=local`.
+- [ ] Configurare `LOCAL_DOCUMENT_STORAGE_ROOT=/var/lib/fai-crm/documents` per usare il volume persistente documenti del Compose.
+- [ ] Verificare il record DNS `A` di `desk.finanzaagevolaimpresa.it` verso l'IP VPS e attendere propagazione.
+- [ ] Eseguire `docker compose --env-file .env.production -f docker-compose.prod.example.yml build`.
+- [ ] Eseguire `docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d`.
+- [ ] Confermare che `npm run prisma:generate` sia stato eseguito nel build Docker.
+- [ ] Eseguire `npm run prisma:migrate:deploy` nel container app solo se esistono migration committate.
+- [ ] Testare `https://desk.finanzaagevolaimpresa.it/api/health`.
+- [ ] Testare login admin con un utente reale di produzione.
+- [ ] Testare upload e download di un documento.
+- [ ] Testare `/settings/system` con un utente autorizzato.
+- [ ] Eseguire un backup manuale di database e documenti e verificare che i file siano stati creati.
+- [ ] Verificare che repository, file example e documentazione non contengano segreti reali.
+
+## Rollback base
+
+Per un rollback applicativo semplice:
+
+1. Identificare il tag immagine o il commit precedente funzionante.
+2. Eseguire un backup prima del rollback, anche se il problema sembra solo applicativo.
+3. Ricostruire o ripuntare l'immagine alla versione precedente.
+4. Riavviare lo stack senza rimuovere volumi persistenti:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d --build
+```
+
+5. Non eseguire `docker compose down -v` durante un rollback ordinario: eliminerebbe i volumi di database e documenti.
+6. Verificare `/api/health`, login admin, upload/download documenti e `/settings/system` dopo il rollback.
+
+Se una migration già applicata ha modificato il database, non improvvisare downgrade manuali in produzione: ripristinare da backup validato oppure preparare una procedura di rollback dati testata in staging.

@@ -1,0 +1,15 @@
+# Example Caddy reverse proxy for CRM FAI with automatic HTTPS.
+# Replace the domain only if deploying to another hostname.
+# Caddy obtains certificates after DNS points to the VPS and ports 80/443 are reachable.
+
+desk.finanzaagevolaimpresa.it {
+  encode zstd gzip
+
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy strict-origin-when-cross-origin
+  }
+
+  reverse_proxy 127.0.0.1:3000
+}
