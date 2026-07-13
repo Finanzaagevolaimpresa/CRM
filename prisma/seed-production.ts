@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { initialAiAgentConfigs } from "../src/lib/ai-agent-configs";
+import { initialAiAgentConfigs } from "./ai-agent-configs";
 
 const prisma = new PrismaClient();
 
