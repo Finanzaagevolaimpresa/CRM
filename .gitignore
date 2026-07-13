@@ -9,3 +9,7 @@ uploads/
 *.tmp
 
 tsconfig.tsbuildinfo
+.env.production
+.env.production.*
+backups/
+.bootstrap-admin*

@@ -189,14 +189,14 @@ I valori sopra sono placeholder: sostituire password e segreti con valori forti 
 Build e avvio:
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.example.yml build
-docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml build
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d
 ```
 
 Il Dockerfile esegue già `npm run prisma:generate` durante la build. Applicare le migration solo se esistono migration committate in `prisma/migrations`:
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.example.yml exec app npm run prisma:migrate:deploy
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec app npm run prisma:migrate:deploy
 ```
 
 Non usare `prisma migrate dev` in produzione e non generare nuove migration dal server.
@@ -250,7 +250,7 @@ Esempio backup database dal servizio PostgreSQL:
 
 ```bash
 mkdir -p backups
-docker compose --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
   pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner \
   > backups/postgres-$(date -u +%Y%m%dT%H%M%SZ).dump
 ```
@@ -281,8 +281,8 @@ Conservare i backup cifrati o in storage protetto, perché contengono dati clien
 - [ ] Configurare `STORAGE_PROVIDER=local`.
 - [ ] Configurare `LOCAL_DOCUMENT_STORAGE_ROOT=/var/lib/fai-crm/documents` per usare il volume persistente documenti del Compose.
 - [ ] Verificare il record DNS `A` di `desk.finanzaagevolaimpresa.it` verso l'IP VPS e attendere propagazione.
-- [ ] Eseguire `docker compose --env-file .env.production -f docker-compose.prod.example.yml build`.
-- [ ] Eseguire `docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d`.
+- [ ] Eseguire `docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml build`.
+- [ ] Eseguire `docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d`.
 - [ ] Confermare che `npm run prisma:generate` sia stato eseguito nel build Docker.
 - [ ] Eseguire `npm run prisma:migrate:deploy` nel container app solo se esistono migration committate.
 - [ ] Testare `https://desk.finanzaagevolaimpresa.it/api/health`.
@@ -302,10 +302,126 @@ Per un rollback applicativo semplice:
 4. Riavviare lo stack senza rimuovere volumi persistenti:
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d --build
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d --build
 ```
 
 5. Non eseguire `docker compose down -v` durante un rollback ordinario: eliminerebbe i volumi di database e documenti.
 6. Verificare `/api/health`, login admin, upload/download documenti e `/settings/system` dopo il rollback.
 
 Se una migration già applicata ha modificato il database, non improvvisare downgrade manuali in produzione: ripristinare da backup validato oppure preparare una procedura di rollback dati testata in staging.
+
+## Sequenza Docker production sicura
+
+Eseguire i comandi dalla root del repository sul server. `.env.production` deve restare solo sul server; `.dockerignore` esclude `.env`, `.env.*`, backup, upload e storage privato dal contesto Docker, mantenendo disponibile solo `.env.production.example`.
+
+1. **Build immagine**
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml build
+```
+
+2. **Avvio solo PostgreSQL**
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d postgres
+```
+
+3. **Migration Prisma production**
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:migrate:deploy
+```
+
+Questo usa `prisma migrate deploy`; non usare `prisma migrate dev` in produzione e non eseguire migration durante la build Docker.
+
+Smoke test Docker sulla VPS (utile quando Docker non è disponibile in CI/Codex):
+
+```bash
+COMPOSE_PROJECT_NAME=fai-crm ./scripts/smoke-docker-prod.sh
+```
+
+Lo smoke test valida la configurazione Compose, costruisce l'immagine app e verifica nel runner che i comandi production siano risolvibili e che la directory documenti sia scrivibile.
+
+4. **Seed production-safe**
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:seed:production
+```
+
+Il seed production inizializza solo catalogo servizi e configurazioni agenti AI. Non crea utenti demo, clienti demo, lead demo, documenti demo, pratiche demo o password `ChangeMe123!`.
+
+5. **Primo amministratore**
+
+```bash
+BOOTSTRAP_ADMIN_EMAIL="admin@example.com" \
+BOOTSTRAP_ADMIN_NAME="Admin CRM" \
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run admin:bootstrap
+```
+
+Se `BOOTSTRAP_ADMIN_PASSWORD` non è impostata, lo script genera una password forte casuale e la mostra una sola volta nel terminale: salvarla subito in un password manager. Lo script rifiuta di creare un secondo admin attivo; usare `BOOTSTRAP_ADMIN_ALLOW_ADDITIONAL=true` solo se si intende esplicitamente aggiungere un altro amministratore.
+
+6. **Avvio app**
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d app
+```
+
+Il container crea `/var/lib/fai-crm/documents` prima del cambio utente e monta il volume Compose del progetto `fai-crm` su quella directory privata. La directory non deve essere servita da Caddy, Nginx o altri static file server.
+
+7. **Health check**
+
+```bash
+curl -fsS https://desk.finanzaagevolaimpresa.it/api/health
+```
+
+Verificare `ok: true` e database raggiungibile prima di aprire l'accesso agli utenti.
+
+8. **DNS**
+
+Configurare un record `A`/`AAAA` del dominio CRM verso l'IP pubblico della VPS. Attendere la propagazione prima di chiedere certificati TLS automatici.
+
+9. **Caddy**
+
+```bash
+sudo cp Caddyfile.example /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Caddy deve inoltrare verso `127.0.0.1:3000`; il volume documenti resta accessibile solo all'applicazione.
+
+10. **Backup Docker production**
+
+```bash
+./scripts/backup-docker-prod.sh
+```
+
+Lo script usa `umask 077`, crea la directory backup con permessi `700`, produce dump PostgreSQL custom leggendo `POSTGRES_USER` e `POSTGRES_DB` dentro il container PostgreSQL, archivia i documenti da `/var/lib/fai-crm/documents` tramite il servizio app e crea file con permessi `600`. Non stampa password o `DATABASE_URL` e applica retention configurabile con `RETENTION_DAYS` (default 14). Se la directory documenti non esiste o non è accessibile, conserva il backup database, stampa un warning ed esce con codice `2`; non usa comandi distruttivi come `docker compose down -v`.
+
+Variabili utili:
+
+```bash
+COMPOSE_PROJECT_NAME=fai-crm BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh
+```
+
+Restore database su database vuoto/preparato:
+
+```bash
+cat /secure/backups/fai-crm/postgres-YYYYMMDDTHHMMSSZ.dump | \
+  docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
+  sh -c 'pg_restore --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Restore documenti:
+
+```bash
+cat /secure/backups/fai-crm/documents-YYYYMMDDTHHMMSSZ.tar.gz | \
+  docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app \
+  sh -c 'mkdir -p /var/lib/fai-crm/documents && tar -xzf - -C /var/lib/fai-crm/documents'
+```
+
+Cron giornaliero esempio:
+
+```cron
+15 2 * * * cd /srv/fai-crm && COMPOSE_PROJECT_NAME=fai-crm BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh >> /var/log/fai-crm-backup.log 2>&1
+```
