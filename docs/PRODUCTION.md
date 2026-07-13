@@ -309,3 +309,113 @@ docker compose --env-file .env.production -f docker-compose.prod.example.yml up 
 6. Verificare `/api/health`, login admin, upload/download documenti e `/settings/system` dopo il rollback.
 
 Se una migration già applicata ha modificato il database, non improvvisare downgrade manuali in produzione: ripristinare da backup validato oppure preparare una procedura di rollback dati testata in staging.
+
+## Sequenza Docker production sicura
+
+Eseguire i comandi dalla root del repository sul server. `.env.production` deve restare solo sul server; `.dockerignore` esclude `.env`, `.env.*`, backup, upload e storage privato dal contesto Docker, mantenendo disponibile solo `.env.production.example`.
+
+1. **Build immagine**
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml build
+```
+
+2. **Avvio solo PostgreSQL**
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d postgres
+```
+
+3. **Migration Prisma production**
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:migrate:deploy
+```
+
+Questo usa `prisma migrate deploy`; non usare `prisma migrate dev` in produzione e non eseguire migration durante la build Docker.
+
+4. **Seed production-safe**
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:seed:production
+```
+
+Il seed production inizializza solo catalogo servizi e configurazioni agenti AI. Non crea utenti demo, clienti demo, lead demo, documenti demo, pratiche demo o password `ChangeMe123!`.
+
+5. **Primo amministratore**
+
+```bash
+BOOTSTRAP_ADMIN_EMAIL="admin@example.com" \
+BOOTSTRAP_ADMIN_NAME="Admin CRM" \
+docker compose --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run admin:bootstrap
+```
+
+Se `BOOTSTRAP_ADMIN_PASSWORD` non è impostata, lo script genera una password forte casuale e la mostra una sola volta nel terminale: salvarla subito in un password manager. Lo script rifiuta di creare un secondo admin attivo; usare `BOOTSTRAP_ADMIN_ALLOW_ADDITIONAL=true` solo se si intende esplicitamente aggiungere un altro amministratore.
+
+6. **Avvio app**
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.example.yml up -d app
+```
+
+Il container crea `/var/lib/fai-crm/documents` prima del cambio utente e monta `crm_documents` su quella directory privata. La directory non deve essere servita da Caddy, Nginx o altri static file server.
+
+7. **Health check**
+
+```bash
+curl -fsS https://desk.finanzaagevolaimpresa.it/api/health
+```
+
+Verificare `ok: true` e database raggiungibile prima di aprire l'accesso agli utenti.
+
+8. **DNS**
+
+Configurare un record `A`/`AAAA` del dominio CRM verso l'IP pubblico della VPS. Attendere la propagazione prima di chiedere certificati TLS automatici.
+
+9. **Caddy**
+
+```bash
+sudo cp Caddyfile.example /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Caddy deve inoltrare verso `127.0.0.1:3000`; il volume documenti resta accessibile solo all'applicazione.
+
+10. **Backup Docker production**
+
+```bash
+./scripts/backup-docker-prod.sh
+```
+
+Lo script usa `umask 077`, crea la directory backup con permessi `700`, produce dump PostgreSQL custom e archivio del volume documenti con permessi `600`, non stampa password o `DATABASE_URL` e applica retention configurabile con `RETENTION_DAYS` (default 14). Se il volume documenti non esiste, stampa un warning e continua senza usare comandi distruttivi come `docker compose down -v`.
+
+Variabili utili:
+
+```bash
+BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh
+```
+
+Restore database su database vuoto/preparato:
+
+```bash
+cat /secure/backups/fai-crm/postgres-YYYYMMDDTHHMMSSZ.dump | \
+  docker compose --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
+  pg_restore --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+```
+
+Restore documenti:
+
+```bash
+docker run --rm \
+  -v crm_crm_documents:/documents \
+  -v /secure/backups/fai-crm:/backup:ro \
+  alpine:3.20 \
+  sh -c 'cd /documents && tar -xzf /backup/documents-YYYYMMDDTHHMMSSZ.tar.gz'
+```
+
+Cron giornaliero esempio:
+
+```cron
+15 2 * * * cd /srv/fai-crm && BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh >> /var/log/fai-crm-backup.log 2>&1
+```

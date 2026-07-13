@@ -9,7 +9,8 @@ services:
       dockerfile: Dockerfile.prod.example
     image: fai-crm:prod
     env_file:
-      - .env.production
+      - path: .env.production
+        required: false
     environment:
       NODE_ENV: production
       APP_ENV: production
