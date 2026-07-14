@@ -1,17 +1,25 @@
 'use server';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
-import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
+import { prepareAiOutput, MockAiAdapter, OpenAiAdapter, getAiProviderDiagnostics, testAiProviderDiagnostic } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
-import { canViewClient, canViewDocument, isSensitiveDocument, hasGlobalAccess } from './access-control';
+import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, isSensitiveDocument, hasGlobalAccess } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
+import { isPrimaryOperationalAiAgent } from './ai-agent-catalog';
+import { scanForbiddenPhrases } from './compliance';
+import {
+  getClientDossierReadAccess,
+  listAccessibleTasks,
+  requireAiOutputReadAccess,
+  requireClientContextReadAccess,
+} from './read-access';
 import {
   denyWriteAccess,
   requireActiveUser,
@@ -31,6 +39,82 @@ import {
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
+
+class ConcurrentLeadConversionError extends Error {}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function nextConcurrencyTimestamp(previous: Date) {
+  return new Date(Math.max(Date.now(), previous.getTime() + 1));
+}
+
+function dossierAuditSnapshot(dossier: {
+  id: string;
+  clientId: string;
+  clientServiceId?: string | null;
+  projectId?: string | null;
+  sourceAiOutputId?: string | null;
+  title: string;
+  type: unknown;
+  status: unknown;
+  content: string;
+  reviewedById?: string | null;
+  reviewedAt?: Date | null;
+  updatedAt: Date;
+}) {
+  return {
+    id: dossier.id,
+    clientId: dossier.clientId,
+    clientServiceId: dossier.clientServiceId ?? null,
+    projectId: dossier.projectId ?? null,
+    sourceAiOutputId: dossier.sourceAiOutputId ?? null,
+    titleLength: dossier.title.length,
+    type: String(dossier.type),
+    status: String(dossier.status),
+    contentLength: dossier.content.length,
+    reviewedById: dossier.reviewedById ?? null,
+    reviewedAt: dossier.reviewedAt ?? null,
+    updatedAt: dossier.updatedAt,
+  };
+}
+
+function minimizeAiInstructions(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed
+    .slice(0, 2000)
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email rimossa]')
+    .replace(/\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b/gi, '[codice fiscale rimosso]')
+    .replace(/\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b/gi, '[IBAN rimosso]');
+}
+
+function resolveAiAgentRuntime(providerValue: string, configuredModel?: string | null) {
+  const provider = providerValue.trim().toLowerCase();
+  if (provider === 'mock') {
+    return { provider, model: 'mock-template-v1', adapter: new MockAiAdapter() };
+  }
+  if (provider === 'openai') {
+    const model = configuredModel?.trim() || getAiProviderDiagnostics().model;
+    return { provider, model, adapter: new OpenAiAdapter(model) };
+  }
+  throw new UserFacingActionError(`Provider AI non supportato per questo agente: ${providerValue}.`);
+}
+
+function aiRunOutputSummary(draft: { title: string; content: string; metadata?: Record<string, unknown> }) {
+  const metadata = draft.metadata && typeof draft.metadata === 'object'
+    ? {
+        provider: typeof draft.metadata.provider === 'string' ? draft.metadata.provider : undefined,
+        model: typeof draft.metadata.model === 'string' ? draft.metadata.model : undefined,
+      }
+    : undefined;
+  return JSON.parse(JSON.stringify({
+    titleLength: draft.title.length,
+    contentLength: draft.content.length,
+    metadata,
+  })) as Prisma.InputJsonValue;
+}
 
 export async function runAiProviderDiagnosticTest() {
   const s = await requirePermission('ai_agents.read');
@@ -56,7 +140,14 @@ export async function updateAiAgentConfig(form: FormData) {
   const events = ['ai_agent_config_update'];
   if (promptChanged) events.push('ai_agent_prompt_update');
   if (activeChanged) events.push(agent.active ? 'ai_agent_activate' : 'ai_agent_deactivate');
-  await Promise.all(events.map((event) => audit(s.userId, event, 'AiAgent', agent.id, { before: { code: before.code, systemPrompt: before.systemPrompt, active: before.active }, after: { code: agent.code, systemPrompt: agent.systemPrompt, active: agent.active } })));
+  await Promise.all(events.map((event) => audit(s.userId, event, 'AiAgent', agent.id, {
+    code: agent.code,
+    promptChanged,
+    previousPromptLength: before.systemPrompt.length,
+    nextPromptLength: agent.systemPrompt.length,
+    previousActive: before.active,
+    nextActive: agent.active,
+  })));
   revalidatePath('/settings/ai-agents');
   void agent;
 }
@@ -99,10 +190,42 @@ export async function convertLeadToClient(form: FormData) {
     return existingClient;
   }
   const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
-  const client = await prisma.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId ?? s.userId, notes: lead.notes } });
-  const updated = await prisma.lead.update({ where: { id: lead.id }, data: { clientId: client.id, status: 'vinto' } });
-  await audit(s.userId, 'lead_convert_to_client', 'Lead', lead.id, { before: lead, after: updated, client });
-  return client;
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId ?? s.userId, notes: lead.notes } });
+      const claimed = await tx.lead.updateMany({
+        where: { id: lead.id, clientId: null, updatedAt: lead.updatedAt },
+        data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) },
+      });
+      if (claimed.count !== 1) throw new ConcurrentLeadConversionError();
+      await tx.auditLog.create({ data: {
+        actorId: s.userId,
+        event: 'lead_convert_to_client',
+        entityType: 'Lead',
+        entityId: lead.id,
+        after: { leadId: lead.id, clientId: client.id, fromStatus: lead.status, toStatus: 'vinto', salesOwnerId: client.salesOwnerId },
+      } });
+      return client;
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error) && !(error instanceof ConcurrentLeadConversionError)) throw error;
+
+    const currentLead = await requireLeadEditAccess(s, data.id);
+    const existingClient = currentLead.clientId
+      ? await prisma.client.findFirst({ where: { id: currentLead.clientId, deletedAt: null } })
+      : await prisma.client.findFirst({ where: { leadId: currentLead.id, deletedAt: null } });
+    if (!existingClient) throw new UserFacingActionError('Il lead è stato modificato durante la conversione. Riprova.');
+    await requireCommercialOfferTargetAccess(s, { clientId: existingClient.id });
+
+    if (!currentLead.clientId) {
+      const reconciled = await prisma.lead.updateMany({
+        where: { id: currentLead.id, clientId: null, updatedAt: currentLead.updatedAt },
+        data: { clientId: existingClient.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(currentLead.updatedAt) },
+      });
+      if (reconciled.count !== 1) throw new UserFacingActionError('Il lead è stato modificato durante la conversione. Ricarica la pagina.');
+    }
+    return existingClient;
+  }
 }
 
 export async function createCommercialOffer(form: FormData) {
@@ -376,19 +499,13 @@ function dossierLine(label: string, value: unknown) { return `- ${label}: ${valu
 function money(value: unknown) { return value ? `€ ${Number(value).toLocaleString('it-IT')}` : '—'; }
 function dateLabel(value?: Date | null) { return value ? value.toLocaleDateString('it-IT') : '—'; }
 
-async function assertClientDossierContext(session: Pick<AuthSession, 'userId' | 'role'>, clientId: string, clientServiceId?: string, projectId?: string) {
-  const [client, service, project] = await Promise.all([
-    prisma.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }),
-    clientServiceId ? prisma.clientService.findFirst({ where: { id: clientServiceId, clientId, deletedAt: null }, select: { id: true } }) : null,
-    projectId ? prisma.project.findFirst({ where: { id: projectId, clientId, deletedAt: null }, select: { id: true } }) : null,
-  ]);
-  if (!client) throw new UserFacingActionError('Cliente non valido');
-  if (!canViewClient(session, client)) throw new UserFacingActionError('Cliente non accessibile');
-  if (clientServiceId && !service) throw new UserFacingActionError('Il servizio selezionato non appartiene al cliente scelto');
-  if (projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente scelto');
+async function assertClientDossierContext(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string) {
+  const access = await requireClientContextReadAccess(session, { clientId, clientServiceId, projectId });
+  if (!canViewClient(session, access.client)) denyWriteAccess();
+  return access;
 }
 
-async function buildClientDossierContent(clientId: string, clientServiceId?: string, projectId?: string) {
+async function buildClientDossierContent(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string) {
   const [agentConfig, client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
     prisma.aiAgent.findUniqueOrThrow({ where: { code: AI_AGENT_CODES.dossierCliente } }),
     prisma.client.findUniqueOrThrow({ where: { id: clientId } }),
@@ -397,18 +514,42 @@ async function buildClientDossierContent(clientId: string, clientServiceId?: str
     prisma.serviceCatalog.findMany(),
     prisma.project.findMany({ where: { clientId, ...(projectId ? { id: projectId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
-    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, title: true, documentCategory: true, status: true, containsSensitiveData: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
-    prisma.task.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
+    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, title: true, documentCategory: true, type: true, status: true, containsSensitiveData: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
+    listAccessibleTasks(session, { where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
   ]);
   if (!agentConfig.active) throw new UserFacingActionError(`Agente ${AI_AGENT_CODES.dossierCliente} disattivato: riattivarlo da Impostazioni > Agenti AI per generare il dossier.`);
+  const canReadSensitive = hasPermission(session, 'document.sensitive.read');
+  const projectById = new Map(projects.map((project) => [project.id, { ...project, client }]));
+  const serviceById = new Map(services.map((service) => [service.id, {
+    ...service,
+    client,
+    project: service.projectId ? projectById.get(service.projectId) ?? null : null,
+  }]));
+  const visibleDocuments = documents.filter((document) => canViewDocument(session, {
+    ...document,
+    client,
+    project: document.projectId ? projectById.get(document.projectId) ?? null : null,
+    clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) ?? null : null,
+  }, canReadSensitive));
+  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const visibleChecklist = checklist.filter((item) => {
+    if (!canViewChecklistItem(session, {
+      ...item,
+      client,
+      project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+      clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
+    })) return false;
+    if (isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title })) return canReadSensitive;
+    return !item.documentId || visibleDocumentIds.has(item.documentId);
+  });
   const catalogName = (id: string) => serviceCatalog.find((s) => s.id === id)?.name ?? 'Servizio FAI';
   const mainCompany = companies[0];
   return [
-    '# Dossier / Pre-analisi', '', '## Configurazione agente FAI', dossierLine('Agente', agentConfig?.name ?? 'dossier_cliente'), dossierLine('Provider', agentConfig?.provider ?? 'mock'), dossierLine('Stato agente', 'attivo'), '### Istruzioni operative agente', agentConfig?.systemPrompt || 'Generazione mock/template con revisione umana obbligatoria.', '',
+    '# Dossier / Pre-analisi', '', '## Configurazione agente FAI', dossierLine('Agente', agentConfig?.name ?? 'dossier_cliente'), dossierLine('Provider', agentConfig?.provider ?? 'mock'), dossierLine('Versione prompt', agentConfig?.promptVersion ?? 'non disponibile'), dossierLine('Stato agente', 'attivo'), '',
     '## 1. Dati cliente', dossierLine('Cliente', client.displayName), dossierLine('Tipologia', client.type), dossierLine('Stato fascicolo', client.status), dossierLine('Note cliente', client.notes), mainCompany ? dossierLine('Azienda principale', `${mainCompany.name}${mainCompany.vatNumber ? ` · P.IVA ${mainCompany.vatNumber}` : ''}`) : '- Azienda principale: —', '',
     '## 2. Inquadramento attività', companies.length ? companies.map((c) => `- ${c.name}: ${[c.legalForm, c.atecoCode, c.atecoDescription, c.city, c.province].filter(Boolean).join(' · ') || 'dati da completare'}`).join('\n') : '- Dati aziendali non ancora completi.', '',
     '## 3. Obiettivo richiesto', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)} · pratica: ${s.practiceType ?? '—'} · importo richiesto: ${money(s.requestedAmount)} · investimento previsto: ${money(s.plannedInvestment)}`).join('\n') : '- Nessun servizio/pratica collegato.', projects.length ? projects.map((p) => `- Progetto ${p.title}: richiesto ${money(p.requestedAmount)}, investimento ${money(p.totalInvestment)}, stato ${p.status}.`).join('\n') : '- Nessun progetto di investimento collegato.', '',
-    '## 4. Stato documentale', checklist.length ? checklist.map((i) => `- ${i.title}: ${i.status.replaceAll('_', ' ')}${i.documentId ? ' · documento collegato' : ''}${i.notes ? ` · ${i.notes}` : ''}`).join('\n') : '- Checklist documentale non ancora popolata.', documents.length ? documents.map((d) => `- Documento caricato: ${d.title} (${d.documentCategory}, stato ${d.status})`).join('\n') : '- Nessun documento caricato.', '',
+    '## 4. Stato documentale', visibleChecklist.length ? visibleChecklist.map((i) => `- ${i.title}: ${i.status.replaceAll('_', ' ')}${i.documentId ? ' · documento collegato' : ''}${i.notes ? ` · ${i.notes}` : ''}`).join('\n') : '- Checklist documentale non disponibile o non ancora popolata.', visibleDocuments.length ? visibleDocuments.map((d) => `- Documento caricato: ${d.title} (${d.documentCategory}, stato ${d.status})`).join('\n') : '- Nessun documento visibile per il ruolo corrente.', '',
     '## 5. Stato operativo pratica', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)}: pipeline ${String(s.operationalStatus).replaceAll('_', ' ')}, servizio ${String(s.status).replaceAll('_', ' ')}. Note: ${s.operationalNotes ?? s.internalNotes ?? '—'}`).join('\n') : '- Nessuna pipeline servizio presente.', '',
     '## 6. Attività/scadenze aperte', tasks.length ? tasks.map((t) => `- ${t.title}: ${t.status.replaceAll('_', ' ')} · priorità ${t.priority} · scadenza ${dateLabel(t.dueAt)}${t.description ? ` · ${t.description}` : ''}`).join('\n') : '- Nessuna attività aperta rilevante.', '',
     '## 7. Prime criticità emerse', '- Verificare completezza documentale, coerenza importi richiesti/investimento e condizioni operative prima della revisione.', '',
@@ -457,54 +598,85 @@ export async function createClientDossierFromAiOutput(form: FormData) {
   const s = await requirePermission('dossier.write');
   if (!hasPermission(s, 'ai.review')) throw new UserFacingActionError('Permesso ai.review richiesto per trasformare un output AI in bozza dossier.');
   const data = aiOutputDossierSchema.parse(clean(form));
-  const output = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } });
+  const outputContext = await requireAiOutputReadAccess(s, data.id);
+  const { output, run, clientService: service, project } = outputContext;
   if (!output.clientId) throw new UserFacingActionError('Output AI non collegato a un cliente: impossibile creare la bozza dossier.');
-  if (output.status !== 'approved') throw new UserFacingActionError('Solo output AI approvati/revisionati possono generare una bozza dossier.');
+  const hasValidHumanApproval = output.status === 'approved'
+    && output.requiresHumanReview === true
+    && Boolean(output.reviewedById && output.reviewedAt && output.approvedById && output.approvedAt)
+    && Boolean(run.createdById)
+    && run.createdById !== output.reviewedById
+    && run.createdById !== output.approvedById
+    && output.reviewedById !== output.approvedById;
+  if (!hasValidHumanApproval) throw new UserFacingActionError('L’output non contiene una revisione e approvazione umana valide e indipendenti dal generatore.');
+  if (scanForbiddenPhrases(`${output.title}\n${output.content}`).length) throw new UserFacingActionError('Output AI non conforme: rigenerare e sottoporre a nuova revisione.');
 
-  const [run, client, service, project] = await Promise.all([
-    prisma.aiRun.findUniqueOrThrow({ where: { id: output.aiRunId } }),
+  const [client, previousConversion] = await Promise.all([
     prisma.client.findFirst({ where: { id: output.clientId, deletedAt: null } }),
-    output.clientServiceId ? prisma.clientService.findFirst({ where: { id: output.clientServiceId, clientId: output.clientId, deletedAt: null } }) : null,
-    output.projectId ? prisma.project.findFirst({ where: { id: output.projectId, clientId: output.clientId, deletedAt: null } }) : null,
+    prisma.clientDossier.findUnique({ where: { sourceAiOutputId: output.id } }),
   ]);
   if (!client) throw new UserFacingActionError('Cliente collegato all’output non valido.');
-  if (!canViewClient(s, client)) throw new UserFacingActionError('Cliente non accessibile.');
-  if (output.clientServiceId && !service) throw new UserFacingActionError('Servizio collegato all’output non valido o non accessibile.');
-  if (output.projectId && !project) throw new UserFacingActionError('Progetto collegato all’output non valido o non accessibile.');
+  if (previousConversion) {
+    const existingContext = await getClientDossierReadAccess(s, previousConversion.id);
+    if (!existingContext
+      || previousConversion.clientId !== output.clientId
+      || (previousConversion.clientServiceId ?? null) !== (output.clientServiceId ?? null)
+      || (previousConversion.projectId ?? null) !== (output.projectId ?? null)) denyWriteAccess();
+    return previousConversion;
+  }
 
   const agent = await prisma.aiAgent.findUnique({ where: { id: run.agentId } });
   const agentName = agent?.name ?? run.agentId;
   const title = `Bozza da output AI - ${agentName} - ${new Date().toLocaleDateString('it-IT')}`;
-  const dossier = await prisma.clientDossier.create({
-    data: {
-      clientId: output.clientId,
-      clientServiceId: output.clientServiceId,
-      projectId: output.projectId,
-      type: dossierTypeForAgent(agent?.code),
-      title,
-      content: buildAiOutputDossierContent({
-        clientName: client.displayName,
-        agentName,
-        agentCode: agent?.code,
-        generatedAt: output.createdAt,
-        serviceLabel: buildClientServiceLabel(service, service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null),
-        projectTitle: project?.title,
-        outputContent: output.content,
-      }),
-      createdById: s.userId,
-      updatedById: s.userId,
-    } as never,
+  const serviceCatalog = service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null;
+  const content = buildAiOutputDossierContent({
+    clientName: client.displayName,
+    agentName,
+    agentCode: agent?.code,
+    generatedAt: output.createdAt,
+    serviceLabel: buildClientServiceLabel(service, serviceCatalog),
+    projectTitle: project?.title,
+    outputContent: output.content,
   });
-  await audit(s.userId, 'client_dossier_create_from_ai_output', 'ClientDossier', dossier.id, { outputId: output.id, dossierId: dossier.id, clientId: output.clientId, clientServiceId: output.clientServiceId, projectId: output.projectId, aiRunId: output.aiRunId, agentId: run.agentId, userId: s.userId });
-  await audit(s.userId, 'ai_output_to_client_dossier', 'AiOutput', output.id, { outputId: output.id, dossierId: dossier.id, clientId: output.clientId, clientServiceId: output.clientServiceId, projectId: output.projectId, userId: s.userId });
-  return dossier;
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const dossier = await tx.clientDossier.create({ data: {
+        clientId: output.clientId!,
+        clientServiceId: output.clientServiceId,
+        projectId: output.projectId,
+        sourceAiOutputId: output.id,
+        type: dossierTypeForAgent(agent?.code),
+        title,
+        content,
+        createdById: s.userId,
+        updatedById: s.userId,
+      } as never });
+      const trace = { outputId: output.id, dossierId: dossier.id, clientId: output.clientId, clientServiceId: output.clientServiceId, projectId: output.projectId, aiRunId: output.aiRunId, agentId: run.agentId };
+      await tx.auditLog.createMany({ data: [
+        { actorId: s.userId, event: 'client_dossier_create_from_ai_output', entityType: 'ClientDossier', entityId: dossier.id, after: trace },
+        { actorId: s.userId, event: 'ai_output_to_client_dossier', entityType: 'AiOutput', entityId: output.id, after: trace },
+      ] });
+      return dossier;
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const existing = await prisma.clientDossier.findUnique({ where: { sourceAiOutputId: output.id } });
+    if (!existing) throw new UserFacingActionError('La conversione è stata completata da un altro operatore. Ricarica la pagina.');
+    const existingContext = await getClientDossierReadAccess(s, existing.id);
+    if (!existingContext
+      || existing.clientId !== output.clientId
+      || (existing.clientServiceId ?? null) !== (output.clientServiceId ?? null)
+      || (existing.projectId ?? null) !== (output.projectId ?? null)) denyWriteAccess();
+    return existing;
+  }
 }
 
 export async function generateClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierGenerateSchema.parse(clean(form));
   await assertClientDossierContext(s, data.clientId, data.clientServiceId, data.projectId);
-  const content = await buildClientDossierContent(data.clientId, data.clientServiceId, data.projectId);
+  const content = await buildClientDossierContent(s, data.clientId, data.clientServiceId, data.projectId);
   const dossier = await prisma.clientDossier.create({ data: { clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, type: data.type, title: data.title ?? `${dossierTypeLabel[data.type]} — ${new Date().toLocaleDateString('it-IT')}`, content, createdById: s.userId, updatedById: s.userId } as never });
   await audit(s.userId, 'client_dossier_generate', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId, type: dossier.type, status: dossier.status });
   return dossier;
@@ -515,9 +687,77 @@ export async function updateClientDossier(form: FormData) {
   const data = clientDossierUpdateSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
   await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
-  const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { title: data.title, type: data.type, status: data.status, content: data.content, updatedById: s.userId, archivedAt: data.status === 'archiviata' ? (before.archivedAt ?? new Date()) : null, archivedById: data.status === 'archiviata' ? s.userId : null } });
-  await audit(s.userId, before.status !== 'archiviata' && dossier.status === 'archiviata' ? 'client_dossier_archive' : 'client_dossier_update', 'ClientDossier', dossier.id, { before, after: dossier });
-  return dossier;
+  if (before.status === 'archiviata' && data.status !== 'archiviata') throw new UserFacingActionError('Un dossier archiviato non può essere riaperto dalla modifica generica.');
+  const substantiveChange = before.title !== data.title || before.type !== data.type || before.content !== data.content;
+  if (data.status === 'revisionata' && (before.status !== 'revisionata' || substantiveChange)) {
+    throw new UserFacingActionError('Per confermare un dossier come revisionato usa l’azione di approvazione separata. Ogni modifica sostanziale deve tornare in bozza.');
+  }
+  const now = nextConcurrencyTimestamp(before.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.clientDossier.updateMany({
+      where: { id: data.id, status: before.status, updatedAt: before.updatedAt },
+      data: {
+        title: data.title,
+        type: data.type,
+        status: data.status,
+        content: data.content,
+        updatedById: s.userId,
+        reviewedById: data.status === 'bozza' ? null : before.reviewedById,
+        reviewedAt: data.status === 'bozza' ? null : before.reviewedAt,
+        archivedAt: data.status === 'archiviata' ? (before.archivedAt ?? now) : null,
+        archivedById: data.status === 'archiviata' ? s.userId : null,
+        updatedAt: now,
+      },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('Il dossier è stato modificato da un altro operatore. Ricarica la pagina.');
+    const dossier = await tx.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: before.status !== 'archiviata' && dossier.status === 'archiviata' ? 'client_dossier_archive' : 'client_dossier_update',
+      entityType: 'ClientDossier',
+      entityId: dossier.id,
+      after: { before: dossierAuditSnapshot(before), after: dossierAuditSnapshot(dossier), contentChanged: before.content !== dossier.content },
+    } });
+    return dossier;
+  });
+}
+
+export async function approveClientDossier(form: FormData) {
+  const s = await requirePermission('dossier.approve');
+  const data = clientDossierIdSchema.parse(clean(form));
+  const context = await getClientDossierReadAccess(s, data.id);
+  if (!context) denyWriteAccess();
+  const before = context.dossier;
+  if (before.status === 'archiviata') throw new UserFacingActionError('Un dossier archiviato non può essere approvato.');
+  if (before.reviewedById && before.reviewedAt && before.status === 'revisionata') return before;
+  if (before.createdById === s.userId || before.updatedById === s.userId) {
+    throw new UserFacingActionError('Il revisore del dossier deve essere diverso da chi lo ha creato o modificato per ultimo.');
+  }
+  const now = nextConcurrencyTimestamp(before.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.clientDossier.updateMany({
+      where: {
+        id: before.id,
+        status: { in: ['bozza', 'revisionata'] },
+        reviewedById: null,
+        reviewedAt: null,
+        updatedAt: before.updatedAt,
+        createdById: { not: s.userId },
+        OR: [{ updatedById: null }, { updatedById: { not: s.userId } }],
+      },
+      data: { status: 'revisionata', reviewedById: s.userId, reviewedAt: now, updatedById: s.userId, updatedAt: now },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('Dossier già revisionato o modificato da un altro operatore.');
+    const dossier = await tx.clientDossier.findUniqueOrThrow({ where: { id: before.id } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'client_dossier_review',
+      entityType: 'ClientDossier',
+      entityId: dossier.id,
+      after: { before: dossierAuditSnapshot(before), after: dossierAuditSnapshot(dossier) },
+    } });
+    return dossier;
+  });
 }
 
 export async function archiveClientDossier(form: FormData) {
@@ -525,14 +765,30 @@ export async function archiveClientDossier(form: FormData) {
   const data = clientDossierIdSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
   await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
-  const dossier = await prisma.clientDossier.update({ where: { id: data.id }, data: { status: 'archiviata', archivedAt: before.archivedAt ?? new Date(), archivedById: s.userId, updatedById: s.userId } });
-  await audit(s.userId, 'client_dossier_archive', 'ClientDossier', dossier.id, { before, after: dossier });
-  return dossier;
+  if (before.status === 'archiviata') return before;
+  const now = nextConcurrencyTimestamp(before.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.clientDossier.updateMany({
+      where: { id: data.id, status: before.status, updatedAt: before.updatedAt },
+      data: { status: 'archiviata', archivedAt: before.archivedAt ?? now, archivedById: s.userId, updatedById: s.userId, updatedAt: now },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('Il dossier è stato modificato da un altro operatore. Ricarica la pagina.');
+    const dossier = await tx.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'client_dossier_archive',
+      entityType: 'ClientDossier',
+      entityId: dossier.id,
+      after: { before: dossierAuditSnapshot(before), after: dossierAuditSnapshot(dossier) },
+    } });
+    return dossier;
+  });
 }
 
 export async function auditClientDossierExport(id: string, format: 'markdown' | 'docx' = 'markdown') {
   const s = await requirePermission('dossier.read');
   const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
+  await requireClientContextReadAccess(s, { clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId });
   await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format });
   return dossier;
 }
@@ -688,49 +944,294 @@ export async function runClientAiAgent(form: FormData) {
   const data = clientAiRunSchema.parse(clean(form));
   const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
   if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.');
+  if (!isPrimaryOperationalAiAgent(agent.code)) throw new UserFacingActionError('Agente AI non abilitato al workflow operativo cliente.');
+  const agentRuntime = resolveAiAgentRuntime(agent.provider, agent.futureModel);
 
+  const access = await requireClientContextReadAccess(s, data);
   const client = await prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null } });
-  if (!client || !canViewClient(s, client)) throw new UserFacingActionError('Cliente non accessibile');
+  if (!client) throw new UserFacingActionError('Cliente non accessibile');
+  const { clientService, project } = access;
+  const linkedCompanyId = clientService?.companyId ?? project?.companyId ?? undefined;
+  const canViewWholeClient = canViewClient(s, access.client);
 
-  const [companies, clientService, project, checklist, tasks, documents, clientDossiers, legacyDossiers, serviceCatalog] = await Promise.all([
-    prisma.company.findMany({ where: { clientId: data.clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    data.clientServiceId ? prisma.clientService.findFirst({ where: { id: data.clientServiceId, clientId: data.clientId, deletedAt: null } }) : null,
-    data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null } }) : null,
-    prisma.documentChecklistItem.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null, active: true }, orderBy: { updatedAt: 'desc' } }),
-    prisma.task.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null }, orderBy: { dueAt: 'asc' }, take: 25 }),
-    prisma.document.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null }, orderBy: { createdAt: 'desc' }, take: 50 }),
-    prisma.clientDossier.findMany({ where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
-    prisma.dossier.findMany({ where: { clientId: data.clientId, projectId: data.projectId || undefined }, orderBy: { updatedAt: 'desc' }, take: 10 }),
-    prisma.serviceCatalog.findMany(),
+  const [companies, checklist, tasks, documents, allProjects, allServices, serviceCatalog] = await Promise.all([
+    linkedCompanyId || canViewWholeClient
+      ? prisma.company.findMany({
+          where: { clientId: data.clientId, ...(linkedCompanyId ? { id: linkedCompanyId } : {}), deletedAt: null },
+          select: { annualRevenue: true, legalForm: true, atecoCode: true, region: true, employees: true, durcStatus: true },
+          orderBy: { updatedAt: 'desc' },
+          take: linkedCompanyId ? 1 : 3,
+        })
+      : Promise.resolve([]),
+    prisma.documentChecklistItem.findMany({
+      where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null, active: true },
+      select: { clientId: true, projectId: true, clientServiceId: true, createdById: true, updatedById: true, title: true, status: true, documentId: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+    }),
+    listAccessibleTasks(s, {
+      where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null },
+      orderBy: { dueAt: 'asc' },
+      take: 25,
+    }),
+    prisma.document.findMany({
+      where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null },
+      select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, containsSensitiveData: true, documentCategory: true, type: true, status: true, serviceArea: true },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    }),
+    prisma.project.findMany({ where: { clientId: data.clientId, deletedAt: null } }),
+    prisma.clientService.findMany({ where: { clientId: data.clientId, deletedAt: null } }),
+    clientService
+      ? prisma.serviceCatalog.findMany({ where: { id: clientService.serviceCatalogId }, select: { id: true, name: true } })
+      : Promise.resolve([]),
   ]);
-  if (data.clientServiceId && !clientService) throw new UserFacingActionError('La pratica selezionata non appartiene al cliente');
-  if (data.projectId && !project) throw new UserFacingActionError('Il progetto selezionato non appartiene al cliente');
-
-  const safeDocuments = documents.map(({ storagePath: _storagePath, checksum: _checksum, ...document }) => document);
+  const projectById = new Map(allProjects.map((item) => [item.id, { ...item, client: access.client }]));
+  const serviceById = new Map(allServices.map((item) => [item.id, {
+    ...item,
+    client: access.client,
+    project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+  }]));
+  const canReadSensitive = hasPermission(s, 'document.sensitive.read');
+  const visibleDocuments = documents.filter((document) => canViewDocument(s, {
+    ...document,
+    client: access.client,
+    project: document.projectId ? projectById.get(document.projectId) ?? null : null,
+    clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) ?? null : null,
+  }, canReadSensitive));
+  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const safeChecklist = checklist.filter((item) => {
+    if (!canViewChecklistItem(s, {
+      ...item,
+      client: access.client,
+      project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+      clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
+    })) return false;
+    if (isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title })) return canReadSensitive;
+    return !item.documentId || visibleDocumentIds.has(item.documentId);
+  });
+  const safeDocuments = visibleDocuments.map((document) => ({
+    documentCategory: document.documentCategory,
+    status: document.status,
+    serviceArea: document.serviceArea,
+  }));
+  const operationalInstructions = minimizeAiInstructions(data.operationalInstructions);
   const input = JSON.parse(JSON.stringify({
     source: 'CRM interno FAI',
     humanReviewRequired: true,
-    operationalInstructions: data.operationalInstructions,
-    context: { client, companies, clientService, serviceCatalog, project, checklist, tasks, documents: safeDocuments, clientDossiers, legacyDossiers },
+    context: {
+      client: { type: client.type, status: client.status },
+      companies: companies.map((company) => ({
+        annualRevenue: company.annualRevenue,
+        legalForm: company.legalForm,
+        atecoCode: company.atecoCode,
+        region: company.region,
+        employees: company.employees,
+        durcStatus: company.durcStatus,
+      })),
+      clientService: clientService ? {
+        serviceCatalogId: clientService.serviceCatalogId,
+        practiceType: clientService.practiceType,
+        status: clientService.status,
+        operationalStatus: clientService.operationalStatus,
+        requestedAmount: clientService.requestedAmount,
+        plannedInvestment: clientService.plannedInvestment,
+      } : null,
+      serviceCatalog: serviceCatalog.map((item) => ({ id: item.id, name: item.name })),
+      project: project ? {
+        requestedAmount: project.requestedAmount,
+        totalInvestment: project.totalInvestment,
+        status: project.status,
+        priority: project.priority,
+        startTiming: project.startTiming,
+        region: project.region,
+        sector: project.sector,
+      } : null,
+      checklist: safeChecklist.map((item) => ({ title: item.title, status: item.status, hasLinkedDocument: Boolean(item.documentId) })),
+      tasks: tasks.map((task) => ({ status: task.status, priority: task.priority })),
+      documents: safeDocuments,
+    },
   }));
+  const providerInput = operationalInstructions ? { ...input, operationalInstructions } : input;
+  const run = await prisma.aiRun.create({ data: {
+    agentId: agent.id,
+    clientId: data.clientId,
+    clientServiceId: data.clientServiceId,
+    projectId: data.projectId,
+    status: 'running',
+    provider: agentRuntime.provider,
+    model: agentRuntime.model,
+    promptVersion: agent.promptVersion,
+    input: input as Prisma.InputJsonValue,
+    operationalInstructions,
+    createdById: s.userId,
+  } });
+
   let draft;
   try {
-    draft = await getAiAdapter().run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, input);
+    draft = await agentRuntime.adapter.run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, providerInput);
   } catch (error) {
-    await audit(s.userId, 'ai_agent_run_failed', 'AiAgent', agent.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, provider: normalizeAiProvider(), error: error instanceof Error ? error.message : 'Errore AI sconosciuto' });
-    throw error;
+    await prisma.$transaction(async (tx) => {
+      const failed = await tx.aiRun.updateMany({ where: { id: run.id, status: 'running' }, data: { status: 'failed' } });
+      if (failed.count !== 1) throw new UserFacingActionError('Stato esecuzione AI non coerente. Ricarica la pagina.');
+      await tx.auditLog.create({ data: {
+        actorId: s.userId,
+        event: 'ai_agent_run_failed',
+        entityType: 'AiRun',
+        entityId: run.id,
+        after: {
+          aiRunId: run.id,
+          agentId: agent.id,
+          agentCode: agent.code,
+          clientId: data.clientId,
+          clientServiceId: data.clientServiceId ?? null,
+          projectId: data.projectId ?? null,
+          provider: agentRuntime.provider,
+          model: agentRuntime.model,
+          promptVersion: agent.promptVersion,
+          status: 'failed',
+          errorCode: error instanceof UserFacingActionError ? 'AI_PROVIDER_REJECTED' : 'AI_PROVIDER_FAILURE',
+        },
+      } });
+    });
+    if (error instanceof UserFacingActionError) throw error;
+    throw new UserFacingActionError('Errore operativo durante l’esecuzione AI. Nessun output è stato salvato.');
   }
   const prepared = prepareAiOutput(draft);
-  const run = await prisma.aiRun.create({ data: { agentId: agent.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, input: input as Prisma.InputJsonValue, output: draft as Prisma.InputJsonValue, operationalInstructions: data.operationalInstructions, createdById: s.userId } });
-  const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
-  await audit(s.userId, 'ai_agent_run', 'AiRun', run.id, { agentId: agent.id, agentCode: agent.code, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId });
-  await audit(s.userId, 'ai_output_generation', 'AiOutput', output.id, { outputId: output.id, aiRunId: run.id, agentId: agent.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId });
-  return output;
+  return prisma.$transaction(async (tx) => {
+    const completed = await tx.aiRun.updateMany({
+      where: { id: run.id, status: 'running' },
+      data: { status: 'completed', output: aiRunOutputSummary(draft) },
+    });
+    if (completed.count !== 1) throw new UserFacingActionError('Stato esecuzione AI non coerente. Ricarica la pagina.');
+    const output = await tx.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
+    const trace = {
+      aiRunId: run.id,
+      outputId: output.id,
+      agentId: agent.id,
+      agentCode: agent.code,
+      clientId: data.clientId,
+      clientServiceId: data.clientServiceId ?? null,
+      projectId: data.projectId ?? null,
+      provider: agentRuntime.provider,
+      model: agentRuntime.model,
+      promptVersion: agent.promptVersion,
+      outputStatus: output.status,
+    };
+    await tx.auditLog.createMany({ data: [
+      { actorId: s.userId, event: 'ai_agent_run', entityType: 'AiRun', entityId: run.id, after: trace },
+      { actorId: s.userId, event: 'ai_output_generation', entityType: 'AiOutput', entityId: output.id, after: trace },
+    ] });
+    return output;
+  });
 }
 
-export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run({ code: agentCode, role: agent.name, systemPrompt: agent.systemPrompt }, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
-export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_output_status_change', 'AiOutput', id, { before: current, after: output });
-  await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }
+export async function runMockAgent(agentCode: string, input: unknown) {
+  const s = await requirePermission('ai_agents.write');
+  if (!hasGlobalAccess(s)) denyWriteAccess();
+  const prompt = typeof input === 'object' && input && typeof (input as { prompt?: unknown }).prompt === 'string'
+    ? (input as { prompt: string }).prompt.trim()
+    : '';
+  if (!prompt || prompt.length > 2000) throw new UserFacingActionError('Il prompt mock deve contenere da 1 a 2000 caratteri.');
+  const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } });
+  if (!agent.active || !isPrimaryOperationalAiAgent(agent.code)) throw new UserFacingActionError('Agente AI non disponibile per il quick-run mock.');
+  const safeInput = { prompt: minimizeAiInstructions(prompt), source: 'CRM interno FAI', humanReviewRequired: true, context: {} };
+  const draft = await new MockAiAdapter().run({ code: agentCode, role: agent.name, systemPrompt: agent.systemPrompt }, safeInput);
+  const prepared = prepareAiOutput(draft);
+  return prisma.$transaction(async (tx) => {
+    const createdRun = await tx.aiRun.create({ data: {
+      agentId: agent.id,
+      status: 'completed',
+      provider: 'mock',
+      model: 'mock-template-v1',
+      promptVersion: agent.promptVersion,
+      input: safeInput,
+      output: aiRunOutputSummary(draft),
+      createdById: s.userId,
+    } });
+    const createdOutput = await tx.aiOutput.create({ data: { aiRunId: createdRun.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'ai_mock_generation',
+      entityType: 'AiOutput',
+      entityId: createdOutput.id,
+      after: { outputId: createdOutput.id, aiRunId: createdRun.id, agentId: agent.id, provider: 'mock', model: 'mock-template-v1', promptVersion: agent.promptVersion, status: createdOutput.status },
+    } });
+    return createdOutput;
+  });
+}
+
+function hydratedAiPolicyContext(context: Awaited<ReturnType<typeof requireAiOutputReadAccess>>) {
+  return {
+    ...context.output,
+    run: context.run,
+    client: context.client,
+    project: context.project,
+    clientService: context.clientService,
+  };
+}
+
+export async function reviewAiOutput(id: string) {
+  const s = await requirePermission('ai.review');
+  const data = aiOutputApprovalSchema.parse({ id });
+  const context = await requireAiOutputReadAccess(s, data.id);
+  const current = context.output;
+  if (!canReviewAiOutput(s, hydratedAiPolicyContext(context))) throw new UserFacingActionError('Output non revisionabile: verifica stato, contesto e separazione dal generatore.');
+  if (scanForbiddenPhrases(`${current.title}\n${current.content}`).length) throw new UserFacingActionError('Output non conforme: non può superare la revisione.');
+  const now = nextConcurrencyTimestamp(current.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.aiOutput.updateMany({
+      where: { id: data.id, aiRunId: current.aiRunId, status: 'needs_review', requiresHumanReview: true, reviewedById: null, reviewedAt: null, approvedById: null, approvedAt: null, updatedAt: current.updatedAt },
+      data: { reviewedById: s.userId, reviewedAt: now, updatedAt: now },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('Output già revisionato o modificato da un altro operatore.');
+    const output = await tx.aiOutput.findUniqueOrThrow({ where: { id: data.id } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'ai_output_review',
+      entityType: 'AiOutput',
+      entityId: output.id,
+      after: { outputId: output.id, aiRunId: output.aiRunId, fromStatus: current.status, toStatus: output.status, reviewedById: s.userId },
+    } });
+    return output;
+  });
+}
+
+export async function approveAiOutput(id: string) {
+  const s = await requirePermission('ai.approve');
+  const data = aiOutputApprovalSchema.parse({ id });
+  const context = await requireAiOutputReadAccess(s, data.id);
+  const current = context.output;
+  if (!canApproveAiOutput(s, hydratedAiPolicyContext(context))) throw new UserFacingActionError('Output non approvabile: serve una revisione valida, indipendente dal generatore.');
+  if (scanForbiddenPhrases(`${current.title}\n${current.content}`).length) throw new UserFacingActionError('Output non conforme: non può essere approvato.');
+  if (!current.reviewedById || !current.reviewedAt) throw new UserFacingActionError('Output non approvabile: revisione non valida.');
+  const now = nextConcurrencyTimestamp(current.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.aiOutput.updateMany({
+      where: {
+        id: data.id,
+        aiRunId: current.aiRunId,
+        status: 'needs_review',
+        requiresHumanReview: true,
+        reviewedById: current.reviewedById,
+        reviewedAt: current.reviewedAt,
+        approvedById: null,
+        approvedAt: null,
+        updatedAt: current.updatedAt,
+        NOT: { reviewedById: s.userId },
+      },
+      data: { status: 'approved', approvedById: s.userId, approvedAt: now, updatedAt: now },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('Output già approvato o modificato da un altro operatore.');
+    const output = await tx.aiOutput.findUniqueOrThrow({ where: { id: data.id } });
+    const trace = { outputId: output.id, aiRunId: output.aiRunId, fromStatus: current.status, toStatus: output.status, reviewedById: current.reviewedById, approvedById: s.userId };
+    await tx.auditLog.createMany({ data: [
+      { actorId: s.userId, event: 'ai_output_status_change', entityType: 'AiOutput', entityId: output.id, after: trace },
+      { actorId: s.userId, event: 'ai_approval', entityType: 'AiOutput', entityId: output.id, after: trace },
+    ] });
+    return output;
+  });
+}
 
 export async function createTechnicalPractice(form: FormData) {
   const s = await requirePermission('technical.write');

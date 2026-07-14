@@ -10,8 +10,9 @@ import { DocumentUploadForm } from '@/components/document-upload-form';
 import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask, generateClientDossierAndRedirect, runClientAiAgentAndRedirect } from '@/lib/form-actions';
 import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { canViewClient, canViewDocument } from '@/lib/access-control';
+import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
+import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -55,59 +56,175 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
-  const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents, technicalPractices, practiceCommunications] = await Promise.all([
-    prisma.client.findUnique({ where: { id } }),
-    prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
-    prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.clientService.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.document.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { createdAt: 'desc' } }),
-    prisma.contract.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.payment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.task.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.preAnalysis.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.dossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
-    prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
-    prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }),
-  ]);
+  const client = await prisma.client.findFirst({ where: { id, deletedAt: null } });
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
+  const canViewCompanies = hasPermission(session, 'company.read');
+  const canViewProjects = hasPermission(session, 'project.read');
+  const canViewServices = hasPermission(session, 'service.read');
+  const canViewDocuments = hasPermission(session, 'document.download');
+  const canUploadDocuments = hasPermission(session, 'document.upload');
+  const canViewDossiers = hasPermission(session, 'dossier.read');
+  const canViewContracts = hasPermission(session, 'contract.read');
+  const canViewPayments = hasPermission(session, 'payment.read');
+  const canViewTechnical = hasPermission(session, 'technical.read');
+  const canViewCommunications = hasPermission(session, 'practice_communications.read');
+  const canViewAiOutputs = hasPermission(session, 'ai.review');
+  const canViewAudit = hasPermission(session, 'audit.read');
+  const canReadSensitive = hasPermission(session, 'document.sensitive.read');
+  const canRunAiAgents = hasPermission(session, 'ai.run');
+
+  const [companyContextRows, companies, projectRows, clientServiceRows, documentRows, contractRows, paymentRows, tasks, preAnalysisRows, dossierRows, clientDossierRows, bankabilityRows, financingRows, checklistItems, activeAgents, technicalPracticeRows, practiceCommunicationRows] = await Promise.all([
+    prisma.company.findMany({ where: { clientId: id, deletedAt: null }, select: { id: true, clientId: true } }),
+    canViewCompanies ? prisma.company.findMany({ where: { clientId: id, deletedAt: null } }) : Promise.resolve([]),
+    canViewProjects ? prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewServices ? prisma.clientService.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewDocuments ? prisma.document.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { createdAt: 'desc' } }) : Promise.resolve([]),
+    canViewContracts ? prisma.contract.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewPayments ? prisma.payment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewServices ? listAccessibleTasks(session, { where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewDossiers ? prisma.preAnalysis.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewDossiers ? prisma.dossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewDossiers ? prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canReadSensitive ? prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canReadSensitive ? prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : Promise.resolve([]),
+    canRunAiAgents ? prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    canViewTechnical ? prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canViewCommunications ? prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+  ]);
+
+  const companyContextById = new Map(companyContextRows.map((company) => [company.id, company]));
+  const projects = projectRows.filter((project) => (
+    (!project.companyId || companyContextById.has(project.companyId))
+    && canViewProject(session, { ...project, client })
+  ));
+  const projectById = new Map(projects.map((project) => [project.id, { ...project, client }]));
+  const clientServices = clientServiceRows.filter((service) => {
+    const project = service.projectId ? projectById.get(service.projectId) ?? null : null;
+    if (service.companyId && !companyContextById.has(service.companyId)) return false;
+    if (service.projectId && !project) return false;
+    if (service.companyId && project?.companyId && service.companyId !== project.companyId) return false;
+    return canViewService(session, { ...service, client, project });
+  });
+  const serviceById = new Map(clientServices.map((service) => [service.id, {
+    ...service,
+    client,
+    project: service.projectId ? projectById.get(service.projectId) ?? null : null,
+  }]));
+  const contracts = contractRows.filter((contract) => {
+    const project = contract.projectId ? projectById.get(contract.projectId) ?? null : null;
+    return (!contract.projectId || Boolean(project))
+      && canViewClientContext(session, { clientId: contract.clientId, client, project });
+  });
+  const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
+  const payments = paymentRows.filter((payment) => {
+    const contract = contractById.get(payment.contractId);
+    return Boolean(contract && contract.clientId === payment.clientId);
+  });
+  const preAnalyses = preAnalysisRows.filter((preAnalysis) => {
+    const project = projectById.get(preAnalysis.projectId) ?? null;
+    if (!project) return false;
+    if (preAnalysis.companyId && !companyContextById.has(preAnalysis.companyId)) return false;
+    if (preAnalysis.companyId && project.companyId && preAnalysis.companyId !== project.companyId) return false;
+    return canViewClientContext(session, { clientId: preAnalysis.clientId, client, project });
+  });
+  const preAnalysisById = new Map(preAnalyses.map((preAnalysis) => [preAnalysis.id, preAnalysis]));
+  const dossiers = dossierRows.filter((dossier) => {
+    const project = projectById.get(dossier.projectId) ?? null;
+    if (!project) return false;
+    if (dossier.preAnalysisId) {
+      const preAnalysis = preAnalysisById.get(dossier.preAnalysisId);
+      if (!preAnalysis || preAnalysis.clientId !== dossier.clientId || preAnalysis.projectId !== dossier.projectId) return false;
+    }
+    return canViewClientContext(session, { clientId: dossier.clientId, client, project });
+  });
+  const clientDossiers = clientDossierRows.filter((dossier) => {
+    const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
+    const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
+    if (dossier.projectId && !project) return false;
+    if (dossier.clientServiceId && !clientService) return false;
+    return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+  });
+  const bankability = bankabilityRows.filter((assessment) => {
+    const project = assessment.projectId ? projectById.get(assessment.projectId) ?? null : null;
+    if (assessment.projectId && !project) return false;
+    if (assessment.companyId && !companyContextById.has(assessment.companyId)) return false;
+    if (assessment.companyId && project?.companyId && assessment.companyId !== project.companyId) return false;
+    return canViewClientContext(session, { clientId: assessment.clientId, client, project });
+  });
+  const financing = financingRows.filter((assessment) => {
+    const project = assessment.projectId ? projectById.get(assessment.projectId) ?? null : null;
+    const clientService = assessment.clientServiceId ? serviceById.get(assessment.clientServiceId) ?? null : null;
+    if (assessment.projectId && !project) return false;
+    if (assessment.clientServiceId && !clientService) return false;
+    if (assessment.companyId && !companyContextById.has(assessment.companyId)) return false;
+    if (assessment.companyId && project?.companyId && assessment.companyId !== project.companyId) return false;
+    if (assessment.companyId && clientService?.companyId && assessment.companyId !== clientService.companyId) return false;
+    return canViewClientContext(session, { clientId: assessment.clientId, client, project, clientService });
+  });
+  const technicalPractices = technicalPracticeRows.filter((practice) => {
+    const project = practice.projectId ? projectById.get(practice.projectId) ?? null : null;
+    const clientService = practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null;
+    if (practice.projectId && !project) return false;
+    if (practice.clientServiceId && !clientService) return false;
+    return canViewClientContext(session, { clientId: practice.clientId, client, project, clientService })
+      && canViewTechnicalPractice(session, { ...practice, client });
+  });
+  const technicalPracticeById = new Map(technicalPractices.map((practice) => [practice.id, practice]));
+  const practiceCommunications = practiceCommunicationRows.filter((communication) => {
+    const practice = technicalPracticeById.get(communication.technicalPracticeId);
+    return Boolean(practice
+      && communication.clientId === practice.clientId
+      && (communication.projectId ?? null) === (practice.projectId ?? null)
+      && (communication.clientServiceId ?? null) === (practice.clientServiceId ?? null));
+  });
+
   const serviceIds = clientServices.map((service) => service.id);
-  const [aiOutputs, auditLogs, catalog, users] = await Promise.all([
-    prisma.aiOutput.findMany({ where: { OR: [{ clientId: id }, ...(serviceIds.length > 0 ? [{ clientServiceId: { in: serviceIds } }] : [])] }, orderBy: { createdAt: 'desc' }, take: 15 }),
-    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: documents.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 80 }),
+  const visibleDocuments = canViewDocuments ? documentRows.filter((document) => {
+    const project = document.projectId ? projectById.get(document.projectId) ?? null : null;
+    const clientService = document.clientServiceId ? serviceById.get(document.clientServiceId) ?? null : null;
+    if (document.companyId && !companyContextById.has(document.companyId)) return false;
+    if (document.companyId && project?.companyId && document.companyId !== project.companyId) return false;
+    if (document.companyId && clientService?.companyId && document.companyId !== clientService.companyId) return false;
+    return canViewDocument(session, { ...document, client, project, clientService }, canReadSensitive);
+  }) : [];
+  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const visibleChecklistItems = checklistItems.filter((item) =>
+    (!isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title }) || canReadSensitive)
+    && (!item.documentId || visibleDocumentIds.has(item.documentId)),
+  ).filter((item) => canViewChecklistItem(session, {
+    ...item,
+    client,
+    project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+    clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
+  }));
+  const [aiOutputContexts, catalog, users] = await Promise.all([
+    canViewAiOutputs ? listAccessibleAiOutputs(session, { where: { clientId: id }, orderBy: { createdAt: 'desc' }, take: 15 }) : Promise.resolve([]),
     prisma.serviceCatalog.findMany({ where: { id: { in: clientServices.map((s) => s.serviceCatalogId) } } }),
     prisma.user.findMany({ where: { active: true } }),
   ]);
+  const aiOutputs = aiOutputContexts.map((context) => context.output);
+  const auditLogs = canViewAudit ? await prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: visibleDocuments.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] }, orderBy: { createdAt: 'desc' }, take: 80 }) : [];
   const canManageChecklist = hasPermission(session, 'service.write');
-  const canViewDocuments = hasPermission(session, 'document.download');
-  const canReadSensitive = hasPermission(session, 'document.sensitive.read');
   const canAssignServices = hasPermission(session, 'service.assign');
   const canManageTasks = hasPermission(session, 'service.write');
   const canManageDossiers = hasPermission(session, 'dossier.write');
-  const canRunAiAgents = hasPermission(session, 'ai.run');
   const aiDossierAudits = aiOutputs.length ? await prisma.auditLog.findMany({ where: { event: 'ai_output_to_client_dossier', entityType: 'AiOutput', entityId: { in: aiOutputs.map((output) => output.id) } }, orderBy: { createdAt: 'desc' } }) : [];
   const dossierByOutputId = new Map(aiDossierAudits.map((audit) => [audit.entityId, (audit.after as { dossierId?: string } | null)?.dossierId]).filter((entry): entry is [string, string] => Boolean(entry[0] && entry[1])));
-  const outputRuns = aiOutputs.length ? await prisma.aiRun.findMany({ where: { id: { in: aiOutputs.map((output) => output.aiRunId) } } }) : [];
+  const outputRuns = aiOutputContexts.map((context) => context.run);
   const outputAgents = outputRuns.length ? await prisma.aiAgent.findMany({ where: { id: { in: outputRuns.map((run) => run.agentId) } } }) : [];
   const runById = new Map(outputRuns.map((run) => [run.id, run]));
   const agentById = new Map(outputAgents.map((agent) => [agent.id, agent]));
   const taskStatuses = ['aperta','in_lavorazione','completata','annullata'];
   const taskPriorities = ['bassa','media','alta','urgente'];
-  const serviceById = new Map(clientServices.map((service) => [service.id, service]));
-  const projectById = new Map(projects.map((project) => [project.id, project]));
-  const visibleDocuments = canViewDocuments ? documents.filter((document) => canViewDocument(session, { ...document, client, project: document.projectId && projectById.get(document.projectId) ? { ...projectById.get(document.projectId)!, client } : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive)) : [];
   const documentById = new Map(visibleDocuments.map((document) => [document.id, document]));
   const nameOf = (serviceId: string) => catalog.find((s) => s.id === serviceId)?.name ?? 'Servizio FAI';
   const labelOf = (service: { serviceCatalogId: string; practiceType?: string | null; operationalStatus?: string | null; requestedAmount?: unknown; plannedInvestment?: unknown } | null | undefined) => service ? buildClientServiceLabel(service, catalog.find((item) => item.id === service.serviceCatalogId) ?? null) : 'Fascicolo cliente';
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? (userId ? 'Utente non attivo' : 'Sistema');
   const documentAvailability = new Map(await Promise.all(visibleDocuments.map(async (d) => [d.id, await privateDocumentExists(d.storagePath)] as const)));
-  const missingChecklistItems = checklistItems.filter(isMissingChecklistDocument);
-  const receivedChecklistItems = checklistItems.filter((item) => item.documentId || ['ricevuto','validato'].includes(item.status));
+  const missingChecklistItems = visibleChecklistItems.filter(isMissingChecklistDocument);
+  const receivedChecklistItems = visibleChecklistItems.filter((item) => item.documentId || ['ricevuto','validato'].includes(item.status));
   const requestText = missingChecklistItems.length ? `Gentile cliente, per proseguire con la lavorazione della pratica abbiamo necessità di ricevere i seguenti documenti: ${missingChecklistItems.map((item) => item.title).join('; ')}. Restiamo a disposizione per eventuali chiarimenti.` : 'Nessun documento mancante risulta richiesto in checklist.';
   const documentCenterGroups = [
     { title: 'Documenti mancanti', tone: 'border-amber-200 bg-amber-50/70', rows: missingChecklistItems.map((item) => ({ id: item.id, title: item.title, clientName: client.displayName, practice: item.clientServiceId ? labelOf(serviceById.get(item.clientServiceId)) : item.projectId ? projectById.get(item.projectId)?.title ?? 'Pratica collegata' : 'Fascicolo generale', category: 'Checklist', status: item.status, date: item.updatedAt, note: item.notes ?? 'Documento richiesto non ancora collegato.', action: null })) },
@@ -129,7 +246,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       ...(c.reviewedAt ? [{ id: `communication-reviewed-${c.id}`, date: c.reviewedAt, user: userOf(c.reviewedById), type: 'comunicazione approvata', entity: 'Comunicazione pratica', dedupeKey: c.id, category: 'comunicazioni', description: `${c.title} approvata`, beforeAfter: c.internalNote ?? null }] : []),
       ...(c.usedAt ? [{ id: `communication-used-${c.id}`, date: c.usedAt, user: userOf(c.reviewedById), type: 'comunicazione usata/inviata', entity: 'Comunicazione pratica', dedupeKey: c.id, category: 'comunicazioni', description: `${c.title} segnata come usata/inviata`, beforeAfter: 'Invio manuale tracciato: nessun automatismo CRM.' }] : []),
     ]),
-    ...documents.flatMap((d) => [
+    ...visibleDocuments.flatMap((d) => [
       { id: `document-created-${d.id}`, date: d.createdAt, user: userOf(d.uploadedById), type: 'documento caricato', entity: 'Documento', category: 'documenti', description: `${d.title} · ${d.documentCategory}`, beforeAfter: d.status.replaceAll('_', ' ') },
       ...(d.updatedAt.getTime() !== d.createdAt.getTime() ? [{ id: `document-updated-${d.id}`, date: d.updatedAt, user: userOf(d.uploadedById), type: 'documento aggiornato', entity: 'Documento', category: 'documenti', description: `${d.title} aggiornato`, beforeAfter: `Stato ${d.status.replaceAll('_', ' ')}` }] : []),
     ]),
@@ -147,11 +264,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="azienda-visura-ateco" title="Azienda / Visura / ATECO">{companies.length === 0 ? <EmptyState title="Nessuna azienda collegata" /> : <Table headers={['Azienda','P.IVA','ATECO','Stato','Creato il','Aggiornato il']} rows={companies.map((c) => [c.name, c.vatNumber ?? '—', [c.atecoCode, c.atecoDescription].filter(Boolean).join(' · ') || '—', c.activityStatus ?? '—', formatDateTime(c.createdAt), formatDateTime(c.updatedAt)])} />}</Card>
     <Card id="titolari-soci-amministratori" title="Titolari, soci e amministratori"><EmptyState title="Assetto societario da completare">Collegare soci, titolari effettivi e amministratori dalla visura verificata.</EmptyState></Card>
     <Card id="progetti" title="Progetti">{projects.length === 0 ? <EmptyState title="Nessun progetto" /> : <Table headers={['Titolo','Stato','Creato il','Aggiornato il']} rows={projects.map((p) => [p.title, <StatusBadge status={p.status} key="s" />, formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card>
-    <Card id="servizi-acquistati" title="Servizi acquistati"><div className="grid gap-4 md:grid-cols-2">{clientServices.map((s) => <article id={`service-${s.id}`} key={s.id} className="scroll-mt-36 rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50/80 p-5 shadow-sm ring-1 ring-white transition hover:-translate-y-0.5 hover:shadow-lg"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold text-fai-navy">{nameOf(s.serviceCatalogId)}</h3><p className="text-sm text-fai-gray">Responsabile: {userOf(s.assignedToId)}</p></div><div className="flex gap-2"><StatusBadge status={s.paymentStatus} /><StatusBadge status={s.status} /></div></div><TimestampMeta createdAt={s.openedAt ?? s.createdAt} updatedAt={s.statusUpdatedAt ?? s.updatedAt} updatedBy={userOf(s.assignedToId)} /><div className="mt-4 grid gap-3 rounded-2xl bg-white/80 p-3 text-sm ring-1 ring-slate-200/70"><div className="flex flex-wrap gap-2"><StatusBadge status={s.operationalStatus} /><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">Agg. stato: {formatDateTime(s.statusUpdatedAt)}</span></div><p className="text-slate-600">Tipologia: {s.practiceType ?? nameOf(s.serviceCatalogId)} · Importo richiesto: {moneyLabel(s.requestedAmount)} · Investimento previsto: {moneyLabel(s.plannedInvestment)}</p><p className="text-slate-600">Note operative: {s.operationalNotes ?? s.internalNotes ?? '—'}</p></div>{canManageChecklist ? <form action={updateServicePipelineAndRefresh} className="mt-3 grid gap-2 rounded-2xl bg-fai-blue/5 p-3 ring-1 ring-fai-blue/10 md:grid-cols-2"><input type="hidden" name="id" value={s.id}/><select name="operationalStatus" defaultValue={s.operationalStatus} className="rounded-xl border px-3 py-2 text-sm">{operationalStatuses.map(st=><option key={st} value={st}>{operationalStatusLabel(st)}</option>)}</select>{canAssignServices ? <select name="assignedToId" defaultValue={s.assignedToId??''} className="rounded-xl border px-3 py-2 text-sm"><option value="">Da assegnare</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select> : <p className="rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-500">Responsabile: {userOf(s.assignedToId)}</p>}<input className="rounded-xl border p-2 text-sm" name="practiceType" defaultValue={s.practiceType ?? ''} placeholder="Tipologia pratica"/><input className="rounded-xl border p-2 text-sm" name="requestedAmount" defaultValue={s.requestedAmount ? String(s.requestedAmount) : ''} placeholder="Importo richiesto"/><input className="rounded-xl border p-2 text-sm" name="plannedInvestment" defaultValue={s.plannedInvestment ? String(s.plannedInvestment) : ''} placeholder="Investimento previsto"/><textarea className="rounded-xl border p-2 text-sm" name="operationalNotes" defaultValue={s.operationalNotes ?? ''} placeholder="Note operative brevi" rows={2}/><div className="md:col-span-2"><PrimaryButton type="submit">Aggiorna pipeline</PrimaryButton></div></form> : null}<p className="mt-4 rounded-2xl bg-white/80 p-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200/70">Note interne: {s.internalNotes ?? '—'}</p><div className="mt-3 grid gap-2 md:grid-cols-2"><form action={updateServiceStatusAndRefresh} className="flex gap-2"><input type="hidden" name="id" value={s.id}/><select name="status" defaultValue={s.status} className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm">{['richiesto','pagato','raccolta_documenti','in_lavorazione','bozza_ai','revisione_umana','consegnabile','consegnato','sospeso','chiuso','archiviato'].map(st=><option key={st} value={st}>{st}</option>)}</select><PrimaryButton type="submit">Salva</PrimaryButton></form>{canAssignServices ? <form action={assignServiceAndRefresh} className="flex gap-2"><input type="hidden" name="id" value={s.id}/><select name="assignedToId" defaultValue={s.assignedToId??''} className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm"><option value="">Da assegnare</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select><PrimaryButton type="submit">Assegna</PrimaryButton></form> : <p className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-slate-500 ring-1 ring-slate-200">Assegnazione non disponibile per il tuo ruolo.</p>}</div><form action={uploadDocumentAndRefresh} className="mt-4 grid gap-2 rounded-2xl bg-white/80 p-3 ring-1 ring-slate-200 md:grid-cols-2"><input type="hidden" name="clientId" value={client.id}/><input type="hidden" name="companyId" value={s.companyId ?? ''}/><input type="hidden" name="projectId" value={s.projectId ?? ''}/><input type="hidden" name="clientServiceId" value={s.id}/><input className="rounded-xl border p-2 text-sm" type="file" name="file" required/><input className="rounded-xl border p-2 text-sm" name="title" placeholder="Titolo documento" required/><select className="rounded-xl border p-2 text-sm" name="serviceArea" defaultValue="altro">{serviceAreas.map(a=><option key={a} value={a}>{a}</option>)}</select><input className="rounded-xl border p-2 text-sm" name="documentCategory" placeholder="Categoria" defaultValue="altro"/><label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="containsSensitiveData" value="true"/> Sensibile</label><PrimaryButton type="submit">Carica documento</PrimaryButton></form><p className="mt-3 text-xs leading-5 text-slate-500">Checklist documentale gestita nella sezione dedicata del fascicolo.</p></article>)}</div>{clientServices.length === 0 && <EmptyState title="Nessun servizio acquistato" />}</Card>
+    <Card id="servizi-acquistati" title="Servizi acquistati"><div className="grid gap-4 md:grid-cols-2">{clientServices.map((s) => <article id={`service-${s.id}`} key={s.id} className="scroll-mt-36 rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50/80 p-5 shadow-sm ring-1 ring-white transition hover:-translate-y-0.5 hover:shadow-lg"><div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold text-fai-navy">{nameOf(s.serviceCatalogId)}</h3><p className="text-sm text-fai-gray">Responsabile: {userOf(s.assignedToId)}</p></div><div className="flex gap-2"><StatusBadge status={s.paymentStatus} /><StatusBadge status={s.status} /></div></div><TimestampMeta createdAt={s.openedAt ?? s.createdAt} updatedAt={s.statusUpdatedAt ?? s.updatedAt} updatedBy={userOf(s.assignedToId)} /><div className="mt-4 grid gap-3 rounded-2xl bg-white/80 p-3 text-sm ring-1 ring-slate-200/70"><div className="flex flex-wrap gap-2"><StatusBadge status={s.operationalStatus} /><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">Agg. stato: {formatDateTime(s.statusUpdatedAt)}</span></div><p className="text-slate-600">Tipologia: {s.practiceType ?? nameOf(s.serviceCatalogId)} · Importo richiesto: {moneyLabel(s.requestedAmount)} · Investimento previsto: {moneyLabel(s.plannedInvestment)}</p><p className="text-slate-600">Note operative: {s.operationalNotes ?? s.internalNotes ?? '—'}</p></div>{canManageChecklist ? <form action={updateServicePipelineAndRefresh} className="mt-3 grid gap-2 rounded-2xl bg-fai-blue/5 p-3 ring-1 ring-fai-blue/10 md:grid-cols-2"><input type="hidden" name="id" value={s.id}/><select name="operationalStatus" defaultValue={s.operationalStatus} className="rounded-xl border px-3 py-2 text-sm">{operationalStatuses.map(st=><option key={st} value={st}>{operationalStatusLabel(st)}</option>)}</select>{canAssignServices ? <select name="assignedToId" defaultValue={s.assignedToId??''} className="rounded-xl border px-3 py-2 text-sm"><option value="">Da assegnare</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select> : <p className="rounded-xl border bg-slate-50 px-3 py-2 text-sm text-slate-500">Responsabile: {userOf(s.assignedToId)}</p>}<input className="rounded-xl border p-2 text-sm" name="practiceType" defaultValue={s.practiceType ?? ''} placeholder="Tipologia pratica"/><input className="rounded-xl border p-2 text-sm" name="requestedAmount" defaultValue={s.requestedAmount ? String(s.requestedAmount) : ''} placeholder="Importo richiesto"/><input className="rounded-xl border p-2 text-sm" name="plannedInvestment" defaultValue={s.plannedInvestment ? String(s.plannedInvestment) : ''} placeholder="Investimento previsto"/><textarea className="rounded-xl border p-2 text-sm" name="operationalNotes" defaultValue={s.operationalNotes ?? ''} placeholder="Note operative brevi" rows={2}/><div className="md:col-span-2"><PrimaryButton type="submit">Aggiorna pipeline</PrimaryButton></div></form> : null}<p className="mt-4 rounded-2xl bg-white/80 p-3 text-sm leading-6 text-slate-600 ring-1 ring-slate-200/70">Note interne: {s.internalNotes ?? '—'}</p><div className="mt-3 grid gap-2 md:grid-cols-2">{canManageChecklist ? <form action={updateServiceStatusAndRefresh} className="flex gap-2"><input type="hidden" name="id" value={s.id}/><select name="status" defaultValue={s.status} className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm">{['richiesto','pagato','raccolta_documenti','in_lavorazione','bozza_ai','revisione_umana','consegnabile','consegnato','sospeso','chiuso','archiviato'].map(st=><option key={st} value={st}>{st}</option>)}</select><PrimaryButton type="submit">Salva</PrimaryButton></form> : null}{canAssignServices ? <form action={assignServiceAndRefresh} className="flex gap-2"><input type="hidden" name="id" value={s.id}/><select name="assignedToId" defaultValue={s.assignedToId??''} className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm"><option value="">Da assegnare</option>{users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select><PrimaryButton type="submit">Assegna</PrimaryButton></form> : null}</div>{canUploadDocuments ? <form action={uploadDocumentAndRefresh} className="mt-4 grid gap-2 rounded-2xl bg-white/80 p-3 ring-1 ring-slate-200 md:grid-cols-2"><input type="hidden" name="clientId" value={client.id}/><input type="hidden" name="companyId" value={s.companyId ?? ''}/><input type="hidden" name="projectId" value={s.projectId ?? ''}/><input type="hidden" name="clientServiceId" value={s.id}/><input className="rounded-xl border p-2 text-sm" type="file" name="file" required/><input className="rounded-xl border p-2 text-sm" name="title" placeholder="Titolo documento" required/><select className="rounded-xl border p-2 text-sm" name="serviceArea" defaultValue="altro">{serviceAreas.map(a=><option key={a} value={a}>{a}</option>)}</select><input className="rounded-xl border p-2 text-sm" name="documentCategory" placeholder="Categoria" defaultValue="altro"/><label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" name="containsSensitiveData" value="true"/> Sensibile</label><PrimaryButton type="submit">Carica documento</PrimaryButton></form> : null}<p className="mt-3 text-xs leading-5 text-slate-500">Checklist documentale gestita nella sezione dedicata del fascicolo.</p></article>)}</div>{clientServices.length === 0 && <EmptyState title="Nessun servizio acquistato" />}</Card>
     <Card id="finanziamento-aziendale" title="Finanziamento aziendale">{financing.length === 0 ? <EmptyState title="Nessuna valutazione finanziamento"/> : <Table headers={['Importo richiesto','Finalità','Prossima azione','Creato il','Aggiornato il']} rows={financing.map((f) => [f.requestedAmount ? `€ ${Number(f.requestedAmount).toLocaleString('it-IT')}` : '—', f.purpose ?? '—', f.nextAction ?? '—', formatDateTime(f.createdAt), formatDateTime(f.updatedAt)])} />}</Card>
     <Card id="bandi-finanza-agevolata" title="Bandi / Finanza agevolata"><EmptyState title="Misure da verificare">Stato misura, apertura, chiusura, fonti ufficiali, condizioni e prossime azioni saranno tracciati qui.</EmptyState></Card>
     <Card id="bancabilita" title="Bancabilità">{bankability.length === 0 ? <EmptyState title="Nessun assessment" /> : <Table headers={['Rischio','Completezza','Revisione','Aggiornato il']} rows={bankability.map((b) => [<StatusBadge status={b.riskLevel} key="r" />, `${b.dataCompleteness}%`, b.humanReviewStatus, formatDateTime(b.updatedAt)])} />}</Card>
-    <Card id="documenti" title="Documenti">{query?.uploadError ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{query.uploadError}</div> : null}<DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName }]} companies={companies.map((c) => ({ id: c.id, clientId: c.clientId, label: c.name }))} projects={projects.map((project) => ({ id: project.id, clientId: project.clientId, label: project.title }))} services={clientServices.map((service) => ({ id: service.id, clientId: service.clientId, label: nameOf(service.serviceCatalogId) }))} serviceAreas={serviceAreas} submitLabel="Carica" className="mb-5 grid gap-3 md:grid-cols-4" buttonClassName="" />{!canViewDocuments ? <EmptyState title="Documenti non disponibili per il tuo ruolo" /> : visibleDocuments.length === 0 ? <EmptyState title="Nessun documento" /> : <Table headers={['Documento','Sezione','Categoria','Servizio','Sensibile','Stato file','Tracciabilità','Scadenza','Download']} rows={visibleDocuments.map((d) => { const ok = documentAvailability.get(d.id); return [<span key="n">{d.title}<br/><span className="text-xs text-slate-500">{d.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, d.serviceArea, d.documentCategory, d.clientServiceId ? nameOf(clientServices.find(s => s.id === d.clientServiceId)?.serviceCatalogId ?? '') : 'Fascicolo generale', d.containsSensitiveData ? 'Sì' : 'No', ok ? 'disponibile' : 'metadata demo / non caricato', <span key="t">Caricato il {formatDateTime(d.createdAt)} da {userOf(d.uploadedById)}<br/>Aggiornato il {formatDateTime(d.updatedAt)}</span>, formatDateTime(d.validUntil), ok ? <SecondaryLink key="d" href={`/documents/${d.id}/download`}>Scarica</SecondaryLink> : <DisabledAction key="d" reason="File fisico assente nello storage privato">File non disponibile</DisabledAction>]; })} />}</Card>
+    <Card id="documenti" title="Documenti">{query?.uploadError ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{query.uploadError}</div> : null}{canUploadDocuments ? <DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName }]} companies={companies.map((c) => ({ id: c.id, clientId: c.clientId, label: c.name }))} projects={projects.map((project) => ({ id: project.id, clientId: project.clientId, label: project.title }))} services={clientServices.map((service) => ({ id: service.id, clientId: service.clientId, label: nameOf(service.serviceCatalogId) }))} serviceAreas={serviceAreas} submitLabel="Carica" className="mb-5 grid gap-3 md:grid-cols-4" buttonClassName="" /> : null}{!canViewDocuments ? <EmptyState title="Documenti non disponibili per il tuo ruolo" /> : visibleDocuments.length === 0 ? <EmptyState title="Nessun documento" /> : <Table headers={['Documento','Sezione','Categoria','Servizio','Sensibile','Stato file','Tracciabilità','Scadenza','Download']} rows={visibleDocuments.map((d) => { const ok = documentAvailability.get(d.id); return [<span key="n">{d.title}<br/><span className="text-xs text-slate-500">{d.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, d.serviceArea, d.documentCategory, d.clientServiceId ? nameOf(clientServices.find(s => s.id === d.clientServiceId)?.serviceCatalogId ?? '') : 'Fascicolo generale', d.containsSensitiveData ? 'Sì' : 'No', ok ? 'disponibile' : 'metadata demo / non caricato', <span key="t">Caricato il {formatDateTime(d.createdAt)} da {userOf(d.uploadedById)}<br/>Aggiornato il {formatDateTime(d.updatedAt)}</span>, formatDateTime(d.validUntil), ok ? <SecondaryLink key="d" href={`/documents/${d.id}/download`}>Scarica</SecondaryLink> : <DisabledAction key="d" reason="File fisico assente nello storage privato">File non disponibile</DisabledAction>]; })} />}</Card>
 
     {canViewDocuments ? <Card id="centro-documentale" title="Centro documentale"><div className="mb-5 grid gap-4 lg:grid-cols-[1fr_0.9fr]"><div className="rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10"><h3 className="text-sm font-black uppercase tracking-wide text-fai-navy">Richiesta documenti pronta</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{requestText}</p></div>{canManageTasks && missingChecklistItems.length > 0 ? <form action={createClientTaskAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200"><input type="hidden" name="clientId" value={client.id}/><input type="hidden" name="title" value="Sollecito documenti mancanti"/><input type="hidden" name="description" value={requestText}/><input type="hidden" name="priority" value="media"/><p className="text-sm text-slate-600"><b>Azione operativa:</b> crea un task interno per sollecitare i documenti mancanti rilevati dalla checklist.</p><PrimaryButton type="submit">Crea task sollecito documenti</PrimaryButton></form> : <EmptyState title="Nessun sollecito necessario">La checklist non contiene documenti mancanti da sollecitare.</EmptyState>}</div><div className="grid gap-4 xl:grid-cols-2">{documentCenterGroups.map((group) => <section key={group.title} className={`rounded-2xl border p-4 ${group.tone}`}><div className="mb-3 flex items-center justify-between gap-2"><h3 className="font-black text-fai-navy">{group.title}</h3><span className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-slate-200">{group.rows.length}</span></div>{group.rows.length === 0 ? <EmptyState title="Nessun documento in questo gruppo" /> : <div className="space-y-3">{group.rows.map((row) => <article key={row.id} className="rounded-2xl bg-white/90 p-3 text-sm shadow-sm ring-1 ring-slate-200"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-black text-fai-navy">{row.title}</p><p className="text-xs leading-5 text-slate-500">{row.clientName} · {row.practice}</p></div><StatusBadge status={row.status} /></div><p className="mt-2 text-xs leading-5 text-slate-600">Categoria/tipo: {row.category} · Aggiornato: {formatDateTime(row.date)}</p><p className="mt-1 text-xs leading-5 text-slate-500">{row.note}</p>{row.action ? <div className="mt-3"><SecondaryLink href={row.action}>Apri/Scarica</SecondaryLink></div> : null}</article>)}</div>}</section>)}</div><p className="mt-4 text-xs leading-5 text-slate-500">Checklist collegata: {receivedChecklistItems.length} voci presenti o ricevute, {missingChecklistItems.length} ancora mancanti. Le pratiche tecniche collegate al cliente restano consultabili nella sezione Ufficio Tecnico / Pratiche.</p></Card> : null}
 
@@ -176,7 +293,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
           <div className="mt-4"><PrimaryButton type="submit">Inserisci set base</PrimaryButton></div>
         </form> : null}
       </div>
-      {checklistItems.length === 0 ? <EmptyState title="Nessuna voce checklist" /> : <Table headers={['Documento richiesto','Contesto','Stato','Documento collegato','Aggiornato','Azioni']} rows={checklistItems.map((item) => {
+      {visibleChecklistItems.length === 0 ? <EmptyState title="Nessuna voce checklist" /> : <Table headers={['Documento richiesto','Contesto','Stato','Documento collegato','Aggiornato','Azioni']} rows={visibleChecklistItems.map((item) => {
         const linkedDocument = item.documentId ? documentById.get(item.documentId) : null;
         const service = item.clientServiceId ? serviceById.get(item.clientServiceId) : null;
         const project = item.projectId ? projectById.get(item.projectId) : null;

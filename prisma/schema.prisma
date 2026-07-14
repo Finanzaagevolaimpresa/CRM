@@ -381,7 +381,7 @@ model Client {
   id           String     @id @default(cuid())
   type         ClientType
   displayName  String
-  leadId       String?
+  leadId       String?    @unique
   status       String     @default("attivo")
   salesOwnerId String?
   consultantId String?
@@ -681,20 +681,23 @@ model Dossier {
 }
 
 model ClientDossier {
-  id              String              @id @default(cuid())
-  clientId        String
-  clientServiceId String?
-  projectId       String?
-  title           String
-  type            ClientDossierType   @default(pre_analisi)
-  content         String
-  status          ClientDossierStatus @default(bozza)
-  createdById     String
-  updatedById     String?
-  archivedById    String?
-  archivedAt      DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  id               String              @id @default(cuid())
+  clientId         String
+  clientServiceId  String?
+  projectId        String?
+  sourceAiOutputId String?             @unique
+  title            String
+  type             ClientDossierType   @default(pre_analisi)
+  content          String
+  status           ClientDossierStatus @default(bozza)
+  createdById      String
+  updatedById      String?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  archivedById     String?
+  archivedAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
   @@index([clientId])
   @@index([clientServiceId])
@@ -800,6 +803,9 @@ model AiRun {
   clientServiceId         String?
   projectId               String?
   status                  String   @default("completed")
+  provider                String   @default("unknown")
+  model                   String?
+  promptVersion           String?
   input                   Json?
   output                  Json?
   operationalInstructions String?

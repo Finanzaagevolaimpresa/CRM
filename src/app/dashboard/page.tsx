@@ -11,6 +11,8 @@ import { legalDisclaimer } from "@/lib/compliance";
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
+import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, canViewTechnicalPractice } from "@/lib/access-control";
+import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
@@ -32,28 +34,77 @@ export default async function Dashboard() {
     "practice_communications.review",
   );
   const canReadLeads = hasPermission(session, "lead.read");
-  const canSeeAllTasks = [
-    "admin",
-    "direzione",
-    "revisore",
-    "backoffice",
-  ].includes(session.role);
-  const openTaskWhere = {
-    deletedAt: null,
-    status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] },
-    ...(canSeeAllTasks
-      ? {}
-      : {
-          OR: [
-            { assignedToId: session.userId },
-            { createdById: session.userId },
-          ],
-        }),
-  };
+  const canReadClients = hasPermission(session, "client.read");
+  const canReadProjects = hasPermission(session, "project.read");
+  const canReadDossiers = hasPermission(session, "dossier.read");
+  const canReadContracts = hasPermission(session, "contract.read");
+  const canReadPayments = hasPermission(session, "payment.read");
+  const canReadAiOutputs = hasPermission(session, "ai.review") || hasPermission(session, "ai.approve");
+  const canReadAudit = hasPermission(session, "audit.read");
+  const [accessClients, accessProjects, accessServices, accessTechnicalPractices] = await Promise.all([
+    canReadClients || canReadProjects || canReadServices || canReadTechnical
+      ? prisma.client.findMany({ where: { deletedAt: null } })
+      : Promise.resolve([]),
+    canReadProjects ? prisma.project.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    canReadServices ? prisma.clientService.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    canReadTechnical ? prisma.technicalPractice.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+  ]);
+  const accessClientById = new Map(accessClients.map((client) => [client.id, client]));
+  const visibleClients = accessClients.filter((client) => canViewClient(session, client));
+  const visibleClientIds = visibleClients.map((client) => client.id);
+  const accessProjectById = new Map(accessProjects.map((project) => [project.id, { ...project, client: accessClientById.get(project.clientId) ?? null }]));
+  const visibleProjects = [...accessProjectById.values()].filter((project) => canViewProject(session, project));
+  const visibleProjectIds = visibleProjects.map((project) => project.id);
+  const visibleServices = accessServices.filter((service) => canViewService(session, {
+    ...service,
+    client: accessClientById.get(service.clientId) ?? null,
+    project: service.projectId ? accessProjectById.get(service.projectId) ?? null : null,
+  }));
+  const visibleServiceIds = visibleServices.map((service) => service.id);
+  const accessibleOpenTasks = canReadServices
+    ? await listAccessibleTasks(session, {
+        where: {
+          deletedAt: null,
+          status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] },
+        },
+        orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
+      })
+    : [];
+  const accessibleOverdueTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt < now);
+  const accessibleDueSoonTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= now && task.dueAt <= next7);
+  const accessibleMyTasks = accessibleOpenTasks.filter((task) => task.assignedToId === session.userId);
+  const accessibleTodayTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= startOfToday && task.dueAt <= endOfToday);
+  const accessibleOperationalTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt <= endOfToday).slice(0, 20);
+  const visibleTechnicalPractices = accessTechnicalPractices.filter((practice) => canViewTechnicalPractice(session, {
+    ...practice,
+    client: accessClientById.get(practice.clientId) ?? null,
+  }));
+  const accessibleOverdueClientUpdates = visibleTechnicalPractices.filter((practice) => practice.nextClientUpdateAt && practice.nextClientUpdateAt < now);
+  const accessibleActiveTechnicalPractices = visibleTechnicalPractices.filter((practice) => !["approvata", "respinta", "archiviata"].includes(practice.status));
+  const accessibleOperationalPractices = [...accessibleActiveTechnicalPractices]
+    .sort((left, right) => {
+      const leftDue = left.dueDate ? +left.dueDate : Number.POSITIVE_INFINITY;
+      const rightDue = right.dueDate ? +right.dueDate : Number.POSITIVE_INFINITY;
+      return leftDue - rightDue || +right.updatedAt - +left.updatedAt;
+    })
+    .slice(0, 20);
   const leadAccessWhere =
     session.role === "admin" || session.role === "direzione"
       ? {}
       : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
+  const visibleLeadIds = canReadLeads
+    ? (await prisma.lead.findMany({ where: { deletedAt: null, ...leadAccessWhere }, select: { id: true } })).map((lead) => lead.id)
+    : [];
+  const offerAccessWhere = session.role === "admin" || session.role === "direzione"
+    ? {}
+    : { OR: [
+        { createdById: session.userId },
+        { leadId: { in: visibleLeadIds } },
+        { clientId: { in: visibleClientIds } },
+      ] };
+  const accessibleAiContexts = canReadAiOutputs
+    ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
+    : [];
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
     "pre_analisi",
@@ -102,9 +153,9 @@ export default async function Dashboard() {
     overdueTasks,
     dueSoonTasks,
     myTasks,
-    aiReview,
+    _aiReview,
     lastAudit,
-    lastAiOutput,
+    _lastAiOutput,
     lastPayment,
     lastTask,
     pipelineCounts,
@@ -192,23 +243,24 @@ export default async function Dashboard() {
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "inviata" },
+          where: { deletedAt: null, status: "inviata", ...offerAccessWhere },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "accettata" },
+          where: { deletedAt: null, status: "accettata", ...offerAccessWhere },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "rifiutata" },
+          where: { deletedAt: null, status: "rifiutata", ...offerAccessWhere },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
           where: {
             deletedAt: null,
+            ...offerAccessWhere,
             followUpAt: { lt: now },
             status: { notIn: ["accettata", "rifiutata"] },
           },
@@ -218,122 +270,65 @@ export default async function Dashboard() {
       ? prisma.commercialOffer.count({
           where: {
             deletedAt: null,
+            ...offerAccessWhere,
             followUpAt: { gte: now, lte: next7 },
             status: { notIn: ["accettata", "rifiutata"] },
           },
         })
       : 0,
-    prisma.client.count({ where: { deletedAt: null, status: "attivo" } }),
-    prisma.project.count({
-      where: { deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
-    }),
-    prisma.clientService.count({ where: { deletedAt: null } }),
-    prisma.preAnalysis.count({
-      where: { status: { in: ["bozza_generata", "da_revisionare"] } },
-    }),
-    prisma.dossier.count({
-      where: {
-        status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] },
-      },
-    }),
-    prisma.contract.count(),
-    prisma.payment.count({
-      where: { status: { notIn: ["incassato", "stornato", "rimborsato"] } },
-    }),
-    canReadServices ? prisma.task.count({ where: openTaskWhere }) : 0,
-    canReadServices
-      ? prisma.task.count({ where: { ...openTaskWhere, dueAt: { lt: now } } })
-      : 0,
-    canReadServices
-      ? prisma.task.count({
-          where: { ...openTaskWhere, dueAt: { gte: now, lte: next7 } },
-        })
-      : 0,
-    canReadServices
-      ? prisma.task.count({
-          where: { ...openTaskWhere, assignedToId: session.userId },
-        })
-      : 0,
-    prisma.aiOutput.count({
-      where: {
-        status: { in: ["needs_review", "flagged"] },
-        requiresHumanReview: true,
-      },
-    }),
-    prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }),
-    prisma.aiOutput.findFirst({
-      where: { status: { in: ["needs_review", "flagged"] } },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.payment.findFirst({ orderBy: { createdAt: "desc" } }),
-    canReadServices
-      ? prisma.task.findFirst({
-          where: openTaskWhere,
-          orderBy: { dueAt: "asc" },
-        })
-      : null,
+    canReadClients ? prisma.client.count({ where: { id: { in: visibleClientIds }, deletedAt: null, status: "attivo" } }) : 0,
+    canReadProjects ? prisma.project.count({
+      where: { id: { in: visibleProjectIds }, deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
+    }) : 0,
+    canReadServices ? prisma.clientService.count({ where: { id: { in: visibleServiceIds }, deletedAt: null } }) : 0,
+    canReadDossiers ? prisma.preAnalysis.count({
+      where: { clientId: { in: visibleClientIds }, projectId: { in: visibleProjectIds }, status: { in: ["bozza_generata", "da_revisionare"] } },
+    }) : 0,
+    canReadDossiers ? prisma.dossier.count({
+      where: { clientId: { in: visibleClientIds }, projectId: { in: visibleProjectIds }, status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] } },
+    }) : 0,
+    canReadContracts ? prisma.contract.count({ where: { clientId: { in: visibleClientIds } } }) : 0,
+    canReadPayments ? prisma.payment.count({
+      where: { clientId: { in: visibleClientIds }, status: { notIn: ["incassato", "stornato", "rimborsato"] } },
+    }) : 0,
+    accessibleOpenTasks.length,
+    accessibleOverdueTasks.length,
+    accessibleDueSoonTasks.length,
+    accessibleMyTasks.length,
+    0,
+    canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
+    null,
+    canReadPayments ? prisma.payment.findFirst({ where: { clientId: { in: visibleClientIds } }, orderBy: { createdAt: "desc" } }) : null,
+    accessibleOpenTasks[0] ?? null,
     canReadServices
       ? prisma.clientService.groupBy({
           by: ["operationalStatus"],
-          where: { deletedAt: null },
+          where: { id: { in: visibleServiceIds }, deletedAt: null },
           _count: { _all: true },
         })
       : [],
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, status: "da_revisionare" },
+          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "da_revisionare" },
         })
       : 0,
-    canReadTechnical
-      ? prisma.technicalPractice.count({
-          where: { deletedAt: null, nextClientUpdateAt: { lt: now } },
-        })
-      : 0,
+    accessibleOverdueClientUpdates.length,
     canReadPracticeCommunications
       ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, status: "approvata", usedAt: null },
+          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "approvata", usedAt: null },
         })
       : 0,
-    canReadServices
-      ? prisma.task.count({
-          where: {
-            ...openTaskWhere,
-            dueAt: { gte: startOfToday, lte: endOfToday },
-          },
-        })
-      : 0,
-    canReadTechnical
-      ? prisma.technicalPractice.count({
-          where: {
-            deletedAt: null,
-            status: { notIn: ["approvata", "respinta", "archiviata"] },
-          },
-        })
-      : 0,
-    canReadServices
-      ? prisma.task.findMany({
-          where: { ...openTaskWhere, dueAt: { lte: endOfToday } },
-          orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
-          take: 20,
-        })
-      : [],
+    accessibleTodayTasks.length,
+    accessibleActiveTechnicalPractices.length,
+    accessibleOperationalTasks,
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "da_revisionare" },
+          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "da_revisionare" },
           orderBy: { createdAt: "asc" },
           take: 20,
         })
       : [],
-    canReadTechnical
-      ? prisma.technicalPractice.findMany({
-          where: {
-            deletedAt: null,
-            status: { notIn: ["approvata", "respinta", "archiviata"] },
-          },
-          orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
-          take: 20,
-        })
-      : [],
+    accessibleOperationalPractices,
     canReadLeads
       ? prisma.lead.findMany({
           where: {
@@ -352,6 +347,7 @@ export default async function Dashboard() {
       ? prisma.commercialOffer.findMany({
           where: {
             deletedAt: null,
+            ...offerAccessWhere,
             followUpAt: { lte: next7 },
             status: { notIn: ["accettata", "rifiutata"] },
           },
@@ -360,10 +356,23 @@ export default async function Dashboard() {
         })
       : [],
     prisma.client.findMany({
-      where: { deletedAt: null },
+      where: { id: { in: visibleClientIds }, deletedAt: null },
       select: { id: true, displayName: true },
     }),
   ]);
+  void _aiReview;
+  void _lastAiOutput;
+  const aiReview = accessibleAiContexts.length;
+  const lastAiOutput = accessibleAiContexts[0]?.output ?? null;
+  const operationalOfferLeads = operationalOfferFollowUps.some((offer) => offer.leadId)
+    ? await prisma.lead.findMany({ where: { id: { in: operationalOfferFollowUps.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)) }, deletedAt: null } })
+    : [];
+  const operationalOfferLeadById = new Map(operationalOfferLeads.map((lead) => [lead.id, lead]));
+  const visibleOperationalOfferFollowUps = operationalOfferFollowUps.filter((offer) => canViewCommercialOffer(session, {
+    ...offer,
+    lead: offer.leadId ? operationalOfferLeadById.get(offer.leadId) ?? null : null,
+    client: offer.clientId ? accessClientById.get(offer.clientId) ?? null : null,
+  }));
   const priorityStats = [
     [
       "Lead nuovi",
@@ -686,7 +695,7 @@ export default async function Dashboard() {
       date: lead.nextActionDate,
       href: `/leads/${lead.id}`,
     })),
-    ...operationalOfferFollowUps.map((offer) => ({
+    ...visibleOperationalOfferFollowUps.map((offer) => ({
       id: `offer-${offer.id}`,
       rank: 4,
       title: offer.title,

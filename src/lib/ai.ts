@@ -109,7 +109,13 @@ function sanitizeForOpenAi(input: unknown) {
         plannedInvestment: ctx.clientService.plannedInvestment,
         operationalNotes: ctx.clientService.operationalNotes,
       } : undefined,
-      project: ctx.project,
+      project: ctx.project ? {
+        title: ctx.project.title,
+        requestedAmount: ctx.project.requestedAmount,
+        totalInvestment: ctx.project.totalInvestment,
+        scenarioA: ctx.project.scenarioA,
+        scenarioB: ctx.project.scenarioB,
+      } : undefined,
       checklist: max(ctx.checklist, 30).map((i) => ({ title: i.title, status: i.status, notes: i.notes, hasLinkedDocument: Boolean(i.documentId) })),
       documents: max(ctx.documents, 30).map((d) => ({ title: d.title, documentCategory: d.documentCategory, status: d.status, serviceArea: d.serviceArea })),
       tasks: max(ctx.tasks, 15).map((t) => ({ title: t.title, status: t.status, priority: t.priority, description: t.description })),
@@ -143,10 +149,12 @@ export class MockAiAdapter implements AiProviderAdapter {
 }
 
 export class OpenAiAdapter implements AiProviderAdapter {
+  constructor(private readonly model = process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL) {}
+
   async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
     const runtime = normalizeAgent(agent);
     const apiKey = process.env.AI_API_KEY?.trim();
-    if (!apiKey) throw new UserFacingActionError('Provider OpenAI configurato ma AI_API_KEY non è valorizzata. Imposta la chiave lato server o usa AI_PROVIDER=mock.');
+    if (!apiKey) throw new UserFacingActionError('Provider OpenAI configurato ma AI_API_KEY non è valorizzata. Imposta la chiave lato server oppure configura questo agente con provider mock.');
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
@@ -155,7 +163,7 @@ export class OpenAiAdapter implements AiProviderAdapter {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL,
+          model: this.model,
           instructions: runtime.systemPrompt || 'Sei un assistente AI interno FAI. Rispondi in italiano professionale.',
           input: buildOpenAiPrompt(runtime, input),
           max_output_tokens: 2500,
@@ -170,12 +178,12 @@ export class OpenAiAdapter implements AiProviderAdapter {
       return {
         title: `Bozza OpenAI ${runtime.code} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`,
         content: content.trim(),
-        metadata: { provider: 'openai', model: process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL },
+        metadata: { provider: 'openai', model: this.model },
       };
     } catch (error) {
       if (error instanceof UserFacingActionError) throw error;
       const message = error instanceof Error && error.name === 'AbortError'
-        ? 'Timeout durante la chiamata OpenAI. Riprova più tardi o usa AI_PROVIDER=mock.'
+        ? 'Timeout durante la chiamata OpenAI. Riprova più tardi oppure configura questo agente con provider mock.'
         : 'Errore operativo durante la chiamata OpenAI. Nessun output AI è stato salvato.';
       throw new UserFacingActionError(message);
     } finally {

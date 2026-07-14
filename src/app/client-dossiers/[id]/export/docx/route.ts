@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 import { auditClientDossierExport } from '@/lib/actions';
-import { canViewClient } from '@/lib/access-control';
 import { requirePermission } from '@/lib/auth';
 import { buildClientDossierDocx } from '@/lib/docx-export';
 import { prisma } from '@/lib/prisma';
+import { getClientDossierReadAccess } from '@/lib/read-access';
 
 export const runtime = 'nodejs';
 
@@ -12,10 +12,11 @@ function safeFileName(value: string) { return value.toLowerCase().replace(/[^a-z
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const session = await requirePermission('dossier.read');
-  const dossier = await prisma.clientDossier.findUnique({ where: { id } });
-  if (!dossier) return new NextResponse('Not found', { status: 404 });
-  const client = await prisma.client.findUnique({ where: { id: dossier.clientId } });
-  if (!client || !canViewClient(session, client)) return new NextResponse('Forbidden', { status: 403 });
+  const context = await getClientDossierReadAccess(session, id);
+  if (!context) return new NextResponse('Not found', { status: 404 });
+  const { dossier } = context;
+  const client = await prisma.client.findFirst({ where: { id: dossier.clientId, deletedAt: null } });
+  if (!client) return new NextResponse('Not found', { status: 404 });
 
   const docx = buildClientDossierDocx({
     title: dossier.title,

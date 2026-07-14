@@ -124,7 +124,7 @@ function assertGuardsBeforeMutation(action: string, guards: readonly string[], m
 
 test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', () => {
   assertGuardsBeforeMutation('updateLeadCommercial', ['requireLeadEditAccess'], 'prisma.lead.update');
-  assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'prisma.client.create');
+  assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'tx.client.create');
   assertGuardsBeforeMutation('createCommercialOffer', ['requireCommercialOfferTargetAccess'], 'prisma.commercialOffer.create');
   assertGuardsBeforeMutation(
     'updateCommercialOffer',
@@ -213,4 +213,131 @@ test('la route DOCX verifica l offerta prima di generare il documento', () => {
   assert.notEqual(guardIndex, -1);
   assert.notEqual(exportIndex, -1);
   assert.ok(guardIndex < exportIndex, 'GET: il controllo ABAC deve precedere la generazione DOCX');
+});
+
+test('esecuzione AI applica contesto, filtro documenti e allowlist prima del provider', () => {
+  const body = functionBody('runClientAiAgent');
+  const contextIndex = body.indexOf('requireClientContextReadAccess');
+  const documentPolicyIndex = body.indexOf('canViewDocument');
+  const inputIndex = body.indexOf('const input');
+  const providerIndex = body.indexOf('agentRuntime.adapter.run');
+  assert.ok(contextIndex >= 0 && contextIndex < providerIndex, 'guardia contesto AI assente o tardiva');
+  assert.ok(documentPolicyIndex >= 0 && documentPolicyIndex < inputIndex, 'documenti non filtrati prima del payload AI');
+  assert.ok(inputIndex >= 0 && inputIndex < providerIndex, 'payload AI costruito dopo il provider');
+  assert.doesNotMatch(body.slice(inputIndex, providerIndex), /storagePath|checksum|fileName|clientDossiers|legacyDossiers/);
+  assert.match(body, /isPrimaryOperationalAiAgent/);
+  assert.match(body, /prisma\.\$transaction/);
+});
+
+test('quick-run mock e forzatamente locale e riservato alla configurazione AI', () => {
+  const body = functionBody('runMockAgent');
+  assert.match(body, /requirePermission\('ai_agents\.write'\)/);
+  assert.match(body, /new MockAiAdapter\(\)\.run/);
+  assert.doesNotMatch(body, /getAiAdapter\(\)/);
+  assert.match(body, /prompt\.length > 2000/);
+});
+
+test('review e approval AI usano guardia oggetto, compliance e aggiornamento atomico', () => {
+  assertGuardsBeforeMutation(
+    'reviewAiOutput',
+    ['requireAiOutputReadAccess', 'canReviewAiOutput', 'scanForbiddenPhrases'],
+    'tx.aiOutput.updateMany',
+  );
+  assertGuardsBeforeMutation(
+    'approveAiOutput',
+    ['requireAiOutputReadAccess', 'canApproveAiOutput', 'scanForbiddenPhrases'],
+    'tx.aiOutput.updateMany',
+  );
+  const approval = functionBody('approveAiOutput');
+  assert.match(approval, /status: 'needs_review'/);
+  assert.match(approval, /reviewedById: current\.reviewedById/);
+  assert.match(approval, /reviewedAt: current\.reviewedAt/);
+  assert.match(approval, /updatedAt: current\.updatedAt/);
+  assert.match(approval, /approvedById: null/);
+  assert.match(approval, /NOT: \{ reviewedById: s\.userId \}/);
+});
+
+test('conversione AI-dossier e idempotente a livello database e l export ricontrolla il contesto', () => {
+  assertGuardsBeforeMutation('createClientDossierFromAiOutput', ['requireAiOutputReadAccess', 'scanForbiddenPhrases'], 'tx.clientDossier.create');
+  assert.match(functionBody('createClientDossierFromAiOutput'), /sourceAiOutputId: output\.id/);
+  assert.match(functionBody('auditClientDossierExport'), /requireClientContextReadAccess/);
+  const schema = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+  assert.match(schema, /sourceAiOutputId\s+String\?\s+@unique/);
+});
+
+test('le pagine di dettaglio sensibili usano loader di lettura autorevoli', () => {
+  const expectations = [
+    ['src/app/companies/[id]/page.tsx', 'getCompanyReadAccess'],
+    ['src/app/projects/[id]/page.tsx', 'getProjectReadAccess'],
+    ['src/app/commercial-offers/[id]/page.tsx', 'getCommercialOfferReadAccess'],
+    ['src/app/contracts/[id]/page.tsx', 'getContractReadAccess'],
+    ['src/app/preanalyses/[id]/page.tsx', 'getPreAnalysisReadAccess'],
+    ['src/app/dossiers/[id]/page.tsx', 'getLegacyDossierReadAccess'],
+    ['src/app/client-dossiers/[id]/page.tsx', 'getClientDossierReadAccess'],
+    ['src/app/ai/outputs/[id]/page.tsx', 'getAiOutputReadAccess'],
+  ] as const;
+  for (const [path, guard] of expectations) {
+    const source = readFileSync(resolve(process.cwd(), path), 'utf8');
+    assert.match(source, /requirePermission\(/, `${path}: permission guard assente`);
+    assert.ok(source.includes(guard), `${path}: loader ${guard} assente`);
+  }
+});
+
+test('il fascicolo cliente autorizza il parent prima di interrogare le sezioni figlie', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/app/clients/[id]/page.tsx'), 'utf8');
+  const parentLoad = source.indexOf('const client = await prisma.client.findFirst');
+  const parentGuard = source.indexOf('if (!client || !canViewClient');
+  const childQueries = source.indexOf('const [companyContextRows, companies, projectRows');
+  assert.ok(parentLoad >= 0 && parentLoad < parentGuard);
+  assert.ok(parentGuard < childQueries, 'le query figlie devono avvenire dopo la guardia cliente');
+  for (const permission of ['company.read', 'project.read', 'service.read', 'document.download', 'dossier.read', 'contract.read', 'payment.read', 'technical.read', 'practice_communications.read', 'ai.review', 'audit.read']) {
+    assert.ok(source.includes(`hasPermission(session, '${permission}')`), `fascicolo: permission ${permission} assente`);
+  }
+  assert.match(source, /visibleDocuments\.flatMap/);
+  for (const guardedCollection of [
+    'projectRows.filter',
+    'clientServiceRows.filter',
+    'contractRows.filter',
+    'paymentRows.filter',
+    'preAnalysisRows.filter',
+    'dossierRows.filter',
+    'clientDossierRows.filter',
+    'technicalPracticeRows.filter',
+    'practiceCommunicationRows.filter',
+  ]) {
+    assert.ok(source.includes(guardedCollection), `fascicolo: filtro strutturale ${guardedCollection} assente`);
+  }
+  assert.match(source, /canViewClientContext\(session,/);
+  assert.match(source, /communication\.technicalPracticeId/);
+  assert.match(source, /communication\.projectId[\s\S]*practice\.projectId/);
+  assert.match(source, /communication\.clientServiceId[\s\S]*practice\.clientServiceId/);
+});
+
+test('liste e code AI applicano permission e resolver ABAC centralizzato', () => {
+  for (const path of ['src/app/ai/outputs/page.tsx', 'src/app/ai/outputs-to-review/page.tsx']) {
+    const source = readFileSync(resolve(process.cwd(), path), 'utf8');
+    assert.match(source, /requirePermission\('ai\.review'\)/);
+    assert.match(source, /listAccessibleAiOutputs/);
+  }
+  const runs = readFileSync(resolve(process.cwd(), 'src/app/ai/runs/page.tsx'), 'utf8');
+  assert.match(runs, /requirePermission\('ai\.review'\)/);
+  assert.match(runs, /listAccessibleAiRuns/);
+});
+
+test('le viste ufficio tecnico filtrano le pratiche e autorizzano il parent prima dei figli', () => {
+  for (const path of ['src/app/technical-office/page.tsx', 'src/app/technical-office/practices/page.tsx']) {
+    const source = readFileSync(resolve(process.cwd(), path), 'utf8');
+    assert.match(source, /canViewTechnicalPractice/);
+    assert.match(source, /visiblePractices/);
+  }
+
+  const detail = readFileSync(resolve(process.cwd(), 'src/app/technical-office/practices/[id]/page.tsx'), 'utf8');
+  const clientLoad = detail.indexOf('const client = await prisma.client.findFirst');
+  const parentGuard = detail.indexOf('if (!client || !canViewTechnicalPractice');
+  const childQueries = detail.indexOf('const [users, documentRows');
+  assert.ok(clientLoad >= 0 && clientLoad < parentGuard);
+  assert.ok(parentGuard < childQueries, 'la pratica deve essere autorizzata prima delle query figlie');
+  assert.match(detail, /canViewDocument/);
+  assert.match(detail, /canViewTask/);
+  assert.match(detail, /canViewChecklistItem/);
 });

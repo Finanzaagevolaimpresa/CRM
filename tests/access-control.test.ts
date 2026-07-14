@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { RoleCode } from '@prisma/client';
 import {
+  canApproveAiOutput,
   canAssignService,
   canEditChecklistItem,
   canEditClient,
@@ -12,6 +13,16 @@ import {
   canEditService,
   canEditTask,
   canEditTechnicalPractice,
+  canReviewAiOutput,
+  canViewAiOutput,
+  canViewChecklistItem,
+  canViewClientContext,
+  canViewCommercialOffer,
+  canViewDocument,
+  canViewLead,
+  canViewProject,
+  canViewService,
+  canViewTask,
   hasConsistentClientContext,
 } from '../src/lib/access-control';
 
@@ -21,19 +32,24 @@ const client = (id = 'client-1', salesOwnerId: string | null = null, consultantI
   salesOwnerId,
   consultantId,
 });
-const project = (clientId = 'client-1', consultantId: string | null = null, linkedClient = client(clientId)) => ({
+const project = (clientId = 'client-1', consultantId: string | null = null, linkedClient = client(clientId), id = 'project-1') => ({
+  id,
   clientId,
   consultantId,
   client: linkedClient,
 });
 const service = (clientId = 'client-1', assignedToId: string | null = null, linkedClient = client(clientId), linkedProject = project(clientId, null, linkedClient)) => ({
+  id: 'service-1',
   clientId,
+  projectId: linkedProject.id,
   assignedToId,
   client: linkedClient,
   project: linkedProject,
 });
 const document = (overrides: Record<string, unknown> = {}) => ({
   clientId: 'client-1',
+  projectId: null,
+  clientServiceId: null,
   uploadedById: 'uploader',
   containsSensitiveData: false,
   documentCategory: 'altro',
@@ -194,4 +210,108 @@ test('le pratiche tecniche sono globali per backoffice ma il consulente deve ess
   assert.equal(canEditTechnicalPractice(actor('consulente'), { technicalOwnerId: 'user-2' }), false);
   assert.equal(canEditTechnicalPractice(actor('commerciale'), { technicalOwnerId: 'user-1' }), false);
   assert.equal(canEditTechnicalPractice(actor('collaboratore_limitato'), { technicalOwnerId: 'user-1' }), false);
+});
+
+test('le letture di lead e offerte seguono assegnazione, creatore e parent coerenti', () => {
+  const commerciale = actor('commerciale');
+  assert.equal(canViewLead(commerciale, { assignedToId: null }), true);
+  assert.equal(canViewLead(commerciale, { assignedToId: 'user-1' }), true);
+  assert.equal(canViewLead(commerciale, { assignedToId: 'user-2' }), false);
+  assert.equal(canViewCommercialOffer(commerciale, { createdById: 'user-1' }), true);
+  assert.equal(canViewCommercialOffer(commerciale, { leadId: 'lead-1', lead: { assignedToId: 'user-2', clientId: null } }), false);
+  assert.equal(canViewCommercialOffer(commerciale, { clientId: 'client-1', client: client('client-1', 'user-1') }), true);
+  assert.equal(canViewCommercialOffer(actor('admin'), { leadId: 'missing', lead: null }), false);
+  assert.equal(canViewCommercialOffer(actor('admin'), {
+    leadId: 'lead-1',
+    clientId: 'client-2',
+    lead: { assignedToId: null, clientId: 'client-1' },
+    client: client('client-2'),
+  }), false);
+});
+
+test('servizi e contesti cliente in lettura negano parent incoerenti', () => {
+  const ownedClient = client('client-1', null, 'user-1');
+  const ownedProject = project('client-1', 'user-1', ownedClient);
+  const ownedService = service('client-1', 'user-1', ownedClient, ownedProject);
+  assert.equal(canViewService(actor('consulente'), ownedService), true);
+  assert.equal(canViewClientContext(actor('consulente'), { clientId: 'client-1', client: ownedClient, project: ownedProject, clientService: ownedService }), true);
+  assert.equal(canViewClientContext(actor('admin'), {
+    clientId: 'client-1',
+    client: ownedClient,
+    project: { ...project('client-1'), id: 'project-2' },
+    clientService: ownedService,
+  }), false);
+  assert.equal(canViewService(actor('admin'), service('client-1', null, client('client-2'))), false);
+  assert.equal(canViewProject(actor('admin'), { id: 'project-1', clientId: 'client-1', consultantId: null, client: null }), false);
+  assert.equal(canViewService(actor('admin'), { id: 'service-1', clientId: 'client-1', projectId: null, assignedToId: null, client: null, project: null }), false);
+  assert.equal(canViewService(actor('admin'), { id: 'service-1', clientId: 'client-1', projectId: 'missing', assignedToId: null, client: ownedClient, project: null }), false);
+});
+
+test('la lettura documenti nega collegamenti dangling o cross-client anche agli amministratori', () => {
+  assert.equal(canViewDocument(actor('admin'), document({ client: null })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ projectId: 'project-2', project: project('client-2', null, client('client-2'), 'project-2'), client: client('client-1') })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ clientId: null, client: null, projectId: 'project-1', project: project('client-1') })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ projectId: 'missing-project', project: null })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ clientServiceId: 'missing-service', clientService: null })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ projectId: 'expected-project', project: project('client-1', null, client('client-1'), 'different-project') })), false);
+  assert.equal(canViewDocument(actor('admin'), document({ clientServiceId: 'expected-service', clientService: service('client-1') })), false);
+  assert.equal(canViewDocument(actor('admin'), document({
+    projectId: 'project-1',
+    project: project('client-1', null, client('client-1'), 'project-1'),
+    clientServiceId: 'service-1',
+    clientService: { ...service('client-1'), projectId: 'project-2' },
+  })), false);
+  assert.equal(canViewDocument(actor('admin'), document({
+    projectId: 'project-1',
+    project: project('client-1'),
+    clientServiceId: 'service-1',
+    clientService: service('client-1'),
+  })), true);
+  assert.equal(canViewDocument(actor('admin'), document()), true);
+});
+
+test('task e checklist in lettura ereditano soltanto contesti cliente validi', () => {
+  const ownedClient = client('client-1', null, 'user-1');
+  assert.equal(canViewTask(actor('consulente'), { clientId: 'client-1', assignedToId: null, createdById: null, client: ownedClient }), true);
+  assert.equal(canViewTask(actor('admin'), { clientId: 'client-1', assignedToId: null, createdById: null, client: null }), false);
+  assert.equal(canViewTask(actor('admin'), { clientId: 'client-1', projectId: 'missing', assignedToId: null, createdById: null, client: ownedClient, project: null }), false);
+  assert.equal(canViewTask(actor('backoffice'), { clientId: null, assignedToId: null, createdById: null }), false);
+  assert.equal(canViewChecklistItem(actor('consulente'), { clientId: 'client-1', createdById: null, updatedById: null, client: ownedClient }), true);
+  assert.equal(canViewChecklistItem(actor('admin'), { clientId: 'client-1', createdById: null, updatedById: null, client: null }), false);
+  assert.equal(canViewChecklistItem(actor('admin'), { clientId: 'client-1', clientServiceId: 'missing', createdById: null, updatedById: null, client: ownedClient, clientService: null }), false);
+});
+
+test('output AI richiedono contesto run identico e revisione indipendente dal generatore', () => {
+  const ownedClient = client('client-1', null, 'consultant-1');
+  const run = { clientId: 'client-1', clientServiceId: null, projectId: null, createdById: 'generator-1' };
+  const output = {
+    clientId: 'client-1',
+    clientServiceId: null,
+    projectId: null,
+    status: 'needs_review',
+    requiresHumanReview: true,
+    forbiddenPhrases: [],
+    reviewedById: null,
+    reviewedAt: null,
+    run,
+    client: ownedClient,
+    project: null,
+    clientService: null,
+  };
+
+  assert.equal(canViewAiOutput(actor('consulente', 'consultant-1'), output), true);
+  assert.equal(canViewAiOutput(actor('consulente', 'other-consultant'), output), false);
+  assert.equal(canViewAiOutput(actor('admin'), { ...output, run: { ...run, clientId: 'client-2' } }), false);
+  assert.equal(canViewAiOutput(actor('revisore'), { ...output, clientId: null, client: null, run: { clientId: null, clientServiceId: null, projectId: null, createdById: 'generator-1' } }), false);
+  assert.equal(canViewAiOutput(actor('direzione'), { ...output, clientId: null, client: null, run: { clientId: null, clientServiceId: null, projectId: null, createdById: 'generator-1' } }), true);
+
+  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), output), true);
+  assert.equal(canReviewAiOutput(actor('consulente', 'generator-1'), output), false);
+  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, forbiddenPhrases: ['garantito'] }), false);
+  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, run: { ...run, createdById: null } }), false);
+  assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), output), false);
+  assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), true);
+  assert.equal(canApproveAiOutput(actor('revisore', 'reviewer-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);
+  assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), { ...output, reviewedById: 'generator-1', reviewedAt: new Date() }), false);
+  assert.equal(canApproveAiOutput(actor('revisore', 'generator-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);
 });
