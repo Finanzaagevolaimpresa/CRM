@@ -2,12 +2,14 @@ import { Card, EmptyState, PageHeader, Table, TimestampMeta } from '@/components
 import { prisma } from '@/lib/prisma';
 import { SecondaryLink } from '@/components/actions';
 import { requirePermission } from '@/lib/auth';
+import { canViewClient } from '@/lib/access-control';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  await requirePermission('company.read');
+  const session = await requirePermission('company.read');
   const { id } = await params;
   const company = await prisma.company.findUnique({ where: { id } });
-  if (!company) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è più disponibile." />;
+  const client = company ? await prisma.client.findUnique({ where: { id: company.clientId } }) : null;
+  if (!company || !client || !canViewClient(session, client)) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è più disponibile." />;
   const people = await prisma.companyPerson.findMany({ where: { companyId: id } });
   return <div className="space-y-6">
     <PageHeader title={`Azienda — ${company.name}`} description="Dati camerali, sede, ATECO, DURC, fatturato e persone collegate." />

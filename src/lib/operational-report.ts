@@ -72,6 +72,14 @@ export async function buildOperationalReportMarkdown(
     prisma.user.findMany({ where: { active: true } }),
   ]);
   if (!client) return null;
+  const canReadServices = hasPermission(session, 'service.read');
+  const canReadProjects = hasPermission(session, 'project.read');
+  const canReadDocuments = hasPermission(session, 'document.download');
+  const canReadDossiers = hasPermission(session, 'dossier.read');
+  const canReviewAi = hasPermission(session, 'ai.review') || hasPermission(session, 'ai.approve');
+  const canReadTechnical = hasPermission(session, 'technical.read');
+  const canReadCommunications = hasPermission(session, 'practice_communications.read');
+  const canReadAudit = hasPermission(session, 'audit.read');
   const userOf = (id?: string | null) =>
     users.find((u) => u.id === id)?.name ?? (id ? "Utente non attivo" : "—");
 
@@ -96,14 +104,14 @@ export async function buildOperationalReportMarkdown(
       : { id: "__no_practice_linked_ai_output__" }
     : { OR: [{ clientId }] };
   const [services, projects] = await Promise.all([
-    prisma.clientService.findMany({
+    canReadServices ? prisma.clientService.findMany({
       where: { clientId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
-    }),
-    prisma.project.findMany({
+    }) : Promise.resolve([]),
+    canReadProjects ? prisma.project.findMany({
       where: { clientId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
-    }),
+    }) : Promise.resolve([]),
   ]);
   const [
     documents,
@@ -116,19 +124,19 @@ export async function buildOperationalReportMarkdown(
     catalog,
     technicalPractices,
   ] = await Promise.all([
-    prisma.document.findMany({
+    canReadDocuments ? prisma.document.findMany({
       where: { deletedAt: null, ...scopeWhere },
       orderBy: { createdAt: "desc" },
-    }),
-    prisma.documentChecklistItem.findMany({
+    }) : Promise.resolve([]),
+    canReadServices ? prisma.documentChecklistItem.findMany({
       where: { active: true, deletedAt: null, ...scopeWhere },
       orderBy: { updatedAt: "desc" },
-    }),
-    prisma.task.findMany({
+    }) : Promise.resolve([]),
+    canReadServices ? prisma.task.findMany({
       where: { deletedAt: null, ...scopeWhere },
       orderBy: [{ status: "asc" }, { dueAt: "asc" }],
-    }),
-    hasPermission(session, "practice_communications.read")
+    }) : Promise.resolve([]),
+    canReadCommunications
       ? prisma.practiceCommunication.findMany({
           where: {
             deletedAt: null,
@@ -137,21 +145,21 @@ export async function buildOperationalReportMarkdown(
           orderBy: { updatedAt: "desc" },
         })
       : Promise.resolve([]),
-    hasPermission(session, "dossier.read")
+    canReadDossiers
       ? prisma.clientDossier.findMany({
           where: clientDossierWhere,
           orderBy: { updatedAt: "desc" },
           take: 10,
         })
       : Promise.resolve([]),
-    hasPermission(session, "ai.review") || hasPermission(session, "ai.approve")
+    canReviewAi
       ? prisma.aiOutput.findMany({
           where: aiOutputWhere,
           orderBy: { createdAt: "desc" },
           take: 10,
         })
       : Promise.resolve([]),
-    hasPermission(session, "audit.read")
+    canReadAudit
       ? prisma.auditLog.findMany({
           where: practice
             ? { OR: [{ entityId: practice.id }, { entityId: clientId }] }
@@ -161,7 +169,7 @@ export async function buildOperationalReportMarkdown(
         })
       : Promise.resolve([]),
     prisma.serviceCatalog.findMany(),
-    prisma.technicalPractice.findMany({
+    canReadTechnical ? prisma.technicalPractice.findMany({
       where: {
         deletedAt: null,
         OR: [
@@ -181,7 +189,7 @@ export async function buildOperationalReportMarkdown(
         ],
       },
       orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
-    }),
+    }) : Promise.resolve([]),
   ]);
   const visibleTechnicalPractices = technicalPractices.filter((item) =>
     canViewTechnicalPractice(session, { ...item, client }),
@@ -380,28 +388,28 @@ export async function buildOperationalReportMarkdown(
       "## Timeline operativa sintetica",
       list(timeline, (e) => `- ${fmt(e.date)} — ${e.text}`),
       "",
-      "## Documenti presenti",
+      ...(canReadDocuments ? ["## Documenti presenti",
       list(
         visibleDocuments,
         (d) =>
           `- ${d.title} · ${clean(d.documentCategory)} · stato ${clean(d.status)} · caricato ${fmt(d.createdAt)}${d.containsSensitiveData ? " · sensibile" : ""}`,
       ),
-      "",
-      "## Documenti mancanti da checklist",
+      ""] : []),
+      ...(canReadServices ? ["## Documenti mancanti da checklist",
       list(
         missing,
         (i) =>
           `- ${i.title} · stato ${clean(i.status)} · contesto ${serviceName(i.clientServiceId)} · aggiornato ${fmt(i.updatedAt)}`,
       ),
-      "",
-      "## Task aperti, scaduti e completati",
+      ""] : []),
+      ...(canReadServices ? ["## Task aperti, scaduti e completati",
       list(
         tasks,
         (t) =>
           `- [${taskBucket(t.status, t.dueAt)}] ${t.title} · priorità ${clean(t.priority)} · scadenza ${fmt(t.dueAt)} · assegnatario ${userOf(t.assignedToId)}`,
       ),
-      "",
-      "## Comunicazioni pratica",
+      ""] : []),
+      ...(canReadCommunications ? ["## Comunicazioni pratica",
       list(communications, (c) => {
         const originalText = `${c.title} ${c.content}`;
         const historicalDraft = hasRawPlaceholders(originalText);
@@ -413,12 +421,13 @@ export async function buildOperationalReportMarkdown(
         ).slice(0, 240);
         return `- ${renderedTitle} · ${clean(c.type)}/${clean(c.channel)} · stato ${clean(c.status)} · creata ${fmt(c.createdAt)} · revisione ${fmt(c.reviewedAt)} · uso ${fmt(c.usedAt)}${historicalDraft ? " · bozza storica da verificare" : ""}${c.internalNote ? ` · nota: ${c.internalNote}` : ""} · testo: ${renderedContent}`;
       }),
-      "",
-      "## Dossier e output AI autorizzati",
+      ""] : []),
+      ...((canReadDossiers || canReviewAi) ? ["## Dossier e output AI autorizzati",
       dossierAndAiRows.length
         ? list(dossierAndAiRows, (x) => `- ${x.text}`)
         : noDossierAiMessage,
-      ...(hasPermission(session, "audit.read")
+      ""] : []),
+      ...(canReadAudit
         ? [
             "",
             "## Audit log autorizzato",

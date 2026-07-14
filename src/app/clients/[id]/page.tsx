@@ -32,6 +32,7 @@ const serviceSections = [
   ['pagamenti', 'Pagamenti'],
   ['task-scadenze', 'Attività e scadenze'],
   ['ufficio-tecnico-pratiche', 'Ufficio Tecnico / Pratiche'],
+  ['comunicazioni-pratica', 'Comunicazioni pratica'],
   ['output-ai', 'Agenti AI / Output interni'],
   ['timeline-operativa', 'Timeline operativa'],
   ['audit-log', 'Audit log'],
@@ -55,31 +56,41 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
+  const canReadCompanies = hasPermission(session, 'company.read');
+  const canReadProjects = hasPermission(session, 'project.read');
+  const canReadServices = hasPermission(session, 'service.read');
+  const canReadDossiers = hasPermission(session, 'dossier.read');
+  const canReadContracts = hasPermission(session, 'contract.read');
+  const canReadPayments = hasPermission(session, 'payment.read');
+  const canReadTechnical = hasPermission(session, 'technical.read');
+  const canReadCommunications = hasPermission(session, 'practice_communications.read');
+  const canReviewAi = hasPermission(session, 'ai.review');
+  const canReadAudit = hasPermission(session, 'audit.read');
   const [client, companies, projects, clientServices, documents, contracts, payments, tasks, preAnalyses, dossiers, clientDossiers, bankability, financing, checklistItems, activeAgents, technicalPractices, practiceCommunications] = await Promise.all([
     prisma.client.findUnique({ where: { id } }),
-    prisma.company.findMany({ where: { clientId: id, deletedAt: null } }),
-    prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.clientService.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.document.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { createdAt: 'desc' } }),
-    prisma.contract.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.payment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.task.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.preAnalysis.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.dossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
+    canReadCompanies ? prisma.company.findMany({ where: { clientId: id, deletedAt: null } }) : [],
+    canReadProjects ? prisma.project.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadServices ? prisma.clientService.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : [],
+    hasPermission(session, 'document.download') ? prisma.document.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { createdAt: 'desc' } }) : [],
+    canReadContracts ? prisma.contract.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadPayments ? prisma.payment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadServices ? prisma.task.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadDossiers ? prisma.preAnalysis.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadDossiers ? prisma.dossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadDossiers ? prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : [],
     prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
     prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }),
-    prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }),
+    canReadServices ? prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : [],
     prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
-    prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }),
+    canReadTechnical ? prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : [],
+    canReadCommunications ? prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }) : [],
   ]);
   if (!client || !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Cliente non trovato o non accessibile</h1>;
 
   const serviceIds = clientServices.map((service) => service.id);
   const [aiOutputs, auditLogs, catalog, users] = await Promise.all([
-    prisma.aiOutput.findMany({ where: { OR: [{ clientId: id }, ...(serviceIds.length > 0 ? [{ clientServiceId: { in: serviceIds } }] : [])] }, orderBy: { createdAt: 'desc' }, take: 15 }),
-    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: documents.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 80 }),
+    canReviewAi ? prisma.aiOutput.findMany({ where: { OR: [{ clientId: id }, ...(serviceIds.length > 0 ? [{ clientServiceId: { in: serviceIds } }] : [])] }, orderBy: { createdAt: 'desc' }, take: 15 }) : [],
+    canReadAudit ? prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: documents.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] }, orderBy: { createdAt: 'desc' }, take: 80 }) : [],
     prisma.serviceCatalog.findMany({ where: { id: { in: clientServices.map((s) => s.serviceCatalogId) } } }),
     prisma.user.findMany({ where: { active: true } }),
   ]);
@@ -137,10 +148,24 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     ...auditLogs.map((a) => ({ id: `audit-${a.id}`, date: a.createdAt, user: userOf(a.actorId), type: auditLabel(a.event), entity: a.entityType ?? 'AuditLog', dedupeKey: a.entityId, category: 'audit', description: auditLabel(a.event), beforeAfter: a.before || a.after ? 'Dettaglio disponibile nel registro audit.' : null })),
   ].sort((a, b) => +new Date(b.date) - +new Date(a.date));
   const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' ? !isRedundantOperationalAudit(event, allTimelineEvents) : event.category === activeTimelineFilter).slice(0, 60);
+  const visibleServiceSections = serviceSections.filter(([sectionId]) => {
+    if (['azienda-visura-ateco','titolari-soci-amministratori'].includes(sectionId)) return canReadCompanies;
+    if (['progetti','finanziamento-aziendale','bandi-finanza-agevolata','bancabilita'].includes(sectionId)) return canReadProjects;
+    if (['servizi-acquistati','checklist-documentale','task-scadenze'].includes(sectionId)) return canReadServices;
+    if (['documenti','centro-documentale'].includes(sectionId)) return canViewDocuments;
+    if (['pre-analisi','dossier'].includes(sectionId)) return canReadDossiers;
+    if (sectionId === 'contratti') return canReadContracts;
+    if (sectionId === 'pagamenti') return canReadPayments;
+    if (sectionId === 'ufficio-tecnico-pratiche') return canReadTechnical;
+    if (sectionId === 'comunicazioni-pratica') return canReadCommunications;
+    if (sectionId === 'output-ai') return canReviewAi || canRunAiAgents;
+    if (sectionId === 'audit-log') return canReadAudit;
+    return true;
+  });
 
   return <div className="space-y-8">
     <PageHeader title={`Fascicolo Cliente Interno — ${client.displayName}`} description="Scheda operativa interna FAI: servizi acquistati, documenti per sezione, output AI in bozza con revisione umana obbligatoria e audit."/><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2"><SecondaryLink href="/clients">← Torna alla lista</SecondaryLink><SecondaryLink href={`/clients/${client.id}/operational-report`}>Esporta fascicolo completo</SecondaryLink><SecondaryLink href={`/clients/${client.id}/operational-report/docx`}>Report Word</SecondaryLink></div><div className="flex flex-wrap gap-2"><StatusBadge status={client.status} /><span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-wide text-fai-navy ring-1 ring-slate-200">Operatore: {userOf(client.consultantId)}</span></div></div>
-    <nav className="sticky top-20 z-10 flex flex-wrap gap-2 rounded-[1.5rem] border border-white/75 bg-white/88 p-3 shadow-xl shadow-slate-200/60 ring-1 ring-slate-900/5 backdrop-blur-xl">{serviceSections.map(([id, label]) => <a className="rounded-full bg-fai-blue/8 px-3 py-2 text-xs font-black text-fai-blue ring-1 ring-fai-blue/10 transition hover:-translate-y-0.5 hover:bg-fai-blue hover:text-white hover:shadow-lg hover:shadow-fai-blue/15 focus:outline-none focus:ring-2 focus:ring-fai-lime" href={`#${id}`} key={id}>{label}</a>)}</nav>
+    <nav className="sticky top-20 z-10 flex flex-wrap gap-2 rounded-[1.5rem] border border-white/75 bg-white/88 p-3 shadow-xl shadow-slate-200/60 ring-1 ring-slate-900/5 backdrop-blur-xl">{visibleServiceSections.map(([id, label]) => <a className="rounded-full bg-fai-blue/8 px-3 py-2 text-xs font-black text-fai-blue ring-1 ring-fai-blue/10 transition hover:-translate-y-0.5 hover:bg-fai-blue hover:text-white hover:shadow-lg hover:shadow-fai-blue/15 focus:outline-none focus:ring-2 focus:ring-fai-lime" href={`#${id}`} key={id}>{label}</a>)}</nav>
 
     <Card id="overview" title="Overview"><div className="grid gap-4 md:grid-cols-4"><div className="rounded-2xl bg-gradient-to-br from-fai-navy to-fai-blue p-5 text-white shadow-lg shadow-fai-blue/20"><p className="text-lg font-black">{client.displayName}</p><p className="mt-2 text-sm text-white/75">Tipo: {client.type}</p><div className="mt-3"><StatusBadge status={client.status} /></div></div>{[[companies.length,'Aziende','from-fai-lime to-fai-green'],[projects.length,'Progetti','from-fai-blue to-fai-purple'],[clientServices.length,'Servizi','from-fai-orange to-fai-lime']].map(([value,label,gradient])=><div key={String(label)} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"><p className={`bg-gradient-to-br ${gradient} bg-clip-text text-4xl font-black text-transparent`}>{value}</p><span className="mt-1 block text-xs font-black uppercase tracking-wide text-slate-500">{label}</span></div>)}</div><TimestampMeta createdAt={client.createdAt} updatedAt={client.updatedAt} createdBy={userOf(client.salesOwnerId)} updatedBy={userOf(client.consultantId)} /></Card>
     <Card id="anagrafica-completa" title="Anagrafica completa"><p>Nome visualizzato: {client.displayName}</p><p>Tipo cliente: {client.type}</p><p>Note: {client.notes ?? '—'}</p><TimestampMeta createdAt={client.createdAt} updatedAt={client.updatedAt} /></Card>
@@ -151,7 +176,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="finanziamento-aziendale" title="Finanziamento aziendale">{financing.length === 0 ? <EmptyState title="Nessuna valutazione finanziamento"/> : <Table headers={['Importo richiesto','Finalità','Prossima azione','Creato il','Aggiornato il']} rows={financing.map((f) => [f.requestedAmount ? `€ ${Number(f.requestedAmount).toLocaleString('it-IT')}` : '—', f.purpose ?? '—', f.nextAction ?? '—', formatDateTime(f.createdAt), formatDateTime(f.updatedAt)])} />}</Card>
     <Card id="bandi-finanza-agevolata" title="Bandi / Finanza agevolata"><EmptyState title="Misure da verificare">Stato misura, apertura, chiusura, fonti ufficiali, condizioni e prossime azioni saranno tracciati qui.</EmptyState></Card>
     <Card id="bancabilita" title="Bancabilità">{bankability.length === 0 ? <EmptyState title="Nessun assessment" /> : <Table headers={['Rischio','Completezza','Revisione','Aggiornato il']} rows={bankability.map((b) => [<StatusBadge status={b.riskLevel} key="r" />, `${b.dataCompleteness}%`, b.humanReviewStatus, formatDateTime(b.updatedAt)])} />}</Card>
-    <Card id="documenti" title="Documenti">{query?.uploadError ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{query.uploadError}</div> : null}<DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName }]} companies={companies.map((c) => ({ id: c.id, clientId: c.clientId, label: c.name }))} projects={projects.map((project) => ({ id: project.id, clientId: project.clientId, label: project.title }))} services={clientServices.map((service) => ({ id: service.id, clientId: service.clientId, label: nameOf(service.serviceCatalogId) }))} serviceAreas={serviceAreas} submitLabel="Carica" className="mb-5 grid gap-3 md:grid-cols-4" buttonClassName="" />{!canViewDocuments ? <EmptyState title="Documenti non disponibili per il tuo ruolo" /> : visibleDocuments.length === 0 ? <EmptyState title="Nessun documento" /> : <Table headers={['Documento','Sezione','Categoria','Servizio','Sensibile','Stato file','Tracciabilità','Scadenza','Download']} rows={visibleDocuments.map((d) => { const ok = documentAvailability.get(d.id); return [<span key="n">{d.title}<br/><span className="text-xs text-slate-500">{d.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, d.serviceArea, d.documentCategory, d.clientServiceId ? nameOf(clientServices.find(s => s.id === d.clientServiceId)?.serviceCatalogId ?? '') : 'Fascicolo generale', d.containsSensitiveData ? 'Sì' : 'No', ok ? 'disponibile' : 'metadata demo / non caricato', <span key="t">Caricato il {formatDateTime(d.createdAt)} da {userOf(d.uploadedById)}<br/>Aggiornato il {formatDateTime(d.updatedAt)}</span>, formatDateTime(d.validUntil), ok ? <SecondaryLink key="d" href={`/documents/${d.id}/download`}>Scarica</SecondaryLink> : <DisabledAction key="d" reason="File fisico assente nello storage privato">File non disponibile</DisabledAction>]; })} />}</Card>
+    <Card id="documenti" title="Documenti">{query?.uploadError ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{query.uploadError}</div> : null}{hasPermission(session, 'document.upload') ? <DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName }]} companies={companies.map((c) => ({ id: c.id, clientId: c.clientId, label: c.name }))} projects={projects.map((project) => ({ id: project.id, clientId: project.clientId, label: project.title }))} services={clientServices.map((service) => ({ id: service.id, clientId: service.clientId, label: nameOf(service.serviceCatalogId) }))} serviceAreas={serviceAreas} submitLabel="Carica" className="mb-5 grid gap-3 md:grid-cols-4" buttonClassName="" /> : null}{!canViewDocuments ? <EmptyState title="Documenti non disponibili per il tuo ruolo" /> : visibleDocuments.length === 0 ? <EmptyState title="Nessun documento" /> : <Table headers={['Documento','Sezione','Categoria','Servizio','Sensibile','Stato file','Tracciabilità','Scadenza','Download']} rows={visibleDocuments.map((d) => { const ok = documentAvailability.get(d.id); return [<span key="n">{d.title}<br/><span className="text-xs text-slate-500">{d.fileName}{!ok ? ' · metadata demo / file non caricato' : ''}</span></span>, d.serviceArea, d.documentCategory, d.clientServiceId ? nameOf(clientServices.find(s => s.id === d.clientServiceId)?.serviceCatalogId ?? '') : 'Fascicolo generale', d.containsSensitiveData ? 'Sì' : 'No', ok ? 'disponibile' : 'metadata demo / non caricato', <span key="t">Caricato il {formatDateTime(d.createdAt)} da {userOf(d.uploadedById)}<br/>Aggiornato il {formatDateTime(d.updatedAt)}</span>, formatDateTime(d.validUntil), ok ? <SecondaryLink key="d" href={`/documents/${d.id}/download`}>Scarica</SecondaryLink> : <DisabledAction key="d" reason="File fisico assente nello storage privato">File non disponibile</DisabledAction>]; })} />}</Card>
 
     {canViewDocuments ? <Card id="centro-documentale" title="Centro documentale"><div className="mb-5 grid gap-4 lg:grid-cols-[1fr_0.9fr]"><div className="rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10"><h3 className="text-sm font-black uppercase tracking-wide text-fai-navy">Richiesta documenti pronta</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{requestText}</p></div>{canManageTasks && missingChecklistItems.length > 0 ? <form action={createClientTaskAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200"><input type="hidden" name="clientId" value={client.id}/><input type="hidden" name="title" value="Sollecito documenti mancanti"/><input type="hidden" name="description" value={requestText}/><input type="hidden" name="priority" value="media"/><p className="text-sm text-slate-600"><b>Azione operativa:</b> crea un task interno per sollecitare i documenti mancanti rilevati dalla checklist.</p><PrimaryButton type="submit">Crea task sollecito documenti</PrimaryButton></form> : <EmptyState title="Nessun sollecito necessario">La checklist non contiene documenti mancanti da sollecitare.</EmptyState>}</div><div className="grid gap-4 xl:grid-cols-2">{documentCenterGroups.map((group) => <section key={group.title} className={`rounded-2xl border p-4 ${group.tone}`}><div className="mb-3 flex items-center justify-between gap-2"><h3 className="font-black text-fai-navy">{group.title}</h3><span className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-slate-200">{group.rows.length}</span></div>{group.rows.length === 0 ? <EmptyState title="Nessun documento in questo gruppo" /> : <div className="space-y-3">{group.rows.map((row) => <article key={row.id} className="rounded-2xl bg-white/90 p-3 text-sm shadow-sm ring-1 ring-slate-200"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-black text-fai-navy">{row.title}</p><p className="text-xs leading-5 text-slate-500">{row.clientName} · {row.practice}</p></div><StatusBadge status={row.status} /></div><p className="mt-2 text-xs leading-5 text-slate-600">Categoria/tipo: {row.category} · Aggiornato: {formatDateTime(row.date)}</p><p className="mt-1 text-xs leading-5 text-slate-500">{row.note}</p>{row.action ? <div className="mt-3"><SecondaryLink href={row.action}>Apri/Scarica</SecondaryLink></div> : null}</article>)}</div>}</section>)}</div><p className="mt-4 text-xs leading-5 text-slate-500">Checklist collegata: {receivedChecklistItems.length} voci presenti o ricevute, {missingChecklistItems.length} ancora mancanti. Le pratiche tecniche collegate al cliente restano consultabili nella sezione Ufficio Tecnico / Pratiche.</p></Card> : null}
 

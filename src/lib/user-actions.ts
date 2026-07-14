@@ -70,13 +70,13 @@ export async function createInternalUser(form: FormData) {
 export async function updateInternalUserRole(form: FormData) {
   const s = await requirePermission('settings.manage');
   const data = userRoleSchema.parse(Object.fromEntries(form));
-  const user = await serializable(async (tx) => {
+  const result = await serializable(async (tx) => {
     const before = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });
     if ((before.role === 'admin' || data.role === 'admin') && s.role !== 'admin') throw new Error('Solo un admin può modificare il ruolo di un admin.');
     const safety = canChangeUserRole(before, data.role, await usersForSafety(tx));
     if (!safety.allowed) {
       if (safety.reason === 'last_active_admin') await auditWith(tx, s.userId, 'blocked_last_admin_change', 'User', before.id, { attemptedRole: data.role }, { role: before.role, active: before.active });
-      throw new Error(safety.reason === 'last_active_admin' ? 'Impossibile cambiare ruolo all’ultimo admin attivo.' : 'Impossibile modificare utenti eliminati.');
+      return { allowed: false as const, reason: safety.reason, userId: before.id };
     }
     const deletedOverrides = before.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed })).filter((override) => isPermission(override.permission));
     const [updated] = await Promise.all([
@@ -84,27 +84,29 @@ export async function updateInternalUserRole(form: FormData) {
       shouldClearPermissionOverridesOnRoleChange(data.role) ? tx.userPermissionOverride.deleteMany({ where: { userId: data.userId } }) : Promise.resolve({ count: 0 }),
     ]);
     await auditWith(tx, s.userId, 'role_change', 'User', updated.id, { role: updated.role, deletedPermissionOverrides: shouldClearPermissionOverridesOnRoleChange(data.role) ? deletedOverrides : [] }, { role: before.role, permissionOverrides: deletedOverrides });
-    return updated;
+    return { allowed: true as const, user: updated };
   });
-  revalidateUserPages(user.id);
+  if (!result.allowed) throw new Error(result.reason === 'last_active_admin' ? 'Impossibile cambiare ruolo all’ultimo admin attivo.' : 'Impossibile modificare utenti eliminati.');
+  revalidateUserPages(result.user.id);
 }
 
 export async function deactivateInternalUser(form: FormData) {
   const s = await requirePermission('settings.manage');
   const data = userIdSchema.parse(Object.fromEntries(form));
-  const user = await serializable(async (tx) => {
-    const before = await assertTargetMutable(tx, s, data.userId);
+  const result = await serializable(async (tx) => {
+    const before = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });
     const safety = canDeactivateUser(s.userId, before, await usersForSafety(tx));
     if (!safety.allowed) {
       if (safety.reason === 'self_deactivation') await auditWith(tx, s.userId, 'blocked_self_deactivation', 'User', before.id, { reason: safety.reason });
       if (safety.reason === 'last_active_admin') await auditWith(tx, s.userId, 'blocked_last_admin_change', 'User', before.id, { active: false }, { role: before.role, active: before.active });
-      throw new Error(safety.reason === 'self_deactivation' ? 'Non puoi disattivare il tuo account.' : 'Impossibile disattivare l’ultimo admin attivo.');
+      return { allowed: false as const, reason: safety.reason, userId: before.id };
     }
     const updated = await tx.user.update({ where: { id: data.userId }, data: { active: false } });
     await auditWith(tx, s.userId, 'user_deactivate', 'User', updated.id, { active: false }, { active: before.active });
-    return updated;
+    return { allowed: true as const, user: updated };
   });
-  revalidateUserPages(user.id);
+  if (!result.allowed) throw new Error(result.reason === 'self_deactivation' ? 'Non puoi disattivare il tuo account.' : 'Impossibile disattivare l’ultimo admin attivo.');
+  revalidateUserPages(result.user.id);
 }
 
 export async function activateInternalUser(form: FormData) {

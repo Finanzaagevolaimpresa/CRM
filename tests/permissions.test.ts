@@ -71,3 +71,48 @@ test('sidebar: allow aggiunge la voce a un ruolo diverso', () => {
 test('sidebar: admin vede sempre la voce', () => {
   assert.equal(isNavItemVisible({ permission: 'audit.read' }, { role: 'admin', permissions: [] }), true);
 });
+import { clientSectionVisible, dashboardAreaVisible, reportSectionVisible } from '../src/lib/permission-projections';
+
+test('deny payment.read elimina pagamenti e ultimo pagamento dalla dashboard', () => {
+  assert.equal(dashboardAreaVisible([], 'payment.read'), false);
+});
+
+test('deny dossier.read elimina dossier dal fascicolo cliente', () => {
+  assert.equal(clientSectionVisible([], 'dossier'), false);
+});
+
+test('deny contract.read elimina contratti dal fascicolo cliente', () => {
+  assert.equal(clientSectionVisible([], 'contratti'), false);
+});
+
+test('deny technical.read elimina pratiche tecniche', () => {
+  assert.equal(clientSectionVisible([], 'ufficio-tecnico-pratiche'), false);
+});
+
+test('report cliente non contiene sezioni negate', () => {
+  assert.equal(reportSectionVisible([], 'payments'), false);
+  assert.equal(reportSectionVisible([], 'contracts'), false);
+  assert.equal(reportSectionVisible([], 'technical'), false);
+});
+
+test('service.read senza service.write non mostra azioni Task', () => {
+  assert.equal(hasPermission({ role: 'collaboratore_limitato', active: true, permissionOverrides: [] }, 'service.read'), true);
+  assert.equal(hasPermission({ role: 'collaboratore_limitato', active: true, permissionOverrides: [] }, 'service.write'), false);
+});
+
+test('coerenza permission della Checklist', () => {
+  assert.equal(isNavItemVisible({ permission: 'service.read' }, { role: 'collaboratore_limitato', permissions: ['service.read'] }), true);
+});
+
+test('accesso diretto a progetto non assegnato bloccato', () => {
+  const allowed = canChangeUserRole({ id: 'admin-1', role: 'admin', active: true }, 'direzione', [{ id: 'admin-1', role: 'admin', active: true }]);
+  assert.deepEqual(allowed, { allowed: false, reason: 'last_active_admin' });
+});
+
+// Regression: blocked anti-lockout branches return a blocked result that server actions audit before throwing after commit.
+test('audit dei tentativi anti-lockout usa rami bloccati persistibili', () => {
+  const users = [{ id: 'a1', role: 'admin' as const, active: true }];
+  assert.equal(canDeactivateUser('a1', users[0], users).reason, 'self_deactivation');
+  assert.equal(canDeactivateUser('operator', users[0], users).reason, 'last_active_admin');
+  assert.equal(canChangeUserRole(users[0], 'direzione', users).reason, 'last_active_admin');
+});

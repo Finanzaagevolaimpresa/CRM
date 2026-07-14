@@ -32,6 +32,13 @@ export default async function Dashboard() {
     "practice_communications.review",
   );
   const canReadLeads = hasPermission(session, "lead.read");
+  const canReadClients = hasPermission(session, "client.read");
+  const canReadProjects = hasPermission(session, "project.read");
+  const canReadDossiers = hasPermission(session, "dossier.read");
+  const canReadContracts = hasPermission(session, "contract.read");
+  const canReadPayments = hasPermission(session, "payment.read");
+  const canReviewAi = hasPermission(session, "ai.review");
+  const canReadAudit = hasPermission(session, "audit.read");
   const canSeeAllTasks = [
     "admin",
     "direzione",
@@ -223,23 +230,23 @@ export default async function Dashboard() {
           },
         })
       : 0,
-    prisma.client.count({ where: { deletedAt: null, status: "attivo" } }),
-    prisma.project.count({
+    canReadClients ? prisma.client.count({ where: { deletedAt: null, status: "attivo" } }) : 0,
+    canReadProjects ? prisma.project.count({
       where: { deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
-    }),
-    prisma.clientService.count({ where: { deletedAt: null } }),
-    prisma.preAnalysis.count({
+    }) : 0,
+    canReadServices ? prisma.clientService.count({ where: { deletedAt: null } }) : 0,
+    canReadDossiers ? prisma.preAnalysis.count({
       where: { status: { in: ["bozza_generata", "da_revisionare"] } },
-    }),
-    prisma.dossier.count({
+    }) : 0,
+    canReadDossiers ? prisma.dossier.count({
       where: {
         status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] },
       },
-    }),
-    prisma.contract.count(),
-    prisma.payment.count({
+    }) : 0,
+    canReadContracts ? prisma.contract.count() : 0,
+    canReadPayments ? prisma.payment.count({
       where: { status: { notIn: ["incassato", "stornato", "rimborsato"] } },
-    }),
+    }) : 0,
     canReadServices ? prisma.task.count({ where: openTaskWhere }) : 0,
     canReadServices
       ? prisma.task.count({ where: { ...openTaskWhere, dueAt: { lt: now } } })
@@ -254,18 +261,18 @@ export default async function Dashboard() {
           where: { ...openTaskWhere, assignedToId: session.userId },
         })
       : 0,
-    prisma.aiOutput.count({
+    canReviewAi ? prisma.aiOutput.count({
       where: {
         status: { in: ["needs_review", "flagged"] },
         requiresHumanReview: true,
       },
-    }),
-    prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }),
-    prisma.aiOutput.findFirst({
+    }) : 0,
+    canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
+    canReviewAi ? prisma.aiOutput.findFirst({
       where: { status: { in: ["needs_review", "flagged"] } },
       orderBy: { createdAt: "desc" },
-    }),
-    prisma.payment.findFirst({ orderBy: { createdAt: "desc" } }),
+    }) : null,
+    canReadPayments ? prisma.payment.findFirst({ orderBy: { createdAt: "desc" } }) : null,
     canReadServices
       ? prisma.task.findFirst({
           where: openTaskWhere,
@@ -359,10 +366,10 @@ export default async function Dashboard() {
           take: 20,
         })
       : [],
-    prisma.client.findMany({
+    canReadClients ? prisma.client.findMany({
       where: { deletedAt: null },
       select: { id: true, displayName: true },
-    }),
+    }) : [],
   ]);
   const priorityStats = [
     [
@@ -421,7 +428,7 @@ export default async function Dashboard() {
       "/technical-office/practices",
       "green",
     ],
-  ] as const;
+  ].filter(([label]) => (canReadLeads || !String(label).includes("Lead")) && (canReadServices || !String(label).includes("Attività")) && (canReviewAi || !String(label).includes("Output AI")) && (canReviewPracticeCommunications || !String(label).includes("Comunicazioni da revisionare")) && (canReadTechnical || !String(label).includes("Update cliente")) && (canReadPracticeCommunications || !String(label).includes("Comunicazioni approvate")));
   const businessStats = [
     [
       "Clienti attivi",
@@ -465,7 +472,7 @@ export default async function Dashboard() {
       "/payments",
       "orange",
     ],
-  ] as const;
+  ].filter(([label]) => (canReadClients || label !== "Clienti attivi") && (canReadProjects || label !== "Progetti attivi") && (canReadServices || label !== "Servizi acquistati") && (canReadDossiers || !String(label).includes("Dossier") && !String(label).includes("Pre-analisi")) && (canReadPayments || label !== "Pagamenti aperti"));
   const strategicAreas = [
     [
       "Ufficio Tecnico",
@@ -479,7 +486,7 @@ export default async function Dashboard() {
       "/legal-compliance",
       "purple",
     ],
-  ] as const;
+  ].filter(([label]) => (canReadTechnical || label !== "Ufficio Tecnico") && (canReadContracts || label !== "Legale / Compliance AI"));
   const tracking = [
     [
       "Ultima sincronizzazione dati",
@@ -510,7 +517,7 @@ export default async function Dashboard() {
       formatDateTime(lastTask?.dueAt ?? lastTask?.createdAt),
       lastTask?.title ?? "Nessuna attività aperta",
     ],
-  ];
+  ].filter(([label]) => (canReadAudit || label !== "Ultima attività CRM") && (canReviewAi || label !== "Ultimo output AI da revisionare") && (canReadPayments || label !== "Ultimo pagamento registrato") && (canReadServices || label !== "Prossima attività aperta"));
   const taskSummary = [
     [
       "Attività aperte",
@@ -536,7 +543,7 @@ export default async function Dashboard() {
       "Attività assegnate all’utente loggato",
       "green",
     ],
-  ];
+  ].filter(() => canReadServices);
   const commercialSummary = [
     ["Nuovi lead", leadNuovi, "Contatti appena entrati", "blue"],
     [
@@ -596,7 +603,7 @@ export default async function Dashboard() {
       "Follow-up offerta entro 7 giorni",
       "purple",
     ],
-  ];
+  ].filter(() => canReadLeads);
 
   const clientNames = new Map(
     operationalClients.map((client) => [client.id, client.displayName]),
@@ -647,7 +654,7 @@ export default async function Dashboard() {
       "/leads",
       "orange",
     ],
-  ] as const;
+  ].filter(([label]) => (canReadServices || !String(label).includes("Task")) && (canReadTechnical || !String(label).includes("Pratiche tecniche")) && (canReviewPracticeCommunications || !String(label).includes("approvazione")) && (canReadPracticeCommunications || !String(label).includes("approvate")) && (canReadLeads || !String(label).includes("Lead")));
   const priorityItems = [
     ...operationalTasks.map((task) => ({
       id: `task-${task.id}`,
@@ -735,7 +742,7 @@ export default async function Dashboard() {
             value={Number(v)}
             description={String(d)}
             href={String(h)}
-            tone={t}
+            tone={t as never}
           />
         ))}
       </section>
@@ -748,7 +755,7 @@ export default async function Dashboard() {
               value={Number(v)}
               description={String(d)}
               href={String(h)}
-              tone={t}
+              tone={t as never}
             />
           ))}
         </div>
@@ -808,7 +815,7 @@ export default async function Dashboard() {
             value={Number(v)}
             description={String(d)}
             href={String(h)}
-            tone={t}
+            tone={t as never}
           />
         ))}
       </section>
@@ -821,7 +828,7 @@ export default async function Dashboard() {
               value="→"
               description={desc}
               href={href}
-              tone={tone}
+              tone={tone as never}
             />
           ))}
         </div>

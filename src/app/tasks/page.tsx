@@ -12,9 +12,10 @@ import {
   formatDateTime,
 } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/auth";
+import { hasPermission, requirePermission } from "@/lib/auth";
 export default async function Page() {
   const session = await requirePermission("service.read");
+  const canWriteTasks = hasPermission(session, "service.write");
   const [items, clientRows, projectRows, userRows] = await Promise.all([
     prisma.task.findMany({ orderBy: { dueAt: "asc" } }),
     prisma.client.findMany({ where: { deletedAt: null } }),
@@ -72,12 +73,12 @@ export default async function Page() {
               />,
               x.completedAt ? (
                 "Completato"
-              ) : (
+              ) : canWriteTasks ? (
                 <form action={completeTask} key="a">
                   <input type="hidden" name="id" value={x.id} />
                   <PrimaryButton type="submit">Completa</PrimaryButton>
                 </form>
-              ),
+              ) : "—",
             ])}
           />
         )}
