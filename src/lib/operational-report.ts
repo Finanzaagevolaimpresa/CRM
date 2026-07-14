@@ -222,7 +222,7 @@ export async function buildOperationalReportMarkdown(
       !i.documentId &&
       !["ricevuto", "validato", "non_necessario"].includes(i.status),
   );
-  const title = practice
+  const title = practice && canReadTechnical
     ? `Report operativo pratica — ${practice.title}`
     : `Fascicolo completo cliente — ${client.displayName}`;
   const dossierAndAiRows = [
@@ -350,7 +350,7 @@ export async function buildOperationalReportMarkdown(
       line("Consulente", userOf(client.consultantId)),
       line("Note", safeText(client.notes)),
       "",
-      "## Pratica tecnica collegata",
+      ...(canReadTechnical ? ["## Pratica tecnica collegata",
       practice
         ? [
             line("Titolo", practice.title),
@@ -373,7 +373,8 @@ export async function buildOperationalReportMarkdown(
             (s) =>
               `- ${serviceName(s.id)} · stato ${clean(s.status)} · operativo ${clean(s.operationalStatus)} · owner ${userOf(s.assignedToId)}`,
           ),
-      ...(practice
+      ""] : []),
+      ...(canReadTechnical && practice
         ? []
         : [
             "",

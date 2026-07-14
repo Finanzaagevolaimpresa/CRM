@@ -55,3 +55,12 @@ export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwne
   const id = actorId(user);
   return ['backoffice', 'consulente'].includes(user.role) || practice?.technicalOwnerId === id;
 }
+
+export function canViewAiRecord(user: Actor, record: { createdById?: string | null; client?: Pick<Client, 'salesOwnerId' | 'consultantId'> | null; project?: (Pick<Project, 'consultantId'> & { client?: Pick<Client, 'salesOwnerId' | 'consultantId'> | null }) | null }) {
+  if (hasGlobalAccess(user) || user.role === 'revisore') return true;
+  const id = actorId(user);
+  if (record.createdById && record.createdById === id) return true;
+  if (record.project && canViewProject(user, record.project)) return true;
+  if (record.client && canViewClient(user, record.client)) return true;
+  return false;
+}

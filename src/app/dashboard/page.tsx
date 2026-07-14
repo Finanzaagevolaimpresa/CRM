@@ -8,6 +8,7 @@ import {
   formatDateTime,
 } from "@/components/ui";
 import { legalDisclaimer } from "@/lib/compliance";
+import { canViewClient, canViewProject } from "@/lib/access-control";
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
@@ -61,6 +62,15 @@ export default async function Dashboard() {
     session.role === "admin" || session.role === "direzione"
       ? {}
       : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
+  const [allDashboardClients, allDashboardProjects] = await Promise.all([
+    prisma.client.findMany({ where: { deletedAt: null } }),
+    prisma.project.findMany({ where: { deletedAt: null } }),
+  ]);
+  const accessibleDashboardClients = allDashboardClients.filter((client) => canViewClient(session, client));
+  const accessibleDashboardClientIds = accessibleDashboardClients.map((client) => client.id);
+  const dashboardClientWhere = { clientId: { in: accessibleDashboardClientIds } };
+  const accessibleDashboardProjects = allDashboardProjects.filter((project) => canViewProject(session, { ...project, client: allDashboardClients.find((client) => client.id === project.clientId) ?? null }));
+  const accessibleDashboardProjectIds = accessibleDashboardProjects.map((project) => project.id);
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
     "pre_analisi",
@@ -230,22 +240,20 @@ export default async function Dashboard() {
           },
         })
       : 0,
-    canReadClients ? prisma.client.count({ where: { deletedAt: null, status: "attivo" } }) : 0,
-    canReadProjects ? prisma.project.count({
-      where: { deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
-    }) : 0,
-    canReadServices ? prisma.clientService.count({ where: { deletedAt: null } }) : 0,
+    canReadClients ? accessibleDashboardClients.filter((client) => client.status === "attivo").length : 0,
+    canReadProjects ? accessibleDashboardProjects.filter((project) => !["chiuso", "archiviato"].includes(project.status)).length : 0,
+    canReadServices ? prisma.clientService.count({ where: { deletedAt: null, ...dashboardClientWhere } }) : 0,
     canReadDossiers ? prisma.preAnalysis.count({
-      where: { status: { in: ["bozza_generata", "da_revisionare"] } },
+      where: { clientId: { in: accessibleDashboardClientIds }, projectId: { in: accessibleDashboardProjectIds }, status: { in: ["bozza_generata", "da_revisionare"] } },
     }) : 0,
     canReadDossiers ? prisma.dossier.count({
       where: {
-        status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] },
+        clientId: { in: accessibleDashboardClientIds }, projectId: { in: accessibleDashboardProjectIds }, status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] },
       },
     }) : 0,
-    canReadContracts ? prisma.contract.count() : 0,
+    canReadContracts ? prisma.contract.count({ where: dashboardClientWhere }) : 0,
     canReadPayments ? prisma.payment.count({
-      where: { status: { notIn: ["incassato", "stornato", "rimborsato"] } },
+      where: { ...dashboardClientWhere, status: { notIn: ["incassato", "stornato", "rimborsato"] } },
     }) : 0,
     canReadServices ? prisma.task.count({ where: openTaskWhere }) : 0,
     canReadServices
@@ -263,6 +271,7 @@ export default async function Dashboard() {
       : 0,
     canReviewAi ? prisma.aiOutput.count({
       where: {
+        clientId: { in: accessibleDashboardClientIds },
         status: { in: ["needs_review", "flagged"] },
         requiresHumanReview: true,
       },
@@ -272,7 +281,7 @@ export default async function Dashboard() {
       where: { status: { in: ["needs_review", "flagged"] } },
       orderBy: { createdAt: "desc" },
     }) : null,
-    canReadPayments ? prisma.payment.findFirst({ orderBy: { createdAt: "desc" } }) : null,
+    canReadPayments ? prisma.payment.findFirst({ where: dashboardClientWhere, orderBy: { createdAt: "desc" } }) : null,
     canReadServices
       ? prisma.task.findFirst({
           where: openTaskWhere,
@@ -366,10 +375,7 @@ export default async function Dashboard() {
           take: 20,
         })
       : [],
-    canReadClients ? prisma.client.findMany({
-      where: { deletedAt: null },
-      select: { id: true, displayName: true },
-    }) : [],
+    canReadClients ? accessibleDashboardClients.map((client) => ({ id: client.id, displayName: client.displayName })) : [],
   ]);
   const priorityStats = [
     [

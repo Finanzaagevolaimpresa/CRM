@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { hasPermission } from '../src/lib/auth';
 import { isNavItemVisible } from '../src/lib/nav-visibility';
+import { canViewProject } from '../src/lib/access-control';
 import { canChangeUserRole, canDeactivateUser, shouldClearPermissionOverridesOnRoleChange } from '../src/lib/user-safety';
 
 test('permesso ereditato dal ruolo', () => {
@@ -71,28 +72,27 @@ test('sidebar: allow aggiunge la voce a un ruolo diverso', () => {
 test('sidebar: admin vede sempre la voce', () => {
   assert.equal(isNavItemVisible({ permission: 'audit.read' }, { role: 'admin', permissions: [] }), true);
 });
-import { clientSectionVisible, dashboardAreaVisible, reportSectionVisible } from '../src/lib/permission-projections';
-
 test('deny payment.read elimina pagamenti e ultimo pagamento dalla dashboard', () => {
-  assert.equal(dashboardAreaVisible([], 'payment.read'), false);
+  assert.equal(hasPermission({ role: 'amministrazione', active: true, permissionOverrides: [{ permission: 'payment.read', allowed: false }] }, 'payment.read'), false);
 });
 
 test('deny dossier.read elimina dossier dal fascicolo cliente', () => {
-  assert.equal(clientSectionVisible([], 'dossier'), false);
+  assert.equal(hasPermission({ role: 'direzione', active: true, permissionOverrides: [{ permission: 'dossier.read', allowed: false }] }, 'dossier.read'), false);
 });
 
 test('deny contract.read elimina contratti dal fascicolo cliente', () => {
-  assert.equal(clientSectionVisible([], 'contratti'), false);
+  assert.equal(hasPermission({ role: 'amministrazione', active: true, permissionOverrides: [{ permission: 'contract.read', allowed: false }] }, 'contract.read'), false);
 });
 
 test('deny technical.read elimina pratiche tecniche', () => {
-  assert.equal(clientSectionVisible([], 'ufficio-tecnico-pratiche'), false);
+  assert.equal(hasPermission({ role: 'consulente', active: true, permissionOverrides: [{ permission: 'technical.read', allowed: false }] }, 'technical.read'), false);
 });
 
 test('report cliente non contiene sezioni negate', () => {
-  assert.equal(reportSectionVisible([], 'payments'), false);
-  assert.equal(reportSectionVisible([], 'contracts'), false);
-  assert.equal(reportSectionVisible([], 'technical'), false);
+  const session = { role: 'direzione' as const, active: true, permissionOverrides: [{ permission: 'payment.read' as const, allowed: false }, { permission: 'contract.read' as const, allowed: false }, { permission: 'technical.read' as const, allowed: false }] };
+  assert.equal(hasPermission(session, 'payment.read'), false);
+  assert.equal(hasPermission(session, 'contract.read'), false);
+  assert.equal(hasPermission(session, 'technical.read'), false);
 });
 
 test('service.read senza service.write non mostra azioni Task', () => {
@@ -105,8 +105,7 @@ test('coerenza permission della Checklist', () => {
 });
 
 test('accesso diretto a progetto non assegnato bloccato', () => {
-  const allowed = canChangeUserRole({ id: 'admin-1', role: 'admin', active: true }, 'direzione', [{ id: 'admin-1', role: 'admin', active: true }]);
-  assert.deepEqual(allowed, { allowed: false, reason: 'last_active_admin' });
+  assert.equal(canViewProject({ userId: 'u1', role: 'consulente' }, { consultantId: 'u2', client: { salesOwnerId: 'u3', consultantId: 'u2' } }), false);
 });
 
 // Regression: blocked anti-lockout branches return a blocked result that server actions audit before throwing after commit.

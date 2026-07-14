@@ -3,7 +3,7 @@ import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actio
 import { prisma } from '@/lib/prisma';
 import { buildClientServiceLabel } from '@/lib/client-service-label';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { canViewClient } from '@/lib/access-control';
+import { canViewAiRecord, canViewClient } from '@/lib/access-control';
 import { createClientDossierFromAiOutputAndRedirect } from '@/lib/form-actions';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
@@ -20,7 +20,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   ]);
   const serviceCatalog = service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null;
   const serviceLabel = service ? buildClientServiceLabel(service, serviceCatalog) : 'Fascicolo generale';
-  if (client && !canViewClient(session, client)) return <h1 className="text-3xl font-bold text-fai-navy">Output AI non accessibile</h1>;
+  if (!canViewAiRecord(session, { createdById: run?.createdById, client, project: project ? { ...project, client } : null }) || (client && !canViewClient(session, client))) return <h1 className="text-3xl font-bold text-fai-navy">Output AI non accessibile</h1>;
   const canCreateDossier = hasPermission(session, 'dossier.write');
   const canCreateFromOutput = canCreateDossier && !!client && output.status === 'approved';
   const createDisabledReason = !canCreateDossier ? 'Permesso dossier.write richiesto' : !client ? 'Output AI non collegato a un cliente' : output.status === 'archived' ? 'Output AI archiviato' : output.status !== 'approved' ? 'Output AI non ancora approvato/revisionato' : '';
