@@ -585,6 +585,9 @@ async function main() {
   const aiRun = await prisma.aiRun.create({
     data: {
       agentId: agent.id,
+      clientId: client.id,
+      clientServiceId: service.id,
+      projectId: project.id,
       status: "completed",
       createdById: reviewer.id,
       input: {
@@ -601,7 +604,9 @@ async function main() {
   await prisma.aiOutput.create({
     data: {
       aiRunId: aiRun.id,
+      clientId: client.id,
       clientServiceId: service.id,
+      projectId: project.id,
       title: "Bozza Audit AI Bancabilità - Eventi & Video Brescia SRL",
       content:
         "Output interno da revisionare: richiesta 40-50K per marketing, attrezzature, eventi, liquidità affitto e furgone. DURC e CRIF/Centrale Rischi dichiarati ok; servono verifiche documentali e revisione umana.",

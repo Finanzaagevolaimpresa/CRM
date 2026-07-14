@@ -1,11 +1,15 @@
 import { Card, EmptyState, PageHeader, Table, TimestampMeta } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { SecondaryLink } from '@/components/actions';
+import { requirePermission } from '@/lib/auth';
+import { getCompanyReadAccess } from '@/lib/read-access';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  const session = await requirePermission('company.read');
   const { id } = await params;
-  const company = await prisma.company.findUnique({ where: { id } });
-  if (!company) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è più disponibile." />;
+  const context = await getCompanyReadAccess(session, id);
+  if (!context) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è accessibile." />;
+  const { company } = context;
   const people = await prisma.companyPerson.findMany({ where: { companyId: id } });
   return <div className="space-y-6">
     <PageHeader title={`Azienda — ${company.name}`} description="Dati camerali, sede, ATECO, DURC, fatturato e persone collegate." />

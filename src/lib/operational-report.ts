@@ -1,7 +1,8 @@
 import type { AuthSession } from "./auth";
 import { hasPermission } from "./auth";
-import { canViewDocument, canViewTechnicalPractice } from "./access-control";
+import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewTechnicalPractice, isSensitiveDocument } from "./access-control";
 import { prisma } from "./prisma";
+import { listAccessibleAiOutputs, listAccessibleTasks } from "./read-access";
 
 const DISCLAIMER =
   "Documento interno di lavoro. Finanza Agevola Impresa S.r.l. non eroga finanziamenti, non promette contributi e non garantisce esiti o erogazioni. Offre consulenza tecnica, strategica e di orientamento.";
@@ -61,17 +62,19 @@ export async function buildOperationalReportMarkdown(
   input: { clientId?: string; technicalPracticeId?: string },
 ) {
   const practice = input.technicalPracticeId
-    ? await prisma.technicalPractice.findUnique({
-        where: { id: input.technicalPracticeId },
+    ? await prisma.technicalPractice.findFirst({
+        where: { id: input.technicalPracticeId, deletedAt: null },
       })
     : null;
+  if (input.technicalPracticeId && !practice) return null;
   const clientId = practice?.clientId ?? input.clientId;
   if (!clientId) return null;
   const [client, users] = await Promise.all([
-    prisma.client.findUnique({ where: { id: clientId } }),
+    prisma.client.findFirst({ where: { id: clientId, deletedAt: null } }),
     prisma.user.findMany({ where: { active: true } }),
   ]);
-  if (!client) return null;
+  if (!client || !canViewClient(session, client)) return null;
+  if (practice && (!hasPermission(session, "technical.read") || !canViewTechnicalPractice(session, { ...practice, client }))) return null;
   const userOf = (id?: string | null) =>
     users.find((u) => u.id === id)?.name ?? (id ? "Utente non attivo" : "—");
 
@@ -83,7 +86,9 @@ export async function buildOperationalReportMarkdown(
     : [];
   const practiceLinkedFilters = [...serviceFilter, ...projectFilter];
   const scopeWhere = practice
-    ? { OR: [{ clientId }, ...practiceLinkedFilters] }
+    ? practiceLinkedFilters.length > 0
+      ? { clientId, OR: practiceLinkedFilters }
+      : { id: "__no_practice_linked_record__" }
     : { clientId };
   const clientDossierWhere = practice
     ? practiceLinkedFilters.length > 0
@@ -92,18 +97,18 @@ export async function buildOperationalReportMarkdown(
     : { clientId };
   const aiOutputWhere = practice
     ? practiceLinkedFilters.length > 0
-      ? { OR: practiceLinkedFilters }
+      ? { clientId, OR: practiceLinkedFilters }
       : { id: "__no_practice_linked_ai_output__" }
-    : { OR: [{ clientId }] };
+    : { clientId };
   const [services, projects] = await Promise.all([
-    prisma.clientService.findMany({
+    hasPermission(session, "service.read") ? prisma.clientService.findMany({
       where: { clientId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
-    }),
-    prisma.project.findMany({
+    }) : Promise.resolve([]),
+    hasPermission(session, "project.read") ? prisma.project.findMany({
       where: { clientId, deletedAt: null },
       orderBy: { updatedAt: "desc" },
-    }),
+    }) : Promise.resolve([]),
   ]);
   const [
     documents,
@@ -111,23 +116,23 @@ export async function buildOperationalReportMarkdown(
     tasks,
     communications,
     clientDossiers,
-    aiOutputs,
+    _aiOutputs,
     audits,
     catalog,
     technicalPractices,
   ] = await Promise.all([
-    prisma.document.findMany({
+    hasPermission(session, "document.download") ? prisma.document.findMany({
       where: { deletedAt: null, ...scopeWhere },
       orderBy: { createdAt: "desc" },
-    }),
-    prisma.documentChecklistItem.findMany({
+    }) : Promise.resolve([]),
+    hasPermission(session, "document.download") ? prisma.documentChecklistItem.findMany({
       where: { active: true, deletedAt: null, ...scopeWhere },
       orderBy: { updatedAt: "desc" },
-    }),
-    prisma.task.findMany({
+    }) : Promise.resolve([]),
+    hasPermission(session, "service.read") ? listAccessibleTasks(session, {
       where: { deletedAt: null, ...scopeWhere },
       orderBy: [{ status: "asc" }, { dueAt: "asc" }],
-    }),
+    }) : Promise.resolve([]),
     hasPermission(session, "practice_communications.read")
       ? prisma.practiceCommunication.findMany({
           where: {
@@ -144,13 +149,7 @@ export async function buildOperationalReportMarkdown(
           take: 10,
         })
       : Promise.resolve([]),
-    hasPermission(session, "ai.review") || hasPermission(session, "ai.approve")
-      ? prisma.aiOutput.findMany({
-          where: aiOutputWhere,
-          orderBy: { createdAt: "desc" },
-          take: 10,
-        })
-      : Promise.resolve([]),
+    Promise.resolve([]),
     hasPermission(session, "audit.read")
       ? prisma.auditLog.findMany({
           where: practice
@@ -161,7 +160,7 @@ export async function buildOperationalReportMarkdown(
         })
       : Promise.resolve([]),
     prisma.serviceCatalog.findMany(),
-    prisma.technicalPractice.findMany({
+    hasPermission(session, "technical.read") ? prisma.technicalPractice.findMany({
       where: {
         deletedAt: null,
         OR: [
@@ -181,13 +180,14 @@ export async function buildOperationalReportMarkdown(
         ],
       },
       orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
-    }),
+    }) : Promise.resolve([]),
   ]);
   const visibleTechnicalPractices = technicalPractices.filter((item) =>
     canViewTechnicalPractice(session, { ...item, client }),
   );
-  const serviceById = new Map(services.map((s) => [s.id, s]));
-  const projectById = new Map(projects.map((p) => [p.id, p]));
+  void _aiOutputs;
+  const projectById = new Map(projects.map((project) => [project.id, { ...project, client }]));
+  const serviceById = new Map(services.map((service) => [service.id, { ...service, client, project: service.projectId ? projectById.get(service.projectId) ?? null : null }]));
   const visibleDocuments = hasPermission(session, "document.download")
     ? documents.filter((document) =>
         canViewDocument(
@@ -196,7 +196,7 @@ export async function buildOperationalReportMarkdown(
             ...document,
             client,
             project: document.projectId
-              ? { ...projectById.get(document.projectId)!, client }
+              ? projectById.get(document.projectId) ?? null
               : null,
             clientService: document.clientServiceId
               ? serviceById.get(document.clientServiceId)
@@ -206,10 +206,31 @@ export async function buildOperationalReportMarkdown(
         ),
       )
     : [];
+  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const canReadSensitive = hasPermission(session, "document.sensitive.read");
+  const visibleChecklist = checklist.filter((item) =>
+    (!isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title }) || canReadSensitive)
+    && (!item.documentId || visibleDocumentIds.has(item.documentId)),
+  ).filter((item) => canViewChecklistItem(session, {
+    ...item,
+    client,
+    project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+    clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
+  }));
+  const visibleClientDossiers = clientDossiers.filter((dossier) => {
+    const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
+    const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
+    if ((dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;
+    return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+  });
+  const aiOutputContexts = hasPermission(session, "ai.review") || hasPermission(session, "ai.approve")
+    ? await listAccessibleAiOutputs(session, { where: aiOutputWhere, orderBy: { createdAt: "desc" }, take: 10 })
+    : [];
+  const aiOutputs = aiOutputContexts.map((context) => context.output);
   const serviceName = (id?: string | null) =>
     catalog.find((c) => c.id === serviceById.get(id ?? "")?.serviceCatalogId)
       ?.name ?? "Fascicolo generale";
-  const missing = checklist.filter(
+  const missing = visibleChecklist.filter(
     (i) =>
       !i.documentId &&
       !["ricevuto", "validato", "non_necessario"].includes(i.status),
@@ -218,7 +239,7 @@ export async function buildOperationalReportMarkdown(
     ? `Report operativo pratica — ${practice.title}`
     : `Fascicolo completo cliente — ${client.displayName}`;
   const dossierAndAiRows = [
-    ...clientDossiers.map((d) => ({
+    ...visibleClientDossiers.map((d) => ({
       text: `Dossier: ${d.title} · ${clean(d.type)} · ${clean(d.status)} · aggiornato ${fmt(d.updatedAt)}`,
     })),
     ...aiOutputs.map((o) => ({

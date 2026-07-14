@@ -4,7 +4,7 @@ import { PracticeCommunicationTemplates } from '@/components/practice-communicat
 import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { canViewTechnicalPractice } from '@/lib/access-control';
+import { canViewChecklistItem, canViewDocument, canViewTask, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { archivePracticeCommunicationAndRefresh, archiveTechnicalPracticeAndRefresh, approvePracticeCommunicationDraftAndRefresh, assignTechnicalPracticeAndRefresh, createPracticeCommunicationDraftAndRefresh, markPracticeCommunicationAsUsedAndRefresh, updateTechnicalPracticeAndRefresh, updateTechnicalPracticeStatusAndRefresh } from '@/lib/form-actions';
 import { practiceCommunicationTemplates } from '@/lib/practice-communication-templates';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
@@ -27,25 +27,69 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const session = await requirePermission('technical.read');
   const { id } = await params;
   const query = await searchParams;
-  const practice = await prisma.technicalPractice.findUnique({ where: { id } });
+  const practice = await prisma.technicalPractice.findFirst({ where: { id, deletedAt: null } });
   if (!practice) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non trovata</h1>;
-  const [client, project, service, users, documents, tasks, checklist, communications, audits] = await Promise.all([
-    prisma.client.findUnique({ where: { id: practice.clientId } }),
-    practice.projectId ? prisma.project.findUnique({ where: { id: practice.projectId } }) : null,
-    practice.clientServiceId ? prisma.clientService.findUnique({ where: { id: practice.clientServiceId } }) : null,
-    prisma.user.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
-    prisma.document.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { createdAt: 'desc' } }),
-    prisma.task.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { dueAt: 'asc' } }),
-    prisma.documentChecklistItem.findMany({ where: { active: true, deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { updatedAt: 'desc' } }),
-    prisma.practiceCommunication.findMany({ where: { technicalPracticeId: practice.id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityType: 'TechnicalPractice', entityId: practice.id }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 30 }),
-  ]);
+  const client = await prisma.client.findFirst({ where: { id: practice.clientId, deletedAt: null } });
   if (!client || !canViewTechnicalPractice(session, { ...practice, client })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+
+  const [project, service] = await Promise.all([
+    practice.projectId ? prisma.project.findFirst({ where: { id: practice.projectId, deletedAt: null } }) : null,
+    practice.clientServiceId ? prisma.clientService.findFirst({ where: { id: practice.clientServiceId, deletedAt: null } }) : null,
+  ]);
+  if (practice.projectId && (!project || project.clientId !== practice.clientId)) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+  if (practice.clientServiceId && (!service || service.clientId !== practice.clientId)) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+  const serviceProject = service?.projectId
+    ? (project?.id === service.projectId ? project : await prisma.project.findFirst({ where: { id: service.projectId, deletedAt: null } }))
+    : null;
+  if (service?.projectId && (!serviceProject || serviceProject.clientId !== practice.clientId)) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+  if (project && serviceProject && project.id !== serviceProject.id) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+
+  const canViewDocuments = hasPermission(session, 'document.download');
+  const canReadSensitive = hasPermission(session, 'document.sensitive.read');
+  const canCommRead = hasPermission(session, 'practice_communications.read');
+  const [users, documentRows, taskRows, checklistRows, communications, audits, documentProjects, documentServices] = await Promise.all([
+    prisma.user.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+    canViewDocuments ? prisma.document.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { createdAt: 'desc' } }) : Promise.resolve([]),
+    prisma.task.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { dueAt: 'asc' } }),
+    canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { active: true, deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    canCommRead ? prisma.practiceCommunication.findMany({ where: { technicalPracticeId: practice.id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
+    prisma.auditLog.findMany({ where: hasPermission(session, 'audit.read') ? { OR: [{ entityType: 'TechnicalPractice', entityId: practice.id }] } : { id: '__no_audit_permission__' }, orderBy: { createdAt: 'desc' }, take: 30 }),
+    prisma.project.findMany({ where: { clientId: practice.clientId, deletedAt: null } }),
+    prisma.clientService.findMany({ where: { clientId: practice.clientId, deletedAt: null } }),
+  ]);
+  const projectById = new Map(documentProjects.map((item) => [item.id, { ...item, client }]));
+  const serviceById = new Map(documentServices.map((item) => [item.id, {
+    ...item,
+    client,
+    project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+  }]));
+  const documents = documentRows.filter((document) => canViewDocument(session, {
+    ...document,
+    client: document.clientId === client.id ? client : null,
+    project: document.projectId ? projectById.get(document.projectId) ?? null : null,
+    clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) ?? null : null,
+  }, canReadSensitive));
+  const tasks = taskRows.filter((task) => canViewTask(session, {
+    ...task,
+    client: task.clientId === client.id ? client : null,
+    project: task.projectId ? projectById.get(task.projectId) ?? null : null,
+    clientService: task.clientServiceId ? serviceById.get(task.clientServiceId) ?? null : null,
+  }));
+  const visibleDocumentIds = new Set(documents.map((document) => document.id));
+  const checklist = checklistRows.filter((item) => {
+    if (isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title }) && !canReadSensitive) return false;
+    if (item.documentId && !visibleDocumentIds.has(item.documentId)) return false;
+    return canViewChecklistItem(session, {
+      ...item,
+      client: item.clientId === client.id ? client : null,
+      project: item.projectId ? projectById.get(item.projectId) ?? null : null,
+      clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
+    });
+  });
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? '—';
   const canWrite = hasPermission(session, 'technical.write');
   const canStatus = hasPermission(session, 'technical.status');
   const canAssign = hasPermission(session, 'technical.assign');
-  const canCommRead = hasPermission(session, 'practice_communications.read');
   const canCommWrite = hasPermission(session, 'practice_communications.write');
   const canCommReview = hasPermission(session, 'practice_communications.review');
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');

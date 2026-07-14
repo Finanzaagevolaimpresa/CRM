@@ -1,10 +1,12 @@
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
-import { requirePermission } from '@/lib/auth';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { canEditCommercialOffer } from '@/lib/access-control';
 import { COMMERCIAL_OFFER_DISCLAIMER } from '@/lib/docx-export';
 import { updateCommercialOfferAndRefresh } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 import type { CommercialOffer, CommercialOfferStatus } from '@prisma/client';
+import { getCommercialOfferReadAccess } from '@/lib/read-access';
 
 const statuses: CommercialOfferStatus[] = ['bozza','inviata','accettata','rifiutata','scaduta'];
 const serviceTemplates = [['Verifica AI preliminare FAI', '190'], ['Audit AI Bancabilità FAI', '390'], ['Consulenza Strategica FAI', '500'], ['Pre-Analisi AI Ammissibilità FAI', '890'], ['Dossier Strategico FAI', '890'], ['Ottimizzazione AI Progetto FAI', '890'], ['Business Plan FAI', ''], ['Progetti Digitali / Software / Piattaforme', ''], ['Servizio personalizzato', '']];
@@ -17,11 +19,11 @@ function HiddenOfferFields({ offer, action }: { offer: CommercialOffer; action: 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('lead.read');
   const { id } = await params;
-  const offer = await prisma.commercialOffer.findFirst({ where: { id, deletedAt: null } });
-  if (!offer) return <PageHeader title="Offerta non trovata" description="Il record richiesto non esiste o non è più disponibile."/>;
-  const [lead, client] = await Promise.all([offer.leadId ? prisma.lead.findUnique({ where: { id: offer.leadId } }) : null, offer.clientId ? prisma.client.findUnique({ where: { id: offer.clientId } }) : null]);
-  if (lead && !(session.role === 'admin' || session.role === 'direzione') && lead.assignedToId && lead.assignedToId !== session.userId) return <PageHeader title="Offerta non disponibile" description="L’offerta è collegata a un lead assegnato a un altro utente."/>;
-  const canWrite = ['admin','direzione','commerciale','consulente'].includes(session.role);
+  const context = await getCommercialOfferReadAccess(session, id);
+  if (!context) return <PageHeader title="Offerta non trovata" description="Il record richiesto non esiste o non è accessibile."/>;
+  const { offer, lead } = context;
+  const client = offer.clientId ? await prisma.client.findUnique({ where: { id: offer.clientId } }) : null;
+  const canWrite = hasPermission(session, 'lead.write') && canEditCommercialOffer(session, { ...offer, lead, client: context.client });
   const outcome = offer.status === 'accettata' ? `Accettata il ${formatDateTime(offer.acceptedAt ?? offer.updatedAt)}` : offer.status === 'rifiutata' ? `Rifiutata il ${formatDateTime(offer.rejectedAt ?? offer.updatedAt)}${offer.rejectionReason ? ` — ${offer.rejectionReason}` : ''}` : offer.outcomeNote ?? 'Trattativa aperta';
   return <div className="space-y-6"><PageHeader title={`Offerta commerciale — ${offer.title}`} description="Documento commerciale FAI strutturato, collegato a lead e/o cliente, modificabile ed esportabile in Word."/>
     <div className="flex flex-wrap gap-3"><SecondaryLink href={offer.leadId ? `/leads/${offer.leadId}` : '/leads'}>← Torna al lead</SecondaryLink><SecondaryLink href={`/commercial-offers/${offer.id}/export/docx`}>Esporta Word (.docx)</SecondaryLink></div>

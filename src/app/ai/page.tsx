@@ -6,10 +6,13 @@ import { runMockAiAndRedirect } from '@/lib/form-actions';
 import { Card, EmptyState, PageHeader, StatusBadge, Table } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { getAiAgentCategory, isPrimaryOperationalAiAgent, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
+import { hasPermission, requirePermission } from '@/lib/auth';
 
 export default async function Page() {
+  const session = await requirePermission('ai.review');
   const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { name: 'asc' } }));
   const activeAgents = agents.filter((agent) => agent.active && isPrimaryOperationalAiAgent(agent.code));
+  const canQuickRunMock = hasPermission(session, 'ai_agents.write');
 
   return (
     <div className="space-y-6">
@@ -21,8 +24,10 @@ export default async function Page() {
             <Link className="rounded-xl bg-fai-orange px-4 py-2 text-sm font-bold text-white" href="/ai/outputs-to-review">Output da revisionare</Link>
           </div>
         </Card>
-        <Card title="Run AI mock">
-          {activeAgents.length === 0 ? (
+        <Card title="Quick-run mock amministrativo">
+          {!canQuickRunMock ? (
+            <EmptyState title="Funzione riservata">Il quick-run senza fascicolo è disponibile solo ad amministratori e direzione. Gli operatori eseguono gli agenti dal fascicolo cliente.</EmptyState>
+          ) : activeAgents.length === 0 ? (
             <EmptyState title="Nessun agente attivo">Riattivare almeno un agente da Impostazioni &gt; Agenti AI per eseguire una bozza mock.</EmptyState>
           ) : (
             <form action={runMockAiAndRedirect} className="space-y-3">

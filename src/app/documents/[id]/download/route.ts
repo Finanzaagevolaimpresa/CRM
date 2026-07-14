@@ -15,13 +15,31 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!document) return new NextResponse('Documento non trovato', { status: 404 });
 
   const [client, project, clientService] = await Promise.all([
-    document.clientId ? prisma.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: { salesOwnerId: true, consultantId: true } }) : null,
-    document.projectId ? prisma.project.findFirst({ where: { id: document.projectId, deletedAt: null }, select: { consultantId: true, clientId: true } }) : null,
-    document.clientServiceId ? prisma.clientService.findFirst({ where: { id: document.clientServiceId, deletedAt: null }, select: { assignedToId: true } }) : null,
+    document.clientId ? prisma.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }) : null,
+    document.projectId ? prisma.project.findFirst({ where: { id: document.projectId, deletedAt: null }, select: { id: true, consultantId: true, clientId: true } }) : null,
+    document.clientServiceId ? prisma.clientService.findFirst({ where: { id: document.clientServiceId, deletedAt: null }, select: { id: true, clientId: true, projectId: true, assignedToId: true } }) : null,
   ]);
-  const projectClient = project?.clientId ? await prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: { salesOwnerId: true, consultantId: true } }) : null;
+  const [projectClient, serviceClient, serviceProject] = await Promise.all([
+    project?.clientId ? prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }) : null,
+    clientService?.clientId ? prisma.client.findFirst({ where: { id: clientService.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }) : null,
+    clientService?.projectId
+      ? prisma.project.findFirst({ where: { id: clientService.projectId, deletedAt: null }, select: { id: true, consultantId: true, clientId: true } })
+      : null,
+  ]);
+  const serviceProjectClient = serviceProject?.clientId
+    ? await prisma.client.findFirst({ where: { id: serviceProject.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } })
+    : null;
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
-  if (!canViewDocument(session, { ...document, client, project: project ? { consultantId: project.consultantId, client: projectClient } : null, clientService }, canReadSensitive)) return new NextResponse('Non autorizzato', { status: 403 });
+  if (!canViewDocument(session, {
+    ...document,
+    client,
+    project: project ? { ...project, client: projectClient } : null,
+    clientService: clientService ? {
+      ...clientService,
+      client: serviceClient,
+      project: serviceProject ? { ...serviceProject, client: serviceProjectClient } : null,
+    } : null,
+  }, canReadSensitive)) return new NextResponse('Non autorizzato', { status: 403 });
   if (isSensitiveDocument(document)) await audit(session.userId, 'document_sensitive_access', 'Document', document.id, { category: document.documentCategory });
   if (!(await privateDocumentExists(document.storagePath))) return new NextResponse('File non disponibile', { status: 404 });
 

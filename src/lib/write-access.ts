@@ -173,8 +173,8 @@ async function loadDocumentContext(documentId: string) {
   ]);
   if (document.clientId && !client) denyWriteAccess();
   if (document.companyId && !company) denyWriteAccess();
-  if (project && document.clientId && project.clientId !== document.clientId) denyWriteAccess();
-  if (clientService && document.clientId && clientService.clientId !== document.clientId) denyWriteAccess();
+  if (document.projectId && (!project || !document.clientId || project.clientId !== document.clientId)) denyWriteAccess();
+  if (document.clientServiceId && (!clientService || !document.clientId || clientService.clientId !== document.clientId)) denyWriteAccess();
   if (company && project?.companyId && project.companyId !== document.companyId) denyWriteAccess();
   if (company && clientService?.companyId && clientService.companyId !== document.companyId) denyWriteAccess();
   if (project && clientService?.projectId && clientService.projectId !== project.id) denyWriteAccess();
@@ -198,7 +198,9 @@ export async function requireChecklistEditAccess(session: AuthSession, itemId: s
     item.clientServiceId ? loadServiceContext(item.clientServiceId) : null,
     item.documentId ? loadDocumentContext(item.documentId) : null,
   ]);
-  if (!client || (project && project.clientId !== item.clientId) || (clientService && clientService.clientId !== item.clientId)) denyWriteAccess();
+  if (!client) denyWriteAccess();
+  if (item.projectId && (!project || project.clientId !== item.clientId)) denyWriteAccess();
+  if (item.clientServiceId && (!clientService || clientService.clientId !== item.clientId)) denyWriteAccess();
   if (document && document.clientId !== item.clientId) denyWriteAccess();
   if (document && !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
   const context = { ...item, client, project, clientService };
@@ -217,7 +219,9 @@ export async function requireTaskEditAccess(session: AuthSession, taskId: string
     task.projectId ? loadProjectContext(task.projectId) : null,
     task.clientServiceId ? loadServiceContext(task.clientServiceId) : null,
   ]);
-  if (!client || (project && project.clientId !== task.clientId) || (clientService && clientService.clientId !== task.clientId)) denyWriteAccess();
+  if (!client) denyWriteAccess();
+  if (task.projectId && (!project || project.clientId !== task.clientId)) denyWriteAccess();
+  if (task.clientServiceId && (!clientService || clientService.clientId !== task.clientId)) denyWriteAccess();
   if (task.companyId && !company) denyWriteAccess();
   if (company && project?.companyId && project.companyId !== company.id) denyWriteAccess();
   if (company && clientService?.companyId && clientService.companyId !== company.id) denyWriteAccess();
@@ -235,7 +239,9 @@ async function loadTechnicalPracticeContext(practiceId: string) {
     practice.projectId ? loadProjectContext(practice.projectId) : null,
     practice.clientServiceId ? loadServiceContext(practice.clientServiceId) : null,
   ]);
-  if (!client || (project && project.clientId !== practice.clientId) || (clientService && clientService.clientId !== practice.clientId)) denyWriteAccess();
+  if (!client) denyWriteAccess();
+  if (practice.projectId && (!project || project.clientId !== practice.clientId)) denyWriteAccess();
+  if (practice.clientServiceId && (!clientService || clientService.clientId !== practice.clientId)) denyWriteAccess();
   if (project && clientService?.projectId && clientService.projectId !== project.id) denyWriteAccess();
   return { practice, client, project, clientService };
 }

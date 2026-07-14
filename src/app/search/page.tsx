@@ -4,9 +4,10 @@ import Link from 'next/link';
 import type { Prisma } from '@prisma/client';
 import { OpenLink, PrimaryButton } from '@/components/actions';
 import { Card, EmptyState, PageHeader, StatusBadge, formatDateTime } from '@/components/ui';
-import { canViewClient, canViewDocument, canViewTechnicalPractice } from '@/lib/access-control';
+import { canViewClient, canViewClientContext, canViewCommercialOffer, canViewDocument, canViewLead, canViewService, canViewTechnicalPractice } from '@/lib/access-control';
 import { hasPermission, requireSession, type Permission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 
 type SearchResult = {
   id: string;
@@ -68,7 +69,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
   let groups: ResultGroup[] = [];
 
   if (q.length >= 2) {
-    const [clients, projects, services, documents, technicalPractices, tasks, communications, leads, offers, aiOutputs, dossiers] = await Promise.all([
+    const [clients, projects, services, documents, technicalPractices, tasks, communications, leads, offers] = await Promise.all([
       hasPermission(session, 'client.read')
         ? prisma.client.findMany({ where: { deletedAt: null, OR: [{ displayName: text(q) }, { status: text(q) }, { notes: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
@@ -81,7 +82,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
         ? prisma.technicalPractice.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { practiceType: text(q) }, { targetEntity: text(q) }, { targetPortal: text(q) }, { protocolNumber: text(q) }, { integrationRequestNote: text(q) }, { internalNotes: text(q) }, { clientVisibleStatus: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'service.read')
-        ? prisma.task.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { description: text(q) }, { type: text(q) }] }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }], take: takePerCategory })
+        ? listAccessibleTasks(session, { where: { deletedAt: null, OR: [{ title: text(q) }, { description: text(q) }, { type: text(q) }] }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }], take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'practice_communications.read')
         ? prisma.practiceCommunication.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { content: text(q) }, { internalNote: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
@@ -92,26 +93,56 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       hasPermission(session, 'lead.read')
         ? prisma.commercialOffer.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { description: text(q) }, { services: text(q) }, { includedActivities: text(q) }, { operationalConditions: text(q) }, { commercialProposal: text(q) }, { notes: text(q) }, { followUpNote: text(q) }, { outcomeNote: text(q) }, { rejectionReason: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
-      hasPermission(session, 'ai.review')
-        ? prisma.aiOutput.findMany({ where: { OR: [{ title: text(q) }, { content: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
-        : Promise.resolve([]),
-      hasPermission(session, 'dossier.read')
-        ? prisma.clientDossier.findMany({ where: { OR: [{ title: text(q) }, { content: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
-        : Promise.resolve([]),
     ]);
 
     const allClients = await prisma.client.findMany({ where: { deletedAt: null } });
     const clientById = new Map(allClients.map((client) => [client.id, client]));
     const projectById = new Map(projects.map((project) => [project.id, { ...project, client: clientById.get(project.clientId) }]));
-    const serviceById = new Map(services.map((service) => [service.id, service]));
+    const serviceById = new Map(services.map((service) => [service.id, { ...service, client: clientById.get(service.clientId) ?? null, project: service.projectId ? projectById.get(service.projectId) ?? null : null }]));
 
     const visibleClients = clients.filter((client) => canViewClient(session, client));
     const visiblePractices = technicalPractices.filter((practice) => canViewTechnicalPractice(session, { ...practice, client: clientById.get(practice.clientId) ?? null }));
     const visibleDocuments = documents.filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
-    const visibleTasks = session.role === 'admin' || session.role === 'direzione' || ['revisore', 'backoffice'].includes(session.role) ? tasks : tasks.filter((task) => task.assignedToId === session.userId || task.createdById === session.userId);
-    const visibleCommunications = communications.filter((communication) => canViewTechnicalPractice(session, { commercialOwnerId: communication.commercialOwnerId, technicalOwnerId: communication.technicalOwnerId, client: clientById.get(communication.clientId) ?? null }));
-    const visibleLeads = session.role === 'admin' || session.role === 'direzione' ? leads : leads.filter((lead) => !lead.assignedToId || lead.assignedToId === session.userId);
-    const visibleOffers = session.role === 'admin' || session.role === 'direzione' ? offers : offers.filter((offer) => !offer.createdById || offer.createdById === session.userId || (offer.leadId && visibleLeads.some((lead) => lead.id === offer.leadId)) || (offer.clientId && visibleClients.some((client) => client.id === offer.clientId)));
+    const visibleTasks = tasks;
+    const communicationPracticeIds = [...new Set(communications.map((communication) => communication.technicalPracticeId))];
+    const communicationPractices = communicationPracticeIds.length
+      ? await prisma.technicalPractice.findMany({ where: { id: { in: communicationPracticeIds }, deletedAt: null } })
+      : [];
+    const communicationPracticeById = new Map(communicationPractices.map((practice) => [practice.id, practice]));
+    const visibleCommunications = communications.filter((communication) => {
+      const practice = communicationPracticeById.get(communication.technicalPracticeId);
+      if (!practice || practice.clientId !== communication.clientId) return false;
+      return canViewTechnicalPractice(session, {
+        ...practice,
+        client: clientById.get(practice.clientId) ?? null,
+      });
+    });
+    const visibleLeads = leads.filter((lead) => canViewLead(session, lead));
+    const offerLeadIds = [...new Set(offers.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)))];
+    const offerLeads = offerLeadIds.length
+      ? await prisma.lead.findMany({ where: { id: { in: offerLeadIds }, deletedAt: null } })
+      : [];
+    const leadById = new Map(offerLeads.map((lead) => [lead.id, lead]));
+    const visibleOffers = offers.filter((offer) => canViewCommercialOffer(session, { ...offer, lead: offer.leadId ? leadById.get(offer.leadId) ?? null : null, client: offer.clientId ? clientById.get(offer.clientId) ?? null : null }));
+    const accessibleClientIds = allClients.filter((client) => canViewClient(session, client)).map((client) => client.id);
+    const accessibleProjectIds = [...projectById.values()].filter((project) => canViewClientContext(session, { clientId: project.clientId, client: project.client ?? null, project })).map((project) => project.id);
+    const accessibleServiceIds = [...serviceById.values()].filter((service) => canViewService(session, service)).map((service) => service.id);
+    const [aiOutputContexts, dossierRows] = await Promise.all([
+      hasPermission(session, 'ai.review')
+        ? listAccessibleAiOutputs(session, { where: { OR: [{ title: text(q) }, { content: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        : Promise.resolve([]),
+      hasPermission(session, 'dossier.read') && (accessibleClientIds.length || accessibleProjectIds.length || accessibleServiceIds.length)
+        ? prisma.clientDossier.findMany({ where: { AND: [{ OR: [{ title: text(q) }, { content: text(q) }] }, { OR: [{ clientId: { in: accessibleClientIds } }, { projectId: { in: accessibleProjectIds } }, { clientServiceId: { in: accessibleServiceIds } }] }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        : Promise.resolve([]),
+    ]);
+    const aiOutputs = aiOutputContexts.map((context) => context.output);
+    const visibleDossiers = dossierRows.filter((dossier) => {
+      const client = clientById.get(dossier.clientId) ?? null;
+      const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
+      const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
+      if (!client || (dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;
+      return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+    });
 
     groups = [
       { title: 'Clienti', permission: 'client.read', items: visibleClients.map((client) => ({ id: client.id, title: client.displayName, subtitle: [client.type, client.notes].filter(Boolean).join(' · ') || 'Fascicolo cliente', category: 'Clienti', status: client.status, date: client.updatedAt, href: `/clients/${client.id}` })) },
@@ -121,7 +152,8 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       { title: 'Comunicazioni', permission: 'practice_communications.read', items: visibleCommunications.map((communication) => ({ id: communication.id, title: communication.title, subtitle: snippet(`${communication.type} · ${communication.channel} · ${communication.content}`), category: 'Comunicazioni', status: communication.status, date: communication.usedAt ?? communication.reviewedAt ?? communication.updatedAt, href: `/technical-office/practices/${communication.technicalPracticeId}` })) },
       { title: 'Lead', permission: 'lead.read', items: visibleLeads.map((lead) => ({ id: lead.id, title: lead.companyName || fullName(lead.firstName, lead.lastName), subtitle: [lead.contactPerson, lead.email, lead.phone, lead.interest].filter(Boolean).join(' · ') || 'Lead commerciale', category: 'Lead', status: lead.status, date: lead.nextActionDate ?? lead.updatedAt, href: `/leads/${lead.id}` })) },
       { title: 'Offerte', permission: 'lead.read', items: visibleOffers.map((offer) => ({ id: offer.id, title: offer.title, subtitle: snippet(offer.description ?? offer.services ?? offer.commercialProposal ?? 'Offerta commerciale'), category: 'Offerte', status: offer.status, date: offer.followUpAt ?? offer.validUntil ?? offer.updatedAt, href: `/commercial-offers/${offer.id}` })) },
-      { title: 'Altri risultati', permission: 'ai.review', items: [...aiOutputs.map((output) => ({ id: output.id, title: output.title, subtitle: snippet(output.content), category: 'Output AI', status: output.status, date: output.updatedAt, href: `/ai/outputs/${output.id}` })), ...dossiers.map((dossier) => ({ id: dossier.id, title: dossier.title, subtitle: snippet(dossier.content), category: 'Dossier', status: dossier.status, date: dossier.updatedAt, href: `/client-dossiers/${dossier.id}` }))] },
+      { title: 'Output AI', permission: 'ai.review', items: aiOutputs.map((output) => ({ id: output.id, title: output.title, subtitle: snippet(output.content), category: 'Output AI', status: output.status, date: output.updatedAt, href: `/ai/outputs/${output.id}` })) },
+      { title: 'Dossier', permission: 'dossier.read', items: visibleDossiers.map((dossier) => ({ id: dossier.id, title: dossier.title, subtitle: snippet(dossier.content), category: 'Dossier', status: dossier.status, date: dossier.updatedAt, href: `/client-dossiers/${dossier.id}` })) },
     ] satisfies ResultGroup[];
     groups = groups.filter((group) => hasPermission(session, group.permission));
   }

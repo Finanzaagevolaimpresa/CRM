@@ -3,6 +3,7 @@ import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, Stat, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { canViewTechnicalPractice } from '@/lib/access-control';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,14 +20,42 @@ const buckets = [
 ] as const;
 
 export default async function Page() {
-  await requirePermission('technical.read');
-  const [grouped, urgent, clients, users] = await Promise.all([
-    prisma.technicalPractice.groupBy({ by: ['status'], where: { deletedAt: null }, _count: { _all: true } }),
-    prisma.technicalPractice.findMany({ where: { deletedAt: null, OR: [{ priority: 'urgente' }, { dueDate: { lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } }] }, orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }], take: 10 }),
-    prisma.client.findMany({ select: { id: true, displayName: true } }),
+  const session = await requirePermission('technical.read');
+  const [practices, clients, projects, services, users] = await Promise.all([
+    prisma.technicalPractice.findMany({ where: { deletedAt: null } }),
+    prisma.client.findMany({ where: { deletedAt: null } }),
+    prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true } }),
+    prisma.clientService.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true } }),
     prisma.user.findMany({ where: { active: true }, select: { id: true, name: true } }),
   ]);
-  const count = (status: string) => grouped.find((item) => item.status === status)?._count._all ?? 0;
+  const clientById = new Map(clients.map((client) => [client.id, client]));
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const serviceById = new Map(services.map((service) => [service.id, service]));
+  const visiblePractices = practices.filter((practice) => {
+    const client = clientById.get(practice.clientId) ?? null;
+    const project = practice.projectId ? projectById.get(practice.projectId) ?? null : null;
+    const service = practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null;
+    if (!client) return false;
+    if (practice.projectId && (!project || project.clientId !== practice.clientId)) return false;
+    if (practice.clientServiceId && (!service || service.clientId !== practice.clientId)) return false;
+    if (service?.projectId) {
+      const serviceProject = projectById.get(service.projectId);
+      if (!serviceProject || serviceProject.clientId !== practice.clientId) return false;
+      if (project && project.id !== serviceProject.id) return false;
+    }
+    return canViewTechnicalPractice(session, { ...practice, client });
+  });
+  const next7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const priorityRank = { urgente: 0, alta: 1, media: 2, bassa: 3 } as const;
+  const urgent = visiblePractices
+    .filter((practice) => practice.priority === 'urgente' || (practice.dueDate && practice.dueDate <= next7))
+    .sort((left, right) => {
+      const leftDue = left.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+      const rightDue = right.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+      return leftDue - rightDue || priorityRank[left.priority] - priorityRank[right.priority];
+    })
+    .slice(0, 10);
+  const count = (status: string) => visiblePractices.filter((item) => item.status === status).length;
   const clientOf = (id: string) => clients.find((client) => client.id === id)?.displayName ?? 'Cliente';
   const userOf = (id?: string | null) => users.find((user) => user.id === id)?.name ?? 'Da assegnare';
 
