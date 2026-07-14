@@ -439,3 +439,48 @@ Cron giornaliero esempio:
 ```cron
 15 2 * * * cd /srv/fai-crm && COMPOSE_PROJECT_NAME=fai-crm BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh >> /var/log/fai-crm-backup.log 2>&1
 ```
+
+## Scheduler systemd per AI reconciler
+
+Il reconciler AI deve essere pianificato sul VPS production per chiudere localmente le lease scadute senza invocare provider AI e senza retry verso provider esterni. Gli esempi versionati sono:
+
+- `deploy/systemd/fai-crm-ai-reconcile.service.example`
+- `deploy/systemd/fai-crm-ai-reconcile.timer.example`
+
+Installazione manuale sul server, dalla root del repository in `/opt/fai-crm`:
+
+```bash
+sudo cp deploy/systemd/fai-crm-ai-reconcile.service.example /etc/systemd/system/fai-crm-ai-reconcile.service
+sudo cp deploy/systemd/fai-crm-ai-reconcile.timer.example /etc/systemd/system/fai-crm-ai-reconcile.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now fai-crm-ai-reconcile.timer
+```
+
+Esecuzione manuale una tantum del service:
+
+```bash
+sudo systemctl start fai-crm-ai-reconcile.service
+```
+
+Controllo dello stato del timer e dell'ultima esecuzione:
+
+```bash
+systemctl status fai-crm-ai-reconcile.timer
+systemctl status fai-crm-ai-reconcile.service
+journalctl -u fai-crm-ai-reconcile.service -n 100 --no-pager
+```
+
+Disattivazione sicura:
+
+```bash
+sudo systemctl disable --now fai-crm-ai-reconcile.timer
+sudo systemctl reset-failed fai-crm-ai-reconcile.service
+```
+
+Il service esegue nel container app esistente:
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app npm run ai:reconcile
+```
+
+Non copiare segreti nei file unit: le variabili restano in `/opt/fai-crm/.env.production`, già usato da Docker Compose.
