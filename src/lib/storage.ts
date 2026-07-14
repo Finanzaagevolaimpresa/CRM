@@ -3,7 +3,8 @@ import { mkdir, stat, writeFile, readFile } from 'fs/promises';
 import path from 'path';
 
 const provider = process.env.STORAGE_PROVIDER ?? 'local';
-const root = path.resolve(process.cwd(), process.env.LOCAL_DOCUMENT_STORAGE_ROOT ?? 'storage/private/documents');
+const legacyDefaultRoot = 'storage/private/documents';
+const root = path.resolve(process.cwd(), process.env.LOCAL_DOCUMENT_STORAGE_ROOT ?? legacyDefaultRoot);
 const maxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? 25 * 1024 * 1024);
 const allowedExtensions = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods', '.p7m', '.xml']);
 const blockedExtensions = new Set(['.exe', '.bat', '.cmd', '.com', '.js', '.mjs', '.sh', '.ps1', '.vbs', '.scr', '.jar', '.php']);
@@ -23,11 +24,33 @@ function assertLocalProvider() {
   if (provider !== 'local') throw new Error(`Storage provider ${provider} non attivo: placeholder S3 non configurato`);
 }
 
+function storageKeySegments(storagePath: string) {
+  if (!storagePath || storagePath.includes('\0')) throw new Error('Storage path non valido');
+  if (path.posix.isAbsolute(storagePath) || path.win32.isAbsolute(storagePath) || /^[A-Za-z]:/.test(storagePath)) {
+    throw new Error('Storage path non valido');
+  }
+
+  const normalizedPath = storagePath.replace(/\\/g, '/');
+  const legacyPrefix = `${legacyDefaultRoot}/`;
+  const key = normalizedPath.startsWith(legacyPrefix) ? normalizedPath.slice(legacyPrefix.length) : normalizedPath;
+  const segments = key.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) throw new Error('Storage path non valido');
+  return segments;
+}
+
+function assertStorageSegment(segment: string, fieldName: string) {
+  if (!segment || segment === '.' || segment === '..' || segment.includes('/') || segment.includes('\\') || segment.includes('\0')) {
+    throw new Error(`${fieldName} non valido`);
+  }
+}
+
 export function localPathFromStoragePath(storagePath: string) {
   assertLocalProvider();
-  if (storagePath.includes('..') || path.isAbsolute(storagePath)) throw new Error('Storage path non valido');
-  const full = path.resolve(process.cwd(), storagePath);
-  if (!full.startsWith(root + path.sep)) throw new Error('Storage path fuori dallo storage privato');
+  const full = path.resolve(root, ...storageKeySegments(storagePath));
+  const relative = path.relative(root, full);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Storage path fuori dallo storage privato');
+  }
   return full;
 }
 
@@ -37,11 +60,14 @@ export async function savePrivateDocumentFile(input: { file: File; clientId: str
   if (input.file.size > maxBytes) throw new Error(`File oltre il limite di ${Math.floor(maxBytes / 1024 / 1024)} MB`);
   assertSafeUploadName(input.fileName);
   const servicePart = input.clientServiceId || 'generale';
-  const dir = path.join(root, input.clientId, servicePart);
-  await mkdir(dir, { recursive: true });
-  const storagePath = path.relative(process.cwd(), path.join(dir, `${randomUUID()}-${input.fileName}`));
+  assertStorageSegment(input.clientId, 'Client ID');
+  assertStorageSegment(servicePart, 'Client service ID');
+  const storagePath = path.posix.join(input.clientId, servicePart, `${randomUUID()}-${input.fileName}`);
+  const targetPath = localPathFromStoragePath(storagePath);
+  const dir = path.dirname(targetPath);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   const buffer = Buffer.from(await input.file.arrayBuffer());
-  await writeFile(localPathFromStoragePath(storagePath), buffer, { flag: 'wx' });
+  await writeFile(targetPath, buffer, { flag: 'wx', mode: 0o600 });
   return { storagePath, checksum: createHash('sha256').update(buffer).digest('hex'), sizeBytes: buffer.byteLength };
 }
 
