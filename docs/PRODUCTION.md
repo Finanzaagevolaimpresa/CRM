@@ -56,6 +56,8 @@ Applicare migration solo se la directory `prisma/migrations` contiene migration 
 npm run prisma:migrate:deploy
 ```
 
+Dopo il merge di modifiche che includono migration Prisma, eseguire sempre `npm run prisma:migrate:deploy` prima del riavvio applicativo definitivo, così lo schema database production riceve le nuove tabelle senza alterare dati esistenti.
+
 Non usare `prisma migrate dev` in produzione e non generare migration direttamente sul server.
 
 ## Avvio applicazione
@@ -199,6 +201,8 @@ Il Dockerfile esegue già `npm run prisma:generate` durante la build. Applicare 
 docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec app npm run prisma:migrate:deploy
 ```
 
+Dopo il merge di modifiche che includono migration Prisma, eseguire sempre `npm run prisma:migrate:deploy` prima del riavvio applicativo definitivo, così lo schema database production riceve le nuove tabelle senza alterare dati esistenti.
+
 Non usare `prisma migrate dev` in produzione e non generare nuove migration dal server.
 
 ## Reverse proxy HTTPS con Caddy
@@ -331,6 +335,8 @@ docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.exam
 ```bash
 docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:migrate:deploy
 ```
+
+Dopo il merge di modifiche che includono migration Prisma, eseguire sempre `npm run prisma:migrate:deploy` prima del riavvio applicativo definitivo, così lo schema database production riceve le nuove tabelle senza alterare dati esistenti.
 
 Questo usa `prisma migrate deploy`; non usare `prisma migrate dev` in produzione e non eseguire migration durante la build Docker.
 

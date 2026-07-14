@@ -1,6 +1,7 @@
 "use client";
 
 import type { RoleCode } from "@prisma/client";
+import type { Permission } from "@/lib/auth";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,6 +10,7 @@ type NavItem = {
   href: string;
   adminOnly?: boolean;
   roles?: RoleCode[];
+  permission?: Permission;
 };
 
 type NavSection = {
@@ -39,26 +41,26 @@ const sections: NavSection[] = [
       { label: "Ricerca", href: "/search" },
       { label: "Task", href: "/tasks" },
       { label: "Scadenze", href: "/deadlines" },
-      { label: "Documenti", href: "/documents" },
-      { label: "Checklist documentale", href: "/document-checklists" },
+      { label: "Documenti", href: "/documents", permission: "document.download" },
+      { label: "Checklist documentale", href: "/document-checklists", permission: "service.read" },
     ],
   },
   {
     title: "Commerciale",
     items: [
-      { label: "Lead e offerte", href: "/leads" },
-      { label: "Offerte", href: "/commercial-offers" },
-      { label: "Contratti", href: "/contracts" },
-      { label: "Pagamenti", href: "/payments" },
+      { label: "Lead e offerte", href: "/leads", permission: "lead.read" },
+      { label: "Offerte", href: "/commercial-offers", permission: "lead.read" },
+      { label: "Contratti", href: "/contracts", permission: "contract.read" },
+      { label: "Pagamenti", href: "/payments", permission: "payment.read" },
     ],
   },
   {
     title: "Clienti e pratiche",
     items: [
-      { label: "Clienti", href: "/clients" },
-      { label: "Progetti", href: "/projects" },
+      { label: "Clienti", href: "/clients", permission: "client.read" },
+      { label: "Progetti", href: "/projects", permission: "project.read" },
       { label: "Pre-analisi", href: "/preanalyses" },
-      { label: "Dossier", href: "/dossiers" },
+      { label: "Dossier", href: "/dossiers", permission: "dossier.read" },
     ],
   },
   {
@@ -68,8 +70,9 @@ const sections: NavSection[] = [
         label: "Ufficio Tecnico",
         href: "/technical-office",
         roles: operationalRoles,
+        permission: "technical.read",
       },
-      { label: "Pratiche tecniche", href: "/technical-office/practices", roles: operationalRoles },
+      { label: "Pratiche tecniche", href: "/technical-office/practices", roles: operationalRoles, permission: "technical.read" },
       { label: "Enti / Portali", href: "/technical-office/portals", roles: operationalRoles },
       { label: "Integrazioni", href: "/technical-office/integrations", roles: operationalRoles },
       { label: "Rendicontazioni", href: "/technical-office/reporting", roles: operationalRoles },
@@ -79,9 +82,9 @@ const sections: NavSection[] = [
     title: "AI",
     items: [
       { label: "Control center AI", href: "/ai" },
-      { label: "Output AI", href: "/ai/outputs" },
-      { label: "Dossier AI / Bozze", href: "/client-dossiers" },
-      { label: "Agenti AI", href: "/settings/ai-agents", adminOnly: true },
+      { label: "Output AI", href: "/ai/outputs", permission: "ai.review" },
+      { label: "Dossier AI / Bozze", href: "/client-dossiers", permission: "dossier.read" },
+      { label: "Agenti AI", href: "/settings/ai-agents", adminOnly: true, permission: "ai_agents.read" },
     ],
   },
   {
@@ -100,15 +103,16 @@ const sections: NavSection[] = [
   {
     title: "Admin / Sistema",
     items: [
-      { label: "Utenti", href: "/settings/users", adminOnly: true },
-      { label: "Ruoli", href: "/settings/roles", adminOnly: true },
-      { label: "Diagnostica sistema", href: "/settings/system", adminOnly: true },
+      { label: "Utenti", href: "/settings/users", adminOnly: true, permission: "settings.manage" },
+      { label: "Ruoli", href: "/settings/roles", adminOnly: true, permission: "settings.manage" },
+      { label: "Diagnostica sistema", href: "/settings/system", adminOnly: true, permission: "settings.manage" },
       {
         label: "Diagnostica AI",
         href: "/settings/ai-diagnostics",
         adminOnly: true,
+        permission: "ai_agents.read",
       },
-      { label: "Audit log", href: "/audit-log", adminOnly: true },
+      { label: "Audit log", href: "/audit-log", adminOnly: true, permission: "audit.read" },
     ],
   },
 ];
@@ -118,9 +122,11 @@ const adminRoles: RoleCode[] = ["admin", "direzione"];
 export function NavLinks({
   role,
   notificationCount = 0,
+  permissions = [],
 }: {
   role?: RoleCode | null;
   notificationCount?: number;
+  permissions?: readonly Permission[];
 }) {
   const pathname = usePathname();
   const canSeeAdmin = Boolean(role && adminRoles.includes(role));
@@ -131,6 +137,7 @@ export function NavLinks({
         const visibleItems = section.items.filter((item) => {
           if (item.adminOnly && !canSeeAdmin) return false;
           if (item.roles && (!role || !item.roles.includes(role))) return false;
+          if (item.permission && !permissions.includes(item.permission) && role !== "admin") return false;
           return true;
         });
         if (visibleItems.length === 0) return null;
