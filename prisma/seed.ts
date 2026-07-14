@@ -1,5 +1,6 @@
 import { PrismaClient, RoleCode, type User } from "@prisma/client";
 import { AI_AGENT_CODES, initialAiAgentConfigs } from "./ai-agent-configs";
+import { seedAiAgentConfig } from "./seed-ai-agent";
 import bcrypt from "bcryptjs";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
@@ -78,38 +79,7 @@ async function main() {
   });
 
   for (const config of initialAiAgentConfigs) {
-    const agent = await prisma.aiAgent.upsert({
-      where: { code: config.code },
-      update: {
-        name: config.name,
-        description: config.description,
-        operationalScope: config.operationalScope,
-        systemPrompt: config.systemPrompt,
-        requiredDataChecklist: config.requiredDataChecklist,
-        expectedOutput: config.expectedOutput,
-        toneStyle: config.toneStyle,
-        active: config.active,
-        provider: config.provider,
-        futureModel: config.futureModel ?? null,
-      },
-      create: {
-        code: config.code,
-        name: config.name,
-        description: config.description,
-        operationalScope: config.operationalScope,
-        systemPrompt: config.systemPrompt,
-        requiredDataChecklist: config.requiredDataChecklist,
-        expectedOutput: config.expectedOutput,
-        toneStyle: config.toneStyle,
-        active: config.active,
-        provider: config.provider,
-        futureModel: config.futureModel ?? null,
-        promptVersion: "v1",
-        inputSchema: {},
-        outputSchema: { requiresHumanReview: true },
-      },
-    });
-    await prisma.auditLog.create({ data: { actorId: admin.id, event: 'ai_agent_config_seed', entityType: 'AiAgent', entityId: agent.id, after: { code: agent.code, active: agent.active, provider: agent.provider } } });
+    await seedAiAgentConfig(prisma, config, admin.id, 'development_seed');
   }
 
   const services = [

@@ -10,7 +10,7 @@ Questa guida prepara il CRM FAI per ambienti raggiungibili via HTTPS, ad esempio
 - Avvio tipico: `APP_ENV=development npm run dev`.
 - Database: PostgreSQL Docker locale configurato in `DATABASE_URL`.
 - Storage documenti: filesystem locale privato.
-- AI: provider `mock` predefinito oppure OpenAI opzionale solo server-side.
+- AI: provider `mock` predefinito; OpenAI opzionale solo dopo l'apertura esplicita del doppio gate Control Plane.
 - Credenziali demo: ammesse solo per development.
 
 ### Staging
@@ -43,12 +43,20 @@ Configurare le variabili lato server, senza prefisso `NEXT_PUBLIC_` per secret e
 | `AUTH_SECRET` | Sì | Deve essere una stringa lunga, casuale e reale; diversa per ogni ambiente. |
 | `STORAGE_PROVIDER` | Sì | Valore attualmente supportato: `local`. Non configurare `s3`/cloud storage finché non viene implementato nel codice runtime. |
 | `LOCAL_DOCUMENT_STORAGE_ROOT` | Sì | Directory privata e persistente del server per i documenti quando `STORAGE_PROVIDER="local"`. Non deve essere dentro una directory pubblica servita dal web server. |
-| `AI_PROVIDER` | Sì | `mock` per ambienti senza AI reale oppure `openai` quando configurato server-side. |
-| `AI_API_KEY` | Sì se `AI_PROVIDER=openai` | Chiave API mantenuta solo server-side; mai nel browser, mai in `NEXT_PUBLIC_*`, mai nei log. |
-| `AI_MODEL` | Sì | Modello usato dal provider AI configurato. |
+| `AI_PROVIDER` | Sì | Compatibilità/diagnostica; lasciare `mock`. I run operativi usano il provider del singolo agente. |
+| `AI_API_KEY` | Sì se si abilita OpenAI | Chiave API mantenuta solo server-side; mai nel browser, mai in `NEXT_PUBLIC_*`, nel database o nei log. |
+| `AI_MODEL` | No | Compatibilità/diagnostica; non autorizza modelli per i run operativi. |
+| `AI_EXTERNAL_PROVIDERS_ENABLED` | Sì | Gate infrastrutturale: valore iniziale `false`; solo `true` esatto può abilitare chiamate esterne. |
+| `AI_ALLOWED_MODELS` | Sì | Allowlist CSV dei modelli OpenAI; lasciare vuota per negare ogni modello esterno. |
 | `WEBSITE_LEAD_WEBHOOK_SECRET` | Sì | Deve essere una stringa lunga, casuale e reale condivisa solo tra WordPress e CRM. |
 
 Generare `AUTH_SECRET` e `WEBSITE_LEAD_WEBHOOK_SECRET` con un generatore crittograficamente sicuro. Non riutilizzare valori demo, brevi o prevedibili.
+
+### Control Plane AI per ambiente
+
+Il gate ambiente e lo switch globale nel database devono essere entrambi attivi; uno stato mancante o incoerente nega la chiamata. Servono inoltre modello allowlisted, agente attivo, `ai.run`, `ai.external.run`, conferma esplicita per il singolo run e limite orario disponibile. Nessun output viene inviato automaticamente a clienti o terzi.
+
+Creare progetti OpenAI e chiavi distinti per staging e produzione, con budget e limiti separati. Collaudare prima in staging usando dati sintetici. Il runtime invia richieste con `store: false`, che non costituisce garanzia ZDR; Zero Data Retention richiede una configurazione idonea separata sul progetto/organizzazione OpenAI. Procedura completa: [`ai-control-plane.md`](ai-control-plane.md).
 
 ### Storage documenti supportato in questa versione
 
@@ -69,6 +77,8 @@ LOCAL_DOCUMENT_STORAGE_ROOT="/percorso/privato/persistente/fai-crm/documents"
 - Configurare backup automatici del database PostgreSQL e test periodici di restore.
 - Configurare backup dello storage documenti e test periodici di restore.
 - Non loggare `DATABASE_URL`, `AUTH_SECRET`, `WEBSITE_LEAD_WEBHOOK_SECRET`, `AI_API_KEY` o header di autenticazione.
+- Lasciare `AI_EXTERNAL_PROVIDERS_ENABLED=false` e `AI_ALLOWED_MODELS=""` finché governance, privacy e collaudo non sono completati.
+- Limitare `ai.external.run` agli operatori approvati e verificare periodicamente audit e rate limit.
 - Non usare credenziali demo in produzione.
 - Disattivare, eliminare o cambiare password dell'admin demo prima del go-live.
 - Mantenere accesso solo per utenti interni FAI autorizzati.

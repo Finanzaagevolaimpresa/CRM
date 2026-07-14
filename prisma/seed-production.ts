@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { initialAiAgentConfigs } from "./ai-agent-configs";
+import { seedAiAgentConfig } from "./seed-ai-agent";
 
 const prisma = new PrismaClient();
 
@@ -38,37 +39,7 @@ const services = [
 
 async function seedAiAgentConfigs() {
   for (const config of initialAiAgentConfigs) {
-    await prisma.aiAgent.upsert({
-      where: { code: config.code },
-      update: {
-        name: config.name,
-        description: config.description,
-        operationalScope: config.operationalScope,
-        systemPrompt: config.systemPrompt,
-        requiredDataChecklist: config.requiredDataChecklist,
-        expectedOutput: config.expectedOutput,
-        toneStyle: config.toneStyle,
-        active: config.active,
-        provider: config.provider,
-        futureModel: config.futureModel ?? null,
-      },
-      create: {
-        code: config.code,
-        name: config.name,
-        description: config.description,
-        operationalScope: config.operationalScope,
-        systemPrompt: config.systemPrompt,
-        requiredDataChecklist: config.requiredDataChecklist,
-        expectedOutput: config.expectedOutput,
-        toneStyle: config.toneStyle,
-        active: config.active,
-        provider: config.provider,
-        futureModel: config.futureModel ?? null,
-        promptVersion: "v1",
-        inputSchema: {},
-        outputSchema: { requiresHumanReview: true },
-      },
-    });
+    await seedAiAgentConfig(prisma, config);
   }
 }
 

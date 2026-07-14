@@ -1,6 +1,8 @@
 import { constants } from 'fs';
 import { access, stat } from 'fs/promises';
 import path from 'path';
+import { getAiProviderDiagnostics } from '@/lib/ai';
+import { getAiControlPolicy } from '@/lib/ai-control-plane';
 import { prisma } from '@/lib/prisma';
 
 export type ReadinessStatus = 'OK' | 'Attenzione' | 'Errore' | 'Non configurato';
@@ -109,15 +111,41 @@ function s3Status(): ReadinessCheck {
   };
 }
 
-function aiStatus(): ReadinessCheck {
-  const provider = configuredValue('AI_PROVIDER', 'mock') ?? 'mock';
-  const hasApiKey = envPresent('AI_API_KEY');
-  return {
-    title: 'AI provider',
-    status: provider === 'openai' && !hasApiKey ? 'Attenzione' : 'OK',
-    summary: `${provider} configurato`,
-    details: [`AI_API_KEY: ${hasApiKey ? 'presente' : 'non presente'}. Il valore non viene mostrato.`],
-  };
+async function aiStatus(): Promise<ReadinessCheck> {
+  const diagnostics = getAiProviderDiagnostics();
+  try {
+    const policy = await getAiControlPolicy();
+    const partiallyEnabled = policy.environmentEnabled
+      || policy.databaseEnabled
+      || policy.allowedModels.length > 0
+      || diagnostics.hasApiKey;
+    const ready = policy.effectiveExternalProvidersEnabled
+      && policy.allowedModels.length > 0
+      && diagnostics.hasApiKey;
+    return {
+      title: 'AI Control Plane',
+      status: ready || !partiallyEnabled ? 'OK' : 'Attenzione',
+      summary: ready
+        ? 'Provider esterni tecnicamente abilitabili'
+        : partiallyEnabled
+          ? 'Configurazione parziale: chiamate esterne bloccate'
+          : 'Fail-closed: provider esterni disabilitati',
+      details: [
+        `Gate ambiente: ${policy.environmentEnabled ? 'abilitato' : 'disabilitato'}.`,
+        `Switch database: ${policy.databaseEnabled ? 'abilitato' : 'disabilitato'}.`,
+        `Modelli in allowlist: ${policy.allowedModels.length}.`,
+        `AI_API_KEY: ${diagnostics.hasApiKey ? 'presente' : 'non presente'}. Il valore non viene mostrato.`,
+        `AI_PROVIDER diagnostica/compatibilità: ${diagnostics.provider}.`,
+      ],
+    };
+  } catch {
+    return {
+      title: 'AI Control Plane',
+      status: 'Errore',
+      summary: 'Stato database del Control Plane non leggibile',
+      details: ['Le chiamate esterne restano bloccate in assenza di uno stato valido. Nessun segreto viene mostrato.'],
+    };
+  }
 }
 
 function storageProviderStatus(provider: string | undefined, localStorage: ReadinessCheck): ReadinessCheck {
@@ -187,6 +215,7 @@ export async function getSystemReadinessChecks() {
   const database = await databaseStatus();
   const localStorage = await localStorageStatus(localRoot);
   const backup = await backupStatus();
+  const ai = await aiStatus();
   const storageProviderCheck = storageProviderStatus(storageProvider, localStorage);
 
   return [
@@ -197,7 +226,7 @@ export async function getSystemReadinessChecks() {
     localStorage,
     s3Status(),
     authSecretStatus(),
-    aiStatus(),
+    ai,
     appUrlStatus(),
     backup,
   ];
@@ -208,5 +237,6 @@ export const recommendedActions = [
   'Pubblicare l’app dietro HTTPS e verificare URL pubblici/callback.',
   'Verificare backup schedulati e testare periodicamente il restore del database.',
   'Usare storage documentale persistente e testare upload/download.',
+  'Mantenere il Control Plane AI fail-closed finché privacy, allowlist, permessi e collaudo staging non sono approvati.',
   'Eseguire un collaudo con utente admin e con utente non admin.',
 ];

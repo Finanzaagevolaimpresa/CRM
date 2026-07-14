@@ -777,40 +777,83 @@ model Deadline {
 }
 
 model AiAgent {
-  id                    String   @id @default(cuid())
-  code                  String   @unique
+  id                    String                 @id @default(cuid())
+  code                  String                 @unique
   name                  String
-  description           String   @default("")
-  operationalScope      String   @default("")
-  systemPrompt          String   @default("")
-  requiredDataChecklist Json     @default("[]")
-  expectedOutput        String   @default("")
-  toneStyle             String   @default("")
-  active                Boolean  @default(true)
-  provider              String   @default("mock")
+  description           String                 @default("")
+  operationalScope      String                 @default("")
+  systemPrompt          String                 @default("")
+  requiredDataChecklist Json                   @default("[]")
+  expectedOutput        String                 @default("")
+  toneStyle             String                 @default("")
+  active                Boolean                @default(true)
+  provider              String                 @default("mock")
   futureModel           String?
+  promptVersion         String
+  configVersion         Int                    @default(1)
+  inputSchema           Json
+  outputSchema          Json
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  configVersions        AiAgentConfigVersion[]
+}
+
+model AiControlSetting {
+  id                            String   @id @default("global")
+  externalProvidersEnabled      Boolean  @default(false)
+  maxExternalRunsPerUserPerHour Int      @default(10)
+  updatedById                   String?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+}
+
+model AiAgentConfigVersion {
+  id                    String   @id @default(cuid())
+  agentId               String
+  version               Int
+  code                  String
+  name                  String
+  description           String
+  operationalScope      String
+  systemPrompt          String
+  requiredDataChecklist Json
+  expectedOutput        String
+  toneStyle             String
+  active                Boolean
+  provider              String
+  model                 String?
   promptVersion         String
   inputSchema           Json
   outputSchema          Json
+  createdById           String?
   createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  agent                 AiAgent  @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([agentId, version])
+  @@index([agentId, createdAt])
 }
 
 model AiRun {
-  id                      String   @id @default(cuid())
+  id                      String    @id @default(cuid())
   agentId                 String
   clientId                String?
   clientServiceId         String?
   projectId               String?
-  status                  String   @default("completed")
-  provider                String   @default("unknown")
+  status                  String    @default("completed")
+  provider                String    @default("unknown")
   model                   String?
   promptVersion           String?
+  externalConfirmedAt     DateTime?
+  externalDataCategories  Json?
+  inputTokens             Int?
+  outputTokens            Int?
+  totalTokens             Int?
+  providerRequestId       String?
   input                   Json?
   output                  Json?
   operationalInstructions String?
   createdById             String?
-  createdAt               DateTime @default(now())
+  createdAt               DateTime  @default(now())
 
   @@index([clientId])
   @@index([clientServiceId])

@@ -6,6 +6,11 @@ const money = z.coerce.number().finite().nonnegative();
 const optionalMoney = z.preprocess((value) => value === '' || value === null ? undefined : value, money.optional());
 const date = z.coerce.date();
 const email = z.string().trim().email().optional().or(z.literal('').transform(() => undefined));
+const formBoolean = z.preprocess((value) => {
+  if (value === true || value === 'true' || value === '1' || value === 'on') return true;
+  if (value === false || value === 'false' || value === '0' || value === '' || value === null || value === undefined) return false;
+  return value;
+}, z.boolean());
 
 export const leadStatusSchema = z.enum(['nuovo','da_contattare','contattato','qualificato','non_qualificato','appuntamento_fissato','preanalisi_richiesta','offerta_inviata','contratto_inviato','cliente_acquisito','proposta_da_preparare','proposta_inviata','in_trattativa','vinto','perso','archiviato']);
 export const leadSourceSchema = z.enum(['sito','whatsapp','referral','campagna','consulente','manuale','altro']);
@@ -57,7 +62,14 @@ export const clientDossierIdSchema = z.object({ id });
 export const contractSchema = z.object({ clientId: id, projectId: id.optional(), contractNumber: z.string().trim().min(1).max(80), serviceName: z.string().trim().min(1).max(200), serviceDescription: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, notes: optionalText });
 export const paymentSchema = z.object({ contractId: id, clientId: id, taxableAmount: money, vatAmount: money, totalAmount: money, method: optionalText, dueDate: date.optional(), collectedAt: date.optional(), notes: optionalText });
 export const aiRunSchema = z.object({ agentCode: z.string().trim().min(1).max(120), input: z.unknown() });
-export const clientAiRunSchema = z.object({ agentId: id, clientId: id, clientServiceId: id.optional(), projectId: id.optional(), operationalInstructions: optionalText });
+export const clientAiRunSchema = z.object({
+  agentId: id,
+  clientId: id,
+  clientServiceId: id.optional(),
+  projectId: id.optional(),
+  operationalInstructions: optionalText,
+  externalDataConfirmed: formBoolean.default(false),
+});
 export const aiOutputApprovalSchema = z.object({ id });
 export const aiOutputDossierSchema = z.object({ id });
 
@@ -65,7 +77,27 @@ export const internalUserSchema = z.object({ name: z.string().trim().min(1).max(
 export const userRoleSchema = z.object({ userId: id, role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']) });
 export const userIdSchema = z.object({ userId: id });
 
-export const aiAgentConfigUpdateSchema = z.object({ id, systemPrompt: z.string().trim().min(1).max(20000), active: z.coerce.boolean().default(false) });
+export const aiAgentConfigUpdateSchema = z.object({
+  id,
+  systemPrompt: z.string().trim().min(1).max(20000),
+  active: formBoolean.default(false),
+  provider: z.enum(['mock', 'openai']),
+  futureModel: z.string().trim().max(120).optional().or(z.literal('').transform(() => undefined)),
+  expectedConfigVersion: z.coerce.number().int().positive(),
+}).superRefine((data, context) => {
+  if (data.provider === 'openai' && !data.futureModel) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['futureModel'], message: 'Per OpenAI è obbligatorio scegliere un modello autorizzato.' });
+  }
+  if (data.provider === 'mock' && data.futureModel) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['futureModel'], message: 'Il provider mock non accetta un modello esterno.' });
+  }
+});
+
+export const aiControlSettingUpdateSchema = z.object({
+  externalProvidersEnabled: formBoolean.default(false),
+  maxExternalRunsPerUserPerHour: z.coerce.number().int().min(1).max(1000),
+  expectedUpdatedAt: date.optional(),
+});
 
 export const technicalPracticeStatusSchema = z.enum(['da_progettare','in_progettazione','documenti_richiesti','documenti_completi','pronta_presentazione','presentata','integrazione_richiesta','in_istruttoria','approvata','respinta','archiviata']);
 export const technicalPracticePrioritySchema = z.enum(['bassa','media','alta','urgente']);

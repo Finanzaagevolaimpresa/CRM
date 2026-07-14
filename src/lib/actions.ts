@@ -1,18 +1,36 @@
 'use server';
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, clientAiRunSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
-import { prepareAiOutput, MockAiAdapter, OpenAiAdapter, getAiProviderDiagnostics, testAiProviderDiagnostic } from './ai';
+import {
+  AiProviderCallError,
+  aiProviderErrorMetadata,
+  createExternalAiPayload,
+  externalAiDataCategories,
+  prepareAiOutput,
+  MockAiAdapter,
+  OpenAiAdapter,
+  getAiProviderDiagnostics,
+  minimizeProviderRequestId,
+  testAiProviderDiagnostic,
+  type ExternalAiPayload,
+} from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
 import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, isSensitiveDocument, hasGlobalAccess } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
 import { isPrimaryOperationalAiAgent } from './ai-agent-catalog';
+import {
+  AI_CONTROL_SETTING_ID,
+  assertExternalAiRunAllowed,
+  isExternalModelAllowed,
+  type ExternalAiPermit,
+} from './ai-control-plane';
 import { scanForbiddenPhrases } from './compliance';
 import {
   getClientDossierReadAccess,
@@ -44,6 +62,24 @@ class ConcurrentLeadConversionError extends Error {}
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function isSerializableConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+}
+
+async function withSerializableAiTransaction<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(operation, { isolationLevel: 'Serializable' });
+    } catch (error) {
+      if (!isSerializableConflict(error)) throw error;
+      if (attempt === 3) {
+        throw new UserFacingActionError('Conflitto temporaneo nel controllo AI. Riprova tra qualche istante.');
+      }
+    }
+  }
+  throw new UserFacingActionError('Controllo AI non completato. Riprova.');
 }
 
 function nextConcurrencyTimestamp(previous: Date) {
@@ -84,10 +120,10 @@ function minimizeAiInstructions(value?: string) {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return trimmed
-    .slice(0, 2000)
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email rimossa]')
     .replace(/\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b/gi, '[codice fiscale rimosso]')
-    .replace(/\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b/gi, '[IBAN rimosso]');
+    .replace(/\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b/gi, '[IBAN rimosso]')
+    .slice(0, 2000);
 }
 
 function resolveAiAgentRuntime(providerValue: string, configuredModel?: string | null) {
@@ -96,7 +132,8 @@ function resolveAiAgentRuntime(providerValue: string, configuredModel?: string |
     return { provider, model: 'mock-template-v1', adapter: new MockAiAdapter() };
   }
   if (provider === 'openai') {
-    const model = configuredModel?.trim() || getAiProviderDiagnostics().model;
+    const model = configuredModel?.trim();
+    if (!model) throw new UserFacingActionError('Un agente OpenAI richiede un modello esplicito autorizzato.');
     return { provider, model, adapter: new OpenAiAdapter(model) };
   }
   throw new UserFacingActionError(`Provider AI non supportato per questo agente: ${providerValue}.`);
@@ -116,15 +153,210 @@ function aiRunOutputSummary(draft: { title: string; content: string; metadata?: 
   })) as Prisma.InputJsonValue;
 }
 
-export async function runAiProviderDiagnosticTest() {
+function safeAiTokenCount(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function aiProviderPersistenceMetadata(draft: { metadata?: Record<string, unknown> }) {
+  const metadata = draft.metadata && typeof draft.metadata === 'object' ? draft.metadata : {};
+  return {
+    inputTokens: safeAiTokenCount(metadata.inputTokens),
+    outputTokens: safeAiTokenCount(metadata.outputTokens),
+    totalTokens: safeAiTokenCount(metadata.totalTokens),
+    providerRequestId: typeof metadata.providerRequestId === 'string'
+      ? minimizeProviderRequestId(metadata.providerRequestId)
+      : undefined,
+  };
+}
+
+function aiProviderFailureMetadata(error: unknown) {
+  const metadata = aiProviderErrorMetadata(error);
+  return {
+    inputTokens: safeAiTokenCount(metadata.inputTokens),
+    outputTokens: safeAiTokenCount(metadata.outputTokens),
+    totalTokens: safeAiTokenCount(metadata.totalTokens),
+    providerRequestId: minimizeProviderRequestId(metadata.providerRequestId),
+  };
+}
+
+function externalNumericValue(value: unknown): string | number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') return value;
+  const serialized = String(value);
+  return serialized && serialized !== '[object Object]' ? serialized : null;
+}
+
+async function markAiRunFailedBestEffort(options: {
+  runId: string;
+  actorId: string;
+  event: string;
+  errorCode: string;
+  trace: Record<string, unknown>;
+  telemetry?: ReturnType<typeof aiProviderPersistenceMetadata>;
+}) {
+  const telemetry: ReturnType<typeof aiProviderPersistenceMetadata> = options.telemetry ?? {
+    inputTokens: undefined,
+    outputTokens: undefined,
+    totalTokens: undefined,
+    providerRequestId: undefined,
+  };
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const failed = await tx.aiRun.updateMany({
+        where: { id: options.runId, status: 'running' },
+        data: {
+          status: 'failed',
+          inputTokens: telemetry.inputTokens,
+          outputTokens: telemetry.outputTokens,
+          totalTokens: telemetry.totalTokens,
+          providerRequestId: telemetry.providerRequestId,
+        },
+      });
+      if (failed.count !== 1) return false;
+      await tx.auditLog.create({ data: {
+        actorId: options.actorId,
+        event: options.event,
+        entityType: 'AiRun',
+        entityId: options.runId,
+        after: JSON.parse(JSON.stringify({
+          ...options.trace,
+          status: 'failed',
+          errorCode: options.errorCode,
+          ...telemetry,
+        })) as Prisma.InputJsonValue,
+      } });
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+export async function runAiProviderDiagnosticTest(form: FormData) {
   const s = await requirePermission('ai_agents.read');
-  const result = await testAiProviderDiagnostic();
-  await audit(s.userId, 'ai_provider_diagnostic_test', 'AiProvider', result.provider, {
-    provider: result.provider,
-    model: result.model,
-    success: result.success,
-    status: result.success ? 'ok' : 'failure',
+  const diagnostics = getAiProviderDiagnostics();
+  if (diagnostics.provider === 'mock') {
+    const result = await testAiProviderDiagnostic();
+    await audit(s.userId, 'ai_provider_diagnostic_test', 'AiProvider', result.provider, {
+      provider: result.provider,
+      model: result.model,
+      success: result.success,
+      status: result.success ? 'ok' : 'failure',
+      external: false,
+    });
+    const params = new URLSearchParams({ status: result.success ? 'ok' : 'error', message: result.message });
+    redirect(`/settings/ai-diagnostics?${params.toString()}`);
+  }
+
+  if (!hasPermission(s, 'ai.run') || !hasPermission(s, 'ai.external.run')) {
+    throw new UserFacingActionError('La diagnostica OpenAI richiede i permessi ai.run e ai.external.run.');
+  }
+  if (!form.has('externalDiagnosticConfirmed')) {
+    throw new UserFacingActionError('Conferma esplicitamente il test OpenAI e il possibile costo della singola chiamata.');
+  }
+  const confirmedAt = new Date();
+  const reservation = await withSerializableAiTransaction(async (tx) => {
+    const diagnosticAgent = await tx.aiAgent.findFirst({
+      where: { active: true, provider: 'openai', futureModel: diagnostics.model },
+      orderBy: { id: 'asc' },
+      select: { id: true, promptVersion: true },
+    });
+    if (!diagnosticAgent) {
+      throw new UserFacingActionError('Per il test esterno serve un agente OpenAI attivo configurato con il modello diagnostico.');
+    }
+    const authorization = await assertExternalAiRunAllowed({
+      userId: s.userId,
+      permissionGranted: hasPermission(s, 'ai.external.run'),
+      model: diagnostics.model,
+      dataCategories: ['agent_configuration'],
+      confirmedAt,
+      now: confirmedAt,
+      db: tx,
+    });
+    const run = await tx.aiRun.create({ data: {
+      agentId: diagnosticAgent.id,
+      status: 'running',
+      provider: 'openai',
+      model: diagnostics.model,
+      promptVersion: diagnosticAgent.promptVersion,
+      externalConfirmedAt: confirmedAt,
+      externalDataCategories: [...authorization.dataCategories],
+      createdById: s.userId,
+    } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'ai_provider_diagnostic_reserved',
+      entityType: 'AiRun',
+      entityId: run.id,
+      after: {
+        aiRunId: run.id,
+        agentId: diagnosticAgent.id,
+        provider: 'openai',
+        model: diagnostics.model,
+        externalConfirmedAt: confirmedAt,
+        dataCategories: authorization.dataCategories,
+        status: 'running',
+      },
+    } });
+    return { run, permit: authorization.permit };
   });
+
+  let result;
+  try {
+    result = await testAiProviderDiagnostic(reservation.permit);
+  } catch (error) {
+    await markAiRunFailedBestEffort({
+      runId: reservation.run.id,
+      actorId: s.userId,
+      event: 'ai_provider_diagnostic_failed',
+      errorCode: 'AI_DIAGNOSTIC_PROVIDER_FAILURE',
+      trace: { aiRunId: reservation.run.id, provider: 'openai', model: diagnostics.model },
+      telemetry: aiProviderFailureMetadata(error),
+    });
+    if (error instanceof UserFacingActionError) throw error;
+    throw new UserFacingActionError('Errore controllato durante il test OpenAI. Nessun output AI salvato.');
+  }
+  const usage = result.usage ?? {};
+  const diagnosticTelemetry = {
+    inputTokens: safeAiTokenCount(usage.inputTokens),
+    outputTokens: safeAiTokenCount(usage.outputTokens),
+    totalTokens: safeAiTokenCount(usage.totalTokens),
+    providerRequestId: minimizeProviderRequestId(usage.providerRequestId),
+  };
+  try {
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.aiRun.updateMany({
+        where: { id: reservation.run.id, status: 'running' },
+        data: { status: result.success ? 'completed' : 'failed', ...diagnosticTelemetry },
+      });
+      if (updated.count !== 1) throw new UserFacingActionError('Stato diagnostica AI non coerente. Ricarica la pagina.');
+      await tx.auditLog.create({ data: {
+        actorId: s.userId,
+        event: 'ai_provider_diagnostic_test',
+        entityType: 'AiRun',
+        entityId: reservation.run.id,
+        after: {
+          aiRunId: reservation.run.id,
+          provider: result.provider,
+          model: result.model,
+          success: result.success,
+          status: result.success ? 'completed' : 'failed',
+          ...diagnosticTelemetry,
+        },
+      } });
+    });
+  } catch {
+    await markAiRunFailedBestEffort({
+      runId: reservation.run.id,
+      actorId: s.userId,
+      event: 'ai_provider_diagnostic_persistence_failed',
+      errorCode: 'AI_DIAGNOSTIC_PERSISTENCE_FAILURE',
+      trace: { aiRunId: reservation.run.id, provider: result.provider, model: result.model },
+      telemetry: diagnosticTelemetry,
+    });
+    throw new UserFacingActionError('Risposta diagnostica ricevuta ma salvataggio stato non completato. Riprova.');
+  }
   const params = new URLSearchParams({ status: result.success ? 'ok' : 'error', message: result.message });
   redirect(`/settings/ai-diagnostics?${params.toString()}`);
 }
@@ -133,23 +365,147 @@ export async function updateAiAgentConfig(form: FormData) {
   const s = await requirePermission('ai_agents.write');
   const raw = clean(form);
   const data = aiAgentConfigUpdateSchema.parse({ ...raw, active: form.has('active') });
-  const before = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.id } });
-  const agent = await prisma.aiAgent.update({ where: { id: data.id }, data: { systemPrompt: data.systemPrompt, active: data.active } });
-  const promptChanged = before.systemPrompt !== agent.systemPrompt;
-  const activeChanged = before.active !== agent.active;
-  const events = ['ai_agent_config_update'];
-  if (promptChanged) events.push('ai_agent_prompt_update');
-  if (activeChanged) events.push(agent.active ? 'ai_agent_activate' : 'ai_agent_deactivate');
-  await Promise.all(events.map((event) => audit(s.userId, event, 'AiAgent', agent.id, {
-    code: agent.code,
-    promptChanged,
-    previousPromptLength: before.systemPrompt.length,
-    nextPromptLength: agent.systemPrompt.length,
-    previousActive: before.active,
-    nextActive: agent.active,
-  })));
+  if (data.provider === 'openai' && !isExternalModelAllowed(data.futureModel)) {
+    throw new UserFacingActionError('Il modello OpenAI selezionato non è presente nella allowlist server.');
+  }
+  const agent = await withSerializableAiTransaction(async (tx) => {
+    const before = await tx.aiAgent.findUniqueOrThrow({ where: { id: data.id } });
+    if (before.configVersion !== data.expectedConfigVersion) {
+      throw new UserFacingActionError('Configurazione agente modificata da un altro operatore. Ricarica la pagina.');
+    }
+    if (data.provider === 'openai' && !isExternalModelAllowed(data.futureModel)) {
+      throw new UserFacingActionError('Il modello OpenAI selezionato non è presente nella allowlist server.');
+    }
+    const nextConfigVersion = before.configVersion + 1;
+    const promptVersion = `v${nextConfigVersion}`;
+    const updatedAt = nextConcurrencyTimestamp(before.updatedAt);
+    const updated = await tx.aiAgent.updateMany({
+      where: { id: data.id, configVersion: data.expectedConfigVersion, updatedAt: before.updatedAt },
+      data: {
+        systemPrompt: data.systemPrompt,
+        active: data.active,
+        provider: data.provider,
+        futureModel: data.provider === 'openai' ? data.futureModel : null,
+        configVersion: nextConfigVersion,
+        promptVersion,
+        updatedAt,
+      },
+    });
+    if (updated.count !== 1) {
+      throw new UserFacingActionError('Configurazione agente modificata da un altro operatore. Ricarica la pagina.');
+    }
+    const next = await tx.aiAgent.findUniqueOrThrow({ where: { id: data.id } });
+    await tx.aiAgentConfigVersion.create({ data: {
+      agentId: next.id,
+      version: next.configVersion,
+      code: next.code,
+      name: next.name,
+      description: next.description,
+      operationalScope: next.operationalScope,
+      systemPrompt: next.systemPrompt,
+      requiredDataChecklist: next.requiredDataChecklist as Prisma.InputJsonValue,
+      expectedOutput: next.expectedOutput,
+      toneStyle: next.toneStyle,
+      active: next.active,
+      provider: next.provider,
+      model: next.futureModel,
+      promptVersion: next.promptVersion,
+      inputSchema: next.inputSchema as Prisma.InputJsonValue,
+      outputSchema: next.outputSchema as Prisma.InputJsonValue,
+      createdById: s.userId,
+    } });
+    const promptChanged = before.systemPrompt !== next.systemPrompt;
+    const activeChanged = before.active !== next.active;
+    const providerChanged = before.provider !== next.provider || before.futureModel !== next.futureModel;
+    const events = ['ai_agent_config_update'];
+    if (promptChanged) events.push('ai_agent_prompt_update');
+    if (activeChanged) events.push(next.active ? 'ai_agent_activate' : 'ai_agent_deactivate');
+    if (providerChanged) events.push('ai_agent_provider_update');
+    const summary = {
+      code: next.code,
+      previousConfigVersion: before.configVersion,
+      nextConfigVersion: next.configVersion,
+      previousPromptVersion: before.promptVersion,
+      nextPromptVersion: next.promptVersion,
+      promptChanged,
+      previousPromptLength: before.systemPrompt.length,
+      nextPromptLength: next.systemPrompt.length,
+      previousActive: before.active,
+      nextActive: next.active,
+      previousProvider: before.provider,
+      nextProvider: next.provider,
+      previousModel: before.futureModel,
+      nextModel: next.futureModel,
+    };
+    await tx.auditLog.createMany({ data: events.map((event) => ({
+      actorId: s.userId,
+      event,
+      entityType: 'AiAgent',
+      entityId: next.id,
+      after: summary,
+    })) });
+    return next;
+  });
   revalidatePath('/settings/ai-agents');
   void agent;
+}
+
+export async function updateAiControlSetting(form: FormData) {
+  const s = await requirePermission('settings.manage');
+  const raw = clean(form);
+  const data = aiControlSettingUpdateSchema.parse({
+    ...raw,
+    externalProvidersEnabled: form.has('externalProvidersEnabled'),
+  });
+  const setting = await withSerializableAiTransaction(async (tx) => {
+    const before = await tx.aiControlSetting.findUnique({ where: { id: AI_CONTROL_SETTING_ID } });
+    if (before) {
+      if (!data.expectedUpdatedAt || before.updatedAt.getTime() !== data.expectedUpdatedAt.getTime()) {
+        throw new UserFacingActionError('Impostazioni AI modificate da un altro operatore. Ricarica la pagina.');
+      }
+      const updatedAt = nextConcurrencyTimestamp(before.updatedAt);
+      const updated = await tx.aiControlSetting.updateMany({
+        where: { id: AI_CONTROL_SETTING_ID, updatedAt: before.updatedAt },
+        data: {
+          externalProvidersEnabled: data.externalProvidersEnabled,
+          maxExternalRunsPerUserPerHour: data.maxExternalRunsPerUserPerHour,
+          updatedById: s.userId,
+          updatedAt,
+        },
+      });
+      if (updated.count !== 1) {
+        throw new UserFacingActionError('Impostazioni AI modificate da un altro operatore. Ricarica la pagina.');
+      }
+    } else {
+      if (data.expectedUpdatedAt) {
+        throw new UserFacingActionError('Impostazioni AI non coerenti. Ricarica la pagina.');
+      }
+      await tx.aiControlSetting.create({ data: {
+        id: AI_CONTROL_SETTING_ID,
+        externalProvidersEnabled: data.externalProvidersEnabled,
+        maxExternalRunsPerUserPerHour: data.maxExternalRunsPerUserPerHour,
+        updatedById: s.userId,
+      } });
+    }
+    const next = await tx.aiControlSetting.findUniqueOrThrow({ where: { id: AI_CONTROL_SETTING_ID } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'ai_control_setting_update',
+      entityType: 'AiControlSetting',
+      entityId: AI_CONTROL_SETTING_ID,
+      after: {
+        previousExternalProvidersEnabled: before?.externalProvidersEnabled ?? false,
+        nextExternalProvidersEnabled: next.externalProvidersEnabled,
+        previousMaxExternalRunsPerUserPerHour: before?.maxExternalRunsPerUserPerHour ?? null,
+        nextMaxExternalRunsPerUserPerHour: next.maxExternalRunsPerUserPerHour,
+        updatedById: s.userId,
+      },
+    } });
+    return next;
+  });
+  revalidatePath('/settings/ai-agents');
+  revalidatePath('/settings/ai-diagnostics');
+  void setting;
 }
 
 export async function createLead(form: FormData) {
@@ -942,10 +1298,16 @@ export async function updateDocumentSection(form: FormData) {
 export async function runClientAiAgent(form: FormData) {
   const s = await requirePermission('ai.run');
   const data = clientAiRunSchema.parse(clean(form));
-  const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
-  if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.');
-  if (!isPrimaryOperationalAiAgent(agent.code)) throw new UserFacingActionError('Agente AI non abilitato al workflow operativo cliente.');
-  const agentRuntime = resolveAiAgentRuntime(agent.provider, agent.futureModel);
+  const requestedAgent = await prisma.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
+  if (!requestedAgent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.');
+  if (!isPrimaryOperationalAiAgent(requestedAgent.code)) throw new UserFacingActionError('Agente AI non abilitato al workflow operativo cliente.');
+  const externalProviderRequested = requestedAgent.provider.trim().toLowerCase() === 'openai';
+  if (externalProviderRequested && !hasPermission(s, 'ai.external.run')) {
+    throw new UserFacingActionError('Il provider OpenAI richiede anche il permesso ai.external.run.');
+  }
+  if (externalProviderRequested && !data.externalDataConfirmed) {
+    throw new UserFacingActionError('Conferma esplicitamente l’invio dei dati minimizzati al provider OpenAI.');
+  }
 
   const access = await requireClientContextReadAccess(s, data);
   const client = await prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null } });
@@ -999,7 +1361,8 @@ export async function runClientAiAgent(form: FormData) {
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
     clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) ?? null : null,
   }, canReadSensitive));
-  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const aiEligibleDocuments = visibleDocuments.filter((document) => !isSensitiveDocument(document));
+  const aiEligibleDocumentIds = new Set(aiEligibleDocuments.map((document) => document.id));
   const safeChecklist = checklist.filter((item) => {
     if (!canViewChecklistItem(s, {
       ...item,
@@ -1007,10 +1370,10 @@ export async function runClientAiAgent(form: FormData) {
       project: item.projectId ? projectById.get(item.projectId) ?? null : null,
       clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
     })) return false;
-    if (isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title })) return canReadSensitive;
-    return !item.documentId || visibleDocumentIds.has(item.documentId);
+    if (isSensitiveDocument({ containsSensitiveData: false, documentCategory: item.title, type: item.title })) return false;
+    return !item.documentId || aiEligibleDocumentIds.has(item.documentId);
   });
-  const safeDocuments = visibleDocuments.map((document) => ({
+  const safeDocuments = aiEligibleDocuments.map((document) => ({
     documentCategory: document.documentCategory,
     status: document.status,
     serviceArea: document.serviceArea,
@@ -1052,78 +1415,218 @@ export async function runClientAiAgent(form: FormData) {
       documents: safeDocuments,
     },
   }));
-  const providerInput = operationalInstructions ? { ...input, operationalInstructions } : input;
-  const run = await prisma.aiRun.create({ data: {
-    agentId: agent.id,
-    clientId: data.clientId,
-    clientServiceId: data.clientServiceId,
-    projectId: data.projectId,
-    status: 'running',
-    provider: agentRuntime.provider,
-    model: agentRuntime.model,
-    promptVersion: agent.promptVersion,
-    input: input as Prisma.InputJsonValue,
-    operationalInstructions,
-    createdById: s.userId,
-  } });
+  const mockProviderInput = operationalInstructions ? { ...input, operationalInstructions } : input;
+  const externalPayload: ExternalAiPayload = createExternalAiPayload({
+    source: 'CRM interno FAI',
+    humanReviewRequired: true,
+    ...(operationalInstructions ? { operationalInstructions } : {}),
+    context: {
+      client: { type: client.type, status: client.status },
+      companies: companies.map((company) => ({
+        annualRevenue: externalNumericValue(company.annualRevenue),
+        legalForm: company.legalForm,
+        atecoCode: company.atecoCode,
+        region: company.region,
+        employees: company.employees,
+        durcStatus: company.durcStatus,
+      })),
+      service: clientService ? {
+        label: buildClientServiceLabel(clientService, serviceCatalog[0], 'Pratica cliente'),
+        practiceType: clientService.practiceType,
+        status: clientService.status,
+        operationalStatus: clientService.operationalStatus,
+        requestedAmount: externalNumericValue(clientService.requestedAmount),
+        plannedInvestment: externalNumericValue(clientService.plannedInvestment),
+      } : null,
+      project: project ? {
+        requestedAmount: externalNumericValue(project.requestedAmount),
+        totalInvestment: externalNumericValue(project.totalInvestment),
+        status: project.status,
+        priority: project.priority,
+        startTiming: project.startTiming,
+        region: project.region,
+        sector: project.sector,
+      } : null,
+      checklist: safeChecklist.map((item) => ({
+        title: item.title,
+        status: item.status,
+        hasLinkedDocument: Boolean(item.documentId),
+      })),
+      documents: safeDocuments,
+      tasks: tasks.map((task) => ({ status: task.status, priority: task.priority })),
+    },
+  });
+  const externalDataCategories = externalAiDataCategories(externalPayload);
+  const externalConfirmedAt = externalProviderRequested ? new Date() : null;
+  const reservation = await withSerializableAiTransaction(async (tx) => {
+    const currentAgent = await tx.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
+    if (!currentAgent.active || !isPrimaryOperationalAiAgent(currentAgent.code)) {
+      throw new UserFacingActionError('Agente AI non più disponibile. Ricarica la pagina.');
+    }
+    if (currentAgent.configVersion !== requestedAgent.configVersion) {
+      throw new UserFacingActionError('Configurazione agente modificata prima dell’esecuzione. Ricarica la pagina.');
+    }
+    const currentRuntime = resolveAiAgentRuntime(currentAgent.provider, currentAgent.futureModel);
+    let authorizedCategories = [] as readonly (typeof externalDataCategories)[number][];
+    let externalPermit: ExternalAiPermit | undefined;
+    if (currentRuntime.provider === 'openai') {
+      if (!hasPermission(s, 'ai.external.run') || !data.externalDataConfirmed) {
+        throw new UserFacingActionError('Permesso e conferma esplicita sono obbligatori per OpenAI.');
+      }
+      const authorization = await assertExternalAiRunAllowed({
+        userId: s.userId,
+        permissionGranted: hasPermission(s, 'ai.external.run'),
+        model: currentRuntime.model,
+        dataCategories: externalDataCategories,
+        confirmedAt: externalConfirmedAt,
+        now: externalConfirmedAt ?? undefined,
+        db: tx,
+      });
+      authorizedCategories = authorization.dataCategories;
+      externalPermit = authorization.permit;
+    }
+    const run = await tx.aiRun.create({ data: {
+      agentId: currentAgent.id,
+      clientId: data.clientId,
+      clientServiceId: data.clientServiceId,
+      projectId: data.projectId,
+      status: 'running',
+      provider: currentRuntime.provider,
+      model: currentRuntime.model,
+      promptVersion: currentAgent.promptVersion,
+      externalConfirmedAt: currentRuntime.provider === 'openai' ? externalConfirmedAt : null,
+      externalDataCategories: currentRuntime.provider === 'openai' ? [...authorizedCategories] : Prisma.DbNull,
+      input: currentRuntime.provider === 'openai' ? Prisma.DbNull : input as Prisma.InputJsonValue,
+      operationalInstructions: currentRuntime.provider === 'openai' ? null : operationalInstructions,
+      createdById: s.userId,
+    } });
+    await tx.auditLog.create({ data: {
+      actorId: s.userId,
+      event: 'ai_agent_run_reserved',
+      entityType: 'AiRun',
+      entityId: run.id,
+      after: {
+        aiRunId: run.id,
+        agentId: currentAgent.id,
+        agentCode: currentAgent.code,
+        clientId: data.clientId,
+        clientServiceId: data.clientServiceId ?? null,
+        projectId: data.projectId ?? null,
+        provider: currentRuntime.provider,
+        model: currentRuntime.model,
+        promptVersion: currentAgent.promptVersion,
+        configVersion: currentAgent.configVersion,
+        externalConfirmedAt: currentRuntime.provider === 'openai' ? externalConfirmedAt : null,
+        externalDataCategories: currentRuntime.provider === 'openai' ? authorizedCategories : [],
+        status: 'running',
+      },
+    } });
+    return { run, agent: currentAgent, runtime: currentRuntime, authorizedCategories, externalPermit };
+  });
+  const { run, agent, runtime: agentRuntime } = reservation;
 
   let draft;
   try {
-    draft = await agentRuntime.adapter.run({ code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt }, providerInput);
+    const providerInput = agentRuntime.provider === 'openai' ? externalPayload : mockProviderInput;
+    draft = await agentRuntime.adapter.run(
+      { code: agent.code, role: agent.name, systemPrompt: agent.systemPrompt },
+      providerInput,
+      reservation.externalPermit,
+    );
   } catch (error) {
-    await prisma.$transaction(async (tx) => {
-      const failed = await tx.aiRun.updateMany({ where: { id: run.id, status: 'running' }, data: { status: 'failed' } });
-      if (failed.count !== 1) throw new UserFacingActionError('Stato esecuzione AI non coerente. Ricarica la pagina.');
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_agent_run_failed',
-        entityType: 'AiRun',
-        entityId: run.id,
-        after: {
-          aiRunId: run.id,
-          agentId: agent.id,
-          agentCode: agent.code,
-          clientId: data.clientId,
-          clientServiceId: data.clientServiceId ?? null,
-          projectId: data.projectId ?? null,
-          provider: agentRuntime.provider,
-          model: agentRuntime.model,
-          promptVersion: agent.promptVersion,
-          status: 'failed',
-          errorCode: error instanceof UserFacingActionError ? 'AI_PROVIDER_REJECTED' : 'AI_PROVIDER_FAILURE',
-        },
-      } });
+    await markAiRunFailedBestEffort({
+      runId: run.id,
+      actorId: s.userId,
+      event: 'ai_agent_run_failed',
+      errorCode: error instanceof AiProviderCallError
+        ? error.errorCode
+        : error instanceof UserFacingActionError ? 'AI_PROVIDER_REJECTED' : 'AI_PROVIDER_FAILURE',
+      trace: {
+        aiRunId: run.id,
+        agentId: agent.id,
+        agentCode: agent.code,
+        clientId: data.clientId,
+        clientServiceId: data.clientServiceId ?? null,
+        projectId: data.projectId ?? null,
+        provider: agentRuntime.provider,
+        model: agentRuntime.model,
+        promptVersion: agent.promptVersion,
+        configVersion: agent.configVersion,
+        externalConfirmedAt: run.externalConfirmedAt,
+        externalDataCategories: reservation.authorizedCategories,
+      },
+      telemetry: aiProviderFailureMetadata(error),
     });
     if (error instanceof UserFacingActionError) throw error;
     throw new UserFacingActionError('Errore operativo durante l’esecuzione AI. Nessun output è stato salvato.');
   }
-  const prepared = prepareAiOutput(draft);
-  return prisma.$transaction(async (tx) => {
-    const completed = await tx.aiRun.updateMany({
-      where: { id: run.id, status: 'running' },
-      data: { status: 'completed', output: aiRunOutputSummary(draft) },
+  const providerMetadata = aiProviderPersistenceMetadata(draft);
+  try {
+    const prepared = prepareAiOutput(draft);
+    return await prisma.$transaction(async (tx) => {
+      const completed = await tx.aiRun.updateMany({
+        where: { id: run.id, status: 'running' },
+        data: {
+          status: 'completed',
+          output: aiRunOutputSummary(draft),
+          inputTokens: providerMetadata.inputTokens,
+          outputTokens: providerMetadata.outputTokens,
+          totalTokens: providerMetadata.totalTokens,
+          providerRequestId: providerMetadata.providerRequestId,
+        },
+      });
+      if (completed.count !== 1) throw new UserFacingActionError('Stato esecuzione AI non coerente. Ricarica la pagina.');
+      const output = await tx.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
+      const trace = {
+        aiRunId: run.id,
+        outputId: output.id,
+        agentId: agent.id,
+        agentCode: agent.code,
+        clientId: data.clientId,
+        clientServiceId: data.clientServiceId ?? null,
+        projectId: data.projectId ?? null,
+        provider: agentRuntime.provider,
+        model: agentRuntime.model,
+        promptVersion: agent.promptVersion,
+        configVersion: agent.configVersion,
+        externalConfirmedAt: run.externalConfirmedAt,
+        externalDataCategories: reservation.authorizedCategories,
+        inputTokens: providerMetadata.inputTokens,
+        outputTokens: providerMetadata.outputTokens,
+        totalTokens: providerMetadata.totalTokens,
+        providerRequestId: providerMetadata.providerRequestId,
+        outputStatus: output.status,
+      };
+      await tx.auditLog.createMany({ data: [
+        { actorId: s.userId, event: 'ai_agent_run', entityType: 'AiRun', entityId: run.id, after: trace },
+        { actorId: s.userId, event: 'ai_output_generation', entityType: 'AiOutput', entityId: output.id, after: trace },
+      ] });
+      return output;
     });
-    if (completed.count !== 1) throw new UserFacingActionError('Stato esecuzione AI non coerente. Ricarica la pagina.');
-    const output = await tx.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
-    const trace = {
-      aiRunId: run.id,
-      outputId: output.id,
-      agentId: agent.id,
-      agentCode: agent.code,
-      clientId: data.clientId,
-      clientServiceId: data.clientServiceId ?? null,
-      projectId: data.projectId ?? null,
-      provider: agentRuntime.provider,
-      model: agentRuntime.model,
-      promptVersion: agent.promptVersion,
-      outputStatus: output.status,
-    };
-    await tx.auditLog.createMany({ data: [
-      { actorId: s.userId, event: 'ai_agent_run', entityType: 'AiRun', entityId: run.id, after: trace },
-      { actorId: s.userId, event: 'ai_output_generation', entityType: 'AiOutput', entityId: output.id, after: trace },
-    ] });
-    return output;
-  });
+  } catch {
+    await markAiRunFailedBestEffort({
+      runId: run.id,
+      actorId: s.userId,
+      event: 'ai_output_persistence_failed',
+      errorCode: 'AI_OUTPUT_PERSISTENCE_FAILURE',
+      trace: {
+        aiRunId: run.id,
+        agentId: agent.id,
+        agentCode: agent.code,
+        clientId: data.clientId,
+        clientServiceId: data.clientServiceId ?? null,
+        projectId: data.projectId ?? null,
+        provider: agentRuntime.provider,
+        model: agentRuntime.model,
+        promptVersion: agent.promptVersion,
+        configVersion: agent.configVersion,
+        externalConfirmedAt: run.externalConfirmedAt,
+        externalDataCategories: reservation.authorizedCategories,
+      },
+      telemetry: providerMetadata,
+    });
+    throw new UserFacingActionError('Risposta AI ricevuta ma output non salvato correttamente. Riprova.');
+  }
 }
 
 export async function runMockAgent(agentCode: string, input: unknown) {

@@ -103,18 +103,19 @@ test('la conversione output AI richiede prova umana completa ed è idempotente a
 
 test('il run cliente usa il provider configurato sull agente e persiste il lifecycle prima della chiamata', () => {
   const body = functionBody('runClientAiAgent');
-  const createRun = body.indexOf('prisma.aiRun.create');
+  const createRun = body.indexOf('tx.aiRun.create');
   const providerCall = body.indexOf('agentRuntime.adapter.run');
 
-  assert.match(body, /resolveAiAgentRuntime\(agent\.provider, agent\.futureModel\)/);
+  assert.match(body, /resolveAiAgentRuntime\(currentAgent\.provider, currentAgent\.futureModel\)/);
   assert.match(functionBody('resolveAiAgentRuntime'), /new MockAiAdapter/);
   assert.match(functionBody('resolveAiAgentRuntime'), /new OpenAiAdapter/);
   assert.match(functionBody('resolveAiAgentRuntime'), /configuredModel\?\.trim\(\)/);
   assert.ok(createRun >= 0 && createRun < providerCall, 'AiRun running deve esistere prima della chiamata al provider');
   assert.match(body.slice(createRun, providerCall), /status: 'running'/);
-  assert.match(body.slice(createRun, providerCall), /provider: agentRuntime\.provider/);
-  assert.match(body.slice(createRun, providerCall), /promptVersion: agent\.promptVersion/);
-  assert.match(body, /status: 'failed'/);
+  assert.match(body.slice(createRun, providerCall), /provider: currentRuntime\.provider/);
+  assert.match(body.slice(createRun, providerCall), /promptVersion: currentAgent\.promptVersion/);
+  assert.match(body, /markAiRunFailedBestEffort/);
+  assert.match(functionBody('markAiRunFailedBestEffort'), /status: 'failed'/);
   assert.match(body, /status: 'completed'/);
   assert.doesNotMatch(body, /getAiAdapter|normalizeAiProvider/);
 });
@@ -122,7 +123,7 @@ test('il run cliente usa il provider configurato sull agente e persiste il lifec
 test('il payload AI usa task accessibili e non inoltra campi liberi o identificativi non necessari', () => {
   const body = functionBody('runClientAiAgent');
   const inputStart = body.indexOf('const input');
-  const inputEnd = body.indexOf('const providerInput');
+  const inputEnd = body.indexOf('const mockProviderInput');
   assert.ok(inputStart >= 0 && inputEnd > inputStart);
   const payload = body.slice(inputStart, inputEnd);
 

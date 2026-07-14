@@ -24,18 +24,19 @@ export default async function Page() {
             <Link className="rounded-xl bg-fai-orange px-4 py-2 text-sm font-bold text-white" href="/ai/outputs-to-review">Output da revisionare</Link>
           </div>
         </Card>
-        <Card title="Quick-run mock amministrativo">
+        <Card title="Quick-run amministrativo">
           {!canQuickRunMock ? (
             <EmptyState title="Funzione riservata">Il quick-run senza fascicolo è disponibile solo ad amministratori e direzione. Gli operatori eseguono gli agenti dal fascicolo cliente.</EmptyState>
           ) : activeAgents.length === 0 ? (
-            <EmptyState title="Nessun agente attivo">Riattivare almeno un agente da Impostazioni &gt; Agenti AI per eseguire una bozza mock.</EmptyState>
+            <EmptyState title="Nessun agente attivo">Riattivare almeno un agente da Impostazioni &gt; Agenti AI per generare una bozza interna.</EmptyState>
           ) : (
             <form action={runMockAiAndRedirect} className="space-y-3">
               <select name="agentCode" className="w-full rounded-xl border p-3" required>
                 {activeAgents.map((agent) => <option key={agent.code} value={agent.code}>{agent.name} · {getAiAgentCategory(agent.code)}</option>)}
               </select>
               <textarea name="prompt" className="w-full rounded-xl border p-3" placeholder="Input interno per bozza AI" defaultValue="Genera una bozza interna da revisionare." />
-              <PrimaryButton type="submit">Run AI mock</PrimaryButton>
+              <p className="text-xs leading-5 text-slate-500">Questo quick-run senza fascicolo resta locale e non effettua chiamate a provider esterni. Ogni output è una bozza soggetta a revisione umana.</p>
+              <PrimaryButton type="submit">Genera bozza interna</PrimaryButton>
             </form>
           )}
         </Card>
