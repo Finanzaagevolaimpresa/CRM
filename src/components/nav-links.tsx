@@ -2,6 +2,7 @@
 
 import type { RoleCode } from "@prisma/client";
 import type { Permission } from "@/lib/auth";
+import { isNavItemVisible } from "@/lib/nav-visibility";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -18,20 +19,6 @@ type NavSection = {
   items: NavItem[];
 };
 
-const operationalRoles: RoleCode[] = [
-  "admin",
-  "direzione",
-  "consulente",
-  "revisore",
-  "backoffice",
-];
-const legalComplianceRoles: RoleCode[] = [
-  "admin",
-  "direzione",
-  "revisore",
-  "amministrazione",
-];
-
 const sections: NavSection[] = [
   {
     title: "Operatività",
@@ -39,8 +26,8 @@ const sections: NavSection[] = [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Notifiche", href: "/notifications" },
       { label: "Ricerca", href: "/search" },
-      { label: "Task", href: "/tasks" },
-      { label: "Scadenze", href: "/deadlines" },
+      { label: "Task", href: "/tasks", permission: "service.read" },
+      { label: "Scadenze", href: "/deadlines", permission: "service.read" },
       { label: "Documenti", href: "/documents", permission: "document.download" },
       { label: "Checklist documentale", href: "/document-checklists", permission: "service.read" },
     ],
@@ -59,7 +46,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Clienti", href: "/clients", permission: "client.read" },
       { label: "Progetti", href: "/projects", permission: "project.read" },
-      { label: "Pre-analisi", href: "/preanalyses" },
+      { label: "Pre-analisi", href: "/preanalyses", permission: "dossier.read" },
       { label: "Dossier", href: "/dossiers", permission: "dossier.read" },
     ],
   },
@@ -69,19 +56,18 @@ const sections: NavSection[] = [
       {
         label: "Ufficio Tecnico",
         href: "/technical-office",
-        roles: operationalRoles,
         permission: "technical.read",
       },
-      { label: "Pratiche tecniche", href: "/technical-office/practices", roles: operationalRoles, permission: "technical.read" },
-      { label: "Enti / Portali", href: "/technical-office/portals", roles: operationalRoles },
-      { label: "Integrazioni", href: "/technical-office/integrations", roles: operationalRoles },
-      { label: "Rendicontazioni", href: "/technical-office/reporting", roles: operationalRoles },
+      { label: "Pratiche tecniche", href: "/technical-office/practices", permission: "technical.read" },
+      { label: "Enti / Portali", href: "/technical-office/portals", permission: "technical.read" },
+      { label: "Integrazioni", href: "/technical-office/integrations", permission: "technical.read" },
+      { label: "Rendicontazioni", href: "/technical-office/reporting", permission: "technical.read" },
     ],
   },
   {
     title: "AI",
     items: [
-      { label: "Control center AI", href: "/ai" },
+      { label: "Control center AI", href: "/ai", permission: "ai.run" },
       { label: "Output AI", href: "/ai/outputs", permission: "ai.review" },
       { label: "Dossier AI / Bozze", href: "/client-dossiers", permission: "dossier.read" },
       { label: "Agenti AI", href: "/settings/ai-agents", adminOnly: true, permission: "ai_agents.read" },
@@ -93,11 +79,11 @@ const sections: NavSection[] = [
       {
         label: "Legale / Compliance",
         href: "/legal-compliance",
-        roles: legalComplianceRoles,
+        permission: "contract.read",
       },
-      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", roles: legalComplianceRoles },
-      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", roles: legalComplianceRoles },
-      { label: "Privacy e consensi", href: "/legal-compliance/privacy", roles: legalComplianceRoles },
+      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", permission: "contract.read" },
+      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", permission: "contract.read" },
+      { label: "Privacy e consensi", href: "/legal-compliance/privacy", permission: "contract.read" },
     ],
   },
   {
@@ -117,7 +103,6 @@ const sections: NavSection[] = [
   },
 ];
 
-const adminRoles: RoleCode[] = ["admin", "direzione"];
 
 export function NavLinks({
   role,
@@ -129,16 +114,11 @@ export function NavLinks({
   permissions?: readonly Permission[];
 }) {
   const pathname = usePathname();
-  const canSeeAdmin = Boolean(role && adminRoles.includes(role));
-
   return (
     <nav className="space-y-4 pb-1" aria-label="Navigazione principale">
       {sections.map((section) => {
         const visibleItems = section.items.filter((item) => {
-          if (item.adminOnly && !canSeeAdmin) return false;
-          if (item.roles && (!role || !item.roles.includes(role))) return false;
-          if (item.permission && !permissions.includes(item.permission) && role !== "admin") return false;
-          return true;
+          return isNavItemVisible(item, { role, permissions });
         });
         if (visibleItems.length === 0) return null;
 

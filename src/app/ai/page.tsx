@@ -5,9 +5,12 @@ import { PrimaryButton } from '@/components/actions';
 import { runMockAiAndRedirect } from '@/lib/form-actions';
 import { Card, EmptyState, PageHeader, StatusBadge, Table } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
+import { hasPermission, requirePermission } from '@/lib/auth';
 import { getAiAgentCategory, isPrimaryOperationalAiAgent, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
 
 export default async function Page() {
+  const session = await requirePermission('ai.run');
+  const canReview = hasPermission(session, 'ai.review');
   const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { name: 'asc' } }));
   const activeAgents = agents.filter((agent) => agent.active && isPrimaryOperationalAiAgent(agent.code));
 
@@ -18,7 +21,7 @@ export default async function Page() {
         <Card title="Azioni rapide">
           <div className="flex flex-wrap gap-3">
             <Link className="rounded-xl bg-fai-blue px-4 py-2 text-sm font-bold text-white" href="/ai/runs">Storico run</Link>
-            <Link className="rounded-xl bg-fai-orange px-4 py-2 text-sm font-bold text-white" href="/ai/outputs-to-review">Output da revisionare</Link>
+            {canReview ? <Link className="rounded-xl bg-fai-orange px-4 py-2 text-sm font-bold text-white" href="/ai/outputs-to-review">Output da revisionare</Link> : null}
           </div>
         </Card>
         <Card title="Run AI mock">

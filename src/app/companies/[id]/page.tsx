@@ -1,8 +1,10 @@
 import { Card, EmptyState, PageHeader, Table, TimestampMeta } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { SecondaryLink } from '@/components/actions';
+import { requirePermission } from '@/lib/auth';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
+  await requirePermission('company.read');
   const { id } = await params;
   const company = await prisma.company.findUnique({ where: { id } });
   if (!company) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è più disponibile." />;
