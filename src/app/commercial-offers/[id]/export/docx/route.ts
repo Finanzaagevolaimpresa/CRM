@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auditCommercialOfferExport } from '@/lib/actions';
+import { canEditCommercialOffer } from '@/lib/access-control';
 import { buildCommercialOfferDocx } from '@/lib/docx-export';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -10,14 +11,15 @@ function safeFileName(value: string) { return value.toLowerCase().replace(/[^a-z
 function leadName(lead: { companyName: string | null; firstName: string; lastName: string }) { return lead.companyName || `${lead.firstName} ${lead.lastName}`.trim(); }
 
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
-  await requirePermission('lead.read');
+  const session = await requirePermission('lead.read');
   const { id } = await params;
   const offer = await prisma.commercialOffer.findFirst({ where: { id, deletedAt: null } });
   if (!offer) return new NextResponse('Not found', { status: 404 });
   const [lead, client] = await Promise.all([
-    offer.leadId ? prisma.lead.findUnique({ where: { id: offer.leadId } }) : null,
-    offer.clientId ? prisma.client.findUnique({ where: { id: offer.clientId } }) : null,
+    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null } }) : null,
+    offer.clientId ? prisma.client.findFirst({ where: { id: offer.clientId, deletedAt: null } }) : null,
   ]);
+  if (!canEditCommercialOffer(session, { ...offer, lead, client })) return new NextResponse('Not found', { status: 404 });
   const docx = buildCommercialOfferDocx({
     title: offer.title,
     lead: lead ? { name: leadName(lead), email: lead.email, phone: lead.phone, interest: lead.interest } : null,
