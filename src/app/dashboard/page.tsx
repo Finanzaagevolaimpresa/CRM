@@ -8,7 +8,7 @@ import {
   formatDateTime,
 } from "@/components/ui";
 import { legalDisclaimer } from "@/lib/compliance";
-import { canViewClient, canViewProject } from "@/lib/access-control";
+import { canViewAiRecord, canViewClient, canViewProject } from "@/lib/access-control";
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
@@ -121,7 +121,7 @@ export default async function Dashboard() {
     myTasks,
     aiReview,
     lastAudit,
-    lastAiOutput,
+    lastAiOutputCandidates,
     lastPayment,
     lastTask,
     pipelineCounts,
@@ -209,23 +209,24 @@ export default async function Dashboard() {
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "inviata" },
+          where: { deletedAt: null, status: "inviata", OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }] },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "accettata" },
+          where: { deletedAt: null, status: "accettata", OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }] },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "rifiutata" },
+          where: { deletedAt: null, status: "rifiutata", OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }] },
         })
       : 0,
     canReadLeads
       ? prisma.commercialOffer.count({
           where: {
             deletedAt: null,
+            OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }],
             followUpAt: { lt: now },
             status: { notIn: ["accettata", "rifiutata"] },
           },
@@ -235,6 +236,7 @@ export default async function Dashboard() {
       ? prisma.commercialOffer.count({
           where: {
             deletedAt: null,
+            OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }],
             followUpAt: { gte: now, lte: next7 },
             status: { notIn: ["accettata", "rifiutata"] },
           },
@@ -277,10 +279,11 @@ export default async function Dashboard() {
       },
     }) : 0,
     canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
-    canReviewAi ? prisma.aiOutput.findFirst({
+    canReviewAi ? prisma.aiOutput.findMany({
       where: { status: { in: ["needs_review", "flagged"] } },
       orderBy: { createdAt: "desc" },
-    }) : null,
+      take: 50,
+    }) : [],
     canReadPayments ? prisma.payment.findFirst({ where: dashboardClientWhere, orderBy: { createdAt: "desc" } }) : null,
     canReadServices
       ? prisma.task.findFirst({
@@ -291,23 +294,23 @@ export default async function Dashboard() {
     canReadServices
       ? prisma.clientService.groupBy({
           by: ["operationalStatus"],
-          where: { deletedAt: null },
+          where: { deletedAt: null, ...dashboardClientWhere },
           _count: { _all: true },
         })
       : [],
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, status: "da_revisionare" },
+          where: { deletedAt: null, status: "da_revisionare", clientId: { in: accessibleDashboardClientIds } },
         })
       : 0,
     canReadTechnical
       ? prisma.technicalPractice.count({
-          where: { deletedAt: null, nextClientUpdateAt: { lt: now } },
+          where: { deletedAt: null, clientId: { in: accessibleDashboardClientIds }, nextClientUpdateAt: { lt: now } },
         })
       : 0,
     canReadPracticeCommunications
       ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, status: "approvata", usedAt: null },
+          where: { deletedAt: null, clientId: { in: accessibleDashboardClientIds }, status: "approvata", usedAt: null },
         })
       : 0,
     canReadServices
@@ -322,6 +325,7 @@ export default async function Dashboard() {
       ? prisma.technicalPractice.count({
           where: {
             deletedAt: null,
+            clientId: { in: accessibleDashboardClientIds },
             status: { notIn: ["approvata", "respinta", "archiviata"] },
           },
         })
@@ -335,7 +339,7 @@ export default async function Dashboard() {
       : [],
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "da_revisionare" },
+          where: { deletedAt: null, status: "da_revisionare", clientId: { in: accessibleDashboardClientIds } },
           orderBy: { createdAt: "asc" },
           take: 20,
         })
@@ -344,6 +348,7 @@ export default async function Dashboard() {
       ? prisma.technicalPractice.findMany({
           where: {
             deletedAt: null,
+            clientId: { in: accessibleDashboardClientIds },
             status: { notIn: ["approvata", "respinta", "archiviata"] },
           },
           orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
@@ -368,6 +373,7 @@ export default async function Dashboard() {
       ? prisma.commercialOffer.findMany({
           where: {
             deletedAt: null,
+            OR: [{ clientId: null }, { clientId: { in: accessibleDashboardClientIds } }],
             followUpAt: { lte: next7 },
             status: { notIn: ["accettata", "rifiutata"] },
           },
@@ -377,6 +383,9 @@ export default async function Dashboard() {
       : [],
     canReadClients ? accessibleDashboardClients.map((client) => ({ id: client.id, displayName: client.displayName })) : [],
   ]);
+  const lastAiRuns = lastAiOutputCandidates.length ? await prisma.aiRun.findMany({ where: { id: { in: lastAiOutputCandidates.map((output) => output.aiRunId) } } }) : [];
+  const lastAiRunById = new Map(lastAiRuns.map((run) => [run.id, run]));
+  const lastAiOutput = lastAiOutputCandidates.find((output) => canViewAiRecord(session, { createdById: lastAiRunById.get(output.aiRunId)?.createdById, client: output.clientId ? allDashboardClients.find((client) => client.id === output.clientId) ?? null : null, project: output.projectId ? accessibleDashboardProjects.find((project) => project.id === output.projectId) ?? null : null })) ?? null;
   const priorityStats = [
     [
       "Lead nuovi",

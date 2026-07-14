@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { Prisma, type RoleCode } from '@prisma/client';
 import { prisma } from './prisma';
-import { isPermission, permissionCodes, requirePermission } from './auth';
+import { isPermission, permissionCodes, requireAdmin } from './auth';
 import { canChangeUserRole, canDeactivateUser, shouldClearPermissionOverridesOnRoleChange } from './user-safety';
 import { internalUserSchema, userIdSchema, userPermissionOverridesSchema, userRoleSchema } from './validation';
 
@@ -56,7 +56,7 @@ function revalidateUserPages(userId: string) {
 }
 
 export async function createInternalUser(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const data = internalUserSchema.parse({ ...Object.fromEntries(form), active: form.get('active') === 'on' });
   if (data.role === 'admin' && s.role !== 'admin') throw new Error('Solo un admin può creare un altro admin.');
   const user = await serializable(async (tx) => {
@@ -68,7 +68,7 @@ export async function createInternalUser(form: FormData) {
 }
 
 export async function updateInternalUserRole(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const data = userRoleSchema.parse(Object.fromEntries(form));
   const result = await serializable(async (tx) => {
     const before = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });
@@ -91,7 +91,7 @@ export async function updateInternalUserRole(form: FormData) {
 }
 
 export async function deactivateInternalUser(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const data = userIdSchema.parse(Object.fromEntries(form));
   const result = await serializable(async (tx) => {
     const before = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });
@@ -110,7 +110,7 @@ export async function deactivateInternalUser(form: FormData) {
 }
 
 export async function activateInternalUser(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const data = userIdSchema.parse(Object.fromEntries(form));
   const user = await serializable(async (tx) => {
     const before = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });
@@ -122,7 +122,7 @@ export async function activateInternalUser(form: FormData) {
 }
 
 export async function updateUserPermissionOverrides(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const raw = { userId: form.get('userId'), overrides: permissionCodes.map((permission) => ({ permission, value: form.get(`permission:${permission}`) ?? 'inherit' })) };
   const data = userPermissionOverridesSchema.parse(raw);
   const target = await serializable(async (tx) => {
@@ -140,7 +140,7 @@ export async function updateUserPermissionOverrides(form: FormData) {
 }
 
 export async function resetUserPermissionOverrides(form: FormData) {
-  const s = await requirePermission('settings.manage');
+  const s = await requireAdmin();
   const data = userIdSchema.parse(Object.fromEntries(form));
   const target = await serializable(async (tx) => {
     const beforeUser = await assertTargetMutable(tx, s, data.userId, { allowSelf: true });

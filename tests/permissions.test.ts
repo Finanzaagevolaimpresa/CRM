@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hasPermission } from '../src/lib/auth';
+import { hasPermission, isAdminSession } from '../src/lib/auth';
 import { isNavItemVisible } from '../src/lib/nav-visibility';
-import { canViewProject } from '../src/lib/access-control';
+import { canViewAiRecord, canViewProject } from '../src/lib/access-control';
+import { prisma } from '../src/lib/prisma';
 import { canChangeUserRole, canDeactivateUser, shouldClearPermissionOverridesOnRoleChange } from '../src/lib/user-safety';
 
 test('permesso ereditato dal ruolo', () => {
@@ -114,4 +115,80 @@ test('audit dei tentativi anti-lockout usa rami bloccati persistibili', () => {
   assert.equal(canDeactivateUser('a1', users[0], users).reason, 'self_deactivation');
   assert.equal(canDeactivateUser('operator', users[0], users).reason, 'last_active_admin');
   assert.equal(canChangeUserRole(users[0], 'direzione', users).reason, 'last_active_admin');
+});
+
+test('gestione utenti: direzione non può modificare i propri override', () => {
+  assert.equal(isAdminSession({ role: 'direzione' }), false);
+});
+
+test('gestione utenti: direzione non può modificare un altro utente', () => {
+  assert.equal(isAdminSession({ role: 'direzione' }), false);
+});
+
+test('gestione utenti: admin può modificare un utente non admin', () => {
+  assert.equal(isAdminSession({ role: 'admin' }), true);
+});
+
+test('gestione utenti: override non permettono a non-admin di auto-attribuirsi gestione utenti', () => {
+  const session = { role: 'direzione' as const, active: true, permissionOverrides: [{ permission: 'settings.manage' as const, allowed: true }, { permission: 'user.write' as const, allowed: true }] };
+  assert.equal(hasPermission(session, 'settings.manage'), true);
+  assert.equal(hasPermission(session, 'user.write'), true);
+  assert.equal(isAdminSession(session), false);
+});
+
+test('AI: consulente vede output del proprio cliente e non quello di altro cliente', () => {
+  const consultant = { userId: 'u1', role: 'consulente' as const };
+  assert.equal(canViewAiRecord(consultant, { client: { consultantId: 'u1', salesOwnerId: null } }), true);
+  assert.equal(canViewAiRecord(consultant, { client: { consultantId: 'u2', salesOwnerId: null } }), false);
+});
+
+test('AI: revisore e creatore vedono output non collegati', () => {
+  assert.equal(canViewAiRecord({ userId: 'reviewer', role: 'revisore' }, { createdById: null }), true);
+  assert.equal(canViewAiRecord({ userId: 'creator', role: 'consulente' }, { createdById: 'creator' }), true);
+  assert.equal(canViewAiRecord({ userId: 'other', role: 'consulente' }, { createdById: 'creator' }), false);
+});
+
+test('audit anti-lockout persistono nel database e utente resta invariato', { skip: !process.env.DATABASE_URL }, async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const admin = await prisma.user.create({ data: { email: `admin-${suffix}@example.test`, name: 'Admin Test', role: 'admin', active: true, passwordHash: 'test' } });
+  try {
+    const selfResult = await prisma.$transaction(async (tx) => {
+      const users = await tx.user.findMany({ where: { deletedAt: null }, select: { id: true, role: true, active: true, deletedAt: true } });
+      const target = await tx.user.findUniqueOrThrow({ where: { id: admin.id } });
+      const safety = canDeactivateUser(admin.id, target, users);
+      if (!safety.allowed) {
+        await tx.auditLog.create({ data: { actorId: admin.id, event: 'blocked_self_deactivation', entityType: 'User', entityId: admin.id, after: { reason: safety.reason } } });
+        return safety;
+      }
+      await tx.user.update({ where: { id: admin.id }, data: { active: false } });
+      return safety;
+    });
+    assert.equal(selfResult.allowed, false);
+
+    const roleResult = await prisma.$transaction(async (tx) => {
+      const users = await tx.user.findMany({ where: { deletedAt: null }, select: { id: true, role: true, active: true, deletedAt: true } });
+      const target = await tx.user.findUniqueOrThrow({ where: { id: admin.id } });
+      const safety = canChangeUserRole(target, 'direzione', users);
+      if (!safety.allowed) {
+        await tx.auditLog.create({ data: { actorId: admin.id, event: 'blocked_last_admin_change', entityType: 'User', entityId: admin.id, after: { attemptedRole: 'direzione' } } });
+        return safety;
+      }
+      await tx.user.update({ where: { id: admin.id }, data: { role: 'direzione' } });
+      return safety;
+    });
+    assert.equal(roleResult.allowed, false);
+
+    const [selfAudit, lastAdminAudit, unchanged] = await Promise.all([
+      prisma.auditLog.findFirst({ where: { actorId: admin.id, event: 'blocked_self_deactivation' } }),
+      prisma.auditLog.findFirst({ where: { actorId: admin.id, event: 'blocked_last_admin_change' } }),
+      prisma.user.findUniqueOrThrow({ where: { id: admin.id } }),
+    ]);
+    assert.ok(selfAudit);
+    assert.ok(lastAdminAudit);
+    assert.equal(unchanged.active, true);
+    assert.equal(unchanged.role, 'admin');
+  } finally {
+    await prisma.auditLog.deleteMany({ where: { actorId: admin.id } });
+    await prisma.user.delete({ where: { id: admin.id } }).catch(() => undefined);
+  }
 });

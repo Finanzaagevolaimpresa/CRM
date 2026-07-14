@@ -300,7 +300,7 @@ export async function buildOperationalReportMarkdown(
       : rendered;
   };
   const timeline = [
-    ...(practice
+    ...(canReadTechnical && practice
       ? [
           {
             date: practice.createdAt,
@@ -374,9 +374,8 @@ export async function buildOperationalReportMarkdown(
               `- ${serviceName(s.id)} · stato ${clean(s.status)} · operativo ${clean(s.operationalStatus)} · owner ${userOf(s.assignedToId)}`,
           ),
       ""] : []),
-      ...(canReadTechnical && practice
-        ? []
-        : [
+      ...(canReadTechnical && !practice
+        ? [
             "",
             "## Pratiche tecniche collegate visibili",
             list(
@@ -384,7 +383,8 @@ export async function buildOperationalReportMarkdown(
               (item) =>
                 `- ${item.title} · tipo ${item.practiceType} · stato ${clean(item.status)} · priorità ${clean(item.priority)} · responsabile ${userOf(item.technicalOwnerId)} · owner ${userOf(item.commercialOwnerId)} · scadenza ${fmt(item.dueDate)} · ${practiceIdentifier(item)}`,
             ),
-          ]),
+          ]
+        : []),
       "",
       "## Timeline operativa sintetica",
       list(timeline, (e) => `- ${fmt(e.date)} — ${e.text}`),

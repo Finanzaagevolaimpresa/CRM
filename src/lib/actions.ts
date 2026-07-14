@@ -9,7 +9,7 @@ import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOf
 import { prepareAiOutput, getAiAdapter, testAiProviderDiagnostic, normalizeAiProvider } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
-import { canViewClient, canViewDocument, isSensitiveDocument, canViewTechnicalPractice, canEditTechnicalPractice } from './access-control';
+import { canViewAiRecord, canViewClient, canViewDocument, isSensitiveDocument, canViewTechnicalPractice, canEditTechnicalPractice } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
 
@@ -539,8 +539,27 @@ export async function runClientAiAgent(form: FormData) {
 }
 
 export async function runMockAgent(agentCode: string, input: unknown) { const s = await requirePermission('ai.run'); const agent = await prisma.aiAgent.findUniqueOrThrow({ where: { code: agentCode } }); if (!agent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.'); const draft = await getAiAdapter().run({ code: agentCode, role: agent.name, systemPrompt: agent.systemPrompt }, input); const run = await prisma.aiRun.create({ data: { agentId: agent.id, input: input as object, output: draft as object, createdById: s.userId } }); const prepared = prepareAiOutput(draft); const output = await prisma.aiOutput.create({ data: { aiRunId: run.id, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } }); await audit(s.userId, 'ai_generation', 'AiOutput', output.id, output); return output; }
-export async function approveAiOutput(id: string) { const s = await requirePermission('ai.approve'); const data = aiOutputApprovalSchema.parse({ id }); const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } }); if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval'); const output = await prisma.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } }); await audit(s.userId, 'ai_output_status_change', 'AiOutput', id, { before: current, after: output });
-  await audit(s.userId, 'ai_approval', 'AiOutput', id, output); return output; }
+export async function approveAiOutput(id: string) {
+  const s = await requirePermission('ai.approve');
+  const data = aiOutputApprovalSchema.parse({ id });
+  const current = await prisma.aiOutput.findUniqueOrThrow({ where: { id: data.id } });
+  const run = await prisma.aiRun.findUnique({ where: { id: current.aiRunId } });
+  const [client, project] = await Promise.all([
+    current.clientId ? prisma.client.findUnique({ where: { id: current.clientId } }) : null,
+    current.projectId ? prisma.project.findUnique({ where: { id: current.projectId } }) : null,
+  ]);
+  const projectWithClient = project ? { ...project, client: project.clientId === client?.id ? client : await prisma.client.findUnique({ where: { id: project.clientId } }) } : null;
+  if (!canViewAiRecord(s, { createdById: run?.createdById ?? null, client, project: projectWithClient })) {
+    throw new UserFacingActionError('Output AI non accessibile.');
+  }
+  if (!current.requiresHumanReview) throw new Error('AI output must require human review before approval');
+  return prisma.$transaction(async (tx) => {
+    const output = await tx.aiOutput.update({ where: { id: data.id }, data: { status: 'approved', approvedById: s.userId, approvedAt: new Date(), reviewedById: s.userId, reviewedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorId: s.userId, event: 'ai_output_status_change', entityType: 'AiOutput', entityId: id, after: { before: current, after: output } as Prisma.InputJsonValue } });
+    await tx.auditLog.create({ data: { actorId: s.userId, event: 'ai_approval', entityType: 'AiOutput', entityId: id, after: output as Prisma.InputJsonValue } });
+    return output;
+  });
+}
 
 async function assertTechnicalContext(clientId: string, projectId?: string, clientServiceId?: string) {
   const [client, project, service] = await Promise.all([

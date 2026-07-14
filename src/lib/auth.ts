@@ -119,6 +119,16 @@ export function inheritedPermission(role: RoleCode, permission: Permission) {
   return role === 'admin' || granted.includes('*') || granted.includes(permission);
 }
 
+export function isAdminSession(session: Pick<AuthSession, 'role'>) {
+  return session.role === 'admin';
+}
+
+export async function requireAdmin() {
+  const session = await requireSession();
+  if (!isAdminSession(session)) redirect('/dashboard');
+  return session;
+}
+
 export async function requirePermission(permission: Permission) {
   const session = await requireSession();
   if (!hasPermission(session, permission)) redirect('/dashboard');

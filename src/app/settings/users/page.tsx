@@ -1,14 +1,14 @@
 export const dynamic = 'force-dynamic';
 import Link from 'next/link';
 import { Badge, Card, PageHeader, Table, formatDateTime } from '@/components/ui';
-import { requirePermission } from '@/lib/auth';
+import { requireAdmin } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { activateInternalUser, createInternalUser, deactivateInternalUser, updateInternalUserRole } from '@/lib/user-actions';
 
 const roles = ['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato'];
 function fmt(d?: Date | null) { return formatDateTime(d); }
 export default async function Page(){
- await requirePermission('settings.manage');
+ await requireAdmin();
  const users = await prisma.user.findMany({ include: { _count: { select: { permissionOverrides: true } } }, orderBy: [{ active: 'desc' }, { createdAt: 'desc' }] });
  return <div className="space-y-6"><PageHeader title="Utenti interni" description="Gestione multiutente FAI: account personali, ruoli, stato operativo, eccezioni granulari e accessi effettivi." />
  <Card title="Crea utente interno"><form action={createInternalUser} className="grid gap-3 md:grid-cols-5"><input className="rounded-xl border p-3" name="name" placeholder="Nome" required/><input className="rounded-xl border p-3" name="email" type="email" placeholder="email@azienda.it" required/><select className="rounded-xl border p-3" name="role" defaultValue="collaboratore_limitato">{roles.map(r=><option key={r} value={r}>{r}</option>)}</select><input className="rounded-xl border p-3" name="password" type="password" placeholder="Password temporanea" required minLength={10}/><label className="flex items-center gap-2 text-sm"><input name="active" type="checkbox" defaultChecked/> Attivo</label><button className="rounded-xl bg-fai-green px-4 py-3 font-bold text-white md:col-span-5">Crea utente</button></form></Card>

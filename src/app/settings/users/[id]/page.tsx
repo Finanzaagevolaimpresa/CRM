@@ -1,12 +1,12 @@
 export const dynamic = 'force-dynamic';
 import { notFound } from 'next/navigation';
 import { Badge, Card, PageHeader, Table, formatDateTime } from '@/components/ui';
-import { inheritedPermission, permissionCatalog, requirePermission, resolvePermission, type PermissionOverride } from '@/lib/auth';
+import { inheritedPermission, permissionCatalog, requireAdmin, resolvePermission, type PermissionOverride } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { resetUserPermissionOverrides, updateUserPermissionOverrides } from '@/lib/user-actions';
 
 export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ saved?: string }> }) {
-  await requirePermission('settings.manage');
+  await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams ?? Promise.resolve({ saved: undefined as string | undefined })]);
   const user = await prisma.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || user.deletedAt) notFound();
