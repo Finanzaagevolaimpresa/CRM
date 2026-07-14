@@ -113,10 +113,10 @@ test('il run cliente usa il provider configurato sull agente e persiste il lifec
   assert.ok(createRun >= 0 && createRun < providerCall, 'AiRun running deve esistere prima della chiamata al provider');
   assert.match(body.slice(createRun, providerCall), /status: 'running'/);
   assert.match(body.slice(createRun, providerCall), /provider: currentRuntime\.provider/);
-  assert.match(body.slice(createRun, providerCall), /promptVersion: currentAgent\.promptVersion/);
+  assert.match(body.slice(createRun, providerCall), /promptVersion: currentSnapshot\.promptVersion/);
   assert.match(body, /markAiRunFailedBestEffort/);
-  assert.match(functionBody('markAiRunFailedBestEffort'), /status: 'failed'/);
-  assert.match(body, /status: 'completed'/);
+  assert.match(functionBody('markAiRunFailedBestEffort'), /failAiRunWithLease\(tx, options\.lease/);
+  assert.match(body, /completeAiRunWithLease\(tx, reservation\.lease/);
   assert.doesNotMatch(body, /getAiAdapter|normalizeAiProvider/);
 });
 

@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'node:crypto';
 import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { getAiAgentCategory, isPrimaryOperationalAiAgent, sortAiAgentsByCategory } from '@/lib/ai-agent-catalog';
@@ -73,6 +74,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canViewAudit = hasPermission(session, 'audit.read');
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
   const canRunAiAgents = hasPermission(session, 'ai.run');
+  const aiRequestKey = canRunAiAgents ? randomUUID() : null;
   const canRunExternalAiAgents = hasPermission(session, 'ai.external.run');
 
   const [companyContextRows, companies, projectRows, clientServiceRows, documentRows, contractRows, paymentRows, tasks, preAnalysisRows, dossierRows, clientDossierRows, bankabilityRows, financingRows, checklistItems, activeAgents, technicalPracticeRows, practiceCommunicationRows] = await Promise.all([
@@ -377,6 +379,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     </Card>
     <Card id="output-ai" title="Agenti AI / Output interni">
       {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
+        <input type="hidden" name="requestKey" value={aiRequestKey ?? ''}/>
         <input type="hidden" name="clientId" value={client.id}/>
         <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => {
           const external = agent.provider === 'openai';

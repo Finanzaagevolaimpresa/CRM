@@ -6,7 +6,6 @@ import ts from 'typescript';
 import {
   AiControlPlaneError,
   assertExternalAiRunAllowed,
-  consumeExternalAiPermit,
   getAllowedExternalModels,
   isExternalModelAllowed,
   isExternalProviderEnvironmentEnabled,
@@ -107,9 +106,7 @@ test('policy esterna nega gate, modello, conferma e rate limit tramite il databa
   const allowed = await call({ db: db(true, 1) as never });
   assert.equal(allowed.externalRunsInCurrentWindow, 1);
   assert.deepEqual(allowed.dataCategories, ['client_profile']);
-  consumeExternalAiPermit(allowed.permit, 'gpt-approved');
-  assert.throws(() => consumeExternalAiPermit(allowed.permit, 'gpt-approved'), /non valida/i);
-  assert.throws(() => consumeExternalAiPermit({} as never, 'gpt-approved'), /non valida/i);
+  assert.equal('permit' in allowed, false, 'il gate di policy non deve emettere una capability prima della reservation');
 });
 
 test('DTO egress conserva solo campi approvati, redige PII e guida le categorie', () => {
@@ -142,7 +139,7 @@ test('DTO egress conserva solo campi approvati, redige PII e guida le categorie'
 });
 
 test('conferma FormData usa parsing booleano rigoroso e non accetta stringhe truthy arbitrarie', () => {
-  const base = { agentId: 'agent-1', clientId: 'client-1' };
+  const base = { requestKey: '9c36b1af-c0fc-4f81-a3bb-1798ba19dc4d', agentId: 'agent-1', clientId: 'client-1' };
   assert.equal(clientAiRunSchema.parse({ ...base, externalDataConfirmed: 'on' }).externalDataConfirmed, true);
   assert.equal(clientAiRunSchema.parse({ ...base, externalDataConfirmed: 'false' }).externalDataConfirmed, false);
   assert.equal(clientAiRunSchema.parse(base).externalDataConfirmed, false);
@@ -164,7 +161,7 @@ test('RBAC esterno è ristretto ad admin e direzione', () => {
 
 test('Responses API disabilita sempre lo storage e minimizza usage e request id', () => {
   const aiSource = readFileSync(resolve(root, 'src/lib/ai.ts'), 'utf8');
-  assert.equal((aiSource.match(/store:\s*false/g) ?? []).length, 2, 'run e diagnostica devono impostare store:false');
+  assert.ok((aiSource.match(/store:\s*false/g) ?? []).length >= 3, 'tipo e body di run e diagnostica devono fissare store:false');
 
   assert.deepEqual(extractOpenAiUsage({ usage: { input_tokens: 12, output_tokens: 4 } }, ' req_abc-123 '), {
     inputTokens: 12,
@@ -225,7 +222,8 @@ test('diagnostica OpenAI non aggira permessi, kill switch, allowlist o rate limi
 
   assert.match(body, /hasPermission\(s, 'ai\.run'\)/);
   assert.match(body, /hasPermission\(s, 'ai\.external\.run'\)/);
-  assert.match(body, /form\.has\('externalDiagnosticConfirmed'\)/);
+  assert.match(body, /form\.get\('externalDiagnosticConfirmed'\) === 'on'/);
+  assert.doesNotMatch(body, /form\.has\('externalDiagnosticConfirmed'\)/);
   assert.match(diagnosticPage, /name="externalDiagnosticConfirmed" required/);
   assert.ok(assertion >= 0 && assertion < reservation && reservation < providerCall);
   assert.match(body.slice(assertion, reservation), /dataCategories: \['agent_configuration'\]/);
@@ -237,10 +235,10 @@ test('diagnostica OpenAI non aggira permessi, kill switch, allowlist o rate limi
 test('permit single-use chiude ogni fetch OpenAI importato fuori dalle action autorizzate', () => {
   const aiSource = readFileSync(resolve(root, 'src/lib/ai.ts'), 'utf8');
   const adapterStart = aiSource.indexOf('export class OpenAiAdapter');
-  const adapterPermit = aiSource.indexOf('consumeExternalAiPermit(permit, this.model)', adapterStart);
+  const adapterPermit = aiSource.indexOf('await consumeExternalAiPermit(permit, this.model, requestBody)', adapterStart);
   const adapterFetch = aiSource.indexOf("fetch('https://api.openai.com/v1/responses'", adapterStart);
   const diagnosticStart = aiSource.indexOf('export async function testAiProviderDiagnostic');
-  const diagnosticPermit = aiSource.indexOf('consumeExternalAiPermit(permit, diagnostics.model)', diagnosticStart);
+  const diagnosticPermit = aiSource.indexOf('await consumeExternalAiPermit(permit, diagnostics.model, requestBody)', diagnosticStart);
   const diagnosticFetch = aiSource.indexOf("fetch('https://api.openai.com/v1/responses'", diagnosticStart);
 
   assert.ok(adapterStart >= 0 && adapterPermit > adapterStart && adapterPermit < adapterFetch);
@@ -264,8 +262,9 @@ test('OpenAI non persiste payload o istruzioni e recupera gli errori post-provid
   assert.match(body, /isSensitiveDocument\([\s\S]*item\.title[\s\S]*\)\) return false/);
   assert.match(body, /markAiRunFailedBestEffort/);
   assert.match(body, /AI_OUTPUT_PERSISTENCE_FAILURE/);
-  assert.match(failureHelper, /status: 'failed'/);
-  assert.match(failureHelper, /providerRequestId: telemetry\.providerRequestId/);
+  assert.match(failureHelper, /failAiRunWithLease\(tx, options\.lease/);
+  assert.match(failureHelper, /failureCode: options\.errorCode/);
+  assert.match(failureHelper, /telemetry,/);
 });
 
 test('config agente usa CAS, versioni append-only e audit minimizzato nella stessa transazione', () => {

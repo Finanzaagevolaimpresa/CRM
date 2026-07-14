@@ -292,6 +292,45 @@ function buildOpenAiPrompt(agent: AiAgentRuntime, payload: ExternalAiPayload) {
   ].filter(Boolean).join('\n');
 }
 
+export type OpenAiResponseRequestBody = {
+  model: string;
+  instructions: string;
+  input: string;
+  max_output_tokens: number;
+  store: false;
+};
+
+/** Shared by reservation hashing and the adapter so the permit binds the exact body. */
+export function createOpenAiResponseRequestBody(
+  agent: AiAgentRuntime | string,
+  payload: ExternalAiPayload,
+  model: string,
+): OpenAiResponseRequestBody {
+  const runtime = normalizeAgent(agent);
+  const normalizedModel = model.trim();
+  if (!normalizedModel) throw new UserFacingActionError('Un modello OpenAI esplicito è obbligatorio.');
+  const externalPayload = requiredExternalPayload(payload);
+  return {
+    model: normalizedModel,
+    instructions: runtime.systemPrompt || 'Sei un assistente AI interno FAI. Rispondi in italiano professionale.',
+    input: buildOpenAiPrompt(runtime, externalPayload),
+    max_output_tokens: 2500,
+    store: false,
+  };
+}
+
+export function createOpenAiDiagnosticRequestBody(model: string): OpenAiResponseRequestBody {
+  const normalizedModel = model.trim();
+  if (!normalizedModel) throw new UserFacingActionError('Il modello diagnostico OpenAI non è configurato.');
+  return {
+    model: normalizedModel,
+    instructions: 'Rispondi solo con OK. Test tecnico interno senza dati cliente.',
+    input: 'Test diagnostico provider AI CRM FAI. Non usare dati cliente.',
+    max_output_tokens: 16,
+    store: false,
+  };
+}
+
 export class MockAiAdapter implements AiProviderAdapter {
   async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
     const runtime = normalizeAgent(agent);
@@ -312,9 +351,10 @@ export class OpenAiAdapter implements AiProviderAdapter {
   async run(agent: AiAgentRuntime | string, input: unknown, permit?: ExternalAiPermit): Promise<AiDraft> {
     const runtime = normalizeAgent(agent);
     const externalPayload = requiredExternalPayload(input);
-    consumeExternalAiPermit(permit, this.model);
     const apiKey = process.env.AI_API_KEY?.trim();
     if (!apiKey) throw new UserFacingActionError('Provider OpenAI configurato ma AI_API_KEY non è valorizzata. Imposta la chiave lato server oppure configura questo agente con provider mock.');
+    const requestBody = createOpenAiResponseRequestBody(runtime, externalPayload, this.model);
+    await consumeExternalAiPermit(permit, this.model, requestBody);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
@@ -323,13 +363,7 @@ export class OpenAiAdapter implements AiProviderAdapter {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          instructions: runtime.systemPrompt || 'Sei un assistente AI interno FAI. Rispondi in italiano professionale.',
-          input: buildOpenAiPrompt(runtime, externalPayload),
-          max_output_tokens: 2500,
-          store: false,
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
       telemetry = { providerRequestId: minimizeProviderRequestId(response.headers.get('x-request-id')) };
@@ -425,11 +459,12 @@ export async function testAiProviderDiagnostic(permit?: ExternalAiPermit): Promi
     return { success: true, message: 'Provider mock raggiungibile: risposta sintetica generata correttamente.', provider: diagnostics.provider, model: diagnostics.model };
   }
 
-  consumeExternalAiPermit(permit, diagnostics.model);
   const apiKey = process.env.AI_API_KEY?.trim();
   if (!apiKey) {
     return { success: false, message: 'Provider OpenAI selezionato ma AI_API_KEY non è configurata lato server.', provider: diagnostics.provider, model: diagnostics.model };
   }
+  const requestBody = createOpenAiDiagnosticRequestBody(diagnostics.model);
+  await consumeExternalAiPermit(permit, diagnostics.model, requestBody);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
@@ -438,13 +473,7 @@ export async function testAiProviderDiagnostic(permit?: ExternalAiPermit): Promi
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: diagnostics.model,
-        instructions: 'Rispondi solo con OK. Test tecnico interno senza dati cliente.',
-        input: 'Test diagnostico provider AI CRM FAI. Non usare dati cliente.',
-        max_output_tokens: 16,
-        store: false,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
     usage = { providerRequestId: minimizeProviderRequestId(response.headers.get('x-request-id')) };

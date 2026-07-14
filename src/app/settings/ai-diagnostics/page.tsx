@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'node:crypto';
 import { Badge, Card, PageHeader } from '@/components/ui';
 import { runAiProviderDiagnosticTest } from '@/lib/actions';
 import { getAiProviderDiagnostics } from '@/lib/ai';
@@ -30,6 +31,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     && selectedModelAllowed
     && diagnostics.hasApiKey
     && Boolean(diagnosticAgent);
+  const diagnosticRequestKey = randomUUID();
 
   return (
     <div className="space-y-6">
@@ -104,6 +106,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
           <p>Il test usa un prompt tecnico minimale interno, non usa dati cliente reali, non crea AiOutput o dossier e non registra API key. Il test OpenAI riserva un AiRun tecnico con soli metadati minimizzati, stato, utilizzo token e audit; valgono doppio kill switch, allowlist, `ai.run`, `ai.external.run` e `store: false`.</p>
           {message ? <div className={`rounded-2xl p-4 font-bold ring-1 ${status === 'ok' ? 'bg-fai-teal/10 text-fai-green ring-fai-teal/20' : 'bg-fai-orange/10 text-fai-orange ring-fai-orange/20'}`}>{status === 'ok' ? 'ok' : 'errore controllato'} · {message}</div> : null}
           <form action={runAiProviderDiagnosticTest} className="space-y-3">
+            <input type="hidden" name="requestKey" value={diagnosticRequestKey} />
             {externalDiagnostic ? <label className="flex items-start gap-2 rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">
               <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDiagnosticConfirmed" required />
               <span>Confermo questo singolo test OpenAI, la chiamata al provider esterno e il possibile costo. Il test non usa dati cliente e la conferma non viene riutilizzata.</span>
