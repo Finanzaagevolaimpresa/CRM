@@ -348,13 +348,14 @@ docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.exam
 
 Questo usa `prisma migrate deploy`; non usare `prisma migrate dev` in produzione e non eseguire migration durante la build Docker.
 
-Smoke test Docker sulla VPS (utile quando Docker non è disponibile in CI/Codex):
+Smoke test Docker completo: eseguirlo solo in CI o in un ambiente effimero, mai sul progetto Compose production e mai con `.env.production`. Lo script crea un project name `fai-crm-smoke-*`, un env file temporaneo, un tag immagine temporaneo e distrugge esclusivamente le risorse isolate create dal test. Fallisce se rileva il project name `fai-crm` o una `.env.production` reale.
+
+Verifiche manuali non distruttive sulla VPS production:
 
 ```bash
-COMPOSE_PROJECT_NAME=fai-crm ./scripts/smoke-docker-prod.sh
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml config --quiet
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run --silent ai:reconcile
 ```
-
-Lo smoke test valida la configurazione Compose, costruisce l'immagine app e verifica nel runner che i comandi production siano risolvibili e che la directory documenti sia scrivibile.
 
 4. **Seed production-safe**
 
@@ -480,7 +481,7 @@ sudo systemctl reset-failed fai-crm-ai-reconcile.service
 Il service esegue nel container app esistente:
 
 ```bash
-docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app npm run ai:reconcile
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app npm run --silent ai:reconcile
 ```
 
 Non copiare segreti nei file unit: le variabili restano in `/opt/fai-crm/.env.production`, già usato da Docker Compose.

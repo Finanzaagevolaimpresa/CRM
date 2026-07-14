@@ -7,9 +7,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod.example
-    image: fai-crm:prod
+    image: ${APP_IMAGE:-fai-crm:prod}
     env_file:
-      - path: .env.production
+      - path: ${APP_ENV_FILE:-.env.production}
         required: false
     environment:
       NODE_ENV: production
