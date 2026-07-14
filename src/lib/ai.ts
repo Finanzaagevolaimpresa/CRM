@@ -1,13 +1,81 @@
 import { scanForbiddenPhrases } from './compliance';
 import { buildClientServiceLabel, findServiceCatalogLabel } from './client-service-label';
 import { UserFacingActionError } from './action-errors';
+import {
+  consumeExternalAiPermit,
+  type ExternalAiDataCategory,
+  type ExternalAiPermit,
+} from './ai-control-plane';
 
 export type AiDraft = { title: string; content: string; metadata?: Record<string, unknown> };
 export type AiAgentRuntime = { code: string; role?: string | null; systemPrompt?: string | null };
-export interface AiProviderAdapter { run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft>; }
+export interface AiProviderAdapter { run(agent: AiAgentRuntime | string, input: unknown, permit?: ExternalAiPermit): Promise<AiDraft>; }
 
-const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
+export type AiProviderUsageMetadata = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  providerRequestId?: string;
+};
+
+export class AiProviderCallError extends UserFacingActionError {
+  constructor(
+    message: string,
+    public readonly telemetry: AiProviderUsageMetadata = {},
+    public readonly errorCode = 'AI_PROVIDER_FAILURE',
+  ) {
+    super(message);
+    this.name = 'AiProviderCallError';
+  }
+}
+
+export function aiProviderErrorMetadata(error: unknown) {
+  return error instanceof AiProviderCallError ? error.telemetry : {};
+}
+
+type ExternalNullableText = string | null;
+type ExternalNullableNumber = number | string | null;
+
+/** The only client payload shape that may cross the OpenAI egress boundary. */
+export type ExternalAiPayload = {
+  source: 'CRM interno FAI';
+  humanReviewRequired: true;
+  operationalInstructions?: string;
+  context: {
+    client: { type: string; status: string };
+    companies: Array<{
+      annualRevenue: ExternalNullableNumber;
+      legalForm: ExternalNullableText;
+      atecoCode: ExternalNullableText;
+      region: ExternalNullableText;
+      employees: number | null;
+      durcStatus: ExternalNullableText;
+    }>;
+    service: {
+      label: string;
+      practiceType: ExternalNullableText;
+      status: string;
+      operationalStatus: string;
+      requestedAmount: ExternalNullableNumber;
+      plannedInvestment: ExternalNullableNumber;
+    } | null;
+    project: {
+      requestedAmount: ExternalNullableNumber;
+      totalInvestment: ExternalNullableNumber;
+      status: string;
+      priority: string;
+      startTiming: ExternalNullableText;
+      region: ExternalNullableText;
+      sector: ExternalNullableText;
+    } | null;
+    checklist: Array<{ title: string; status: string; hasLinkedDocument: boolean }>;
+    documents: Array<{ documentCategory: string; status: string; serviceArea: string }>;
+    tasks: Array<{ status: string; priority: string }>;
+  };
+};
+
 const OPENAI_TIMEOUT_MS = 45_000;
+const MAX_PROVIDER_REQUEST_ID_LENGTH = 255;
 
 type AiContext = {
   client?: { displayName?: string; type?: string; status?: string; notes?: string | null };
@@ -33,6 +101,34 @@ function money(value: unknown) { const n = Number(value); return value === null 
 function list(items: string[], empty: string) { return items.length ? items.map((item) => `- ${item}`).join('\n') : `- ${empty}`; }
 function findRevenue(ctx: AiContext) { const company = ctx.companies?.[0]; return company?.revenue ?? company?.annualRevenue ?? company?.turnover ?? company?.fatturato; }
 function docSignals(ctx: AiContext, words: string[]) { const source = [...(ctx.checklist ?? []), ...(ctx.documents ?? [])].map((x) => `${'title' in x ? x.title : ''} ${'documentCategory' in x ? x.documentCategory : ''} ${'notes' in x ? x.notes : ''}`.toLowerCase()); return words.filter((word) => source.some((line) => line.includes(word.toLowerCase()))); }
+
+function safeTokenCount(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function minimizeProviderRequestId(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.length > MAX_PROVIDER_REQUEST_ID_LENGTH) return undefined;
+  return /^[A-Za-z0-9._:-]+$/.test(trimmed) ? trimmed : undefined;
+}
+
+export function extractOpenAiUsage(
+  data: { usage?: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown } },
+  requestId?: string | null,
+): AiProviderUsageMetadata {
+  const inputTokens = safeTokenCount(data.usage?.input_tokens);
+  const outputTokens = safeTokenCount(data.usage?.output_tokens);
+  const reportedTotal = safeTokenCount(data.usage?.total_tokens);
+  const computedTotal = inputTokens !== undefined && outputTokens !== undefined && Number.isSafeInteger(inputTokens + outputTokens)
+    ? inputTokens + outputTokens
+    : undefined;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: reportedTotal ?? computedTotal,
+    providerRequestId: minimizeProviderRequestId(requestId),
+  };
+}
 
 function buildMockContent(agentCode: string, ctx: AiContext) {
   const serviceLabel = buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente');
@@ -89,43 +185,100 @@ function buildMockContent(agentCode: string, ctx: AiContext) {
   return sections.join('\n');
 }
 
-function sanitizeForOpenAi(input: unknown) {
-  const ctx = contextFrom(input);
-  const userPrompt = typeof input === 'object' && input ? (input as { prompt?: unknown }).prompt : undefined;
-  const max = <T>(items: T[] | undefined, limit: number) => (items ?? []).slice(0, limit);
-  const safe = {
-    source: 'CRM interno FAI',
-    humanReviewRequired: true,
-    prompt: typeof userPrompt === 'string' && userPrompt.trim() ? userPrompt.trim() : undefined,
-    operationalInstructions: typeof input === 'object' && input ? (input as { operationalInstructions?: unknown }).operationalInstructions : undefined,
-    context: {
-      client: ctx.client ? { displayName: ctx.client.displayName, type: ctx.client.type, status: ctx.client.status, notes: ctx.client.notes } : undefined,
-      companies: max(ctx.companies, 3).map((c) => ({ name: c.name, revenue: c.revenue ?? c.annualRevenue ?? c.turnover ?? c.fatturato })),
-      clientService: ctx.clientService ? {
-        serviceCatalogId: ctx.clientService.serviceCatalogId,
-        practiceType: ctx.clientService.practiceType,
-        operationalStatus: ctx.clientService.operationalStatus,
-        requestedAmount: ctx.clientService.requestedAmount,
-        plannedInvestment: ctx.clientService.plannedInvestment,
-        operationalNotes: ctx.clientService.operationalNotes,
-      } : undefined,
-      project: ctx.project ? {
-        title: ctx.project.title,
-        requestedAmount: ctx.project.requestedAmount,
-        totalInvestment: ctx.project.totalInvestment,
-        scenarioA: ctx.project.scenarioA,
-        scenarioB: ctx.project.scenarioB,
-      } : undefined,
-      checklist: max(ctx.checklist, 30).map((i) => ({ title: i.title, status: i.status, notes: i.notes, hasLinkedDocument: Boolean(i.documentId) })),
-      documents: max(ctx.documents, 30).map((d) => ({ title: d.title, documentCategory: d.documentCategory, status: d.status, serviceArea: d.serviceArea })),
-      tasks: max(ctx.tasks, 15).map((t) => ({ title: t.title, status: t.status, priority: t.priority, description: t.description })),
-    },
-  };
-  return JSON.parse(JSON.stringify(safe));
+function requiredExternalPayload(input: unknown): ExternalAiPayload {
+  if (!input || typeof input !== 'object') {
+    throw new UserFacingActionError('Payload esterno AI non valido.');
+  }
+  const candidate = input as Partial<ExternalAiPayload>;
+  if (candidate.source !== 'CRM interno FAI' || candidate.humanReviewRequired !== true || !candidate.context) {
+    throw new UserFacingActionError('Payload esterno AI non valido.');
+  }
+  return createExternalAiPayload(candidate as ExternalAiPayload);
 }
 
-function buildOpenAiPrompt(agent: AiAgentRuntime, input: unknown) {
-  const safeInput = sanitizeForOpenAi(input);
+function sanitizeExternalFreeText(value: string, maxLength: number) {
+  return value
+    .trim()
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email rimossa]')
+    .replace(/\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b/gi, '[codice fiscale rimosso]')
+    .replace(/\bIT\d{2}[A-Z]\d{10}[0-9A-Z]{12}\b/gi, '[IBAN rimosso]')
+    .slice(0, maxLength);
+}
+
+/** Rebuilds the DTO field-by-field so extra properties never cross egress. */
+export function createExternalAiPayload(payload: ExternalAiPayload): ExternalAiPayload {
+  const context = payload.context;
+  return {
+    source: 'CRM interno FAI',
+    humanReviewRequired: true,
+    ...(payload.operationalInstructions ? { operationalInstructions: sanitizeExternalFreeText(payload.operationalInstructions, 2000) } : {}),
+    context: {
+      client: { type: context.client.type, status: context.client.status },
+      companies: context.companies.slice(0, 3).map((company) => ({
+        annualRevenue: company.annualRevenue,
+        legalForm: company.legalForm,
+        atecoCode: company.atecoCode,
+        region: company.region,
+        employees: company.employees,
+        durcStatus: company.durcStatus,
+      })),
+      service: context.service ? {
+        label: sanitizeExternalFreeText(context.service.label, 200) || 'Pratica cliente',
+        practiceType: context.service.practiceType,
+        status: context.service.status,
+        operationalStatus: context.service.operationalStatus,
+        requestedAmount: context.service.requestedAmount,
+        plannedInvestment: context.service.plannedInvestment,
+      } : null,
+      project: context.project ? {
+        requestedAmount: context.project.requestedAmount,
+        totalInvestment: context.project.totalInvestment,
+        status: context.project.status,
+        priority: context.project.priority,
+        startTiming: context.project.startTiming,
+        region: context.project.region,
+        sector: context.project.sector,
+      } : null,
+      checklist: context.checklist.slice(0, 30).map((item) => ({
+        title: sanitizeExternalFreeText(item.title, 200),
+        status: item.status,
+        hasLinkedDocument: item.hasLinkedDocument === true,
+      })),
+      documents: context.documents.slice(0, 30).map((document) => ({
+        documentCategory: sanitizeExternalFreeText(document.documentCategory, 120),
+        status: document.status,
+        serviceArea: document.serviceArea,
+      })),
+      tasks: context.tasks.slice(0, 15).map((task) => ({ status: task.status, priority: task.priority })),
+    },
+  };
+}
+
+function hasFinancialValue(value: ExternalNullableNumber) {
+  return value !== null && value !== '';
+}
+
+export function externalAiDataCategories(payload: ExternalAiPayload): ExternalAiDataCategory[] {
+  const context = payload.context;
+  return [
+    'agent_configuration',
+    'client_profile',
+    ...(context.companies.length ? ['company_profile' as const] : []),
+    ...(context.companies.some((company) => hasFinancialValue(company.annualRevenue))
+      || Boolean(context.service && (hasFinancialValue(context.service.requestedAmount) || hasFinancialValue(context.service.plannedInvestment)))
+      || Boolean(context.project && (hasFinancialValue(context.project.requestedAmount) || hasFinancialValue(context.project.totalInvestment)))
+      ? ['financial_data' as const]
+      : []),
+    ...(context.project ? ['project_data' as const] : []),
+    ...(context.service ? ['service_context' as const] : []),
+    ...(context.documents.length ? ['document_metadata' as const] : []),
+    ...(context.checklist.length ? ['checklist_status' as const] : []),
+    ...(context.tasks.length ? ['task_metadata' as const] : []),
+    ...(payload.operationalInstructions ? ['operator_instructions' as const] : []),
+  ];
+}
+
+function buildOpenAiPrompt(agent: AiAgentRuntime, payload: ExternalAiPayload) {
   return [
     `Ruolo agente: ${agent.role || agent.code}.`,
     'Regole FAI obbligatorie:',
@@ -134,9 +287,8 @@ function buildOpenAiPrompt(agent: AiAgentRuntime, input: unknown) {
     '- Quando citi requisiti, bandi, agevolazioni, scadenze, ammissibilità o norme, scrivi "Da verificare su fonte ufficiale".',
     '- Produci testo semplice/Markdown in sezioni chiare: Sintesi, Dati usati, Criticità, Scenari, Documenti da verificare, Prossime azioni.',
     '- Non inventare dati mancanti; segnala cosa richiedere o validare.',
-    safeInput.prompt ? `Prompt quick-run utente (istruzione operativa separata dal systemPrompt agente):\n${safeInput.prompt}` : undefined,
-    'Contesto CRM sanificato, senza percorsi storage/checksum:',
-    JSON.stringify(safeInput, null, 2),
+    'DTO CRM approvato per egress, senza identificativi catalogo, percorsi storage, checksum o file:',
+    JSON.stringify(payload, null, 2),
   ].filter(Boolean).join('\n');
 }
 
@@ -149,15 +301,24 @@ export class MockAiAdapter implements AiProviderAdapter {
 }
 
 export class OpenAiAdapter implements AiProviderAdapter {
-  constructor(private readonly model = process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL) {}
+  private readonly model: string;
 
-  async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
+  constructor(model: string) {
+    const normalized = model.trim();
+    if (!normalized) throw new UserFacingActionError('Un modello OpenAI esplicito è obbligatorio.');
+    this.model = normalized;
+  }
+
+  async run(agent: AiAgentRuntime | string, input: unknown, permit?: ExternalAiPermit): Promise<AiDraft> {
     const runtime = normalizeAgent(agent);
+    const externalPayload = requiredExternalPayload(input);
+    consumeExternalAiPermit(permit, this.model);
     const apiKey = process.env.AI_API_KEY?.trim();
     if (!apiKey) throw new UserFacingActionError('Provider OpenAI configurato ma AI_API_KEY non è valorizzata. Imposta la chiave lato server oppure configura questo agente con provider mock.');
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+    let telemetry: AiProviderUsageMetadata = {};
     try {
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
@@ -165,27 +326,40 @@ export class OpenAiAdapter implements AiProviderAdapter {
         body: JSON.stringify({
           model: this.model,
           instructions: runtime.systemPrompt || 'Sei un assistente AI interno FAI. Rispondi in italiano professionale.',
-          input: buildOpenAiPrompt(runtime, input),
+          input: buildOpenAiPrompt(runtime, externalPayload),
           max_output_tokens: 2500,
+          store: false,
         }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
-      const data = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+      telemetry = { providerRequestId: minimizeProviderRequestId(response.headers.get('x-request-id')) };
+      if (!response.ok) {
+        throw new AiProviderCallError(
+          'Chiamata OpenAI non riuscita. Nessun output AI è stato salvato.',
+          telemetry,
+          `AI_PROVIDER_HTTP_${Math.floor(response.status / 100)}XX`,
+        );
+      }
+      const data = await response.json() as {
+        output_text?: string;
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+        usage?: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown };
+      };
+      telemetry = extractOpenAiUsage(data, response.headers.get('x-request-id'));
       const content = data.output_text || data.output?.flatMap((o) => o.content ?? []).map((c) => c.text).filter(Boolean).join('\n') || '';
-      if (!content.trim()) throw new Error('OpenAI empty response');
-      const ctx = contextFrom(input);
+      if (!content.trim()) throw new AiProviderCallError('OpenAI ha restituito una risposta vuota.', telemetry, 'AI_PROVIDER_EMPTY_RESPONSE');
       return {
-        title: `Bozza OpenAI ${runtime.code} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`,
+        title: `Bozza OpenAI ${runtime.code} - ${externalPayload.context.service?.label || 'Pratica cliente'}`,
         content: content.trim(),
-        metadata: { provider: 'openai', model: this.model },
+        metadata: { provider: 'openai', model: this.model, ...telemetry },
       };
     } catch (error) {
+      if (error instanceof AiProviderCallError) throw error;
       if (error instanceof UserFacingActionError) throw error;
       const message = error instanceof Error && error.name === 'AbortError'
         ? 'Timeout durante la chiamata OpenAI. Riprova più tardi oppure configura questo agente con provider mock.'
         : 'Errore operativo durante la chiamata OpenAI. Nessun output AI è stato salvato.';
-      throw new UserFacingActionError(message);
+      throw new AiProviderCallError(message, telemetry);
     } finally {
       clearTimeout(timeout);
     }
@@ -199,37 +373,47 @@ export function normalizeAiProvider(value = process.env.AI_PROVIDER): AiProvider
   return normalized === 'openai' ? 'openai' : 'mock';
 }
 
-export function getAiAdapter(): AiProviderAdapter {
-  return normalizeAiProvider() === 'openai' ? new OpenAiAdapter() : new MockAiAdapter();
-}
-
 export type AiProviderDiagnostics = {
   provider: AiProviderName;
   configuredProvider: string;
   model: string;
   hasApiKey: boolean;
   mode: AiProviderName;
+  externalEnvEnabled: boolean;
+  allowedModels: string[];
   configurationStatus: 'ok' | 'incompleta';
 };
 
-export type AiProviderDiagnosticTestResult = { success: boolean; message: string; provider: AiProviderName; model: string };
+export type AiProviderDiagnosticTestResult = {
+  success: boolean;
+  message: string;
+  provider: AiProviderName;
+  model: string;
+  usage?: AiProviderUsageMetadata;
+};
+
+function configuredAllowedModels() {
+  return [...new Set((process.env.AI_ALLOWED_MODELS ?? '').split(',').map((value) => value.trim()).filter(Boolean))];
+}
 
 export function getAiProviderDiagnostics(): AiProviderDiagnostics {
   const configuredProvider = process.env.AI_PROVIDER?.trim() || 'mock';
   const provider = normalizeAiProvider(configuredProvider);
   const hasApiKey = Boolean(process.env.AI_API_KEY?.trim());
-  const model = process.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
+  const model = process.env.AI_MODEL?.trim() || '';
   return {
     provider,
     configuredProvider,
     model,
     hasApiKey,
     mode: provider,
-    configurationStatus: provider === 'openai' && !hasApiKey ? 'incompleta' : 'ok',
+    externalEnvEnabled: process.env.AI_EXTERNAL_PROVIDERS_ENABLED === 'true',
+    allowedModels: configuredAllowedModels(),
+    configurationStatus: provider === 'openai' && (!hasApiKey || !configuredAllowedModels().includes(model)) ? 'incompleta' : 'ok',
   };
 }
 
-export async function testAiProviderDiagnostic(): Promise<AiProviderDiagnosticTestResult> {
+export async function testAiProviderDiagnostic(permit?: ExternalAiPermit): Promise<AiProviderDiagnosticTestResult> {
   const diagnostics = getAiProviderDiagnostics();
   if (diagnostics.provider === 'mock') {
     await new MockAiAdapter().run({ code: 'diagnostic_test', role: 'Diagnostica provider AI' }, {
@@ -241,6 +425,7 @@ export async function testAiProviderDiagnostic(): Promise<AiProviderDiagnosticTe
     return { success: true, message: 'Provider mock raggiungibile: risposta sintetica generata correttamente.', provider: diagnostics.provider, model: diagnostics.model };
   }
 
+  consumeExternalAiPermit(permit, diagnostics.model);
   const apiKey = process.env.AI_API_KEY?.trim();
   if (!apiKey) {
     return { success: false, message: 'Provider OpenAI selezionato ma AI_API_KEY non è configurata lato server.', provider: diagnostics.provider, model: diagnostics.model };
@@ -248,6 +433,7 @@ export async function testAiProviderDiagnostic(): Promise<AiProviderDiagnosticTe
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  let usage: AiProviderUsageMetadata = {};
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -257,16 +443,20 @@ export async function testAiProviderDiagnostic(): Promise<AiProviderDiagnosticTe
         instructions: 'Rispondi solo con OK. Test tecnico interno senza dati cliente.',
         input: 'Test diagnostico provider AI CRM FAI. Non usare dati cliente.',
         max_output_tokens: 16,
+        store: false,
       }),
       signal: controller.signal,
     });
-    if (!response.ok) return { success: false, message: `Chiamata OpenAI non riuscita (HTTP ${response.status}). Nessun output AI salvato.`, provider: diagnostics.provider, model: diagnostics.model };
-    return { success: true, message: 'Provider OpenAI raggiungibile: chiamata minima completata. Nessun output AI salvato.', provider: diagnostics.provider, model: diagnostics.model };
+    usage = { providerRequestId: minimizeProviderRequestId(response.headers.get('x-request-id')) };
+    if (!response.ok) return { success: false, message: `Chiamata OpenAI non riuscita (HTTP ${response.status}). Nessun output AI salvato.`, provider: diagnostics.provider, model: diagnostics.model, usage };
+    const data = await response.json() as { usage?: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown } };
+    usage = extractOpenAiUsage(data, response.headers.get('x-request-id'));
+    return { success: true, message: 'Provider OpenAI raggiungibile: chiamata minima completata. Nessun output AI salvato.', provider: diagnostics.provider, model: diagnostics.model, usage };
   } catch (error) {
     const message = error instanceof Error && error.name === 'AbortError'
       ? 'Timeout durante il test OpenAI. Nessun output AI salvato.'
       : 'Errore controllato durante il test OpenAI. Nessun output AI salvato.';
-    return { success: false, message, provider: diagnostics.provider, model: diagnostics.model };
+    return { success: false, message, provider: diagnostics.provider, model: diagnostics.model, usage };
   } finally {
     clearTimeout(timeout);
   }

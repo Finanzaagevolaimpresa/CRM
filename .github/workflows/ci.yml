@@ -52,5 +52,10 @@ jobs:
       - name: Apply database migrations
         run: npm run prisma:migrate:deploy
 
+      - name: Verify production seed idempotency
+        run: |
+          APP_ENV=production npm run prisma:seed:production
+          APP_ENV=production npm run prisma:seed:production
+
       - name: Build
         run: npm run build

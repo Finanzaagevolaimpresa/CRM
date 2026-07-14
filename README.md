@@ -41,27 +41,23 @@ Il seed crea un utente amministratore interno per sviluppo e test manuali:
 Per usare il pulsante rapido **Accedi come admin demo**, avviare Next.js con `APP_ENV=development npm run dev`. In alternativa, compilare il form di `/login` con email e password sopra. Dopo il login viene creato il cookie firmato `fai_crm_session` (o il nome definito in `AUTH_COOKIE_NAME`) con scadenza e redirect a `/dashboard`. Il logout interno cancella il cookie e riporta a `/login`.
 
 
-## Provider AI
+## AI Control Plane
 
-Il provider AI predefinito resta `mock`, adatto allo sviluppo locale senza costi e senza chiamate esterne:
+Il provider predefinito resta `mock`, senza chiamate esterne. Il Control Plane v1 applica un doppio kill switch: per usare OpenAI devono essere attivi sia il gate ambiente sia lo switch globale nel database. La configurazione iniziale è fail-closed:
 
 ```env
 AI_PROVIDER="mock"
 AI_API_KEY=""
-AI_MODEL="gpt-4.1-mini"
+AI_MODEL=""
+AI_EXTERNAL_PROVIDERS_ENABLED="false"
+AI_ALLOWED_MODELS=""
 ```
 
-Per abilitare il provider reale OpenAI solo lato server impostare (integrazione via `fetch` server-side, senza SDK/dipendenza runtime obbligatoria):
+La allowlist vuota non autorizza alcun modello esterno. Per una chiamata OpenAI servono inoltre agente configurato con modello ammesso, `ai.run`, `ai.external.run`, conferma esplicita dell'operatore, limite orario disponibile e chiave API server-side. La chiave non viene mai mostrata dall'interfaccia e non deve usare il prefisso `NEXT_PUBLIC_*`.
 
-```env
-AI_PROVIDER="openai"
-AI_API_KEY="sk-..."
-AI_MODEL="gpt-4.1-mini"
-```
+Le richieste alla Responses API impostano `store: false`; ciò non equivale a Zero Data Retention. I dati API non sono usati per il training per impostazione predefinita, mentre i log di abuse monitoring possono essere conservati fino a 30 giorni. ZDR o Modified Abuse Monitoring richiedono verifiche e configurazioni OpenAI separate. Staging e produzione devono avere progetti, chiavi, budget, allowlist e switch distinti.
 
-`AI_PROVIDER` viene normalizzato lato server con trim e lowercase: sono ammessi solo `mock` e `openai`; qualsiasi altro valore ricade coerentemente su `mock` sia nella diagnostica sia nelle esecuzioni reali. `AI_MODEL` è opzionale; se omesso viene usato `gpt-4.1-mini` come default prudente per bozze operative interne. La chiave `AI_API_KEY` non deve mai essere esposta al browser né inserita in variabili `NEXT_PUBLIC_*`. Se `AI_PROVIDER=openai` ma la chiave manca, l'app restituisce un errore operativo chiaro e non salva output fittizi.
-
-L'uso di OpenAI può generare costi in base a token/modello. La CI resta su `AI_PROVIDER=mock` e non installa pacchetti OpenAI esterni: il provider reale usa la API HTTPS solo quando configurato lato server. Ogni output AI, sia mock sia OpenAI, nasce come bozza interna `needs_review` o `flagged`, mantiene la revisione umana obbligatoria e non deve promettere contributi, finanziamenti o approvazioni. In questo step non sono previsti streaming, upload file a OpenAI, né invio di `storagePath` o `checksum`.
+Ogni output resta una bozza interna con revisione e approvazione umana; non viene effettuato alcun invio automatico. Configurazione, procedura di attivazione, minimizzazione del payload e indicazioni privacy/retention sono descritte in [`docs/ai-control-plane.md`](docs/ai-control-plane.md).
 
 ## Smoke test interno
 
@@ -73,7 +69,7 @@ Dopo seed e avvio locale, verificare manualmente il flusso MVP interno:
 4. Creazione cliente.
 5. Creazione progetto.
 6. Registrazione documento.
-7. Run AI mock.
+7. Run agente AI (`mock` oppure provider esterno esplicitamente abilitato).
 8. Approvazione AI da parte di un utente interno.
 9. Creazione dossier.
 10. Contratto.
@@ -82,7 +78,8 @@ Dopo seed e avvio locale, verificare manualmente il flusso MVP interno:
 ## Architettura
 - `prisma/schema.prisma`: schema dati per auth, CRM, documenti, AI, audit e soft delete.
 - `src/lib/auth.ts`: sessione server, ruoli e permessi base.
-- `src/lib/ai.ts`: adapter AI astratto con mock provider.
+- `src/lib/ai.ts`: adapter AI per provider `mock` e OpenAI, con richieste esterne server-side.
+- `src/lib/ai-control-plane.ts`: doppio gate, allowlist modelli, conferma e rate limit per provider esterni.
 - `src/lib/compliance.ts`: disclaimer e intercettazione frasi vietate.
 - `src/lib/storage.ts`: placeholder per signed URL su storage privato.
 - `src/app/*`: pagine MVP richieste.

@@ -26,11 +26,19 @@ Variabili principali:
 - `AUTH_SECRET`: segreto forte, casuale, lungo almeno 32 byte. Non riusare valori development.
 - `STORAGE_PROVIDER=local`: provider runtime attualmente supportato.
 - `LOCAL_DOCUMENT_STORAGE_ROOT`: directory persistente non servita direttamente dal web server.
-- `AI_PROVIDER`: lasciare `mock` se non si vuole usare un provider reale.
+- `AI_PROVIDER`: compatibilità/diagnostica; lasciare `mock`. I run operativi usano provider e modello configurati sul singolo agente.
 - `AI_API_KEY`: solo server-side e solo se richiesta dal provider AI configurato. Non creare variabili `NEXT_PUBLIC_*` per questa chiave.
+- `AI_EXTERNAL_PROVIDERS_ENABLED=false`: gate infrastrutturale globale. Solo il valore esatto `true` consente di valutare provider esterni.
+- `AI_ALLOWED_MODELS=""`: allowlist CSV dei modelli esterni; vuota significa nessun modello autorizzato.
 - `WEBSITE_LEAD_WEBHOOK_SECRET`: segreto lungo per l'endpoint lead WordPress, se usato.
 
 Le variabili S3 in `.env.production.example` sono placeholder coerenti con la configurazione prevista, ma il runtime attuale documenta `local` come provider operativo. Non impostare `STORAGE_PROVIDER=s3` finché l'implementazione S3 non è completata e collaudata.
+
+### Provider AI esterni
+
+Il deploy nasce fail-closed. Una chiamata esterna richiede contemporaneamente il gate `AI_EXTERNAL_PROVIDERS_ENABLED=true`, lo switch globale nel database, un modello presente nella allowlist non vuota, i permessi `ai.run` e `ai.external.run` e la conferma dell'operatore. Disattivare il gate ambiente o lo switch database blocca nuove chiamate esterne.
+
+Staging e produzione devono usare progetti OpenAI, chiavi, budget, allowlist e switch database distinti. Non copiare la chiave fra ambienti e non inserire mai chiavi in Git, nel database, nei prompt, nei log o in variabili `NEXT_PUBLIC_*`. Il runtime usa `store: false`, ma non presume Zero Data Retention: i controlli ZDR/Modified Abuse Monitoring richiedono idoneità e configurazioni OpenAI separate. Vedere [`docs/ai-control-plane.md`](ai-control-plane.md) prima dell'attivazione.
 
 ## Installazione e build produzione
 
@@ -142,6 +150,10 @@ Prima di restore in produzione fermare l'applicazione, verificare di avere un ba
 - [ ] Directory documenti privata, persistente e non servita come static asset.
 - [ ] Permessi admin verificati; credenziali demo development non presenti in produzione.
 - [ ] `AI_API_KEY` solo server-side, mai `NEXT_PUBLIC_*`.
+- [ ] `AI_EXTERNAL_PROVIDERS_ENABLED=false` e `AI_ALLOWED_MODELS=""` fino al collaudo e all'approvazione esplicita.
+- [ ] Progetto e chiave OpenAI di produzione distinti da staging; budget e limiti configurati.
+- [ ] Doppio kill switch AI verificato, `ai.external.run` assegnato con minimo privilegio e test fail-closed superati.
+- [ ] Confermato che gli output AI restano bozze revisionate e non generano invii automatici.
 - [ ] Backup database e documenti pianificati, cifrati e testati con restore.
 - [ ] Log applicativi e audit log consultabili dagli utenti autorizzati.
 - [ ] `/api/health` monitorato senza esporre dati sensibili.
@@ -182,6 +194,8 @@ AUTH_SECRET="<generate-a-long-random-secret-at-least-32-bytes>"
 NEXT_PUBLIC_APP_URL="https://desk.finanzaagevolaimpresa.it"
 STORAGE_PROVIDER="local"
 LOCAL_DOCUMENT_STORAGE_ROOT="/var/lib/fai-crm/documents"
+AI_EXTERNAL_PROVIDERS_ENABLED="false"
+AI_ALLOWED_MODELS=""
 ```
 
 I valori sopra sono placeholder: sostituire password e segreti con valori forti generati sul server. Non inserire `DATABASE_URL`, `AUTH_SECRET`, chiavi S3, `AI_API_KEY` o password reali nel repository.

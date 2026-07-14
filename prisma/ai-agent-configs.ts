@@ -6,7 +6,7 @@ export const AI_AGENT_CODES = {
   dossierCliente: 'dossier_cliente',
 } as const;
 
-export type SeedAiAgentConfig = { code: string; name: string; description: string; operationalScope: string; systemPrompt: string; requiredDataChecklist: string[]; expectedOutput: string; toneStyle: string; active: boolean; provider: 'mock'; futureModel?: string | null; };
+export type SeedAiAgentConfig = { code: string; name: string; description: string; operationalScope: string; systemPrompt: string; requiredDataChecklist: string[]; expectedOutput: string; toneStyle: string; active: boolean; provider: 'mock'; };
 
 export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
   {
@@ -20,7 +20,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'audit_ai_bancabilita_fai',
@@ -33,7 +32,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'consulenza_strategica_fai',
@@ -46,7 +44,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'pre_analisi_ai_ammissibilita_fai',
@@ -59,7 +56,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'dossier_strategico_fai',
@@ -72,7 +68,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'ottimizzazione_ai_progetto_fai',
@@ -85,7 +80,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'progetti_digitali_software_piattaforme_fai',
@@ -98,7 +92,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'business_plan_fai',
@@ -111,7 +104,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'verifica_spese_ammissibili_fai',
@@ -124,7 +116,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'cumulabilita_agevolazioni_fai',
@@ -137,7 +128,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'revisore_ai_fai',
@@ -150,7 +140,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'governance_prompt_ai_fai',
@@ -163,7 +152,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'bancabilita',
@@ -176,7 +164,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'pre_analisi_agevolata',
@@ -189,7 +176,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'finanza_ordinaria',
@@ -202,7 +188,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'ottimizzazione_pratica',
@@ -215,7 +200,6 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   },
   {
     code: 'dossier_cliente',
@@ -228,6 +212,5 @@ export const initialAiAgentConfigs: SeedAiAgentConfig[] = [
     toneStyle: 'Italiano interno FAI, professionale, prudente, tecnico, chiaro e orientato alla revisione umana.',
     active: true,
     provider: 'mock',
-    futureModel: 'openai-server-side',
   }
 ];
