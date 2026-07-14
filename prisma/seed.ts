@@ -559,6 +559,10 @@ async function main() {
       clientServiceId: service.id,
       projectId: project.id,
       status: "completed",
+      provider: "mock",
+      model: "seed-demo-static-v1",
+      promptVersion: agent.promptVersion,
+      agentConfigVersion: agent.configVersion,
       createdById: reviewer.id,
       input: {
         cliente: client.displayName,

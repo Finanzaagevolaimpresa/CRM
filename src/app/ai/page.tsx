@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { PrimaryButton } from '@/components/actions';
 import { runMockAiAndRedirect } from '@/lib/form-actions';
@@ -13,6 +14,7 @@ export default async function Page() {
   const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { name: 'asc' } }));
   const activeAgents = agents.filter((agent) => agent.active && isPrimaryOperationalAiAgent(agent.code));
   const canQuickRunMock = hasPermission(session, 'ai_agents.write');
+  const quickRunRequestKey = canQuickRunMock ? randomUUID() : null;
 
   return (
     <div className="space-y-6">
@@ -31,6 +33,7 @@ export default async function Page() {
             <EmptyState title="Nessun agente attivo">Riattivare almeno un agente da Impostazioni &gt; Agenti AI per generare una bozza interna.</EmptyState>
           ) : (
             <form action={runMockAiAndRedirect} className="space-y-3">
+              <input type="hidden" name="requestKey" value={quickRunRequestKey ?? ''} />
               <select name="agentCode" className="w-full rounded-xl border p-3" required>
                 {activeAgents.map((agent) => <option key={agent.code} value={agent.code}>{agent.name} · {getAiAgentCategory(agent.code)}</option>)}
               </select>

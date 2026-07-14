@@ -23,6 +23,11 @@ const aiRunAccessSelect = {
   provider: true,
   model: true,
   promptVersion: true,
+  reliabilityVersion: true,
+  agentConfigVersion: true,
+  failureCode: true,
+  finishedAt: true,
+  egressStartedAt: true,
   createdById: true,
   createdAt: true,
 } as const;

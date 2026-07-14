@@ -828,21 +828,33 @@ model AiAgentConfigVersion {
   createdById           String?
   createdAt             DateTime @default(now())
   agent                 AiAgent  @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  runs                  AiRun[]  @relation("AiRunAgentConfigVersion")
 
   @@unique([agentId, version])
   @@index([agentId, createdAt])
 }
 
 model AiRun {
-  id                      String    @id @default(cuid())
+  id                      String                @id @default(cuid())
+  reliabilityVersion      Int?
   agentId                 String
+  agentConfigVersion      Int?
   clientId                String?
   clientServiceId         String?
   projectId               String?
-  status                  String    @default("completed")
-  provider                String    @default("unknown")
+  status                  String                @default("completed")
+  provider                String                @default("unknown")
   model                   String?
   promptVersion           String?
+  requestKey              String?
+  requestFingerprint      String?
+  leaseExpiresAt          DateTime?
+  leaseTokenHash          String?
+  egressPermitHash        String?
+  egressStartedAt         DateTime?
+  externalPayloadHash     String?
+  finishedAt              DateTime?
+  failureCode             String?
   externalConfirmedAt     DateTime?
   externalDataCategories  Json?
   inputTokens             Int?
@@ -853,8 +865,12 @@ model AiRun {
   output                  Json?
   operationalInstructions String?
   createdById             String?
-  createdAt               DateTime  @default(now())
+  createdAt               DateTime              @default(now())
+  agentConfig             AiAgentConfigVersion? @relation("AiRunAgentConfigVersion", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
 
+  @@unique([createdById, requestKey])
+  @@index([agentId, agentConfigVersion])
+  @@index([status, leaseExpiresAt])
   @@index([clientId])
   @@index([clientServiceId])
   @@index([projectId])
