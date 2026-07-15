@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { permissionCodes } from './permissions';
 
 const optionalText = z.string().trim().max(5000).optional().or(z.literal('').transform(() => undefined));
 const id = z.string().trim().min(1).max(128);
@@ -81,6 +82,15 @@ export const aiOutputDossierSchema = z.object({ id });
 export const internalUserSchema = z.object({ name: z.string().trim().min(1).max(120), email: z.string().trim().email().transform((v) => v.toLowerCase()), role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']), password: z.string().min(10).max(200), active: z.coerce.boolean().optional() });
 export const userRoleSchema = z.object({ userId: id, role: z.enum(['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato']) });
 export const userIdSchema = z.object({ userId: id });
+export const permissionOverrideValueSchema = z.enum(['inherit','allow','deny']);
+export const userPermissionOverrideSchema = z.object({ permission: z.enum(permissionCodes as [string, ...string[]]), value: permissionOverrideValueSchema });
+export const userPermissionOverridesSchema = z.object({ userId: id, overrides: z.array(userPermissionOverrideSchema).max(permissionCodes.length) }).superRefine((data, ctx) => {
+  const seen = new Set<string>();
+  data.overrides.forEach((item, index) => {
+    if (seen.has(item.permission)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['overrides', index, 'permission'], message: 'Permesso duplicato' });
+    seen.add(item.permission);
+  });
+});
 
 export const aiAgentConfigUpdateSchema = z.object({
   id,

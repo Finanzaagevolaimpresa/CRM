@@ -324,6 +324,11 @@ docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.exam
 
 Se una migration già applicata ha modificato il database, non improvvisare downgrade manuali in produzione: ripristinare da backup validato oppure preparare una procedura di rollback dati testata in staging.
 
+
+## Deploy permessi granulari utente
+
+Prima di applicare la release dei permessi granulari eseguire un backup del database production. Applicare la migration additiva con `prisma migrate deploy`: non sono previsti seed demo, backfill inventati o logout obbligatori. Le eccezioni personali inherit/allow/deny sono effettive immediatamente perché la sessione rilegge ruolo, stato e override dal database. Dopo il deploy verificare il numero di admin attivi e mantenere almeno un amministratore attivo.
+
 ## Sequenza Docker production sicura
 
 Eseguire i comandi dalla root del repository sul server. `.env.production` deve restare solo sul server; `.dockerignore` esclude `.env`, `.env.*`, backup, upload e storage privato dal contesto Docker, mantenendo disponibile solo `.env.production.example`.

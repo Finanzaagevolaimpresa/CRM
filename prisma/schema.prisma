@@ -314,6 +314,20 @@ model User {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
   lastLoginAt  DateTime?
+  permissionOverrides UserPermissionOverride[]
+}
+
+model UserPermissionOverride {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission String
+  allowed    Boolean
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, permission])
+  @@index([userId])
 }
 
 model Lead {

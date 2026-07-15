@@ -1,15 +1,15 @@
-export const dynamic = 'force-dynamic';
-import { Badge, Card, PageHeader, Table, formatDateTime } from '@/components/ui';
+import Link from 'next/link';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { createInternalUser, deactivateInternalUser, updateInternalUserRole } from '@/lib/user-actions';
-
+import { Badge, Card, Table } from '@/components/ui';
+import { activateInternalUser, createInternalUser, deactivateInternalUser, updateInternalUserRole } from '@/lib/user-actions';
 const roles = ['admin','direzione','commerciale','consulente','revisore','backoffice','amministrazione','collaboratore_limitato'];
-function fmt(d?: Date | null) { return formatDateTime(d); }
-export default async function Page(){
- await requirePermission('settings.manage');
- const users = await prisma.user.findMany({ orderBy: [{ active: 'desc' }, { createdAt: 'desc' }] });
- return <div className="space-y-6"><PageHeader title="Utenti interni" description="Gestione multiutente FAI: account personali, ruoli, stato operativo e accessi. Solo admin o settings.manage possono modificare questa sezione." />
+const fmt=(d:Date|null)=>d?new Intl.DateTimeFormat('it-IT',{dateStyle:'short',timeStyle:'short'}).format(d):'—';
+export default async function UsersPage(){
+ const session = await requirePermission('user.read');
+ const isAdmin = session.role === 'admin';
+ const users = await prisma.user.findMany({ where: { deletedAt: null }, orderBy:{createdAt:'desc'}, include:{ _count:{select:{permissionOverrides:true}} }});
+ return <div className="space-y-6">
  <Card title="Crea utente interno"><form action={createInternalUser} className="grid gap-3 md:grid-cols-5"><input className="rounded-xl border p-3" name="name" placeholder="Nome" required/><input className="rounded-xl border p-3" name="email" type="email" placeholder="email@azienda.it" required/><select className="rounded-xl border p-3" name="role" defaultValue="collaboratore_limitato">{roles.map(r=><option key={r} value={r}>{r}</option>)}</select><input className="rounded-xl border p-3" name="password" type="password" placeholder="Password temporanea" required minLength={10}/><label className="flex items-center gap-2 text-sm"><input name="active" type="checkbox" defaultChecked/> Attivo</label><button className="rounded-xl bg-fai-green px-4 py-3 font-bold text-white md:col-span-5">Crea utente</button></form></Card>
- <Card title="Lista utenti"><Table headers={['Nome','Email','Ruolo','Stato','Ultimo accesso','Creato il','Aggiornato il','Azioni']} rows={users.map(u=>[u.name,u.email,<Badge key="r">{u.role}</Badge>,u.active?<Badge tone="green" key="a">attivo</Badge>:<Badge tone="gray" key="i">non attivo</Badge>,fmt(u.lastLoginAt),fmt(u.createdAt),fmt(u.updatedAt),<div className="flex flex-wrap gap-2" key="x"><form action={updateInternalUserRole} className="flex gap-2"><input type="hidden" name="userId" value={u.id}/><select className="rounded-lg border px-2 py-1" name="role" defaultValue={u.role}>{roles.map(r=><option key={r} value={r}>{r}</option>)}</select><button className="rounded-lg bg-fai-blue px-3 py-1 text-xs font-bold text-white">Modifica ruolo</button></form><form action={deactivateInternalUser}><input type="hidden" name="userId" value={u.id}/><button className="rounded-lg bg-fai-orange px-3 py-1 text-xs font-bold text-white" disabled={!u.active}>Disattiva</button></form></div>])}/></Card></div>;
+ <Card title="Lista utenti"><Table headers={['Nome','Email','Ruolo','Stato','Eccezioni','Ultimo accesso','Azioni']} rows={users.map(u=>[u.name,u.email,<Badge key="r">{u.role}</Badge>,u.active?<Badge tone="green" key="a">attivo</Badge>:<Badge tone="gray" key="i">non attivo</Badge>,u._count.permissionOverrides,fmt(u.lastLoginAt),<div className="flex flex-wrap gap-2" key="x"><Link className="rounded-lg bg-fai-green px-3 py-1 text-xs font-bold text-white" href={`/settings/users/${u.id}`}>Gestisci permessi</Link>{isAdmin||u.role!=='admin'?<form action={updateInternalUserRole} className="flex gap-2"><input type="hidden" name="userId" value={u.id}/><select className="rounded-lg border px-2 py-1" name="role" defaultValue={u.role}>{roles.map(r=><option key={r} value={r}>{r}</option>)}</select><button className="rounded-lg bg-fai-blue px-3 py-1 text-xs font-bold text-white">Modifica ruolo</button></form>:null}{u.active?<form action={deactivateInternalUser}><input type="hidden" name="userId" value={u.id}/><button className="rounded-lg bg-fai-orange px-3 py-1 text-xs font-bold text-white" disabled={u.id===session.userId}>Disattiva</button></form>:<form action={activateInternalUser}><input type="hidden" name="userId" value={u.id}/><button className="rounded-lg bg-fai-blue px-3 py-1 text-xs font-bold text-white">Riattiva</button></form>}</div>])}/></Card></div>;
 }
