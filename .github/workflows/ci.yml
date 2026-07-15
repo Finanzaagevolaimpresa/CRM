@@ -59,3 +59,26 @@ jobs:
 
       - name: Build
         run: npm run build
+
+
+      - name: Verify systemd unit examples
+        run: |
+          if command -v systemd-analyze >/dev/null 2>&1; then
+            root="$(mktemp -d)"
+            mkdir -p "$root/etc/systemd/system" "$root/usr/bin"
+            cp deploy/systemd/fai-crm-ai-reconcile.service.example "$root/etc/systemd/system/fai-crm-ai-reconcile.service"
+            cp deploy/systemd/fai-crm-ai-reconcile.timer.example "$root/etc/systemd/system/fai-crm-ai-reconcile.timer"
+            for unit in network-online.target sysinit.target timers.target; do
+              printf '[Unit]\nDescription=Dummy %%s for verify\n' "$unit" > "$root/etc/systemd/system/$unit"
+            done
+            printf '[Unit]\nDescription=Dummy docker.service for verify\n[Service]\nExecStart=/usr/bin/true\n' > "$root/etc/systemd/system/docker.service"
+            : > "$root/usr/bin/docker"
+            chmod +x "$root/usr/bin/docker"
+            systemd-analyze verify --root="$root" fai-crm-ai-reconcile.service fai-crm-ai-reconcile.timer
+            rm -rf "$root"
+          else
+            echo "systemd-analyze not available; skipping unit verification"
+          fi
+
+      - name: Docker production reconciler smoke test
+        run: COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh

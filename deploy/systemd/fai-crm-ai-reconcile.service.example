@@ -1,0 +1,19 @@
+[Unit]
+Description=FAI CRM AI run reconciler
+Documentation=file:/opt/fai-crm/docs/ai-control-plane.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# faiadmin e l'account di deploy usato nell'installazione FAI.
+# Su altri server creare questo utente oppure sostituire User= e Group=
+# con un account esistente autorizzato a usare Docker.
+User=faiadmin
+Group=faiadmin
+SupplementaryGroups=docker
+WorkingDirectory=/opt/fai-crm
+ExecStart=/usr/bin/docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app npm run --silent ai:reconcile
+# The reconciler only marks expired local leases as failed. It does not invoke AI providers or retry provider calls.
+# Keep secrets in /opt/fai-crm/.env.production; this unit does not print environment values.

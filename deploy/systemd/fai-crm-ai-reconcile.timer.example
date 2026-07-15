@@ -1,0 +1,13 @@
+[Unit]
+Description=Run FAI CRM AI reconciler every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=fai-crm-ai-reconcile.service
+
+[Install]
+WantedBy=timers.target
