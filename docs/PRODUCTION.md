@@ -448,11 +448,20 @@ Il reconciler AI deve essere pianificato sul VPS production per chiudere localme
 - `deploy/systemd/fai-crm-ai-reconcile.service.example`
 - `deploy/systemd/fai-crm-ai-reconcile.timer.example`
 
-Installazione manuale sul server, dalla root del repository in `/opt/fai-crm`:
+Installazione manuale sul server, dalla root del repository in `/opt/fai-crm`.
+
+Il file service usa come esempio `User=faiadmin` e `Group=faiadmin`. Prima di abilitarlo verificare che l'account esista e sia autorizzato a usare Docker. Su server con un diverso account di deploy, sostituire `User=` e `Group=` con i valori corretti.
 
 ```bash
+id faiadmin
+getent group docker
+
 sudo cp deploy/systemd/fai-crm-ai-reconcile.service.example /etc/systemd/system/fai-crm-ai-reconcile.service
 sudo cp deploy/systemd/fai-crm-ai-reconcile.timer.example /etc/systemd/system/fai-crm-ai-reconcile.timer
+
+sudoedit /etc/systemd/system/fai-crm-ai-reconcile.service
+grep -E '^(User|Group|SupplementaryGroups)=' /etc/systemd/system/fai-crm-ai-reconcile.service
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now fai-crm-ai-reconcile.timer
 ```

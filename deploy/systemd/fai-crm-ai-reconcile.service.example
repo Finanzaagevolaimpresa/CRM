@@ -7,6 +7,9 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+# faiadmin e l'account di deploy usato nell'installazione FAI.
+# Su altri server creare questo utente oppure sostituire User= e Group=
+# con un account esistente autorizzato a usare Docker.
 User=faiadmin
 Group=faiadmin
 SupplementaryGroups=docker

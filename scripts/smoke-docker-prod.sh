@@ -37,7 +37,18 @@ resource_count() {
 cleanup() {
   set +e
   if [[ "$SMOKE_CREATED" == "true" ]]; then
-    docker compose -p "$COMPOSE_PROJECT_NAME" --env-file "$SMOKE_ENV_FILE" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    while IFS= read -r container; do
+      [[ -n "$container" ]] && docker rm -f "$container" >/dev/null 2>&1 || true
+    done < <(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
+
+    while IFS= read -r network; do
+      [[ -n "$network" ]] && docker network rm "$network" >/dev/null 2>&1 || true
+    done < <(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
+
+    while IFS= read -r volume; do
+      [[ -n "$volume" ]] && docker volume rm "$volume" >/dev/null 2>&1 || true
+    done < <(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
+
     docker image rm "$SMOKE_APP_IMAGE" >/dev/null 2>&1 || true
   fi
   if [[ -n "$SMOKE_ENV_FILE" ]]; then
