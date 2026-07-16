@@ -74,6 +74,26 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
 
 
 
+
+
+test('navigazione AI richiede ai.review per control center e output', () => {
+  const reviewer = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.review'] });
+  assert.ok(reviewer.includes('/ai'));
+  assert.ok(reviewer.includes('/ai/outputs'));
+
+  const runnerOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.run'] });
+  assert.ok(!runnerOnly.includes('/ai'));
+  assert.ok(!runnerOnly.includes('/ai/outputs'));
+
+  const approverOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.approve'] });
+  assert.ok(!approverOnly.includes('/ai'));
+  assert.ok(!approverOnly.includes('/ai/outputs'));
+
+  const deniedReview = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: [] });
+  assert.ok(!deniedReview.includes('/ai'));
+  assert.ok(!deniedReview.includes('/ai/outputs'));
+});
+
 test('navigazione documentale richiede document.download per documenti e checklist', () => {
   const canDownload = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['document.download'] });
   assert.ok(canDownload.includes('/documents'));

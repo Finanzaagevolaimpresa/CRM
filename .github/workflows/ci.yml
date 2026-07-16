@@ -57,6 +57,9 @@ jobs:
           APP_ENV=production npm run prisma:seed:production
           APP_ENV=production npm run prisma:seed:production
 
+      - name: Verify DB tests skip without DATABASE_URL
+        run: env -u DATABASE_URL npm run test:db
+
       - name: Run PostgreSQL permission tests
         run: RUN_DB_TESTS=1 npm run test:db
 

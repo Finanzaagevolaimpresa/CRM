@@ -63,8 +63,8 @@ const sections: NavSection[] = [
   {
     title: "AI",
     items: [
-      { label: "Control center AI", href: "/ai", requiredAnyPermissions: ["ai.run", "ai.review", "ai.approve"] },
-      { label: "Output AI", href: "/ai/outputs", requiredAnyPermissions: ["ai.review", "ai.approve"] },
+      { label: "Control center AI", href: "/ai", requiredPermission: "ai.review" },
+      { label: "Output AI", href: "/ai/outputs", requiredPermission: "ai.review" },
       { label: "Dossier AI / Bozze", href: "/client-dossiers", requiredPermission: "dossier.read" },
       { label: "Agenti AI", href: "/settings/ai-agents", requiredPermission: "ai_agents.read" },
     ],
