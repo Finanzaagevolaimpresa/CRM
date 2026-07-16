@@ -152,10 +152,10 @@ test('conferma FormData usa parsing booleano rigoroso e non accetta stringhe tru
 });
 
 test('RBAC esterno è ristretto ad admin e direzione', () => {
-  assert.equal(hasPermission({ role: 'admin', active: true } as never, 'ai.external.run'), true);
-  assert.equal(hasPermission({ role: 'direzione', active: true } as never, 'ai.external.run'), true);
+  assert.equal(hasPermission({ role: 'admin', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
+  assert.equal(hasPermission({ role: 'direzione', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
   for (const role of ['consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
-    assert.equal(hasPermission({ role, active: true } as never, 'ai.external.run'), false, `${role} non deve eseguire provider esterni`);
+    assert.equal(hasPermission({ role, active: true, permissionOverrides: [] }, 'ai.external.run'), false, `${role} non deve eseguire provider esterni`);
   }
 });
 

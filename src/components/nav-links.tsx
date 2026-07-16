@@ -72,10 +72,10 @@ const sections: NavSection[] = [
   {
     title: "Legale / Compliance",
     items: [
-      { label: "Legale / Compliance", href: "/legal-compliance", requiredPermission: "contract.read" },
-      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", requiredPermission: "contract.read" },
-      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", requiredPermission: "contract.read" },
-      { label: "Privacy e consensi", href: "/legal-compliance/privacy", requiredPermission: "contract.read" },
+      { label: "Legale / Compliance", href: "/legal-compliance", requiredPermission: "legal.read" },
+      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", requiredPermission: "legal.read" },
+      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", requiredPermission: "legal.read" },
+      { label: "Privacy e consensi", href: "/legal-compliance/privacy", requiredPermission: "legal.read" },
     ],
   },
   {

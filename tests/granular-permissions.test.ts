@@ -22,6 +22,11 @@ test('override allow e deny hanno precedenza sul ruolo', () => {
   assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'lead.read', allowed: true }]), 'lead.read'), true);
 });
 
+if (false) {
+  // @ts-expect-error permissionOverrides è obbligatorio per evitare call-site role-only
+  hasPermission({ role: 'direzione', active: true }, 'audit.read');
+}
+
 test('admin sempre consentito, inattivo negato e permission sconosciuta rifiutata', () => {
   assert.equal(hasPermission(session('admin', [{ permission: 'audit.read', allowed: false }]), 'audit.read'), true);
   assert.equal(hasPermission(session('admin', [], false), 'audit.read'), false);
@@ -44,9 +49,9 @@ test('override immediato senza nuovo login e reset', () => {
 });
 
 test('azioni proteggono auto-disattivazione, ultimo admin e override admin con transazioni serializzabili', () => {
-  const source = readFileSync(resolve(root, 'src/lib/user-actions.ts'), 'utf8');
-  assert.match(source, /data\.userId === s\.userId[\s\S]*Non puoi disattivare te stesso/);
-  assert.match(source, /activeAdminCount\(tx\) <= 1/);
+  const source = readFileSync(resolve(root, 'src/lib/user-privilege-service.ts'), 'utf8');
+  assert.match(source, /userId === actor\.userId[\s\S]*Non puoi disattivare te stesso/);
+  assert.match(source, /activeAdminCount\(tx\) <= 1|activeAdminCount\(tx\) <= 1/);
   assert.match(source, /TransactionIsolationLevel\.Serializable/);
   assert.match(source, /user\.role === 'admin'[\s\S]*admin sono immuni dagli override/i);
   assert.match(source, /blocked_user_privilege_change/);
@@ -60,7 +65,7 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
   assert.ok(granted.includes('/audit-log'));
   const technicalOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['technical.read'] });
   assert.ok(technicalOverride.includes('/technical-office'));
-  const contractOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['contract.read'] });
+  const contractOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['legal.read'] });
   assert.ok(contractOverride.includes('/legal-compliance'));
 });
 

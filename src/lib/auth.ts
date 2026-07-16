@@ -45,22 +45,30 @@ export async function requireSession(): Promise<AuthSession> {
   return session;
 }
 
-export function hasPermission(session: Pick<AuthSession, 'role' | 'active'> & Partial<Pick<AuthSession, 'permissionOverrides'>>, permission: Permission) {
+export type PermissionSession = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'>;
+
+export function hasPermission(session: PermissionSession, permission: Permission) {
   if (!isPermission(permission)) return false;
   if (session.active !== true) return false;
   if (session.role === 'admin') return true;
-  const override = session.permissionOverrides?.find((item) => item.permission === permission);
+  const override = session.permissionOverrides.find((item) => item.permission === permission);
   if (override) return override.allowed;
   return roleHasPermission(session.role, permission);
 }
 
-export function getEffectivePermissions(session: Pick<AuthSession, 'role' | 'active'> & Partial<Pick<AuthSession, 'permissionOverrides'>>) {
+export function getEffectivePermissions(session: PermissionSession) {
   return permissionCodes.filter((permission) => hasPermission(session, permission));
 }
 
 export async function requirePermission(permission: Permission) {
   const session = await requireSession();
   if (!hasPermission(session, permission)) redirect('/dashboard');
+  return session;
+}
+
+export async function requireAnyPermission(permissions: readonly Permission[]) {
+  const session = await requireSession();
+  if (!permissions.some((permission) => hasPermission(session, permission))) redirect('/dashboard');
   return session;
 }
 
