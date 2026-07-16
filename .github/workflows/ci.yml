@@ -57,6 +57,9 @@ jobs:
           APP_ENV=production npm run prisma:seed:production
           APP_ENV=production npm run prisma:seed:production
 
+      - name: Run PostgreSQL permission tests
+        run: RUN_DB_TESTS=1 npm run test:db
+
       - name: Build
         run: npm run build
 

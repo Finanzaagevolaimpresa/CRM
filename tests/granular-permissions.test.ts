@@ -58,6 +58,10 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
   assert.ok(!limited.includes('/audit-log'));
   const granted = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['audit.read'] });
   assert.ok(granted.includes('/audit-log'));
+  const technicalOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['technical.read'] });
+  assert.ok(technicalOverride.includes('/technical-office'));
+  const contractOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['contract.read'] });
+  assert.ok(contractOverride.includes('/legal-compliance'));
 });
 
 test('seed production idempotente non elimina override esistenti', () => {

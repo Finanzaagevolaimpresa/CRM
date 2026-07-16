@@ -51,11 +51,10 @@ export async function activateInternalUser(form: FormData) {
 
 export async function updateInternalUserRole(form: FormData) {
   const s = await requirePermission('user.write');
+  assertAdminActor(s);
   const data = userRoleSchema.parse(Object.fromEntries(form));
   await serializable(async (tx) => {
     const before = await loadMutableUser(tx, data.userId);
-    const privilegeChange = before.role === 'admin' || data.role === 'admin' || data.userId === s.userId;
-    if (privilegeChange) assertAdminActor(s);
     if (data.userId === s.userId && before.role === 'admin' && data.role !== 'admin') { await blocked(tx, s, data.userId, { role: data.role }, { role: before.role }); throw new Error('Non puoi rimuovere il tuo ruolo admin.'); }
     if (before.role === 'admin' && data.role !== 'admin' && await activeAdminCount(tx) <= 1) { await blocked(tx, s, data.userId, { role: data.role }, { role: before.role }); throw new Error('Impossibile modificare l’ultimo admin attivo.'); }
     const user = await tx.user.update({ where: { id: data.userId }, data: { role: data.role as RoleCode } });

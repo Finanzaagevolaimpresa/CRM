@@ -19,20 +19,6 @@ type NavSection = {
   items: NavItem[];
 };
 
-const operationalRoles: RoleCode[] = [
-  "admin",
-  "direzione",
-  "consulente",
-  "revisore",
-  "backoffice",
-];
-const legalComplianceRoles: RoleCode[] = [
-  "admin",
-  "direzione",
-  "revisore",
-  "amministrazione",
-];
-
 const sections: NavSection[] = [
   {
     title: "Operatività",
@@ -67,15 +53,11 @@ const sections: NavSection[] = [
   {
     title: "Ufficio Tecnico",
     items: [
-      {
-        label: "Ufficio Tecnico",
-        href: "/technical-office",
-        roles: operationalRoles,
-      },
-      { label: "Pratiche tecniche", href: "/technical-office/practices", roles: operationalRoles },
-      { label: "Enti / Portali", href: "/technical-office/portals", roles: operationalRoles },
-      { label: "Integrazioni", href: "/technical-office/integrations", roles: operationalRoles },
-      { label: "Rendicontazioni", href: "/technical-office/reporting", roles: operationalRoles },
+      { label: "Ufficio Tecnico", href: "/technical-office", requiredPermission: "technical.read" },
+      { label: "Pratiche tecniche", href: "/technical-office/practices", requiredPermission: "technical.read" },
+      { label: "Enti / Portali", href: "/technical-office/portals", requiredPermission: "technical.read" },
+      { label: "Integrazioni", href: "/technical-office/integrations", requiredPermission: "technical.read" },
+      { label: "Rendicontazioni", href: "/technical-office/reporting", requiredPermission: "technical.read" },
     ],
   },
   {
@@ -90,14 +72,10 @@ const sections: NavSection[] = [
   {
     title: "Legale / Compliance",
     items: [
-      {
-        label: "Legale / Compliance",
-        href: "/legal-compliance",
-        roles: legalComplianceRoles,
-      },
-      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", roles: legalComplianceRoles },
-      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", roles: legalComplianceRoles },
-      { label: "Privacy e consensi", href: "/legal-compliance/privacy", roles: legalComplianceRoles },
+      { label: "Legale / Compliance", href: "/legal-compliance", requiredPermission: "contract.read" },
+      { label: "Contratti da revisionare", href: "/legal-compliance/contracts", requiredPermission: "contract.read" },
+      { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", requiredPermission: "contract.read" },
+      { label: "Privacy e consensi", href: "/legal-compliance/privacy", requiredPermission: "contract.read" },
     ],
   },
   {
