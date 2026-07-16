@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { Prisma } from '@prisma/client';
 import { getEffectivePermissions, hasPermission, isPermission, permissionCatalog, roleHasPermission, type AuthSession } from '../src/lib/auth';
+import { mapSerializableConflict } from '../src/lib/serializable';
 import { visibleNavItemsForTest } from '../src/components/nav-links';
 
 const root = resolve(import.meta.dirname, '..');
@@ -52,7 +54,8 @@ test('azioni proteggono auto-disattivazione, ultimo admin e override admin con t
   const source = readFileSync(resolve(root, 'src/lib/user-privilege-service.ts'), 'utf8');
   assert.match(source, /userId === actor\.userId[\s\S]*Non puoi disattivare te stesso/);
   assert.match(source, /activeAdminCount\(tx\) <= 1|activeAdminCount\(tx\) <= 1/);
-  assert.match(source, /TransactionIsolationLevel\.Serializable/);
+  const serializable = readFileSync(resolve(root, 'src/lib/serializable.ts'), 'utf8');
+  assert.match(serializable, /TransactionIsolationLevel\.Serializable/);
   assert.match(source, /user\.role === 'admin'[\s\S]*admin sono immuni dagli override/i);
   assert.match(source, /blocked_user_privilege_change/);
 });
@@ -72,4 +75,11 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
 test('seed production idempotente non elimina override esistenti', () => {
   const seed = readFileSync(resolve(root, 'prisma/seed-production.ts'), 'utf8');
   assert.doesNotMatch(seed, /userPermissionOverride\.(delete|deleteMany|update|upsert|create)/);
+});
+
+test('P2034 viene mappato in messaggio controllato', () => {
+  const error = new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: 'test' });
+  const mapped = mapSerializableConflict(error);
+  assert.ok(mapped instanceof Error);
+  assert.equal(mapped.message, 'Operazione concorrente rilevata: riprovare.');
 });

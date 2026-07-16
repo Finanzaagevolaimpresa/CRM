@@ -5,7 +5,7 @@ import type { Permission } from "@/lib/permissions";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-type NavItem = {
+export type NavItem = {
   label: string;
   href: string;
   adminOnly?: boolean;
@@ -96,6 +96,22 @@ const sections: NavSection[] = [
 
 const adminRoles: RoleCode[] = ["admin", "direzione"];
 
+
+export function getVisibleNavItems({ role, effectivePermissions = [] }: { role?: RoleCode | null; effectivePermissions?: Permission[] }) {
+  const canSeeAdmin = Boolean(role && adminRoles.includes(role));
+  const effectivePermissionSet = new Set(effectivePermissions);
+  return sections.flatMap((section) => {
+    const visibleItems = section.items.filter((item) => {
+      if (item.adminOnly && !canSeeAdmin) return false;
+      if (item.roles && (!role || !item.roles.includes(role))) return false;
+      if (item.requiredPermission && !effectivePermissionSet.has(item.requiredPermission)) return false;
+      if (item.requiredAnyPermissions && !item.requiredAnyPermissions.some((permission) => effectivePermissionSet.has(permission))) return false;
+      return true;
+    });
+    return visibleItems.length ? [{ ...section, items: visibleItems }] : [];
+  });
+}
+
 export function NavLinks({
   role,
   notificationCount = 0,
@@ -106,21 +122,10 @@ export function NavLinks({
   effectivePermissions?: Permission[];
 }) {
   const pathname = usePathname();
-  const canSeeAdmin = Boolean(role && adminRoles.includes(role));
-  const effectivePermissionSet = new Set(effectivePermissions);
-
   return (
     <nav className="space-y-4 pb-1" aria-label="Navigazione principale">
-      {sections.map((section) => {
-        const visibleItems = section.items.filter((item) => {
-          if (item.adminOnly && !canSeeAdmin) return false;
-          if (item.roles && (!role || !item.roles.includes(role))) return false;
-          if (item.requiredPermission && !effectivePermissionSet.has(item.requiredPermission)) return false;
-          if (item.requiredAnyPermissions && !item.requiredAnyPermissions.some((permission) => effectivePermissionSet.has(permission))) return false;
-          return true;
-        });
-        if (visibleItems.length === 0) return null;
-
+      {getVisibleNavItems({ role, effectivePermissions }).map((section) => {
+        const visibleItems = section.items;
         return (
           <div key={section.title} className="space-y-1.5">
             <p className="px-3 text-[0.65rem] font-black uppercase tracking-[0.18em] text-white/45">
@@ -167,13 +172,5 @@ export function NavLinks({
 
 
 export function visibleNavItemsForTest({ role, effectivePermissions = [] }: { role?: RoleCode | null; effectivePermissions?: Permission[] }) {
-  const canSeeAdmin = Boolean(role && adminRoles.includes(role));
-  const effectivePermissionSet = new Set(effectivePermissions);
-  return sections.flatMap((section) => section.items).filter((item) => {
-    if (item.adminOnly && !canSeeAdmin) return false;
-    if (item.roles && (!role || !item.roles.includes(role))) return false;
-    if (item.requiredPermission && !effectivePermissionSet.has(item.requiredPermission)) return false;
-    if (item.requiredAnyPermissions && !item.requiredAnyPermissions.some((permission) => effectivePermissionSet.has(permission))) return false;
-    return true;
-  }).map((item) => item.href);
+  return getVisibleNavItems({ role, effectivePermissions }).flatMap((section) => section.items.map((item) => item.href));
 }

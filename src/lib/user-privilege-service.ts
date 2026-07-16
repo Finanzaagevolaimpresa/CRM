@@ -1,44 +1,53 @@
-import { Prisma, type PrismaClient, type RoleCode } from '@prisma/client';
+import { Prisma, type RoleCode, type User } from '@prisma/client';
+import { serializableOptions } from './serializable';
 
-type Db = PrismaClient | Prisma.TransactionClient;
-export type PrivilegeActor = { userId: string; role: RoleCode };
+export type PrivilegeActor = { userId: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
 
-export const serializableOptions = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } as const;
+type Tx = Prisma.TransactionClient;
+type ActorUser = Pick<User, 'id' | 'role' | 'active' | 'deletedAt'>;
 
 function denied(message: string): PrivilegeResult<never> { return { ok: false, message }; }
 
-async function auditTx(tx: Db, actorId: string, event: string, entityType: string, entityId?: string, after?: unknown, before?: unknown) {
+async function auditTx(tx: Tx, actorId: string, event: string, entityType: string, entityId?: string, after?: unknown, before?: unknown) {
   await tx.auditLog.create({ data: { actorId, event, entityType, entityId, before: before as Prisma.InputJsonValue, after: after as Prisma.InputJsonValue } });
 }
 
-async function auditBlocked(tx: Db, actor: PrivilegeActor, targetId: string, after: unknown, before?: unknown) {
+async function auditBlocked(tx: Tx, actor: PrivilegeActor, targetId: string, after: unknown, before?: unknown) {
   await auditTx(tx, actor.userId, 'blocked_user_privilege_change', 'User', targetId, after, before);
 }
 
-function requireAdmin(actor: PrivilegeActor) { return actor.role === 'admin'; }
-async function activeAdminCount(tx: Db) { return tx.user.count({ where: { role: 'admin', active: true, deletedAt: null } }); }
-async function loadMutableUser(tx: Db, id: string) {
+async function loadActor(tx: Tx, actor: PrivilegeActor): Promise<ActorUser | null> {
+  return tx.user.findFirst({ where: { id: actor.userId, deletedAt: null }, select: { id: true, role: true, active: true, deletedAt: true } });
+}
+
+async function requireAdminActor(tx: Tx, actor: PrivilegeActor, targetId: string, action: string, after: unknown) {
+  const actorUser = await loadActor(tx, actor);
+  if (!actorUser || !actorUser.active || actorUser.role !== 'admin') {
+    await auditBlocked(tx, actor, targetId, { action, ...typeof after === 'object' && after ? after : { detail: after } }, actorUser ? { role: actorUser.role, active: actorUser.active } : { missing: true });
+    return null;
+  }
+  return actorUser;
+}
+
+async function activeAdminCount(tx: Tx) { return tx.user.count({ where: { role: 'admin', active: true, deletedAt: null } }); }
+async function loadMutableUser(tx: Tx, id: string) {
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || user.deletedAt) return null;
   return user;
 }
 
-export async function createInternalUserWithAudit(tx: Db, actor: PrivilegeActor, data: { email: string; name: string; role: RoleCode; active: boolean; passwordHash: string }) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, actor.userId, { action: 'user_create', role: data.role, active: data.active, email: data.email });
-    return denied('Solo un amministratore reale può creare utenti interni.');
-  }
+export async function createInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, data: { email: string; name: string; role: RoleCode; active: boolean; passwordHash: string }) {
+  const actorUser = await requireAdminActor(tx, actor, actor.userId, 'user_create', { role: data.role, active: data.active, email: data.email });
+  if (!actorUser) return denied('Solo un amministratore reale può creare utenti interni.');
   const user = await tx.user.create({ data });
   await auditTx(tx, actor.userId, 'user_create', 'User', user.id, { email: user.email, role: user.role, active: user.active });
   return { ok: true, value: user } as const;
 }
 
-export async function activateInternalUserWithAudit(tx: Db, actor: PrivilegeActor, userId: string) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, userId, { action: 'user_activate', active: true });
-    return denied('Solo un amministratore reale può riattivare utenti interni.');
-  }
+export async function activateInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, userId: string) {
+  const actorUser = await requireAdminActor(tx, actor, userId, 'user_activate', { active: true });
+  if (!actorUser) return denied('Solo un amministratore reale può riattivare utenti interni.');
   const before = await loadMutableUser(tx, userId);
   if (!before) return denied('Utente non modificabile.');
   const user = await tx.user.update({ where: { id: userId }, data: { active: true } });
@@ -46,11 +55,9 @@ export async function activateInternalUserWithAudit(tx: Db, actor: PrivilegeActo
   return { ok: true, value: user } as const;
 }
 
-export async function deactivateInternalUserWithAudit(tx: Db, actor: PrivilegeActor, userId: string) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, userId, { action: 'user_deactivate', active: false });
-    return denied('Solo un amministratore reale può disattivare utenti interni.');
-  }
+export async function deactivateInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, userId: string) {
+  const actorUser = await requireAdminActor(tx, actor, userId, 'user_deactivate', { active: false });
+  if (!actorUser) return denied('Solo un amministratore reale può disattivare utenti interni.');
   const before = await loadMutableUser(tx, userId);
   if (!before) return denied('Utente non modificabile.');
   if (userId === actor.userId) {
@@ -66,11 +73,9 @@ export async function deactivateInternalUserWithAudit(tx: Db, actor: PrivilegeAc
   return { ok: true, value: user } as const;
 }
 
-export async function updateInternalUserRoleWithAudit(tx: Db, actor: PrivilegeActor, userId: string, role: RoleCode) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, userId, { action: 'role_change', role });
-    return denied('Solo un amministratore reale può modificare ruoli utente.');
-  }
+export async function updateInternalUserRoleWithAudit(tx: Tx, actor: PrivilegeActor, userId: string, role: RoleCode) {
+  const actorUser = await requireAdminActor(tx, actor, userId, 'role_change', { role });
+  if (!actorUser) return denied('Solo un amministratore reale può modificare ruoli utente.');
   const before = await loadMutableUser(tx, userId);
   if (!before) return denied('Utente non modificabile.');
   const removedOverrides = before.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed }));
@@ -84,23 +89,13 @@ export async function updateInternalUserRoleWithAudit(tx: Db, actor: PrivilegeAc
   }
   if (role === 'admin' && removedOverrides.length > 0) await tx.userPermissionOverride.deleteMany({ where: { userId } });
   const user = await tx.user.update({ where: { id: userId }, data: { role } });
-  await auditTx(
-    tx,
-    actor.userId,
-    'role_change',
-    'User',
-    user.id,
-    { role: user.role, removedOverrides: role === 'admin' ? removedOverrides : [] },
-    { role: before.role, overrides: removedOverrides },
-  );
+  await auditTx(tx, actor.userId, 'role_change', 'User', user.id, { role: user.role, removedOverrides: role === 'admin' ? removedOverrides : [] }, { role: before.role, overrides: removedOverrides });
   return { ok: true, value: user } as const;
 }
 
-export async function updatePermissionOverridesWithAudit(tx: Db, actor: PrivilegeActor, userId: string, overrides: { permission: string; allowed: boolean }[]) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, userId, { action: 'user_permission_overrides_updated', count: overrides.length });
-    return denied('Solo un amministratore reale può modificare override utente.');
-  }
+export async function updatePermissionOverridesWithAudit(tx: Tx, actor: PrivilegeActor, userId: string, overrides: { permission: string; allowed: boolean }[]) {
+  const actorUser = await requireAdminActor(tx, actor, userId, 'user_permission_overrides_updated', { count: overrides.length });
+  if (!actorUser) return denied('Solo un amministratore reale può modificare override utente.');
   const user = await loadMutableUser(tx, userId);
   if (!user) return denied('Utente non modificabile.');
   if (user.id === actor.userId) {
@@ -118,11 +113,9 @@ export async function updatePermissionOverridesWithAudit(tx: Db, actor: Privileg
   return { ok: true, value: overrides } as const;
 }
 
-export async function resetPermissionOverridesWithAudit(tx: Db, actor: PrivilegeActor, userId: string) {
-  if (!requireAdmin(actor)) {
-    await auditBlocked(tx, actor, userId, { action: 'user_permission_overrides_reset' });
-    return denied('Solo un amministratore reale può ripristinare override utente.');
-  }
+export async function resetPermissionOverridesWithAudit(tx: Tx, actor: PrivilegeActor, userId: string) {
+  const actorUser = await requireAdminActor(tx, actor, userId, 'user_permission_overrides_reset', {});
+  if (!actorUser) return denied('Solo un amministratore reale può ripristinare override utente.');
   const user = await loadMutableUser(tx, userId);
   if (!user) return denied('Utente non modificabile.');
   if (user.id === actor.userId || user.role === 'admin') {
@@ -134,3 +127,5 @@ export async function resetPermissionOverridesWithAudit(tx: Db, actor: Privilege
   await auditTx(tx, actor.userId, 'user_permission_overrides_reset', 'User', user.id, [], before);
   return { ok: true, value: [] } as const;
 }
+
+export { serializableOptions };
