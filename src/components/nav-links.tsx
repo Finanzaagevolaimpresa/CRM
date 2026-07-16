@@ -28,8 +28,8 @@ const sections: NavSection[] = [
       { label: "Ricerca", href: "/search" },
       { label: "Task", href: "/tasks", requiredPermission: "service.read" },
       { label: "Scadenze", href: "/deadlines", requiredPermission: "service.read" },
-      { label: "Documenti", href: "/documents", requiredAnyPermissions: ["document.download", "document.upload"] },
-      { label: "Checklist documentale", href: "/document-checklists", requiredPermission: "service.read" },
+      { label: "Documenti", href: "/documents", requiredPermission: "document.download" },
+      { label: "Checklist documentale", href: "/document-checklists", requiredPermission: "document.download" },
     ],
   },
   {

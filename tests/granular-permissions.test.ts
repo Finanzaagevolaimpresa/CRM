@@ -72,6 +72,22 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
   assert.ok(contractOverride.includes('/legal-compliance'));
 });
 
+
+
+test('navigazione documentale richiede document.download per documenti e checklist', () => {
+  const canDownload = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['document.download'] });
+  assert.ok(canDownload.includes('/documents'));
+  assert.ok(canDownload.includes('/document-checklists'));
+
+  const uploadOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['document.upload'] });
+  assert.ok(!uploadOnly.includes('/documents'));
+  assert.ok(!uploadOnly.includes('/document-checklists'));
+
+  const deniedDownload = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: [] });
+  assert.ok(!deniedDownload.includes('/documents'));
+  assert.ok(!deniedDownload.includes('/document-checklists'));
+});
+
 test('seed production idempotente non elimina override esistenti', () => {
   const seed = readFileSync(resolve(root, 'prisma/seed-production.ts'), 'utf8');
   assert.doesNotMatch(seed, /userPermissionOverride\.(delete|deleteMany|update|upsert|create)/);
