@@ -748,12 +748,15 @@ test('una transizione schedulabile senza piano e outbox viene interamente rollba
   const before = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
   const commandCount = await db().aiWorkflowCommand.count({ where: { workflowInstanceId: id } });
   const transitionCount = await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } });
-  await assert.rejects(db().$transaction((tx) => attemptDirectLedgerAppend(
-    tx,
-    id,
-    'WF-004',
-    { kind: 'HUMAN', userId: runnerId },
-  )));
+  await assert.rejects(db().$transaction(async (tx) => {
+    await attemptDirectLedgerAppend(
+      tx,
+      id,
+      'WF-004',
+      { kind: 'HUMAN', userId: runnerId },
+    );
+    await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+  }));
   const after = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
   assert.deepEqual(
     { currentState: after.currentState, stateVersion: after.stateVersion, correctionCycle: after.correctionCycle },
