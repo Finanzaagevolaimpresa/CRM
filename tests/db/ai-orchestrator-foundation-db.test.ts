@@ -8,6 +8,10 @@ import {
   getAuditWorkflowTransition,
 } from '../../src/lib/ai-orchestrator/audit-workflow-v1-1';
 import {
+  FAI_AUDIT_JOB_CATALOG_HASH,
+  FAI_AUDIT_JOB_CATALOG_KEY,
+} from '../../src/lib/ai-orchestrator/job-catalog-v1';
+import {
   applyAuditWorkflowTransition,
   createAuditWorkflowInstance,
   type ApplyAuditWorkflowTransitionInput,
@@ -621,6 +625,144 @@ test('stesso comando/hash è replay; stessa chiave con hash diverso è conflitto
   assert.equal(await db().auditLog.count({
     where: { entityId: created.value.workflowInstanceId, event: 'ai_workflow_state_changed' },
   }), 1);
+});
+
+test('WF-004 pianifica job e outbox atomici; il replay non duplica la coda', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await applyOk(id, 'WF-001', human(runnerId));
+  await applyOk(id, 'WF-002', human(runnerId));
+  await applyOk(id, 'WF-003', human(runnerId));
+  const input = await transitionInput(id, 'WF-004', human(runnerId));
+  const aiRunCountBefore = await db().aiRun.count();
+  const first = await applyAuditWorkflowTransition(db(), input, { env: safeEnv });
+  const replay = await applyAuditWorkflowTransition(db(), input, { env: safeEnv });
+  assert.equal(first.ok, true);
+  assert.equal(replay.ok, true);
+  if (!first.ok || !replay.ok) return;
+  assert.equal(first.value.plannedJobCount, 1);
+  assert.equal(replay.value.plannedJobCount, 1);
+  assert.equal(replay.value.jobPlanHash, first.value.jobPlanHash);
+  assert.equal(replay.value.transitionId, first.value.transitionId);
+
+  const jobs = await db().aiWorkflowJob.findMany({ where: { sourceTransitionId: first.value.transitionId } });
+  assert.equal(jobs.length, 1);
+  const job = jobs[0];
+  assert.ok(job);
+  assert.equal(job.catalogCode, 'FAI-AUDIT-JOB-CATALOG');
+  assert.equal(job.catalogVersion, '1.0');
+  assert.equal(job.catalogHash, FAI_AUDIT_JOB_CATALOG_HASH);
+  assert.equal(job.jobCode, 'DOCUMENT_INGESTION');
+  assert.equal(job.completionTransitionCode, 'WF-005');
+  assert.equal(job.status, 'PLANNED');
+  assert.equal(job.provider, 'mock');
+  assert.equal(job.dataMode, 'synthetic');
+  assert.equal(job.automaticDispatchAllowed, false);
+  assert.match(job.dedupeKey, /^[0-9a-f]{64}$/);
+  assert.equal(canonicalSha256(job.payload), job.payloadHash);
+
+  const outbox = await db().aiWorkflowJobOutboxEvent.findMany({ where: { jobId: job.id } });
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0]?.eventType, 'AI_JOB_PLANNED');
+  assert.equal(outbox[0]?.deliveryState, 'PENDING');
+  assert.equal(canonicalSha256(outbox[0]?.payload), outbox[0]?.payloadHash);
+  const transition = await db().aiWorkflowTransition.findUniqueOrThrow({ where: { id: first.value.transitionId } });
+  const planning = asJsonObject(asJsonObject(transition.metadata, 'metadata').jobPlanning, 'jobPlanning');
+  assert.equal(planning.catalogKey, FAI_AUDIT_JOB_CATALOG_KEY);
+  assert.equal(planning.catalogHash, FAI_AUDIT_JOB_CATALOG_HASH);
+  assert.equal(planning.planHash, first.value.jobPlanHash);
+  assert.equal(planning.plannedJobCount, 1);
+  assert.equal(planning.automaticDispatchAllowed, false);
+  assert.equal(await db().aiRun.count(), aiRunCountBefore);
+});
+
+test('bundle analysis e review hanno cardinalità canonica e outbox uno-a-uno', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await advanceToDataValidation(id);
+  await completeDataValidation(id);
+  await applyOk(id, 'WF-011', system());
+  await applyOk(id, 'WF-012', agent());
+  await applyOk(id, 'WF-013', agent());
+
+  const jobs = await db().aiWorkflowJob.findMany({
+    where: { workflowInstanceId: id },
+    orderBy: [{ sourceTransitionSequence: 'asc' }, { slotKey: 'asc' }],
+  });
+  const countFor = (code: string) => jobs.filter(({ sourceTransitionCode }) => sourceTransitionCode === code).length;
+  assert.equal(countFor('WF-004'), 1);
+  assert.equal(countFor('WF-005'), 1);
+  assert.equal(countFor('WF-006'), 1);
+  assert.equal(countFor('WF-007'), 0);
+  assert.equal(countFor('WF-010'), 3);
+  assert.equal(countFor('WF-011'), 1);
+  assert.equal(countFor('WF-012'), 1);
+  assert.equal(countFor('WF-013'), 4);
+  assert.equal(new Set(jobs.filter(({ sourceTransitionCode }) => sourceTransitionCode === 'WF-010')
+    .map(({ bundleKey }) => bundleKey)).size, 1);
+  assert.equal(new Set(jobs.filter(({ sourceTransitionCode }) => sourceTransitionCode === 'WF-013')
+    .map(({ bundleKey }) => bundleKey)).size, 1);
+  assert.ok(jobs.every(({ status, provider, dataMode, automaticDispatchAllowed }) => (
+    status === 'PLANNED'
+    && provider === 'mock'
+    && dataMode === 'synthetic'
+    && automaticDispatchAllowed === false
+  )));
+  assert.equal(await db().aiWorkflowJobOutboxEvent.count({ where: { workflowInstanceId: id } }), jobs.length);
+});
+
+test('la coda consente soltanto PLANNED→BLOCKED e l’outbox resta append-only', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await advanceToDataValidation(id);
+  const job = await db().aiWorkflowJob.findFirstOrThrow({ where: { workflowInstanceId: id } });
+  const blockedAt = new Date();
+  const blocked = await db().aiWorkflowJob.update({
+    where: { id: job.id },
+    data: { status: 'BLOCKED', blockedAt, blockedReasonCode: 'FOUNDATION_HOLD' },
+  });
+  assert.equal(blocked.status, 'BLOCKED');
+  await assert.rejects(db().aiWorkflowJob.update({
+    where: { id: job.id },
+    data: { status: 'PLANNED', blockedAt: null, blockedReasonCode: null },
+  }));
+  await assert.rejects(db().aiWorkflowJob.update({
+    where: { id: job.id },
+    data: { status: 'RUNNING' },
+  }));
+  const event = await db().aiWorkflowJobOutboxEvent.findFirstOrThrow({ where: { jobId: job.id } });
+  await assert.rejects(db().aiWorkflowJobOutboxEvent.update({
+    where: { id: event.id },
+    data: { deliveryState: 'DELIVERED' },
+  }));
+  await assert.rejects(db().aiWorkflowJobOutboxEvent.delete({ where: { id: event.id } }));
+  await assert.rejects(db().aiWorkflowJob.delete({ where: { id: job.id } }));
+});
+
+test('una transizione schedulabile senza piano e outbox viene interamente rollbackata', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await applyOk(id, 'WF-001', human(runnerId));
+  await applyOk(id, 'WF-002', human(runnerId));
+  await applyOk(id, 'WF-003', human(runnerId));
+  const before = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
+  const commandCount = await db().aiWorkflowCommand.count({ where: { workflowInstanceId: id } });
+  const transitionCount = await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } });
+  await assert.rejects(db().$transaction((tx) => attemptDirectLedgerAppend(
+    tx,
+    id,
+    'WF-004',
+    { kind: 'HUMAN', userId: runnerId },
+  )));
+  const after = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
+  assert.deepEqual(
+    { currentState: after.currentState, stateVersion: after.stateVersion, correctionCycle: after.correctionCycle },
+    { currentState: before.currentState, stateVersion: before.stateVersion, correctionCycle: before.correctionCycle },
+  );
+  assert.equal(await db().aiWorkflowCommand.count({ where: { workflowInstanceId: id } }), commandCount);
+  assert.equal(await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } }), transitionCount);
+  assert.equal(await db().aiWorkflowJob.count({ where: { workflowInstanceId: id } }), 0);
+  assert.equal(await db().aiWorkflowJobOutboxEvent.count({ where: { workflowInstanceId: id } }), 0);
 });
 
 test('diniego RBAC è persistito senza mutare stato o creare una transizione', { skip: !runDbTests }, async () => {

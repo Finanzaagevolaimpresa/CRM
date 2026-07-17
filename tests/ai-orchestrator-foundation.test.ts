@@ -235,7 +235,7 @@ test('snapshot decisionale e divieto dispatch sono persistiti con schema e guard
   assert.match(service, /data:\s*\{[\s\S]*?guardSnapshot,[\s\S]*?guardSnapshotHash,/);
 });
 
-test('PR1 non introduce coda, worker, route o provider esterno', () => {
+test('la migration storica PR1 resta priva di coda; la porta resta senza route o provider esterno', () => {
   const sql = readFileSync(migrationPath, 'utf8');
   const service = readFileSync(resolve(root, 'src/lib/ai-orchestrator/workflow-service.ts'), 'utf8');
   const canonicalJson = readFileSync(resolve(root, 'src/lib/canonical-json.ts'), 'utf8');

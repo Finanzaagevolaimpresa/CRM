@@ -14,6 +14,11 @@ import {
   type FaiAuditTransitionCode,
   type WorkflowExecutionMode,
 } from './audit-workflow-v1-1';
+import {
+  FAI_AUDIT_JOB_CATALOG_HASH,
+  FAI_AUDIT_JOB_CATALOG_KEY,
+} from './job-catalog-v1';
+import { createFaiAuditJobPlan, type FaiAuditJobPlan } from './job-planner';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
@@ -166,6 +171,8 @@ export interface AuditWorkflowTransitionResult {
   readonly stateVersion: number;
   readonly stateChanged: boolean;
   readonly transitionHash: string;
+  readonly jobPlanHash: string;
+  readonly plannedJobCount: number;
 }
 
 interface ResolvedActor {
@@ -693,6 +700,29 @@ async function resolveExistingCommand(
       commandId: existing.id,
     });
   }
+  const metadata = existing.transition.metadata;
+  const jobPlanning = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>).jobPlanning
+    : null;
+  if (!jobPlanning || typeof jobPlanning !== 'object' || Array.isArray(jobPlanning)) {
+    return rejected('LEDGER_INTEGRITY_ERROR', 'Metadati del piano job assenti o incoerenti.', {
+      replayed: true,
+      commandId: existing.id,
+    });
+  }
+  const jobPlanHash = (jobPlanning as Record<string, unknown>).planHash;
+  const plannedJobCount = (jobPlanning as Record<string, unknown>).plannedJobCount;
+  if (
+    typeof jobPlanHash !== 'string'
+    || !/^[0-9a-f]{64}$/.test(jobPlanHash)
+    || !Number.isInteger(plannedJobCount)
+    || (plannedJobCount as number) < 0
+  ) {
+    return rejected('LEDGER_INTEGRITY_ERROR', 'Identità del piano job non valida.', {
+      replayed: true,
+      commandId: existing.id,
+    });
+  }
   return {
     ok: true,
     replayed: true,
@@ -705,8 +735,92 @@ async function resolveExistingCommand(
       stateVersion: existing.resultStateVersion,
       stateChanged: existing.transition.fromState !== existing.transition.toState,
       transitionHash: existing.transition.transitionHash,
+      jobPlanHash,
+      plannedJobCount: plannedJobCount as number,
     },
   };
+}
+
+async function persistJobPlan(
+  tx: Tx,
+  input: ApplyAuditWorkflowTransitionInput,
+  transitionId: string,
+  plan: FaiAuditJobPlan,
+  now: Date,
+) {
+  for (const intent of plan.jobs) {
+    const job = await tx.aiWorkflowJob.create({
+      data: {
+        workflowInstanceId: input.workflowInstanceId,
+        sourceTransitionId: transitionId,
+        sourceTransitionCode: input.transitionCode,
+        sourceTransitionSequence: input.expectedStateVersion,
+        catalogCode: intent.catalogCode,
+        catalogVersion: intent.catalogVersion,
+        catalogHash: intent.catalogHash,
+        jobCode: intent.jobCode,
+        jobVersion: intent.jobVersion,
+        jobDefinitionHash: intent.jobDefinitionHash,
+        completionTransitionCode: intent.completionTransitionCode,
+        completionMode: intent.completionMode,
+        slotKey: intent.slotKey,
+        bundleCode: intent.bundleCode,
+        bundleKey: intent.bundleKey,
+        dedupeKey: intent.dedupeKey,
+        status: 'PLANNED',
+        provider: intent.provider,
+        dataMode: intent.dataMode,
+        automaticDispatchAllowed: false,
+        payload: intent.payload as Prisma.InputJsonObject,
+        payloadHash: intent.payloadHash,
+        correlationId: input.correlationId,
+        plannedAt: now,
+        blockedAt: null,
+        blockedReasonCode: null,
+      },
+    });
+    const eventPayload: Prisma.InputJsonObject = {
+      schemaVersion: 1,
+      eventType: 'AI_JOB_PLANNED',
+      eventVersion: 1,
+      workflowInstanceId: input.workflowInstanceId,
+      sourceTransitionId: transitionId,
+      sourceTransitionCode: input.transitionCode,
+      sourceTransitionSequence: input.expectedStateVersion,
+      job: {
+        id: job.id,
+        jobCode: intent.jobCode,
+        jobVersion: intent.jobVersion,
+        dedupeKey: intent.dedupeKey,
+        bundleKey: intent.bundleKey,
+        status: 'PLANNED',
+        provider: 'mock',
+        dataMode: 'synthetic',
+        automaticDispatchAllowed: false,
+        payloadHash: intent.payloadHash,
+      },
+      occurredAt: now.toISOString(),
+    };
+    await tx.aiWorkflowJobOutboxEvent.create({
+      data: {
+        jobId: job.id,
+        workflowInstanceId: input.workflowInstanceId,
+        sourceTransitionId: transitionId,
+        eventKey: canonicalSha256({
+          schemaVersion: 1,
+          eventType: 'AI_JOB_PLANNED',
+          eventVersion: 1,
+          jobDedupeKey: intent.dedupeKey,
+        }),
+        eventType: 'AI_JOB_PLANNED',
+        eventVersion: 1,
+        payload: eventPayload,
+        payloadHash: canonicalSha256(eventPayload),
+        deliveryState: 'PENDING',
+        occurredAt: now,
+      },
+    });
+  }
 }
 
 type FoundationMilestonePhase = 'DATA_VALIDATION' | 'AI_DRAFT' | 'INDEPENDENT_REVIEW';
@@ -1134,6 +1248,23 @@ async function applyAuditWorkflowTransitionTx(
     );
   }
 
+  const nextVersion = instance.stateVersion + 1;
+  const nextCorrectionCycle = transition.incrementsCorrectionCycle
+    ? instance.correctionCycle + 1
+    : instance.correctionCycle;
+  const jobPlan = createFaiAuditJobPlan({
+    workflowInstanceId: instance.id,
+    workflowCode: instance.workflowCode,
+    workflowVersion: instance.workflowVersion,
+    sourceCommandIdempotencyKey: input.idempotencyKey,
+    sourceTransitionCode: transition.transitionCode,
+    sourceTransitionSequence: instance.stateVersion,
+    correlationId: input.correlationId,
+    correctionCycle: nextCorrectionCycle,
+    fromState: instance.currentState as FaiAuditState,
+    toState: evaluation.nextState,
+  });
+
   const guardSnapshot: Prisma.InputJsonObject = {
     schemaVersion: 1,
     actor: {
@@ -1179,10 +1310,6 @@ async function applyAuditWorkflowTransitionTx(
   };
   const guardSnapshotHash = canonicalSha256(guardSnapshot);
 
-  const nextVersion = instance.stateVersion + 1;
-  const nextCorrectionCycle = transition.incrementsCorrectionCycle
-    ? instance.correctionCycle + 1
-    : instance.correctionCycle;
   const cas = await tx.aiWorkflowInstance.updateMany({
     where: {
       id: instance.id,
@@ -1221,6 +1348,8 @@ async function applyAuditWorkflowTransitionTx(
     fromState: instance.currentState,
     fromVersion: instance.stateVersion,
     guardSnapshotHash,
+    jobCatalogHash: jobPlan.catalogHash,
+    jobPlanHash: jobPlan.planHash,
     previousTransitionHash: previous?.transitionHash ?? null,
     reasonCode: input.reasonCode ?? null,
     sequence: instance.stateVersion,
@@ -1253,10 +1382,19 @@ async function applyAuditWorkflowTransitionTx(
         automaticDispatchAllowed: false,
         effect: evaluation.effect,
         stateChanged: evaluation.stateChanged,
+        jobPlanning: {
+          schemaVersion: 1,
+          catalogKey: FAI_AUDIT_JOB_CATALOG_KEY,
+          catalogHash: FAI_AUDIT_JOB_CATALOG_HASH,
+          planHash: jobPlan.planHash,
+          plannedJobCount: jobPlan.jobs.length,
+          automaticDispatchAllowed: false,
+        },
       },
       createdAt: now,
     },
   });
+  await persistJobPlan(tx, input, ledgerEntry.id, jobPlan, now);
   await tx.aiWorkflowCommand.update({
     where: { id: command.id },
     data: {
@@ -1285,6 +1423,8 @@ async function applyAuditWorkflowTransitionTx(
       stateVersion: nextVersion,
       transitionCode: transition.transitionCode,
       transitionHash,
+      jobPlanHash: jobPlan.planHash,
+      plannedJobCount: jobPlan.jobs.length,
     },
     createdAt: now,
   });
@@ -1301,6 +1441,8 @@ async function applyAuditWorkflowTransitionTx(
       stateVersion: nextVersion,
       stateChanged: evaluation.stateChanged,
       transitionHash,
+      jobPlanHash: jobPlan.planHash,
+      plannedJobCount: jobPlan.jobs.length,
     },
   };
 }
