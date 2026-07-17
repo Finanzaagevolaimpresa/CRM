@@ -1,6 +1,6 @@
 # ADR-0001: workflow Audit AI Bancabilità v1.1
 
-- **Stato:** approvato
+- **Stato:** proposto, in revisione
 - **Data:** 2026-07-17
 - **Ambito:** AI Orchestrator MVP v1, vertical slice Audit AI Bancabilità
 - **Decisione precedente:** `FAI-AUDIT-WORKFLOW@1.0`
@@ -8,7 +8,7 @@
 
 ## Contesto
 
-Il CRM deve diventare il sistema di governo dell'ecosistema AI FAI. La prima vertical slice porta l'Audit AI Bancabilità da `CREATED` a `HUMAN_APPROVAL`; approvazione e rilascio restano azioni umane distinte. La state machine è l'unico percorso autorizzato per mutare lo stato del workflow.
+Il CRM deve diventare il sistema di governo dell'ecosistema AI FAI. La prima vertical slice porta l'Audit AI Bancabilità da `CREATED` a `HUMAN_APPROVAL` e si arresta lì. Approvazione, rilascio, chiusura e cancellazione appartengono al contratto di ciclo di vita, ma non sono capacità della State Machine Foundation. La state machine è l'unico percorso applicativo autorizzato per mutare lo stato del workflow.
 
 La specifica eseguibile `FAI-AUDIT-WORKFLOW@1.0` dichiara 16 stati e 23 transizioni, ma mescola cambi di stato del caso e job degli agenti. Non può quindi essere implementata letteralmente senza introdurre stati irraggiungibili o transizioni concorrenti incompatibili.
 
@@ -25,15 +25,17 @@ Questi punti sono una correzione del contratto, non una reinterpretazione silenz
 
 ## Decisione
 
-Adottiamo `FAI-AUDIT-WORKFLOW@1.1` con:
+Proponiamo `FAI-AUDIT-WORKFLOW@1.1` con:
 
 - 16 stati canonici e 23 transizioni deterministiche;
 - job e risultati degli agenti separati dalle transizioni di stato;
 - fan-out dei job indipendenti e un solo fan-in che autorizza la transizione successiva;
 - massimo due cicli funzionali di correzione, poi escalation operativa umana senza bypass della macchina;
-- arresto automatico obbligatorio a `HUMAN_APPROVAL` nella prima vertical slice;
-- transizioni successive definite nel contratto, ma invocabili soltanto da comandi umani autorizzati;
-- `APPROVED -> RELEASED` sempre manuale: nessun agente o worker può rilasciare un deliverable.
+- arresto applicativo obbligatorio a `HUMAN_APPROVAL` nella prima vertical slice;
+- porta applicativa della Foundation limitata a WF-001..WF-017;
+- WF-018..WF-023 conservate nella definizione canonica, ma sempre negate dalla Foundation con `FOUNDATION_SCOPE_LIMIT`;
+- `APPROVED -> RELEASED` previsto come futuro passaggio esclusivamente manuale: questa PR non approva e non rilascia alcun deliverable;
+- abilitazione della state machine e abilitazione del dispatch governate da flag distinti, entrambi disabilitati per default.
 
 I nomi generici del Master Blueprint, per esempio `NEW`, `REVIEW` e `HUMAN_GATE`, restano concetti di riferimento. Nel database dell'Audit si persistono esclusivamente gli stati canonici seguenti.
 
@@ -88,7 +90,9 @@ I codici WF identificano la semantica della versione `1.1`. Non devono essere in
 | WF-022 | `CASE_CLOSED` | `RELEASED` | `CLOSED` | Consegna registrata e condizioni di chiusura soddisfatte. |
 | WF-023 | `DELETION_REQUESTED` | `CLOSED` | `DELETION_PENDING` | Retention scaduta, senza legal hold, dopo controllo autorizzato. |
 
-Anche una self-transition valida incrementa sequenza e versione dello stato e produce un record di transizione. Una ripetizione idempotente dello stesso comando restituisce invece il risultato già registrato senza incrementi e senza un secondo evento audit.
+La matrice completa resta l'autorità semantica del ciclo di vita. Nella State Machine Foundation, tuttavia, soltanto WF-001..WF-017 appartengono all'allowlist applicativa: WF-018..WF-023 non sono richiamabili neppure da un attore umano con `ai.approve` e non possono portare un'istanza oltre `HUMAN_APPROVAL`.
+
+Anche una self-transition valida incrementa sequenza e versione dello stato e produce un record di transizione. Una ripetizione idempotente dello stesso comando restituisce invece il risultato già registrato senza incrementi e senza un secondo evento audit. Una nuova idempotency key non consente di ripetere la stessa milestone nella medesima fase o nel medesimo ciclo di review.
 
 ## Job, gate e transizioni
 
@@ -96,19 +100,24 @@ Un job descrive lavoro da eseguire; una transizione descrive un cambiamento auto
 
 - Financial, Credit e Calculation sono job separati. Il completamento di un singolo job non sposta l'istanza ad `AI_DRAFT`; WF-011 è ammessa solo dopo il fan-in e la verifica di tutti i risultati richiesti.
 - Schema, Numeric, Source e Red Team sono review separate e indipendenti dall'autore. WF-014 registra il fan-in; WF-015 o WF-017 applicano poi l'esito dei gate.
+- I booleani presentati dal chiamante non costituiscono da soli prova del completamento. La porta applicativa verifica nel ledger append-only, usando la sequenza e non il timestamp, le milestone della fase corrente: WF-005, WF-006 e WF-007 prima di WF-010; WF-012 prima di WF-013; WF-014 prima di WF-015 o WF-017.
+- L'ingresso in una nuova fase `DATA_VALIDATION` tramite WF-004 o WF-009 e l'ingresso in un nuovo ciclo `INDEPENDENT_REVIEW` tramite WF-013 o WF-016 definiscono un nuovo confine. Le milestone di una fase o di un ciclo precedente non sono riutilizzabili.
+- WF-005, WF-006 e WF-007 devono essere registrate nell'ordine dichiarato. WF-005, WF-006, WF-007, WF-012 e WF-014 sono registrabili una sola volta entro il rispettivo confine di fase o ciclo.
 - Retry tecnici di un job non sono transizioni e non aumentano il ciclo di correzione.
-- Il ciclo di correzione aumenta su WF-015 e WF-019. Dopo due cicli non si applica una transizione inventata: si apre un'escalation operativa e il caso resta bloccato nello stato corrente finché una decisione umana autorizzata non produce un comando valido.
+- Nel contratto completo il ciclo di correzione aumenta su WF-015 e WF-019; nella Foundation WF-019 è fuori perimetro, quindi i cicli eseguibili prima di `HUMAN_APPROVAL` passano soltanto da WF-015 e WF-016. Dopo due cicli non si applica una transizione inventata: il caso resta bloccato nello stato corrente in attesa della futura capacità di escalation.
 - Nessun job scrive direttamente `currentState`; tutti i cambi di stato passano dal motore centrale.
 
 La coda persistente, i job, i tentativi e il worker separato appartengono alle PR successive. La State Machine Foundation non esegue agenti.
 
 ## Autorità e fail-closed
 
-La definizione in codice e la matrice versionata sono l'unica autorità sulle coppie `from`/`to`. Per ogni richiesta il motore verifica almeno workflow/versione, stato atteso, versione attesa, transition code, `actorKind` e precondizioni dichiarate. I soli actor kind ammessi sono `HUMAN`, `AGENT` e `SYSTEM`, ciascuno con il proprio contesto identificativo esclusivo. Valori sconosciuti, dati mancanti, definizione/hash incoerente o gate non esplicitamente superato producono un diniego senza mutazione.
+La definizione in codice e la matrice versionata sono l'unica autorità sulle coppie `from`/`to`; l'allowlist WF-001..WF-017 è l'autorità sul perimetro eseguibile della Foundation. Per ogni richiesta il motore verifica almeno workflow/versione, stato atteso, versione attesa, transition code, `actorKind`, fatti persistiti e precondizioni dichiarate. I soli actor kind ammessi sono `HUMAN`, `AGENT` e `SYSTEM`, ciascuno con il proprio contesto identificativo esclusivo. Valori sconosciuti, dati mancanti, definizione/hash incoerente, milestone assenti o gate non esplicitamente superato producono un diniego senza mutazione.
 
-L'MVP conserva `dispatchEnabled=false`, `syntheticDataOnly=true` e provider `mock` nel setting globale. L'assenza o l'incoerenza del setting equivale a disabilitato. Nella PR 1 non esiste alcun worker o percorso di dispatch. Il futuro gate ambiente `AI_ORCHESTRATOR_WORKER_ENABLED` è previsto per la PR del worker e non viene introdotto da questa decisione.
+Il setting globale distingue `stateMachineEnabled` da `dispatchEnabled`. Entrambi hanno default database `false`; `syntheticDataOnly=true` e provider `mock` restano obbligatori. Creazione e transizioni WF-001..WF-017 richiedono `stateMachineEnabled=true`, ma non richiedono né modificano `dispatchEnabled`. L'assenza o l'incoerenza del setting equivale a state machine disabilitata. Nella PR 1 non esiste alcun worker o percorso di dispatch e `automaticDispatchAllowed` resta sempre falso. Il futuro gate ambiente `AI_ORCHESTRATOR_WORKER_ENABLED` è previsto per la PR del worker e non viene introdotto da questa decisione.
 
-I campi di collegamento al contesto CRM sono riservati ma obbligatoriamente `NULL` in questa versione. `automaticDispatchAllowed` resta sempre falso. WF-018..020 sono presenti per chiudere il contratto di ciclo di vita, ma non sono una capacità operativa: artefatti, checksum, snapshot del ruolo, handler autenticati e capability del worker saranno introdotti e verificati prima di qualsiasi esposizione.
+I campi di collegamento al contesto CRM sono riservati ma obbligatoriamente `NULL` in questa versione. WF-018..WF-023 sono presenti per chiudere il contratto di ciclo di vita, ma la porta applicativa le nega con `FOUNDATION_SCOPE_LIMIT`: artefatti, checksum, handler autenticati e ulteriori decisioni di governance dovranno essere introdotti e verificati in PR successive prima di qualsiasi abilitazione.
+
+Ogni transizione accettata persiste, oltre al relativo hash, lo snapshot strutturato e minimizzato dei guard effettivamente valutati. Lo snapshot comprende ruolo umano, permesso richiesto con esito e fonte `ADMIN`, `ROLE`, `OVERRIDE` o `NOT_REQUIRED`, versione e timestamp del setting Orchestrator, gate, precondizioni, milestone persistite, ciclo di correzione e verifiche di separazione applicate. Il `guardSnapshotHash` è calcolato esattamente sullo stesso oggetto JSON persistito. Lo snapshot non contiene documenti, prompt, output completi, dati cliente, cookie, credenziali o segreti.
 
 I provider esterni restano governati dall'AI Control Plane esistente e devono rimanere disabilitati. La state machine non indebolisce doppio kill switch, allowlist, RBAC/ABAC o revisione umana.
 
@@ -120,13 +129,13 @@ I provider esterni restano governati dall'AI Control Plane esistente e devono ri
 - I job concorrenti non competono per la stessa transizione.
 - Versione e hash impediscono di confondere contratti v1.0 e v1.1.
 - Idempotenza e controllo ottimistico rendono esplicito il comportamento sotto concorrenza.
-- Il rilascio resta separato da generazione, review e approvazione.
+- La Foundation non può approvare, rilasciare, chiudere o avviare la cancellazione.
 
 ### Costi e vincoli
 
-- Il fan-in richiede risultati e gate persistenti nelle PR successive.
+- Le milestone di avanzamento sono fatti del ledger della fase corrente; gli artefatti e i risultati completi dei futuri job resteranno oggetto di PR successive.
 - Le istanze non possono cambiare versione di workflow implicitamente; un'eventuale migrazione richiede una decisione e una procedura dedicate.
-- Le transizioni manuali successive a `HUMAN_APPROVAL` sono parte del contratto, ma la prima vertical slice non fornisce automazioni per eseguirle.
+- Le transizioni successive a `HUMAN_APPROVAL` sono parte del contratto canonico, ma la prima vertical slice le rifiuta esplicitamente anche per richieste manuali.
 
 ## Alternative rifiutate
 

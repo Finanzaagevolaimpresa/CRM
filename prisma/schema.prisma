@@ -829,15 +829,16 @@ model AiControlSetting {
 }
 
 model AiOrchestratorSetting {
-  id                String   @id @default("global")
-  dispatchEnabled   Boolean  @default(false)
-  syntheticDataOnly Boolean  @default(true)
-  provider          String   @default("mock")
-  version           Int      @default(1)
-  updatedById       String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  updatedBy         User?    @relation("AiOrchestratorSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  id                  String   @id @default("global")
+  stateMachineEnabled Boolean  @default(false)
+  dispatchEnabled     Boolean  @default(false)
+  syntheticDataOnly   Boolean  @default(true)
+  provider            String   @default("mock")
+  version             Int      @default(1)
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  updatedBy           User?    @relation("AiOrchestratorSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([updatedById])
 }
@@ -926,6 +927,7 @@ model AiWorkflowTransition {
   fromVersion             Int
   toVersion               Int
   definitionHash          String
+  guardSnapshot           Json
   guardSnapshotHash       String
   previousTransitionHash  String?
   transitionHash          String                 @unique
@@ -936,7 +938,7 @@ model AiWorkflowTransition {
   actorSystemCode         String?
   reasonCode              String?
   correlationId           String
-  metadata                Json?
+  metadata                Json
   createdAt               DateTime               @default(now())
   workflowInstance        AiWorkflowInstance     @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command                 AiWorkflowCommand      @relation(fields: [commandId, workflowInstanceId], references: [id, workflowInstanceId], onDelete: Restrict, onUpdate: Restrict)

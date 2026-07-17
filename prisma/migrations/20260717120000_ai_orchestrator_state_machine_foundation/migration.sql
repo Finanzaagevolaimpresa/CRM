@@ -9,6 +9,7 @@ BEGIN;
 
 CREATE TABLE "AiOrchestratorSetting" (
   "id" TEXT NOT NULL DEFAULT 'global',
+  "stateMachineEnabled" BOOLEAN NOT NULL DEFAULT false,
   "dispatchEnabled" BOOLEAN NOT NULL DEFAULT false,
   "syntheticDataOnly" BOOLEAN NOT NULL DEFAULT true,
   "provider" TEXT NOT NULL DEFAULT 'mock',
@@ -19,6 +20,8 @@ CREATE TABLE "AiOrchestratorSetting" (
   CONSTRAINT "AiOrchestratorSetting_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "AiOrchestratorSetting_singleton_check"
     CHECK ("id" = 'global'),
+  CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"
+    CHECK ("dispatchEnabled" = false),
   CONSTRAINT "AiOrchestratorSetting_synthetic_only_check"
     CHECK ("syntheticDataOnly" = true),
   CONSTRAINT "AiOrchestratorSetting_mock_provider_check"
@@ -35,10 +38,12 @@ ALTER TABLE "AiOrchestratorSetting"
   FOREIGN KEY ("updatedById") REFERENCES "User"("id")
   ON DELETE RESTRICT ON UPDATE RESTRICT;
 
--- The row exists immediately after deployment, but dispatch remains disabled.
--- The database contract permits only synthetic data and the mock provider.
+-- The row exists immediately after deployment, but both the state machine and
+-- dispatch remain disabled. The database contract permits only synthetic data
+-- and the mock provider; dispatch cannot be enabled by this foundation.
 INSERT INTO "AiOrchestratorSetting" (
   "id",
+  "stateMachineEnabled",
   "dispatchEnabled",
   "syntheticDataOnly",
   "provider",
@@ -46,6 +51,7 @@ INSERT INTO "AiOrchestratorSetting" (
   "updatedAt"
 ) VALUES (
   'global',
+  false,
   false,
   true,
   'mock',
@@ -374,7 +380,11 @@ CREATE TABLE "AiWorkflowCommand" (
         'STATE_VERSION_MISMATCH',
         'LEDGER_INTEGRITY_ERROR',
         'APPROVER_SEPARATION_FAILED',
-        'RELEASE_DUAL_CONTROL_FAILED'
+        'RELEASE_DUAL_CONTROL_FAILED',
+        'FOUNDATION_SCOPE_LIMIT',
+        'MILESTONE_NOT_COMPLETED',
+        'MILESTONE_OUT_OF_ORDER',
+        'MILESTONE_DUPLICATE'
       )
     ),
   CONSTRAINT "AiWorkflowCommand_applied_transition_check"
@@ -397,13 +407,7 @@ CREATE TABLE "AiWorkflowCommand" (
         ('WF-014', 'INDEPENDENT_REVIEW'),
         ('WF-015', 'NEEDS_CORRECTION'),
         ('WF-016', 'INDEPENDENT_REVIEW'),
-        ('WF-017', 'HUMAN_APPROVAL'),
-        ('WF-018', 'APPROVED'),
-        ('WF-019', 'NEEDS_CORRECTION'),
-        ('WF-020', 'RELEASED'),
-        ('WF-021', 'SUPERSEDED'),
-        ('WF-022', 'CLOSED'),
-        ('WF-023', 'DELETION_PENDING')
+        ('WF-017', 'HUMAN_APPROVAL')
       )
     )
 );
@@ -433,6 +437,395 @@ ALTER TABLE "AiWorkflowCommand"
   REFERENCES "AiAgentConfigVersion"("agentId", "version")
   ON DELETE RESTRICT ON UPDATE RESTRICT;
 
+-- Canonical JSON used to verify the guard snapshot hash at the database
+-- boundary. Object keys use C ordering, matching the ASCII keys emitted by the
+-- application canonicalizer; array order and scalar JSON representations are
+-- preserved. Foundation snapshots accept only integer numeric fields.
+CREATE FUNCTION "canonicalize_ai_workflow_jsonb"(input_json JSONB)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+DECLARE
+  canonical TEXT;
+BEGIN
+  CASE JSONB_TYPEOF(input_json)
+    WHEN 'object' THEN
+      SELECT '{' || COALESCE(
+        STRING_AGG(
+          TO_JSONB(object_key)::TEXT || ':' || "canonicalize_ai_workflow_jsonb"(object_value),
+          ',' ORDER BY object_key COLLATE "C"
+        ),
+        ''
+      ) || '}'
+      INTO canonical
+      FROM JSONB_EACH(input_json) AS object_entry(object_key, object_value);
+      RETURN canonical;
+    WHEN 'array' THEN
+      SELECT '[' || COALESCE(
+        STRING_AGG(
+          "canonicalize_ai_workflow_jsonb"(array_value),
+          ',' ORDER BY array_position
+        ),
+        ''
+      ) || ']'
+      INTO canonical
+      FROM JSONB_ARRAY_ELEMENTS(input_json) WITH ORDINALITY
+        AS array_entry(array_value, array_position);
+      RETURN canonical;
+    ELSE
+      RETURN input_json::TEXT;
+  END CASE;
+END;
+$$;
+
+CREATE FUNCTION "count_ai_workflow_jsonb_keys"(input_json JSONB)
+RETURNS INTEGER
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+  SELECT COUNT(*)::INTEGER FROM JSONB_OBJECT_KEYS(input_json);
+$$;
+
+-- Enforce the complete minimized decision shape. Exact object key counts make
+-- unexpected payloads (including client data, prompts, outputs and secrets)
+-- invalid rather than silently retained in the immutable ledger.
+CREATE FUNCTION "validate_ai_workflow_guard_snapshot"(
+  snapshot JSONB,
+  row_transition_code TEXT,
+  row_actor_kind TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+DECLARE
+  actor_snapshot JSONB;
+  permission_snapshot JSONB;
+  setting_snapshot JSONB;
+  provider_policy JSONB;
+  foundation_policy JSONB;
+  gate_snapshot JSONB;
+  milestone_snapshot JSONB;
+  separation_snapshot JSONB;
+  array_key TEXT;
+  expected_actor_kind TEXT;
+  expected_permission TEXT;
+  expected_gate TEXT;
+  expected_precondition_codes JSONB;
+  actual_precondition_codes JSONB;
+  expected_milestone_phase TEXT;
+  expected_milestone_canonical JSONB;
+  expected_milestone_required JSONB;
+  expected_separation JSONB;
+BEGIN
+  expected_actor_kind := CASE
+    WHEN row_transition_code IN (
+      'WF-001', 'WF-002', 'WF-003', 'WF-004', 'WF-009', 'WF-010', 'WF-017'
+    ) THEN 'HUMAN'
+    WHEN row_transition_code IN (
+      'WF-005', 'WF-006', 'WF-007', 'WF-012', 'WF-013', 'WF-016'
+    ) THEN 'AGENT'
+    WHEN row_transition_code IN ('WF-008', 'WF-011', 'WF-014', 'WF-015') THEN 'SYSTEM'
+    ELSE NULL
+  END;
+  expected_permission := CASE
+    WHEN row_transition_code IN ('WF-001', 'WF-002', 'WF-003', 'WF-004', 'WF-009', 'WF-010') THEN 'ai.run'
+    WHEN row_transition_code = 'WF-017' THEN 'ai.review'
+    ELSE NULL
+  END;
+  expected_gate := CASE row_transition_code
+    WHEN 'WF-001' THEN 'G0_ORDER'
+    WHEN 'WF-002' THEN 'G0_PAYMENT'
+    WHEN 'WF-003' THEN 'G1_AUTHORITY'
+    WHEN 'WF-004' THEN 'G2_COMPLETENESS'
+    WHEN 'WF-005' THEN 'G3_INGEST'
+    WHEN 'WF-006' THEN 'G4_CLASSIFY'
+    WHEN 'WF-007' THEN 'G4_EXTRACT'
+    WHEN 'WF-008' THEN 'G5_DATA_CONFLICT'
+    WHEN 'WF-009' THEN 'G5_CLARIFICATION'
+    WHEN 'WF-010' THEN 'G5_DATA_QUALITY'
+    WHEN 'WF-011' THEN 'G6_ANALYSIS_JOIN'
+    WHEN 'WF-012' THEN 'G6_FINDINGS'
+    WHEN 'WF-013' THEN 'G6_COMPOSE'
+    WHEN 'WF-014' THEN 'G7_REVIEW_JOIN'
+    WHEN 'WF-015' THEN 'G7_CORRECTION_REQUIRED'
+    WHEN 'WF-016' THEN 'G7_CORRECT'
+    WHEN 'WF-017' THEN 'G7_PASS'
+    ELSE NULL
+  END;
+  expected_precondition_codes := CASE row_transition_code
+    WHEN 'WF-001' THEN '["ORDER_ACTIVE", "CONTRACT_COHERENT"]'::JSONB
+    WHEN 'WF-002' THEN '["PAYMENT_CONFIRMED"]'::JSONB
+    WHEN 'WF-003' THEN '["AUTHORITY_VALID", "AI_USE_AUTHORIZED", "DATA_SCOPE_VALID"]'::JSONB
+    WHEN 'WF-004' THEN '["CORE_DOCUMENTS_COMPLETE", "CONDITIONAL_DOCUMENTS_RESOLVED"]'::JSONB
+    WHEN 'WF-005' THEN '["FILES_SAFE", "FILES_READABLE", "CHECKSUMS_RECORDED"]'::JSONB
+    WHEN 'WF-006' THEN '["DOCUMENT_TYPES_CONFIRMED", "SUBJECTS_CONFIRMED", "PERIODS_CONFIRMED", "DATA_ZONES_CONFIRMED"]'::JSONB
+    WHEN 'WF-007' THEN '["SOURCE_ANCHORS_PRESENT", "EXTRACTION_TYPED"]'::JSONB
+    WHEN 'WF-008' THEN '["MATERIAL_CONFLICT_PRESENT"]'::JSONB
+    WHEN 'WF-009' THEN '["CLARIFICATION_RESOLVED"]'::JSONB
+    WHEN 'WF-010' THEN '["IDENTITY_RECONCILED", "PERIODS_RECONCILED", "UNITS_RECONCILED", "CORE_DATA_COMPLETE"]'::JSONB
+    WHEN 'WF-011' THEN '["FINANCIAL_ANALYSIS_COMPLETE", "CREDIT_ANALYSIS_COMPLETE", "CALCULATIONS_COMPLETE"]'::JSONB
+    WHEN 'WF-012' THEN '["CLAIMS_HAVE_EVIDENCE", "NO_SINGLE_SCORE"]'::JSONB
+    WHEN 'WF-013' THEN '["REPORT_SECTIONS_COMPLETE", "LIMITATIONS_EXPLICIT", "DISCLAIMER_PRESENT"]'::JSONB
+    WHEN 'WF-014' THEN '["SCHEMA_REVIEW_COMPLETE", "NUMERIC_REVIEW_COMPLETE", "SOURCE_REVIEW_COMPLETE", "RED_TEAM_REVIEW_COMPLETE"]'::JSONB
+    WHEN 'WF-015' THEN '["OPEN_CRITICAL_OR_MAJOR_FINDINGS"]'::JSONB
+    WHEN 'WF-016' THEN '["NEW_ARTIFACT_VERSION_CREATED", "FINDINGS_LINKED", "SOURCES_IMMUTABLE"]'::JSONB
+    WHEN 'WF-017' THEN '["ZERO_OPEN_CRITICAL_MAJOR", "ALL_REVIEWS_PASS", "TARGET_VERSION_HASHED"]'::JSONB
+    ELSE NULL
+  END;
+  expected_milestone_phase := CASE
+    WHEN row_transition_code IN ('WF-005', 'WF-006', 'WF-007', 'WF-010') THEN 'DATA_VALIDATION'
+    WHEN row_transition_code IN ('WF-012', 'WF-013') THEN 'AI_DRAFT'
+    WHEN row_transition_code IN ('WF-014', 'WF-015', 'WF-017') THEN 'INDEPENDENT_REVIEW'
+    ELSE NULL
+  END;
+  expected_milestone_canonical := CASE expected_milestone_phase
+    WHEN 'DATA_VALIDATION' THEN '["WF-005", "WF-006", "WF-007"]'::JSONB
+    WHEN 'AI_DRAFT' THEN '["WF-012"]'::JSONB
+    WHEN 'INDEPENDENT_REVIEW' THEN '["WF-014"]'::JSONB
+    ELSE '[]'::JSONB
+  END;
+  expected_milestone_required := CASE row_transition_code
+    WHEN 'WF-006' THEN '["WF-005"]'::JSONB
+    WHEN 'WF-007' THEN '["WF-005", "WF-006"]'::JSONB
+    WHEN 'WF-010' THEN '["WF-005", "WF-006", "WF-007"]'::JSONB
+    WHEN 'WF-013' THEN '["WF-012"]'::JSONB
+    WHEN 'WF-015' THEN '["WF-014"]'::JSONB
+    WHEN 'WF-017' THEN '["WF-014"]'::JSONB
+    ELSE '[]'::JSONB
+  END;
+  expected_separation := CASE
+    WHEN row_transition_code = 'WF-017' THEN '[
+      {"code":"HUMAN_REVIEW_BOUNDARY","applied":true,"result":"PASSED"},
+      {"code":"REVIEWER_APPROVER_SEPARATION","applied":false,"result":"NOT_APPLICABLE_FOUNDATION_SCOPE"},
+      {"code":"APPROVER_RELEASE_SEPARATION","applied":false,"result":"NOT_APPLICABLE_FOUNDATION_SCOPE"}
+    ]'::JSONB
+    ELSE '[
+      {"code":"HUMAN_REVIEW_BOUNDARY","applied":false,"result":"NOT_APPLICABLE"},
+      {"code":"REVIEWER_APPROVER_SEPARATION","applied":false,"result":"NOT_APPLICABLE_FOUNDATION_SCOPE"},
+      {"code":"APPROVER_RELEASE_SEPARATION","applied":false,"result":"NOT_APPLICABLE_FOUNDATION_SCOPE"}
+    ]'::JSONB
+  END;
+
+  IF expected_gate IS NULL
+    OR expected_actor_kind IS NULL
+    OR expected_precondition_codes IS NULL
+    OR row_actor_kind IS DISTINCT FROM expected_actor_kind
+  THEN
+    RETURN false;
+  END IF;
+
+  IF JSONB_TYPEOF(snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(snapshot) IS DISTINCT FROM 11
+    OR (snapshot ?& ARRAY[
+      'schemaVersion', 'actor', 'permission', 'correctionCycle',
+      'orchestratorSetting', 'providerPolicy', 'foundationPolicy', 'gate',
+      'preconditions', 'milestone', 'separationChecks'
+    ]) IS DISTINCT FROM true
+    OR JSONB_TYPEOF(snapshot -> 'schemaVersion') IS DISTINCT FROM 'number'
+    OR snapshot ->> 'schemaVersion' IS DISTINCT FROM '1'
+    OR JSONB_TYPEOF(snapshot -> 'correctionCycle') IS DISTINCT FROM 'number'
+    OR (snapshot ->> 'correctionCycle' ~ '^[0-2]$') IS DISTINCT FROM true
+  THEN
+    RETURN false;
+  END IF;
+
+  actor_snapshot := snapshot -> 'actor';
+  IF JSONB_TYPEOF(actor_snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(actor_snapshot) IS DISTINCT FROM 2
+    OR (actor_snapshot ?& ARRAY['kind', 'humanRole']) IS DISTINCT FROM true
+    OR actor_snapshot ->> 'kind' IS DISTINCT FROM row_actor_kind
+  THEN
+    RETURN false;
+  END IF;
+  IF row_actor_kind = 'HUMAN' THEN
+    IF actor_snapshot ->> 'humanRole' IS NULL
+      OR actor_snapshot ->> 'humanRole' NOT IN (
+        'admin', 'direzione', 'commerciale', 'consulente', 'revisore',
+        'backoffice', 'amministrazione', 'collaboratore_limitato'
+      )
+    THEN
+      RETURN false;
+    END IF;
+  ELSIF actor_snapshot -> 'humanRole' IS DISTINCT FROM 'null'::JSONB THEN
+    RETURN false;
+  END IF;
+
+  permission_snapshot := snapshot -> 'permission';
+  IF JSONB_TYPEOF(permission_snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(permission_snapshot) IS DISTINCT FROM 3
+    OR (permission_snapshot ?& ARRAY['required', 'granted', 'source']) IS DISTINCT FROM true
+    OR permission_snapshot -> 'granted' IS DISTINCT FROM 'true'::JSONB
+  THEN
+    RETURN false;
+  END IF;
+  IF expected_permission IS NULL THEN
+    IF permission_snapshot -> 'required' IS DISTINCT FROM 'null'::JSONB
+      OR permission_snapshot ->> 'source' IS DISTINCT FROM 'NOT_REQUIRED'
+    THEN
+      RETURN false;
+    END IF;
+  ELSIF permission_snapshot ->> 'required' IS DISTINCT FROM expected_permission
+    OR permission_snapshot ->> 'source' IS NULL
+    OR permission_snapshot ->> 'source' NOT IN ('ADMIN', 'OVERRIDE', 'ROLE')
+  THEN
+    RETURN false;
+  END IF;
+
+  setting_snapshot := snapshot -> 'orchestratorSetting';
+  IF JSONB_TYPEOF(setting_snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(setting_snapshot) IS DISTINCT FROM 7
+    OR (setting_snapshot ?& ARRAY[
+      'id', 'stateMachineEnabled', 'dispatchEnabled', 'provider',
+      'syntheticDataOnly', 'version', 'updatedAt'
+    ]) IS DISTINCT FROM true
+    OR setting_snapshot ->> 'id' IS DISTINCT FROM 'global'
+    OR setting_snapshot -> 'stateMachineEnabled' IS DISTINCT FROM 'true'::JSONB
+    OR setting_snapshot -> 'dispatchEnabled' IS DISTINCT FROM 'false'::JSONB
+    OR setting_snapshot ->> 'provider' IS DISTINCT FROM 'mock'
+    OR setting_snapshot -> 'syntheticDataOnly' IS DISTINCT FROM 'true'::JSONB
+    OR JSONB_TYPEOF(setting_snapshot -> 'version') IS DISTINCT FROM 'number'
+    OR (setting_snapshot ->> 'version' ~ '^[1-9][0-9]*$') IS DISTINCT FROM true
+    OR (setting_snapshot ->> 'version')::INTEGER < 1
+    OR JSONB_TYPEOF(setting_snapshot -> 'updatedAt') IS DISTINCT FROM 'string'
+    OR (
+      setting_snapshot ->> 'updatedAt'
+      ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$'
+    ) IS DISTINCT FROM true
+  THEN
+    RETURN false;
+  END IF;
+
+  provider_policy := snapshot -> 'providerPolicy';
+  IF JSONB_TYPEOF(provider_policy) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(provider_policy) IS DISTINCT FROM 3
+    OR (provider_policy ?& ARRAY[
+      'databaseExternalProvidersEnabled',
+      'environmentExternalProvidersEnabled',
+      'effectiveExternalProvidersEnabled'
+    ]) IS DISTINCT FROM true
+    OR provider_policy -> 'databaseExternalProvidersEnabled' IS DISTINCT FROM 'false'::JSONB
+    OR provider_policy -> 'environmentExternalProvidersEnabled' IS DISTINCT FROM 'false'::JSONB
+    OR provider_policy -> 'effectiveExternalProvidersEnabled' IS DISTINCT FROM 'false'::JSONB
+  THEN
+    RETURN false;
+  END IF;
+
+  foundation_policy := snapshot -> 'foundationPolicy';
+  IF JSONB_TYPEOF(foundation_policy) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(foundation_policy) IS DISTINCT FROM 2
+    OR (foundation_policy ?& ARRAY['transitionInScope', 'automaticDispatchAllowed']) IS DISTINCT FROM true
+    OR foundation_policy -> 'transitionInScope' IS DISTINCT FROM 'true'::JSONB
+    OR foundation_policy -> 'automaticDispatchAllowed' IS DISTINCT FROM 'false'::JSONB
+  THEN
+    RETURN false;
+  END IF;
+
+  gate_snapshot := snapshot -> 'gate';
+  IF JSONB_TYPEOF(gate_snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(gate_snapshot) IS DISTINCT FROM 3
+    OR (gate_snapshot ?& ARRAY['code', 'result', 'passed']) IS DISTINCT FROM true
+    OR gate_snapshot ->> 'code' IS DISTINCT FROM expected_gate
+    OR gate_snapshot ->> 'result' IS DISTINCT FROM 'PASS'
+    OR gate_snapshot -> 'passed' IS DISTINCT FROM 'true'::JSONB
+  THEN
+    RETURN false;
+  END IF;
+
+  IF JSONB_TYPEOF(snapshot -> 'preconditions') IS DISTINCT FROM 'array'
+    OR JSONB_ARRAY_LENGTH(snapshot -> 'preconditions') IS DISTINCT FROM JSONB_ARRAY_LENGTH(expected_precondition_codes)
+    OR EXISTS (
+      SELECT 1
+      FROM JSONB_ARRAY_ELEMENTS(snapshot -> 'preconditions') AS precondition(item)
+      WHERE JSONB_TYPEOF(item) IS DISTINCT FROM 'object'
+        OR "count_ai_workflow_jsonb_keys"(item) IS DISTINCT FROM 3
+        OR (item ?& ARRAY['code', 'result', 'passed']) IS DISTINCT FROM true
+        OR JSONB_TYPEOF(item -> 'code') IS DISTINCT FROM 'string'
+        OR item -> 'result' IS DISTINCT FROM 'true'::JSONB
+        OR item -> 'passed' IS DISTINCT FROM 'true'::JSONB
+    )
+  THEN
+    RETURN false;
+  END IF;
+  SELECT COALESCE(JSONB_AGG(item -> 'code' ORDER BY array_position), '[]'::JSONB)
+    INTO actual_precondition_codes
+  FROM JSONB_ARRAY_ELEMENTS(snapshot -> 'preconditions') WITH ORDINALITY
+    AS precondition(item, array_position);
+  IF actual_precondition_codes IS DISTINCT FROM expected_precondition_codes THEN
+    RETURN false;
+  END IF;
+
+  milestone_snapshot := snapshot -> 'milestone';
+  IF JSONB_TYPEOF(milestone_snapshot) IS DISTINCT FROM 'object'
+    OR "count_ai_workflow_jsonb_keys"(milestone_snapshot) IS DISTINCT FROM 6
+    OR (milestone_snapshot ?& ARRAY[
+      'phase', 'phaseEntrySequence', 'canonicalTransitionCodes',
+      'requiredTransitionCodes', 'completedTransitionCodes', 'decision'
+    ]) IS DISTINCT FROM true
+  THEN
+    RETURN false;
+  END IF;
+
+  FOREACH array_key IN ARRAY ARRAY[
+    'canonicalTransitionCodes', 'requiredTransitionCodes', 'completedTransitionCodes'
+  ] LOOP
+    IF JSONB_TYPEOF(milestone_snapshot -> array_key) IS DISTINCT FROM 'array'
+      OR EXISTS (
+        SELECT 1
+        FROM JSONB_ARRAY_ELEMENTS(milestone_snapshot -> array_key) AS milestone_code(value)
+        WHERE JSONB_TYPEOF(value) IS DISTINCT FROM 'string'
+          OR (value #>> '{}' ~ '^WF-0(05|06|07|12|14)$') IS DISTINCT FROM true
+      )
+    THEN
+      RETURN false;
+    END IF;
+  END LOOP;
+
+  IF expected_milestone_phase IS NULL THEN
+    IF milestone_snapshot ->> 'decision' IS DISTINCT FROM 'NOT_REQUIRED'
+      OR milestone_snapshot -> 'phase' IS DISTINCT FROM 'null'::JSONB
+      OR milestone_snapshot -> 'phaseEntrySequence' IS DISTINCT FROM 'null'::JSONB
+      OR milestone_snapshot -> 'canonicalTransitionCodes' IS DISTINCT FROM '[]'::JSONB
+      OR milestone_snapshot -> 'requiredTransitionCodes' IS DISTINCT FROM '[]'::JSONB
+      OR milestone_snapshot -> 'completedTransitionCodes' IS DISTINCT FROM '[]'::JSONB
+    THEN
+      RETURN false;
+    END IF;
+  ELSE
+    IF milestone_snapshot ->> 'decision' IS DISTINCT FROM 'SATISFIED'
+      OR milestone_snapshot ->> 'phase' IS DISTINCT FROM expected_milestone_phase
+      OR JSONB_TYPEOF(milestone_snapshot -> 'phaseEntrySequence') IS DISTINCT FROM 'number'
+      OR (milestone_snapshot ->> 'phaseEntrySequence' ~ '^[1-9][0-9]*$') IS DISTINCT FROM true
+      OR (milestone_snapshot ->> 'phaseEntrySequence')::INTEGER < 1
+      OR milestone_snapshot -> 'canonicalTransitionCodes' IS DISTINCT FROM expected_milestone_canonical
+      OR milestone_snapshot -> 'requiredTransitionCodes' IS DISTINCT FROM expected_milestone_required
+      OR milestone_snapshot -> 'completedTransitionCodes' IS DISTINCT FROM expected_milestone_required
+    THEN
+      RETURN false;
+    END IF;
+  END IF;
+
+  separation_snapshot := snapshot -> 'separationChecks';
+  IF JSONB_TYPEOF(separation_snapshot) IS DISTINCT FROM 'array'
+    OR separation_snapshot IS DISTINCT FROM expected_separation
+  THEN
+    RETURN false;
+  END IF;
+
+  RETURN true;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN false;
+END;
+$$;
+
 CREATE TABLE "AiWorkflowTransition" (
   "id" TEXT NOT NULL,
   "workflowInstanceId" TEXT NOT NULL,
@@ -445,6 +838,7 @@ CREATE TABLE "AiWorkflowTransition" (
   "fromVersion" INTEGER NOT NULL,
   "toVersion" INTEGER NOT NULL,
   "definitionHash" TEXT NOT NULL,
+  "guardSnapshot" JSONB NOT NULL,
   "guardSnapshotHash" TEXT NOT NULL,
   "previousTransitionHash" TEXT,
   "transitionHash" TEXT NOT NULL,
@@ -455,7 +849,7 @@ CREATE TABLE "AiWorkflowTransition" (
   "actorSystemCode" TEXT,
   "reasonCode" TEXT,
   "correlationId" TEXT NOT NULL,
-  "metadata" JSONB,
+  "metadata" JSONB NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "AiWorkflowTransition_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "AiWorkflowTransition_contract_check"
@@ -486,6 +880,16 @@ CREATE TABLE "AiWorkflowTransition" (
         ('WF-023', 'DELETION_REQUESTED', 'CLOSED', 'DELETION_PENDING')
       )
     ),
+  -- The canonical lifecycle remains defined above, while this foundation can
+  -- persist only the vertical slice ending at HUMAN_APPROVAL.
+  CONSTRAINT "AiWorkflowTransition_foundation_scope_check"
+    CHECK (
+      "transitionCode" IN (
+        'WF-001', 'WF-002', 'WF-003', 'WF-004', 'WF-005', 'WF-006',
+        'WF-007', 'WF-008', 'WF-009', 'WF-010', 'WF-011', 'WF-012',
+        'WF-013', 'WF-014', 'WF-015', 'WF-016', 'WF-017'
+      )
+    ),
   CONSTRAINT "AiWorkflowTransition_version_sequence_check"
     CHECK (
       "sequence" >= 1
@@ -502,6 +906,20 @@ CREATE TABLE "AiWorkflowTransition" (
         OR "previousTransitionHash" ~ '^[0-9a-f]{64}$'
       )
       AND "transitionHash" ~ '^[0-9a-f]{64}$'
+    ),
+  CONSTRAINT "AiWorkflowTransition_guard_snapshot_check"
+    CHECK (
+      (
+        "validate_ai_workflow_guard_snapshot"(
+          "guardSnapshot",
+          "transitionCode",
+          "actorKind"
+        )
+        AND ENCODE(
+          SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"("guardSnapshot"), 'UTF8')),
+          'hex'
+        ) = "guardSnapshotHash"
+      ) IS TRUE
     ),
   CONSTRAINT "AiWorkflowTransition_hash_chain_check"
     CHECK (
@@ -573,8 +991,11 @@ CREATE TABLE "AiWorkflowTransition" (
     ),
   CONSTRAINT "AiWorkflowTransition_metadata_check"
     CHECK (
-      "metadata" IS NULL
-      OR JSONB_TYPEOF("metadata") = 'object'
+      (
+        JSONB_TYPEOF("metadata") = 'object'
+        AND "metadata" ? 'automaticDispatchAllowed'
+        AND "metadata" -> 'automaticDispatchAllowed' = 'false'::JSONB
+      ) IS TRUE
     )
 );
 
@@ -629,7 +1050,31 @@ CREATE FUNCTION "enforce_ai_workflow_instance_initial_insert"()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  orchestrator_setting "AiOrchestratorSetting"%ROWTYPE;
 BEGIN
+  SELECT * INTO orchestrator_setting
+  FROM "AiOrchestratorSetting"
+  WHERE "id" = 'global';
+
+  IF NOT FOUND
+    OR orchestrator_setting."stateMachineEnabled" IS DISTINCT FROM true
+    OR orchestrator_setting."dispatchEnabled" IS DISTINCT FROM false
+    OR orchestrator_setting."syntheticDataOnly" IS DISTINCT FROM true
+    OR orchestrator_setting."provider" IS DISTINCT FROM 'mock'
+  THEN
+    RAISE EXCEPTION 'State Machine Foundation must be enabled while dispatch remains disabled';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM "AiControlSetting"
+    WHERE "id" = 'global'
+      AND "externalProvidersEnabled" = false
+  ) THEN
+    RAISE EXCEPTION 'External AI providers must be explicitly disabled';
+  END IF;
+
   IF NEW."currentState" <> 'CREATED'
     OR NEW."stateVersion" <> 1
     OR NEW."correctionCycle" <> 0
@@ -785,7 +1230,40 @@ DECLARE
   predecessor "AiWorkflowTransition"%ROWTYPE;
   command_row "AiWorkflowCommand"%ROWTYPE;
   instance_row "AiWorkflowInstance"%ROWTYPE;
+  phase_start_sequence INTEGER;
+  phase_milestones TEXT[];
+  expected_milestones TEXT[];
+  orchestrator_setting "AiOrchestratorSetting"%ROWTYPE;
+  actor_role TEXT;
+  required_permission TEXT;
+  permission_override_allowed BOOLEAN;
+  permission_override_found BOOLEAN;
+  expected_permission_source TEXT;
 BEGIN
+  SELECT * INTO orchestrator_setting
+  FROM "AiOrchestratorSetting"
+  WHERE "id" = 'global';
+
+  IF NOT FOUND
+    OR orchestrator_setting."stateMachineEnabled" IS DISTINCT FROM true
+    OR orchestrator_setting."dispatchEnabled" IS DISTINCT FROM false
+    OR orchestrator_setting."syntheticDataOnly" IS DISTINCT FROM true
+    OR orchestrator_setting."provider" IS DISTINCT FROM 'mock'
+    OR (NEW."guardSnapshot" -> 'orchestratorSetting' ->> 'version')::INTEGER
+      IS DISTINCT FROM orchestrator_setting."version"
+  THEN
+    RAISE EXCEPTION 'State Machine Foundation must be enabled while dispatch remains disabled';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM "AiControlSetting"
+    WHERE "id" = 'global'
+      AND "externalProvidersEnabled" = false
+  ) THEN
+    RAISE EXCEPTION 'External AI providers must be explicitly disabled';
+  END IF;
+
   SELECT * INTO command_row
   FROM "AiWorkflowCommand"
   WHERE "id" = NEW."commandId"
@@ -808,6 +1286,53 @@ BEGIN
     RAISE EXCEPTION 'AiWorkflowTransition command binding is invalid';
   END IF;
 
+  IF NEW."actorKind" = 'HUMAN' THEN
+    SELECT "role"::TEXT INTO actor_role
+    FROM "User"
+    WHERE "id" = NEW."actorUserId"
+      AND "active" = true
+      AND "deletedAt" IS NULL;
+
+    IF NOT FOUND
+      OR NEW."guardSnapshot" -> 'actor' ->> 'humanRole' IS DISTINCT FROM actor_role
+    THEN
+      RAISE EXCEPTION 'AiWorkflowTransition human role snapshot is invalid';
+    END IF;
+
+    required_permission := NEW."guardSnapshot" -> 'permission' ->> 'required';
+    permission_override_found := false;
+    SELECT "allowed" INTO permission_override_allowed
+    FROM "UserPermissionOverride"
+    WHERE "userId" = NEW."actorUserId"
+      AND "permission" = required_permission;
+    permission_override_found := FOUND;
+
+    IF actor_role = 'admin' THEN
+      expected_permission_source := 'ADMIN';
+    ELSIF permission_override_found THEN
+      IF permission_override_allowed IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'AiWorkflowTransition permission override denies the transition';
+      END IF;
+      expected_permission_source := 'OVERRIDE';
+    ELSE
+      IF (required_permission = 'ai.run' AND actor_role NOT IN ('direzione', 'consulente'))
+        OR (
+          required_permission = 'ai.review'
+          AND actor_role NOT IN ('direzione', 'consulente', 'revisore')
+        )
+      THEN
+        RAISE EXCEPTION 'AiWorkflowTransition role does not grant the required permission';
+      END IF;
+      expected_permission_source := 'ROLE';
+    END IF;
+
+    IF NEW."guardSnapshot" -> 'permission' ->> 'source'
+      IS DISTINCT FROM expected_permission_source
+    THEN
+      RAISE EXCEPTION 'AiWorkflowTransition permission source snapshot is invalid';
+    END IF;
+  END IF;
+
   SELECT * INTO instance_row
   FROM "AiWorkflowInstance"
   WHERE "id" = NEW."workflowInstanceId";
@@ -819,6 +1344,13 @@ BEGIN
     OR instance_row."lastTransitionAt" IS DISTINCT FROM NEW."createdAt"
   THEN
     RAISE EXCEPTION 'AiWorkflowTransition instance fencing is invalid';
+  END IF;
+
+  IF (NEW."guardSnapshot" ->> 'correctionCycle')::INTEGER IS DISTINCT FROM (
+    instance_row."correctionCycle"
+    - CASE WHEN NEW."transitionCode" = 'WF-015' THEN 1 ELSE 0 END
+  ) THEN
+    RAISE EXCEPTION 'AiWorkflowTransition correction cycle snapshot is invalid';
   END IF;
 
   IF NEW."sequence" = 1 THEN
@@ -840,6 +1372,144 @@ BEGIN
       RAISE EXCEPTION 'AiWorkflowTransition predecessor is not the immediate ledger entry';
     END IF;
   END IF;
+
+  -- DATA_VALIDATION milestones are scoped to the latest entry into the phase.
+  -- Returning from NEEDS_CLARIFICATION through WF-009 starts a fresh phase, so
+  -- milestones from the earlier phase cannot be reused.
+  IF NEW."transitionCode" IN ('WF-005', 'WF-006', 'WF-007', 'WF-010') THEN
+    SELECT MAX("sequence") INTO phase_start_sequence
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "transitionCode" IN ('WF-004', 'WF-009');
+
+    IF phase_start_sequence IS NULL THEN
+      RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: DATA_VALIDATION phase has no persisted entry milestone';
+    END IF;
+    IF (NEW."guardSnapshot" -> 'milestone' ->> 'phaseEntrySequence')::INTEGER
+      IS DISTINCT FROM phase_start_sequence
+    THEN
+      RAISE EXCEPTION 'AiWorkflowTransition DATA_VALIDATION phase entry snapshot is invalid';
+    END IF;
+
+    SELECT COALESCE(
+      ARRAY_AGG("transitionCode" ORDER BY "sequence"),
+      ARRAY[]::TEXT[]
+    ) INTO phase_milestones
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "sequence" > phase_start_sequence
+      AND "transitionCode" IN ('WF-005', 'WF-006', 'WF-007');
+
+    IF NEW."transitionCode" IN ('WF-005', 'WF-006', 'WF-007')
+      AND NEW."transitionCode" = ANY(phase_milestones)
+    THEN
+      RAISE EXCEPTION 'MILESTONE_DUPLICATE: % already completed in the current DATA_VALIDATION phase', NEW."transitionCode";
+    END IF;
+
+    expected_milestones := CASE NEW."transitionCode"
+      WHEN 'WF-005' THEN ARRAY[]::TEXT[]
+      WHEN 'WF-006' THEN ARRAY['WF-005']::TEXT[]
+      WHEN 'WF-007' THEN ARRAY['WF-005', 'WF-006']::TEXT[]
+      WHEN 'WF-010' THEN ARRAY['WF-005', 'WF-006', 'WF-007']::TEXT[]
+    END;
+
+    IF phase_milestones IS DISTINCT FROM expected_milestones THEN
+      IF NEW."transitionCode" = 'WF-010'
+        AND CARDINALITY(phase_milestones) < CARDINALITY(expected_milestones)
+      THEN
+        RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: % lacks ordered DATA_VALIDATION milestones', NEW."transitionCode";
+      END IF;
+      RAISE EXCEPTION 'MILESTONE_OUT_OF_ORDER: % has invalid DATA_VALIDATION milestone order', NEW."transitionCode";
+    END IF;
+  END IF;
+
+  -- FINDINGS_DRAFTED may occur once after the current WF-011 entry into
+  -- AI_DRAFT, and REPORT_DRAFTED cannot consume a milestone from another phase.
+  IF NEW."transitionCode" IN ('WF-012', 'WF-013') THEN
+    SELECT MAX("sequence") INTO phase_start_sequence
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "transitionCode" = 'WF-011';
+
+    IF phase_start_sequence IS NULL THEN
+      RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: AI_DRAFT phase has no persisted entry milestone';
+    END IF;
+    IF (NEW."guardSnapshot" -> 'milestone' ->> 'phaseEntrySequence')::INTEGER
+      IS DISTINCT FROM phase_start_sequence
+    THEN
+      RAISE EXCEPTION 'AiWorkflowTransition AI_DRAFT phase entry snapshot is invalid';
+    END IF;
+
+    SELECT COALESCE(
+      ARRAY_AGG("transitionCode" ORDER BY "sequence"),
+      ARRAY[]::TEXT[]
+    ) INTO phase_milestones
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "sequence" > phase_start_sequence
+      AND "transitionCode" = 'WF-012';
+
+    IF NEW."transitionCode" = 'WF-012' AND 'WF-012' = ANY(phase_milestones) THEN
+      RAISE EXCEPTION 'MILESTONE_DUPLICATE: WF-012 already completed in the current AI_DRAFT phase';
+    END IF;
+
+    expected_milestones := CASE NEW."transitionCode"
+      WHEN 'WF-012' THEN ARRAY[]::TEXT[]
+      WHEN 'WF-013' THEN ARRAY['WF-012']::TEXT[]
+    END;
+
+    IF phase_milestones IS DISTINCT FROM expected_milestones THEN
+      IF CARDINALITY(phase_milestones) < CARDINALITY(expected_milestones) THEN
+        RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: % requires WF-012 in the current AI_DRAFT phase', NEW."transitionCode";
+      END IF;
+      RAISE EXCEPTION 'MILESTONE_OUT_OF_ORDER: % has invalid AI_DRAFT milestone order', NEW."transitionCode";
+    END IF;
+  END IF;
+
+  -- Every independent-review cycle starts with WF-013 or WF-016 and owns one
+  -- WF-014 milestone. Earlier review cycles cannot satisfy WF-015 or WF-017.
+  IF NEW."transitionCode" IN ('WF-014', 'WF-015', 'WF-017') THEN
+    SELECT MAX("sequence") INTO phase_start_sequence
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "transitionCode" IN ('WF-013', 'WF-016');
+
+    IF phase_start_sequence IS NULL THEN
+      RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: review cycle has no persisted entry milestone';
+    END IF;
+    IF (NEW."guardSnapshot" -> 'milestone' ->> 'phaseEntrySequence')::INTEGER
+      IS DISTINCT FROM phase_start_sequence
+    THEN
+      RAISE EXCEPTION 'AiWorkflowTransition review phase entry snapshot is invalid';
+    END IF;
+
+    SELECT COALESCE(
+      ARRAY_AGG("transitionCode" ORDER BY "sequence"),
+      ARRAY[]::TEXT[]
+    ) INTO phase_milestones
+    FROM "AiWorkflowTransition"
+    WHERE "workflowInstanceId" = NEW."workflowInstanceId"
+      AND "sequence" > phase_start_sequence
+      AND "transitionCode" = 'WF-014';
+
+    IF NEW."transitionCode" = 'WF-014' AND 'WF-014' = ANY(phase_milestones) THEN
+      RAISE EXCEPTION 'MILESTONE_DUPLICATE: WF-014 already completed in the current review cycle';
+    END IF;
+
+    expected_milestones := CASE NEW."transitionCode"
+      WHEN 'WF-014' THEN ARRAY[]::TEXT[]
+      WHEN 'WF-015' THEN ARRAY['WF-014']::TEXT[]
+      WHEN 'WF-017' THEN ARRAY['WF-014']::TEXT[]
+    END;
+
+    IF phase_milestones IS DISTINCT FROM expected_milestones THEN
+      IF CARDINALITY(phase_milestones) < CARDINALITY(expected_milestones) THEN
+        RAISE EXCEPTION 'MILESTONE_NOT_COMPLETED: % requires WF-014 in the current review cycle', NEW."transitionCode";
+      END IF;
+      RAISE EXCEPTION 'MILESTONE_OUT_OF_ORDER: % has invalid review-cycle milestone order', NEW."transitionCode";
+    END IF;
+  END IF;
+
   RETURN NEW;
 END;
 $$;

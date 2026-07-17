@@ -73,7 +73,12 @@ test('la definizione canonica v1.1 contiene esattamente 16 stati e 23 transizion
   assert.equal(Object.isFrozen(FAI_AUDIT_TRANSITION_CODES), true);
   assert.equal(Object.isFrozen(FAI_AUDIT_TRANSITIONS), true);
   assert.equal(FAI_AUDIT_STATES.length, 16);
+  assert.equal(FAI_AUDIT_TRANSITION_CODES.length, 23);
   assert.equal(FAI_AUDIT_TRANSITIONS.length, 23);
+  assert.deepEqual(
+    FAI_AUDIT_TRANSITIONS.map(({ transitionCode }) => transitionCode),
+    FAI_AUDIT_TRANSITION_CODES,
+  );
   assert.doesNotThrow(() => assertAuditWorkflowDefinitionInvariants());
 
   const report = getAuditWorkflowDefinitionInvariantReport();
@@ -128,7 +133,7 @@ test('workflow id, versione e definition hash sono obbligatori e verificati fail
   }
 });
 
-test('tutte le 23 transizioni approvate passano con attore, gate e precondizioni validi', async (t) => {
+test('il motore canonico conserva tutte le 23 transizioni, incluse quelle oltre la porta foundation', async (t) => {
   for (const definition of FAI_AUDIT_TRANSITIONS) {
     await t.test(`${definition.transitionCode} ${definition.event}`, () => {
       const result = evaluateAuditWorkflowTransition(validRequestFor(definition));
@@ -138,6 +143,19 @@ test('tutte le 23 transizioni approvate passano con attore, gate e precondizioni
       assert.equal(result.effect, definition.from === definition.to ? 'STEP_COMPLETION' : 'STATE_CHANGE');
       assert.equal(result.stateChanged, definition.from !== definition.to);
     });
+  }
+});
+
+test('WF-018..WF-023 restano valide solo come contratto canonico e non autorizzano dispatch', () => {
+  const postFoundation = FAI_AUDIT_TRANSITIONS.slice(17);
+  assert.deepEqual(
+    postFoundation.map(({ transitionCode }) => transitionCode),
+    ['WF-018', 'WF-019', 'WF-020', 'WF-021', 'WF-022', 'WF-023'],
+  );
+  for (const definition of postFoundation) {
+    const result = evaluateAuditWorkflowTransition(validRequestFor(definition));
+    assert.equal(result.allowed, true, definition.transitionCode);
+    if (result.allowed) assert.equal(result.automaticDispatchAllowed, false, definition.transitionCode);
   }
 });
 

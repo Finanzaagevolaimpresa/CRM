@@ -9,13 +9,23 @@ export interface PermissionSession {
   readonly permissionOverrides: readonly PermissionOverrideSnapshot[];
 }
 
-export function hasPermission(session: PermissionSession, permission: Permission) {
-  if (!isPermission(permission)) return false;
-  if (session.active !== true) return false;
-  if (session.role === 'admin') return true;
+export type PermissionDecisionSource = 'ADMIN' | 'OVERRIDE' | 'ROLE';
+
+export interface PermissionDecision {
+  readonly allowed: boolean;
+  readonly source: PermissionDecisionSource;
+}
+
+export function evaluatePermission(session: PermissionSession, permission: Permission): PermissionDecision {
+  if (!isPermission(permission) || session.active !== true) return { allowed: false, source: 'ROLE' };
+  if (session.role === 'admin') return { allowed: true, source: 'ADMIN' };
   const override = session.permissionOverrides.find((item) => item.permission === permission);
-  if (override) return override.allowed;
-  return roleHasPermission(session.role, permission);
+  if (override) return { allowed: override.allowed, source: 'OVERRIDE' };
+  return { allowed: roleHasPermission(session.role, permission), source: 'ROLE' };
+}
+
+export function hasPermission(session: PermissionSession, permission: Permission) {
+  return evaluatePermission(session, permission).allowed;
 }
 
 export function getEffectivePermissions(session: PermissionSession) {
