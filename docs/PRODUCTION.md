@@ -499,3 +499,11 @@ docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.exam
 ```
 
 Non copiare segreti nei file unit: le variabili restano in `/opt/fai-crm/.env.production`, già usato da Docker Compose.
+
+## AI Orchestrator: State Machine Foundation v1.1
+
+La fondazione dell'Orchestrator è additiva e nasce fail-closed: `dispatchEnabled=false`, soli dati sintetici e provider `mock`. Questa release non aggiunge coda, worker, route pubbliche o esecuzioni di agenti; non modifica il reconciler AI già operativo. OpenAI e tutti i provider esterni devono restare disabilitati secondo l'[AI Control Plane](ai-control-plane.md).
+
+Il deploy resta esclusivamente manuale. Prima della migration eseguire un backup validato; dopo `prisma migrate deploy` verificare health, permessi v2, flussi CRM esistenti e valori sicuri del setting globale. La presenza delle nuove tabelle non autorizza test con dati cliente reali.
+
+In caso di rollback ripristinare l'immagine applicativa precedente e lasciare intatte le nuove tabelle: non eliminare volumi, ledger o dati audit. Contratto, test, procedura completa e rollback sono descritti in [AI Orchestrator: State Machine Foundation v1.1](ai-orchestrator-state-machine-foundation.md); la correzione della specifica è motivata nell'[ADR-0001](adr/0001-ai-audit-workflow-v1-1.md).

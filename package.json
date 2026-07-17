@@ -12,7 +12,7 @@
     "prisma:seed:production": "tsx prisma/seed-production.ts",
     "admin:bootstrap": "tsx scripts/bootstrap-admin.ts",
     "ai:reconcile": "tsx scripts/reconcile-ai-runs.ts",
-    "test:db": "node --import tsx --test tests/db/*.test.ts"
+    "test:db": "node --import tsx --test --test-concurrency=1 tests/db/*.test.ts"
   },
   "dependencies": {
     "@prisma/client": "5.22.0",

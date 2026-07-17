@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Prisma } from '@prisma/client';
 import { getEffectivePermissions, hasPermission, isPermission, permissionCatalog, roleHasPermission, type AuthSession } from '../src/lib/auth';
-import { mapSerializableConflict } from '../src/lib/serializable';
+import { mapSerializableConflict, SerializableConflictError } from '../src/lib/serializable';
 import { visibleNavItemsForTest } from '../src/components/nav-links';
 
 const root = resolve(import.meta.dirname, '..');
@@ -116,6 +116,7 @@ test('seed production idempotente non elimina override esistenti', () => {
 test('P2034 viene mappato in messaggio controllato', () => {
   const error = new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: 'test' });
   const mapped = mapSerializableConflict(error);
-  assert.ok(mapped instanceof Error);
+  assert.ok(mapped instanceof SerializableConflictError);
+  assert.equal(mapped.code, 'SERIALIZABLE_CONFLICT');
   assert.equal(mapped.message, 'Operazione concorrente rilevata: riprovare.');
 });
