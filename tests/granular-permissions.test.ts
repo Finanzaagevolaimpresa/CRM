@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Prisma } from '@prisma/client';
 import { getEffectivePermissions, hasPermission, isPermission, permissionCatalog, roleHasPermission, type AuthSession } from '../src/lib/auth';
-import { mapSerializableConflict } from '../src/lib/serializable';
+import { evaluatePermission } from '../src/lib/permission-evaluator';
+import { mapSerializableConflict, SerializableConflictError } from '../src/lib/serializable';
 import { visibleNavItemsForTest } from '../src/components/nav-links';
 
 const root = resolve(import.meta.dirname, '..');
@@ -22,6 +23,28 @@ test('override allow e deny hanno precedenza sul ruolo', () => {
   assert.equal(hasPermission(session('direzione', [{ permission: 'audit.read', allowed: false }]), 'audit.read'), false);
   assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'project.read', allowed: false }]), 'project.read'), false);
   assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'lead.read', allowed: true }]), 'lead.read'), true);
+});
+
+test('la decisione espone la fonte effettiva ADMIN, OVERRIDE o ROLE', () => {
+  assert.deepEqual(
+    evaluatePermission(session('admin', [{ permission: 'ai.run', allowed: false }]), 'ai.run'),
+    { allowed: true, source: 'ADMIN' },
+  );
+  assert.deepEqual(
+    evaluatePermission(
+      session('collaboratore_limitato', [{ permission: 'ai.run', allowed: true }]),
+      'ai.run',
+    ),
+    { allowed: true, source: 'OVERRIDE' },
+  );
+  assert.deepEqual(
+    evaluatePermission(session('consulente'), 'ai.run'),
+    { allowed: true, source: 'ROLE' },
+  );
+  assert.deepEqual(
+    evaluatePermission(session('collaboratore_limitato'), 'ai.run'),
+    { allowed: false, source: 'ROLE' },
+  );
 });
 
 if (false) {
@@ -116,6 +139,7 @@ test('seed production idempotente non elimina override esistenti', () => {
 test('P2034 viene mappato in messaggio controllato', () => {
   const error = new Prisma.PrismaClientKnownRequestError('conflict', { code: 'P2034', clientVersion: 'test' });
   const mapped = mapSerializableConflict(error);
-  assert.ok(mapped instanceof Error);
+  assert.ok(mapped instanceof SerializableConflictError);
+  assert.equal(mapped.code, 'SERIALIZABLE_CONFLICT');
   assert.equal(mapped.message, 'Operazione concorrente rilevata: riprovare.');
 });

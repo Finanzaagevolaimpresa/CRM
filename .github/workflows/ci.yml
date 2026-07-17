@@ -12,7 +12,7 @@ jobs:
     name: Install, Prisma generate and build
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fai_crm?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public
       AUTH_SECRET: ci-only-secret-change-me
       AUTH_COOKIE_NAME: fai_crm_session
       AI_PROVIDER: mock
@@ -22,11 +22,11 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: fai_crm
+          POSTGRES_DB: fai_crm_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres -d fai_crm"
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
@@ -61,7 +61,7 @@ jobs:
         run: env -u DATABASE_URL npm run test:db
 
       - name: Run PostgreSQL permission tests
-        run: RUN_DB_TESTS=1 npm run test:db
+        run: RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
 
       - name: Build
         run: npm run build

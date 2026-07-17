@@ -1,13 +1,13 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import type { RoleCode, UserPermissionOverride } from '@prisma/client';
+import type { RoleCode } from '@prisma/client';
+import { getEffectivePermissions, hasPermission, type PermissionOverrideSnapshot } from './permission-evaluator';
 import { prisma } from './prisma';
 import { verifySessionCookie, type SessionCookie } from './session';
-import { isPermission, permissionCodes, roleHasPermission, rolePermissions, type Permission } from './permissions';
+import { rolePermissions, type Permission } from './permissions';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type PermissionOverrideSnapshot = Pick<UserPermissionOverride, 'permission' | 'allowed'>;
 export type AuthSession = SessionCookie & {
   role: RoleCode;
   active: boolean;
@@ -15,6 +15,12 @@ export type AuthSession = SessionCookie & {
 };
 export type { Permission } from './permissions';
 export { permissionCatalog, permissionCodes, roleHasPermission, rolePermissions, isPermission } from './permissions';
+export {
+  getEffectivePermissions,
+  hasPermission,
+  type PermissionOverrideSnapshot,
+  type PermissionSession,
+} from './permission-evaluator';
 export const permissions = rolePermissions;
 
 async function auditBlockedInactiveUserAccess(userId: string) {
@@ -43,21 +49,6 @@ export async function requireSession(): Promise<AuthSession> {
   const session = await getSession();
   if (!session) redirect('/login');
   return session;
-}
-
-export type PermissionSession = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'>;
-
-export function hasPermission(session: PermissionSession, permission: Permission) {
-  if (!isPermission(permission)) return false;
-  if (session.active !== true) return false;
-  if (session.role === 'admin') return true;
-  const override = session.permissionOverrides.find((item) => item.permission === permission);
-  if (override) return override.allowed;
-  return roleHasPermission(session.role, permission);
-}
-
-export function getEffectivePermissions(session: PermissionSession) {
-  return permissionCodes.filter((permission) => hasPermission(session, permission));
 }
 
 export async function requirePermission(permission: Permission) {

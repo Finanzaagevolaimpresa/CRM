@@ -304,17 +304,21 @@ enum TaskPriority {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  name         String
-  passwordHash String
-  role         RoleCode
-  active       Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
-  lastLoginAt  DateTime?
-  permissionOverrides UserPermissionOverride[]
+  id                             String                   @id @default(cuid())
+  email                          String                   @unique
+  name                           String
+  passwordHash                   String
+  role                           RoleCode
+  active                         Boolean                  @default(true)
+  createdAt                      DateTime                 @default(now())
+  updatedAt                      DateTime                 @updatedAt
+  deletedAt                      DateTime?
+  lastLoginAt                    DateTime?
+  permissionOverrides            UserPermissionOverride[]
+  aiOrchestratorSettingsUpdated  AiOrchestratorSetting[]  @relation("AiOrchestratorSettingUpdatedBy")
+  aiWorkflowInstancesCreated     AiWorkflowInstance[]     @relation("AiWorkflowInstanceCreatedBy")
+  aiWorkflowCommandsRequested    AiWorkflowCommand[]      @relation("AiWorkflowCommandRequestedByUser")
+  aiWorkflowTransitionsPerformed AiWorkflowTransition[]   @relation("AiWorkflowTransitionActorUser")
 }
 
 model UserPermissionOverride {
@@ -392,46 +396,48 @@ model CommercialOffer {
 }
 
 model Client {
-  id           String     @id @default(cuid())
-  type         ClientType
-  displayName  String
-  leadId       String?    @unique
-  status       String     @default("attivo")
-  salesOwnerId String?
-  consultantId String?
-  notes        String?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  deletedAt    DateTime?
+  id                  String               @id @default(cuid())
+  type                ClientType
+  displayName         String
+  leadId              String?              @unique
+  status              String               @default("attivo")
+  salesOwnerId        String?
+  consultantId        String?
+  notes               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  aiWorkflowInstances AiWorkflowInstance[]
 }
 
 model Company {
-  id                String    @id @default(cuid())
-  clientId          String
-  name              String
-  vatNumber         String?
-  taxCode           String?
-  rea               String?
-  pec               String?
-  legalAddress      String?
-  operatingAddress  String?
-  region            String?
-  province          String?
-  city              String?
-  legalForm         String?
-  atecoCode         String?
-  atecoDescription  String?
-  incorporationDate DateTime?
-  activityStartDate DateTime?
-  activityStatus    String?
-  employees         Int?
-  annualRevenue     Decimal?
-  durcStatus        String?
-  taxRegime         String?
-  notes             String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  deletedAt         DateTime?
+  id                  String               @id @default(cuid())
+  clientId            String
+  name                String
+  vatNumber           String?
+  taxCode             String?
+  rea                 String?
+  pec                 String?
+  legalAddress        String?
+  operatingAddress    String?
+  region              String?
+  province            String?
+  city                String?
+  legalForm           String?
+  atecoCode           String?
+  atecoDescription    String?
+  incorporationDate   DateTime?
+  activityStartDate   DateTime?
+  activityStatus      String?
+  employees           Int?
+  annualRevenue       Decimal?
+  durcStatus          String?
+  taxRegime           String?
+  notes               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  aiWorkflowInstances AiWorkflowInstance[]
 }
 
 model Person {
@@ -469,7 +475,7 @@ model IncorporationSubject {
 }
 
 model Project {
-  id                     String        @id @default(cuid())
+  id                     String               @id @default(cuid())
   clientId               String
   companyId              String?
   incorporationSubjectId String?
@@ -481,15 +487,16 @@ model Project {
   region                 String?
   province               String?
   sector                 String?
-  status                 ProjectStatus @default(idea)
-  priority               String        @default("media")
+  status                 ProjectStatus        @default(idea)
+  priority               String               @default("media")
   scenarioA              String?
   scenarioB              String?
   blockingConditions     String?
   consultantId           String?
-  createdAt              DateTime      @default(now())
-  updatedAt              DateTime      @updatedAt
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
   deletedAt              DateTime?
+  aiWorkflowInstances    AiWorkflowInstance[]
 }
 
 model ProjectExpense {
@@ -821,8 +828,137 @@ model AiControlSetting {
   updatedAt                     DateTime @updatedAt
 }
 
+model AiOrchestratorSetting {
+  id                  String   @id @default("global")
+  stateMachineEnabled Boolean  @default(false)
+  dispatchEnabled     Boolean  @default(false)
+  syntheticDataOnly   Boolean  @default(true)
+  provider            String   @default("mock")
+  version             Int      @default(1)
+  updatedById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  updatedBy           User?    @relation("AiOrchestratorSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([updatedById])
+}
+
+model AiWorkflowInstance {
+  id                  String                 @id @default(cuid())
+  creationKey         String                 @unique
+  creationRequestHash String
+  workflowCode        String
+  workflowVersion     String
+  definitionHash      String
+  dataMode            String                 @default("synthetic")
+  clientId            String?
+  companyId           String?
+  projectId           String?
+  clientServiceId     String?
+  currentState        String                 @default("CREATED")
+  stateVersion        Int                    @default(1)
+  correctionCycle     Int                    @default(0)
+  lastTransitionAt    DateTime?
+  createdById         String
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  client              Client?                @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  company             Company?               @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project             Project?               @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clientService       ClientService?         @relation(fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy           User                   @relation("AiWorkflowInstanceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  commands            AiWorkflowCommand[]
+  transitions         AiWorkflowTransition[]
+
+  @@index([workflowCode, workflowVersion])
+  @@index([currentState, updatedAt])
+  @@index([clientId])
+  @@index([companyId])
+  @@index([projectId])
+  @@index([clientServiceId])
+  @@index([createdById])
+}
+
+model AiWorkflowCommand {
+  id                            String                @id @default(cuid())
+  workflowInstanceId            String
+  transitionCode                String
+  eventType                     String
+  idempotencyKey                String
+  requestHash                   String
+  definitionHash                String
+  expectedState                 String
+  expectedStateVersion          Int
+  actorKind                     String
+  requestedByUserId             String?
+  requestedByAgentId            String?
+  requestedByAgentConfigVersion Int?
+  requestedBySystemCode         String?
+  correlationId                 String
+  status                        String                @default("PENDING")
+  resultState                   String?
+  resultStateVersion            Int?
+  rejectionCode                 String?
+  resolvedAt                    DateTime?
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+  workflowInstance              AiWorkflowInstance    @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  requestedByUser               User?                 @relation("AiWorkflowCommandRequestedByUser", fields: [requestedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  requestedByAgentConfig        AiAgentConfigVersion? @relation("AiWorkflowCommandRequestedByAgentConfig", fields: [requestedByAgentId, requestedByAgentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  transition                    AiWorkflowTransition?
+
+  @@unique([id, workflowInstanceId])
+  @@unique([workflowInstanceId, idempotencyKey])
+  @@index([workflowInstanceId, status, createdAt])
+  @@index([requestedByUserId])
+  @@index([requestedByAgentId, requestedByAgentConfigVersion], map: "AiWorkflowCommand_agentConfig_idx")
+  @@index([correlationId])
+}
+
+model AiWorkflowTransition {
+  id                      String                 @id @default(cuid())
+  workflowInstanceId      String
+  commandId               String                 @unique
+  transitionCode          String
+  eventType               String
+  sequence                Int
+  fromState               String
+  toState                 String
+  fromVersion             Int
+  toVersion               Int
+  definitionHash          String
+  guardSnapshot           Json
+  guardSnapshotHash       String
+  previousTransitionHash  String?
+  transitionHash          String                 @unique
+  actorKind               String
+  actorUserId             String?
+  actorAgentId            String?
+  actorAgentConfigVersion Int?
+  actorSystemCode         String?
+  reasonCode              String?
+  correlationId           String
+  metadata                Json
+  createdAt               DateTime               @default(now())
+  workflowInstance        AiWorkflowInstance     @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  command                 AiWorkflowCommand      @relation(fields: [commandId, workflowInstanceId], references: [id, workflowInstanceId], onDelete: Restrict, onUpdate: Restrict)
+  actorUser               User?                  @relation("AiWorkflowTransitionActorUser", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorAgentConfig        AiAgentConfigVersion?  @relation("AiWorkflowTransitionActorAgentConfig", fields: [actorAgentId, actorAgentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  previousTransition      AiWorkflowTransition?  @relation("AiWorkflowTransitionHashChain", fields: [workflowInstanceId, previousTransitionHash], references: [workflowInstanceId, transitionHash], onDelete: NoAction, onUpdate: NoAction)
+  nextTransitions         AiWorkflowTransition[] @relation("AiWorkflowTransitionHashChain")
+
+  @@unique([commandId, workflowInstanceId])
+  @@unique([workflowInstanceId, sequence])
+  @@unique([workflowInstanceId, transitionHash])
+  @@index([workflowInstanceId, createdAt])
+  @@index([transitionCode, createdAt])
+  @@index([actorUserId])
+  @@index([actorAgentId, actorAgentConfigVersion], map: "AiWorkflowTransition_agentConfig_idx")
+  @@index([correlationId])
+}
+
 model AiAgentConfigVersion {
-  id                    String   @id @default(cuid())
+  id                    String                 @id @default(cuid())
   agentId               String
   version               Int
   code                  String
@@ -840,9 +976,11 @@ model AiAgentConfigVersion {
   inputSchema           Json
   outputSchema          Json
   createdById           String?
-  createdAt             DateTime @default(now())
-  agent                 AiAgent  @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  runs                  AiRun[]  @relation("AiRunAgentConfigVersion")
+  createdAt             DateTime               @default(now())
+  agent                 AiAgent                @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  runs                  AiRun[]                @relation("AiRunAgentConfigVersion")
+  workflowCommands      AiWorkflowCommand[]    @relation("AiWorkflowCommandRequestedByAgentConfig")
+  workflowTransitions   AiWorkflowTransition[] @relation("AiWorkflowTransitionActorAgentConfig")
 
   @@unique([agentId, version])
   @@index([agentId, createdAt])
@@ -935,30 +1073,31 @@ model ServiceCatalog {
 }
 
 model ClientService {
-  id                String                   @id @default(cuid())
-  clientId          String
-  companyId         String?
-  projectId         String?
-  serviceCatalogId  String
-  contractId        String?
-  paymentId         String?
-  status            ServiceStatus            @default(richiesto)
-  operationalStatus OperationalServiceStatus @default(nuova)
-  statusUpdatedAt   DateTime                 @default(now())
-  practiceType      String?
-  requestedAmount   Decimal?
-  plannedInvestment Decimal?
-  openedAt          DateTime                 @default(now())
-  operationalNotes  String?
-  paymentStatus     PaymentStatus            @default(da_incassare)
-  assignedToId      String?
-  purchasedAt       DateTime                 @default(now())
-  dueDate           DateTime?
-  completedAt       DateTime?
-  internalNotes     String?
-  createdAt         DateTime                 @default(now())
-  updatedAt         DateTime                 @updatedAt
-  deletedAt         DateTime?
+  id                  String                   @id @default(cuid())
+  clientId            String
+  companyId           String?
+  projectId           String?
+  serviceCatalogId    String
+  contractId          String?
+  paymentId           String?
+  status              ServiceStatus            @default(richiesto)
+  operationalStatus   OperationalServiceStatus @default(nuova)
+  statusUpdatedAt     DateTime                 @default(now())
+  practiceType        String?
+  requestedAmount     Decimal?
+  plannedInvestment   Decimal?
+  openedAt            DateTime                 @default(now())
+  operationalNotes    String?
+  paymentStatus       PaymentStatus            @default(da_incassare)
+  assignedToId        String?
+  purchasedAt         DateTime                 @default(now())
+  dueDate             DateTime?
+  completedAt         DateTime?
+  internalNotes       String?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  deletedAt           DateTime?
+  aiWorkflowInstances AiWorkflowInstance[]
 
   @@index([operationalStatus])
   @@index([statusUpdatedAt])
