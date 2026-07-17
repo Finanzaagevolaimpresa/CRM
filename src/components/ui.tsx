@@ -361,9 +361,11 @@ export function PageHeader({
 export function Nav({
   role,
   notificationCount = 0,
+  effectivePermissions = [],
 }: {
   role?: import("@prisma/client").RoleCode | null;
   notificationCount?: number;
+  effectivePermissions?: import("@/lib/permissions").Permission[];
 }) {
   return (
     <aside className="relative z-30 flex w-full shrink-0 flex-col overflow-hidden bg-fai-navy p-4 text-white shadow-xl shadow-fai-navy/20 md:h-screen md:w-72">
@@ -391,7 +393,7 @@ export function Nav({
           Pratiche, clienti, AI e compliance in ambiente protetto.
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-          <NavLinks notificationCount={notificationCount} role={role} />
+          <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} />
         </div>
         <form
           action={logoutAction}

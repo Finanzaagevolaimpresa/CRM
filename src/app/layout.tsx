@@ -1,6 +1,6 @@
 import "./globals.css";
 import { Nav } from "@/components/ui";
-import { getSession } from "@/lib/auth";
+import { getEffectivePermissions, getSession } from "@/lib/auth";
 import { getInternalNotificationCount } from "@/lib/internal-notifications";
 export default async function RootLayout({
   children,
@@ -15,7 +15,7 @@ export default async function RootLayout({
     <html lang="it">
       <body>
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
-          <Nav notificationCount={notificationCount} role={session?.role} />
+          <Nav effectivePermissions={session ? getEffectivePermissions(session) : []} notificationCount={notificationCount} role={session?.role} />
           <div className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
             <div className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 px-4 py-3 shadow-sm shadow-slate-200/50 backdrop-blur-xl md:px-6">
               <div className="flex items-center justify-between gap-4">

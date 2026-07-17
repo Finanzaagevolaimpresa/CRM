@@ -1,28 +1,21 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import type { RoleCode, User } from '@prisma/client';
+import type { RoleCode, UserPermissionOverride } from '@prisma/client';
 import { prisma } from './prisma';
 import { verifySessionCookie, type SessionCookie } from './session';
+import { isPermission, permissionCodes, roleHasPermission, rolePermissions, type Permission } from './permissions';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type AuthSession = SessionCookie & Pick<User, 'role' | 'active'>;
-
-export type Permission =
-  | 'user.read' | 'user.write' | 'settings.manage'
-  | 'lead.read' | 'lead.write'
-  | 'client.read' | 'client.write'
-  | 'company.read' | 'company.write'
-  | 'project.read' | 'project.write'
-  | 'document.upload' | 'document.download' | 'document.sensitive.read'
-  | 'service.read' | 'service.write' | 'service.assign' | 'service.close'
-  | 'ai.run' | 'ai.external.run' | 'ai.review' | 'ai.approve' | 'ai_agents.read' | 'ai_agents.write'
-  | 'dossier.read' | 'dossier.write' | 'dossier.approve'
-  | 'contract.read' | 'contract.write'
-  | 'payment.read' | 'payment.write'
-  | 'audit.read'
-  | 'technical.read' | 'technical.write' | 'technical.assign' | 'technical.status' | 'technical.admin'
-  | 'practice_communications.read' | 'practice_communications.write' | 'practice_communications.review' | 'practice_communications.mark_used';
+export type PermissionOverrideSnapshot = Pick<UserPermissionOverride, 'permission' | 'allowed'>;
+export type AuthSession = SessionCookie & {
+  role: RoleCode;
+  active: boolean;
+  permissionOverrides: PermissionOverrideSnapshot[];
+};
+export type { Permission } from './permissions';
+export { permissionCatalog, permissionCodes, roleHasPermission, rolePermissions, isPermission } from './permissions';
+export const permissions = rolePermissions;
 
 async function auditBlockedInactiveUserAccess(userId: string) {
   await prisma.auditLog.create({ data: { actorId: userId, event: 'blocked_inactive_user_access', entityType: 'User', entityId: userId } });
@@ -35,15 +28,15 @@ export async function getSession() {
 
   const user = await prisma.user.findUnique({
     where: { id: cookieSession.userId },
-    select: { id: true, role: true, active: true },
+    select: { id: true, role: true, active: true, deletedAt: true, permissionOverrides: { select: { permission: true, allowed: true } } },
   });
-  if (!user) return null;
+  if (!user || user.deletedAt) return null;
   if (!user.active) {
     await auditBlockedInactiveUserAccess(user.id);
     return null;
   }
 
-  return { ...cookieSession, role: user.role, active: user.active } satisfies AuthSession;
+  return { ...cookieSession, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides } satisfies AuthSession;
 }
 
 export async function requireSession(): Promise<AuthSession> {
@@ -52,20 +45,19 @@ export async function requireSession(): Promise<AuthSession> {
   return session;
 }
 
-export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
-  admin: ['*','dossier.read','dossier.write'],
-  direzione: ['technical.read','technical.write','technical.assign','technical.status','technical.admin','practice_communications.read','practice_communications.write','practice_communications.review','practice_communications.mark_used','user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.run','ai.external.run','ai.review','ai.approve','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
-  commerciale: ['technical.read','practice_communications.read','lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign'],
-  consulente: ['technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.run','ai.review','dossier.read','dossier.write'],
-  revisore: ['technical.read','practice_communications.read','practice_communications.review','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.review','ai.approve','dossier.read','dossier.approve','service.read'],
-  backoffice: ['technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','project.read','document.upload','document.download','service.read','service.write','dossier.read'],
-  amministrazione: ['client.read','company.read','project.read','document.download','document.sensitive.read','contract.read','contract.write','payment.read','payment.write','service.read'],
-  collaboratore_limitato: ['client.read','project.read','service.read','document.download'],
-};
+export type PermissionSession = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'>;
 
-export function hasPermission(session: Pick<AuthSession, 'role'>, permission: Permission) {
-  const granted = rolePermissions[session.role] ?? [];
-  return granted.includes('*') || granted.includes(permission);
+export function hasPermission(session: PermissionSession, permission: Permission) {
+  if (!isPermission(permission)) return false;
+  if (session.active !== true) return false;
+  if (session.role === 'admin') return true;
+  const override = session.permissionOverrides.find((item) => item.permission === permission);
+  if (override) return override.allowed;
+  return roleHasPermission(session.role, permission);
+}
+
+export function getEffectivePermissions(session: PermissionSession) {
+  return permissionCodes.filter((permission) => hasPermission(session, permission));
 }
 
 export async function requirePermission(permission: Permission) {
@@ -74,10 +66,14 @@ export async function requirePermission(permission: Permission) {
   return session;
 }
 
+export async function requireAnyPermission(permissions: readonly Permission[]) {
+  const session = await requireSession();
+  if (!permissions.some((permission) => hasPermission(session, permission))) redirect('/dashboard');
+  return session;
+}
+
 export async function requireAuth(roles?: RoleCode[]) {
   const session = await requireSession();
   if (roles && !roles.includes(session.role)) redirect('/dashboard');
   return session;
 }
-
-export const permissions = rolePermissions;

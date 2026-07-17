@@ -1,14 +1,8 @@
 import { Badge, Card, EmptyState, PageHeader, Stat } from "@/components/ui";
-import { requireAuth } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-const allowedRoles = [
-  "admin",
-  "direzione",
-  "revisore",
-  "amministrazione",
-] as const;
 
 const queues = [
   [
@@ -44,7 +38,7 @@ const queues = [
 ] as const;
 
 export default async function Page() {
-  await requireAuth([...allowedRoles]);
+  await requirePermission('legal.read');
 
   return (
     <div className="space-y-6">
