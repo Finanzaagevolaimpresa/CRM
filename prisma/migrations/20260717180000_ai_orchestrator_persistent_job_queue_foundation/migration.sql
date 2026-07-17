@@ -276,7 +276,7 @@ BEGIN
     RAISE EXCEPTION 'AiWorkflowJob transition planning metadata is invalid';
   END IF;
 
-  expected_bundle_key := ENCODE(DIGEST(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
+  expected_bundle_key := ENCODE(SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
     JSONB_BUILD_OBJECT(
       'schemaVersion', 1,
       'catalogKey', 'FAI-AUDIT-JOB-CATALOG@1.0',
@@ -288,8 +288,8 @@ BEGIN
       'correctionCycle', instance_row."correctionCycle",
       'bundleCode', NEW."bundleCode"
     )
-  ), 'UTF8'), 'sha256'), 'hex');
-  expected_dedupe_key := ENCODE(DIGEST(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
+  ), 'UTF8')), 'hex');
+  expected_dedupe_key := ENCODE(SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
     JSONB_BUILD_OBJECT(
       'schemaVersion', 1,
       'catalogKey', 'FAI-AUDIT-JOB-CATALOG@1.0',
@@ -302,7 +302,7 @@ BEGIN
       'jobKey', NEW."jobCode" || '@' || NEW."jobVersion",
       'slotKey', NEW."slotKey"
     )
-  ), 'UTF8'), 'sha256'), 'hex');
+  ), 'UTF8')), 'hex');
   IF NEW."bundleKey" IS DISTINCT FROM expected_bundle_key
     OR NEW."dedupeKey" IS DISTINCT FROM expected_dedupe_key
   THEN
@@ -346,9 +346,9 @@ BEGIN
     OR NEW."payload" -> 'job' ->> 'bundleKey' IS DISTINCT FROM NEW."bundleKey"
     OR NEW."payload" -> 'job' ->> 'provider' IS DISTINCT FROM 'mock'
     OR NEW."payload" -> 'job' -> 'automaticDispatchAllowed' IS DISTINCT FROM 'false'::JSONB
-    OR NEW."payloadHash" IS DISTINCT FROM ENCODE(DIGEST(CONVERT_TO(
+    OR NEW."payloadHash" IS DISTINCT FROM ENCODE(SHA256(CONVERT_TO(
       "canonicalize_ai_workflow_jsonb"(NEW."payload"), 'UTF8'
-    ), 'sha256'), 'hex')
+    )), 'hex')
   THEN
     RAISE EXCEPTION 'AiWorkflowJob payload or persisted payload hash is invalid';
   END IF;
@@ -379,14 +379,14 @@ BEGIN
     RAISE EXCEPTION 'AiWorkflowJobOutboxEvent job binding is invalid';
   END IF;
 
-  expected_event_key := ENCODE(DIGEST(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
+  expected_event_key := ENCODE(SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
     JSONB_BUILD_OBJECT(
       'schemaVersion', 1,
       'eventType', 'AI_JOB_PLANNED',
       'eventVersion', 1,
       'jobDedupeKey', job_row."dedupeKey"
     )
-  ), 'UTF8'), 'sha256'), 'hex');
+  ), 'UTF8')), 'hex');
   SELECT COUNT(*) INTO top_level_key_count FROM JSONB_OBJECT_KEYS(NEW."payload");
   SELECT COUNT(*) INTO job_key_count FROM JSONB_OBJECT_KEYS(NEW."payload" -> 'job');
   IF top_level_key_count IS DISTINCT FROM 9
@@ -412,9 +412,9 @@ BEGIN
     OR NEW."payload" -> 'job' ->> 'payloadHash' IS DISTINCT FROM job_row."payloadHash"
     OR ((NEW."payload" ->> 'occurredAt')::TIMESTAMPTZ AT TIME ZONE 'UTC')
       IS DISTINCT FROM NEW."occurredAt"
-    OR NEW."payloadHash" IS DISTINCT FROM ENCODE(DIGEST(CONVERT_TO(
+    OR NEW."payloadHash" IS DISTINCT FROM ENCODE(SHA256(CONVERT_TO(
       "canonicalize_ai_workflow_jsonb"(NEW."payload"), 'UTF8'
-    ), 'sha256'), 'hex')
+    )), 'hex')
   THEN
     RAISE EXCEPTION 'AiWorkflowJobOutboxEvent canonical identity or payload is invalid';
   END IF;
@@ -474,7 +474,7 @@ BEGIN
   IF command_row."id" IS NULL OR instance_row."id" IS NULL THEN
     RAISE EXCEPTION 'AiWorkflowTransition job plan identity cannot be resolved';
   END IF;
-  SELECT ENCODE(DIGEST(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
+  SELECT ENCODE(SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
     JSONB_BUILD_OBJECT(
       'schemaVersion', 1,
       'catalogKey', 'FAI-AUDIT-JOB-CATALOG@1.0',
@@ -494,7 +494,7 @@ BEGIN
         'payloadHash', queue_job."payloadHash"
       ) ORDER BY queue_job."slotKey"), '[]'::JSONB)
     )
-  ), 'UTF8'), 'sha256'), 'hex') INTO expected_plan_hash
+  ), 'UTF8')), 'hex') INTO expected_plan_hash
   FROM "AiWorkflowJob" AS queue_job
   WHERE queue_job."sourceTransitionId" = NEW."id"
     AND queue_job."workflowInstanceId" = NEW."workflowInstanceId";
