@@ -24,6 +24,16 @@ import {
   type ApplyAuditWorkflowTransitionInput,
   type AuditWorkflowActor,
 } from '../../src/lib/ai-orchestrator/workflow-service';
+import {
+  admitAiWorkflowJobOutbox,
+  AiOrchestratorLeaseLostError,
+  AiOrchestratorWorkerDisabledError,
+  claimNextAiWorkflowJob,
+  completeAiWorkflowJob,
+  failAiWorkflowJob,
+  heartbeatAiWorkflowJobLease,
+  surrenderAiWorkflowJobLease,
+} from '../../src/lib/ai-orchestrator/worker-runtime';
 
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
@@ -54,6 +64,7 @@ const prisma = runDbTests ? new PrismaClient() : null;
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const safeEnv = { ...process.env, AI_EXTERNAL_PROVIDERS_ENABLED: 'false' };
 const passwordHash = 'not-a-real-login-hash';
+const originalWorkerGate = process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
 
 let runnerId = '';
 let reviewerId = '';
@@ -61,6 +72,7 @@ let limitedId = '';
 let roleRunnerId = '';
 let overrideRunnerId = '';
 let agentId = '';
+let workerRuntimeWorkflowId = '';
 let migrationDefaults: {
   stateMachineEnabled: boolean;
   dispatchEnabled: boolean;
@@ -173,6 +185,8 @@ test.after(async () => {
     await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: migrationDefaults });
   }
   await db().aiControlSetting.updateMany({ where: { id: 'global' }, data: { externalProvidersEnabled: false } });
+  if (originalWorkerGate === undefined) delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+  else process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
   await db().$disconnect();
 });
 
@@ -1763,6 +1777,7 @@ test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job 
   const migrationRoot = resolve(process.cwd(), 'prisma/migrations');
   const pr74Migration = '20260717120000_ai_orchestrator_state_machine_foundation';
   const pr75Migration = '20260717180000_ai_orchestrator_persistent_job_queue_foundation';
+  const workerRuntimeMigration = '20260718220000_ai_orchestrator_worker_runtime_foundation';
   for (const migrationName of readdirSync(migrationRoot).sort()) {
     if (/^\d/.test(migrationName) && migrationName <= pr74Migration) {
       cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
@@ -1950,7 +1965,216 @@ test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job 
     assert.equal(await upgradePrisma.aiWorkflowJobOutboxEvent.count({
       where: { workflowInstanceId: legacyInput.workflowInstanceId },
     }), 0);
+
+    cpSync(
+      join(migrationRoot, workerRuntimeMigration),
+      join(tempMigrations, workerRuntimeMigration),
+      { recursive: true },
+    );
+    deploy();
+    assert.equal(await upgradePrisma.aiWorkflowJobRuntime.count({
+      where: { workflowInstanceId: legacyInput.workflowInstanceId },
+    }), 0);
+    assert.equal(await upgradePrisma.aiWorkflowJobAttempt.count(), 0);
+    assert.equal(await upgradePrisma.aiWorkflowOutboxConsumption.count(), 0);
+    const replayAfterWorkerUpgrade = await applyAuditWorkflowTransition(
+      upgradePrisma,
+      legacyInput,
+      { env: safeEnv },
+    );
+    assert.equal(replayAfterWorkerUpgrade.ok, true);
+    if (replayAfterWorkerUpgrade.ok) {
+      assert.equal(replayAfterWorkerUpgrade.replayed, true);
+      assert.equal(replayAfterWorkerUpgrade.value.jobPlanningStatus, 'LEGACY_NOT_PLANNED');
+      assert.equal(replayAfterWorkerUpgrade.value.plannedJobCount, 0);
+    }
   } finally {
     await upgradePrisma.$disconnect();
   }
+});
+
+// WORKER RUNTIME FOUNDATION TESTS: isolated scenarios below may open dispatch
+// only in the confirmed ephemeral PostgreSQL test database.
+async function setWorkerRuntimeGates(stateMachineEnabled: boolean, dispatchEnabled: boolean) {
+  await db().aiOrchestratorSetting.update({
+    where: { id: 'global' },
+    data: {
+      stateMachineEnabled,
+      dispatchEnabled,
+      syntheticDataOnly: true,
+      provider: 'mock',
+    },
+  });
+  await db().aiControlSetting.update({
+    where: { id: 'global' },
+    data: { externalProvidersEnabled: false },
+  });
+}
+
+test('Worker Runtime resta fail-closed e la migration non crea backfill', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  workerRuntimeWorkflowId = created.value.workflowInstanceId;
+  await advanceToDataValidation(workerRuntimeWorkflowId);
+  assert.equal(await db().aiWorkflowJob.count({ where: { workflowInstanceId: workerRuntimeWorkflowId } }), 1);
+  assert.equal(await db().aiWorkflowJobRuntime.count({
+    where: { workflowInstanceId: workerRuntimeWorkflowId },
+  }), 0);
+  assert.equal(await db().aiWorkflowOutboxConsumption.count({
+    where: { job: { workflowInstanceId: workerRuntimeWorkflowId } },
+  }), 0);
+  await assert.rejects(
+    admitAiWorkflowJobOutbox({ workflowInstanceId: workerRuntimeWorkflowId }),
+    AiOrchestratorWorkerDisabledError,
+  );
+  await setWorkerRuntimeGates(false, false);
+  await assert.rejects(
+    admitAiWorkflowJobOutbox({ workflowInstanceId: workerRuntimeWorkflowId }),
+    AiOrchestratorWorkerDisabledError,
+  );
+  assert.equal(await db().aiWorkflowJobRuntime.count({
+    where: { workflowInstanceId: workerRuntimeWorkflowId },
+  }), 0);
+  await setWorkerRuntimeGates(true, false);
+});
+
+test('outbox admission, claim concorrente, heartbeat e fencing sono atomici', { skip: !runDbTests }, async () => {
+  assert.ok(workerRuntimeWorkflowId);
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const jobBefore = await db().aiWorkflowJob.findFirstOrThrow({
+    where: { workflowInstanceId: workerRuntimeWorkflowId },
+  });
+  const outboxBefore = await db().aiWorkflowJobOutboxEvent.findFirstOrThrow({
+    where: { workflowInstanceId: workerRuntimeWorkflowId },
+  });
+  const aiRunCountBefore = await db().aiRun.count();
+  await setWorkerRuntimeGates(true, true);
+  assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: workerRuntimeWorkflowId }), 1);
+  assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: workerRuntimeWorkflowId }), 0);
+  assert.equal(await db().aiWorkflowOutboxConsumption.count({
+    where: { jobId: jobBefore.id },
+  }), 1);
+
+  const claims = await Promise.all([
+    claimNextAiWorkflowJob({
+      workerInstanceId: 'synthetic-worker-a',
+      workerBuildHash: 'a'.repeat(64),
+      workflowInstanceId: workerRuntimeWorkflowId,
+    }),
+    claimNextAiWorkflowJob({
+      workerInstanceId: 'synthetic-worker-b',
+      workerBuildHash: 'b'.repeat(64),
+      workflowInstanceId: workerRuntimeWorkflowId,
+    }),
+  ]);
+  const firstClaim = claims.find((claim) => claim !== null);
+  assert.ok(firstClaim);
+  assert.equal(claims.filter(Boolean).length, 1);
+  assert.equal(firstClaim.fencingToken, 1n);
+  assert.equal(firstClaim.attemptSequence, 1);
+  assert.equal(await db().aiWorkflowJobAttempt.count({ where: { jobId: jobBefore.id } }), 1);
+  const heartbeatExpiry = await heartbeatAiWorkflowJobLease(firstClaim.lease);
+  assert.ok(heartbeatExpiry > firstClaim.leaseExpiresAt);
+
+  const surrendered = await surrenderAiWorkflowJobLease(firstClaim.lease);
+  assert.equal(surrendered.state, 'RETRY_WAIT');
+  const secondClaim = await claimNextAiWorkflowJob({
+    workerInstanceId: 'synthetic-worker-c',
+    workerBuildHash: 'c'.repeat(64),
+    workflowInstanceId: workerRuntimeWorkflowId,
+  });
+  assert.ok(secondClaim);
+  assert.equal(secondClaim.fencingToken, 2n);
+  await assert.rejects(
+    completeAiWorkflowJob(firstClaim.lease, { resultHash: 'd'.repeat(64) }),
+    AiOrchestratorLeaseLostError,
+  );
+  const completed = await completeAiWorkflowJob(secondClaim.lease, { resultHash: 'e'.repeat(64) });
+  assert.deepEqual(completed, { replay: false, state: 'SUCCEEDED' });
+  const replay = await completeAiWorkflowJob(secondClaim.lease, { resultHash: 'e'.repeat(64) });
+  assert.deepEqual(replay, { replay: true, state: 'SUCCEEDED' });
+
+  const jobAfter = await db().aiWorkflowJob.findUniqueOrThrow({ where: { id: jobBefore.id } });
+  const outboxAfter = await db().aiWorkflowJobOutboxEvent.findUniqueOrThrow({ where: { id: outboxBefore.id } });
+  assert.deepEqual(jobAfter, jobBefore);
+  assert.deepEqual(outboxAfter, outboxBefore);
+  assert.equal(await db().aiRun.count(), aiRunCountBefore);
+  assert.equal(await db().aiWorkflowJobRuntimeEvent.count({ where: { jobId: jobBefore.id } }), 5);
+  await setWorkerRuntimeGates(true, false);
+});
+
+test('retry/backoff e terminalizzazione non duplicano attempt o runtime', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  const workflowInstanceId = created.value.workflowInstanceId;
+  await advanceToDataValidation(workflowInstanceId);
+  await setWorkerRuntimeGates(true, true);
+  assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId }), 1);
+  const claim = await claimNextAiWorkflowJob({
+    workerInstanceId: 'synthetic-retry-worker',
+    workerBuildHash: 'f'.repeat(64),
+    workflowInstanceId,
+  });
+  assert.ok(claim);
+  const failed = await failAiWorkflowJob(claim.lease, { failureCode: 'MOCK_HANDLER_TRANSIENT' });
+  assert.equal(failed.state, 'RETRY_WAIT');
+  assert.equal(failed.retryFailureCount, 1);
+  assert.ok(failed.nextAvailableAt);
+  assert.ok(failed.nextAvailableAt > new Date());
+  assert.equal(await claimNextAiWorkflowJob({
+    workerInstanceId: 'synthetic-retry-too-early',
+    workerBuildHash: '1'.repeat(64),
+    workflowInstanceId,
+  }), null);
+  const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: claim.jobId } });
+  assert.equal(runtime.state, 'RETRY_WAIT');
+  assert.equal(runtime.attemptSequence, 1);
+  assert.equal(runtime.retryFailureCount, 1);
+  assert.equal(await db().aiWorkflowJobAttempt.count({ where: { runtimeId: runtime.id } }), 1);
+  assert.equal(await db().aiWorkflowOutboxConsumption.count({ where: { runtimeId: runtime.id } }), 1);
+  await setWorkerRuntimeGates(true, false);
+});
+
+test('executor inattivo e HUMAN_APPROVAL impediscono ogni admission runtime', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const inactiveCase = await createCase();
+  await advanceToDataValidation(inactiveCase.value.workflowInstanceId);
+  const inactiveJob = await db().aiWorkflowJob.findFirstOrThrow({
+    where: { workflowInstanceId: inactiveCase.value.workflowInstanceId },
+  });
+  await db().aiAgent.update({ where: { id: inactiveJob.executorAgentId }, data: { active: false } });
+  try {
+    await setWorkerRuntimeGates(true, true);
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: inactiveCase.value.workflowInstanceId,
+    }), 0);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { jobId: inactiveJob.id } }), 0);
+  } finally {
+    await db().aiAgent.update({ where: { id: inactiveJob.executorAgentId }, data: { active: true } });
+    await setWorkerRuntimeGates(true, false);
+  }
+
+  const humanCase = await createCase();
+  await advanceToIndependentReview(humanCase.value.workflowInstanceId);
+  await applyOk(humanCase.value.workflowInstanceId, 'WF-014', system());
+  await applyOk(humanCase.value.workflowInstanceId, 'WF-017', human(reviewerId));
+  const atHumanGate = await db().aiWorkflowInstance.findUniqueOrThrow({
+    where: { id: humanCase.value.workflowInstanceId },
+  });
+  assert.equal(atHumanGate.currentState, 'HUMAN_APPROVAL');
+  const runtimeCountBefore = await db().aiWorkflowJobRuntime.count({
+    where: { workflowInstanceId: humanCase.value.workflowInstanceId },
+  });
+  await setWorkerRuntimeGates(true, true);
+  assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: humanCase.value.workflowInstanceId }), 0);
+  assert.equal(await db().aiWorkflowJobRuntime.count({
+    where: { workflowInstanceId: humanCase.value.workflowInstanceId },
+  }), runtimeCountBefore);
+  assert.equal(await db().aiRun.count({
+    where: { id: { startsWith: humanCase.value.workflowInstanceId } },
+  }), 0);
+  await setWorkerRuntimeGates(true, false);
 });

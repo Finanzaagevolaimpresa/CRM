@@ -119,14 +119,15 @@ test('la porta applicativa foundation espone esattamente WF-001..WF-017 e lascia
 test('state machine e dispatch hanno gate distinti e nessun test foundation abilita il dispatch', () => {
   const service = readFileSync(resolve(root, 'src/lib/ai-orchestrator/workflow-service.ts'), 'utf8');
   const dbTest = readFileSync(resolve(root, 'tests/db/ai-orchestrator-foundation-db.test.ts'), 'utf8');
+  const stateMachineFoundationDbTests = dbTest.split('// WORKER RUNTIME FOUNDATION TESTS:')[0] ?? dbTest;
   assert.match(service, /orchestrator\.stateMachineEnabled === true/);
   assert.match(service, /orchestrator\.dispatchEnabled === false/);
   assert.doesNotMatch(service, /orchestrator\.dispatchEnabled === true/);
   assert.match(
-    dbTest,
+    stateMachineFoundationDbTests,
     /test\.before[\s\S]*data:\s*\{[\s\S]*?stateMachineEnabled:\s*true,[\s\S]*?dispatchEnabled:\s*false/,
   );
-  assert.doesNotMatch(dbTest, /dispatchEnabled:\s*true/);
+  assert.doesNotMatch(stateMachineFoundationDbTests, /dispatchEnabled:\s*true/);
 });
 
 test('i vincoli PostgreSQL chiudono NULL bypass, cross-workflow e actor confusion', () => {
