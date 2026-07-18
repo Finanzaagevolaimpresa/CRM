@@ -941,6 +941,7 @@ model AiWorkflowTransition {
   reasonCode              String?
   correlationId           String
   metadata                Json
+  jobPlanningVersion      Int?
   createdAt               DateTime                   @default(now())
   workflowInstance        AiWorkflowInstance         @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command                 AiWorkflowCommand          @relation(fields: [commandId, workflowInstanceId], references: [id, workflowInstanceId], onDelete: Restrict, onUpdate: Restrict)
@@ -962,39 +963,54 @@ model AiWorkflowTransition {
 }
 
 model AiWorkflowJob {
-  id                       String                     @id @default(cuid())
-  workflowInstanceId       String
-  sourceTransitionId       String
-  sourceTransitionCode     String
-  sourceTransitionSequence Int
-  catalogCode              String
-  catalogVersion           String
-  catalogHash              String
-  jobCode                  String
-  jobVersion               String
-  jobDefinitionHash        String
-  completionTransitionCode String
-  completionMode           String
-  slotKey                  String
-  bundleCode               String
-  bundleKey                String
-  dedupeKey                String                     @unique
-  status                   String                     @default("PLANNED")
-  provider                 String                     @default("mock")
-  dataMode                 String                     @default("synthetic")
-  automaticDispatchAllowed Boolean                    @default(false)
-  payload                  Json
-  payloadHash              String
-  correlationId            String
-  plannedAt                DateTime                   @default(now())
-  blockedAt                DateTime?
-  blockedReasonCode        String?
-  workflowInstance         AiWorkflowInstance         @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sourceTransition         AiWorkflowTransition       @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  outboxEvents             AiWorkflowJobOutboxEvent[]
+  id                         String                     @id @default(cuid())
+  workflowInstanceId         String
+  sourceTransitionId         String
+  sourceTransitionCode       String
+  sourceTransitionSequence   Int
+  workflowDefinitionHash     String
+  phaseCode                  String
+  phaseEntrySequence         Int
+  sourceState                String
+  sourceStateVersion         Int
+  correctionCycle            Int
+  executorAgentId            String
+  executorAgentCode          String
+  executorAgentConfigVersion Int
+  executorAgentConfigHash    String
+  catalogCode                String
+  catalogVersion             String
+  catalogHash                String
+  jobCode                    String
+  jobVersion                 String
+  jobDefinitionHash          String
+  completionTransitionCode   String
+  completionMode             String
+  slotKey                    String
+  bundleCode                 String
+  bundleKey                  String
+  dedupeKey                  String                     @unique
+  status                     String                     @default("PLANNED")
+  provider                   String                     @default("mock")
+  dataMode                   String                     @default("synthetic")
+  automaticDispatchAllowed   Boolean                    @default(false)
+  payload                    Json
+  payloadHash                String
+  correlationId              String
+  plannedAt                  DateTime                   @default(now())
+  availableAt                DateTime
+  blockedAt                  DateTime?
+  blockedReasonCode          String?
+  workflowInstance           AiWorkflowInstance         @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceTransition           AiWorkflowTransition       @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  executorAgentConfig        AiAgentConfigVersion       @relation("AiWorkflowJobExecutorConfig", fields: [executorAgentId, executorAgentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  outboxEvents               AiWorkflowJobOutboxEvent[]
 
   @@unique([sourceTransitionId, jobCode, jobVersion, slotKey])
-  @@index([workflowInstanceId, status, plannedAt])
+  @@index([status, availableAt])
+  @@index([workflowInstanceId, status, availableAt])
+  @@index([phaseCode, correctionCycle, status])
+  @@index([executorAgentId, executorAgentConfigVersion, status], map: "AiWorkflowJob_executorConfig_status_idx")
   @@index([sourceTransitionId])
   @@index([bundleKey, status])
   @@index([correlationId])
@@ -1046,6 +1062,7 @@ model AiAgentConfigVersion {
   runs                  AiRun[]                @relation("AiRunAgentConfigVersion")
   workflowCommands      AiWorkflowCommand[]    @relation("AiWorkflowCommandRequestedByAgentConfig")
   workflowTransitions   AiWorkflowTransition[] @relation("AiWorkflowTransitionActorAgentConfig")
+  executorJobs          AiWorkflowJob[]        @relation("AiWorkflowJobExecutorConfig")
 
   @@unique([agentId, version])
   @@index([agentId, createdAt])

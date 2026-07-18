@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { createAiAgentConfigHash } from '../../src/lib/ai-agent-config-hash';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
 import {
   FAI_AUDIT_WORKFLOW_DEFINITION_HASH,
@@ -10,9 +15,11 @@ import {
 import {
   FAI_AUDIT_JOB_CATALOG_HASH,
   FAI_AUDIT_JOB_CATALOG_KEY,
+  FAI_AUDIT_JOB_EXECUTOR_BINDINGS,
 } from '../../src/lib/ai-orchestrator/job-catalog-v1';
 import {
   applyAuditWorkflowTransition,
+  createAuditWorkflowCommandRequestHash,
   createAuditWorkflowInstance,
   type ApplyAuditWorkflowTransitionInput,
   type AuditWorkflowActor,
@@ -504,6 +511,12 @@ test('state machine e dispatch sono flag distinti e la foundation non autorizza 
   const enabledCase = await createCase(runnerId, enabledCreationKey);
   const enabledId = enabledCase.value.workflowInstanceId;
   const enabledInput = await transitionInput(enabledId, 'WF-001', human(runnerId));
+  const planningCase = await createCase();
+  const planningId = planningCase.value.workflowInstanceId;
+  await applyOk(planningId, 'WF-001', human(runnerId));
+  await applyOk(planningId, 'WF-002', human(runnerId));
+  await applyOk(planningId, 'WF-003', human(runnerId));
+  const disabledPlanningInput = await transitionInput(planningId, 'WF-004', human(runnerId));
 
   await db().aiOrchestratorSetting.update({
     where: { id: 'global' },
@@ -538,6 +551,11 @@ test('state machine e dispatch sono flag distinti e la foundation non autorizza 
     );
     assert.equal(await db().aiWorkflowCommand.count({ where: { workflowInstanceId: enabledId } }), 0);
     assert.equal(await db().aiWorkflowTransition.count({ where: { workflowInstanceId: enabledId } }), 0);
+    const deniedPlanning = await applyAuditWorkflowTransition(db(), disabledPlanningInput, { env: safeEnv });
+    assert.equal(deniedPlanning.ok, false);
+    if (!deniedPlanning.ok) assert.equal(deniedPlanning.code, 'ORCHESTRATOR_DISABLED');
+    assert.equal(await db().aiWorkflowJob.count({ where: { workflowInstanceId: planningId } }), 0);
+    assert.equal(await db().aiWorkflowJobOutboxEvent.count({ where: { workflowInstanceId: planningId } }), 0);
   } finally {
     await db().aiOrchestratorSetting.update({
       where: { id: 'global' },
@@ -595,6 +613,20 @@ test('creazione concorrente usa una sola istanza e restituisce replay idempotent
   assert.equal(await db().auditLog.count({
     where: { entityId: first.value.workflowInstanceId, event: 'ai_workflow_created' },
   }), 1);
+});
+
+test('definitionHash alterato viene rifiutato prima di ledger, job e outbox', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  const input = await transitionInput(id, 'WF-001', human(runnerId), {
+    expectedDefinitionHash: '0'.repeat(64),
+  });
+  const denied = await applyAuditWorkflowTransition(db(), input, { env: safeEnv });
+  assert.equal(denied.ok, false);
+  if (!denied.ok) assert.equal(denied.code, 'INVALID_INPUT');
+  assert.equal(await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } }), 0);
+  assert.equal(await db().aiWorkflowJob.count({ where: { workflowInstanceId: id } }), 0);
+  assert.equal(await db().aiWorkflowJobOutboxEvent.count({ where: { workflowInstanceId: id } }), 0);
 });
 
 test('stesso comando/hash è replay; stessa chiave con hash diverso è conflitto senza duplicati', { skip: !runDbTests }, async () => {
@@ -658,6 +690,28 @@ test('WF-004 pianifica job e outbox atomici; il replay non duplica la coda', { s
   assert.equal(job.provider, 'mock');
   assert.equal(job.dataMode, 'synthetic');
   assert.equal(job.automaticDispatchAllowed, false);
+  assert.equal(job.workflowDefinitionHash, FAI_AUDIT_WORKFLOW_DEFINITION_HASH);
+  assert.equal(job.phaseCode, 'DATA_VALIDATION');
+  assert.equal(job.phaseEntrySequence, 4);
+  assert.equal(job.sourceState, 'NEEDS_DOCUMENTS');
+  assert.equal(job.sourceStateVersion, 4);
+  assert.equal(job.correctionCycle, 0);
+  assert.equal(job.availableAt.toISOString(), job.plannedAt.toISOString());
+  const expectedExecutor = FAI_AUDIT_JOB_EXECUTOR_BINDINGS.find(({ jobCode }) => jobCode === job.jobCode);
+  assert.ok(expectedExecutor);
+  assert.equal(job.executorAgentCode, expectedExecutor.executorAgentCode);
+  assert.equal(job.executorAgentConfigVersion, expectedExecutor.executorAgentConfigVersion);
+  assert.equal(job.executorAgentConfigHash, expectedExecutor.executorAgentConfigHash);
+  assert.notEqual(job.executorAgentId, runnerId, 'attore umano ed executor sono identità distinte');
+  const executorSnapshot = await db().aiAgentConfigVersion.findUniqueOrThrow({
+    where: {
+      agentId_version: {
+        agentId: job.executorAgentId,
+        version: job.executorAgentConfigVersion,
+      },
+    },
+  });
+  assert.equal(createAiAgentConfigHash(executorSnapshot), job.executorAgentConfigHash);
   assert.match(job.dedupeKey, /^[0-9a-f]{64}$/);
   assert.equal(canonicalSha256(job.payload), job.payloadHash);
 
@@ -666,14 +720,132 @@ test('WF-004 pianifica job e outbox atomici; il replay non duplica la coda', { s
   assert.equal(outbox[0]?.eventType, 'AI_JOB_PLANNED');
   assert.equal(outbox[0]?.deliveryState, 'PENDING');
   assert.equal(canonicalSha256(outbox[0]?.payload), outbox[0]?.payloadHash);
+  const outboxPayload = asJsonObject(outbox[0]?.payload, 'outbox.payload');
+  const outboxExecutor = asJsonObject(outboxPayload.executor, 'outbox.payload.executor');
+  assert.deepEqual(outboxExecutor, {
+    agentId: job.executorAgentId,
+    agentCode: job.executorAgentCode,
+    configVersion: job.executorAgentConfigVersion,
+    configHash: job.executorAgentConfigHash,
+  });
   const transition = await db().aiWorkflowTransition.findUniqueOrThrow({ where: { id: first.value.transitionId } });
   const planning = asJsonObject(asJsonObject(transition.metadata, 'metadata').jobPlanning, 'jobPlanning');
   assert.equal(planning.catalogKey, FAI_AUDIT_JOB_CATALOG_KEY);
   assert.equal(planning.catalogHash, FAI_AUDIT_JOB_CATALOG_HASH);
+  assert.equal(planning.workflowDefinitionHash, FAI_AUDIT_WORKFLOW_DEFINITION_HASH);
+  assert.equal(planning.phaseCode, 'DATA_VALIDATION');
+  assert.equal(planning.phaseEntrySequence, 4);
+  assert.equal(planning.sourceState, 'NEEDS_DOCUMENTS');
+  assert.equal(planning.sourceStateVersion, 4);
+  assert.equal(planning.correctionCycle, 0);
   assert.equal(planning.planHash, first.value.jobPlanHash);
   assert.equal(planning.plannedJobCount, 1);
   assert.equal(planning.automaticDispatchAllowed, false);
   assert.equal(await db().aiRun.count(), aiRunCountBefore);
+});
+
+test('executor assente, inattivo o non mock causa rollback atomico senza reinterpretare config storiche', { skip: !runDbTests }, async () => {
+  const canonicalAgent = await db().aiAgent.findUniqueOrThrow({
+    where: { code: 'verifica_ai_preliminare_fai' },
+  });
+  const original = {
+    active: canonicalAgent.active,
+    provider: canonicalAgent.provider,
+    configVersion: canonicalAgent.configVersion,
+  };
+
+  for (const unsafe of [
+    { configVersion: 999 },
+    { active: false },
+    { provider: 'openai' },
+  ]) {
+    const created = await createCase();
+    const id = created.value.workflowInstanceId;
+    await applyOk(id, 'WF-001', human(runnerId));
+    await applyOk(id, 'WF-002', human(runnerId));
+    await applyOk(id, 'WF-003', human(runnerId));
+    const input = await transitionInput(id, 'WF-004', human(runnerId));
+    const before = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
+    await db().aiAgent.update({ where: { id: canonicalAgent.id }, data: unsafe });
+    try {
+      const denied = await applyAuditWorkflowTransition(db(), input, { env: safeEnv });
+      assert.equal(denied.ok, false);
+      if (!denied.ok) assert.equal(denied.code, 'LEDGER_INTEGRITY_ERROR');
+      assert.deepEqual(
+        await db().aiWorkflowInstance.findUniqueOrThrow({
+          where: { id },
+          select: { currentState: true, stateVersion: true, correctionCycle: true },
+        }),
+        {
+          currentState: before.currentState,
+          stateVersion: before.stateVersion,
+          correctionCycle: before.correctionCycle,
+        },
+      );
+      assert.equal(await db().aiWorkflowCommand.count({ where: { workflowInstanceId: id } }), 3);
+      assert.equal(await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } }), 3);
+      assert.equal(await db().aiWorkflowJob.count({ where: { workflowInstanceId: id } }), 0);
+      assert.equal(await db().aiWorkflowJobOutboxEvent.count({ where: { workflowInstanceId: id } }), 0);
+    } finally {
+      await db().aiAgent.update({ where: { id: canonicalAgent.id }, data: original });
+    }
+  }
+
+  const plannedCase = await createCase();
+  const plannedId = plannedCase.value.workflowInstanceId;
+  await applyOk(plannedId, 'WF-001', human(runnerId));
+  await applyOk(plannedId, 'WF-002', human(runnerId));
+  await applyOk(plannedId, 'WF-003', human(runnerId));
+  const planningInput = await transitionInput(plannedId, 'WF-004', human(runnerId));
+  const planned = await applyAuditWorkflowTransition(db(), planningInput, { env: safeEnv });
+  assert.equal(planned.ok, true);
+  if (!planned.ok) return;
+  const jobBefore = await db().aiWorkflowJob.findFirstOrThrow({ where: { workflowInstanceId: plannedId } });
+  const snapshotV1 = await db().aiAgentConfigVersion.findUniqueOrThrow({
+    where: { agentId_version: { agentId: canonicalAgent.id, version: 1 } },
+  });
+  await assert.rejects(db().aiAgentConfigVersion.update({
+    where: { id: snapshotV1.id },
+    data: { systemPrompt: `${snapshotV1.systemPrompt} tampered` },
+  }));
+  const existingV2 = await db().aiAgentConfigVersion.findUnique({
+    where: { agentId_version: { agentId: canonicalAgent.id, version: 2 } },
+  });
+  if (!existingV2) {
+    await db().aiAgentConfigVersion.create({
+      data: {
+        agentId: canonicalAgent.id,
+        version: 2,
+        code: snapshotV1.code,
+        name: snapshotV1.name,
+        description: snapshotV1.description,
+        operationalScope: snapshotV1.operationalScope,
+        systemPrompt: `${snapshotV1.systemPrompt}\nSynthetic v2.`,
+        requiredDataChecklist: snapshotV1.requiredDataChecklist as Prisma.InputJsonValue,
+        expectedOutput: snapshotV1.expectedOutput,
+        toneStyle: snapshotV1.toneStyle,
+        active: true,
+        provider: 'mock',
+        model: null,
+        promptVersion: 'v2',
+        inputSchema: snapshotV1.inputSchema as Prisma.InputJsonValue,
+        outputSchema: snapshotV1.outputSchema as Prisma.InputJsonValue,
+        createdById: runnerId,
+      },
+    });
+  }
+  await db().aiAgent.update({ where: { id: canonicalAgent.id }, data: { configVersion: 2 } });
+  try {
+    const replay = await applyAuditWorkflowTransition(db(), planningInput, { env: safeEnv });
+    assert.equal(replay.ok, true);
+    if (replay.ok) assert.equal(replay.replayed, true);
+    const jobAfter = await db().aiWorkflowJob.findUniqueOrThrow({ where: { id: jobBefore.id } });
+    assert.equal(jobAfter.executorAgentConfigVersion, 1);
+    assert.equal(jobAfter.executorAgentConfigHash, jobBefore.executorAgentConfigHash);
+    assert.equal(createAiAgentConfigHash(snapshotV1), jobAfter.executorAgentConfigHash);
+  } finally {
+    await db().aiAgent.update({ where: { id: canonicalAgent.id }, data: original });
+  }
 });
 
 test('bundle analysis e review hanno cardinalità canonica e outbox uno-a-uno', { skip: !runDbTests }, async () => {
@@ -737,6 +909,71 @@ test('la coda consente soltanto PLANNED→BLOCKED e l’outbox resta append-only
   }));
   await assert.rejects(db().aiWorkflowJobOutboxEvent.delete({ where: { id: event.id } }));
   await assert.rejects(db().aiWorkflowJob.delete({ where: { id: job.id } }));
+});
+
+test('PostgreSQL rifiuta alterazioni di definition, fase ed executor rispetto al ledger', { skip: !runDbTests }, async () => {
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await advanceToDataValidation(id);
+  const source = await db().aiWorkflowJob.findFirstOrThrow({
+    where: { workflowInstanceId: id, sourceTransitionCode: 'WF-004' },
+  });
+  const clone = (overrides: Partial<Pick<typeof source,
+    | 'workflowDefinitionHash'
+    | 'phaseCode'
+    | 'phaseEntrySequence'
+    | 'executorAgentId'
+    | 'executorAgentConfigVersion'
+    | 'executorAgentConfigHash'
+  >>) => db().aiWorkflowJob.create({
+    data: {
+      workflowInstanceId: source.workflowInstanceId,
+      sourceTransitionId: source.sourceTransitionId,
+      sourceTransitionCode: source.sourceTransitionCode,
+      sourceTransitionSequence: source.sourceTransitionSequence,
+      workflowDefinitionHash: source.workflowDefinitionHash,
+      phaseCode: source.phaseCode,
+      phaseEntrySequence: source.phaseEntrySequence,
+      sourceState: source.sourceState,
+      sourceStateVersion: source.sourceStateVersion,
+      correctionCycle: source.correctionCycle,
+      executorAgentId: source.executorAgentId,
+      executorAgentCode: source.executorAgentCode,
+      executorAgentConfigVersion: source.executorAgentConfigVersion,
+      executorAgentConfigHash: source.executorAgentConfigHash,
+      catalogCode: source.catalogCode,
+      catalogVersion: source.catalogVersion,
+      catalogHash: source.catalogHash,
+      jobCode: source.jobCode,
+      jobVersion: source.jobVersion,
+      jobDefinitionHash: source.jobDefinitionHash,
+      completionTransitionCode: source.completionTransitionCode,
+      completionMode: source.completionMode,
+      slotKey: source.slotKey,
+      bundleCode: source.bundleCode,
+      bundleKey: source.bundleKey,
+      dedupeKey: source.dedupeKey,
+      status: source.status,
+      provider: source.provider,
+      dataMode: source.dataMode,
+      automaticDispatchAllowed: source.automaticDispatchAllowed,
+      payload: source.payload as Prisma.InputJsonValue,
+      payloadHash: source.payloadHash,
+      correlationId: source.correlationId,
+      plannedAt: source.plannedAt,
+      availableAt: source.availableAt,
+      blockedAt: source.blockedAt,
+      blockedReasonCode: source.blockedReasonCode,
+      ...overrides,
+    },
+  });
+
+  await assert.rejects(clone({ workflowDefinitionHash: '0'.repeat(64) }), /causal phase identity/i);
+  await assert.rejects(clone({ phaseCode: 'AI_DRAFT' }), /causal phase identity/i);
+  await assert.rejects(clone({ phaseEntrySequence: 3 }), /causal phase identity/i);
+  await assert.rejects(clone({ executorAgentId: `missing-${randomUUID()}` }), /executor config/i);
+  await assert.rejects(clone({ executorAgentConfigVersion: 2 }), /canonical catalog mapping/i);
+  await assert.rejects(clone({ executorAgentConfigHash: '0'.repeat(64) }), /canonical catalog mapping/i);
 });
 
 test('una transizione schedulabile senza piano e outbox viene interamente rollbackata', { skip: !runDbTests }, async () => {
@@ -836,12 +1073,24 @@ test('le milestone DATA_VALIDATION della fase precedente non superano WF-008/WF-
   await applyOk(id, 'WF-007', agent());
   await applyOk(id, 'WF-008', system());
   await applyOk(id, 'WF-009', human(runnerId));
+  const reentryJob = await db().aiWorkflowJob.findFirstOrThrow({
+    where: { workflowInstanceId: id, sourceTransitionCode: 'WF-009' },
+  });
+  assert.equal(reentryJob.phaseCode, 'DATA_VALIDATION');
+  assert.equal(reentryJob.phaseEntrySequence, reentryJob.sourceTransitionSequence);
 
   const staleMilestones = await applyCode(id, 'WF-010', human(runnerId));
   assert.equal(staleMilestones.ok, false);
   if (!staleMilestones.ok) assert.equal(staleMilestones.code, 'MILESTONE_NOT_COMPLETED');
 
   await completeDataValidation(id);
+  const postReentryJobs = await db().aiWorkflowJob.findMany({
+    where: { workflowInstanceId: id, sourceTransitionCode: { in: ['WF-005', 'WF-006'] } },
+  });
+  assert.equal(
+    postReentryJobs.filter((job) => job.phaseEntrySequence === reentryJob.phaseEntrySequence).length,
+    2,
+  );
   assert.equal(
     (await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } })).currentState,
     'READY_FOR_ANALYSIS',
@@ -910,6 +1159,21 @@ test('vertical slice sintetica termina a HUMAN_APPROVAL e rifiuta WF-018..WF-023
     instance = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
     assert.equal(instance.currentState, 'INDEPENDENT_REVIEW');
   }
+
+  const reviewJobs = await db().aiWorkflowJob.findMany({
+    where: {
+      workflowInstanceId: id,
+      sourceTransitionCode: { in: ['WF-013', 'WF-016'] },
+    },
+  });
+  for (const correctionCycle of [0, 1, 2]) {
+    const cycleJobs = reviewJobs.filter((job) => job.correctionCycle === correctionCycle);
+    assert.equal(cycleJobs.length, 4);
+    assert.equal(new Set(cycleJobs.map(({ dedupeKey }) => dedupeKey)).size, 4);
+    assert.ok(cycleJobs.every(({ phaseCode }) => phaseCode === 'INDEPENDENT_REVIEW'));
+  }
+  assert.equal(new Set(reviewJobs.map(({ dedupeKey }) => dedupeKey)).size, 12);
+  assert.equal(new Set(reviewJobs.map(({ phaseEntrySequence }) => phaseEntrySequence)).size, 3);
 
   const thirdCorrection = await applyCode(id, 'WF-015', system());
   assert.equal(thirdCorrection.ok, false);
@@ -1091,6 +1355,13 @@ test('due comandi concorrenti sulla stessa stateVersion producono un solo vincit
   assert.equal(instance.currentState, 'DATA_VALIDATION');
   assert.equal(instance.stateVersion, 6);
   assert.equal(await db().aiWorkflowTransition.count({ where: { workflowInstanceId: id } }), 5);
+  const concurrentJobs = await db().aiWorkflowJob.findMany({
+    where: { workflowInstanceId: id, sourceTransitionCode: 'WF-005' },
+  });
+  assert.equal(concurrentJobs.length, 1);
+  assert.equal(await db().aiWorkflowJobOutboxEvent.count({
+    where: { sourceTransitionId: concurrentJobs[0]?.sourceTransitionId },
+  }), 1);
 });
 
 test('vincoli e trigger DB chiudono NULL bypass, stato diretto e riscrittura idempotenza', { skip: !runDbTests }, async () => {
@@ -1472,4 +1743,214 @@ test('trigger ledger rifiuta command cross-workflow e predecessore non immediato
     }),
     { currentState: 'WAITING_FOR_AUTHORITY', stateVersion: 3 },
   );
+});
+
+test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job o outbox', { skip: !runDbTests }, async () => {
+  const databaseUrl = process.env.DATABASE_URL;
+  assert.ok(databaseUrl);
+  const schemaName = `orchestrator_upgrade_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  assert.match(schemaName, /^[a-z0-9_]+$/);
+  await db().$executeRawUnsafe(`CREATE SCHEMA "${schemaName}"`);
+
+  const upgradeUrl = new URL(databaseUrl);
+  upgradeUrl.searchParams.set('schema', schemaName);
+  const tempRoot = mkdtempSync(join(tmpdir(), 'crm-orchestrator-upgrade-test-'));
+  const tempPrisma = join(tempRoot, 'prisma');
+  const tempMigrations = join(tempPrisma, 'migrations');
+  mkdirSync(tempMigrations, { recursive: true });
+  cpSync(resolve(process.cwd(), 'prisma/schema.prisma'), join(tempPrisma, 'schema.prisma'));
+
+  const migrationRoot = resolve(process.cwd(), 'prisma/migrations');
+  const pr74Migration = '20260717120000_ai_orchestrator_state_machine_foundation';
+  const pr75Migration = '20260717180000_ai_orchestrator_persistent_job_queue_foundation';
+  for (const migrationName of readdirSync(migrationRoot).sort()) {
+    if (/^\d/.test(migrationName) && migrationName <= pr74Migration) {
+      cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
+    }
+  }
+  const deploy = () => execFileSync(
+    resolve(process.cwd(), 'node_modules/.bin/prisma'),
+    ['migrate', 'deploy', '--schema', join(tempPrisma, 'schema.prisma')],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, DATABASE_URL: upgradeUrl.toString() },
+      stdio: 'pipe',
+    },
+  );
+  deploy();
+
+  const upgradePrisma = new PrismaClient({
+    datasources: { db: { url: upgradeUrl.toString() } },
+  });
+  try {
+    const legacyUser = await upgradePrisma.user.create({
+      data: {
+        email: `legacy-upgrade-${runId}@example.test`,
+        name: 'Legacy upgrade synthetic admin',
+        passwordHash,
+        role: 'admin',
+        active: true,
+      },
+    });
+    await upgradePrisma.aiOrchestratorSetting.update({
+      where: { id: 'global' },
+      data: {
+        stateMachineEnabled: true,
+        dispatchEnabled: false,
+        syntheticDataOnly: true,
+        provider: 'mock',
+      },
+    });
+    await upgradePrisma.aiControlSetting.upsert({
+      where: { id: 'global' },
+      create: { id: 'global', externalProvidersEnabled: false, maxExternalRunsPerUserPerHour: 10 },
+      update: { externalProvidersEnabled: false },
+    });
+    const created = await createAuditWorkflowInstance(upgradePrisma, {
+      creationKey: randomUUID(),
+      expectedDefinitionHash: FAI_AUDIT_WORKFLOW_DEFINITION_HASH,
+      actor: { kind: 'HUMAN', userId: legacyUser.id },
+    }, { env: safeEnv });
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+
+    const legacyInput: ApplyAuditWorkflowTransitionInput = {
+      workflowInstanceId: created.value.workflowInstanceId,
+      transitionCode: 'WF-001',
+      idempotencyKey: randomUUID(),
+      correlationId: randomUUID(),
+      expectedDefinitionHash: FAI_AUDIT_WORKFLOW_DEFINITION_HASH,
+      expectedState: 'CREATED',
+      expectedStateVersion: 1,
+      actor: { kind: 'HUMAN', userId: legacyUser.id },
+      gateResults: { G0_ORDER: 'PASS' },
+      preconditions: { ORDER_ACTIVE: true, CONTRACT_COHERENT: true },
+    };
+    const setting = await upgradePrisma.aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } });
+    const guardSnapshot: Prisma.InputJsonObject = {
+      schemaVersion: 1,
+      actor: { kind: 'HUMAN', humanRole: 'admin' },
+      permission: { required: 'ai.run', granted: true, source: 'ADMIN' },
+      correctionCycle: 0,
+      orchestratorSetting: {
+        id: 'global',
+        stateMachineEnabled: true,
+        dispatchEnabled: false,
+        provider: 'mock',
+        syntheticDataOnly: true,
+        version: setting.version,
+        updatedAt: setting.updatedAt.toISOString(),
+      },
+      providerPolicy: {
+        databaseExternalProvidersEnabled: false,
+        environmentExternalProvidersEnabled: false,
+        effectiveExternalProvidersEnabled: false,
+      },
+      foundationPolicy: { transitionInScope: true, automaticDispatchAllowed: false },
+      gate: { code: 'G0_ORDER', result: 'PASS', passed: true },
+      preconditions: [
+        { code: 'ORDER_ACTIVE', result: true, passed: true },
+        { code: 'CONTRACT_COHERENT', result: true, passed: true },
+      ],
+      milestone: {
+        phase: null,
+        phaseEntrySequence: null,
+        canonicalTransitionCodes: [],
+        requiredTransitionCodes: [],
+        completedTransitionCodes: [],
+        decision: 'NOT_REQUIRED',
+      },
+      separationChecks: [
+        { code: 'HUMAN_REVIEW_BOUNDARY', applied: false, result: 'NOT_APPLICABLE' },
+        { code: 'REVIEWER_APPROVER_SEPARATION', applied: false, result: 'NOT_APPLICABLE_FOUNDATION_SCOPE' },
+        { code: 'APPROVER_RELEASE_SEPARATION', applied: false, result: 'NOT_APPLICABLE_FOUNDATION_SCOPE' },
+      ],
+    };
+    const legacyMetadata: Prisma.InputJsonObject = {
+      automaticDispatchAllowed: false,
+      effect: 'STATE_CHANGED',
+      stateChanged: true,
+    };
+    const transitionId = randomUUID();
+    const transitionHash = canonicalSha256({ fixture: 'pr74-legacy-upgrade', transitionId });
+    const createdAt = new Date();
+    const requestHash = createAuditWorkflowCommandRequestHash(legacyInput);
+    await upgradePrisma.$transaction(async (tx) => {
+      const command = await tx.aiWorkflowCommand.create({
+        data: {
+          workflowInstanceId: legacyInput.workflowInstanceId,
+          transitionCode: 'WF-001',
+          eventType: 'CASE_STARTED',
+          idempotencyKey: legacyInput.idempotencyKey,
+          requestHash,
+          definitionHash: FAI_AUDIT_WORKFLOW_DEFINITION_HASH,
+          expectedState: 'CREATED',
+          expectedStateVersion: 1,
+          actorKind: 'HUMAN',
+          requestedByUserId: legacyUser.id,
+          correlationId: legacyInput.correlationId,
+          status: 'PENDING',
+          createdAt,
+        },
+      });
+      await tx.aiWorkflowInstance.update({
+        where: { id: legacyInput.workflowInstanceId },
+        data: { currentState: 'WAITING_FOR_PAYMENT', stateVersion: 2, lastTransitionAt: createdAt },
+      });
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "AiWorkflowTransition" (
+          "id", "workflowInstanceId", "commandId", "transitionCode", "eventType",
+          "sequence", "fromState", "toState", "fromVersion", "toVersion", "definitionHash",
+          "guardSnapshot", "guardSnapshotHash", "previousTransitionHash", "transitionHash",
+          "actorKind", "actorUserId", "actorAgentId", "actorAgentConfigVersion", "actorSystemCode",
+          "reasonCode", "correlationId", "metadata", "createdAt"
+        ) VALUES (
+          ${transitionId}, ${legacyInput.workflowInstanceId}, ${command.id}, 'WF-001', 'CASE_STARTED',
+          1, 'CREATED', 'WAITING_FOR_PAYMENT', 1, 2, ${FAI_AUDIT_WORKFLOW_DEFINITION_HASH},
+          ${JSON.stringify(guardSnapshot)}::JSONB, ${canonicalSha256(guardSnapshot)}, NULL, ${transitionHash},
+          'HUMAN', ${legacyUser.id}, NULL, NULL, NULL,
+          NULL, ${legacyInput.correlationId}, ${JSON.stringify(legacyMetadata)}::JSONB, ${createdAt}
+        )
+      `);
+      await tx.aiWorkflowCommand.update({
+        where: { id: command.id },
+        data: {
+          status: 'APPLIED',
+          resultState: 'WAITING_FOR_PAYMENT',
+          resultStateVersion: 2,
+          resolvedAt: createdAt,
+        },
+      });
+    });
+
+    cpSync(join(migrationRoot, pr75Migration), join(tempMigrations, pr75Migration), { recursive: true });
+    deploy();
+
+    const beforeReplay = await upgradePrisma.aiWorkflowTransition.findUniqueOrThrow({ where: { id: transitionId } });
+    assert.equal(beforeReplay.jobPlanningVersion, null);
+    assert.deepEqual(beforeReplay.metadata, legacyMetadata);
+    const replay = await applyAuditWorkflowTransition(upgradePrisma, legacyInput, { env: safeEnv });
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.value.jobPlanningStatus, 'LEGACY_NOT_PLANNED');
+    assert.equal(replay.value.jobPlanHash, null);
+    assert.equal(replay.value.plannedJobCount, 0);
+    const afterReplay = await upgradePrisma.aiWorkflowTransition.findUniqueOrThrow({ where: { id: transitionId } });
+    assert.equal(afterReplay.transitionHash, beforeReplay.transitionHash);
+    assert.equal(afterReplay.guardSnapshotHash, beforeReplay.guardSnapshotHash);
+    assert.deepEqual(afterReplay.metadata, beforeReplay.metadata);
+    assert.equal(afterReplay.jobPlanningVersion, null);
+    assert.equal(await upgradePrisma.aiWorkflowTransition.count({
+      where: { workflowInstanceId: legacyInput.workflowInstanceId },
+    }), 1);
+    assert.equal(await upgradePrisma.aiWorkflowJob.count({
+      where: { workflowInstanceId: legacyInput.workflowInstanceId },
+    }), 0);
+    assert.equal(await upgradePrisma.aiWorkflowJobOutboxEvent.count({
+      where: { workflowInstanceId: legacyInput.workflowInstanceId },
+    }), 0);
+  } finally {
+    await upgradePrisma.$disconnect();
+  }
 });

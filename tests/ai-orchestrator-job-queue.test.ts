@@ -8,6 +8,7 @@ import {
   FAI_AUDIT_JOB_CATALOG_KEY,
   FAI_AUDIT_JOB_CODES,
   FAI_AUDIT_JOB_DEFINITIONS,
+  FAI_AUDIT_JOB_EXECUTOR_BINDINGS,
   FAI_AUDIT_JOB_PLANNING_RULES,
   getFaiAuditJobCatalogInvariantErrors,
 } from '../src/lib/ai-orchestrator/job-catalog-v1';
@@ -24,13 +25,25 @@ function plan(transitionCode: FaiAuditTransitionCode, overrides: Record<string, 
     workflowInstanceId: 'synthetic-workflow-id',
     workflowCode: 'FAI-AUDIT-WORKFLOW',
     workflowVersion: '1.1',
+    workflowDefinitionHash: 'a'.repeat(64),
+    phaseCode: 'DATA_VALIDATION',
+    phaseEntrySequence: 4,
     sourceCommandIdempotencyKey: 'synthetic-command-key',
     sourceTransitionCode: transitionCode,
     sourceTransitionSequence: 4,
     correlationId: 'synthetic-correlation-id',
     correctionCycle: 0,
-    fromState: 'NEEDS_DOCUMENTS',
-    toState: 'DATA_VALIDATION',
+    sourceState: 'NEEDS_DOCUMENTS',
+    sourceStateVersion: 4,
+    targetState: 'DATA_VALIDATION',
+    availableAt: '2026-07-18T10:00:00.000Z',
+    resolvedExecutors: FAI_AUDIT_JOB_EXECUTOR_BINDINGS.map((binding) => ({
+      jobCode: binding.jobCode,
+      executorAgentId: `synthetic-${binding.executorAgentCode}`,
+      executorAgentCode: binding.executorAgentCode,
+      executorAgentConfigVersion: binding.executorAgentConfigVersion,
+      executorAgentConfigHash: binding.executorAgentConfigHash,
+    })),
     ...overrides,
   });
 }
@@ -39,7 +52,7 @@ test('il catalogo canonico v1 è completo, immutabile per hash e fail-closed', (
   assert.equal(FAI_AUDIT_JOB_CATALOG_KEY, 'FAI-AUDIT-JOB-CATALOG@1.0');
   assert.equal(
     FAI_AUDIT_JOB_CATALOG_HASH,
-    'eca7f4174ab8a188ef21df6758ab6cfd081dd51a126f47097f6a3706ec7bbb9e',
+    '3e99436a4734323a423907bf742f71e632e433f8d0203f28da0c96bcc44a45f9',
   );
   assert.equal(FAI_AUDIT_JOB_CODES.length, 13);
   assert.equal(FAI_AUDIT_JOB_DEFINITIONS.length, FAI_AUDIT_JOB_CODES.length);
@@ -49,6 +62,8 @@ test('il catalogo canonico v1 è completo, immutabile per hash e fail-closed', (
     assert.equal(definition.provider, 'mock');
     assert.equal(definition.dataMode, 'synthetic');
     assert.equal(definition.automaticDispatchAllowed, false);
+    assert.equal(definition.executorAgentConfigVersion, 1);
+    assert.match(definition.executorAgentConfigHash, /^[0-9a-f]{64}$/);
     assert.ok(Number(definition.completionTransitionCode.slice(3)) <= 16);
   }
 });
@@ -90,11 +105,29 @@ test('planner, dedupe e bundle sono deterministici e sensibili all’identità c
   for (const changed of [
     plan('WF-010', { sourceCommandIdempotencyKey: 'different-command-key' }),
     plan('WF-010', { sourceTransitionSequence: 5 }),
+    plan('WF-010', { workflowDefinitionHash: 'b'.repeat(64) }),
+    plan('WF-010', { phaseCode: 'READY_FOR_ANALYSIS' }),
+    plan('WF-010', { phaseEntrySequence: 3 }),
+    plan('WF-010', { sourceStateVersion: 3 }),
     plan('WF-010', { correctionCycle: 1 }),
   ]) {
     assert.notEqual(changed.planHash, first.planHash);
     assert.notDeepEqual(changed.jobs.map(({ dedupeKey }) => dedupeKey), first.jobs.map(({ dedupeKey }) => dedupeKey));
   }
+  const changedExecutor = plan('WF-010', {
+    resolvedExecutors: FAI_AUDIT_JOB_EXECUTOR_BINDINGS.map((binding) => ({
+      jobCode: binding.jobCode,
+      executorAgentId: `changed-${binding.executorAgentCode}`,
+      executorAgentCode: binding.executorAgentCode,
+      executorAgentConfigVersion: binding.executorAgentConfigVersion,
+      executorAgentConfigHash: binding.executorAgentConfigHash,
+    })),
+  });
+  assert.notEqual(changedExecutor.planHash, first.planHash);
+  assert.notDeepEqual(
+    changedExecutor.jobs.map(({ dedupeKey }) => dedupeKey),
+    first.jobs.map(({ dedupeKey }) => dedupeKey),
+  );
 });
 
 test('i payload pianificati contengono soltanto identità tecniche sintetiche', () => {
@@ -105,7 +138,7 @@ test('i payload pianificati contengono soltanto identità tecniche sintetiche', 
     assert.equal(job.automaticDispatchAllowed, false);
     assert.match(job.payloadHash, /^[0-9a-f]{64}$/);
     assert.deepEqual(Object.keys(job.payload).sort(), [
-      'catalogHash', 'catalogKey', 'job', 'schemaVersion', 'sourceTransition', 'workflow',
+      'catalogHash', 'catalogKey', 'executor', 'job', 'phase', 'schemaVersion', 'sourceTransition', 'workflow',
     ]);
     assert.doesNotMatch(
       JSON.stringify(job.payload),
@@ -128,6 +161,12 @@ test('schema e migration espongono solo coda persistente passiva e outbox transa
   assert.match(sql, /"provider" = 'mock'[\s\S]*"dataMode" = 'synthetic'[\s\S]*"automaticDispatchAllowed" = false/);
   assert.match(sql, /"eventType" = 'AI_JOB_PLANNED'[\s\S]*"deliveryState" = 'PENDING'/);
   assert.match(sql, /DEFERRABLE INITIALLY DEFERRED/);
+  assert.match(sql, /FOREIGN KEY \("executorAgentId", "executorAgentConfigVersion"\)[\s\S]*REFERENCES "AiAgentConfigVersion"\("agentId", "version"\) ON DELETE RESTRICT ON UPDATE RESTRICT/);
+  assert.match(sql, /"status", "availableAt"/);
+  assert.match(sql, /"workflowInstanceId", "status", "availableAt"/);
+  assert.match(sql, /"phaseCode", "correctionCycle", "status"/);
+  assert.match(sql, /"executorAgentId", "executorAgentConfigVersion", "status"/);
+  assert.match(sql, /"availableAt" = "plannedAt"/);
   assert.match(sql, /canonical job plan hash is invalid/);
   assert.match(sql, /one-way PLANNED to BLOCKED safety transition/);
   assert.doesNotMatch(`${jobModel}\n${outboxModel}\n${planner}\n${catalog}\n${sql}`, /\bRUNNING\b/);

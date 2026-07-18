@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient, type RoleCode } from '@prisma/client';
+import { createAiAgentConfigHash } from '../ai-agent-config-hash';
 import { canonicalSha256 } from '../canonical-json';
 import { evaluatePermission, type PermissionDecision } from '../permission-evaluator';
 import { SerializableConflictError, withSerializableTransaction } from '../serializable';
@@ -15,16 +16,30 @@ import {
   type WorkflowExecutionMode,
 } from './audit-workflow-v1-1';
 import {
+  FAI_AUDIT_EXECUTOR_BINDING_VERSION,
   FAI_AUDIT_JOB_CATALOG_HASH,
   FAI_AUDIT_JOB_CATALOG_KEY,
+  getFaiAuditJobDefinition,
+  getFaiAuditJobPlanningRule,
 } from './job-catalog-v1';
-import { createFaiAuditJobPlan, type FaiAuditJobPlan } from './job-planner';
+import {
+  createFaiAuditJobPlan,
+  type FaiAuditJobPlan,
+  type ResolvedFaiAuditJobExecutor,
+} from './job-planner';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
 const ORCHESTRATOR_SETTING_ID = 'global';
 const ALLOWED_SYSTEM_CODE = 'AI_ORCHESTRATOR' as const;
 const MAX_SERIALIZABLE_ATTEMPTS = 2;
+
+class CanonicalExecutorUnavailableError extends Error {
+  constructor() {
+    super('Executor canonico o configurazione mock immutabile non disponibile.');
+    this.name = 'CanonicalExecutorUnavailableError';
+  }
+}
 
 export const FOUNDATION_TRANSITION_CODES = Object.freeze([
   'WF-001',
@@ -171,7 +186,8 @@ export interface AuditWorkflowTransitionResult {
   readonly stateVersion: number;
   readonly stateChanged: boolean;
   readonly transitionHash: string;
-  readonly jobPlanHash: string;
+  readonly jobPlanningStatus: 'PLANNED' | 'LEGACY_NOT_PLANNED';
+  readonly jobPlanHash: string | null;
   readonly plannedJobCount: number;
 }
 
@@ -446,6 +462,73 @@ async function loadSafeSettings(tx: Tx, env: NodeJS.ProcessEnv) {
   };
 }
 
+async function resolveCanonicalJobExecutors(
+  tx: Tx,
+  transitionCode: FaiAuditTransitionCode,
+): Promise<readonly ResolvedFaiAuditJobExecutor[] | null> {
+  const rule = getFaiAuditJobPlanningRule(transitionCode);
+  if (!rule) return [];
+  const resolved: ResolvedFaiAuditJobExecutor[] = [];
+  for (const jobCode of rule.jobCodes) {
+    const definition = getFaiAuditJobDefinition(jobCode);
+    if (!definition) return null;
+    const snapshot = await tx.aiAgentConfigVersion.findFirst({
+      where: {
+        version: definition.executorAgentConfigVersion,
+        code: definition.executorAgentCode,
+        agent: { code: definition.executorAgentCode },
+      },
+      select: {
+        agentId: true,
+        version: true,
+        code: true,
+        name: true,
+        description: true,
+        operationalScope: true,
+        systemPrompt: true,
+        requiredDataChecklist: true,
+        expectedOutput: true,
+        toneStyle: true,
+        active: true,
+        provider: true,
+        model: true,
+        promptVersion: true,
+        inputSchema: true,
+        outputSchema: true,
+        agent: {
+          select: {
+            code: true,
+            active: true,
+            provider: true,
+            configVersion: true,
+          },
+        },
+      },
+    });
+    if (
+      !snapshot
+      || snapshot.code !== definition.executorAgentCode
+      || snapshot.agent.code !== definition.executorAgentCode
+      || snapshot.version !== definition.executorAgentConfigVersion
+      || snapshot.agent.configVersion !== definition.executorAgentConfigVersion
+      || !snapshot.active
+      || !snapshot.agent.active
+      || snapshot.provider !== 'mock'
+      || snapshot.agent.provider !== 'mock'
+      || snapshot.model !== null
+      || createAiAgentConfigHash(snapshot) !== definition.executorAgentConfigHash
+    ) return null;
+    resolved.push(Object.freeze({
+      jobCode,
+      executorAgentId: snapshot.agentId,
+      executorAgentCode: snapshot.code,
+      executorAgentConfigVersion: snapshot.version,
+      executorAgentConfigHash: definition.executorAgentConfigHash,
+    }));
+  }
+  return Object.freeze(resolved);
+}
+
 async function auditCreationDenial(
   tx: Tx,
   now: Date,
@@ -700,6 +783,41 @@ async function resolveExistingCommand(
       commandId: existing.id,
     });
   }
+  if (existing.transition.jobPlanningVersion === null) {
+    const [jobCount, outboxCount] = await Promise.all([
+      tx.aiWorkflowJob.count({ where: { sourceTransitionId: existing.transition.id } }),
+      tx.aiWorkflowJobOutboxEvent.count({ where: { sourceTransitionId: existing.transition.id } }),
+    ]);
+    if (jobCount !== 0 || outboxCount !== 0) {
+      return rejected('LEDGER_INTEGRITY_ERROR', 'Una transizione legacy contiene artefatti job non autorizzati.', {
+        replayed: true,
+        commandId: existing.id,
+      });
+    }
+    return {
+      ok: true,
+      replayed: true,
+      value: {
+        workflowInstanceId: instanceId,
+        commandId: existing.id,
+        transitionId: existing.transition.id,
+        transitionCode: existing.transition.transitionCode as FaiAuditTransitionCode,
+        currentState: existing.resultState as FaiAuditState,
+        stateVersion: existing.resultStateVersion,
+        stateChanged: existing.transition.fromState !== existing.transition.toState,
+        transitionHash: existing.transition.transitionHash,
+        jobPlanningStatus: 'LEGACY_NOT_PLANNED',
+        jobPlanHash: null,
+        plannedJobCount: 0,
+      },
+    };
+  }
+  if (existing.transition.jobPlanningVersion !== 1) {
+    return rejected('LEDGER_INTEGRITY_ERROR', 'Versione del piano job non riconosciuta.', {
+      replayed: true,
+      commandId: existing.id,
+    });
+  }
   const metadata = existing.transition.metadata;
   const jobPlanning = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
     ? (metadata as Record<string, unknown>).jobPlanning
@@ -735,6 +853,7 @@ async function resolveExistingCommand(
       stateVersion: existing.resultStateVersion,
       stateChanged: existing.transition.fromState !== existing.transition.toState,
       transitionHash: existing.transition.transitionHash,
+      jobPlanningStatus: 'PLANNED',
       jobPlanHash,
       plannedJobCount: plannedJobCount as number,
     },
@@ -755,6 +874,16 @@ async function persistJobPlan(
         sourceTransitionId: transitionId,
         sourceTransitionCode: input.transitionCode,
         sourceTransitionSequence: input.expectedStateVersion,
+        workflowDefinitionHash: intent.workflowDefinitionHash,
+        phaseCode: intent.phaseCode,
+        phaseEntrySequence: intent.phaseEntrySequence,
+        sourceState: intent.sourceState,
+        sourceStateVersion: intent.sourceStateVersion,
+        correctionCycle: intent.correctionCycle,
+        executorAgentId: intent.executorAgentId,
+        executorAgentCode: intent.executorAgentCode,
+        executorAgentConfigVersion: intent.executorAgentConfigVersion,
+        executorAgentConfigHash: intent.executorAgentConfigHash,
         catalogCode: intent.catalogCode,
         catalogVersion: intent.catalogVersion,
         catalogHash: intent.catalogHash,
@@ -775,6 +904,7 @@ async function persistJobPlan(
         payloadHash: intent.payloadHash,
         correlationId: input.correlationId,
         plannedAt: now,
+        availableAt: now,
         blockedAt: null,
         blockedReasonCode: null,
       },
@@ -787,6 +917,18 @@ async function persistJobPlan(
       sourceTransitionId: transitionId,
       sourceTransitionCode: input.transitionCode,
       sourceTransitionSequence: input.expectedStateVersion,
+      workflowDefinitionHash: intent.workflowDefinitionHash,
+      phaseCode: intent.phaseCode,
+      phaseEntrySequence: intent.phaseEntrySequence,
+      sourceState: intent.sourceState,
+      sourceStateVersion: intent.sourceStateVersion,
+      correctionCycle: intent.correctionCycle,
+      executor: {
+        agentId: intent.executorAgentId,
+        agentCode: intent.executorAgentCode,
+        configVersion: intent.executorAgentConfigVersion,
+        configHash: intent.executorAgentConfigHash,
+      },
       job: {
         id: job.id,
         jobCode: intent.jobCode,
@@ -797,6 +939,7 @@ async function persistJobPlan(
         provider: 'mock',
         dataMode: 'synthetic',
         automaticDispatchAllowed: false,
+        availableAt: intent.availableAt,
         payloadHash: intent.payloadHash,
       },
       occurredAt: now.toISOString(),
@@ -1000,6 +1143,27 @@ async function evaluatePersistedMilestones(
       decision: 'SATISFIED',
     },
   };
+}
+
+function resolvePhaseIdentity(
+  sourceState: FaiAuditState,
+  targetState: FaiAuditState,
+  sourceTransitionSequence: number,
+  milestone: FoundationMilestoneSnapshot,
+) {
+  if (sourceState !== targetState) {
+    return { phaseCode: targetState, phaseEntrySequence: sourceTransitionSequence } as const;
+  }
+  if (
+    milestone.phase !== targetState
+    || !Number.isInteger(milestone.phaseEntrySequence)
+    || (milestone.phaseEntrySequence as number) < 1
+    || (milestone.phaseEntrySequence as number) >= sourceTransitionSequence
+  ) return null;
+  return {
+    phaseCode: targetState,
+    phaseEntrySequence: milestone.phaseEntrySequence as number,
+  } as const;
 }
 
 function foundationSeparationChecks(transitionCode: FaiAuditTransitionCode): Prisma.InputJsonArray {
@@ -1252,17 +1416,42 @@ async function applyAuditWorkflowTransitionTx(
   const nextCorrectionCycle = transition.incrementsCorrectionCycle
     ? instance.correctionCycle + 1
     : instance.correctionCycle;
+  const phaseIdentity = resolvePhaseIdentity(
+    instance.currentState as FaiAuditState,
+    evaluation.nextState,
+    instance.stateVersion,
+    milestoneEvaluation.snapshot,
+  );
+  if (!phaseIdentity) {
+    return rejectPersistedCommand(
+      tx,
+      input,
+      command.id,
+      actor.actorId,
+      'LEDGER_INTEGRITY_ERROR',
+      'Identità causale della fase non risolvibile dal ledger persistito.',
+      now,
+    );
+  }
+  const resolvedExecutors = await resolveCanonicalJobExecutors(tx, transition.transitionCode);
+  if (!resolvedExecutors) throw new CanonicalExecutorUnavailableError();
   const jobPlan = createFaiAuditJobPlan({
     workflowInstanceId: instance.id,
     workflowCode: instance.workflowCode,
     workflowVersion: instance.workflowVersion,
+    workflowDefinitionHash: instance.definitionHash,
+    phaseCode: phaseIdentity.phaseCode,
+    phaseEntrySequence: phaseIdentity.phaseEntrySequence,
     sourceCommandIdempotencyKey: input.idempotencyKey,
     sourceTransitionCode: transition.transitionCode,
     sourceTransitionSequence: instance.stateVersion,
+    sourceState: instance.currentState as FaiAuditState,
+    sourceStateVersion: instance.stateVersion,
+    targetState: evaluation.nextState,
     correlationId: input.correlationId,
     correctionCycle: nextCorrectionCycle,
-    fromState: instance.currentState as FaiAuditState,
-    toState: evaluation.nextState,
+    availableAt: now.toISOString(),
+    resolvedExecutors,
   });
 
   const guardSnapshot: Prisma.InputJsonObject = {
@@ -1383,14 +1572,29 @@ async function applyAuditWorkflowTransitionTx(
         effect: evaluation.effect,
         stateChanged: evaluation.stateChanged,
         jobPlanning: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           catalogKey: FAI_AUDIT_JOB_CATALOG_KEY,
           catalogHash: FAI_AUDIT_JOB_CATALOG_HASH,
+          executorBindingVersion: FAI_AUDIT_EXECUTOR_BINDING_VERSION,
+          workflowDefinitionHash: instance.definitionHash,
+          phaseCode: phaseIdentity.phaseCode,
+          phaseEntrySequence: phaseIdentity.phaseEntrySequence,
+          sourceState: instance.currentState,
+          sourceStateVersion: instance.stateVersion,
+          correctionCycle: nextCorrectionCycle,
+          executors: resolvedExecutors.map((executor) => ({
+            jobCode: executor.jobCode,
+            executorAgentId: executor.executorAgentId,
+            executorAgentCode: executor.executorAgentCode,
+            executorAgentConfigVersion: executor.executorAgentConfigVersion,
+            executorAgentConfigHash: executor.executorAgentConfigHash,
+          })),
           planHash: jobPlan.planHash,
           plannedJobCount: jobPlan.jobs.length,
           automaticDispatchAllowed: false,
         },
       },
+      jobPlanningVersion: 1,
       createdAt: now,
     },
   });
@@ -1423,6 +1627,7 @@ async function applyAuditWorkflowTransitionTx(
       stateVersion: nextVersion,
       transitionCode: transition.transitionCode,
       transitionHash,
+      jobPlanningStatus: 'PLANNED',
       jobPlanHash: jobPlan.planHash,
       plannedJobCount: jobPlan.jobs.length,
     },
@@ -1441,6 +1646,7 @@ async function applyAuditWorkflowTransitionTx(
       stateVersion: nextVersion,
       stateChanged: evaluation.stateChanged,
       transitionHash,
+      jobPlanningStatus: 'PLANNED',
       jobPlanHash: jobPlan.planHash,
       plannedJobCount: jobPlan.jobs.length,
     },
@@ -1453,7 +1659,14 @@ export async function applyAuditWorkflowTransition(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<WorkflowServiceResult<AuditWorkflowTransitionResult>> {
   const env = options.env ?? process.env;
-  return withControlledSerializableRetry(
-    () => withSerializableTransaction(prisma, (tx) => applyAuditWorkflowTransitionTx(tx, input, env)),
-  );
+  try {
+    return await withControlledSerializableRetry(
+      () => withSerializableTransaction(prisma, (tx) => applyAuditWorkflowTransitionTx(tx, input, env)),
+    );
+  } catch (error) {
+    if (error instanceof CanonicalExecutorUnavailableError) {
+      return rejected('LEDGER_INTEGRITY_ERROR', error.message);
+    }
+    throw error;
+  }
 }

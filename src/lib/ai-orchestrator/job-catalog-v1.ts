@@ -7,6 +7,7 @@ import {
 export const FAI_AUDIT_JOB_CATALOG_CODE = 'FAI-AUDIT-JOB-CATALOG' as const;
 export const FAI_AUDIT_JOB_CATALOG_VERSION = '1.0' as const;
 export const FAI_AUDIT_JOB_CATALOG_KEY = `${FAI_AUDIT_JOB_CATALOG_CODE}@${FAI_AUDIT_JOB_CATALOG_VERSION}` as const;
+export const FAI_AUDIT_EXECUTOR_BINDING_VERSION = '1.0' as const;
 
 export const FAI_AUDIT_JOB_CODES = Object.freeze([
   'DOCUMENT_INGESTION',
@@ -33,12 +34,59 @@ export type FaiAuditJobBundleCode =
   | 'REVIEW_BUNDLE'
   | 'CORRECTION_PIPELINE';
 
+export interface FaiAuditExecutorBinding {
+  readonly bindingVersion: typeof FAI_AUDIT_EXECUTOR_BINDING_VERSION;
+  readonly jobCode: FaiAuditJobCode;
+  readonly executorAgentCode: string;
+  readonly executorAgentConfigVersion: 1;
+  readonly executorAgentConfigHash: string;
+}
+
+function defineExecutor(
+  jobCode: FaiAuditJobCode,
+  executorAgentCode: string,
+  executorAgentConfigHash: string,
+): Readonly<FaiAuditExecutorBinding> {
+  return Object.freeze({
+    bindingVersion: FAI_AUDIT_EXECUTOR_BINDING_VERSION,
+    jobCode,
+    executorAgentCode,
+    executorAgentConfigVersion: 1,
+    executorAgentConfigHash,
+  });
+}
+
+/** Canonical, versioned job -> immutable executor config mapping. */
+export const FAI_AUDIT_JOB_EXECUTOR_BINDINGS = Object.freeze([
+  defineExecutor('DOCUMENT_INGESTION', 'verifica_ai_preliminare_fai', '99ae44b882e1cd1f52c04b8ec2ab5aa4ef2e54cb09ae0b2aecdd16587c0b4f67'),
+  defineExecutor('DOCUMENT_CLASSIFICATION', 'verifica_ai_preliminare_fai', '99ae44b882e1cd1f52c04b8ec2ab5aa4ef2e54cb09ae0b2aecdd16587c0b4f67'),
+  defineExecutor('EVIDENCE_EXTRACTION', 'pre_analisi_ai_ammissibilita_fai', '3b5902fb767a64e7710d5bd71cc283102d0df3a4a6184d8786e6a5f06510ef5c'),
+  defineExecutor('FINANCIAL_ANALYSIS', 'business_plan_fai', '48baa1112ed62a6cba09f35dea87557adf43df7304feefb5693f9379a8340e3e'),
+  defineExecutor('CREDIT_ANALYSIS', 'audit_ai_bancabilita_fai', 'e575e630bbd7daeb92e281619a374fff8afd064c18adb5d833af177fe7ebbb4c'),
+  defineExecutor('CALCULATIONS', 'business_plan_fai', '48baa1112ed62a6cba09f35dea87557adf43df7304feefb5693f9379a8340e3e'),
+  defineExecutor('FINDINGS_DRAFTING', 'pre_analisi_ai_ammissibilita_fai', '3b5902fb767a64e7710d5bd71cc283102d0df3a4a6184d8786e6a5f06510ef5c'),
+  defineExecutor('REPORT_COMPOSITION', 'dossier_strategico_fai', 'd9c6dc5418e2beb0ac1468770cfa7f629b870ef2312df2f8ca20f53f5135af49'),
+  defineExecutor('SCHEMA_REVIEW', 'revisore_ai_fai', '6336bbc6c1e44fc90b70a409dfc43778020bae4565b19abe573ae7ef101dd18f'),
+  defineExecutor('NUMERIC_REVIEW', 'revisore_ai_fai', '6336bbc6c1e44fc90b70a409dfc43778020bae4565b19abe573ae7ef101dd18f'),
+  defineExecutor('SOURCE_REVIEW', 'revisore_ai_fai', '6336bbc6c1e44fc90b70a409dfc43778020bae4565b19abe573ae7ef101dd18f'),
+  defineExecutor('RED_TEAM_REVIEW', 'revisore_ai_fai', '6336bbc6c1e44fc90b70a409dfc43778020bae4565b19abe573ae7ef101dd18f'),
+  defineExecutor('CORRECTION', 'ottimizzazione_ai_progetto_fai', '2b213d8a828c55a16eb14be27b18a90812e530ecd522a073576d8e36e33a58ff'),
+] as const satisfies readonly FaiAuditExecutorBinding[]);
+
+const executorBindingByJobCode = new Map<FaiAuditJobCode, Readonly<FaiAuditExecutorBinding>>(
+  FAI_AUDIT_JOB_EXECUTOR_BINDINGS.map((binding) => [binding.jobCode, binding]),
+);
+
 export interface FaiAuditJobDefinition {
   readonly jobCode: FaiAuditJobCode;
   readonly jobVersion: '1.0';
   readonly bundleCode: FaiAuditJobBundleCode;
   readonly completionMode: 'SINGLE' | 'ALL_OF_BUNDLE';
   readonly completionTransitionCode: FaiAuditTransitionCode;
+  readonly executorBindingVersion: typeof FAI_AUDIT_EXECUTOR_BINDING_VERSION;
+  readonly executorAgentCode: string;
+  readonly executorAgentConfigVersion: 1;
+  readonly executorAgentConfigHash: string;
   readonly provider: 'mock';
   readonly dataMode: 'synthetic';
   readonly automaticDispatchAllowed: false;
@@ -50,12 +98,18 @@ function defineJob(
   completionTransitionCode: FaiAuditTransitionCode,
   completionMode: FaiAuditJobDefinition['completionMode'] = 'SINGLE',
 ): Readonly<FaiAuditJobDefinition> {
+  const executor = executorBindingByJobCode.get(jobCode);
+  if (!executor) throw new Error(`Binding executor mancante per ${jobCode}.`);
   return Object.freeze({
     jobCode,
     jobVersion: '1.0',
     bundleCode,
     completionMode,
     completionTransitionCode,
+    executorBindingVersion: executor.bindingVersion,
+    executorAgentCode: executor.executorAgentCode,
+    executorAgentConfigVersion: executor.executorAgentConfigVersion,
+    executorAgentConfigHash: executor.executorAgentConfigHash,
     provider: 'mock',
     dataMode: 'synthetic',
     automaticDispatchAllowed: false,
@@ -114,13 +168,17 @@ export function getFaiAuditJobDefinition(jobCode: FaiAuditJobCode) {
   return jobDefinitionByCode.get(jobCode) ?? null;
 }
 
+export function getFaiAuditExecutorBinding(jobCode: FaiAuditJobCode) {
+  return executorBindingByJobCode.get(jobCode) ?? null;
+}
+
 export function getFaiAuditJobPlanningRule(transitionCode: FaiAuditTransitionCode) {
   return jobPlanningRuleByTransition.get(transitionCode) ?? null;
 }
 
 export function createFaiAuditJobDefinitionHash(definition: FaiAuditJobDefinition) {
   return canonicalSha256({
-    schemaVersion: 1,
+    schemaVersion: 2,
     catalogKey: FAI_AUDIT_JOB_CATALOG_KEY,
     definition,
   });
@@ -135,10 +193,12 @@ export const FAI_AUDIT_JOB_DEFINITION_HASHES = Object.freeze(Object.fromEntries(
 
 export function createFaiAuditJobCatalogHash() {
   return canonicalSha256({
-    schemaVersion: 1,
+    schemaVersion: 2,
     catalogCode: FAI_AUDIT_JOB_CATALOG_CODE,
     catalogVersion: FAI_AUDIT_JOB_CATALOG_VERSION,
     workflowKey: FAI_AUDIT_WORKFLOW_KEY,
+    executorBindingVersion: FAI_AUDIT_EXECUTOR_BINDING_VERSION,
+    executorBindings: FAI_AUDIT_JOB_EXECUTOR_BINDINGS,
     definitions: FAI_AUDIT_JOB_DEFINITIONS,
     planningRules: FAI_AUDIT_JOB_PLANNING_RULES,
   });
@@ -149,10 +209,13 @@ export const FAI_AUDIT_JOB_CATALOG_HASH = createFaiAuditJobCatalogHash();
 export function getFaiAuditJobCatalogInvariantErrors() {
   const errors: string[] = [];
   const definitionCodes = FAI_AUDIT_JOB_DEFINITIONS.map(({ jobCode }) => jobCode);
+  const executorCodes = FAI_AUDIT_JOB_EXECUTOR_BINDINGS.map(({ jobCode }) => jobCode);
   const ruleTransitions = FAI_AUDIT_JOB_PLANNING_RULES.map(({ sourceTransitionCode }) => sourceTransitionCode);
   if (new Set(definitionCodes).size !== definitionCodes.length) errors.push('Job code duplicato nel catalogo.');
+  if (new Set(executorCodes).size !== executorCodes.length) errors.push('Binding executor duplicato nel catalogo.');
   if (new Set(ruleTransitions).size !== ruleTransitions.length) errors.push('Transizione duplicata nelle regole di planning.');
   if (definitionCodes.length !== FAI_AUDIT_JOB_CODES.length) errors.push('Il catalogo non definisce tutti i job canonici.');
+  if (executorCodes.length !== FAI_AUDIT_JOB_CODES.length) errors.push('Il catalogo non lega tutti i job a un executor.');
   for (const rule of FAI_AUDIT_JOB_PLANNING_RULES) {
     if (Number(rule.sourceTransitionCode.slice(3)) >= 17) {
       errors.push(`${rule.sourceTransitionCode} non può pianificare job oltre la barriera Foundation.`);
@@ -163,6 +226,14 @@ export function getFaiAuditJobCatalogInvariantErrors() {
     }
   }
   for (const definition of FAI_AUDIT_JOB_DEFINITIONS) {
+    const executor = executorBindingByJobCode.get(definition.jobCode);
+    if (
+      !executor
+      || executor.executorAgentCode !== definition.executorAgentCode
+      || executor.executorAgentConfigVersion !== definition.executorAgentConfigVersion
+      || executor.executorAgentConfigHash !== definition.executorAgentConfigHash
+      || !/^[0-9a-f]{64}$/.test(definition.executorAgentConfigHash)
+    ) errors.push(`${definition.jobCode} ha un binding executor incoerente.`);
     if (
       definition.provider !== 'mock'
       || definition.dataMode !== 'synthetic'

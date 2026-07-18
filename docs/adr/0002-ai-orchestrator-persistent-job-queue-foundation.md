@@ -20,7 +20,7 @@ Introduciamo una coda persistente passiva con due modelli additivi:
 
 Una transizione accettata costruisce un piano puro dal catalogo `FAI-AUDIT-JOB-CATALOG@1.0` e persiste ledger, job e outbox nella stessa transazione `SERIALIZABLE`. Se job o outbox non corrispondono esattamente al mapping canonico, l'intera transazione fallisce. Le transizioni senza mapping persistono un piano vuoto, comunque identificato da un hash canonico.
 
-Il catalogo comprende tredici tipi di job, ciascuno con versione, hash di definizione, bundle, modalità di completamento e transizione di completamento prevista. Il catalogo e le regole transizione-job hanno un hash complessivo fissato. Qualunque modifica semantica richiede una nuova versione del catalogo e una migration esplicita: non è ammessa una reinterpretazione silenziosa dei job già persistiti.
+Il catalogo comprende tredici tipi di job, ciascuno con versione, hash di definizione, bundle, modalità di completamento, transizione di completamento prevista e binding a uno snapshot executor. Il mapping `jobCode → executor agent code/config version/config hash` è esplicito, versionato e incluso nel catalog hash. Non deriva dal payload né dall'attore della transizione. Qualunque modifica semantica richiede una nuova versione del catalogo e una migration esplicita: non è ammessa una reinterpretazione silenziosa dei job già persistiti.
 
 ## Identità e deduplica
 
@@ -28,14 +28,24 @@ La dedupe key SHA-256 lega esattamente:
 
 - versione e hash del catalogo;
 - workflow instance;
+- workflow definition hash;
+- phase code e phase-entry sequence derivati dal ledger;
 - idempotency key del comando sorgente;
 - codice e sequenza della transizione sorgente;
+- stato e state version sorgenti;
 - ciclo di correzione;
+- executor agent ID/code e config version/hash;
 - job code/version e slot canonico.
 
-La bundle key usa la medesima identità causale e il bundle code. La dedupe key è univoca globalmente; anche `(sourceTransitionId, jobCode, jobVersion, slotKey)` è univoco. Il replay coerente del comando rilegge il piano già persistito e non crea nuove righe.
+La bundle key usa la medesima identità causale e il bundle code, ma omette l'executor affinché resti comune ai job del bundle. La dedupe key è univoca globalmente; anche `(sourceTransitionId, jobCode, jobVersion, slotKey)` è univoco. Il replay coerente del comando rilegge il piano già persistito e non crea nuove righe.
 
 Il `planHash` copre identità causale e lista ordinata di job, inclusi definition hash, slot, bundle key, dedupe key e payload hash. Un trigger differito PostgreSQL ricostruisce l'hash dai record persistiti e lo confronta con i metadati del ledger.
+
+L'identità di fase è deterministica. Una transizione che cambia stato apre la fase di destinazione alla propria sequence; una self-transition riusa l'ultimo phase-entry validato dal ledger e fissato nel guard snapshot. In particolare WF-004/WF-009 aprono `DATA_VALIDATION`, WF-011 apre `AI_DRAFT`, WF-013/WF-016 aprono `INDEPENDENT_REVIEW` e WF-015 apre `NEEDS_CORRECTION` incrementando il correction cycle.
+
+## Binding executor
+
+La porta risolve ogni executor nella stessa transazione `SERIALIZABLE` del planning. Agente e snapshot devono esistere, essere attivi, `mock`, senza model esterno, avere la versione corrente prevista e produrre esattamente il config hash catalogato. Una FK composita `RESTRICT` lega il job a `AiAgentConfigVersion(agentId, version)`. Gli snapshot sono protetti da UPDATE/DELETE; ID, code, versione e hash restano inoltre nel job, nel payload, nella dedupe key, nel plan hash e nell'outbox. Un futuro worker dovrà ricalcolare lo stesso hash prima di interpretare la configurazione.
 
 ## Lifecycle
 
@@ -48,6 +58,8 @@ PLANNED ── blocco di sicurezza esplicito ──> BLOCKED
 Un job nasce soltanto `PLANNED`. L'unico aggiornamento ammesso è `PLANNED→BLOCKED`, con timestamp e reason code stabile. Identità e payload sono immutabili; UPDATE successivi e DELETE sono rifiutati. Non esistono `RUNNING`, lease, claim, attempt, retry, dispatch, esito o artefatto agente.
 
 L'outbox nasce `PENDING` ed è append-only. In questa PR non esiste un consumer e `PENDING` non significa autorizzato al dispatch. La consegna, l'eventuale stato terminale e il fencing richiederanno una decisione successiva.
+
+`availableAt` è obbligatorio, coincide con `plannedAt` ed è immutabile. Gli indici espongono stato/disponibilità globale e per workflow, fase/ciclo, executor/config e correlation ID, ma il timestamp non costituisce una capability di dispatch.
 
 ## Confini dei dati
 
@@ -66,6 +78,8 @@ La migration aggiunge vincoli e trigger per verificare:
 - catalogo, mapping, hash di definizione, slot e cardinalità esatti;
 - setting sicuro, provider esterni disabilitati e dispatch disabilitato;
 - binding a workflow, comando e transizione sorgente;
+- identità di definition, fase/phase-entry, stato/versione sorgenti e correction cycle;
+- binding composito e hash dello snapshot executor mock;
 - dedupe key, bundle key, payload hash, event key e outbox payload ricalcolati;
 - payload JSON minimizzati e privi di campi aggiuntivi;
 - conteggio esatto job/outbox e `planHash` prima del commit;
@@ -73,6 +87,10 @@ La migration aggiunge vincoli e trigger per verificare:
 - lifecycle e immutabilità.
 
 I trigger di consistenza transizione/piano e job/outbox sono `DEFERRABLE INITIALLY DEFERRED`, così la porta applicativa può inserire ledger, job e outbox in ordine nella stessa transazione senza rendere osservabile uno stato parziale.
+
+## Compatibilità del ledger PR #74
+
+La migration aggiunge alla transizione un marcatore nullable senza aggiornare le righe esistenti. `jobPlanningVersion=NULL` identifica esclusivamente ledger append-only precedente alla queue Foundation. Il replay esatto di tali comandi restituisce `LEGACY_NOT_PLANNED`, zero job e hash nullo, senza mutare o completare retroattivamente il record. Il servizio rifiuta un legacy associato a job/outbox. Dopo la migration, un trigger differito impone `jobPlanningVersion=1` e metadati/piano v2 completi a ogni nuova transizione, inclusi i piani vuoti.
 
 ## Conseguenze
 
