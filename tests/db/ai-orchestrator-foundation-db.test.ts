@@ -296,29 +296,27 @@ async function expireLeaseForTest(runtimeId: string) {
 
 async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
   await withRuntimeClockFixture(async (tx) => {
-    const rows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
-      SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
-    `);
-    const now = rows[0]?.now;
-    assert.ok(now);
     const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
       where: { id: runtimeId },
       select: { attemptSequence: true, state: true },
     });
     assert.equal(runtime.state, 'RETRY_WAIT');
-    await tx.aiWorkflowJobRuntime.update({
-      where: { id: runtimeId },
-      data: { effectiveAvailableAt: now, updatedAt: now },
-    });
-    await tx.aiWorkflowJobAttempt.update({
-      where: {
-        runtimeId_attemptSequence: {
-          runtimeId,
-          attemptSequence: runtime.attemptSequence,
-        },
-      },
-      data: { nextAvailableAt: now },
-    });
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE "AiWorkflowJobRuntime"
+      SET "effectiveAvailableAt" = clock_timestamp() AT TIME ZONE 'UTC' - INTERVAL '1 second',
+        "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
+      WHERE "id" = ${runtimeId}
+    `);
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE "AiWorkflowJobAttempt"
+      SET "nextAvailableAt" = (
+        SELECT current_runtime."effectiveAvailableAt"
+        FROM "AiWorkflowJobRuntime" current_runtime
+        WHERE current_runtime."id" = ${runtimeId}
+      )
+      WHERE "runtimeId" = ${runtimeId}
+        AND "attemptSequence" = ${runtime.attemptSequence}
+    `);
   });
 }
 
