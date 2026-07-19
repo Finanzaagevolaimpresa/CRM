@@ -212,12 +212,10 @@ async function expireLeaseForTest(runtimeId: string) {
     `);
     const now = rows[0]?.now;
     assert.ok(now);
-    const claimedAt = new Date(now.getTime() - 130_000);
     const leaseExpiresAt = new Date(now.getTime() - 1_000);
-    const leaseMaxExpiresAt = new Date(now.getTime() + 470_000);
     await tx.aiWorkflowJobRuntime.update({
       where: { id: runtimeId },
-      data: { leaseClaimedAt: claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
+      data: { leaseExpiresAt },
     });
     await tx.aiWorkflowJobAttempt.update({
       where: {
@@ -229,7 +227,7 @@ async function expireLeaseForTest(runtimeId: string) {
           })).attemptSequence,
         },
       },
-      data: { claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
+      data: { leaseExpiresAt },
     });
   });
 }
@@ -2551,7 +2549,7 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
           workflowTransitionWriteAllowed: false,
         },
       });
-    }), /one_admitted|duplicate key/i);
+    }), /one_admitted|duplicate key|unique constraint failed/i);
 
     await assert.rejects(db().$transaction(async (tx) => {
       const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
@@ -2603,7 +2601,7 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
           capabilityHash: claimedAttempt.capabilityHash,
         },
       });
-    }), /one_claimed|duplicate key/i);
+    }), /one_claimed|duplicate key|unique constraint failed/i);
 
     await assert.rejects(db().$transaction(async (tx) => {
       const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`

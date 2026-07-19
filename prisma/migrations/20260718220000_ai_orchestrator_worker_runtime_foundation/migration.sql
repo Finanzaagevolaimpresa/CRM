@@ -1060,8 +1060,10 @@ BEGIN
             OR event."occurredAt" IS DISTINCT FROM attempt."claimedAt"
             OR event."payload" ->> 'workerInstanceId' IS DISTINCT FROM attempt."workerInstanceId"
             OR event."payload" ->> 'workerBuildHash' IS DISTINCT FROM attempt."workerBuildHash"
+            -- CLAIMED records the initial lease. Heartbeats may extend the
+            -- current attempt lease without rewriting the immutable event.
             OR event."payload" ->> 'leaseExpiresAt' IS DISTINCT FROM
-              TO_CHAR(attempt."leaseExpiresAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+              TO_CHAR(attempt."claimedAt" + INTERVAL '120 seconds', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
             OR event."payload" ->> 'leaseMaxExpiresAt' IS DISTINCT FROM
               TO_CHAR(attempt."leaseMaxExpiresAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
             OR event."payload" ->> 'capabilityHash' IS DISTINCT FROM attempt."capabilityHash"
