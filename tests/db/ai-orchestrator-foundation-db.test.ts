@@ -172,10 +172,12 @@ async function withTemporaryDispatchFixture<T>(
 
 async function withRuntimeClockFixture(
   callback: (tx: Prisma.TransactionClient) => Promise<void>,
+  options: { rewriteRuntimeEvents?: boolean } = {},
 ) {
   assertConfirmedRuntimeDbFixture();
   let runtimeProtectionDisabled = false;
   let attemptProtectionDisabled = false;
+  let eventProtectionDisabled = false;
   try {
     await db().$executeRawUnsafe(
       'ALTER TABLE "AiWorkflowJobRuntime" DISABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
@@ -185,21 +187,35 @@ async function withRuntimeClockFixture(
       'ALTER TABLE "AiWorkflowJobAttempt" DISABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
     );
     attemptProtectionDisabled = true;
+    if (options.rewriteRuntimeEvents) {
+      await db().$executeRawUnsafe(
+        'ALTER TABLE "AiWorkflowJobRuntimeEvent" DISABLE TRIGGER "AiWorkflowJobRuntimeEvent_immutable_update"',
+      );
+      eventProtectionDisabled = true;
+    }
     await db().$transaction(async (tx) => {
       await callback(tx);
     });
   } finally {
     try {
-      if (attemptProtectionDisabled) {
+      if (eventProtectionDisabled) {
         await db().$executeRawUnsafe(
-          'ALTER TABLE "AiWorkflowJobAttempt" ENABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
+          'ALTER TABLE "AiWorkflowJobRuntimeEvent" ENABLE TRIGGER "AiWorkflowJobRuntimeEvent_immutable_update"',
         );
       }
     } finally {
-      if (runtimeProtectionDisabled) {
-        await db().$executeRawUnsafe(
-          'ALTER TABLE "AiWorkflowJobRuntime" ENABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
-        );
+      try {
+        if (attemptProtectionDisabled) {
+          await db().$executeRawUnsafe(
+            'ALTER TABLE "AiWorkflowJobAttempt" ENABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
+          );
+        }
+      } finally {
+        if (runtimeProtectionDisabled) {
+          await db().$executeRawUnsafe(
+            'ALTER TABLE "AiWorkflowJobRuntime" ENABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
+          );
+        }
       }
     }
   }
@@ -212,24 +228,70 @@ async function expireLeaseForTest(runtimeId: string) {
     `);
     const now = rows[0]?.now;
     assert.ok(now);
-    const leaseExpiresAt = new Date(now.getTime() - 1_000);
+    const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+    });
+    const claimedEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: {
+        runtimeId,
+        eventType: 'CLAIMED',
+        attemptSequence: runtime.attemptSequence,
+        fencingToken: runtime.fencingToken,
+      },
+    });
+    const latestEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: { runtimeId },
+      orderBy: { sequence: 'desc' },
+      select: { id: true },
+    });
+    assert.equal(latestEvent.id, claimedEvent.id);
+
+    const claimedAt = new Date(now.getTime() - 130_000);
+    const leaseExpiresAt = new Date(claimedAt.getTime() + 120_000);
+    const leaseMaxExpiresAt = new Date(claimedAt.getTime() + 600_000);
+    const payload = {
+      ...(claimedEvent.payload as Record<string, string | number | boolean | null>),
+      leaseExpiresAt: leaseExpiresAt.toISOString(),
+      leaseMaxExpiresAt: leaseMaxExpiresAt.toISOString(),
+    };
+    const payloadHash = canonicalSha256(payload);
+    const eventHash = canonicalSha256({
+      schemaVersion: 1,
+      runtimeId,
+      jobId: runtime.jobId,
+      workflowInstanceId: runtime.workflowInstanceId,
+      sequence: claimedEvent.sequence,
+      eventType: 'CLAIMED',
+      attemptSequence: runtime.attemptSequence,
+      fencingToken: String(runtime.fencingToken),
+      reasonCode: null,
+      payloadHash,
+      previousEventHash: claimedEvent.previousEventHash,
+      occurredAt: claimedAt.toISOString(),
+    });
     await tx.aiWorkflowJobRuntime.update({
       where: { id: runtimeId },
-      data: { leaseExpiresAt },
+      data: { leaseClaimedAt: claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
     });
     await tx.aiWorkflowJobAttempt.update({
       where: {
         runtimeId_attemptSequence: {
           runtimeId,
-          attemptSequence: (await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
-            where: { id: runtimeId },
-            select: { attemptSequence: true },
-          })).attemptSequence,
+          attemptSequence: runtime.attemptSequence,
         },
       },
-      data: { leaseExpiresAt },
+      data: { claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
     });
-  });
+    await tx.aiWorkflowJobRuntimeEvent.update({
+      where: { id: claimedEvent.id },
+      data: {
+        occurredAt: claimedAt,
+        payload,
+        payloadHash,
+        eventHash,
+      },
+    });
+  }, { rewriteRuntimeEvents: true });
 }
 
 async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
