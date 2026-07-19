@@ -303,7 +303,7 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
     assert.equal(runtime.state, 'RETRY_WAIT');
     await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobRuntime"
-      SET "effectiveAvailableAt" = clock_timestamp() AT TIME ZONE 'UTC' - INTERVAL '1 second',
+      SET "effectiveAvailableAt" = "createdAt",
         "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
       WHERE "id" = ${runtimeId}
     `);
