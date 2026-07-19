@@ -1940,7 +1940,7 @@ test('trigger ledger rifiuta command cross-workflow e predecessore non immediato
   );
 });
 
-test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job o outbox', { skip: !runDbTests }, async () => {
+test('upgrade reale PR74→PR75→PR76 preserva replay legacy, barriera dispatch e assenza di backfill runtime', { skip: !runDbTests }, async () => {
   const databaseUrl = process.env.DATABASE_URL;
   assert.ok(databaseUrl);
   const schemaName = `orchestrator_upgrade_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
