@@ -303,7 +303,9 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
     assert.equal(runtime.state, 'RETRY_WAIT');
     await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobRuntime"
-      SET "effectiveAvailableAt" = "createdAt",
+      -- Fixed SQL timestamp avoids driver/timezone normalization in this
+      -- confirmed ephemeral fixture; production never rewrites availability.
+      SET "effectiveAvailableAt" = TIMESTAMP '2000-01-01 00:00:00',
         "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
       WHERE "id" = ${runtimeId}
     `);
