@@ -166,24 +166,35 @@ async function withRuntimeClockFixture(
   callback: (tx: Prisma.TransactionClient) => Promise<void>,
 ) {
   assertConfirmedRuntimeDbFixture();
-  await db().$transaction(async (tx) => {
-    await tx.$executeRawUnsafe(
+  let runtimeProtectionDisabled = false;
+  let attemptProtectionDisabled = false;
+  try {
+    await db().$executeRawUnsafe(
       'ALTER TABLE "AiWorkflowJobRuntime" DISABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
     );
-    await tx.$executeRawUnsafe(
+    runtimeProtectionDisabled = true;
+    await db().$executeRawUnsafe(
       'ALTER TABLE "AiWorkflowJobAttempt" DISABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
     );
-    try {
+    attemptProtectionDisabled = true;
+    await db().$transaction(async (tx) => {
       await callback(tx);
+    });
+  } finally {
+    try {
+      if (attemptProtectionDisabled) {
+        await db().$executeRawUnsafe(
+          'ALTER TABLE "AiWorkflowJobAttempt" ENABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
+        );
+      }
     } finally {
-      await tx.$executeRawUnsafe(
-        'ALTER TABLE "AiWorkflowJobAttempt" ENABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
-      );
-      await tx.$executeRawUnsafe(
-        'ALTER TABLE "AiWorkflowJobRuntime" ENABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
-      );
+      if (runtimeProtectionDisabled) {
+        await db().$executeRawUnsafe(
+          'ALTER TABLE "AiWorkflowJobRuntime" ENABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
+        );
+      }
     }
-  });
+  }
 }
 
 async function expireLeaseForTest(runtimeId: string) {
@@ -2459,6 +2470,7 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
           updatedAt: now,
         },
       });
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /attempt|CLAIMED|consistency/);
 
     const claim = await claimNextAiWorkflowJob({
@@ -2493,6 +2505,7 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
           updatedAt: now,
         },
       });
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /SUCCEEDED|attempt|audit|consistency/);
 
     await assert.rejects(db().$transaction(async (tx) => {
@@ -2516,10 +2529,12 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
           retryBudgetConsumed: false,
         },
       });
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /LEASED|attempt|consistency/);
 
     await assert.rejects(db().$transaction(async (tx) => {
       await insertSemanticallyFalseSucceededEvent(tx, claim.runtimeId);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /semantically|cardinality|SUCCEEDED|consistency/);
     assert.deepEqual(
       await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: claim.runtimeId } }),
