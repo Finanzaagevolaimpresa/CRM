@@ -5,7 +5,12 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
-import { Prisma, PrismaClient } from '@prisma/client';
+import {
+  Prisma,
+  PrismaClient,
+  type AiWorkflowJob,
+  type AiWorkflowJobOutboxEvent,
+} from '@prisma/client';
 import { createAiAgentConfigHash } from '../../src/lib/ai-agent-config-hash';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
 import {
@@ -15,8 +20,19 @@ import {
 import {
   FAI_AUDIT_JOB_CATALOG_HASH,
   FAI_AUDIT_JOB_CATALOG_KEY,
+  FAI_AUDIT_JOB_CODES,
+  FAI_AUDIT_JOB_DEFINITION_HASHES,
   FAI_AUDIT_JOB_EXECUTOR_BINDINGS,
 } from '../../src/lib/ai-orchestrator/job-catalog-v1';
+import {
+  AI_ORCHESTRATOR_WORKER_CAPABILITIES,
+  AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES,
+  AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS,
+  AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_CODE,
+  AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH,
+  AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION,
+  getAiOrchestratorWorkerCapability,
+} from '../../src/lib/ai-orchestrator/worker-runtime-policy-v1';
 import {
   applyAuditWorkflowTransition,
   createAuditWorkflowCommandRequestHash,
@@ -24,6 +40,18 @@ import {
   type ApplyAuditWorkflowTransitionInput,
   type AuditWorkflowActor,
 } from '../../src/lib/ai-orchestrator/workflow-service';
+import {
+  admitAiWorkflowJobOutbox,
+  AiOrchestratorLeaseLostError,
+  AiOrchestratorWorkerDisabledError,
+  claimNextAiWorkflowJob,
+  completeAiWorkflowJob,
+  failAiWorkflowJob,
+  heartbeatAiWorkflowJobLease,
+  recoverExpiredAiWorkflowJobLeases,
+  surrenderAiWorkflowJobLease,
+  supersedeIneligibleAiWorkflowJobRuntimes,
+} from '../../src/lib/ai-orchestrator/worker-runtime';
 
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
@@ -54,6 +82,8 @@ const prisma = runDbTests ? new PrismaClient() : null;
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const safeEnv = { ...process.env, AI_EXTERNAL_PROVIDERS_ENABLED: 'false' };
 const passwordHash = 'not-a-real-login-hash';
+const originalWorkerGate = process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+let workerRuntimeDispatchFixtureOpen = false;
 
 let runnerId = '';
 let reviewerId = '';
@@ -71,6 +101,314 @@ let migrationDefaults: {
 function db() {
   if (!prisma) throw new Error('DB tests disabled');
   return prisma;
+}
+
+function assertConfirmedRuntimeDbFixture() {
+  if (!runDbTests || !dbTestsRequested || !destructiveDbTestsConfirmed) {
+    throw new Error('Fixture runtime consentita soltanto nel PostgreSQL effimero confermato.');
+  }
+}
+
+async function dispatchConstraintState(client: PrismaClient | Prisma.TransactionClient = db()) {
+  const rows = await client.$queryRaw<Array<{ present: boolean; validated: boolean }>>(Prisma.sql`
+    SELECT true AS "present", constraint_row."convalidated" AS "validated"
+    FROM pg_constraint constraint_row
+    JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
+    WHERE table_row."relname" = 'AiOrchestratorSetting'
+      AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
+      AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
+  `);
+  return rows[0] ?? { present: false, validated: false };
+}
+
+async function restorePhysicalDispatchBarrier() {
+  if (!runDbTests) return;
+  assertConfirmedRuntimeDbFixture();
+  await db().$executeRawUnsafe(
+    'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = false WHERE "id" = \'global\'',
+  );
+  const constraint = await dispatchConstraintState();
+  if (!constraint.present) {
+    await db().$executeRawUnsafe(
+      'ALTER TABLE "AiOrchestratorSetting" ADD CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check" CHECK ("dispatchEnabled" = false) NOT VALID',
+    );
+  }
+  await db().$executeRawUnsafe(
+    'ALTER TABLE "AiOrchestratorSetting" VALIDATE CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+  );
+  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+}
+
+async function withTemporaryDispatchFixture<T>(
+  callback: () => Promise<T>,
+  options: { enabledJobCodes?: readonly string[] } = {},
+) {
+  assertConfirmedRuntimeDbFixture();
+  if (workerRuntimeDispatchFixtureOpen) throw new Error('Fixture dispatch runtime già aperta.');
+  await restorePhysicalDispatchBarrier();
+  await db().$executeRawUnsafe(
+    'ALTER TABLE "AiOrchestratorSetting" DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+  );
+  workerRuntimeDispatchFixtureOpen = true;
+  try {
+    await setWorkerRuntimeGates(true, true);
+    await setWorkerCapabilityGates(options.enabledJobCodes ?? FAI_AUDIT_JOB_CODES);
+    return await callback();
+  } finally {
+    try {
+      await setWorkerCapabilityGates([]);
+    } finally {
+      try {
+        await db().$executeRawUnsafe(
+          'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = false WHERE "id" = \'global\'',
+        );
+      } finally {
+        workerRuntimeDispatchFixtureOpen = false;
+        await restorePhysicalDispatchBarrier();
+      }
+    }
+  }
+}
+
+async function withRuntimeClockFixture(
+  callback: (tx: Prisma.TransactionClient) => Promise<void>,
+  options: { rewriteRuntimeEvents?: boolean } = {},
+) {
+  assertConfirmedRuntimeDbFixture();
+  let runtimeProtectionDisabled = false;
+  let attemptProtectionDisabled = false;
+  let eventProtectionDisabled = false;
+  try {
+    await db().$executeRawUnsafe(
+      'ALTER TABLE "AiWorkflowJobRuntime" DISABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
+    );
+    runtimeProtectionDisabled = true;
+    await db().$executeRawUnsafe(
+      'ALTER TABLE "AiWorkflowJobAttempt" DISABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
+    );
+    attemptProtectionDisabled = true;
+    if (options.rewriteRuntimeEvents) {
+      await db().$executeRawUnsafe(
+        'ALTER TABLE "AiWorkflowJobRuntimeEvent" DISABLE TRIGGER "AiWorkflowJobRuntimeEvent_immutable_update"',
+      );
+      eventProtectionDisabled = true;
+    }
+    await db().$transaction(async (tx) => {
+      await callback(tx);
+    });
+  } finally {
+    try {
+      if (eventProtectionDisabled) {
+        await db().$executeRawUnsafe(
+          'ALTER TABLE "AiWorkflowJobRuntimeEvent" ENABLE TRIGGER "AiWorkflowJobRuntimeEvent_immutable_update"',
+        );
+      }
+    } finally {
+      try {
+        if (attemptProtectionDisabled) {
+          await db().$executeRawUnsafe(
+            'ALTER TABLE "AiWorkflowJobAttempt" ENABLE TRIGGER "AiWorkflowJobAttempt_protect_update"',
+          );
+        }
+      } finally {
+        if (runtimeProtectionDisabled) {
+          await db().$executeRawUnsafe(
+            'ALTER TABLE "AiWorkflowJobRuntime" ENABLE TRIGGER "AiWorkflowJobRuntime_protect_update"',
+          );
+        }
+      }
+    }
+  }
+}
+
+async function expireLeaseForTest(runtimeId: string) {
+  await withRuntimeClockFixture(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+      SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+    `);
+    const now = rows[0]?.now;
+    assert.ok(now);
+    const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+    });
+    const claimedEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: {
+        runtimeId,
+        eventType: 'CLAIMED',
+        attemptSequence: runtime.attemptSequence,
+        fencingToken: runtime.fencingToken,
+      },
+    });
+    const latestEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: { runtimeId },
+      orderBy: { sequence: 'desc' },
+      select: { id: true },
+    });
+    assert.equal(latestEvent.id, claimedEvent.id);
+
+    const claimedAt = new Date(now.getTime() - 130_000);
+    const leaseExpiresAt = new Date(claimedAt.getTime() + 120_000);
+    const leaseMaxExpiresAt = new Date(claimedAt.getTime() + 600_000);
+    const payload = {
+      ...(claimedEvent.payload as Record<string, string | number | boolean | null>),
+      leaseExpiresAt: leaseExpiresAt.toISOString(),
+      leaseMaxExpiresAt: leaseMaxExpiresAt.toISOString(),
+    };
+    const payloadHash = canonicalSha256(payload);
+    const eventHash = canonicalSha256({
+      schemaVersion: 1,
+      runtimeId,
+      jobId: runtime.jobId,
+      workflowInstanceId: runtime.workflowInstanceId,
+      sequence: claimedEvent.sequence,
+      eventType: 'CLAIMED',
+      attemptSequence: runtime.attemptSequence,
+      fencingToken: String(runtime.fencingToken),
+      reasonCode: null,
+      payloadHash,
+      previousEventHash: claimedEvent.previousEventHash,
+      occurredAt: claimedAt.toISOString(),
+    });
+    await tx.aiWorkflowJobRuntime.update({
+      where: { id: runtimeId },
+      data: { leaseClaimedAt: claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
+    });
+    await tx.aiWorkflowJobAttempt.update({
+      where: {
+        runtimeId_attemptSequence: {
+          runtimeId,
+          attemptSequence: runtime.attemptSequence,
+        },
+      },
+      data: { claimedAt, leaseExpiresAt, leaseMaxExpiresAt },
+    });
+    await tx.aiWorkflowJobRuntimeEvent.update({
+      where: { id: claimedEvent.id },
+      data: {
+        occurredAt: claimedAt,
+        payload,
+        payloadHash,
+        eventHash,
+      },
+    });
+  }, { rewriteRuntimeEvents: true });
+}
+
+async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
+  await withRuntimeClockFixture(async (tx) => {
+    const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+    });
+    assert.equal(runtime.state, 'RETRY_WAIT');
+    const terminalEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: {
+        runtimeId,
+        attemptSequence: runtime.attemptSequence,
+        fencingToken: runtime.fencingToken,
+        eventType: { in: ['RETRY_SCHEDULED', 'LEASE_RECOVERED'] },
+      },
+      orderBy: { sequence: 'desc' },
+    });
+    const latestEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: { runtimeId },
+      orderBy: { sequence: 'desc' },
+      select: { id: true },
+    });
+    assert.equal(latestEvent.id, terminalEvent.id);
+    const nextAvailableAt = new Date('2000-01-01T00:00:00.000Z');
+    const payload = {
+      ...(terminalEvent.payload as Record<string, string | number | boolean | null>),
+      nextAvailableAt: nextAvailableAt.toISOString(),
+    };
+    const payloadHash = canonicalSha256(payload);
+    const eventHash = canonicalSha256({
+      schemaVersion: 1,
+      runtimeId,
+      jobId: runtime.jobId,
+      workflowInstanceId: runtime.workflowInstanceId,
+      sequence: terminalEvent.sequence,
+      eventType: terminalEvent.eventType,
+      attemptSequence: terminalEvent.attemptSequence,
+      fencingToken: String(terminalEvent.fencingToken),
+      reasonCode: terminalEvent.reasonCode,
+      payloadHash,
+      previousEventHash: terminalEvent.previousEventHash,
+      occurredAt: terminalEvent.occurredAt.toISOString(),
+    });
+    const updatedRuntime = await tx.$executeRaw(Prisma.sql`
+      UPDATE "AiWorkflowJobRuntime"
+      SET "effectiveAvailableAt" = ${nextAvailableAt},
+        "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
+      WHERE "id" = ${runtimeId}
+    `);
+    assert.equal(updatedRuntime, 1);
+    const updatedAttempt = await tx.$executeRaw(Prisma.sql`
+      UPDATE "AiWorkflowJobAttempt"
+      SET "nextAvailableAt" = ${nextAvailableAt}
+      WHERE "runtimeId" = ${runtimeId}
+        AND "attemptSequence" = ${runtime.attemptSequence}
+    `);
+    assert.equal(updatedAttempt, 1);
+    await tx.aiWorkflowJobRuntimeEvent.update({
+      where: { id: terminalEvent.id },
+      data: { payload, payloadHash, eventHash },
+    });
+    assert.equal((await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+      select: { effectiveAvailableAt: true },
+    })).effectiveAvailableAt.toISOString(), '2000-01-01T00:00:00.000Z');
+  }, { rewriteRuntimeEvents: true });
+}
+
+async function assertRuntimeReadyForRetryClaim(runtimeId: string) {
+  const rows = await db().$queryRaw<Array<{
+    state: string;
+    available: boolean;
+    current: boolean;
+    executorValid: boolean;
+    capabilityEnabled: boolean;
+    activeGlobal: number;
+    activeWorkflow: number;
+    activeExecutor: number;
+    effectiveAvailableAt: string;
+    databaseNow: string;
+  }>>(Prisma.sql`
+    SELECT runtime."state",
+      runtime."effectiveAvailableAt" <= (clock_timestamp() AT TIME ZONE 'UTC') AS "available",
+      TO_CHAR(runtime."effectiveAvailableAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "effectiveAvailableAt",
+      TO_CHAR(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "databaseNow",
+      "ai_workflow_runtime_job_is_current"(runtime."jobId") AS "current",
+      "ai_workflow_runtime_executor_is_valid"(runtime."jobId") AS "executorValid",
+      "ai_workflow_runtime_capability_enabled"(runtime."jobId") AS "capabilityEnabled",
+      (SELECT COUNT(*)::INTEGER FROM "AiWorkflowJobRuntime" active
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC') AS "activeGlobal",
+      (SELECT COUNT(*)::INTEGER FROM "AiWorkflowJobRuntime" active
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC'
+          AND active."workflowInstanceId" = runtime."workflowInstanceId") AS "activeWorkflow",
+      (SELECT COUNT(*)::INTEGER
+        FROM "AiWorkflowJobRuntime" active
+        JOIN "AiWorkflowJob" active_job ON active_job."id" = active."jobId"
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC'
+          AND active_job."executorAgentId" = job."executorAgentId"
+          AND active_job."executorAgentConfigVersion" = job."executorAgentConfigVersion") AS "activeExecutor"
+    FROM "AiWorkflowJobRuntime" runtime
+    JOIN "AiWorkflowJob" job ON job."id" = runtime."jobId"
+    WHERE runtime."id" = ${runtimeId}
+  `);
+  const row = rows[0];
+  assert.ok(row, 'Runtime retry non trovato.');
+  const diagnostic = JSON.stringify(row);
+  assert.equal(row.state, 'RETRY_WAIT', diagnostic);
+  assert.equal(row.available, true, diagnostic);
+  assert.equal(row.current, true, diagnostic);
+  assert.equal(row.executorValid, true, diagnostic);
+  assert.equal(row.capabilityEnabled, true, diagnostic);
+  assert.equal(row.activeGlobal, 0, diagnostic);
+  assert.equal(row.activeWorkflow, 0, diagnostic);
+  assert.equal(row.activeExecutor, 0, diagnostic);
 }
 
 async function createUser(name: string, role: 'admin' | 'collaboratore_limitato' | 'consulente') {
@@ -169,10 +507,15 @@ test.before(async () => {
 
 test.after(async () => {
   if (!runDbTests || !prisma) return;
+  workerRuntimeDispatchFixtureOpen = false;
+  await setWorkerCapabilityGates([]);
+  await restorePhysicalDispatchBarrier();
   if (migrationDefaults) {
     await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: migrationDefaults });
   }
   await db().aiControlSetting.updateMany({ where: { id: 'global' }, data: { externalProvidersEnabled: false } });
+  if (originalWorkerGate === undefined) delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+  else process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
   await db().$disconnect();
 });
 
@@ -504,6 +847,16 @@ test('la migration crea il singleton fail-closed con state machine e dispatch di
     syntheticDataOnly: true,
     provider: 'mock',
   });
+});
+
+test('la catena production preserva la barriera fisica dispatch PR74', { skip: !runDbTests }, async () => {
+  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  await assert.rejects(db().$executeRawUnsafe(
+    'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = true WHERE "id" = \'global\'',
+  ));
+  const setting = await db().aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } });
+  assert.equal(setting.dispatchEnabled, false);
+  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
 });
 
 test('state machine e dispatch sono flag distinti e la foundation non autorizza mai dispatch', { skip: !runDbTests }, async () => {
@@ -1745,7 +2098,7 @@ test('trigger ledger rifiuta command cross-workflow e predecessore non immediato
   );
 });
 
-test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job o outbox', { skip: !runDbTests }, async () => {
+test('upgrade reale PR74→PR75→PR76 preserva replay legacy, barriera dispatch e assenza di backfill runtime', { skip: !runDbTests }, async () => {
   const databaseUrl = process.env.DATABASE_URL;
   assert.ok(databaseUrl);
   const schemaName = `orchestrator_upgrade_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1763,6 +2116,7 @@ test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job 
   const migrationRoot = resolve(process.cwd(), 'prisma/migrations');
   const pr74Migration = '20260717120000_ai_orchestrator_state_machine_foundation';
   const pr75Migration = '20260717180000_ai_orchestrator_persistent_job_queue_foundation';
+  const workerRuntimeMigration = '20260718220000_ai_orchestrator_worker_runtime_foundation';
   for (const migrationName of readdirSync(migrationRoot).sort()) {
     if (/^\d/.test(migrationName) && migrationName <= pr74Migration) {
       cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
@@ -1950,7 +2304,1039 @@ test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job 
     assert.equal(await upgradePrisma.aiWorkflowJobOutboxEvent.count({
       where: { workflowInstanceId: legacyInput.workflowInstanceId },
     }), 0);
+
+    cpSync(
+      join(migrationRoot, workerRuntimeMigration),
+      join(tempMigrations, workerRuntimeMigration),
+      { recursive: true },
+    );
+    deploy();
+    const upgradeConstraint = await upgradePrisma.$queryRaw<Array<{ validated: boolean }>>(Prisma.sql`
+      SELECT constraint_row."convalidated" AS "validated"
+      FROM pg_constraint constraint_row
+      JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
+      WHERE table_row."relname" = 'AiOrchestratorSetting'
+        AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
+        AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
+    `);
+    assert.deepEqual(upgradeConstraint, [{ validated: true }]);
+    await assert.rejects(upgradePrisma.$executeRawUnsafe(
+      'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = true WHERE "id" = \'global\'',
+    ));
+    assert.equal(await upgradePrisma.aiWorkflowJobRuntime.count({
+      where: { workflowInstanceId: legacyInput.workflowInstanceId },
+    }), 0);
+    assert.equal(await upgradePrisma.aiOrchestratorWorkerCapabilitySetting.count(), 13);
+    assert.equal(await upgradePrisma.aiOrchestratorWorkerCapabilitySetting.count({
+      where: { enabled: true },
+    }), 0);
+    assert.equal(await upgradePrisma.aiWorkflowJobAttempt.count(), 0);
+    assert.equal(await upgradePrisma.aiWorkflowOutboxConsumption.count(), 0);
+    const replayAfterWorkerUpgrade = await applyAuditWorkflowTransition(
+      upgradePrisma,
+      legacyInput,
+      { env: safeEnv },
+    );
+    assert.equal(replayAfterWorkerUpgrade.ok, true);
+    if (replayAfterWorkerUpgrade.ok) {
+      assert.equal(replayAfterWorkerUpgrade.replayed, true);
+      assert.equal(replayAfterWorkerUpgrade.value.jobPlanningStatus, 'LEGACY_NOT_PLANNED');
+      assert.equal(replayAfterWorkerUpgrade.value.plannedJobCount, 0);
+    }
   } finally {
     await upgradePrisma.$disconnect();
   }
+});
+
+// WORKER RUNTIME FOUNDATION TESTS: positive runtime paths may open dispatch
+// only through withTemporaryDispatchFixture in the confirmed ephemeral DB.
+async function setWorkerRuntimeGates(stateMachineEnabled: boolean, dispatchEnabled: boolean) {
+  if (dispatchEnabled && !workerRuntimeDispatchFixtureOpen) {
+    throw new Error('dispatchEnabled=true è consentito soltanto nella fixture DDL runtime confermata.');
+  }
+  await db().aiOrchestratorSetting.update({
+    where: { id: 'global' },
+    data: { stateMachineEnabled, dispatchEnabled, syntheticDataOnly: true, provider: 'mock' },
+  });
+  await db().aiControlSetting.update({
+    where: { id: 'global' },
+    data: { externalProvidersEnabled: false },
+  });
+}
+
+async function setWorkerCapabilityGates(enabledJobCodes: readonly string[]) {
+  const requested = new Set(enabledJobCodes);
+  if (requested.size > 0 && !workerRuntimeDispatchFixtureOpen) {
+    throw new Error('Capability runtime positive consentite soltanto nella fixture DDL confermata.');
+  }
+  for (const jobCode of FAI_AUDIT_JOB_CODES) {
+    const setting = await db().aiOrchestratorWorkerCapabilitySetting.findUniqueOrThrow({
+      where: { jobCode },
+    });
+    const enabled = requested.has(jobCode);
+    if (setting.enabled === enabled) continue;
+    await db().aiOrchestratorWorkerCapabilitySetting.update({
+      where: { jobCode },
+      data: { enabled, version: { increment: 1 } },
+    });
+  }
+}
+
+async function createDataValidationRuntimeCase() {
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  await advanceToDataValidation(created.value.workflowInstanceId);
+  const job = await db().aiWorkflowJob.findFirstOrThrow({
+    where: { workflowInstanceId: created.value.workflowInstanceId },
+  });
+  const outbox = await db().aiWorkflowJobOutboxEvent.findFirstOrThrow({
+    where: { jobId: job.id },
+  });
+  return { workflowInstanceId: created.value.workflowInstanceId, job, outbox };
+}
+
+async function rawAdmissionWithoutAdmittedEvent(
+  tx: Prisma.TransactionClient,
+  job: AiWorkflowJob,
+  outbox: AiWorkflowJobOutboxEvent,
+) {
+  const capability = getAiOrchestratorWorkerCapability(job.jobCode);
+  assert.ok(capability);
+  const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+    SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+  `);
+  const now = nowRows[0]?.now;
+  assert.ok(now);
+  const runtimeId = randomUUID();
+  const capabilityHash = AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode];
+  await tx.aiWorkflowJobRuntime.create({
+    data: {
+      id: runtimeId,
+      jobId: job.id,
+      workflowInstanceId: job.workflowInstanceId,
+      runtimePolicyCode: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_CODE,
+      runtimePolicyVersion: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION,
+      runtimePolicyHash: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH,
+      capabilityCode: capability.capabilityCode,
+      capabilityVersion: capability.capabilityVersion,
+      capabilityHash,
+      handlerCode: capability.handlerCode,
+      handlerVersion: capability.handlerVersion,
+      state: 'AVAILABLE',
+      effectiveAvailableAt: job.availableAt,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  await tx.aiWorkflowOutboxConsumption.create({
+    data: {
+      id: randomUUID(),
+      outboxEventId: outbox.id,
+      jobId: job.id,
+      runtimeId,
+      consumerCode: 'AI_ORCHESTRATOR_JOB_PLANNED_CONSUMER',
+      consumerVersion: '1.0',
+      runtimePolicyHash: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH,
+      capabilityHash,
+      eventKey: outbox.eventKey,
+      eventPayloadHash: outbox.payloadHash,
+      jobDedupeKey: job.dedupeKey,
+      jobPayloadHash: job.payloadHash,
+      workflowDefinitionHash: job.workflowDefinitionHash,
+      phaseCode: job.phaseCode,
+      phaseEntrySequence: job.phaseEntrySequence,
+      correctionCycle: job.correctionCycle,
+      executorAgentId: job.executorAgentId,
+      executorAgentConfigVersion: job.executorAgentConfigVersion,
+      executorAgentConfigHash: job.executorAgentConfigHash,
+      consumedAt: now,
+    },
+  });
+}
+
+async function insertRawRuntimeEvent(
+  tx: Prisma.TransactionClient,
+  runtimeId: string,
+  input: {
+    eventType: string;
+    attemptSequence: number | null;
+    fencingToken: bigint | null;
+    reasonCode: string | null;
+    payload: Record<string, string | number | boolean | null>;
+    occurredAt?: Date;
+  },
+) {
+  const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: runtimeId } });
+  const previous = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+    where: { runtimeId },
+    orderBy: { sequence: 'desc' },
+  });
+  const occurredAt = input.occurredAt ?? (await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+    SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+  `))[0]?.now;
+  assert.ok(occurredAt);
+  const payload = {
+    schemaVersion: 1,
+    runtimePolicyHash: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH,
+    ...input.payload,
+  };
+  const payloadHash = canonicalSha256(payload);
+  const sequence = previous.sequence + 1;
+  const eventHash = canonicalSha256({
+    schemaVersion: 1,
+    runtimeId,
+    jobId: runtime.jobId,
+    workflowInstanceId: runtime.workflowInstanceId,
+    sequence,
+    eventType: input.eventType,
+    attemptSequence: input.attemptSequence,
+    fencingToken: input.fencingToken === null ? null : String(input.fencingToken),
+    reasonCode: input.reasonCode,
+    payloadHash,
+    previousEventHash: previous.eventHash,
+    occurredAt: occurredAt.toISOString(),
+  });
+  await tx.aiWorkflowJobRuntimeEvent.create({
+    data: {
+      id: randomUUID(),
+      runtimeId,
+      jobId: runtime.jobId,
+      workflowInstanceId: runtime.workflowInstanceId,
+      sequence,
+      eventType: input.eventType,
+      attemptSequence: input.attemptSequence,
+      fencingToken: input.fencingToken,
+      reasonCode: input.reasonCode,
+      payload,
+      payloadHash,
+      previousEventHash: previous.eventHash,
+      eventHash,
+      occurredAt,
+    },
+  });
+}
+
+async function insertSemanticallyFalseSucceededEvent(
+  tx: Prisma.TransactionClient,
+  runtimeId: string,
+) {
+  const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: runtimeId } });
+  await insertRawRuntimeEvent(tx, runtimeId, {
+    eventType: 'SUCCEEDED',
+    attemptSequence: runtime.attemptSequence,
+    fencingToken: runtime.fencingToken,
+    reasonCode: 'SUCCEEDED',
+    payload: {
+      resultHash: '9'.repeat(64),
+      provider: 'mock',
+      workflowTransitionApplied: false,
+    },
+  });
+}
+
+test('Worker Runtime resta fail-closed, senza backfill e con dispatch fisicamente chiuso', { skip: !runDbTests }, async () => {
+  const created = await createDataValidationRuntimeCase();
+  const capabilitySettings = await db().aiOrchestratorWorkerCapabilitySetting.findMany({
+    orderBy: { jobCode: 'asc' },
+  });
+  assert.equal(capabilitySettings.length, 13);
+  assert.ok(capabilitySettings.every((setting) => setting.enabled === false));
+  assert.equal(await db().aiWorkflowJobRuntime.count({
+    where: { workflowInstanceId: created.workflowInstanceId },
+  }), 0);
+  assert.equal(await db().aiWorkflowOutboxConsumption.count({ where: { jobId: created.job.id } }), 0);
+
+  delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+  await assert.rejects(
+    admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }),
+    AiOrchestratorWorkerDisabledError,
+  );
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await assert.rejects(
+    admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }),
+    AiOrchestratorWorkerDisabledError,
+  );
+  await assert.rejects(setWorkerRuntimeGates(true, true), /fixture DDL runtime/);
+  await withTemporaryDispatchFixture(async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: created.workflowInstanceId,
+    }), 0);
+    await assert.rejects(db().$transaction(async (tx) => {
+      await rawAdmissionWithoutAdmittedEvent(tx, created.job, created.outbox);
+    }), /capability|disabled/i);
+  }, { enabledJobCodes: [] });
+  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  assert.equal(await db().aiOrchestratorWorkerCapabilitySetting.count({ where: { enabled: true } }), 0);
+  assert.equal(await db().aiWorkflowJobRuntime.count({ where: { jobId: created.job.id } }), 0);
+});
+
+test('catalogo capability SQL e TypeScript coincidono per tutti i 13 job e ogni famiglia è ammissibile', { skip: !runDbTests }, async () => {
+  assert.equal(AI_ORCHESTRATOR_WORKER_CAPABILITIES.length, 13);
+  for (const jobCode of FAI_AUDIT_JOB_CODES) {
+    const sqlRows = await db().$queryRaw<Array<{
+      capabilityCode: string;
+      capabilityHash: string;
+      handlerCode: string;
+      jobDefinitionHash: string;
+      executorAgentCode: string;
+      executorAgentConfigVersion: number;
+      executorAgentConfigHash: string;
+    }>>(Prisma.sql`
+      SELECT * FROM "expected_ai_workflow_worker_capability"(${jobCode})
+    `);
+    const sql = sqlRows[0];
+    const capability = getAiOrchestratorWorkerCapability(jobCode);
+    const executor = FAI_AUDIT_JOB_EXECUTOR_BINDINGS.find((entry) => entry.jobCode === jobCode);
+    const setting = await db().aiOrchestratorWorkerCapabilitySetting.findUnique({
+      where: { jobCode },
+    });
+    assert.ok(sql && capability && executor);
+    assert.deepEqual(sql, {
+      capabilityCode: capability.capabilityCode,
+      capabilityHash: AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[jobCode],
+      handlerCode: capability.handlerCode,
+      jobDefinitionHash: FAI_AUDIT_JOB_DEFINITION_HASHES[jobCode],
+      executorAgentCode: executor.executorAgentCode,
+      executorAgentConfigVersion: executor.executorAgentConfigVersion,
+      executorAgentConfigHash: executor.executorAgentConfigHash,
+    });
+    assert.deepEqual(setting && {
+      capabilityCode: setting.capabilityCode,
+      capabilityVersion: setting.capabilityVersion,
+      capabilityHash: setting.capabilityHash,
+      enabled: setting.enabled,
+    }, {
+      capabilityCode: capability.capabilityCode,
+      capabilityVersion: capability.capabilityVersion,
+      capabilityHash: AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[jobCode],
+      enabled: false,
+    });
+  }
+
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await applyOk(id, 'WF-001', human(runnerId));
+  await applyOk(id, 'WF-002', human(runnerId));
+  await applyOk(id, 'WF-003', human(runnerId));
+  await applyOk(id, 'WF-004', human(runnerId));
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-005', agent());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-006', agent());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-007', agent());
+  await applyOk(id, 'WF-010', human(runnerId));
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 3);
+  await applyOk(id, 'WF-011', system());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-012', agent());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-013', agent());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 4);
+  await applyOk(id, 'WF-014', system());
+  await applyOk(id, 'WF-015', system());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 1);
+  await applyOk(id, 'WF-016', agent());
+  assert.equal(await withTemporaryDispatchFixture(
+    () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+  ), 4);
+  const admittedCodes = new Set((await db().aiWorkflowJobRuntime.findMany({
+    where: { workflowInstanceId: id },
+    select: { job: { select: { jobCode: true } } },
+  })).map((runtime) => runtime.job.jobCode));
+  assert.deepEqual([...admittedCodes].sort(), [...FAI_AUDIT_JOB_CODES].sort());
+});
+
+test('constraint differiti rifiutano admission, claim, success, attempt ed evento semanticamente incompleti', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const admissionCase = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    await assert.rejects(db().$transaction(async (tx) => {
+      await rawAdmissionWithoutAdmittedEvent(tx, admissionCase.job, admissionCase.outbox);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /ADMITTED|consistency|canonical/);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { jobId: admissionCase.job.id } }), 0);
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: admissionCase.workflowInstanceId,
+    }), 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { jobId: admissionCase.job.id },
+    });
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      await insertRawRuntimeEvent(tx, runtime.id, {
+        eventType: 'ADMITTED',
+        attemptSequence: null,
+        fencingToken: null,
+        reasonCode: null,
+        payload: {
+          jobCode: admissionCase.job.jobCode,
+          capabilityCode: runtime.capabilityCode,
+          capabilityHash: runtime.capabilityHash,
+          eventKey: admissionCase.outbox.eventKey,
+          provider: 'mock',
+          dataMode: 'synthetic',
+          networkAccessAllowed: false,
+          crmDataAccessAllowed: false,
+          providerCallAllowed: false,
+          workflowTransitionWriteAllowed: false,
+        },
+      });
+    }), /one_admitted|duplicate key|unique constraint failed/i);
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+        SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+      `);
+      const now = nowRows[0]?.now;
+      assert.ok(now);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "AiWorkflowJobRuntime"
+        SET "state" = 'LEASED',
+          "attemptSequence" = 1,
+          "fencingToken" = 1,
+          "leaseOwnerId" = 'raw-missing-attempt',
+          "leaseTokenHash" = ${'1'.repeat(64)},
+          "leaseClaimedAt" = ${now},
+          "leaseExpiresAt" = ${new Date(now.getTime() + 120_000)},
+          "leaseMaxExpiresAt" = ${new Date(now.getTime() + 600_000)},
+          "updatedAt" = ${now}
+        WHERE "id" = ${runtime.id}
+      `);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /attempt|CLAIMED|consistency/);
+
+    const claim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'semantic-negative-worker',
+      workerBuildHash: '2'.repeat(64),
+      workflowInstanceId: admissionCase.workflowInstanceId,
+    });
+    assert.ok(claim);
+    const claimedRuntime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: claim.runtimeId },
+    });
+    const claimedAttempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({
+      where: { runtimeId: claim.runtimeId, attemptSequence: claim.attemptSequence },
+    });
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      await insertRawRuntimeEvent(tx, claim.runtimeId, {
+        eventType: 'CLAIMED',
+        attemptSequence: claim.attemptSequence,
+        fencingToken: claim.fencingToken,
+        reasonCode: null,
+        occurredAt: claimedAttempt.claimedAt,
+        payload: {
+          workerInstanceId: claimedAttempt.workerInstanceId,
+          workerBuildHash: claimedAttempt.workerBuildHash,
+          leaseExpiresAt: claimedAttempt.leaseExpiresAt.toISOString(),
+          leaseMaxExpiresAt: claimedAttempt.leaseMaxExpiresAt.toISOString(),
+          capabilityHash: claimedAttempt.capabilityHash,
+        },
+      });
+    }), /one_claimed|duplicate key|unique constraint failed/i);
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+        SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+      `);
+      const now = nowRows[0]?.now;
+      assert.ok(now);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "AiWorkflowJobRuntime"
+        SET "state" = 'SUCCEEDED',
+          "leaseOwnerId" = NULL,
+          "leaseTokenHash" = NULL,
+          "leaseClaimedAt" = NULL,
+          "leaseExpiresAt" = NULL,
+          "leaseMaxExpiresAt" = NULL,
+          "terminalAt" = ${now},
+          "terminalReasonCode" = 'SUCCEEDED',
+          "resultHash" = ${'3'.repeat(64)},
+          "lastFailureCode" = NULL,
+          "updatedAt" = ${now}
+        WHERE "id" = ${claim.runtimeId}
+      `);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /SUCCEEDED|attempt|audit|consistency/);
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      const nowRows = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+        SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+      `);
+      const now = nowRows[0]?.now;
+      assert.ok(now);
+      await tx.aiWorkflowJobAttempt.update({
+        where: {
+          runtimeId_attemptSequence: {
+            runtimeId: claim.runtimeId,
+            attemptSequence: claim.attemptSequence,
+          },
+        },
+        data: {
+          finishedAt: now,
+          outcome: 'FAILED_TERMINAL',
+          failureCode: 'CAPABILITY_DENIED',
+          retryable: false,
+          retryBudgetConsumed: false,
+        },
+      });
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /LEASED|attempt|consistency/);
+
+    await assert.rejects(db().$transaction(async (tx) => {
+      await insertSemanticallyFalseSucceededEvent(tx, claim.runtimeId);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /semantically|cardinality|SUCCEEDED|consistency/);
+    assert.deepEqual(
+      await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: claim.runtimeId } }),
+      claimedRuntime,
+    );
+    await surrenderAiWorkflowJobLease(claim.lease);
+  });
+});
+
+test('audit differito rifiuta un attempt precedente concluso senza il proprio evento terminale', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId });
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { jobId: created.job.id },
+    });
+    await assert.rejects(db().$transaction(async (tx) => {
+      const now = (await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+        SELECT clock_timestamp() AT TIME ZONE 'UTC' AS "now"
+      `))[0]?.now;
+      assert.ok(now);
+
+      const claimRawAttempt = async (attemptSequence: number) => {
+        const fencingToken = BigInt(attemptSequence);
+        const leaseTokenHash = String.fromCharCode(96 + attemptSequence).repeat(64);
+        const leaseExpiresAt = new Date(now.getTime() + 120_000);
+        const leaseMaxExpiresAt = new Date(now.getTime() + 600_000);
+        await tx.aiWorkflowJobRuntime.update({
+          where: { id: runtime.id },
+          data: {
+            state: 'LEASED',
+            attemptSequence,
+            fencingToken,
+            leaseOwnerId: `raw-audit-worker-${attemptSequence}`,
+            leaseTokenHash,
+            leaseClaimedAt: now,
+            leaseExpiresAt,
+            leaseMaxExpiresAt,
+            lastFailureCode: null,
+            updatedAt: now,
+          },
+        });
+        await tx.aiWorkflowJobAttempt.create({
+          data: {
+            id: randomUUID(),
+            runtimeId: runtime.id,
+            jobId: created.job.id,
+            attemptSequence,
+            fencingToken,
+            workerInstanceId: `raw-audit-worker-${attemptSequence}`,
+            workerBuildHash: String(attemptSequence).repeat(64),
+            leaseTokenHash,
+            claimedAt: now,
+            leaseExpiresAt,
+            leaseMaxExpiresAt,
+            runtimePolicyHash: runtime.runtimePolicyHash,
+            capabilityHash: runtime.capabilityHash,
+            handlerCode: runtime.handlerCode,
+            handlerVersion: runtime.handlerVersion,
+            workflowDefinitionHash: created.job.workflowDefinitionHash,
+            phaseCode: created.job.phaseCode,
+            phaseEntrySequence: created.job.phaseEntrySequence,
+            correctionCycle: created.job.correctionCycle,
+            executorAgentId: created.job.executorAgentId,
+            executorAgentConfigVersion: created.job.executorAgentConfigVersion,
+            executorAgentConfigHash: created.job.executorAgentConfigHash,
+            jobPayloadHash: created.job.payloadHash,
+          },
+        });
+        await insertRawRuntimeEvent(tx, runtime.id, {
+          eventType: 'CLAIMED',
+          attemptSequence,
+          fencingToken,
+          reasonCode: null,
+          occurredAt: now,
+          payload: {
+            workerInstanceId: `raw-audit-worker-${attemptSequence}`,
+            workerBuildHash: String(attemptSequence).repeat(64),
+            leaseExpiresAt: leaseExpiresAt.toISOString(),
+            leaseMaxExpiresAt: leaseMaxExpiresAt.toISOString(),
+            capabilityHash: runtime.capabilityHash,
+          },
+        });
+      };
+
+      const surrenderRawAttempt = async (attemptSequence: number, appendTerminalEvent: boolean) => {
+        await tx.aiWorkflowJobRuntime.update({
+          where: { id: runtime.id },
+          data: {
+            state: 'RETRY_WAIT',
+            effectiveAvailableAt: now,
+            leaseOwnerId: null,
+            leaseTokenHash: null,
+            leaseClaimedAt: null,
+            leaseExpiresAt: null,
+            leaseMaxExpiresAt: null,
+            lastFailureCode: null,
+            updatedAt: now,
+          },
+        });
+        await tx.aiWorkflowJobAttempt.update({
+          where: { runtimeId_attemptSequence: { runtimeId: runtime.id, attemptSequence } },
+          data: {
+            finishedAt: now,
+            outcome: 'SURRENDERED',
+            retryable: true,
+            retryBudgetConsumed: false,
+          },
+        });
+        if (appendTerminalEvent) {
+          await insertRawRuntimeEvent(tx, runtime.id, {
+            eventType: 'SURRENDERED',
+            attemptSequence,
+            fencingToken: BigInt(attemptSequence),
+            reasonCode: 'WORKER_SURRENDERED',
+            occurredAt: now,
+            payload: { retryBudgetConsumed: false },
+          });
+        }
+      };
+
+      await claimRawAttempt(1);
+      await surrenderRawAttempt(1, false);
+      await claimRawAttempt(2);
+      await surrenderRawAttempt(2, true);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+    }), /cardinality|terminal|consistency/i);
+    const persisted = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: runtime.id } });
+    assert.equal(persisted.state, 'AVAILABLE');
+    assert.equal(persisted.attemptSequence, 0);
+  });
+});
+
+test('doppio claim concorrente produce un vincitore e receipt/attempt/audit canonici', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }), 1);
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }), 0);
+    const claims = await Promise.all([
+      claimNextAiWorkflowJob({
+        workerInstanceId: 'concurrent-worker-a',
+        workerBuildHash: 'a'.repeat(64),
+        workflowInstanceId: created.workflowInstanceId,
+      }),
+      claimNextAiWorkflowJob({
+        workerInstanceId: 'concurrent-worker-b',
+        workerBuildHash: 'b'.repeat(64),
+        workflowInstanceId: created.workflowInstanceId,
+      }),
+    ]);
+    assert.equal(claims.filter(Boolean).length, 1);
+    const claim = claims.find(Boolean);
+    assert.ok(claim);
+    assert.equal(claim.fencingToken, 1n);
+    assert.equal(await db().aiWorkflowJobAttempt.count({ where: { runtimeId: claim.runtimeId } }), 1);
+    assert.equal(await db().aiWorkflowOutboxConsumption.count({ where: { runtimeId: claim.runtimeId } }), 1);
+    assert.equal(await db().aiWorkflowJobRuntimeEvent.count({ where: { runtimeId: claim.runtimeId } }), 2);
+    await surrenderAiWorkflowJobLease(claim.lease);
+  });
+});
+
+test('recovery scaduta è singola e il vecchio fence non torna utilizzabile', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  const oldClaim = await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId });
+    const claimed = await claimNextAiWorkflowJob({
+      workerInstanceId: 'expired-worker',
+      workerBuildHash: 'c'.repeat(64),
+      workflowInstanceId: created.workflowInstanceId,
+    });
+    assert.ok(claimed);
+    return claimed;
+  });
+  await expireLeaseForTest(oldClaim.runtimeId);
+  const recoveries = await Promise.all([
+    recoverExpiredAiWorkflowJobLeases({ batchSize: 1 }),
+    recoverExpiredAiWorkflowJobLeases({ batchSize: 1 }),
+  ]);
+  assert.equal(recoveries.reduce((sum, value) => sum + value, 0), 1);
+  assert.equal(await recoverExpiredAiWorkflowJobLeases({ batchSize: 1 }), 0);
+  await makeRetryImmediatelyAvailableForTest(oldClaim.runtimeId);
+
+  await withTemporaryDispatchFixture(async () => {
+    await assertRuntimeReadyForRetryClaim(oldClaim.runtimeId);
+    const newClaim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'reclaimed-worker',
+      workerBuildHash: 'd'.repeat(64),
+      workflowInstanceId: created.workflowInstanceId,
+    });
+    assert.ok(newClaim);
+    assert.equal(newClaim.fencingToken, oldClaim.fencingToken + 1n);
+    await assert.rejects(
+      heartbeatAiWorkflowJobLease(oldClaim.lease),
+      AiOrchestratorLeaseLostError,
+    );
+    await assert.rejects(
+      completeAiWorkflowJob(oldClaim.lease, { resultHash: '4'.repeat(64) }),
+      AiOrchestratorLeaseLostError,
+    );
+    await completeAiWorkflowJob(newClaim.lease, { resultHash: '5'.repeat(64) });
+    assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
+      where: { runtimeId: oldClaim.runtimeId, eventType: 'LEASE_RECOVERED' },
+    }), 1);
+  });
+});
+
+test('recovery usa la causa canonica esatta e non ritenta un executor diventato inattivo', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  const claim = await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId });
+    const claimed = await claimNextAiWorkflowJob({
+      workerInstanceId: 'executor-invalid-recovery-worker',
+      workerBuildHash: 'e'.repeat(64),
+      workflowInstanceId: created.workflowInstanceId,
+    });
+    assert.ok(claimed);
+    return claimed;
+  });
+  await expireLeaseForTest(claim.runtimeId);
+  try {
+    await db().aiAgent.update({ where: { id: created.job.executorAgentId }, data: { active: false } });
+    assert.equal(await recoverExpiredAiWorkflowJobLeases({ batchSize: 1 }), 1);
+    const [runtime, attempt, event] = await Promise.all([
+      db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: claim.runtimeId } }),
+      db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: claim.runtimeId } }),
+      db().aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+        where: { runtimeId: claim.runtimeId, eventType: 'LEASE_RECOVERED' },
+      }),
+    ]);
+    assert.equal(runtime.state, 'SUPERSEDED');
+    assert.equal(runtime.terminalReasonCode, 'EXECUTOR_INACTIVE');
+    assert.equal(runtime.retryFailureCount, 0);
+    assert.equal(attempt.outcome, 'SUPERSEDED');
+    assert.equal(attempt.failureCode, 'EXECUTOR_INACTIVE');
+    assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(event.reasonCode, 'EXECUTOR_INACTIVE');
+  } finally {
+    await db().aiAgent.update({ where: { id: created.job.executorAgentId }, data: { active: true } });
+  }
+});
+
+test('il worker non può inventare una causa strutturale di supersession', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId });
+    const claim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'false-causal-reason-worker',
+      workerBuildHash: 'd'.repeat(64),
+      workflowInstanceId: created.workflowInstanceId,
+    });
+    assert.ok(claim);
+    await assert.rejects(
+      failAiWorkflowJob(claim.lease, { failureCode: 'HUMAN_APPROVAL_REACHED' }),
+      AiOrchestratorWorkerDisabledError,
+    );
+    assert.equal((await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: claim.runtimeId },
+    })).state, 'LEASED');
+    await surrenderAiWorkflowJobLease(claim.lease);
+  });
+});
+
+test('heartbeat e success sono negati a gate chiusi e la durata massima non è superabile', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const closedCase = await createDataValidationRuntimeCase();
+  const claim = await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: closedCase.workflowInstanceId });
+    const claimed = await claimNextAiWorkflowJob({
+      workerInstanceId: 'closed-gate-worker',
+      workerBuildHash: 'e'.repeat(64),
+      workflowInstanceId: closedCase.workflowInstanceId,
+    });
+    assert.ok(claimed);
+    await assert.rejects(db().aiWorkflowJobRuntime.update({
+      where: { id: claimed.runtimeId },
+      data: {
+        leaseExpiresAt: new Date(
+          claimed.leaseExpiresAt.getTime() + AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxAttemptDurationMs,
+        ),
+      },
+    }));
+    return claimed;
+  });
+  await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease), AiOrchestratorWorkerDisabledError);
+  await assert.rejects(
+    completeAiWorkflowJob(claim.lease, { resultHash: '6'.repeat(64) }),
+    AiOrchestratorWorkerDisabledError,
+  );
+  await surrenderAiWorkflowJobLease(claim.lease);
+});
+
+test('kill switch capability è selettivo e blocca heartbeat/success senza impedire surrender', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    const enabled = await db().aiOrchestratorWorkerCapabilitySetting.findMany({
+      where: { enabled: true },
+      select: { jobCode: true },
+    });
+    assert.deepEqual(enabled, [{ jobCode: created.job.jobCode }]);
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: created.workflowInstanceId,
+    }), 1);
+    const claim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'capability-kill-switch-worker',
+      workerBuildHash: 'f'.repeat(64),
+      workflowInstanceId: created.workflowInstanceId,
+    });
+    assert.ok(claim);
+    await setWorkerCapabilityGates([]);
+    await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease), AiOrchestratorWorkerDisabledError);
+    await assert.rejects(
+      completeAiWorkflowJob(claim.lease, { resultHash: 'a'.repeat(64) }),
+      AiOrchestratorWorkerDisabledError,
+    );
+    await surrenderAiWorkflowJobLease(claim.lease);
+  }, { enabledJobCodes: [created.job.jobCode] });
+  assert.equal(await db().aiOrchestratorWorkerCapabilitySetting.count({ where: { enabled: true } }), 0);
+});
+
+test('retry budget: prime due failure ritentano, terza termina, non-retryable e surrender non consumano budget', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const retryCase = await createDataValidationRuntimeCase();
+  const terminalCase = await createDataValidationRuntimeCase();
+  const surrenderCase = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: retryCase.workflowInstanceId });
+    for (let failure = 1; failure <= 3; failure += 1) {
+      const claim = await claimNextAiWorkflowJob({
+        workerInstanceId: `retry-worker-${failure}`,
+        workerBuildHash: String(failure).repeat(64),
+        workflowInstanceId: retryCase.workflowInstanceId,
+      });
+      assert.ok(claim);
+      const result = await failAiWorkflowJob(claim.lease, {
+        failureCode: 'MOCK_HANDLER_TRANSIENT',
+      });
+      assert.equal(result.retryFailureCount, failure);
+      assert.equal(result.state, failure < 3 ? 'RETRY_WAIT' : 'FAILED_TERMINAL');
+      if (failure < 3) {
+        await makeRetryImmediatelyAvailableForTest(claim.runtimeId);
+        await assertRuntimeReadyForRetryClaim(claim.runtimeId);
+      }
+    }
+    const retryRuntime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { jobId: retryCase.job.id },
+    });
+    assert.equal(retryRuntime.retryFailureCount, 3);
+    assert.equal(retryRuntime.state, 'FAILED_TERMINAL');
+
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: terminalCase.workflowInstanceId });
+    const terminalClaim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'terminal-worker',
+      workerBuildHash: '7'.repeat(64),
+      workflowInstanceId: terminalCase.workflowInstanceId,
+    });
+    assert.ok(terminalClaim);
+    const terminal = await failAiWorkflowJob(terminalClaim.lease, {
+      failureCode: 'CAPABILITY_DENIED',
+    });
+    assert.equal(terminal.state, 'FAILED_TERMINAL');
+    assert.equal(terminal.retryFailureCount, 0);
+
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: surrenderCase.workflowInstanceId });
+    const surrenderClaim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'surrender-worker',
+      workerBuildHash: '8'.repeat(64),
+      workflowInstanceId: surrenderCase.workflowInstanceId,
+    });
+    assert.ok(surrenderClaim);
+    await surrenderAiWorkflowJobLease(surrenderClaim.lease);
+    const surrendered = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: surrenderClaim.runtimeId },
+    });
+    assert.equal(surrendered.state, 'RETRY_WAIT');
+    assert.equal(surrendered.retryFailureCount, 0);
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({
+      where: { runtimeId: surrenderClaim.runtimeId },
+    });
+    assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.retryBudgetConsumed, false);
+  });
+});
+
+test('supersession terminalizza AVAILABLE e RETRY_WAIT fuori fase anche con gate chiusi', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const availableCase = await createDataValidationRuntimeCase();
+  const retryCase = await createDataValidationRuntimeCase();
+  let retryRuntimeId = '';
+  await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: availableCase.workflowInstanceId });
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: retryCase.workflowInstanceId });
+    const retryClaim = await claimNextAiWorkflowJob({
+      workerInstanceId: 'supersession-retry-worker',
+      workerBuildHash: 'a'.repeat(64),
+      workflowInstanceId: retryCase.workflowInstanceId,
+    });
+    assert.ok(retryClaim);
+    retryRuntimeId = retryClaim.runtimeId;
+    await failAiWorkflowJob(retryClaim.lease, { failureCode: 'WORKER_TRANSIENT' });
+  });
+  const availableJobBefore = await db().aiWorkflowJob.findUniqueOrThrow({
+    where: { id: availableCase.job.id },
+  });
+  const availableOutboxBefore = await db().aiWorkflowJobOutboxEvent.findUniqueOrThrow({
+    where: { id: availableCase.outbox.id },
+  });
+  for (const workflowInstanceId of [availableCase.workflowInstanceId, retryCase.workflowInstanceId]) {
+    await applyOk(workflowInstanceId, 'WF-005', agent());
+    await applyOk(workflowInstanceId, 'WF-006', agent());
+    await applyOk(workflowInstanceId, 'WF-007', agent());
+    await applyOk(workflowInstanceId, 'WF-010', human(runnerId));
+  }
+  const aiRunBefore = await db().aiRun.count();
+  const ledgerBefore = await db().aiWorkflowTransition.count();
+  await setWorkerRuntimeGates(true, false);
+  assert.equal(await supersedeIneligibleAiWorkflowJobRuntimes({
+    workflowInstanceId: availableCase.workflowInstanceId,
+  }), 1);
+  assert.equal(await supersedeIneligibleAiWorkflowJobRuntimes({
+    workflowInstanceId: retryCase.workflowInstanceId,
+  }), 1);
+  assert.equal(await supersedeIneligibleAiWorkflowJobRuntimes({
+    workflowInstanceId: retryCase.workflowInstanceId,
+  }), 0);
+  const [availableRuntime, retryRuntime] = await Promise.all([
+    db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: availableCase.job.id } }),
+    db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: retryRuntimeId } }),
+  ]);
+  assert.equal(availableRuntime.state, 'SUPERSEDED');
+  assert.equal(retryRuntime.state, 'SUPERSEDED');
+  assert.equal(availableRuntime.terminalReasonCode, 'PHASE_SUPERSEDED');
+  assert.equal(retryRuntime.terminalReasonCode, 'PHASE_SUPERSEDED');
+  assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
+    where: { runtimeId: availableRuntime.id, eventType: 'SUPERSEDED_IDLE' },
+  }), 1);
+  assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
+    where: { runtimeId: retryRuntime.id, eventType: 'SUPERSEDED_IDLE' },
+  }), 1);
+  assert.deepEqual(
+    await db().aiWorkflowJob.findUniqueOrThrow({ where: { id: availableCase.job.id } }),
+    availableJobBefore,
+  );
+  assert.deepEqual(
+    await db().aiWorkflowJobOutboxEvent.findUniqueOrThrow({ where: { id: availableCase.outbox.id } }),
+    availableOutboxBefore,
+  );
+  assert.equal(await db().aiRun.count(), aiRunBefore);
+  assert.equal(await db().aiWorkflowTransition.count(), ledgerBefore);
+});
+
+test('HUMAN_APPROVAL blocca admission, claim, heartbeat e successo e supersede gli idle', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await advanceToIndependentReview(id);
+  const claim = await withTemporaryDispatchFixture(async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: id }), 4);
+    const claimed = await claimNextAiWorkflowJob({
+      workerInstanceId: 'human-boundary-worker',
+      workerBuildHash: 'b'.repeat(64),
+      workflowInstanceId: id,
+    });
+    assert.ok(claimed);
+    return claimed;
+  });
+  await applyOk(id, 'WF-014', system());
+  await applyOk(id, 'WF-017', human(reviewerId));
+  await withTemporaryDispatchFixture(async () => {
+    assert.equal((await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } })).currentState, 'HUMAN_APPROVAL');
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: id }), 0);
+    assert.equal(await claimNextAiWorkflowJob({
+      workerInstanceId: 'human-boundary-second-worker',
+      workerBuildHash: 'c'.repeat(64),
+      workflowInstanceId: id,
+    }), null);
+    await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease));
+    const completion = await completeAiWorkflowJob(claim.lease, { resultHash: 'd'.repeat(64) });
+    assert.deepEqual(completion, { replay: false, state: 'SUPERSEDED' });
+  });
+  await setWorkerRuntimeGates(true, false);
+  assert.equal(await supersedeIneligibleAiWorkflowJobRuntimes({
+    workflowInstanceId: id,
+    batchSize: 25,
+  }), 3);
+  const runtimes = await db().aiWorkflowJobRuntime.findMany({ where: { workflowInstanceId: id } });
+  assert.equal(runtimes.length, 4);
+  assert.ok(runtimes.every((runtime) => (
+    runtime.state === 'SUPERSEDED'
+    && runtime.terminalReasonCode === 'HUMAN_APPROVAL_REACHED'
+  )));
+  assert.equal(await db().aiRun.count({ where: { id: { startsWith: id } } }), 0);
+});
+
+test('recovery dopo HUMAN_APPROVAL conserva la causa umana esatta senza retry', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  await setWorkerRuntimeGates(true, false);
+  const created = await createCase();
+  const id = created.value.workflowInstanceId;
+  await advanceToIndependentReview(id);
+  const claim = await withTemporaryDispatchFixture(async () => {
+    await admitAiWorkflowJobOutbox({ workflowInstanceId: id });
+    const claimed = await claimNextAiWorkflowJob({
+      workerInstanceId: 'human-recovery-worker',
+      workerBuildHash: '1'.repeat(64),
+      workflowInstanceId: id,
+    });
+    assert.ok(claimed);
+    return claimed;
+  });
+  await applyOk(id, 'WF-014', system());
+  await applyOk(id, 'WF-017', human(reviewerId));
+  await expireLeaseForTest(claim.runtimeId);
+  assert.equal(await recoverExpiredAiWorkflowJobLeases({ batchSize: 1 }), 1);
+  const [runtime, attempt, event] = await Promise.all([
+    db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { id: claim.runtimeId } }),
+    db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: claim.runtimeId } }),
+    db().aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: { runtimeId: claim.runtimeId, eventType: 'LEASE_RECOVERED' },
+    }),
+  ]);
+  assert.equal(runtime.state, 'SUPERSEDED');
+  assert.equal(runtime.terminalReasonCode, 'HUMAN_APPROVAL_REACHED');
+  assert.equal(runtime.retryFailureCount, 0);
+  assert.equal(attempt.outcome, 'SUPERSEDED');
+  assert.equal(attempt.failureCode, 'HUMAN_APPROVAL_REACHED');
+  assert.equal(attempt.retryBudgetConsumed, false);
+  assert.equal(event.reasonCode, 'HUMAN_APPROVAL_REACHED');
 });

@@ -304,21 +304,22 @@ enum TaskPriority {
 }
 
 model User {
-  id                             String                   @id @default(cuid())
-  email                          String                   @unique
-  name                           String
-  passwordHash                   String
-  role                           RoleCode
-  active                         Boolean                  @default(true)
-  createdAt                      DateTime                 @default(now())
-  updatedAt                      DateTime                 @updatedAt
-  deletedAt                      DateTime?
-  lastLoginAt                    DateTime?
-  permissionOverrides            UserPermissionOverride[]
-  aiOrchestratorSettingsUpdated  AiOrchestratorSetting[]  @relation("AiOrchestratorSettingUpdatedBy")
-  aiWorkflowInstancesCreated     AiWorkflowInstance[]     @relation("AiWorkflowInstanceCreatedBy")
-  aiWorkflowCommandsRequested    AiWorkflowCommand[]      @relation("AiWorkflowCommandRequestedByUser")
-  aiWorkflowTransitionsPerformed AiWorkflowTransition[]   @relation("AiWorkflowTransitionActorUser")
+  id                                String                                  @id @default(cuid())
+  email                             String                                  @unique
+  name                              String
+  passwordHash                      String
+  role                              RoleCode
+  active                            Boolean                                 @default(true)
+  createdAt                         DateTime                                @default(now())
+  updatedAt                         DateTime                                @updatedAt
+  deletedAt                         DateTime?
+  lastLoginAt                       DateTime?
+  permissionOverrides               UserPermissionOverride[]
+  aiOrchestratorSettingsUpdated     AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
+  aiWorkerCapabilitySettingsUpdated AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
+  aiWorkflowInstancesCreated        AiWorkflowInstance[]                    @relation("AiWorkflowInstanceCreatedBy")
+  aiWorkflowCommandsRequested       AiWorkflowCommand[]                     @relation("AiWorkflowCommandRequestedByUser")
+  aiWorkflowTransitionsPerformed    AiWorkflowTransition[]                  @relation("AiWorkflowTransitionActorUser")
 }
 
 model UserPermissionOverride {
@@ -843,34 +844,52 @@ model AiOrchestratorSetting {
   @@index([updatedById])
 }
 
+model AiOrchestratorWorkerCapabilitySetting {
+  jobCode           String   @id
+  capabilityCode    String   @unique
+  capabilityVersion String
+  capabilityHash    String   @unique
+  enabled           Boolean  @default(false)
+  version           Int      @default(1)
+  updatedById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  updatedBy         User?    @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([enabled, jobCode])
+  @@index([updatedById])
+}
+
 model AiWorkflowInstance {
-  id                  String                     @id @default(cuid())
-  creationKey         String                     @unique
+  id                  String                      @id @default(cuid())
+  creationKey         String                      @unique
   creationRequestHash String
   workflowCode        String
   workflowVersion     String
   definitionHash      String
-  dataMode            String                     @default("synthetic")
+  dataMode            String                      @default("synthetic")
   clientId            String?
   companyId           String?
   projectId           String?
   clientServiceId     String?
-  currentState        String                     @default("CREATED")
-  stateVersion        Int                        @default(1)
-  correctionCycle     Int                        @default(0)
+  currentState        String                      @default("CREATED")
+  stateVersion        Int                         @default(1)
+  correctionCycle     Int                         @default(0)
   lastTransitionAt    DateTime?
   createdById         String
-  createdAt           DateTime                   @default(now())
-  updatedAt           DateTime                   @updatedAt
-  client              Client?                    @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  company             Company?                   @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  project             Project?                   @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  clientService       ClientService?             @relation(fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  createdBy           User                       @relation("AiWorkflowInstanceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  client              Client?                     @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  company             Company?                    @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  project             Project?                    @relation(fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  clientService       ClientService?              @relation(fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy           User                        @relation("AiWorkflowInstanceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
   commands            AiWorkflowCommand[]
   transitions         AiWorkflowTransition[]
   jobs                AiWorkflowJob[]
   jobOutboxEvents     AiWorkflowJobOutboxEvent[]
+  jobRuntimes         AiWorkflowJobRuntime[]
+  jobRuntimeEvents    AiWorkflowJobRuntimeEvent[]
 
   @@index([workflowCode, workflowVersion])
   @@index([currentState, updatedAt])
@@ -963,7 +982,7 @@ model AiWorkflowTransition {
 }
 
 model AiWorkflowJob {
-  id                         String                     @id @default(cuid())
+  id                         String                        @id @default(cuid())
   workflowInstanceId         String
   sourceTransitionId         String
   sourceTransitionCode       String
@@ -989,22 +1008,26 @@ model AiWorkflowJob {
   slotKey                    String
   bundleCode                 String
   bundleKey                  String
-  dedupeKey                  String                     @unique
-  status                     String                     @default("PLANNED")
-  provider                   String                     @default("mock")
-  dataMode                   String                     @default("synthetic")
-  automaticDispatchAllowed   Boolean                    @default(false)
+  dedupeKey                  String                        @unique
+  status                     String                        @default("PLANNED")
+  provider                   String                        @default("mock")
+  dataMode                   String                        @default("synthetic")
+  automaticDispatchAllowed   Boolean                       @default(false)
   payload                    Json
   payloadHash                String
   correlationId              String
-  plannedAt                  DateTime                   @default(now())
+  plannedAt                  DateTime                      @default(now())
   availableAt                DateTime
   blockedAt                  DateTime?
   blockedReasonCode          String?
-  workflowInstance           AiWorkflowInstance         @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sourceTransition           AiWorkflowTransition       @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  executorAgentConfig        AiAgentConfigVersion       @relation("AiWorkflowJobExecutorConfig", fields: [executorAgentId, executorAgentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance           AiWorkflowInstance            @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceTransition           AiWorkflowTransition          @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  executorAgentConfig        AiAgentConfigVersion          @relation("AiWorkflowJobExecutorConfig", fields: [executorAgentId, executorAgentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
   outboxEvents               AiWorkflowJobOutboxEvent[]
+  runtime                    AiWorkflowJobRuntime?
+  runtimeAttempts            AiWorkflowJobAttempt[]
+  outboxConsumptions         AiWorkflowOutboxConsumption[]
+  runtimeEvents              AiWorkflowJobRuntimeEvent[]
 
   @@unique([sourceTransitionId, jobCode, jobVersion, slotKey])
   @@index([status, availableAt])
@@ -1017,25 +1040,163 @@ model AiWorkflowJob {
 }
 
 model AiWorkflowJobOutboxEvent {
-  id                 String               @id @default(cuid())
+  id                 String                       @id @default(cuid())
   jobId              String
   workflowInstanceId String
   sourceTransitionId String
-  eventKey           String               @unique
+  eventKey           String                       @unique
   eventType          String
-  eventVersion       Int                  @default(1)
+  eventVersion       Int                          @default(1)
   payload            Json
   payloadHash        String
-  deliveryState      String               @default("PENDING")
-  occurredAt         DateTime             @default(now())
-  job                AiWorkflowJob        @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  workflowInstance   AiWorkflowInstance   @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  sourceTransition   AiWorkflowTransition @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  deliveryState      String                       @default("PENDING")
+  occurredAt         DateTime                     @default(now())
+  job                AiWorkflowJob                @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance   AiWorkflowInstance           @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceTransition   AiWorkflowTransition         @relation(fields: [sourceTransitionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  consumption        AiWorkflowOutboxConsumption?
 
   @@unique([jobId, eventType])
   @@index([deliveryState, occurredAt])
   @@index([workflowInstanceId, occurredAt])
   @@index([sourceTransitionId])
+}
+
+model AiWorkflowJobRuntime {
+  id                   String                       @id @default(cuid())
+  jobId                String                       @unique
+  workflowInstanceId   String
+  runtimePolicyCode    String
+  runtimePolicyVersion String
+  runtimePolicyHash    String
+  capabilityCode       String
+  capabilityVersion    String
+  capabilityHash       String
+  handlerCode          String
+  handlerVersion       String
+  state                String                       @default("AVAILABLE")
+  effectiveAvailableAt DateTime
+  attemptSequence      Int                          @default(0)
+  retryFailureCount    Int                          @default(0)
+  fencingToken         BigInt                       @default(0)
+  leaseOwnerId         String?
+  leaseTokenHash       String?
+  leaseClaimedAt       DateTime?
+  leaseExpiresAt       DateTime?
+  leaseMaxExpiresAt    DateTime?
+  terminalAt           DateTime?
+  terminalReasonCode   String?
+  resultHash           String?
+  lastFailureCode      String?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  job                  AiWorkflowJob                @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance     AiWorkflowInstance           @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempts             AiWorkflowJobAttempt[]
+  outboxConsumption    AiWorkflowOutboxConsumption?
+  events               AiWorkflowJobRuntimeEvent[]
+
+  @@index([state, effectiveAvailableAt])
+  @@index([state, leaseExpiresAt])
+  @@index([workflowInstanceId, state, effectiveAvailableAt])
+}
+
+model AiWorkflowJobAttempt {
+  id                         String               @id @default(cuid())
+  runtimeId                  String
+  jobId                      String
+  attemptSequence            Int
+  fencingToken               BigInt
+  workerInstanceId           String
+  workerBuildHash            String
+  leaseTokenHash             String
+  claimedAt                  DateTime
+  leaseExpiresAt             DateTime
+  leaseMaxExpiresAt          DateTime
+  finishedAt                 DateTime?
+  outcome                    String?
+  failureCode                String?
+  retryable                  Boolean?
+  retryBudgetConsumed        Boolean?
+  nextAvailableAt            DateTime?
+  resultHash                 String?
+  runtimePolicyHash          String
+  capabilityHash             String
+  handlerCode                String
+  handlerVersion             String
+  workflowDefinitionHash     String
+  phaseCode                  String
+  phaseEntrySequence         Int
+  correctionCycle            Int
+  executorAgentId            String
+  executorAgentConfigVersion Int
+  executorAgentConfigHash    String
+  jobPayloadHash             String
+  createdAt                  DateTime             @default(now())
+  runtime                    AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  job                        AiWorkflowJob        @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([runtimeId, attemptSequence])
+  @@unique([runtimeId, fencingToken])
+  @@index([jobId, attemptSequence])
+  @@index([outcome, finishedAt])
+  @@index([leaseExpiresAt])
+}
+
+model AiWorkflowOutboxConsumption {
+  id                         String                   @id @default(cuid())
+  outboxEventId              String                   @unique
+  jobId                      String
+  runtimeId                  String                   @unique
+  consumerCode               String
+  consumerVersion            String
+  runtimePolicyHash          String
+  capabilityHash             String
+  eventKey                   String
+  eventPayloadHash           String
+  jobDedupeKey               String
+  jobPayloadHash             String
+  workflowDefinitionHash     String
+  phaseCode                  String
+  phaseEntrySequence         Int
+  correctionCycle            Int
+  executorAgentId            String
+  executorAgentConfigVersion Int
+  executorAgentConfigHash    String
+  consumedAt                 DateTime                 @default(now())
+  outboxEvent                AiWorkflowJobOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  job                        AiWorkflowJob            @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  runtime                    AiWorkflowJobRuntime     @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([jobId])
+  @@index([consumerCode, consumerVersion, consumedAt])
+  @@index([consumedAt])
+}
+
+model AiWorkflowJobRuntimeEvent {
+  id                 String               @id @default(cuid())
+  runtimeId          String
+  jobId              String
+  workflowInstanceId String
+  sequence           Int
+  eventType          String
+  attemptSequence    Int?
+  fencingToken       BigInt?
+  reasonCode         String?
+  payload            Json
+  payloadHash        String
+  previousEventHash  String?
+  eventHash          String               @unique
+  occurredAt         DateTime             @default(now())
+  runtime            AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  job                AiWorkflowJob        @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance   AiWorkflowInstance   @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([runtimeId, sequence])
+  @@unique([runtimeId, eventHash])
+  @@index([jobId, occurredAt])
+  @@index([workflowInstanceId, occurredAt])
+  @@index([eventType, occurredAt])
 }
 
 model AiAgentConfigVersion {
