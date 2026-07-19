@@ -298,34 +298,66 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
   await withRuntimeClockFixture(async (tx) => {
     const runtime = await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
       where: { id: runtimeId },
-      select: { attemptSequence: true, state: true },
     });
     assert.equal(runtime.state, 'RETRY_WAIT');
+    const terminalEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: {
+        runtimeId,
+        attemptSequence: runtime.attemptSequence,
+        fencingToken: runtime.fencingToken,
+        eventType: { in: ['RETRY_SCHEDULED', 'LEASE_RECOVERED'] },
+      },
+      orderBy: { sequence: 'desc' },
+    });
+    const latestEvent = await tx.aiWorkflowJobRuntimeEvent.findFirstOrThrow({
+      where: { runtimeId },
+      orderBy: { sequence: 'desc' },
+      select: { id: true },
+    });
+    assert.equal(latestEvent.id, terminalEvent.id);
+    const nextAvailableAt = new Date('2000-01-01T00:00:00.000Z');
+    const payload = {
+      ...(terminalEvent.payload as Record<string, string | number | boolean | null>),
+      nextAvailableAt: nextAvailableAt.toISOString(),
+    };
+    const payloadHash = canonicalSha256(payload);
+    const eventHash = canonicalSha256({
+      schemaVersion: 1,
+      runtimeId,
+      jobId: runtime.jobId,
+      workflowInstanceId: runtime.workflowInstanceId,
+      sequence: terminalEvent.sequence,
+      eventType: terminalEvent.eventType,
+      attemptSequence: terminalEvent.attemptSequence,
+      fencingToken: String(terminalEvent.fencingToken),
+      reasonCode: terminalEvent.reasonCode,
+      payloadHash,
+      previousEventHash: terminalEvent.previousEventHash,
+      occurredAt: terminalEvent.occurredAt.toISOString(),
+    });
     const updatedRuntime = await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobRuntime"
-      -- Fixed SQL timestamp avoids driver/timezone normalization in this
-      -- confirmed ephemeral fixture; production never rewrites availability.
-      SET "effectiveAvailableAt" = TIMESTAMP '2000-01-01 00:00:00',
+      SET "effectiveAvailableAt" = ${nextAvailableAt},
         "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
       WHERE "id" = ${runtimeId}
     `);
     assert.equal(updatedRuntime, 1);
     const updatedAttempt = await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobAttempt"
-      SET "nextAvailableAt" = (
-        SELECT current_runtime."effectiveAvailableAt"
-        FROM "AiWorkflowJobRuntime" current_runtime
-        WHERE current_runtime."id" = ${runtimeId}
-      )
+      SET "nextAvailableAt" = ${nextAvailableAt}
       WHERE "runtimeId" = ${runtimeId}
         AND "attemptSequence" = ${runtime.attemptSequence}
     `);
     assert.equal(updatedAttempt, 1);
+    await tx.aiWorkflowJobRuntimeEvent.update({
+      where: { id: terminalEvent.id },
+      data: { payload, payloadHash, eventHash },
+    });
     assert.equal((await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
       where: { id: runtimeId },
       select: { effectiveAvailableAt: true },
     })).effectiveAvailableAt.toISOString(), '2000-01-01T00:00:00.000Z');
-  });
+  }, { rewriteRuntimeEvents: true });
 }
 
 async function assertRuntimeReadyForRetryClaim(runtimeId: string) {
