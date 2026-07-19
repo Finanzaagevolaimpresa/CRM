@@ -105,6 +105,33 @@ test('migration non fa backfill e protegge claim, lease, receipt e audit', () =>
   assert.doesNotMatch(migration, /\b(?:DROP|TRUNCATE)\s+(?:TABLE\s+)?"?(?:AiWorkflowJob|AiWorkflowJobOutboxEvent|AiRun|Client)"?/i);
 });
 
+test('ogni capability ha un kill switch DB separato, canonico e disabilitato per default', () => {
+  const setting = schema.match(
+    /model AiOrchestratorWorkerCapabilitySetting \{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert.ok(setting);
+  assert.match(setting, /jobCode\s+String\s+@id/);
+  assert.match(setting, /capabilityCode\s+String\s+@unique/);
+  assert.match(setting, /capabilityHash\s+String\s+@unique/);
+  assert.match(setting, /enabled\s+Boolean\s+@default\(false\)/);
+  assert.match(migration, /INSERT INTO "AiOrchestratorWorkerCapabilitySetting"[\s\S]*false, 1/);
+  assert.match(migration, /"ai_workflow_runtime_capability_enabled"/);
+  assert.match(migration, /Worker capability setting must be inserted disabled at version 1/);
+  assert.match(service, /lockAndAssertCapabilityEnabled/);
+  assert.match(service, /FOR UPDATE OF setting/);
+});
+
+test('audit e recovery sono causali per singolo attempt e non per sola cardinalità aggregata', () => {
+  assert.match(migration, /AiWorkflowJobRuntimeEvent_one_admitted_per_runtime_key/);
+  assert.match(migration, /AiWorkflowJobRuntimeEvent_one_claimed_per_attempt_key/);
+  assert.match(migration, /AiWorkflowJobRuntimeEvent_one_terminal_per_attempt_key/);
+  assert.match(migration, /CASE WHEN attempt\."finishedAt" IS NULL THEN 0 ELSE 1 END/);
+  assert.match(migration, /event\."occurredAt" IS DISTINCT FROM attempt\."finishedAt"/);
+  assert.match(service, /const ineligibilityReason = await runtimeIneligibilityReason\(tx, row\.jobId\)/);
+  assert.doesNotMatch(service, /const reasonCode = current \? 'LEASE_EXPIRED' : 'PHASE_SUPERSEDED'/);
+  assert.match(service, /STRUCTURAL_SUPERSESSION_REASONS\.has/);
+});
+
 test('claim usa clock PostgreSQL, lock atomico, token opaco e fencing monotono', () => {
   assert.match(service, /AI_ORCHESTRATOR_WORKER_ENABLED/);
   assert.match(service, /FOR UPDATE OF orchestrator, control/);

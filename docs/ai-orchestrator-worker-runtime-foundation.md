@@ -7,6 +7,8 @@ Questa Foundation aggiunge il protocollo persistente del futuro worker senza ins
 Incluso:
 
 - policy runtime/capability `FAI-AUDIT-WORKER-RUNTIME-POLICY@1.0`;
+- kill switch persistente separato, disabilitato per default, per ciascuna delle
+  tredici capability canoniche;
 - admission transazionale dell'outbox tramite receipt separata;
 - runtime e attempt persistenti;
 - claim atomico, lease, heartbeat e fencing token;
@@ -32,7 +34,10 @@ Escluso:
 
 Constraint trigger differiti verificano lo stato finale della transazione:
 receipt e `ADMITTED`, claim/attempt/`CLAIMED`, outcome runtime e relativo
-evento devono essere completi e coerenti prima del commit. L'append dell'audit
+evento devono essere completi e coerenti prima del commit. Indici parziali
+impongono un solo `ADMITTED`, un solo `CLAIMED` e un solo evento terminale per
+attempt; l'evento terminale deve corrispondere all'outcome e al suo timestamp.
+L'append dell'audit
 acquisisce un lock transazionale per runtime, evitando due sequence concorrenti.
 
 | Entità | Funzione |
@@ -41,6 +46,7 @@ acquisisce un lock transazionale per runtime, evitando due sequence concorrenti.
 | `AiWorkflowJobAttempt` | Snapshot immutabile del claim e outcome fenced |
 | `AiWorkflowOutboxConsumption` | Receipt unica dell'ammissione outbox |
 | `AiWorkflowJobRuntimeEvent` | Audit tecnico hashato e concatenato |
+| `AiOrchestratorWorkerCapabilitySetting` | Kill switch operativo per capability, default `false` |
 
 ## Policy v1
 
@@ -70,13 +76,25 @@ dispatchEnabled=false
 syntheticDataOnly=true
 provider=mock
 externalProvidersEnabled=false
+AiOrchestratorWorkerCapabilitySetting.enabled=false per tutte le 13 capability
 ```
 
-Questa PR non fornisce alcun comando per cambiare tali valori.
+Record mancante, non canonico o con versione/hash non corrispondenti equivale a
+capability disabilitata. Admission, claim, heartbeat e successo rileggono e
+lockano il relativo record; surrender, recovery e supersession restano
+disponibili come riduzione del rischio. Questa PR non fornisce alcun comando,
+UI o route per cambiare tali valori: la futura Admin Control Plane dovrà
+aggiungere autorizzazione, motivazione e audit amministrativo.
 
 ## HUMAN_APPROVAL
 
 Ogni operazione rilegge fase, ingresso fase e ciclo dal ledger. Un workflow che abbia raggiunto `HUMAN_APPROVAL` non è più eleggibile, anche se una futura transizione lo riportasse in uno stato precedente. La Foundation non importa né invoca il workflow service e non applica WF-001..WF-023.
+
+Failure e recovery derivano dal database le cause strutturali di supersession.
+Il worker non può dichiarare autonomamente `HUMAN_APPROVAL_REACHED`,
+`JOB_BLOCKED`, `PHASE_SUPERSEDED` o una causa di invalidità executor. Una lease
+scaduta ancora eleggibile usa `LEASE_EXPIRED`; una lease divenuta ineleggibile
+termina `SUPERSEDED` con la causa canonica esatta e senza consumare retry budget.
 
 ## Verifiche richieste
 

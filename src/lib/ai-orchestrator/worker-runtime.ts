@@ -86,6 +86,14 @@ type RuntimeGateRow = {
   externalProvidersEnabled: boolean;
 };
 
+type RuntimeCapabilityGateRow = {
+  jobCode: string;
+  capabilityCode: string;
+  capabilityVersion: string;
+  capabilityHash: string;
+  enabled: boolean;
+};
+
 type AdmissionCandidate = {
   outboxEventId: string;
   eventKey: string;
@@ -141,6 +149,15 @@ type RuntimeSupersessionReason =
   | 'EXECUTOR_INACTIVE'
   | 'NON_MOCK_PROVIDER'
   | 'CONFIG_HASH_MISMATCH';
+
+const STRUCTURAL_SUPERSESSION_REASONS = new Set<RuntimeSupersessionReason>([
+  'PHASE_SUPERSEDED',
+  'HUMAN_APPROVAL_REACHED',
+  'JOB_BLOCKED',
+  'EXECUTOR_INACTIVE',
+  'NON_MOCK_PROVIDER',
+  'CONFIG_HASH_MISMATCH',
+]);
 
 type IdleSupersessionCandidate = {
   runtimeId: string;
@@ -206,11 +223,26 @@ async function lockAndAssertRuntimeGates(tx: RuntimeDb) {
   ) throw new AiOrchestratorWorkerDisabledError();
 }
 
-async function runtimeJobIsCurrent(tx: RuntimeDb, jobId: string) {
-  const rows = await tx.$queryRaw<Array<{ valid: boolean }>>(Prisma.sql`
-    SELECT "ai_workflow_runtime_job_is_current"(${jobId}) AS "valid"
+async function lockAndAssertCapabilityEnabled(tx: RuntimeDb, jobId: string) {
+  const rows = await tx.$queryRaw<RuntimeCapabilityGateRow[]>(Prisma.sql`
+    SELECT job."jobCode", setting."capabilityCode", setting."capabilityVersion",
+      setting."capabilityHash", setting."enabled"
+    FROM "AiWorkflowJob" job
+    JOIN "AiOrchestratorWorkerCapabilitySetting" setting
+      ON setting."jobCode" = job."jobCode"
+    WHERE job."id" = ${jobId}
+    FOR UPDATE OF setting
   `);
-  return rows[0]?.valid === true;
+  const setting = rows[0];
+  const capability = setting ? getAiOrchestratorWorkerCapability(setting.jobCode) : null;
+  if (
+    !setting
+    || !capability
+    || setting.enabled !== true
+    || setting.capabilityCode !== capability.capabilityCode
+    || setting.capabilityVersion !== capability.capabilityVersion
+    || setting.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode]
+  ) throw new AiOrchestratorWorkerDisabledError('Capability runtime disabilitata o non canonica.');
 }
 
 async function runtimeIneligibilityReason(tx: RuntimeDb, jobId: string) {
@@ -338,6 +370,7 @@ export async function admitAiWorkflowJobOutbox(options: {
           : Prisma.empty}
         AND "ai_workflow_runtime_job_is_current"(job."id")
         AND "ai_workflow_runtime_executor_is_valid"(job."id")
+        AND "ai_workflow_runtime_capability_enabled"(job."id")
       ORDER BY job."availableAt", event."occurredAt", event."id"
       LIMIT ${batchSize}
       FOR UPDATE OF event SKIP LOCKED
@@ -354,6 +387,7 @@ export async function admitAiWorkflowJobOutbox(options: {
         || capability.executorAgentConfigVersion !== candidate.executorAgentConfigVersion
         || capability.executorAgentConfigHash !== candidate.executorAgentConfigHash
       ) throw new AiOrchestratorWorkerDisabledError('Capability runtime non coerente con il job canonico.');
+      await lockAndAssertCapabilityEnabled(tx, candidate.jobId);
       const capabilityHash = AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode];
       const runtimeId = randomUUID();
       await tx.aiWorkflowJobRuntime.create({
@@ -412,7 +446,9 @@ export async function admitAiWorkflowJobOutbox(options: {
           provider: 'mock',
           dataMode: 'synthetic',
           networkAccessAllowed: false,
+          crmDataAccessAllowed: false,
           providerCallAllowed: false,
+          workflowTransitionWriteAllowed: false,
         },
         occurredAt: now,
       });
@@ -474,12 +510,14 @@ export async function claimNextAiWorkflowJob(input: {
           : Prisma.empty}
         AND "ai_workflow_runtime_job_is_current"(job."id")
         AND "ai_workflow_runtime_executor_is_valid"(job."id")
+        AND "ai_workflow_runtime_capability_enabled"(job."id")
       ORDER BY runtime."effectiveAvailableAt", job."plannedAt", runtime."id"
       LIMIT 1
       FOR UPDATE OF runtime SKIP LOCKED
     `);
     const candidate = candidates[0];
     if (!candidate) return null;
+    await lockAndAssertCapabilityEnabled(tx, candidate.jobId);
     const [activeForWorkflow, activeForExecutor] = await Promise.all([
       tx.aiWorkflowJobRuntime.count({
         where: {
@@ -623,6 +661,7 @@ export async function heartbeatAiWorkflowJobLease(lease: AiWorkflowJobLease) {
   const claims = getLeaseClaims(lease);
   const leaseExpiresAt = await prisma.$transaction(async (tx) => {
     await lockAndAssertRuntimeGates(tx);
+    await lockAndAssertCapabilityEnabled(tx, claims.jobId);
     const now = await databaseNow(tx);
     const runtime = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId } });
     if (
@@ -687,6 +726,7 @@ export async function completeAiWorkflowJob(
   const claims = getLeaseClaims(lease);
   return prisma.$transaction(async (tx) => {
     await lockAndAssertRuntimeGates(tx);
+    await lockAndAssertCapabilityEnabled(tx, claims.jobId);
     const existing = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId } });
     if (existing?.state === 'SUCCEEDED' && existing.resultHash === options.resultHash) {
       return { replay: true as const, state: 'SUCCEEDED' as const };
@@ -909,12 +949,24 @@ export async function failAiWorkflowJob(
   return prisma.$transaction(async (tx) => {
     const now = await databaseNow(tx);
     const runtime = await loadFencedRuntime(tx, claims, now);
+    const ineligibilityReason = await runtimeIneligibilityReason(tx, claims.jobId);
+    if (ineligibilityReason) {
+      await terminalizeSuperseded(tx, runtime, claims, now, ineligibilityReason);
+      return {
+        state: 'SUPERSEDED' as const,
+        retryFailureCount: runtime.retryFailureCount,
+        nextAvailableAt: null,
+      };
+    }
+    if (STRUCTURAL_SUPERSESSION_REASONS.has(options.failureCode as RuntimeSupersessionReason)) {
+      throw new AiOrchestratorWorkerDisabledError(
+        'La causa strutturale dichiarata dal worker non coincide con lo stato persistito.',
+      );
+    }
     const retryable = isRetryableFailureCode(options.failureCode);
     const retryFailureCount = runtime.retryFailureCount + (retryable ? 1 : 0);
     const shouldRetry = retryable
       && retryFailureCount < AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxRetryableFailures;
-    const superseded = ['PHASE_SUPERSEDED', 'HUMAN_APPROVAL_REACHED', 'JOB_BLOCKED']
-      .includes(options.failureCode);
     const nextAvailableAt = shouldRetry
       ? new Date(now.getTime() + calculateAiOrchestratorRetryDelayMs({
         jobId: runtime.jobId,
@@ -922,7 +974,7 @@ export async function failAiWorkflowJob(
         retryFailureCount,
       }))
       : null;
-    const nextState = shouldRetry ? 'RETRY_WAIT' : superseded ? 'SUPERSEDED' : 'FAILED_TERMINAL';
+    const nextState = shouldRetry ? 'RETRY_WAIT' : 'FAILED_TERMINAL';
     await tx.aiWorkflowJobRuntime.update({
       where: { id: runtime.id },
       data: {
@@ -951,7 +1003,7 @@ export async function failAiWorkflowJob(
       },
       data: {
         finishedAt: now,
-        outcome: shouldRetry ? 'RETRY_SCHEDULED' : superseded ? 'SUPERSEDED' : 'FAILED_TERMINAL',
+        outcome: shouldRetry ? 'RETRY_SCHEDULED' : 'FAILED_TERMINAL',
         failureCode: options.failureCode,
         retryable,
         retryBudgetConsumed: retryable,
@@ -963,7 +1015,7 @@ export async function failAiWorkflowJob(
       runtimeId: runtime.id,
       jobId: runtime.jobId,
       workflowInstanceId: runtime.workflowInstanceId,
-      eventType: shouldRetry ? 'RETRY_SCHEDULED' : superseded ? 'SUPERSEDED' : 'FAILED_TERMINAL',
+      eventType: shouldRetry ? 'RETRY_SCHEDULED' : 'FAILED_TERMINAL',
       attemptSequence: claims.attemptSequence,
       fencingToken: claims.fencingToken,
       reasonCode: options.failureCode,
@@ -1055,7 +1107,8 @@ export async function recoverExpiredAiWorkflowJobLeases(options: { batchSize?: n
     `);
     let recovered = 0;
     for (const row of expired) {
-      const current = await runtimeJobIsCurrent(tx, row.jobId);
+      const ineligibilityReason = await runtimeIneligibilityReason(tx, row.jobId);
+      const current = ineligibilityReason === null;
       const retryFailureCount = row.retryFailureCount + (current ? 1 : 0);
       const shouldRetry = current
         && retryFailureCount < AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxRetryableFailures;
@@ -1067,7 +1120,7 @@ export async function recoverExpiredAiWorkflowJobLeases(options: { batchSize?: n
         }))
         : null;
       const state = shouldRetry ? 'RETRY_WAIT' : current ? 'FAILED_TERMINAL' : 'SUPERSEDED';
-      const reasonCode = current ? 'LEASE_EXPIRED' : 'PHASE_SUPERSEDED';
+      const reasonCode = ineligibilityReason ?? 'LEASE_EXPIRED';
       await tx.aiWorkflowJobRuntime.update({
         where: { id: row.runtimeId },
         data: {

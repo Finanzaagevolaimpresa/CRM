@@ -12,6 +12,44 @@ BEGIN;
 -- migration. Positive runtime tests may remove and restore it only inside the
 -- confirmed ephemeral PostgreSQL fixture.
 
+CREATE TABLE "AiOrchestratorWorkerCapabilitySetting" (
+  "jobCode" TEXT NOT NULL,
+  "capabilityCode" TEXT NOT NULL,
+  "capabilityVersion" TEXT NOT NULL,
+  "capabilityHash" TEXT NOT NULL,
+  "enabled" BOOLEAN NOT NULL DEFAULT false,
+  "version" INTEGER NOT NULL DEFAULT 1,
+  "updatedById" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+
+  CONSTRAINT "AiOrchestratorWorkerCapabilitySetting_pkey" PRIMARY KEY ("jobCode"),
+  CONSTRAINT "AiOrchestratorWorkerCapabilitySetting_contract_check" CHECK (
+    "capabilityVersion" = '1.0'
+    AND "capabilityHash" ~ '^[0-9a-f]{64}$'
+    AND "version" >= 1
+  ),
+  CONSTRAINT "AiOrchestratorWorkerCapabilitySetting_job_code_check" CHECK (
+    "jobCode" ~ '^[A-Z][A-Z0-9_]{2,63}$'
+  ),
+  CONSTRAINT "AiOrchestratorWorkerCapabilitySetting_capability_code_check" CHECK (
+    "capabilityCode" ~ '^[A-Z][A-Z0-9_]{2,127}$'
+  )
+);
+
+CREATE UNIQUE INDEX "AiOrchestratorWorkerCapabilitySetting_capabilityCode_key"
+  ON "AiOrchestratorWorkerCapabilitySetting"("capabilityCode");
+CREATE UNIQUE INDEX "AiOrchestratorWorkerCapabilitySetting_capabilityHash_key"
+  ON "AiOrchestratorWorkerCapabilitySetting"("capabilityHash");
+CREATE INDEX "AiOrchestratorWorkerCapabilitySetting_enabled_jobCode_idx"
+  ON "AiOrchestratorWorkerCapabilitySetting"("enabled", "jobCode");
+CREATE INDEX "AiOrchestratorWorkerCapabilitySetting_updatedById_idx"
+  ON "AiOrchestratorWorkerCapabilitySetting"("updatedById");
+
+ALTER TABLE "AiOrchestratorWorkerCapabilitySetting"
+  ADD CONSTRAINT "AiOrchestratorWorkerCapabilitySetting_updatedById_fkey"
+  FOREIGN KEY ("updatedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
 CREATE TABLE "AiWorkflowJobRuntime" (
   "id" TEXT NOT NULL,
   "jobId" TEXT NOT NULL,
@@ -256,7 +294,13 @@ CREATE TABLE "AiWorkflowJobRuntimeEvent" (
         AND "attemptSequence" >= 1 AND "fencingToken" >= 1
       )
     )
-    AND ("reasonCode" IS NULL OR "reasonCode" ~ '^[A-Z][A-Z0-9_]{2,63}$')
+    AND (
+      ("eventType" IN ('ADMITTED', 'CLAIMED') AND "reasonCode" IS NULL)
+      OR (
+        "eventType" NOT IN ('ADMITTED', 'CLAIMED')
+        AND "reasonCode" ~ '^[A-Z][A-Z0-9_]{2,63}$'
+      )
+    )
     AND JSONB_TYPEOF("payload") = 'object'
   ),
   CONSTRAINT "AiWorkflowJobRuntimeEvent_hashes_check" CHECK (
@@ -300,6 +344,15 @@ CREATE UNIQUE INDEX "AiWorkflowJobRuntimeEvent_runtimeId_sequence_key"
   ON "AiWorkflowJobRuntimeEvent"("runtimeId", "sequence");
 CREATE UNIQUE INDEX "AiWorkflowJobRuntimeEvent_runtimeId_eventHash_key"
   ON "AiWorkflowJobRuntimeEvent"("runtimeId", "eventHash");
+CREATE UNIQUE INDEX "AiWorkflowJobRuntimeEvent_one_admitted_per_runtime_key"
+  ON "AiWorkflowJobRuntimeEvent"("runtimeId") WHERE "eventType" = 'ADMITTED';
+CREATE UNIQUE INDEX "AiWorkflowJobRuntimeEvent_one_claimed_per_attempt_key"
+  ON "AiWorkflowJobRuntimeEvent"("runtimeId", "attemptSequence") WHERE "eventType" = 'CLAIMED';
+CREATE UNIQUE INDEX "AiWorkflowJobRuntimeEvent_one_terminal_per_attempt_key"
+  ON "AiWorkflowJobRuntimeEvent"("runtimeId", "attemptSequence")
+  WHERE "eventType" IN (
+    'RETRY_SCHEDULED', 'FAILED_TERMINAL', 'SURRENDERED', 'SUCCEEDED', 'SUPERSEDED', 'LEASE_RECOVERED'
+  );
 CREATE INDEX "AiWorkflowJobRuntimeEvent_jobId_occurredAt_idx"
   ON "AiWorkflowJobRuntimeEvent"("jobId", "occurredAt");
 CREATE INDEX "AiWorkflowJobRuntimeEvent_workflowInstanceId_occurredAt_idx"
@@ -362,6 +415,82 @@ LANGUAGE sql IMMUTABLE AS $$
     "executorAgentCode", "executorAgentConfigVersion", "executorAgentConfigHash"
   )
   WHERE mapping."jobCode" = p_job_code;
+$$;
+
+INSERT INTO "AiOrchestratorWorkerCapabilitySetting" (
+  "jobCode", "capabilityCode", "capabilityVersion", "capabilityHash",
+  "enabled", "version", "createdAt", "updatedAt"
+)
+SELECT codes."jobCode", expected."capabilityCode", '1.0', expected."capabilityHash",
+  false, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+FROM (VALUES
+  ('DOCUMENT_INGESTION'),
+  ('DOCUMENT_CLASSIFICATION'),
+  ('EVIDENCE_EXTRACTION'),
+  ('FINANCIAL_ANALYSIS'),
+  ('CREDIT_ANALYSIS'),
+  ('CALCULATIONS'),
+  ('FINDINGS_DRAFTING'),
+  ('REPORT_COMPOSITION'),
+  ('SCHEMA_REVIEW'),
+  ('NUMERIC_REVIEW'),
+  ('SOURCE_REVIEW'),
+  ('RED_TEAM_REVIEW'),
+  ('CORRECTION')
+) AS codes("jobCode")
+CROSS JOIN LATERAL "expected_ai_workflow_worker_capability"(codes."jobCode") expected;
+
+CREATE FUNCTION "validate_ai_orchestrator_worker_capability_setting"()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  expected RECORD;
+BEGIN
+  SELECT * INTO expected FROM "expected_ai_workflow_worker_capability"(NEW."jobCode");
+  IF expected."capabilityCode" IS NULL
+    OR NEW."capabilityCode" IS DISTINCT FROM expected."capabilityCode"
+    OR NEW."capabilityVersion" <> '1.0'
+    OR NEW."capabilityHash" IS DISTINCT FROM expected."capabilityHash"
+  THEN RAISE EXCEPTION 'Worker capability setting is not canonical'; END IF;
+
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."enabled" <> false OR NEW."version" <> 1 THEN
+      RAISE EXCEPTION 'Worker capability setting must be inserted disabled at version 1';
+    END IF;
+  ELSE
+    IF OLD."jobCode" IS DISTINCT FROM NEW."jobCode"
+      OR OLD."capabilityCode" IS DISTINCT FROM NEW."capabilityCode"
+      OR OLD."capabilityVersion" IS DISTINCT FROM NEW."capabilityVersion"
+      OR OLD."capabilityHash" IS DISTINCT FROM NEW."capabilityHash"
+      OR OLD."createdAt" IS DISTINCT FROM NEW."createdAt"
+      OR OLD."enabled" IS NOT DISTINCT FROM NEW."enabled"
+      OR NEW."version" <> OLD."version" + 1
+      OR NEW."updatedAt" < OLD."updatedAt"
+    THEN RAISE EXCEPTION 'Worker capability setting update is invalid'; END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "AiOrchestratorWorkerCapabilitySetting_validate_insert"
+BEFORE INSERT ON "AiOrchestratorWorkerCapabilitySetting"
+FOR EACH ROW EXECUTE FUNCTION "validate_ai_orchestrator_worker_capability_setting"();
+CREATE TRIGGER "AiOrchestratorWorkerCapabilitySetting_validate_update"
+BEFORE UPDATE ON "AiOrchestratorWorkerCapabilitySetting"
+FOR EACH ROW EXECUTE FUNCTION "validate_ai_orchestrator_worker_capability_setting"();
+
+CREATE FUNCTION "ai_workflow_runtime_capability_enabled"(p_job_id TEXT)
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM "AiWorkflowJob" job
+    CROSS JOIN LATERAL "expected_ai_workflow_worker_capability"(job."jobCode") expected
+    JOIN "AiOrchestratorWorkerCapabilitySetting" setting
+      ON setting."jobCode" = job."jobCode"
+      AND setting."capabilityCode" = expected."capabilityCode"
+      AND setting."capabilityVersion" = '1.0'
+      AND setting."capabilityHash" = expected."capabilityHash"
+    WHERE job."id" = p_job_id AND setting."enabled" = true
+  );
 $$;
 
 CREATE FUNCTION "ai_orchestrator_runtime_gates_open"()
@@ -498,6 +627,7 @@ BEGIN
     OR job_row."executorAgentConfigVersion" IS DISTINCT FROM expected."executorAgentConfigVersion"
     OR job_row."executorAgentConfigHash" IS DISTINCT FROM expected."executorAgentConfigHash"
     OR NOT "ai_orchestrator_runtime_gates_open"()
+    OR NOT "ai_workflow_runtime_capability_enabled"(NEW."jobId")
     OR NOT "ai_workflow_runtime_job_is_current"(NEW."jobId")
     OR NOT "ai_workflow_runtime_executor_is_valid"(NEW."jobId")
   THEN RAISE EXCEPTION 'AiWorkflowJobRuntime admission contract is invalid or disabled'; END IF;
@@ -538,6 +668,7 @@ BEGIN
     OR NEW."runtimePolicyHash" IS DISTINCT FROM runtime_row."runtimePolicyHash"
     OR NEW."capabilityHash" IS DISTINCT FROM runtime_row."capabilityHash"
     OR NOT "ai_orchestrator_runtime_gates_open"()
+    OR NOT "ai_workflow_runtime_capability_enabled"(NEW."jobId")
     OR NOT "ai_workflow_runtime_job_is_current"(NEW."jobId")
     OR NOT "ai_workflow_runtime_executor_is_valid"(NEW."jobId")
   THEN RAISE EXCEPTION 'AiWorkflowOutboxConsumption canonical admission is invalid or disabled'; END IF;
@@ -589,6 +720,7 @@ BEGIN
       OR NEW."leaseExpiresAt" IS DISTINCT FROM NEW."leaseClaimedAt" + INTERVAL '120 seconds'
       OR NEW."leaseMaxExpiresAt" IS DISTINCT FROM NEW."leaseClaimedAt" + INTERVAL '600 seconds'
       OR NOT "ai_orchestrator_runtime_gates_open"()
+      OR NOT "ai_workflow_runtime_capability_enabled"(NEW."jobId")
       OR NOT "ai_workflow_runtime_job_is_current"(NEW."jobId")
       OR NOT "ai_workflow_runtime_executor_is_valid"(NEW."jobId")
     THEN RAISE EXCEPTION 'AiWorkflowJobRuntime claim is invalid or disabled'; END IF;
@@ -601,6 +733,7 @@ BEGIN
       OR NEW."leaseExpiresAt" <= OLD."leaseExpiresAt"
       OR OLD."leaseExpiresAt" <= (clock_timestamp() AT TIME ZONE 'UTC')
       OR NOT "ai_orchestrator_runtime_gates_open"()
+      OR NOT "ai_workflow_runtime_capability_enabled"(NEW."jobId")
       OR NOT "ai_workflow_runtime_job_is_current"(NEW."jobId")
       OR NOT "ai_workflow_runtime_executor_is_valid"(NEW."jobId")
     THEN RAISE EXCEPTION 'AiWorkflowJobRuntime heartbeat is invalid or disabled'; END IF;
@@ -609,10 +742,22 @@ BEGIN
       OR (
         OLD."leaseExpiresAt" <= (clock_timestamp() AT TIME ZONE 'UTC')
         AND NEW."lastFailureCode" IS DISTINCT FROM 'LEASE_EXPIRED'
-        AND NOT (NEW."state" = 'SUPERSEDED' AND NEW."terminalReasonCode" = 'PHASE_SUPERSEDED')
+        AND NOT (
+          NEW."state" = 'SUPERSEDED'
+          AND NEW."terminalReasonCode" IS NOT NULL
+          AND NEW."terminalReasonCode" IS NOT DISTINCT FROM
+            "ai_workflow_runtime_ineligibility_reason"(NEW."jobId")
+        )
       )
+      OR (NEW."state" = 'SUPERSEDED' AND (
+        NEW."terminalReasonCode" IS NULL
+        OR NEW."terminalReasonCode" IS DISTINCT FROM
+          "ai_workflow_runtime_ineligibility_reason"(NEW."jobId")
+        OR NEW."lastFailureCode" IS DISTINCT FROM NEW."terminalReasonCode"
+      ))
       OR (NEW."state" = 'SUCCEEDED' AND (
         NOT "ai_orchestrator_runtime_gates_open"()
+        OR NOT "ai_workflow_runtime_capability_enabled"(NEW."jobId")
         OR NOT "ai_workflow_runtime_job_is_current"(NEW."jobId")
         OR NOT "ai_workflow_runtime_executor_is_valid"(NEW."jobId")
       ))
@@ -823,6 +968,9 @@ BEGIN
     AND event."sequence" = 1 AND event."eventType" = 'ADMITTED'
     AND event."attemptSequence" IS NULL AND event."fencingToken" IS NULL
     AND event."reasonCode" IS NULL AND event."previousEventHash" IS NULL
+    AND event."occurredAt" = consumption."consumedAt"
+    AND event."occurredAt" = runtime_row."createdAt"
+    AND event."payload" ->> 'runtimePolicyHash' = runtime_row."runtimePolicyHash"
     AND event."payload" ->> 'jobCode' = job."jobCode"
     AND event."payload" ->> 'capabilityCode' = runtime_row."capabilityCode"
     AND event."payload" ->> 'capabilityHash' = runtime_row."capabilityHash"
@@ -830,7 +978,9 @@ BEGIN
     AND event."payload" ->> 'provider' = 'mock'
     AND event."payload" ->> 'dataMode' = 'synthetic'
     AND event."payload" ->> 'networkAccessAllowed' = 'false'
-    AND event."payload" ->> 'providerCallAllowed' = 'false';
+    AND event."payload" ->> 'crmDataAccessAllowed' = 'false'
+    AND event."payload" ->> 'providerCallAllowed' = 'false'
+    AND event."payload" ->> 'workflowTransitionWriteAllowed' = 'false';
   IF canonical_admission_count <> 1 THEN
     RAISE EXCEPTION 'AiWorkflowJobRuntime requires one canonical ADMITTED event at sequence 1';
   END IF;
@@ -862,13 +1012,23 @@ BEGIN
           OR attempt."attemptSequence" < 1
           OR attempt."attemptSequence" > runtime_row."attemptSequence"
           OR attempt."fencingToken" <> attempt."attemptSequence"::BIGINT
-          OR NOT EXISTS (
-            SELECT 1 FROM "AiWorkflowJobRuntimeEvent" claimed
+          OR (
+            SELECT COUNT(*) FROM "AiWorkflowJobRuntimeEvent" claimed
             WHERE claimed."runtimeId" = attempt."runtimeId"
               AND claimed."eventType" = 'CLAIMED'
               AND claimed."attemptSequence" = attempt."attemptSequence"
               AND claimed."fencingToken" = attempt."fencingToken"
-          )
+          ) <> 1
+          OR (
+            SELECT COUNT(*) FROM "AiWorkflowJobRuntimeEvent" terminal_event
+            WHERE terminal_event."runtimeId" = attempt."runtimeId"
+              AND terminal_event."attemptSequence" = attempt."attemptSequence"
+              AND terminal_event."fencingToken" = attempt."fencingToken"
+              AND terminal_event."eventType" IN (
+                'RETRY_SCHEDULED', 'FAILED_TERMINAL', 'SURRENDERED',
+                'SUCCEEDED', 'SUPERSEDED', 'LEASE_RECOVERED'
+              )
+          ) <> CASE WHEN attempt."finishedAt" IS NULL THEN 0 ELSE 1 END
         )
     )
   THEN RAISE EXCEPTION 'AiWorkflowJobRuntime attempt counters or audit cardinality are inconsistent'; END IF;
@@ -890,11 +1050,21 @@ BEGIN
       AND (
         attempt."id" IS NULL
         OR event."jobId" <> attempt."jobId"
+        OR (
+          event."eventType" <> 'CLAIMED'
+          AND event."occurredAt" IS DISTINCT FROM attempt."finishedAt"
+        )
         OR CASE event."eventType"
           WHEN 'CLAIMED' THEN
             event."reasonCode" IS NOT NULL
+            OR event."occurredAt" IS DISTINCT FROM attempt."claimedAt"
             OR event."payload" ->> 'workerInstanceId' IS DISTINCT FROM attempt."workerInstanceId"
             OR event."payload" ->> 'workerBuildHash' IS DISTINCT FROM attempt."workerBuildHash"
+            OR event."payload" ->> 'leaseExpiresAt' IS DISTINCT FROM
+              TO_CHAR(attempt."leaseExpiresAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+            OR event."payload" ->> 'leaseMaxExpiresAt' IS DISTINCT FROM
+              TO_CHAR(attempt."leaseMaxExpiresAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+            OR event."payload" ->> 'capabilityHash' IS DISTINCT FROM attempt."capabilityHash"
           WHEN 'SUCCEEDED' THEN
             attempt."outcome" IS DISTINCT FROM 'SUCCEEDED'
             OR event."reasonCode" IS DISTINCT FROM 'SUCCEEDED'
@@ -903,6 +1073,14 @@ BEGIN
             attempt."outcome" IS DISTINCT FROM 'RETRY_SCHEDULED'
             OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
             OR event."payload" ->> 'retryable' IS DISTINCT FROM 'true'
+            OR event."payload" ->> 'nextAvailableAt' IS DISTINCT FROM
+              TO_CHAR(attempt."nextAvailableAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+            OR event."payload" ->> 'retryFailureCount' IS DISTINCT FROM (
+              SELECT COUNT(*)::TEXT FROM "AiWorkflowJobAttempt" budget_attempt
+              WHERE budget_attempt."runtimeId" = attempt."runtimeId"
+                AND budget_attempt."attemptSequence" <= attempt."attemptSequence"
+                AND budget_attempt."retryBudgetConsumed" = true
+            )
           WHEN 'SURRENDERED' THEN
             attempt."outcome" IS DISTINCT FROM 'SURRENDERED'
             OR event."reasonCode" IS DISTINCT FROM 'WORKER_SURRENDERED'
@@ -910,6 +1088,13 @@ BEGIN
           WHEN 'FAILED_TERMINAL' THEN
             attempt."outcome" IS DISTINCT FROM 'FAILED_TERMINAL'
             OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
+            OR event."payload" ->> 'retryable' IS DISTINCT FROM LOWER(attempt."retryable"::TEXT)
+            OR event."payload" ->> 'retryFailureCount' IS DISTINCT FROM (
+              SELECT COUNT(*)::TEXT FROM "AiWorkflowJobAttempt" budget_attempt
+              WHERE budget_attempt."runtimeId" = attempt."runtimeId"
+                AND budget_attempt."attemptSequence" <= attempt."attemptSequence"
+                AND budget_attempt."retryBudgetConsumed" = true
+            )
           WHEN 'SUPERSEDED' THEN
             attempt."outcome" IS DISTINCT FROM 'SUPERSEDED'
             OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
@@ -921,6 +1106,17 @@ BEGIN
               WHEN 'RETRY_SCHEDULED' THEN 'RETRY_WAIT'
               WHEN 'FAILED_TERMINAL' THEN 'FAILED_TERMINAL'
               ELSE 'SUPERSEDED'
+            END
+            OR event."payload" ->> 'retryFailureCount' IS DISTINCT FROM (
+              SELECT COUNT(*)::TEXT FROM "AiWorkflowJobAttempt" budget_attempt
+              WHERE budget_attempt."runtimeId" = attempt."runtimeId"
+                AND budget_attempt."attemptSequence" <= attempt."attemptSequence"
+                AND budget_attempt."retryBudgetConsumed" = true
+            )
+            OR event."payload" ->> 'nextAvailableAt' IS DISTINCT FROM CASE attempt."outcome"
+              WHEN 'RETRY_SCHEDULED' THEN
+                TO_CHAR(attempt."nextAvailableAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+              ELSE NULL
             END
           ELSE true
         END
@@ -1048,6 +1244,9 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION '% is append-only', TG_TABLE_NAME; END;
 $$;
 
+CREATE TRIGGER "AiOrchestratorWorkerCapabilitySetting_immutable_delete"
+BEFORE DELETE ON "AiOrchestratorWorkerCapabilitySetting"
+FOR EACH ROW EXECUTE FUNCTION "reject_ai_workflow_runtime_delete"();
 CREATE TRIGGER "AiWorkflowJobRuntime_immutable_delete" BEFORE DELETE ON "AiWorkflowJobRuntime"
 FOR EACH ROW EXECUTE FUNCTION "reject_ai_workflow_runtime_delete"();
 CREATE TRIGGER "AiWorkflowJobAttempt_immutable_delete" BEFORE DELETE ON "AiWorkflowJobAttempt"

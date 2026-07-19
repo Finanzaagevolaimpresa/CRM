@@ -22,6 +22,8 @@ La Worker Runtime Foundation v1 introduce esclusivamente il contratto dormiente 
 - `AiWorkflowJobAttempt`: tentativi e lease fenced;
 - `AiWorkflowOutboxConsumption`: receipt append-only uno-a-uno con l'evento;
 - `AiWorkflowJobRuntimeEvent`: audit tecnico hashato e concatenato.
+- `AiOrchestratorWorkerCapabilitySetting`: kill switch persistente e separato
+  per ognuna delle tredici capability, inizialmente disabilitato.
 
 La migration non crea record runtime per job esistenti. L'ammissione futura avviene soltanto consumando l'outbox e rivalidando il contratto PR75.
 
@@ -56,6 +58,11 @@ La lease dura 120 secondi, heartbeat previsto ogni 30 secondi e durata assoluta 
 Solo `LEASE_EXPIRED`, `MOCK_HANDLER_TRANSIENT` e `WORKER_TRANSIENT` sono retryable. Il budget massimo è tre failure retryable. Il backoff è esponenziale, parte da 30 secondi, ha cap 15 minuti e jitter deterministico massimo 20% derivato da job e fencing token.
 
 Il surrender non consuma retry budget. Il recupero di lease scadute è una primitiva interna distinta dal reconciler `AiRun`; questa PR non la schedula.
+La recovery ricalcola la causa canonica completa: soltanto un job ancora
+eleggibile consuma budget con `LEASE_EXPIRED`; fase/ciclo, barriera umana, job
+bloccato o executor/config non più validi producono `SUPERSEDED` con la causa
+esatta. Le cause strutturali non sono accettate come dichiarazioni fidate del
+worker.
 
 ### Capability e configurazione agente
 
@@ -69,6 +76,12 @@ Il surrender non consuma retry budget. Il recupero di lease scadute è una primi
 - rete, dati CRM, provider call e scrittura transizioni tutte vietate.
 
 Il mapping e l'hash sono duplicati in TypeScript e SQL. Prima di admission, claim, heartbeat e successo PostgreSQL ricalcola l'hash dell'esatta `AiAgentConfigVersion` immutabile. Una nuova versione corrente dell'agente non sostituisce quella persistita nel job. L'agente padre deve comunque esistere, essere attivo, avere code coerente e provider mock.
+
+Ogni mapping possiede inoltre un record operativo distinto. Tutti i tredici
+record nascono con `enabled=false`; assenza, duplicazione o mismatch di
+code/version/hash chiudono la capability. L'abilitazione di una capability non
+abilita le altre. Questo gate operativo non modifica l'hash della policy e non
+reinterpreta runtime già persistiti.
 
 Attore della transizione, executor canonico e worker instance sono identità distinte.
 
@@ -84,6 +97,7 @@ syntheticDataOnly=true
 provider=mock
 externalProvidersEnabled=false
 runtime policy e capability esatte
+kill switch della capability specifica enabled=true
 ```
 
 La migration preserva il vincolo fisico PR74
@@ -95,6 +109,10 @@ effimero confermato e ripristinano valore e constraint in `finally`. Il gate
 ambiente è exact-match e manca per default. La chiusura dei gate impedisce
 nuovo lavoro; surrender, recovery e supersession degli idle ineleggibili
 restano operazioni di sola riduzione del rischio.
+
+Questa Foundation non espone un comando di amministrazione dei kill switch.
+La futura Admin Control Plane dovrà aggiungere RBAC, conferma, motivazione e
+audit delle modifiche senza poter alterare identità o hash canonici.
 
 `automaticDispatchAllowed=false` resta immutato: la pianificazione non conferisce capability. L'eventuale autorizzazione runtime richiede tutti i gate separati sopra.
 
@@ -114,7 +132,9 @@ Gli eventi materiali (`ADMITTED`, `CLAIMED`, retry, surrender, recovery e
 terminali) sono append-only, minimizzati, hashati e concatenati per runtime.
 L'append è serializzato per runtime. Constraint trigger differiti verificano al
 commit receipt, attempt, fencing, stato runtime ed evento come un'unica
-transizione semantica. Gli heartbeat aggiornano soltanto attempt/runtime per
+transizione semantica. Indici unici parziali impongono esattamente un
+`ADMITTED`, un `CLAIMED` e, per ogni attempt concluso, un solo evento terminale
+coerente con outcome, causa e timestamp. Gli heartbeat aggiornano soltanto attempt/runtime per
 evitare audit amplification. Non vengono persistiti prompt, output, documenti,
 eccezioni, credenziali o dati cliente.
 

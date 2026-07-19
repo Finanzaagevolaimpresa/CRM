@@ -304,21 +304,22 @@ enum TaskPriority {
 }
 
 model User {
-  id                             String                   @id @default(cuid())
-  email                          String                   @unique
-  name                           String
-  passwordHash                   String
-  role                           RoleCode
-  active                         Boolean                  @default(true)
-  createdAt                      DateTime                 @default(now())
-  updatedAt                      DateTime                 @updatedAt
-  deletedAt                      DateTime?
-  lastLoginAt                    DateTime?
-  permissionOverrides            UserPermissionOverride[]
-  aiOrchestratorSettingsUpdated  AiOrchestratorSetting[]  @relation("AiOrchestratorSettingUpdatedBy")
-  aiWorkflowInstancesCreated     AiWorkflowInstance[]     @relation("AiWorkflowInstanceCreatedBy")
-  aiWorkflowCommandsRequested    AiWorkflowCommand[]      @relation("AiWorkflowCommandRequestedByUser")
-  aiWorkflowTransitionsPerformed AiWorkflowTransition[]   @relation("AiWorkflowTransitionActorUser")
+  id                                String                                  @id @default(cuid())
+  email                             String                                  @unique
+  name                              String
+  passwordHash                      String
+  role                              RoleCode
+  active                            Boolean                                 @default(true)
+  createdAt                         DateTime                                @default(now())
+  updatedAt                         DateTime                                @updatedAt
+  deletedAt                         DateTime?
+  lastLoginAt                       DateTime?
+  permissionOverrides               UserPermissionOverride[]
+  aiOrchestratorSettingsUpdated     AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
+  aiWorkerCapabilitySettingsUpdated AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
+  aiWorkflowInstancesCreated        AiWorkflowInstance[]                    @relation("AiWorkflowInstanceCreatedBy")
+  aiWorkflowCommandsRequested       AiWorkflowCommand[]                     @relation("AiWorkflowCommandRequestedByUser")
+  aiWorkflowTransitionsPerformed    AiWorkflowTransition[]                  @relation("AiWorkflowTransitionActorUser")
 }
 
 model UserPermissionOverride {
@@ -840,6 +841,22 @@ model AiOrchestratorSetting {
   updatedAt           DateTime @updatedAt
   updatedBy           User?    @relation("AiOrchestratorSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
+  @@index([updatedById])
+}
+
+model AiOrchestratorWorkerCapabilitySetting {
+  jobCode           String   @id
+  capabilityCode    String   @unique
+  capabilityVersion String
+  capabilityHash    String   @unique
+  enabled           Boolean  @default(false)
+  version           Int      @default(1)
+  updatedById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  updatedBy         User?    @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([enabled, jobCode])
   @@index([updatedById])
 }
 
