@@ -237,7 +237,7 @@ async function appendRuntimeEvent(
   },
 ) {
   await tx.$queryRaw(Prisma.sql`
-    SELECT PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(${input.runtimeId}, 0))
+    SELECT PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(${input.runtimeId}, 0::BIGINT))
   `);
   await tx.$queryRaw(Prisma.sql`
     SELECT "id" FROM "AiWorkflowJobRuntime" WHERE "id" = ${input.runtimeId} FOR UPDATE

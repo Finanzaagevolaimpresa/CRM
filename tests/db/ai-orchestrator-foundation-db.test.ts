@@ -115,6 +115,7 @@ async function dispatchConstraintState(client: PrismaClient | Prisma.Transaction
     FROM pg_constraint constraint_row
     JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
     WHERE table_row."relname" = 'AiOrchestratorSetting'
+      AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
       AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
   `);
   return rows[0] ?? { present: false, validated: false };
@@ -2146,6 +2147,7 @@ test('upgrade reale PR74→PR75 preserva il replay legacy senza backfill di job 
       FROM pg_constraint constraint_row
       JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
       WHERE table_row."relname" = 'AiOrchestratorSetting'
+        AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
         AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
     `);
     assert.deepEqual(upgradeConstraint, [{ validated: true }]);

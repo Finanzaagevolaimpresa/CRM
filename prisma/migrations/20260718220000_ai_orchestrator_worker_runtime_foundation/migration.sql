@@ -724,7 +724,7 @@ DECLARE
 BEGIN
   -- A transaction-scoped lock serializes all event appends for one runtime,
   -- including raw SQL callers which did not update the runtime row first.
-  PERFORM PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(NEW."runtimeId", 0));
+  PERFORM PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(NEW."runtimeId", 0::BIGINT));
   SELECT * INTO runtime_row FROM "AiWorkflowJobRuntime"
     WHERE "id" = NEW."runtimeId" FOR UPDATE;
   SELECT * INTO previous_row FROM "AiWorkflowJobRuntimeEvent"
