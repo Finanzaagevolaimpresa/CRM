@@ -99,7 +99,7 @@ test('migration non fa backfill e protegge claim, lease, receipt e audit', () =>
   assert.match(migration, /AiWorkflowOutboxConsumption_immutable_update/);
   assert.match(migration, /AiWorkflowJobRuntimeEvent_immutable_delete/);
   assert.match(migration, /NEW\."eventHash" IS DISTINCT FROM expected_event_hash/);
-  assert.match(migration, /PG_ADVISORY_XACT_LOCK\(HASHTEXTENDED/);
+  assert.match(migration, /PG_ADVISORY_XACT_LOCK\(HASHTEXTEXTENDED/);
   assert.match(migration, /AiWorkflowJobRuntime_final_consistency/);
   assert.match(migration, /assert_ai_workflow_runtime_consistency/);
   assert.doesNotMatch(migration, /\b(?:DROP|TRUNCATE)\s+(?:TABLE\s+)?"?(?:AiWorkflowJob|AiWorkflowJobOutboxEvent|AiRun|Client)"?/i);
@@ -109,7 +109,7 @@ test('claim usa clock PostgreSQL, lock atomico, token opaco e fencing monotono',
   assert.match(service, /AI_ORCHESTRATOR_WORKER_ENABLED/);
   assert.match(service, /FOR UPDATE OF orchestrator, control/);
   assert.match(service, /FOR UPDATE OF runtime SKIP LOCKED/);
-  assert.match(service, /PG_ADVISORY_XACT_LOCK\(HASHTEXTENDED/);
+  assert.match(service, /PG_ADVISORY_XACT_LOCK\(HASHTEXTEXTENDED/);
   assert.match(service, /clock_timestamp\(\) AT TIME ZONE 'UTC'/);
   assert.match(service, /randomBytes\(32\)\.toString\('base64url'\)/);
   assert.match(service, /const tokenHash = sha256\(secret\)/);

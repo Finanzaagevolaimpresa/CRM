@@ -2429,6 +2429,7 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
   await withTemporaryDispatchFixture(async () => {
     await assert.rejects(db().$transaction(async (tx) => {
       await rawAdmissionWithoutAdmittedEvent(tx, admissionCase.job, admissionCase.outbox);
+      await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /ADMITTED|consistency|canonical/);
     assert.equal(await db().aiWorkflowJobRuntime.count({ where: { jobId: admissionCase.job.id } }), 0);
     assert.equal(await admitAiWorkflowJobOutbox({
