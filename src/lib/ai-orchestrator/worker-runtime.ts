@@ -134,6 +134,26 @@ type ClaimCandidate = {
   payload: Prisma.JsonValue;
 };
 
+type RuntimeSupersessionReason =
+  | 'PHASE_SUPERSEDED'
+  | 'HUMAN_APPROVAL_REACHED'
+  | 'JOB_BLOCKED'
+  | 'EXECUTOR_INACTIVE'
+  | 'NON_MOCK_PROVIDER'
+  | 'CONFIG_HASH_MISMATCH';
+
+type IdleSupersessionCandidate = {
+  runtimeId: string;
+  jobId: string;
+  workflowInstanceId: string;
+  previousState: 'AVAILABLE' | 'RETRY_WAIT';
+  reason: RuntimeSupersessionReason;
+  jobPhaseCode: string;
+  jobCorrectionCycle: number;
+  currentPhaseCode: string;
+  currentCorrectionCycle: number;
+};
+
 function assertWorkerEnvironmentEnabled() {
   if (process.env[AI_ORCHESTRATOR_WORKER_ENV_GATE] !== '1') {
     throw new AiOrchestratorWorkerDisabledError(`${AI_ORCHESTRATOR_WORKER_ENV_GATE} non abilitato.`);
@@ -193,6 +213,13 @@ async function runtimeJobIsCurrent(tx: RuntimeDb, jobId: string) {
   return rows[0]?.valid === true;
 }
 
+async function runtimeIneligibilityReason(tx: RuntimeDb, jobId: string) {
+  const rows = await tx.$queryRaw<Array<{ reason: RuntimeSupersessionReason | null }>>(Prisma.sql`
+    SELECT "ai_workflow_runtime_ineligibility_reason"(${jobId}) AS "reason"
+  `);
+  return rows[0]?.reason ?? null;
+}
+
 async function appendRuntimeEvent(
   tx: RuntimeDb,
   input: {
@@ -200,7 +227,8 @@ async function appendRuntimeEvent(
     jobId: string;
     workflowInstanceId: string;
     eventType: 'ADMITTED' | 'CLAIMED' | 'RETRY_SCHEDULED' | 'FAILED_TERMINAL'
-      | 'SURRENDERED' | 'SUCCEEDED' | 'SUPERSEDED' | 'LEASE_RECOVERED';
+      | 'SURRENDERED' | 'SUCCEEDED' | 'SUPERSEDED' | 'SUPERSEDED_IDLE'
+      | 'LEASE_RECOVERED';
     attemptSequence?: number | null;
     fencingToken?: bigint | null;
     reasonCode?: string | null;
@@ -208,6 +236,12 @@ async function appendRuntimeEvent(
     occurredAt: Date;
   },
 ) {
+  await tx.$queryRaw(Prisma.sql`
+    SELECT PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(${input.runtimeId}, 0))
+  `);
+  await tx.$queryRaw(Prisma.sql`
+    SELECT "id" FROM "AiWorkflowJobRuntime" WHERE "id" = ${input.runtimeId} FOR UPDATE
+  `);
   const previous = await tx.aiWorkflowJobRuntimeEvent.findFirst({
     where: { runtimeId: input.runtimeId },
     orderBy: { sequence: 'desc' },
@@ -652,15 +686,16 @@ export async function completeAiWorkflowJob(
   assertSha256(options.resultHash, 'Result hash');
   const claims = getLeaseClaims(lease);
   return prisma.$transaction(async (tx) => {
+    await lockAndAssertRuntimeGates(tx);
     const existing = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId } });
     if (existing?.state === 'SUCCEEDED' && existing.resultHash === options.resultHash) {
       return { replay: true as const, state: 'SUCCEEDED' as const };
     }
-    await lockAndAssertRuntimeGates(tx);
     const now = await databaseNow(tx);
     const runtime = await loadFencedRuntime(tx, claims, now);
-    if (!(await runtimeJobIsCurrent(tx, claims.jobId))) {
-      await terminalizeSuperseded(tx, runtime, claims, now, 'PHASE_SUPERSEDED');
+    const ineligibilityReason = await runtimeIneligibilityReason(tx, claims.jobId);
+    if (ineligibilityReason) {
+      await terminalizeSuperseded(tx, runtime, claims, now, ineligibilityReason);
       return { replay: false as const, state: 'SUPERSEDED' as const };
     }
     const updated = await tx.aiWorkflowJobRuntime.updateMany({
@@ -724,7 +759,7 @@ async function terminalizeSuperseded(
   runtime: Awaited<ReturnType<typeof loadFencedRuntime>>,
   claims: LeaseClaims,
   now: Date,
-  reasonCode: 'PHASE_SUPERSEDED' | 'HUMAN_APPROVAL_REACHED' | 'JOB_BLOCKED',
+  reasonCode: RuntimeSupersessionReason,
 ) {
   await tx.aiWorkflowJobRuntime.update({
     where: { id: runtime.id },
@@ -770,6 +805,88 @@ async function terminalizeSuperseded(
     payload: { phaseCode: runtime.job.phaseCode, correctionCycle: runtime.job.correctionCycle },
     occurredAt: now,
   });
+}
+
+/**
+ * Risk-reduction primitive for dormant or paused installations. It is
+ * intentionally not scheduled and does not require positive worker/dispatch
+ * gates: it can only move idle runtimes to the irreversible SUPERSEDED state.
+ */
+export async function supersedeIneligibleAiWorkflowJobRuntimes(
+  options: { batchSize?: number; workflowInstanceId?: string } = {},
+) {
+  if (options.workflowInstanceId !== undefined && !options.workflowInstanceId.trim()) {
+    throw new TypeError('Workflow filter non valido.');
+  }
+  const batchSize = normalizeBatchSize(
+    options.batchSize,
+    AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.leaseRecoveryBatchSize,
+  );
+  return prisma.$transaction(async (tx) => {
+    const now = await databaseNow(tx);
+    const candidates = await tx.$queryRaw<IdleSupersessionCandidate[]>(Prisma.sql`
+      SELECT
+        runtime."id" AS "runtimeId",
+        runtime."jobId",
+        runtime."workflowInstanceId",
+        runtime."state" AS "previousState",
+        eligibility."reason",
+        job."phaseCode" AS "jobPhaseCode",
+        job."correctionCycle" AS "jobCorrectionCycle",
+        instance."currentState" AS "currentPhaseCode",
+        instance."correctionCycle" AS "currentCorrectionCycle"
+      FROM "AiWorkflowJobRuntime" runtime
+      JOIN "AiWorkflowJob" job ON job."id" = runtime."jobId"
+      JOIN "AiWorkflowInstance" instance ON instance."id" = runtime."workflowInstanceId"
+      CROSS JOIN LATERAL (
+        SELECT "ai_workflow_runtime_ineligibility_reason"(runtime."jobId") AS "reason"
+      ) eligibility
+      WHERE runtime."state" IN ('AVAILABLE', 'RETRY_WAIT')
+        AND eligibility."reason" IS NOT NULL
+        ${options.workflowInstanceId
+          ? Prisma.sql`AND runtime."workflowInstanceId" = ${options.workflowInstanceId}`
+          : Prisma.empty}
+      ORDER BY runtime."updatedAt", runtime."id"
+      LIMIT ${batchSize}
+      FOR UPDATE OF runtime SKIP LOCKED
+    `);
+    let superseded = 0;
+    for (const candidate of candidates) {
+      const updated = await tx.aiWorkflowJobRuntime.updateMany({
+        where: {
+          id: candidate.runtimeId,
+          state: candidate.previousState,
+        },
+        data: {
+          state: 'SUPERSEDED',
+          terminalAt: now,
+          terminalReasonCode: candidate.reason,
+          resultHash: null,
+          lastFailureCode: candidate.reason,
+          updatedAt: now,
+        },
+      });
+      if (updated.count !== 1) continue;
+      await appendRuntimeEvent(tx, {
+        runtimeId: candidate.runtimeId,
+        jobId: candidate.jobId,
+        workflowInstanceId: candidate.workflowInstanceId,
+        eventType: 'SUPERSEDED_IDLE',
+        reasonCode: candidate.reason,
+        payload: {
+          previousState: candidate.previousState,
+          jobPhaseCode: candidate.jobPhaseCode,
+          jobCorrectionCycle: candidate.jobCorrectionCycle,
+          currentPhaseCode: candidate.currentPhaseCode,
+          currentCorrectionCycle: candidate.currentCorrectionCycle,
+          riskReductionOnly: true,
+        },
+        occurredAt: now,
+      });
+      superseded += 1;
+    }
+    return superseded;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 
 function isRetryableFailureCode(code: AiOrchestratorFailureCode) {

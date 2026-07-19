@@ -6,12 +6,11 @@
 
 BEGIN;
 
--- PR74 deliberately made dispatch physically impossible. The runtime
--- foundation keeps the default and deployed value false but permits an
--- explicitly audited future/test transition to true. Every runtime write has
--- additional independent gates below.
-ALTER TABLE "AiOrchestratorSetting"
-  DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check";
+-- PR74 deliberately made dispatch physically impossible. This production
+-- migration preserves AiOrchestratorSetting_dispatch_disabled_check exactly:
+-- opening dispatch requires a separate, explicitly authorised future
+-- migration. Positive runtime tests may remove and restore it only inside the
+-- confirmed ephemeral PostgreSQL fixture.
 
 CREATE TABLE "AiWorkflowJobRuntime" (
   "id" TEXT NOT NULL,
@@ -164,6 +163,25 @@ CREATE TABLE "AiWorkflowJobAttempt" (
       AND ("outcome" = 'SUCCEEDED' OR "resultHash" IS NULL)
       AND ("outcome" <> 'RETRY_SCHEDULED' OR "nextAvailableAt" IS NOT NULL)
       AND ("outcome" = 'RETRY_SCHEDULED' OR "nextAvailableAt" IS NULL)
+      AND (
+        ("outcome" = 'SUCCEEDED' AND "retryable" = false AND "retryBudgetConsumed" = false)
+        OR (
+          "outcome" = 'RETRY_SCHEDULED' AND "failureCode" IS NOT NULL
+          AND "retryable" = true AND "retryBudgetConsumed" = true
+        )
+        OR (
+          "outcome" = 'FAILED_TERMINAL' AND "failureCode" IS NOT NULL
+          AND "retryBudgetConsumed" = "retryable"
+        )
+        OR (
+          "outcome" = 'SURRENDERED' AND "failureCode" IS NULL
+          AND "retryable" = true AND "retryBudgetConsumed" = false
+        )
+        OR (
+          "outcome" = 'SUPERSEDED' AND "failureCode" IS NOT NULL
+          AND "retryable" = false AND "retryBudgetConsumed" = false
+        )
+      )
     )
   )
 );
@@ -227,10 +245,17 @@ CREATE TABLE "AiWorkflowJobRuntimeEvent" (
     "sequence" >= 1
     AND "eventType" IN (
       'ADMITTED', 'CLAIMED', 'RETRY_SCHEDULED', 'FAILED_TERMINAL',
-      'SURRENDERED', 'SUCCEEDED', 'SUPERSEDED', 'LEASE_RECOVERED'
+      'SURRENDERED', 'SUCCEEDED', 'SUPERSEDED', 'SUPERSEDED_IDLE', 'LEASE_RECOVERED'
     )
-    AND ("attemptSequence" IS NULL OR "attemptSequence" >= 1)
-    AND ("fencingToken" IS NULL OR "fencingToken" >= 1)
+    AND (
+      (
+        "eventType" IN ('ADMITTED', 'SUPERSEDED_IDLE')
+        AND "attemptSequence" IS NULL AND "fencingToken" IS NULL
+      ) OR (
+        "eventType" NOT IN ('ADMITTED', 'SUPERSEDED_IDLE')
+        AND "attemptSequence" >= 1 AND "fencingToken" >= 1
+      )
+    )
     AND ("reasonCode" IS NULL OR "reasonCode" ~ '^[A-Z][A-Z0-9_]{2,63}$')
     AND JSONB_TYPEOF("payload") = 'object'
   ),
@@ -394,6 +419,65 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
   );
 $$;
 
+-- Returns the canonical reason why an idle runtime is no longer eligible.
+-- NULL means that the immutable PR75 job still matches the persisted ledger,
+-- current phase/cycle and exact mock executor snapshot.
+CREATE FUNCTION "ai_workflow_runtime_ineligibility_reason"(p_job_id TEXT)
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  job_row "AiWorkflowJob"%ROWTYPE;
+  instance_row "AiWorkflowInstance"%ROWTYPE;
+  agent_row "AiAgent"%ROWTYPE;
+  config_row "AiAgentConfigVersion"%ROWTYPE;
+  current_phase_entry INTEGER;
+BEGIN
+  SELECT * INTO job_row FROM "AiWorkflowJob" WHERE "id" = p_job_id;
+  IF job_row."id" IS NULL THEN RETURN 'PHASE_SUPERSEDED'; END IF;
+  IF job_row."status" = 'BLOCKED' THEN RETURN 'JOB_BLOCKED'; END IF;
+
+  SELECT * INTO instance_row FROM "AiWorkflowInstance" WHERE "id" = job_row."workflowInstanceId";
+  IF instance_row."id" IS NULL THEN RETURN 'PHASE_SUPERSEDED'; END IF;
+  IF EXISTS (
+    SELECT 1 FROM "AiWorkflowTransition" transition
+    WHERE transition."workflowInstanceId" = job_row."workflowInstanceId"
+      AND transition."toState" = 'HUMAN_APPROVAL'
+  ) THEN RETURN 'HUMAN_APPROVAL_REACHED'; END IF;
+
+  SELECT MAX(entry."sequence") INTO current_phase_entry
+  FROM "AiWorkflowTransition" entry
+  WHERE entry."workflowInstanceId" = job_row."workflowInstanceId"
+    AND entry."toState" = job_row."phaseCode"
+    AND entry."fromState" <> entry."toState";
+
+  IF job_row."status" <> 'PLANNED'
+    OR job_row."provider" <> 'mock'
+    OR job_row."dataMode" <> 'synthetic'
+    OR job_row."automaticDispatchAllowed" <> false
+    OR instance_row."definitionHash" IS DISTINCT FROM job_row."workflowDefinitionHash"
+    OR instance_row."currentState" IS DISTINCT FROM job_row."phaseCode"
+    OR instance_row."correctionCycle" IS DISTINCT FROM job_row."correctionCycle"
+    OR current_phase_entry IS DISTINCT FROM job_row."phaseEntrySequence"
+  THEN RETURN 'PHASE_SUPERSEDED'; END IF;
+
+  SELECT * INTO agent_row FROM "AiAgent" WHERE "id" = job_row."executorAgentId";
+  SELECT * INTO config_row FROM "AiAgentConfigVersion"
+  WHERE "agentId" = job_row."executorAgentId"
+    AND "version" = job_row."executorAgentConfigVersion";
+
+  IF agent_row."id" IS NULL OR config_row."id" IS NULL
+    OR agent_row."active" <> true OR config_row."active" <> true
+  THEN RETURN 'EXECUTOR_INACTIVE'; END IF;
+  IF agent_row."provider" <> 'mock' OR config_row."provider" <> 'mock'
+    OR config_row."model" IS NOT NULL
+  THEN RETURN 'NON_MOCK_PROVIDER'; END IF;
+  IF agent_row."code" IS DISTINCT FROM job_row."executorAgentCode"
+    OR config_row."code" IS DISTINCT FROM job_row."executorAgentCode"
+    OR "ai_agent_config_snapshot_hash"(config_row) IS DISTINCT FROM job_row."executorAgentConfigHash"
+  THEN RETURN 'CONFIG_HASH_MISMATCH'; END IF;
+  RETURN NULL;
+END;
+$$;
+
 CREATE FUNCTION "validate_ai_workflow_job_runtime_insert"()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -535,6 +619,9 @@ BEGIN
     THEN RAISE EXCEPTION 'AiWorkflowJobRuntime terminal transition is invalid'; END IF;
   ELSIF OLD."state" IN ('AVAILABLE', 'RETRY_WAIT') AND NEW."state" = 'SUPERSEDED' THEN
     IF NEW."attemptSequence" <> OLD."attemptSequence" OR NEW."fencingToken" <> OLD."fencingToken"
+      OR NEW."terminalReasonCode" IS NULL
+      OR NEW."terminalReasonCode" IS DISTINCT FROM "ai_workflow_runtime_ineligibility_reason"(NEW."jobId")
+      OR NEW."lastFailureCode" IS DISTINCT FROM NEW."terminalReasonCode"
     THEN RAISE EXCEPTION 'AiWorkflowJobRuntime supersession is invalid'; END IF;
   ELSE
     RAISE EXCEPTION 'AiWorkflowJobRuntime lifecycle transition is not allowed';
@@ -635,7 +722,11 @@ DECLARE
   previous_row "AiWorkflowJobRuntimeEvent"%ROWTYPE;
   expected_event_hash TEXT;
 BEGIN
-  SELECT * INTO runtime_row FROM "AiWorkflowJobRuntime" WHERE "id" = NEW."runtimeId";
+  -- A transaction-scoped lock serializes all event appends for one runtime,
+  -- including raw SQL callers which did not update the runtime row first.
+  PERFORM PG_ADVISORY_XACT_LOCK(HASHTEXTENDED(NEW."runtimeId", 0));
+  SELECT * INTO runtime_row FROM "AiWorkflowJobRuntime"
+    WHERE "id" = NEW."runtimeId" FOR UPDATE;
   SELECT * INTO previous_row FROM "AiWorkflowJobRuntimeEvent"
     WHERE "runtimeId" = NEW."runtimeId" ORDER BY "sequence" DESC LIMIT 1;
   expected_event_hash := ENCODE(SHA256(CONVERT_TO("canonicalize_ai_workflow_jsonb"(
@@ -672,6 +763,280 @@ $$;
 CREATE TRIGGER "AiWorkflowJobRuntimeEvent_validate_insert"
 BEFORE INSERT ON "AiWorkflowJobRuntimeEvent"
 FOR EACH ROW EXECUTE FUNCTION "validate_ai_workflow_runtime_event_insert"();
+
+-- Cross-table lifecycle invariants are checked against the final state of the
+-- transaction. Immediate row triggers still reject malformed mutations early;
+-- these deferred checks prevent a caller from committing only one side of a
+-- runtime/attempt/receipt/audit transition.
+CREATE FUNCTION "assert_ai_workflow_runtime_consistency"(p_runtime_id TEXT)
+RETURNS VOID LANGUAGE plpgsql AS $$
+DECLARE
+  runtime_row "AiWorkflowJobRuntime"%ROWTYPE;
+  latest_attempt "AiWorkflowJobAttempt"%ROWTYPE;
+  latest_event "AiWorkflowJobRuntimeEvent"%ROWTYPE;
+  canonical_receipt_count INTEGER;
+  canonical_admission_count INTEGER;
+  attempt_count INTEGER;
+  active_attempt_count INTEGER;
+  finished_attempt_count INTEGER;
+  retry_budget_count INTEGER;
+  event_count INTEGER;
+  idle_superseded_count INTEGER;
+BEGIN
+  SELECT * INTO runtime_row FROM "AiWorkflowJobRuntime" WHERE "id" = p_runtime_id;
+  IF runtime_row."id" IS NULL THEN RETURN; END IF;
+
+  SELECT COUNT(*)::INTEGER INTO canonical_receipt_count
+  FROM "AiWorkflowOutboxConsumption" consumption
+  JOIN "AiWorkflowJobOutboxEvent" outbox ON outbox."id" = consumption."outboxEventId"
+  JOIN "AiWorkflowJob" job ON job."id" = consumption."jobId"
+  WHERE consumption."runtimeId" = runtime_row."id"
+    AND consumption."jobId" = runtime_row."jobId"
+    AND outbox."jobId" = runtime_row."jobId"
+    AND outbox."eventType" = 'AI_JOB_PLANNED' AND outbox."eventVersion" = 1
+    AND outbox."deliveryState" = 'PENDING'
+    AND consumption."eventKey" = outbox."eventKey"
+    AND consumption."eventPayloadHash" = outbox."payloadHash"
+    AND consumption."jobDedupeKey" = job."dedupeKey"
+    AND consumption."jobPayloadHash" = job."payloadHash"
+    AND consumption."workflowDefinitionHash" = job."workflowDefinitionHash"
+    AND consumption."phaseCode" = job."phaseCode"
+    AND consumption."phaseEntrySequence" = job."phaseEntrySequence"
+    AND consumption."correctionCycle" = job."correctionCycle"
+    AND consumption."executorAgentId" = job."executorAgentId"
+    AND consumption."executorAgentConfigVersion" = job."executorAgentConfigVersion"
+    AND consumption."executorAgentConfigHash" = job."executorAgentConfigHash"
+    AND consumption."runtimePolicyHash" = runtime_row."runtimePolicyHash"
+    AND consumption."capabilityHash" = runtime_row."capabilityHash";
+  IF canonical_receipt_count <> 1 THEN
+    RAISE EXCEPTION 'AiWorkflowJobRuntime requires exactly one canonical outbox consumption';
+  END IF;
+
+  SELECT COUNT(*)::INTEGER INTO canonical_admission_count
+  FROM "AiWorkflowJobRuntimeEvent" event
+  JOIN "AiWorkflowOutboxConsumption" consumption
+    ON consumption."runtimeId" = event."runtimeId"
+  JOIN "AiWorkflowJob" job ON job."id" = event."jobId"
+  WHERE event."runtimeId" = runtime_row."id"
+    AND event."jobId" = runtime_row."jobId"
+    AND event."workflowInstanceId" = runtime_row."workflowInstanceId"
+    AND event."sequence" = 1 AND event."eventType" = 'ADMITTED'
+    AND event."attemptSequence" IS NULL AND event."fencingToken" IS NULL
+    AND event."reasonCode" IS NULL AND event."previousEventHash" IS NULL
+    AND event."payload" ->> 'jobCode' = job."jobCode"
+    AND event."payload" ->> 'capabilityCode' = runtime_row."capabilityCode"
+    AND event."payload" ->> 'capabilityHash' = runtime_row."capabilityHash"
+    AND event."payload" ->> 'eventKey' = consumption."eventKey"
+    AND event."payload" ->> 'provider' = 'mock'
+    AND event."payload" ->> 'dataMode' = 'synthetic'
+    AND event."payload" ->> 'networkAccessAllowed' = 'false'
+    AND event."payload" ->> 'providerCallAllowed' = 'false';
+  IF canonical_admission_count <> 1 THEN
+    RAISE EXCEPTION 'AiWorkflowJobRuntime requires one canonical ADMITTED event at sequence 1';
+  END IF;
+
+  SELECT COUNT(*)::INTEGER,
+    COUNT(*) FILTER (WHERE "finishedAt" IS NULL)::INTEGER,
+    COUNT(*) FILTER (WHERE "finishedAt" IS NOT NULL)::INTEGER,
+    COUNT(*) FILTER (WHERE "retryBudgetConsumed" = true)::INTEGER
+  INTO attempt_count, active_attempt_count, finished_attempt_count, retry_budget_count
+  FROM "AiWorkflowJobAttempt" WHERE "runtimeId" = runtime_row."id";
+  SELECT * INTO latest_attempt FROM "AiWorkflowJobAttempt"
+    WHERE "runtimeId" = runtime_row."id" ORDER BY "attemptSequence" DESC LIMIT 1;
+  SELECT COUNT(*)::INTEGER,
+    COUNT(*) FILTER (WHERE "eventType" = 'SUPERSEDED_IDLE')::INTEGER
+  INTO event_count, idle_superseded_count
+  FROM "AiWorkflowJobRuntimeEvent" WHERE "runtimeId" = runtime_row."id";
+  SELECT * INTO latest_event FROM "AiWorkflowJobRuntimeEvent"
+    WHERE "runtimeId" = runtime_row."id" ORDER BY "sequence" DESC LIMIT 1;
+
+  IF attempt_count <> runtime_row."attemptSequence"
+    OR retry_budget_count <> runtime_row."retryFailureCount"
+    OR event_count <> 1 + attempt_count + finished_attempt_count + idle_superseded_count
+    OR EXISTS (
+      SELECT 1
+      FROM "AiWorkflowJobAttempt" attempt
+      WHERE attempt."runtimeId" = runtime_row."id"
+        AND (
+          attempt."jobId" <> runtime_row."jobId"
+          OR attempt."attemptSequence" < 1
+          OR attempt."attemptSequence" > runtime_row."attemptSequence"
+          OR attempt."fencingToken" <> attempt."attemptSequence"::BIGINT
+          OR NOT EXISTS (
+            SELECT 1 FROM "AiWorkflowJobRuntimeEvent" claimed
+            WHERE claimed."runtimeId" = attempt."runtimeId"
+              AND claimed."eventType" = 'CLAIMED'
+              AND claimed."attemptSequence" = attempt."attemptSequence"
+              AND claimed."fencingToken" = attempt."fencingToken"
+          )
+        )
+    )
+  THEN RAISE EXCEPTION 'AiWorkflowJobRuntime attempt counters or audit cardinality are inconsistent'; END IF;
+
+  -- Every attempt-bound event must refer to the exact attempt and describe its
+  -- persisted semantic outcome, not merely carry a formally valid hash.
+  IF EXISTS (
+    SELECT 1
+    FROM "AiWorkflowJobRuntimeEvent" event
+    LEFT JOIN "AiWorkflowJobAttempt" attempt
+      ON attempt."runtimeId" = event."runtimeId"
+      AND attempt."attemptSequence" = event."attemptSequence"
+      AND attempt."fencingToken" = event."fencingToken"
+    WHERE event."runtimeId" = runtime_row."id"
+      AND event."eventType" IN (
+        'CLAIMED', 'SUCCEEDED', 'RETRY_SCHEDULED', 'SURRENDERED',
+        'FAILED_TERMINAL', 'SUPERSEDED', 'LEASE_RECOVERED'
+      )
+      AND (
+        attempt."id" IS NULL
+        OR event."jobId" <> attempt."jobId"
+        OR CASE event."eventType"
+          WHEN 'CLAIMED' THEN
+            event."reasonCode" IS NOT NULL
+            OR event."payload" ->> 'workerInstanceId' IS DISTINCT FROM attempt."workerInstanceId"
+            OR event."payload" ->> 'workerBuildHash' IS DISTINCT FROM attempt."workerBuildHash"
+          WHEN 'SUCCEEDED' THEN
+            attempt."outcome" IS DISTINCT FROM 'SUCCEEDED'
+            OR event."reasonCode" IS DISTINCT FROM 'SUCCEEDED'
+            OR event."payload" ->> 'resultHash' IS DISTINCT FROM attempt."resultHash"
+          WHEN 'RETRY_SCHEDULED' THEN
+            attempt."outcome" IS DISTINCT FROM 'RETRY_SCHEDULED'
+            OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
+            OR event."payload" ->> 'retryable' IS DISTINCT FROM 'true'
+          WHEN 'SURRENDERED' THEN
+            attempt."outcome" IS DISTINCT FROM 'SURRENDERED'
+            OR event."reasonCode" IS DISTINCT FROM 'WORKER_SURRENDERED'
+            OR event."payload" ->> 'retryBudgetConsumed' IS DISTINCT FROM 'false'
+          WHEN 'FAILED_TERMINAL' THEN
+            attempt."outcome" IS DISTINCT FROM 'FAILED_TERMINAL'
+            OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
+          WHEN 'SUPERSEDED' THEN
+            attempt."outcome" IS DISTINCT FROM 'SUPERSEDED'
+            OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
+          WHEN 'LEASE_RECOVERED' THEN
+            (attempt."outcome" IS NULL
+              OR attempt."outcome" NOT IN ('RETRY_SCHEDULED', 'FAILED_TERMINAL', 'SUPERSEDED'))
+            OR event."reasonCode" IS DISTINCT FROM attempt."failureCode"
+            OR event."payload" ->> 'state' IS DISTINCT FROM CASE attempt."outcome"
+              WHEN 'RETRY_SCHEDULED' THEN 'RETRY_WAIT'
+              WHEN 'FAILED_TERMINAL' THEN 'FAILED_TERMINAL'
+              ELSE 'SUPERSEDED'
+            END
+          ELSE true
+        END
+      )
+  ) THEN RAISE EXCEPTION 'AiWorkflowJobRuntimeEvent is semantically incompatible with its attempt'; END IF;
+
+  IF idle_superseded_count > 0 AND (
+    idle_superseded_count <> 1
+    OR runtime_row."state" <> 'SUPERSEDED'
+    OR latest_event."eventType" IS DISTINCT FROM 'SUPERSEDED_IDLE'
+    OR latest_event."attemptSequence" IS NOT NULL OR latest_event."fencingToken" IS NOT NULL
+    OR latest_event."reasonCode" IS DISTINCT FROM runtime_row."terminalReasonCode"
+    OR latest_event."occurredAt" IS DISTINCT FROM runtime_row."terminalAt"
+    OR latest_event."payload" ->> 'riskReductionOnly' IS DISTINCT FROM 'true'
+  ) THEN RAISE EXCEPTION 'Idle supersession audit is inconsistent'; END IF;
+
+  IF runtime_row."state" = 'AVAILABLE' THEN
+    IF attempt_count <> 0 OR active_attempt_count <> 0
+      OR latest_event."eventType" IS DISTINCT FROM 'ADMITTED'
+      OR runtime_row."lastFailureCode" IS NOT NULL
+    THEN RAISE EXCEPTION 'AVAILABLE runtime lifecycle is inconsistent'; END IF;
+  ELSIF runtime_row."state" = 'LEASED' THEN
+    IF active_attempt_count <> 1 OR latest_attempt."id" IS NULL
+      OR latest_attempt."finishedAt" IS NOT NULL
+      OR latest_attempt."attemptSequence" <> runtime_row."attemptSequence"
+      OR latest_attempt."fencingToken" <> runtime_row."fencingToken"
+      OR latest_attempt."leaseTokenHash" <> runtime_row."leaseTokenHash"
+      OR latest_attempt."claimedAt" <> runtime_row."leaseClaimedAt"
+      OR latest_attempt."leaseExpiresAt" <> runtime_row."leaseExpiresAt"
+      OR latest_attempt."leaseMaxExpiresAt" <> runtime_row."leaseMaxExpiresAt"
+      OR latest_event."eventType" IS DISTINCT FROM 'CLAIMED'
+      OR latest_event."attemptSequence" <> latest_attempt."attemptSequence"
+      OR latest_event."fencingToken" <> latest_attempt."fencingToken"
+    THEN RAISE EXCEPTION 'LEASED runtime has no exact active attempt and CLAIMED event'; END IF;
+  ELSIF runtime_row."state" = 'RETRY_WAIT' THEN
+    IF active_attempt_count <> 0 OR latest_attempt."id" IS NULL
+      OR latest_attempt."outcome" IS NULL
+      OR latest_attempt."outcome" NOT IN ('RETRY_SCHEDULED', 'SURRENDERED')
+      OR (
+        latest_attempt."outcome" = 'RETRY_SCHEDULED'
+        AND (
+          runtime_row."lastFailureCode" IS DISTINCT FROM latest_attempt."failureCode"
+          OR runtime_row."effectiveAvailableAt" IS DISTINCT FROM latest_attempt."nextAvailableAt"
+          OR latest_event."eventType" IS NULL
+          OR latest_event."eventType" NOT IN ('RETRY_SCHEDULED', 'LEASE_RECOVERED')
+        )
+      )
+      OR (
+        latest_attempt."outcome" = 'SURRENDERED'
+        AND (
+          runtime_row."lastFailureCode" IS NOT NULL
+          OR runtime_row."effectiveAvailableAt" IS DISTINCT FROM latest_attempt."finishedAt"
+          OR latest_event."eventType" IS DISTINCT FROM 'SURRENDERED'
+        )
+      )
+    THEN RAISE EXCEPTION 'RETRY_WAIT runtime is inconsistent with its terminal attempt'; END IF;
+  ELSIF runtime_row."state" = 'SUCCEEDED' THEN
+    IF active_attempt_count <> 0 OR latest_attempt."outcome" IS DISTINCT FROM 'SUCCEEDED'
+      OR latest_attempt."resultHash" IS DISTINCT FROM runtime_row."resultHash"
+      OR latest_attempt."finishedAt" IS DISTINCT FROM runtime_row."terminalAt"
+      OR latest_event."eventType" IS DISTINCT FROM 'SUCCEEDED'
+      OR latest_event."attemptSequence" <> latest_attempt."attemptSequence"
+      OR latest_event."fencingToken" <> latest_attempt."fencingToken"
+    THEN RAISE EXCEPTION 'SUCCEEDED runtime is inconsistent with attempt or audit'; END IF;
+  ELSIF runtime_row."state" = 'FAILED_TERMINAL' THEN
+    IF active_attempt_count <> 0 OR latest_attempt."outcome" IS DISTINCT FROM 'FAILED_TERMINAL'
+      OR latest_attempt."failureCode" IS DISTINCT FROM runtime_row."terminalReasonCode"
+      OR runtime_row."lastFailureCode" IS DISTINCT FROM runtime_row."terminalReasonCode"
+      OR latest_attempt."finishedAt" IS DISTINCT FROM runtime_row."terminalAt"
+      OR latest_event."eventType" IS NULL
+      OR latest_event."eventType" NOT IN ('FAILED_TERMINAL', 'LEASE_RECOVERED')
+    THEN RAISE EXCEPTION 'FAILED_TERMINAL runtime is inconsistent with attempt or audit'; END IF;
+  ELSIF runtime_row."state" = 'SUPERSEDED' THEN
+    IF active_attempt_count <> 0
+      OR runtime_row."lastFailureCode" IS DISTINCT FROM runtime_row."terminalReasonCode"
+      OR (
+        idle_superseded_count = 0
+        AND (
+          latest_attempt."outcome" IS DISTINCT FROM 'SUPERSEDED'
+          OR latest_attempt."failureCode" IS DISTINCT FROM runtime_row."terminalReasonCode"
+          OR latest_attempt."finishedAt" IS DISTINCT FROM runtime_row."terminalAt"
+          OR latest_event."eventType" IS NULL
+          OR latest_event."eventType" NOT IN ('SUPERSEDED', 'LEASE_RECOVERED')
+        )
+      )
+    THEN RAISE EXCEPTION 'SUPERSEDED runtime is inconsistent with attempt or audit'; END IF;
+  ELSE
+    RAISE EXCEPTION 'Unknown AiWorkflowJobRuntime state';
+  END IF;
+END;
+$$;
+
+CREATE FUNCTION "verify_ai_workflow_runtime_final_state"()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'AiWorkflowJobRuntime' THEN
+    PERFORM "assert_ai_workflow_runtime_consistency"(NEW."id");
+  ELSE
+    PERFORM "assert_ai_workflow_runtime_consistency"(NEW."runtimeId");
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "AiWorkflowJobRuntime_final_consistency"
+AFTER INSERT OR UPDATE ON "AiWorkflowJobRuntime" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "verify_ai_workflow_runtime_final_state"();
+CREATE CONSTRAINT TRIGGER "AiWorkflowJobAttempt_final_consistency"
+AFTER INSERT OR UPDATE ON "AiWorkflowJobAttempt" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "verify_ai_workflow_runtime_final_state"();
+CREATE CONSTRAINT TRIGGER "AiWorkflowOutboxConsumption_final_consistency"
+AFTER INSERT ON "AiWorkflowOutboxConsumption" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "verify_ai_workflow_runtime_final_state"();
+CREATE CONSTRAINT TRIGGER "AiWorkflowJobRuntimeEvent_final_consistency"
+AFTER INSERT ON "AiWorkflowJobRuntimeEvent" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "verify_ai_workflow_runtime_final_state"();
 
 CREATE FUNCTION "reject_ai_workflow_runtime_delete"()
 RETURNS trigger LANGUAGE plpgsql AS $$

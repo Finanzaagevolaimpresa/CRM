@@ -86,7 +86,8 @@ test('schema runtime resta separato dai job e dall’outbox immutabili PR75', ()
 
 test('migration non fa backfill e protegge claim, lease, receipt e audit', () => {
   assert.match(migration, /^--[\s\S]*?\nBEGIN;/);
-  assert.match(migration, /DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"/);
+  assert.doesNotMatch(migration, /DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"/);
+  assert.match(migration, /preserves AiOrchestratorSetting_dispatch_disabled_check/);
   assert.doesNotMatch(migration, /UPDATE "AiOrchestratorSetting"[\s\S]*"dispatchEnabled"\s*=\s*true/i);
   assert.doesNotMatch(migration, /INSERT INTO "AiWorkflowJobRuntime"\s*\([^)]*SELECT/i);
   assert.match(migration, /AiWorkflowJobRuntime_requires_consumption/);
@@ -98,6 +99,9 @@ test('migration non fa backfill e protegge claim, lease, receipt e audit', () =>
   assert.match(migration, /AiWorkflowOutboxConsumption_immutable_update/);
   assert.match(migration, /AiWorkflowJobRuntimeEvent_immutable_delete/);
   assert.match(migration, /NEW\."eventHash" IS DISTINCT FROM expected_event_hash/);
+  assert.match(migration, /PG_ADVISORY_XACT_LOCK\(HASHTEXTENDED/);
+  assert.match(migration, /AiWorkflowJobRuntime_final_consistency/);
+  assert.match(migration, /assert_ai_workflow_runtime_consistency/);
   assert.doesNotMatch(migration, /\b(?:DROP|TRUNCATE)\s+(?:TABLE\s+)?"?(?:AiWorkflowJob|AiWorkflowJobOutboxEvent|AiRun|Client)"?/i);
 });
 
@@ -105,6 +109,7 @@ test('claim usa clock PostgreSQL, lock atomico, token opaco e fencing monotono',
   assert.match(service, /AI_ORCHESTRATOR_WORKER_ENABLED/);
   assert.match(service, /FOR UPDATE OF orchestrator, control/);
   assert.match(service, /FOR UPDATE OF runtime SKIP LOCKED/);
+  assert.match(service, /PG_ADVISORY_XACT_LOCK\(HASHTEXTENDED/);
   assert.match(service, /clock_timestamp\(\) AT TIME ZONE 'UTC'/);
   assert.match(service, /randomBytes\(32\)\.toString\('base64url'\)/);
   assert.match(service, /const tokenHash = sha256\(secret\)/);
@@ -113,6 +118,19 @@ test('claim usa clock PostgreSQL, lock atomico, token opaco e fencing monotono',
   assert.match(service, /const fencingToken = candidate\.fencingToken \+ 1n/);
   assert.match(service, /leaseExpiresAt:\s*\{ gt: now \}/);
   assert.match(service, /isolationLevel: Prisma\.TransactionIsolationLevel\.ReadCommitted/);
+});
+
+test('supersession idle è batch-limitata, lockata e non richiede gate positivi', () => {
+  assert.match(service, /export async function supersedeIneligibleAiWorkflowJobRuntimes/);
+  assert.match(service, /runtime\."state" IN \('AVAILABLE', 'RETRY_WAIT'\)/);
+  assert.match(service, /eligibility\."reason" IS NOT NULL/);
+  assert.match(service, /FOR UPDATE OF runtime SKIP LOCKED/);
+  assert.match(service, /eventType: 'SUPERSEDED_IDLE'/);
+  const supersession = service.match(
+    /export async function supersedeIneligibleAiWorkflowJobRuntimes[\s\S]*?\n}\n\nfunction isRetryableFailureCode/,
+  )?.[0];
+  assert.ok(supersession);
+  assert.doesNotMatch(supersession, /lockAndAssertRuntimeGates|assertWorkerEnvironmentEnabled/);
 });
 
 test('la Foundation non introduce processo, route, provider, AiRun o modifica il reconciler', () => {

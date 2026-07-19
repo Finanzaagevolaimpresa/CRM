@@ -11,7 +11,9 @@ Incluso:
 - runtime e attempt persistenti;
 - claim atomico, lease, heartbeat e fencing token;
 - retry/backoff, surrender, terminalizzazione e recovery;
-- audit runtime append-only;
+- supersession batch-limitata degli idle non più eleggibili, invocabile soltanto
+  come riduzione del rischio e mai schedulata;
+- audit runtime append-only, serializzato e semanticamente legato al lifecycle;
 - controlli PostgreSQL sulla fase e sull'executor.
 
 Escluso:
@@ -27,6 +29,11 @@ Escluso:
 ## Persistenza
 
 `AiWorkflowJob` e `AiWorkflowJobOutboxEvent` restano invariati. La migration non esegue backfill. Un evento viene ammesso soltanto quando il worker gate applicativo e tutti i gate database sono aperti; runtime e receipt nascono nella stessa transazione.
+
+Constraint trigger differiti verificano lo stato finale della transazione:
+receipt e `ADMITTED`, claim/attempt/`CLAIMED`, outcome runtime e relativo
+evento devono essere completi e coerenti prima del commit. L'append dell'audit
+acquisisce un lock transazionale per runtime, evitando due sequence concorrenti.
 
 | Entità | Funzione |
 |---|---|
@@ -83,7 +90,13 @@ npm run build
 git diff --check
 ```
 
-Migration chain, upgrade PR74→PR75→Worker Runtime e test di concorrenza devono essere eseguiti su PostgreSQL 16 effimero dedicato. I test abilitano `dispatchEnabled=true` esclusivamente nel database di test e lo riportano a `false`; non sono ammessi test production con workflow o job reali.
+Migration chain, upgrade PR74→PR75→Worker Runtime e test di concorrenza devono
+essere eseguiti su PostgreSQL 16 effimero dedicato. La migration production
+preserva `AiOrchestratorSetting_dispatch_disabled_check` e PostgreSQL continua
+a rifiutare `dispatchEnabled=true`. I test positivi rimuovono temporaneamente
+il constraint soltanto con entrambi i flag di conferma DB, quindi in `finally`
+ripristinano `dispatchEnabled=false`, ricreano e validano lo stesso constraint.
+Non sono ammessi test production con workflow o job reali.
 
 ## Rollback
 

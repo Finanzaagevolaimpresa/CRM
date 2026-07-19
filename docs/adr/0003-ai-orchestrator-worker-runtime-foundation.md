@@ -86,7 +86,15 @@ externalProvidersEnabled=false
 runtime policy e capability esatte
 ```
 
-La migration sostituisce il divieto fisico PR74 su `dispatchEnabled=true`, ma conserva default, seed e valore production `false`. Non aggiorna il singleton. Il gate ambiente è exact-match e manca per default. La chiusura dei gate impedisce nuovo lavoro; surrender e recovery restano operazioni di riduzione del rischio.
+La migration preserva il vincolo fisico PR74
+`AiOrchestratorSetting_dispatch_disabled_check`: nella catena production
+PostgreSQL continua a rifiutare `dispatchEnabled=true`. La sua eventuale
+rimozione richiede una futura migration separata e un'autorizzazione esplicita.
+I test positivi aprono il gate soltanto tramite DDL temporaneo nel PostgreSQL
+effimero confermato e ripristinano valore e constraint in `finally`. Il gate
+ambiente è exact-match e manca per default. La chiusura dei gate impedisce
+nuovo lavoro; surrender, recovery e supersession degli idle ineleggibili
+restano operazioni di sola riduzione del rischio.
 
 `automaticDispatchAllowed=false` resta immutato: la pianificazione non conferisce capability. L'eventuale autorizzazione runtime richiede tutti i gate separati sopra.
 
@@ -102,7 +110,13 @@ La policy v1 usa limiti conservativi pari a uno globalmente, per workflow e per 
 
 ### Osservabilità
 
-Gli eventi materiali (`ADMITTED`, `CLAIMED`, retry, surrender, recovery e terminali) sono append-only, minimizzati, hashati e concatenati per runtime. Gli heartbeat aggiornano soltanto attempt/runtime per evitare audit amplification. Non vengono persistiti prompt, output, documenti, eccezioni, credenziali o dati cliente.
+Gli eventi materiali (`ADMITTED`, `CLAIMED`, retry, surrender, recovery e
+terminali) sono append-only, minimizzati, hashati e concatenati per runtime.
+L'append è serializzato per runtime. Constraint trigger differiti verificano al
+commit receipt, attempt, fencing, stato runtime ed evento come un'unica
+transizione semantica. Gli heartbeat aggiornano soltanto attempt/runtime per
+evitare audit amplification. Non vengono persistiti prompt, output, documenti,
+eccezioni, credenziali o dati cliente.
 
 ## Compatibilità
 
