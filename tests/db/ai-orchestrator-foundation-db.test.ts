@@ -322,6 +322,52 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
   });
 }
 
+async function assertRuntimeReadyForRetryClaim(runtimeId: string) {
+  const rows = await db().$queryRaw<Array<{
+    state: string;
+    available: boolean;
+    current: boolean;
+    executorValid: boolean;
+    capabilityEnabled: boolean;
+    activeGlobal: number;
+    activeWorkflow: number;
+    activeExecutor: number;
+  }>>(Prisma.sql`
+    SELECT runtime."state",
+      runtime."effectiveAvailableAt" <= clock_timestamp() AT TIME ZONE 'UTC' AS "available",
+      "ai_workflow_runtime_job_is_current"(runtime."jobId") AS "current",
+      "ai_workflow_runtime_executor_is_valid"(runtime."jobId") AS "executorValid",
+      "ai_workflow_runtime_capability_enabled"(runtime."jobId") AS "capabilityEnabled",
+      (SELECT COUNT(*)::INTEGER FROM "AiWorkflowJobRuntime" active
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC') AS "activeGlobal",
+      (SELECT COUNT(*)::INTEGER FROM "AiWorkflowJobRuntime" active
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC'
+          AND active."workflowInstanceId" = runtime."workflowInstanceId") AS "activeWorkflow",
+      (SELECT COUNT(*)::INTEGER
+        FROM "AiWorkflowJobRuntime" active
+        JOIN "AiWorkflowJob" active_job ON active_job."id" = active."jobId"
+        WHERE active."state" = 'LEASED'
+          AND active."leaseExpiresAt" > clock_timestamp() AT TIME ZONE 'UTC'
+          AND active_job."executorAgentId" = job."executorAgentId"
+          AND active_job."executorAgentConfigVersion" = job."executorAgentConfigVersion") AS "activeExecutor"
+    FROM "AiWorkflowJobRuntime" runtime
+    JOIN "AiWorkflowJob" job ON job."id" = runtime."jobId"
+    WHERE runtime."id" = ${runtimeId}
+  `);
+  assert.deepEqual(rows[0], {
+    state: 'RETRY_WAIT',
+    available: true,
+    current: true,
+    executorValid: true,
+    capabilityEnabled: true,
+    activeGlobal: 0,
+    activeWorkflow: 0,
+    activeExecutor: 0,
+  });
+}
+
 async function createUser(name: string, role: 'admin' | 'collaboratore_limitato' | 'consulente') {
   return db().user.create({
     data: {
@@ -2902,6 +2948,7 @@ test('recovery scaduta è singola e il vecchio fence non torna utilizzabile', { 
   await makeRetryImmediatelyAvailableForTest(oldClaim.runtimeId);
 
   await withTemporaryDispatchFixture(async () => {
+    await assertRuntimeReadyForRetryClaim(oldClaim.runtimeId);
     const newClaim = await claimNextAiWorkflowJob({
       workerInstanceId: 'reclaimed-worker',
       workerBuildHash: 'd'.repeat(64),
@@ -3059,7 +3106,10 @@ test('retry budget: prime due failure ritentano, terza termina, non-retryable e 
       });
       assert.equal(result.retryFailureCount, failure);
       assert.equal(result.state, failure < 3 ? 'RETRY_WAIT' : 'FAILED_TERMINAL');
-      if (failure < 3) await makeRetryImmediatelyAvailableForTest(claim.runtimeId);
+      if (failure < 3) {
+        await makeRetryImmediatelyAvailableForTest(claim.runtimeId);
+        await assertRuntimeReadyForRetryClaim(claim.runtimeId);
+      }
     }
     const retryRuntime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
       where: { jobId: retryCase.job.id },
