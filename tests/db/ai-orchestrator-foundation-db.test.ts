@@ -301,7 +301,7 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
       select: { attemptSequence: true, state: true },
     });
     assert.equal(runtime.state, 'RETRY_WAIT');
-    await tx.$executeRaw(Prisma.sql`
+    const updatedRuntime = await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobRuntime"
       -- Fixed SQL timestamp avoids driver/timezone normalization in this
       -- confirmed ephemeral fixture; production never rewrites availability.
@@ -309,7 +309,8 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
         "updatedAt" = clock_timestamp() AT TIME ZONE 'UTC'
       WHERE "id" = ${runtimeId}
     `);
-    await tx.$executeRaw(Prisma.sql`
+    assert.equal(updatedRuntime, 1);
+    const updatedAttempt = await tx.$executeRaw(Prisma.sql`
       UPDATE "AiWorkflowJobAttempt"
       SET "nextAvailableAt" = (
         SELECT current_runtime."effectiveAvailableAt"
@@ -319,6 +320,11 @@ async function makeRetryImmediatelyAvailableForTest(runtimeId: string) {
       WHERE "runtimeId" = ${runtimeId}
         AND "attemptSequence" = ${runtime.attemptSequence}
     `);
+    assert.equal(updatedAttempt, 1);
+    assert.equal((await tx.aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+      select: { effectiveAvailableAt: true },
+    })).effectiveAvailableAt.toISOString(), '2000-01-01T00:00:00.000Z');
   });
 }
 
@@ -332,9 +338,13 @@ async function assertRuntimeReadyForRetryClaim(runtimeId: string) {
     activeGlobal: number;
     activeWorkflow: number;
     activeExecutor: number;
+    effectiveAvailableAt: string;
+    databaseNow: string;
   }>>(Prisma.sql`
     SELECT runtime."state",
-      runtime."effectiveAvailableAt" <= clock_timestamp() AT TIME ZONE 'UTC' AS "available",
+      runtime."effectiveAvailableAt" <= (clock_timestamp() AT TIME ZONE 'UTC') AS "available",
+      TO_CHAR(runtime."effectiveAvailableAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "effectiveAvailableAt",
+      TO_CHAR(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "databaseNow",
       "ai_workflow_runtime_job_is_current"(runtime."jobId") AS "current",
       "ai_workflow_runtime_executor_is_valid"(runtime."jobId") AS "executorValid",
       "ai_workflow_runtime_capability_enabled"(runtime."jobId") AS "capabilityEnabled",
@@ -356,16 +366,17 @@ async function assertRuntimeReadyForRetryClaim(runtimeId: string) {
     JOIN "AiWorkflowJob" job ON job."id" = runtime."jobId"
     WHERE runtime."id" = ${runtimeId}
   `);
-  assert.deepEqual(rows[0], {
-    state: 'RETRY_WAIT',
-    available: true,
-    current: true,
-    executorValid: true,
-    capabilityEnabled: true,
-    activeGlobal: 0,
-    activeWorkflow: 0,
-    activeExecutor: 0,
-  });
+  const row = rows[0];
+  assert.ok(row, 'Runtime retry non trovato.');
+  const diagnostic = JSON.stringify(row);
+  assert.equal(row.state, 'RETRY_WAIT', diagnostic);
+  assert.equal(row.available, true, diagnostic);
+  assert.equal(row.current, true, diagnostic);
+  assert.equal(row.executorValid, true, diagnostic);
+  assert.equal(row.capabilityEnabled, true, diagnostic);
+  assert.equal(row.activeGlobal, 0, diagnostic);
+  assert.equal(row.activeWorkflow, 0, diagnostic);
+  assert.equal(row.activeExecutor, 0, diagnostic);
 }
 
 async function createUser(name: string, role: 'admin' | 'collaboratore_limitato' | 'consulente') {
