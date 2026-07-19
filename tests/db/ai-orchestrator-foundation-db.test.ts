@@ -2456,20 +2456,19 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
       `);
       const now = nowRows[0]?.now;
       assert.ok(now);
-      await tx.aiWorkflowJobRuntime.update({
-        where: { id: runtime.id },
-        data: {
-          state: 'LEASED',
-          attemptSequence: 1,
-          fencingToken: 1n,
-          leaseOwnerId: 'raw-missing-attempt',
-          leaseTokenHash: '1'.repeat(64),
-          leaseClaimedAt: now,
-          leaseExpiresAt: new Date(now.getTime() + 120_000),
-          leaseMaxExpiresAt: new Date(now.getTime() + 600_000),
-          updatedAt: now,
-        },
-      });
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "AiWorkflowJobRuntime"
+        SET "state" = 'LEASED',
+          "attemptSequence" = 1,
+          "fencingToken" = 1,
+          "leaseOwnerId" = 'raw-missing-attempt',
+          "leaseTokenHash" = ${'1'.repeat(64)},
+          "leaseClaimedAt" = ${now},
+          "leaseExpiresAt" = ${new Date(now.getTime() + 120_000)},
+          "leaseMaxExpiresAt" = ${new Date(now.getTime() + 600_000)},
+          "updatedAt" = ${now}
+        WHERE "id" = ${runtime.id}
+      `);
       await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /attempt|CLAIMED|consistency/);
 
@@ -2489,22 +2488,21 @@ test('constraint differiti rifiutano admission, claim, success, attempt ed event
       `);
       const now = nowRows[0]?.now;
       assert.ok(now);
-      await tx.aiWorkflowJobRuntime.update({
-        where: { id: claim.runtimeId },
-        data: {
-          state: 'SUCCEEDED',
-          leaseOwnerId: null,
-          leaseTokenHash: null,
-          leaseClaimedAt: null,
-          leaseExpiresAt: null,
-          leaseMaxExpiresAt: null,
-          terminalAt: now,
-          terminalReasonCode: 'SUCCEEDED',
-          resultHash: '3'.repeat(64),
-          lastFailureCode: null,
-          updatedAt: now,
-        },
-      });
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "AiWorkflowJobRuntime"
+        SET "state" = 'SUCCEEDED',
+          "leaseOwnerId" = NULL,
+          "leaseTokenHash" = NULL,
+          "leaseClaimedAt" = NULL,
+          "leaseExpiresAt" = NULL,
+          "leaseMaxExpiresAt" = NULL,
+          "terminalAt" = ${now},
+          "terminalReasonCode" = 'SUCCEEDED',
+          "resultHash" = ${'3'.repeat(64)},
+          "lastFailureCode" = NULL,
+          "updatedAt" = ${now}
+        WHERE "id" = ${claim.runtimeId}
+      `);
       await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
     }), /SUCCEEDED|attempt|audit|consistency/);
 
