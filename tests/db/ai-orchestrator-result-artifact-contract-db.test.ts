@@ -841,6 +841,7 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
         ordinal: number;
         createdAt: Date;
       },
+      validateImmediately = true,
     ) => {
       await tx.$executeRaw(Prisma.sql`
         INSERT INTO "AiWorkflowJobSourceArtifact" (
@@ -850,9 +851,11 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
           ${input.sourceArtifactHash}, ${input.role ?? 'PRIMARY'}, ${input.ordinal}, ${input.createdAt}
         )
       `);
-      await tx.$executeRawUnsafe(
-        'SET CONSTRAINTS "AiWorkflowJobSourceArtifact_validate_insert" IMMEDIATE',
-      );
+      if (validateImmediately) {
+        await tx.$executeRawUnsafe(
+          'SET CONSTRAINTS "AiWorkflowJobSourceArtifact_validate_insert" IMMEDIATE',
+        );
+      }
     };
 
     await expectDatabaseRejection(
@@ -892,8 +895,8 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
         sourceArtifactHash: firstArtifact.artifactHash,
         createdAt: secondResult.createdAt,
       };
-      await insertSource(tx, { ...shared, role: 'PRIMARY', ordinal: 0 });
-      await insertSource(tx, { ...shared, role: 'SUPPORTING', ordinal: 1 });
+      await insertSource(tx, { ...shared, role: 'PRIMARY', ordinal: 0 }, false);
+      await insertSource(tx, { ...shared, role: 'SUPPORTING', ordinal: 1 }, false);
     }, /resultId_sourceArtifactId_key|duplicate key|unique constraint/i);
 
     assert.equal(await db().aiWorkflowJobSourceArtifact.count({
