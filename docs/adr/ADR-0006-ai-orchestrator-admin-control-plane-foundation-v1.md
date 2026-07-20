@@ -26,7 +26,7 @@ Nove permessi RBAC dedicati — `ai.orchestrator.read`, `ai.orchestrator.configu
 
 Le revisioni appartengono soltanto agli scope chiusi `GLOBAL`, `PROVIDER`, `AGENT`, `CAPABILITY`, `JOB` e `WORKFLOW`. La loro identità include target definition hash/versione, policy hash, previous revision hash, request id/hash, operation code, permessi/decisioni, attore, motivo e conferma.
 
-Le scritture sono serializzate per scope con lock transazionale, CAS sulla versione attesa e idempotency key con request hash server-side. Replay identici non possono duplicare lo storico; un futuro command adapter dovrà rileggere la revisione esistente per restituirla, mentre collisioni semantiche e versioni stale falliscono chiuse. La catena lega atomicamente revisione nuova e precedente e rende ricostruibile l'audit old/new. Identità canoniche, hash, activation epoch e righe storiche non sono aggiornabili o cancellabili.
+Le scritture sono serializzate per scope con lock transazionale, CAS sulla versione attesa e idempotency key con request hash server-side. Il command service interno rilegge la revisione già persistita per i replay identici, mentre collisioni semantiche e versioni stale falliscono chiuse. La catena lega atomicamente revisione nuova e precedente e rende ricostruibile l'audit old/new. Identità canoniche, hash, activation epoch e righe storiche non sono aggiornabili o cancellabili.
 
 ## Emergency stop e limiti
 
