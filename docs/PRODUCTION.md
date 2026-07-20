@@ -525,3 +525,28 @@ Rollback applicativo: mantenere i gate chiusi, ripristinare l'immagine PR76 e la
 La fondazione registry v1 definisce esclusivamente in TypeScript i 13 handler `mock`/`synthetic`, le loro identità hashate, l'invocation strict e le fixture deterministiche validate dal contratto result/artifact. Non introduce né avvia worker, runtime loop, scheduler, route o dispatch; non accede a rete, provider, database o dati CRM reali e non aggiunge schema Prisma, migration, seed o backfill.
 
 Il limite temporale del registry è un budget osservato post-esecuzione, non un hard timeout: il vero isolamento preemptive appartiene a una futura PR del processo worker. La Draft PR #78 non autorizza merge, deploy o attivazione. Tutti i gate e le 13 capability devono restare chiusi; un eventuale rollback è soltanto applicativo e non richiede alcuna operazione sul database.
+
+## AI Orchestrator Admin Control Plane Foundation v1
+
+La fondazione PR79 è esclusivamente ledger-only: registra revisioni `desired`, identità di comando, vincoli CAS/idempotency e audit amministrativo; l'`effective` è derivato ma non viene scritto nei setting runtime. Nessuna policy è collegata a worker, runtime, handler o dispatch. Il derivatore `FOUNDATION_LOCKED_V1` mantiene ogni effetto operativo fail-closed e le 36 revisioni genesis devono risultare tutte `OFF`/`KILLED`.
+
+Una policy `desired` staged non può diventare effettiva dopo un aggiornamento futuro senza una nuova activation epoch e una nuova revisione esplicitamente autorizzata. I nove permessi RBAC dedicati (`read`, `configure`, `enable`, `disable`, `kill`, `retry`, `audit`, `limits`, `agents`) sono assegnati per default soltanto ad `admin`; conferma e motivazione non sostituiscono i kill switch infrastrutturali o PostgreSQL e non consentono di aggirare `HUMAN_APPROVAL`, mutare identità canoniche o abilitare provider esterni.
+
+La PR79 non aggiunge Control Center UI, route, server action, worker, scheduler, cron, timer, systemd, dispatch, rete, provider, dati CRM reali, `AiRun` o `AiOutput`. In produzione devono restare:
+
+```text
+AI_ORCHESTRATOR_WORKER_ENABLED=0
+AI_EXTERNAL_PROVIDERS_ENABLED=false
+AI_ALLOWED_MODELS=
+stateMachineEnabled=false
+dispatchEnabled=false
+syntheticDataOnly=true
+provider=mock
+externalProvidersEnabled=false
+13 capability enabled=false
+36 policy effective=OFF/KILLED
+```
+
+L'emergency stop appende una revisione di riduzione del rischio e non cancella o riscrive job, lease, attempt, result o ledger. I limiti v1 sono hard upper bound, ma restano dichiarativi finché una futura activation epoch non viene collegata da una PR separata a un vero processo worker.
+
+La Draft PR #79 non autorizza merge, deploy o attivazione. Dopo un eventuale deploy separatamente autorizzato verificare in sola lettura il vincolo `AiOrchestratorSetting_dispatch_disabled_check`, le 36 revisioni bootstrap, i tredici kill switch e l'assenza di backfill. Il rollback ordinario ripristina l'immagine precedente mantenendo tutte le tabelle additive e lo storico append-only; non usare `DROP`, `TRUNCATE`, reset o down migration. Il contratto completo è descritto in [Admin Control Plane Foundation v1](ai-orchestrator-admin-control-plane-foundation-v1.md) e nell'[ADR-0006](adr/ADR-0006-ai-orchestrator-admin-control-plane-foundation-v1.md).

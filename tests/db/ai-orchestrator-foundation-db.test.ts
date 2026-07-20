@@ -2099,7 +2099,7 @@ test('trigger ledger rifiuta command cross-workflow e predecessore non immediato
   );
 });
 
-test('upgrade reale PR74→PR75→PR76 preserva replay legacy, barriera dispatch e assenza di backfill runtime', { skip: !runDbTests }, async () => {
+test('upgrade reale PR74→PR75→PR76→PR77→PR79 preserva replay legacy, barriera dispatch e bootstrap fail-closed', { skip: !runDbTests }, async () => {
   const databaseUrl = process.env.DATABASE_URL;
   assert.ok(databaseUrl);
   const schemaName = `orchestrator_upgrade_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -2118,6 +2118,9 @@ test('upgrade reale PR74→PR75→PR76 preserva replay legacy, barriera dispatch
   const pr74Migration = '20260717120000_ai_orchestrator_state_machine_foundation';
   const pr75Migration = '20260717180000_ai_orchestrator_persistent_job_queue_foundation';
   const workerRuntimeMigration = '20260718220000_ai_orchestrator_worker_runtime_foundation';
+  const resultArtifactMigration = '20260719120000_ai_orchestrator_result_artifact_contract_foundation_v1';
+  // PR78 is TypeScript-only and deliberately has no database migration.
+  const adminControlPlaneMigration = '20260720170000_ai_orchestrator_admin_control_plane_foundation_v1';
   for (const migrationName of readdirSync(migrationRoot).sort()) {
     if (/^\d/.test(migrationName) && migrationName <= pr74Migration) {
       cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
@@ -2344,6 +2347,164 @@ test('upgrade reale PR74→PR75→PR76 preserva replay legacy, barriera dispatch
       assert.equal(replayAfterWorkerUpgrade.value.jobPlanningStatus, 'LEGACY_NOT_PLANNED');
       assert.equal(replayAfterWorkerUpgrade.value.plannedJobCount, 0);
     }
+
+    cpSync(
+      join(migrationRoot, resultArtifactMigration),
+      join(tempMigrations, resultArtifactMigration),
+      { recursive: true },
+    );
+    deploy();
+    const resultTables = await upgradePrisma.$queryRaw<Array<{
+      resultTable: string | null;
+      artifactTable: string | null;
+      sourceTable: string | null;
+    }>>(Prisma.sql`
+      SELECT
+        TO_REGCLASS('"AiWorkflowJobResult"')::TEXT AS "resultTable",
+        TO_REGCLASS('"AiWorkflowJobArtifact"')::TEXT AS "artifactTable",
+        TO_REGCLASS('"AiWorkflowJobSourceArtifact"')::TEXT AS "sourceTable"
+    `);
+    assert.deepEqual(resultTables, [{
+      resultTable: '"AiWorkflowJobResult"',
+      artifactTable: '"AiWorkflowJobArtifact"',
+      sourceTable: '"AiWorkflowJobSourceArtifact"',
+    }]);
+    assert.equal(await upgradePrisma.aiWorkflowJobResult.count(), 0);
+    assert.equal(await upgradePrisma.aiWorkflowJobArtifact.count(), 0);
+    assert.equal(await upgradePrisma.aiWorkflowJobSourceArtifact.count(), 0);
+
+    // PR79 requires the exact dormant PR78-era base. Preserve that base and
+    // prove the admin ledger migration does not rewrite it.
+    await upgradePrisma.aiOrchestratorSetting.update({
+      where: { id: 'global' },
+      data: { stateMachineEnabled: false },
+    });
+    const beforeAdminUpgradeSetting = await upgradePrisma.aiOrchestratorSetting.findUniqueOrThrow({
+      where: { id: 'global' },
+    });
+    const beforeAdminUpgradeCounts = {
+      jobs: await upgradePrisma.aiWorkflowJob.count(),
+      outboxEvents: await upgradePrisma.aiWorkflowJobOutboxEvent.count(),
+      runtimes: await upgradePrisma.aiWorkflowJobRuntime.count(),
+      attempts: await upgradePrisma.aiWorkflowJobAttempt.count(),
+      results: await upgradePrisma.aiWorkflowJobResult.count(),
+      artifacts: await upgradePrisma.aiWorkflowJobArtifact.count(),
+      sources: await upgradePrisma.aiWorkflowJobSourceArtifact.count(),
+      aiRuns: await upgradePrisma.aiRun.count(),
+      aiOutputs: await upgradePrisma.aiOutput.count(),
+    };
+
+    cpSync(
+      join(migrationRoot, adminControlPlaneMigration),
+      join(tempMigrations, adminControlPlaneMigration),
+      { recursive: true },
+    );
+    deploy();
+
+    const bootstrap = await upgradePrisma.$queryRaw<Array<{
+      total: number;
+      genesis: number;
+      foundationLocked: number;
+      globalSafe: number;
+      scopesSafe: number;
+      globalScopes: number;
+      providerScopes: number;
+      agentScopes: number;
+      capabilityScopes: number;
+      jobScopes: number;
+      workflowScopes: number;
+    }>>(Prisma.sql`
+      SELECT
+        COUNT(*)::INTEGER AS "total",
+        COUNT(*) FILTER (
+          WHERE "version" = 1
+            AND "operationCode" = 'GENESIS'
+            AND "previousRevisionHash" IS NULL
+            AND "actorUserId" IS NULL
+            AND "actorRole" IS NULL
+            AND "requestId" IS NULL
+        )::INTEGER AS "genesis",
+        COUNT(*) FILTER (
+          WHERE "policy" ->> 'activationEpoch' = 'FOUNDATION_LOCKED_V1'
+        )::INTEGER AS "foundationLocked",
+        COUNT(*) FILTER (
+          WHERE "scopeType" = 'GLOBAL'
+            AND "policy" ->> 'policyCode' = 'AI_ORCHESTRATOR_ADMIN_GLOBAL_POLICY'
+            AND "policy" ->> 'desiredMode' = 'STOPPED'
+            AND "policy" -> 'desiredStateMachineEnabled' = 'false'::JSONB
+            AND "policy" -> 'desiredDispatchEnabled' = 'false'::JSONB
+            AND "policy" -> 'emergencyStopEngaged' = 'true'::JSONB
+            AND "policy" -> 'globalKillSwitch' = 'true'::JSONB
+        )::INTEGER AS "globalSafe",
+        COUNT(*) FILTER (
+          WHERE "scopeType" <> 'GLOBAL'
+            AND "policy" ->> 'policyCode' = 'AI_ORCHESTRATOR_ADMIN_SCOPE_POLICY'
+            AND "policy" -> 'desiredEnabled' = 'false'::JSONB
+            AND "policy" -> 'killSwitch' = 'true'::JSONB
+        )::INTEGER AS "scopesSafe",
+        COUNT(*) FILTER (WHERE "scopeType" = 'GLOBAL')::INTEGER AS "globalScopes",
+        COUNT(*) FILTER (WHERE "scopeType" = 'PROVIDER')::INTEGER AS "providerScopes",
+        COUNT(*) FILTER (WHERE "scopeType" = 'AGENT')::INTEGER AS "agentScopes",
+        COUNT(*) FILTER (WHERE "scopeType" = 'CAPABILITY')::INTEGER AS "capabilityScopes",
+        COUNT(*) FILTER (WHERE "scopeType" = 'JOB')::INTEGER AS "jobScopes",
+        COUNT(*) FILTER (WHERE "scopeType" = 'WORKFLOW')::INTEGER AS "workflowScopes"
+      FROM "AiOrchestratorAdminPolicyRevision"
+    `);
+    assert.deepEqual(bootstrap, [{
+      total: 36,
+      genesis: 36,
+      foundationLocked: 36,
+      globalSafe: 1,
+      scopesSafe: 35,
+      globalScopes: 1,
+      providerScopes: 1,
+      agentScopes: 7,
+      capabilityScopes: 13,
+      jobScopes: 13,
+      workflowScopes: 1,
+    }]);
+
+    assert.deepEqual(
+      await upgradePrisma.aiOrchestratorSetting.findUniqueOrThrow({
+        where: { id: 'global' },
+      }),
+      beforeAdminUpgradeSetting,
+    );
+    assert.equal(await upgradePrisma.aiOrchestratorWorkerCapabilitySetting.count(), 13);
+    assert.equal(await upgradePrisma.aiOrchestratorWorkerCapabilitySetting.count({
+      where: { enabled: true },
+    }), 0);
+    assert.deepEqual({
+      jobs: await upgradePrisma.aiWorkflowJob.count(),
+      outboxEvents: await upgradePrisma.aiWorkflowJobOutboxEvent.count(),
+      runtimes: await upgradePrisma.aiWorkflowJobRuntime.count(),
+      attempts: await upgradePrisma.aiWorkflowJobAttempt.count(),
+      results: await upgradePrisma.aiWorkflowJobResult.count(),
+      artifacts: await upgradePrisma.aiWorkflowJobArtifact.count(),
+      sources: await upgradePrisma.aiWorkflowJobSourceArtifact.count(),
+      aiRuns: await upgradePrisma.aiRun.count(),
+      aiOutputs: await upgradePrisma.aiOutput.count(),
+    }, beforeAdminUpgradeCounts);
+
+    const adminUpgradeConstraint = await upgradePrisma.$queryRaw<Array<{
+      validated: boolean;
+      definition: string;
+    }>>(Prisma.sql`
+      SELECT constraint_row."convalidated" AS "validated",
+             PG_GET_CONSTRAINTDEF(constraint_row.oid) AS "definition"
+      FROM pg_constraint constraint_row
+      JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
+      WHERE table_row."relname" = 'AiOrchestratorSetting'
+        AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
+        AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
+    `);
+    assert.deepEqual(adminUpgradeConstraint, [{
+      validated: true,
+      definition: 'CHECK (("dispatchEnabled" = false))',
+    }]);
+    await assert.rejects(upgradePrisma.$executeRawUnsafe(
+      'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = true WHERE "id" = \'global\'',
+    ));
   } finally {
     await upgradePrisma.$disconnect();
   }

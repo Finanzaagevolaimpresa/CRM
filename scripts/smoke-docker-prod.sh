@@ -75,6 +75,7 @@ AUTH_COOKIE_NAME=fai_crm_smoke_session
 AI_PROVIDER=mock
 AI_EXTERNAL_PROVIDERS_ENABLED=false
 AI_ALLOWED_MODELS=
+AI_ORCHESTRATOR_WORKER_ENABLED=0
 AI_API_KEY=
 APP_ENV=production
 NODE_ENV=production
@@ -91,6 +92,7 @@ export AUTH_COOKIE_NAME=fai_crm_smoke_session
 export AI_PROVIDER=mock
 export AI_EXTERNAL_PROVIDERS_ENABLED=false
 export AI_ALLOWED_MODELS=
+export AI_ORCHESTRATOR_WORKER_ENABLED=0
 export AI_API_KEY=
 export APP_ENV=production
 export NODE_ENV=production
@@ -104,7 +106,7 @@ compose build "$APP_SERVICE"
 SMOKE_CREATED="true"
 compose up -d postgres
 compose run --rm -T --entrypoint sh "$APP_SERVICE" -c \
-  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\")" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test -w "$1"' \
+  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\")" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test "${AI_PROVIDER:-}" = "mock" && test "${AI_ORCHESTRATOR_WORKER_ENABLED:-}" = "0" && test "${AI_EXTERNAL_PROVIDERS_ENABLED:-}" = "false" && test -z "${AI_ALLOWED_MODELS:-}" && test -w "$1"' \
   sh "$DOCUMENTS_PATH"
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
