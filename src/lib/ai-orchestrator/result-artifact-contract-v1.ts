@@ -21,11 +21,43 @@ const UPPER_CODE_RE = /^[A-Z0-9_]{1,120}$/;
 const CANONICAL_IDENTITY_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9_.:_-]{0,199}$/;
 const FORBIDDEN = /(<\/?[a-z][\s\S]*>|https?:\/\/|file:\/\/|\b(prompt|secret|password|token|api[_-]?key|crm real|cliente reale)\b)/i;
 
+const AI_RESULT_SCHEMA_POLICY_IDENTITY = {
+  schemaIdentityVersion: 1,
+  objectStrictness: 'reject-unknown-keys-recursively',
+  jsonPolicy: {
+    canonicalization: 'canonical-json-sorted-object-keys-array-order-preserved',
+    finiteNumbersOnly: true,
+    integerValuesMustBeSafe: true,
+    plainObjectsOnly: true,
+  },
+  contentPolicy: {
+    syntheticLiteralRequired: true,
+    forbiddenPattern: FORBIDDEN.source,
+    forbiddenPatternFlags: FORBIDDEN.flags,
+    scanScope: 'canonical-payload-and-all-json-string-values',
+  },
+  limits: AI_RESULT_LIMITS,
+} as const;
+
+const AI_RESULT_ENVELOPE_POLICY_IDENTITY = {
+  envelopeIdentityVersion: 1,
+  objectStrictness: 'reject-unknown-keys-recursively',
+  artifactOrdering: 'input-array-index-equals-zero-based-ordinal',
+  artifactSlotUniqueness: true,
+  artifactLogicalKeyUniqueness: true,
+  sourceReferenceOrdering: 'input-array-index-equals-zero-based-ordinal',
+  sourceReferenceUniqueness: 'sourceArtifactId',
+  sourceReferenceHashBinding: 'sourceArtifactId-to-sourceArtifactHash',
+  correctionSupersessionBinding: 'artifact-supersedesArtifactId-to-source-reference-hash-in-artifact-ordinal-order',
+  limits: AI_RESULT_LIMITS,
+} as const;
+
 const upperCode = z.string().regex(UPPER_CODE_RE).superRefine((value, ctx) => {
   if (Buffer.byteLength(value, 'utf8') > AI_RESULT_LIMITS.maxCodeBytes) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI_RESULT_CODE_TOO_LARGE' });
 });
 const identityCode = z.string().regex(CANONICAL_IDENTITY_CODE_RE);
 const logicalKey = z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/);
+const sourceReferenceRole = z.enum(['PRIMARY', 'SUPPORTING', 'SUPERSEDED']);
 const syntheticText = z.string().superRefine((value, ctx) => {
   if (Buffer.byteLength(value, 'utf8') > AI_RESULT_LIMITS.maxStringBytes) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI_RESULT_STRING_TOO_LARGE' });
   if (FORBIDDEN.test(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'AI_RESULT_FORBIDDEN_CONTENT_REDACTED' });
@@ -133,7 +165,7 @@ export const AiResultArtifactDraftSchema = z.object({
     payload: z.unknown(),
     supersedesArtifactId: z.string().cuid().optional(),
   }).strict()).max(AI_RESULT_LIMITS.maxArtifacts),
-  sourceReferences: z.array(z.object({ sourceArtifactId: z.string().cuid(), sourceArtifactHash: z.string().regex(HASH_RE), role: upperCode, ordinal: z.number().int().min(0) }).strict()).max(AI_RESULT_LIMITS.maxSourceReferences).default([]),
+  sourceReferences: z.array(z.object({ sourceArtifactId: z.string().cuid(), sourceArtifactHash: z.string().regex(HASH_RE), role: sourceReferenceRole, ordinal: z.number().int().min(0) }).strict()).max(AI_RESULT_LIMITS.maxSourceReferences).default([]),
   retention: z.object({ policyCode: z.literal('AI_RESULT_ARTIFACT_RETENTION_V1'), policyVersion: z.literal('1.0'), retentionClass: z.enum(['AUDIT_SYNTHETIC', 'TEMPORARY_SYNTHETIC']), retainUntil: z.string().datetime({ offset: true }).optional() }).strict(),
 }).strict();
 export type AiResultArtifactDraft = z.infer<typeof AiResultArtifactDraftSchema>;
@@ -145,37 +177,73 @@ function freezeDeep<T>(value: T): Readonly<T> {
   }
   return value as Readonly<T>;
 }
-function schemaHash(schemaCode: ResultSchemaCode) { return canonicalSha256({ domain: 'ai.schema.v1', schemaCode, version: '1.0', schema: schemaDescriptions[schemaCode] }); }
+function schemaHash(schemaCode: ResultSchemaCode) {
+  return canonicalSha256({
+    domain: 'ai.schema.v1',
+    schemaCode,
+    version: '1.0',
+    schema: schemaDescriptions[schemaCode],
+    policy: AI_RESULT_SCHEMA_POLICY_IDENTITY,
+  });
+}
 const contractEntries = FAI_AUDIT_JOB_CODES.map((jobCode) => {
   const capability = getAiOrchestratorWorkerCapability(jobCode)!;
   const def = contractDefs[jobCode];
-  const artifactSchemaMetadata = Object.fromEntries(def.artifacts.map((artifactType) => [artifactType, { artifactSchemaCode: `${artifactType}_SCHEMA`, artifactSchemaVersion: '1.0', artifactSchemaHash: schemaHash(artifactType), description: schemaDescriptions[artifactType] }]));
-  const resultSchemaMetadata = { resultSchemaCode: def.resultSchema, resultSchemaVersion: '1.0', resultSchemaHash: schemaHash(def.resultSchema), description: schemaDescriptions[def.resultSchema] };
-  const identity = { schemaVersion: 1, catalogCode: AI_RESULT_CONTRACT_CATALOG_CODE, resultContractCode: `FAI_AUDIT_${jobCode}_RESULT`, resultContractVersion: AI_RESULT_CONTRACT_VERSION, jobCode, jobDefinitionHash: FAI_AUDIT_JOB_DEFINITION_HASHES[jobCode], capabilityHash: AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[jobCode], handlerCode: capability.handlerCode, handlerVersion: capability.handlerVersion, runtimePolicyHash: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH, resultSchema: resultSchemaMetadata, artifactSchemas: artifactSchemaMetadata, supersessionAllowed: jobCode === 'CORRECTION' };
-  return [jobCode, freezeDeep({ ...identity, resultContractHash: canonicalSha256({ domain: 'ai.resultContract.v1', ...identity }), requiredArtifactTypes: [...def.artifacts] })] as const;
+  const artifactSchemaMetadata = Object.fromEntries(def.artifacts.map((artifactType) => [artifactType, { artifactSchemaCode: `${artifactType}_SCHEMA`, artifactSchemaVersion: '1.0', artifactSchemaHash: schemaHash(artifactType), description: schemaDescriptions[artifactType], policy: AI_RESULT_SCHEMA_POLICY_IDENTITY }]));
+  const resultSchemaMetadata = { resultSchemaCode: def.resultSchema, resultSchemaVersion: '1.0', resultSchemaHash: schemaHash(def.resultSchema), description: schemaDescriptions[def.resultSchema], policy: AI_RESULT_SCHEMA_POLICY_IDENTITY };
+  const identity = { schemaVersion: 1, catalogCode: AI_RESULT_CONTRACT_CATALOG_CODE, resultContractCode: `FAI_AUDIT_${jobCode}_RESULT`, resultContractVersion: AI_RESULT_CONTRACT_VERSION, jobCode, jobDefinitionHash: FAI_AUDIT_JOB_DEFINITION_HASHES[jobCode], capabilityHash: AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[jobCode], handlerCode: capability.handlerCode, handlerVersion: capability.handlerVersion, runtimePolicyHash: AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH, resultSchema: resultSchemaMetadata, requiredArtifactTypes: [...def.artifacts], artifactSchemas: artifactSchemaMetadata, envelopePolicy: AI_RESULT_ENVELOPE_POLICY_IDENTITY, supersessionAllowed: jobCode === 'CORRECTION' };
+  return [jobCode, freezeDeep({ ...identity, resultContractHash: canonicalSha256({ domain: 'ai.resultContract.v1', ...identity }) })] as const;
 });
-const CONTRACTS = freezeDeep(Object.fromEntries(contractEntries) as unknown as Record<FaiAuditJobCode, Readonly<{ resultContractCode: string; resultContractVersion: '1.0'; resultContractHash: string; resultSchema: { resultSchemaCode: ResultSchemaCode; resultSchemaVersion: '1.0'; resultSchemaHash: string; description: Record<string, string> }; requiredArtifactTypes: readonly ArtifactType[]; artifactSchemas: Readonly<Record<string, { artifactSchemaCode: string; artifactSchemaVersion: '1.0'; artifactSchemaHash: string; description: Record<string, string> }>>; supersessionAllowed: boolean }>>);
+const CONTRACTS = freezeDeep(Object.fromEntries(contractEntries) as unknown as Record<FaiAuditJobCode, Readonly<{ resultContractCode: string; resultContractVersion: '1.0'; resultContractHash: string; resultSchema: { resultSchemaCode: ResultSchemaCode; resultSchemaVersion: '1.0'; resultSchemaHash: string; description: Record<string, string>; policy: typeof AI_RESULT_SCHEMA_POLICY_IDENTITY }; requiredArtifactTypes: readonly ArtifactType[]; artifactSchemas: Readonly<Record<string, { artifactSchemaCode: string; artifactSchemaVersion: '1.0'; artifactSchemaHash: string; description: Record<string, string>; policy: typeof AI_RESULT_SCHEMA_POLICY_IDENTITY }>>; envelopePolicy: typeof AI_RESULT_ENVELOPE_POLICY_IDENTITY; supersessionAllowed: boolean }>>);
 const CONTRACT_BY_JOB = new Map<string, typeof CONTRACTS[FaiAuditJobCode]>(Object.entries(CONTRACTS));
 export function getAiResultContract(jobCode: string) { return CONTRACT_BY_JOB.get(jobCode) ?? null; }
 export function listAiResultContracts() { return Object.values(CONTRACTS); }
-export const AI_RESULT_CONTRACT_CATALOG_HASH = canonicalSha256({ domain: 'ai.resultContractCatalog.v1', contracts: Object.fromEntries(Object.entries(CONTRACTS).map(([k, v]) => [k, { resultContractCode: v.resultContractCode, resultContractVersion: v.resultContractVersion, resultContractHash: v.resultContractHash, resultSchema: v.resultSchema, requiredArtifactTypes: v.requiredArtifactTypes, artifactSchemas: v.artifactSchemas, supersessionAllowed: v.supersessionAllowed }])) });
+export const AI_RESULT_CONTRACT_CATALOG_HASH = canonicalSha256({ domain: 'ai.resultContractCatalog.v1', contracts: Object.fromEntries(Object.entries(CONTRACTS).map(([k, v]) => [k, { resultContractCode: v.resultContractCode, resultContractVersion: v.resultContractVersion, resultContractHash: v.resultContractHash, resultSchema: v.resultSchema, requiredArtifactTypes: v.requiredArtifactTypes, artifactSchemas: v.artifactSchemas, envelopePolicy: v.envelopePolicy, supersessionAllowed: v.supersessionAllowed }])) });
 
-function inspectJson(value: unknown, depth = 1): { nodes: number; maxDepth: number } {
+function inspectJson(value: unknown, depth: number, state: { nodes: number; maxDepth: number }): void {
   if (depth > AI_RESULT_LIMITS.maxJsonDepth) throw new TypeError('AI_RESULT_JSON_TOO_DEEP');
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return { nodes: 1, maxDepth: depth };
-  if (typeof value === 'number') { if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw new TypeError('AI_RESULT_UNSAFE_NUMBER'); return { nodes: 1, maxDepth: depth }; }
-  if (Array.isArray(value)) return value.reduce<{ nodes: number; maxDepth: number }>((a, v) => { const r = inspectJson(v, depth + 1); return { nodes: a.nodes + r.nodes, maxDepth: Math.max(a.maxDepth, r.maxDepth) }; }, { nodes: 1, maxDepth: depth });
-  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) return Object.values(value as Record<string, unknown>).reduce<{ nodes: number; maxDepth: number }>((a, v) => { const r = inspectJson(v, depth + 1); return { nodes: a.nodes + r.nodes, maxDepth: Math.max(a.maxDepth, r.maxDepth) }; }, { nodes: 1, maxDepth: depth });
+  state.nodes += 1;
+  state.maxDepth = Math.max(state.maxDepth, depth);
+  if (state.nodes > AI_RESULT_LIMITS.maxJsonNodes) throw new TypeError('AI_RESULT_JSON_TOO_LARGE');
+
+  if (value === null || typeof value === 'boolean') return;
+  if (typeof value === 'string') {
+    if (Buffer.byteLength(value, 'utf8') > AI_RESULT_LIMITS.maxStringBytes) throw new TypeError('AI_RESULT_STRING_TOO_LARGE');
+    return;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) throw new TypeError('AI_RESULT_UNSAFE_NUMBER');
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) inspectJson(item, depth + 1, state);
+    return;
+  }
+  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (Buffer.byteLength(key, 'utf8') > AI_RESULT_LIMITS.maxStringBytes) throw new TypeError('AI_RESULT_STRING_TOO_LARGE');
+      inspectJson(item, depth + 1, state);
+    }
+    return;
+  }
   throw new TypeError('AI_RESULT_NON_JSON');
 }
-function assertPayload(value: unknown, limit: number) {
+
+/**
+ * Applies the canonical JSON, depth, node, string, content and byte limits used by
+ * every v1 result payload and artifact, then returns its domain-separated digest.
+ */
+export function validateAiResultJsonValue(value: unknown, byteLimit: number) {
+  if (!Number.isSafeInteger(byteLimit) || byteLimit < 1 || byteLimit > AI_RESULT_LIMITS.maxResultBytes) {
+    throw new TypeError('AI_RESULT_BYTE_LIMIT_INVALID');
+  }
+  const inspection = { nodes: 0, maxDepth: 0 };
+  inspectJson(value, 1, inspection);
   const canonical = canonicalJson(value);
   const bytes = Buffer.byteLength(canonical, 'utf8');
-  const i = inspectJson(value);
-  if (i.nodes > AI_RESULT_LIMITS.maxJsonNodes) throw new TypeError('AI_RESULT_JSON_TOO_LARGE');
-  if (bytes > limit) throw new TypeError('AI_RESULT_BYTES_TOO_LARGE');
+  if (bytes > byteLimit) throw new TypeError('AI_RESULT_BYTES_TOO_LARGE');
   if (FORBIDDEN.test(canonical)) throw new TypeError('AI_RESULT_FORBIDDEN_CONTENT_REDACTED');
-  return { canonical, bytes, payloadHash: sha256(`ai.payload.v1\n${canonical}`) };
+  return Object.freeze({ canonical, bytes, nodes: inspection.nodes, maxDepth: inspection.maxDepth, payloadHash: sha256(`ai.payload.v1\n${canonical}`) });
 }
 function normalizeRetention(retention: AiResultArtifactDraft['retention']) {
   const retainUntil = retention.retainUntil ? new Date(retention.retainUntil) : null;
@@ -192,40 +260,69 @@ function parseArtifact(contract: NonNullable<ReturnType<typeof getAiResultContra
   const artifactType = artifact.artifactType as ArtifactType;
   const schemaMeta = contract.artifactSchemas[artifactType];
   if (!schemaMeta) throw new TypeError('AI_RESULT_ARTIFACT_NOT_ALLOWED');
+  if (artifact.slotCode !== artifactType) throw new TypeError('AI_RESULT_ARTIFACT_SLOT_INVALID');
   if (artifact.supersedesArtifactId && !contract.supersessionAllowed) throw new TypeError('AI_RESULT_SUPERSESSION_NOT_ALLOWED');
   if (contract.supersessionAllowed && artifact.artifactType === 'CORRECTION_MANIFEST' && artifact.supersedesArtifactId) throw new TypeError('AI_RESULT_SUPERSESSION_SLOT_INVALID');
   const parsedPayload = artifactSchemas[artifactType].parse(artifact.payload);
-  const h = assertPayload(parsedPayload, AI_RESULT_LIMITS.maxArtifactBytes);
+  const h = validateAiResultJsonValue(parsedPayload, AI_RESULT_LIMITS.maxArtifactBytes);
   return { ...artifact, artifactType, payload: parsedPayload, payloadBytes: h.bytes, payloadHash: h.payloadHash, artifactSchemaCode: schemaMeta.artifactSchemaCode, artifactSchemaVersion: schemaMeta.artifactSchemaVersion, artifactSchemaHash: schemaMeta.artifactSchemaHash, artifactHash: artifactHash({ artifactType, ordinal: artifact.ordinal, slotCode: artifact.slotCode, logicalKey: artifact.logicalKey, artifactVersion: artifact.artifactVersion, mediaType: artifact.mediaType, artifactSchemaHash: schemaMeta.artifactSchemaHash, payloadHash: h.payloadHash, supersedesArtifactId: artifact.supersedesArtifactId ?? null }) };
 }
 
 export function validateAndHashAiResultDraft(jobCode: string, draftInput: unknown, provenanceInput: unknown) {
   const contract = getAiResultContract(jobCode); if (!contract) throw new TypeError('AI_RESULT_CONTRACT_NOT_FOUND');
+  const capability = getAiOrchestratorWorkerCapability(jobCode); if (!capability) throw new TypeError('AI_RESULT_CAPABILITY_NOT_FOUND');
   const provenance = AiResultProvenanceSchema.parse(provenanceInput);
+  if (provenance.runtimePolicyHash !== AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH) throw new TypeError('AI_RESULT_RUNTIME_POLICY_MISMATCH');
+  if (provenance.capabilityCode !== capability.capabilityCode || provenance.capabilityVersion !== capability.capabilityVersion || provenance.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[jobCode as FaiAuditJobCode]) throw new TypeError('AI_RESULT_CAPABILITY_MISMATCH');
+  if (provenance.handlerCode !== capability.handlerCode || provenance.handlerVersion !== capability.handlerVersion) throw new TypeError('AI_RESULT_HANDLER_MISMATCH');
+  if (provenance.executorAgentCode !== capability.executorAgentCode || provenance.executorAgentConfigVersion !== capability.executorAgentConfigVersion || provenance.executorAgentConfigHash !== capability.executorAgentConfigHash) throw new TypeError('AI_RESULT_EXECUTOR_MISMATCH');
   const draft = AiResultArtifactDraftSchema.parse(draftInput);
-  const expected = [...contract.requiredArtifactTypes].sort();
-  const actual = draft.artifacts.map((a) => a.artifactType).sort();
-  if (JSON.stringify(expected) !== JSON.stringify(actual)) throw new TypeError('AI_RESULT_ARTIFACT_CARDINALITY_INVALID');
-  const seen = new Set<string>();
-  const artifacts = [...draft.artifacts].sort((a, b) => a.ordinal - b.ordinal).map((artifact, index) => {
-    if (seen.has(artifact.slotCode)) throw new TypeError('AI_RESULT_ARTIFACT_SLOT_DUPLICATE');
-    seen.add(artifact.slotCode);
+  if (draft.artifacts.length !== contract.requiredArtifactTypes.length) throw new TypeError('AI_RESULT_ARTIFACT_CARDINALITY_INVALID');
+  if (draft.artifacts.some((artifact, index) => artifact.artifactType !== contract.requiredArtifactTypes[index])) throw new TypeError('AI_RESULT_ARTIFACT_TYPE_ORDER_INVALID');
+  const seenSlots = new Set<string>();
+  const seenLogicalKeys = new Set<string>();
+  const artifacts = draft.artifacts.map((artifact, index) => {
+    if (seenSlots.has(artifact.slotCode)) throw new TypeError('AI_RESULT_ARTIFACT_SLOT_DUPLICATE');
+    if (seenLogicalKeys.has(artifact.logicalKey)) throw new TypeError('AI_RESULT_ARTIFACT_LOGICAL_KEY_DUPLICATE');
+    seenSlots.add(artifact.slotCode);
+    seenLogicalKeys.add(artifact.logicalKey);
     return parseArtifact(contract, artifact, index);
   });
   const resultPayload = resultSchemas[contract.resultSchema.resultSchemaCode].parse(draft.resultPayload);
-  const rp = assertPayload(resultPayload, AI_RESULT_LIMITS.maxResultBytes);
+  const rp = validateAiResultJsonValue(resultPayload, AI_RESULT_LIMITS.maxResultBytes);
   if (artifacts.length === 1 && canonicalJson(resultPayload) !== canonicalJson(artifacts[0].payload)) throw new TypeError('AI_RESULT_PAYLOAD_ARTIFACT_MISMATCH');
+
+  const sourceIds = new Set<string>();
+  const sourceReferences = draft.sourceReferences.map((source, index) => {
+    if (source.ordinal !== index) throw new TypeError('AI_RESULT_SOURCE_ORDER_INVALID');
+    if (sourceIds.has(source.sourceArtifactId)) throw new TypeError('AI_RESULT_SOURCE_DUPLICATE');
+    sourceIds.add(source.sourceArtifactId);
+    return source;
+  });
+
   if (contract.resultSchema.resultSchemaCode === 'CORRECTION_RESULT') {
     const corrected = artifacts.find((a) => a.artifactType === 'CORRECTED_REPORT');
     const manifest = artifacts.find((a) => a.artifactType === 'CORRECTION_MANIFEST');
     const correctionPayload = resultPayload as { correctedReportHash: string; correctionManifestHash: string };
-    if (!corrected || !manifest || correctionPayload.correctedReportHash !== corrected.artifactHash || correctionPayload.correctionManifestHash !== manifest.artifactHash) throw new TypeError('AI_RESULT_CORRECTION_HASH_MISMATCH');
-    const superseded = artifacts.map((a) => a.supersedesArtifactId).filter(Boolean);
+    if (!corrected || !manifest) throw new TypeError('AI_RESULT_CORRECTION_ARTIFACT_MISSING');
+    const sourceById = new Map(sourceReferences.map((source) => [source.sourceArtifactId, source]));
+    const supersededIds = new Set<string>();
+    const expectedSupersededHashes: string[] = [];
+    for (const artifact of artifacts) {
+      if (!artifact.supersedesArtifactId) continue;
+      if (supersededIds.has(artifact.supersedesArtifactId)) throw new TypeError('AI_RESULT_CORRECTION_SUPERSESSION_DUPLICATE');
+      supersededIds.add(artifact.supersedesArtifactId);
+      const source = sourceById.get(artifact.supersedesArtifactId);
+      if (!source || source.role !== 'SUPERSEDED') throw new TypeError('AI_RESULT_CORRECTION_SUPERSESSION_SOURCE_MISMATCH');
+      expectedSupersededHashes.push(source.sourceArtifactHash);
+    }
+    if (sourceReferences.some((source) => source.role === 'SUPERSEDED' && !supersededIds.has(source.sourceArtifactId))) throw new TypeError('AI_RESULT_CORRECTION_SUPERSESSION_SOURCE_MISMATCH');
     const manifestSuperseded = (manifest.payload as { supersededArtifactHashes: string[] }).supersededArtifactHashes;
-    if (superseded.length !== manifestSuperseded.length) throw new TypeError('AI_RESULT_CORRECTION_SUPERSESSION_MISMATCH');
+    if (canonicalJson(manifestSuperseded) !== canonicalJson(expectedSupersededHashes)) throw new TypeError('AI_RESULT_CORRECTION_SUPERSESSION_MISMATCH');
+    if (correctionPayload.correctedReportHash !== corrected.artifactHash || correctionPayload.correctionManifestHash !== manifest.artifactHash) throw new TypeError('AI_RESULT_CORRECTION_HASH_MISMATCH');
+  } else if (sourceReferences.some((source) => source.role === 'SUPERSEDED')) {
+    throw new TypeError('AI_RESULT_SUPERSESSION_NOT_ALLOWED');
   }
-  const sourceReferences = [...draft.sourceReferences].sort((a, b) => a.ordinal - b.ordinal);
-  sourceReferences.forEach((s, i) => { if (s.ordinal !== i) throw new TypeError('AI_RESULT_SOURCE_ORDER_INVALID'); });
   const retention = normalizeRetention(draft.retention);
   const totalPayloadBytes = rp.bytes + artifacts.reduce((n, a) => n + a.payloadBytes, 0);
   if (totalPayloadBytes > AI_RESULT_LIMITS.maxResultBytes) throw new TypeError('AI_RESULT_TOTAL_BYTES_TOO_LARGE');

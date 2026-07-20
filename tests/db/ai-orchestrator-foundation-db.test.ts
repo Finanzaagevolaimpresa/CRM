@@ -3008,7 +3008,12 @@ test('recovery scaduta è singola e il vecchio fence non torna utilizzabile', { 
       completeAiWorkflowJob(oldClaim.lease, { resultDraft: createSyntheticAiResultDraft(oldClaim.jobCode) }),
       AiOrchestratorLeaseLostError,
     );
-    await completeAiWorkflowJob(newClaim.lease, { resultDraft: createSyntheticAiResultDraft(newClaim.jobCode) });
+    const winningDraft = createSyntheticAiResultDraft(newClaim.jobCode);
+    await completeAiWorkflowJob(newClaim.lease, { resultDraft: winningDraft });
+    await assert.rejects(
+      completeAiWorkflowJob(oldClaim.lease, { resultDraft: winningDraft }),
+      AiOrchestratorLeaseLostError,
+    );
     assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
       where: { runtimeId: oldClaim.runtimeId, eventType: 'LEASE_RECOVERED' },
     }), 1);

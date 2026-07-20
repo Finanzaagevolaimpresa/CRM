@@ -890,6 +890,7 @@ model AiWorkflowInstance {
   jobOutboxEvents     AiWorkflowJobOutboxEvent[]
   jobRuntimes         AiWorkflowJobRuntime[]
   jobRuntimeEvents    AiWorkflowJobRuntimeEvent[]
+  jobResults          AiWorkflowJobResult[]
 
   @@index([workflowCode, workflowVersion])
   @@index([currentState, updatedAt])
@@ -1191,6 +1192,7 @@ model AiWorkflowJobResult {
   runtime                    AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   job                        AiWorkflowJob @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   attempt                    AiWorkflowJobAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance           AiWorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   artifacts                  AiWorkflowJobArtifact[]
   sourceReferences           AiWorkflowJobSourceArtifact[]
 
@@ -1225,6 +1227,7 @@ model AiWorkflowJobArtifact {
 
   @@unique([resultId, ordinal])
   @@unique([resultId, slotCode])
+  @@unique([resultId, logicalKey])
   @@index([resultId])
   @@index([artifactHash])
   @@index([artifactType, artifactHash])
@@ -1242,7 +1245,7 @@ model AiWorkflowJobSourceArtifact {
   sourceArtifact     AiWorkflowJobArtifact @relation("AiWorkflowSourceArtifact", fields: [sourceArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([resultId, ordinal])
-  @@unique([resultId, sourceArtifactId, role])
+  @@unique([resultId, sourceArtifactId])
   @@index([sourceArtifactId])
 }
 
