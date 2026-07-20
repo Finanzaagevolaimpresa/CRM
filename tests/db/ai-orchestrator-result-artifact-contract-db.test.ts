@@ -897,7 +897,7 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       };
       await insertSource(tx, { ...shared, role: 'PRIMARY', ordinal: 0 }, false);
       await insertSource(tx, { ...shared, role: 'SUPPORTING', ordinal: 1 }, false);
-    }, /resultId_sourceArtifactId_key|duplicate key|unique constraint/i);
+    }, /resultId_sourceArtifactId_key|duplicate key|unique constraint|23505|already exists/i);
 
     assert.equal(await db().aiWorkflowJobSourceArtifact.count({
       where: { resultId: { in: [firstResult.id, secondResult.id] } },
