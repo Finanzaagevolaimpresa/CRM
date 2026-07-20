@@ -545,7 +545,7 @@ test('PostgreSQL rispecchia i digest TypeScript e rifiuta i bypass della policy 
       SELECT "assert_ai_workflow_result_payload_shape"(
         ${jobCode},
         CAST(${JSON.stringify(draft.resultPayload)} AS JSONB)
-      )
+      )::TEXT AS "validated"
     `);
     for (const artifactType of contract.requiredArtifactTypes) {
       const schemaHash = contract.artifactSchemas[artifactType]?.artifactSchemaHash;
@@ -557,7 +557,7 @@ test('PostgreSQL rispecchia i digest TypeScript e rifiuta i bypass della policy 
         SELECT "assert_ai_workflow_artifact_payload_shape"(
           ${artifactType},
           CAST(${JSON.stringify(artifact.payload)} AS JSONB)
-        )
+        )::TEXT AS "validated"
       `);
     }
   }
@@ -850,6 +850,9 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
           ${input.sourceArtifactHash}, ${input.role ?? 'PRIMARY'}, ${input.ordinal}, ${input.createdAt}
         )
       `);
+      await tx.$executeRawUnsafe(
+        'SET CONSTRAINTS "AiWorkflowJobSourceArtifact_validate_insert" IMMEDIATE',
+      );
     };
 
     await expectDatabaseRejection(
