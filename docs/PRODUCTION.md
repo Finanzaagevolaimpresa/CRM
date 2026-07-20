@@ -519,3 +519,9 @@ In caso di rollback mantenere o riportare `stateMachineEnabled=false`, mantenere
 La fondazione result/artifact v1 è dormiente e non abilita worker, dispatch, provider esterni o accesso a dati CRM reali. Prima di qualunque deploy futuro devono restare chiusi `stateMachineEnabled=false`, `dispatchEnabled=false`, `syntheticDataOnly=true`, `provider=mock`, `externalProvidersEnabled=false`, `AI_ORCHESTRATOR_WORKER_ENABLED=0` o mancante e tutte le 13 capability worker `enabled=false`.
 
 Rollback applicativo: mantenere i gate chiusi, ripristinare l'immagine PR76 e lasciare intatte le tabelle `AiWorkflowJobResult`, `AiWorkflowJobArtifact` e `AiWorkflowJobSourceArtifact`. Non eseguire DROP/TRUNCATE/reset/down migration; un restore database è una procedura separata.
+
+## AI Orchestrator Mock Handler Registry Foundation v1
+
+La fondazione registry v1 definisce esclusivamente in TypeScript i 13 handler `mock`/`synthetic`, le loro identità hashate, l'invocation strict e le fixture deterministiche validate dal contratto result/artifact. Non introduce né avvia worker, runtime loop, scheduler, route o dispatch; non accede a rete, provider, database o dati CRM reali e non aggiunge schema Prisma, migration, seed o backfill.
+
+Il limite temporale del registry è un budget osservato post-esecuzione, non un hard timeout: il vero isolamento preemptive appartiene a una futura PR del processo worker. La Draft PR #78 non autorizza merge, deploy o attivazione. Tutti i gate e le 13 capability devono restare chiusi; un eventuale rollback è soltanto applicativo e non richiede alcuna operazione sul database.
