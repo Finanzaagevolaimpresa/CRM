@@ -250,10 +250,10 @@ test('all 13 mock outputs pass PostgreSQL shape, canonicalization and payload-ha
     const output = executeAiOrchestratorMockHandler(
       createAiOrchestratorMockHandlerInvocation(intent),
     );
-    await db().$queryRaw(Prisma.sql`
+    await db().$queryRaw<Array<{ validated: string }>>(Prisma.sql`
       SELECT "assert_ai_workflow_result_payload_shape"(
         ${jobCode}, CAST(${JSON.stringify(output.resultPayload)} AS JSONB)
-      )
+      )::TEXT AS "validated"
     `);
     const resultValidation = validateAiResultJsonValue(
       output.resultPayload,
@@ -284,10 +284,10 @@ test('all 13 mock outputs pass PostgreSQL shape, canonicalization and payload-ha
     }]);
 
     for (const artifact of output.artifacts) {
-      await db().$queryRaw(Prisma.sql`
+      await db().$queryRaw<Array<{ validated: string }>>(Prisma.sql`
         SELECT "assert_ai_workflow_artifact_payload_shape"(
           ${artifact.artifactType}, CAST(${JSON.stringify(artifact.payload)} AS JSONB)
-        )
+        )::TEXT AS "validated"
       `);
       const validation = validateAiResultJsonValue(
         artifact.payload,
