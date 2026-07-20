@@ -1214,7 +1214,7 @@ model AiWorkflowJobArtifact {
   mediaType             String   @default("application/json")
   payload               Json
   payloadHash           String
-  artifactHash          String   @unique
+  artifactHash          String
   payloadBytes          Int
   supersedesArtifactId  String?
   createdAt             DateTime @default(now())
@@ -1226,6 +1226,7 @@ model AiWorkflowJobArtifact {
   @@unique([resultId, ordinal])
   @@unique([resultId, slotCode])
   @@index([resultId])
+  @@index([artifactHash])
   @@index([artifactType, artifactHash])
 }
 

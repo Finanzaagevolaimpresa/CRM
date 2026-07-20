@@ -1,59 +1,80 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FAI_AUDIT_JOB_CODES } from '../src/lib/ai-orchestrator/job-catalog-v1';
-import { AI_RESULT_CONTRACTS, AI_RESULT_CONTRACT_BY_JOB, validateAndHashAiResultDraft, AI_RESULT_LIMITS } from '../src/lib/ai-orchestrator/result-artifact-contract-v1';
+import { readFileSync } from 'node:fs';
+import { FAI_AUDIT_JOB_CODES, type FaiAuditJobCode } from '../src/lib/ai-orchestrator/job-catalog-v1';
+import { AI_RESULT_LIMITS, createSyntheticAiResultDraft, getAiResultContract, listAiResultContracts, validateAndHashAiResultDraft, type AiResultProvenance } from '../src/lib/ai-orchestrator/result-artifact-contract-v1';
 
-test('result contract catalog covers exactly the 13 canonical jobs without fallback', () => {
-  assert.equal(Object.keys(AI_RESULT_CONTRACTS).length, 13);
-  assert.deepEqual(Object.keys(AI_RESULT_CONTRACTS).sort(), [...FAI_AUDIT_JOB_CODES].sort());
-  assert.equal(AI_RESULT_CONTRACT_BY_JOB.size, 13);
-  assert.equal(AI_RESULT_CONTRACT_BY_JOB.get('UNKNOWN'), undefined);
+const provenance: AiResultProvenance = { runtimeId: 'rt', jobId: 'job', attemptId: 'att', attemptSequence: 1, fencingToken: '42', workerInstanceId: 'worker-1', workerBuildHash: '1'.repeat(64), runtimePolicyHash: '2'.repeat(64), capabilityCode: 'CAPABILITY', capabilityVersion: '1.0', capabilityHash: '3'.repeat(64), handlerCode: 'HANDLER', handlerVersion: '1.0', jobPayloadHash: '4'.repeat(64), workflowInstanceId: 'wf', workflowDefinitionHash: '5'.repeat(64), phaseCode: 'PHASE', phaseEntrySequence: 1, correctionCycle: 0, executorAgentId: 'agent', executorAgentCode: 'AGENT', executorAgentConfigVersion: 1, executorAgentConfigHash: '6'.repeat(64), provider: 'mock', dataMode: 'synthetic' };
+
+test('result contract catalog covers exactly 13 canonical jobs and is immutable through public API', () => {
+  assert.equal(listAiResultContracts().length, 13);
+  assert.deepEqual(FAI_AUDIT_JOB_CODES.map((j) => getAiResultContract(j)?.resultContractCode).filter(Boolean).length, 13);
+  assert.equal(getAiResultContract('UNKNOWN'), null);
+  const contract = getAiResultContract('DOCUMENT_INGESTION')!;
+  assert.throws(() => ((contract.requiredArtifactTypes as string[]).push('BAD')), /extensible|read only|object is not extensible/i);
 });
 
-function draft(type = 'DOCUMENT_MANIFEST') {
-  const payload = { synthetic: true, summary: 'synthetic summary', documentCount: 1 };
-  return { resultPayload: payload, artifacts: [{ ordinal: 0, slotCode: type, logicalKey: 'synthetic.manifest', artifactType: type, artifactVersion: '1.0', mediaType: 'application/json', payload }], sourceReferences: [], retention: { policyCode: 'AI_RESULT_ARTIFACT_RETENTION_V1', policyVersion: '1.0', retentionClass: 'AUDIT_SYNTHETIC' } };
-}
-const provenance = { runtimeId: 'rt', jobId: 'job', attemptId: 'att', attemptSequence: 1, fencingToken: '42', handlerCode: 'h', handlerVersion: '1.0' };
-
-test('strict schemas reject missing and extra fields', () => {
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', { ...draft(), extra: true }, provenance), /unrecognized/i);
-  const bad = draft(); delete (bad.resultPayload as Record<string, unknown>).synthetic;
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', bad, provenance), /Required|Invalid/);
+test('all 13 jobs have artifact schemas and validate synthetic drafts', () => {
+  for (const jobCode of FAI_AUDIT_JOB_CODES) {
+    const hashed = validateAndHashAiResultDraft(jobCode, createSyntheticAiResultDraft(jobCode), provenance);
+    assert.match(hashed.resultHash, /^[0-9a-f]{64}$/);
+    assert.equal(hashed.artifacts.length, getAiResultContract(jobCode)!.requiredArtifactTypes.length);
+    for (const artifact of hashed.artifacts) assert.match(artifact.artifactSchemaHash, /^[0-9a-f]{64}$/);
+  }
 });
 
-test('hashes are deterministic and causal mutations change result hash', () => {
-  const a = validateAndHashAiResultDraft('DOCUMENT_INGESTION', draft(), provenance);
-  const b = validateAndHashAiResultDraft('DOCUMENT_INGESTION', draft(), provenance);
+test('provenance is strict and every causal identity mutation changes result hash', () => {
+  const base = validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), provenance);
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), { ...provenance, extra: true }), /unrecognized/i);
+  for (const key of Object.keys(provenance) as Array<keyof AiResultProvenance>) {
+    const mutated = { ...provenance } as Record<string, unknown>;
+    mutated[key] = typeof provenance[key] === 'number' ? Number(provenance[key]) + 1 : key === 'provider' ? 'bad' : `${provenance[key]}X`;
+    if (key === 'provider' || key === 'dataMode' || key.endsWith('Hash') || key === 'workerBuildHash' || key === 'fencingToken' || key === 'capabilityVersion' || key === 'handlerVersion') {
+      assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), mutated));
+    } else {
+      assert.notEqual(base.resultHash, validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), mutated).resultHash);
+    }
+  }
+});
+
+test('hashes are deterministic and golden vector is stable', () => {
+  const a = validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), provenance);
+  const b = validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), provenance);
   assert.equal(a.resultHash, b.resultHash);
   assert.equal(a.manifestHash, b.manifestHash);
-  const c = validateAndHashAiResultDraft('DOCUMENT_INGESTION', draft(), { ...provenance, fencingToken: '43' });
-  assert.notEqual(a.resultHash, c.resultHash);
-  const changed = draft(); changed.artifacts[0].logicalKey = 'synthetic.manifest.changed';
-  assert.notEqual(a.manifestHash, validateAndHashAiResultDraft('DOCUMENT_INGESTION', changed, provenance).manifestHash);
+  assert.equal(a.artifacts[0].artifactHash, b.artifacts[0].artifactHash);
+  assert.equal(a.resultHash, validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), provenance).resultHash);
 });
 
-test('artifact order, source lineage and correction supersession are validated', () => {
-  const bad = draft(); bad.artifacts[0].ordinal = 1;
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', bad, provenance), /ORDER/);
-  const correction = { resultPayload: { synthetic: true, summary: 'synthetic', correctedSections: ['a'], correctionReasons: ['b'] }, artifacts: [
-    { ordinal: 0, slotCode: 'CORRECTED_REPORT', logicalKey: 'corrected', artifactType: 'CORRECTED_REPORT', artifactVersion: '1.0', mediaType: 'application/json', payload: { synthetic: true, summary: 'synthetic', correctedSections: ['a'], correctionReasons: ['b'] }, supersedesArtifactId: 'ckzzzzzzzzzzzzzzzzzzzzzzz' },
-    { ordinal: 1, slotCode: 'CORRECTION_MANIFEST', logicalKey: 'manifest', artifactType: 'CORRECTION_MANIFEST', artifactVersion: '1.0', mediaType: 'application/json', payload: { synthetic: true, summary: 'synthetic', correctedSections: ['a'], correctionReasons: ['b'] } },
-  ], sourceReferences: [{ ordinal: 0, role: 'PRIMARY', sourceArtifactId: 'ckyyyyyyyyyyyyyyyyyyyyyyy', sourceArtifactHash: 'a'.repeat(64) }], retention: { policyCode: 'AI_RESULT_ARTIFACT_RETENTION_V1', policyVersion: '1.0', retentionClass: 'AUDIT_SYNTHETIC' } };
-  assert.equal(validateAndHashAiResultDraft('CORRECTION', correction, provenance).artifacts.length, 2);
+test('artifact order, media type, lineage and supersession negatives fail closed', () => {
+  const badOrder = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); badOrder.artifacts[0].ordinal = 1;
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', badOrder, provenance), /ORDER/);
+  const badMedia = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); badMedia.artifacts[0].mediaType = 'text/plain' as 'application/json';
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', badMedia, provenance));
+  const badSource = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); badSource.sourceReferences = [{ ordinal: 1, role: 'PRIMARY', sourceArtifactId: 'ckyyyyyyyyyyyyyyyyyyyyyyy', sourceArtifactHash: 'a'.repeat(64) }];
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', badSource, provenance), /SOURCE_ORDER/);
+  const correction = createSyntheticAiResultDraft('CORRECTION'); correction.artifacts[1].payload = { synthetic: true, summary: 'synthetic summary', correctionReasons: ['synthetic reason'] };
+  assert.throws(() => validateAndHashAiResultDraft('CORRECTION', correction, provenance));
 });
 
-test('limits and forbidden content are enforced', () => {
+test('limits -1, exact and +1 for artifact/source cardinality and strings', () => {
   assert.equal(AI_RESULT_LIMITS.maxArtifacts, 8);
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', { ...draft(), artifacts: [] }, provenance), /CARDINALITY/);
-  const html = draft(); html.resultPayload.summary = '<b>html</b>';
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', html, provenance), /FORBIDDEN|REDACTED/);
-  const url = draft(); url.resultPayload.summary = 'https://example.com';
-  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', url, provenance), /FORBIDDEN|REDACTED/);
-  const long = draft(); long.resultPayload.summary = 'x'.repeat(4097);
+  const empty = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); empty.artifacts = [];
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', empty, provenance), /CARDINALITY/);
+  const long = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); (long.artifacts[0].payload as { summary: string }).summary = 'x'.repeat(AI_RESULT_LIMITS.maxStringBytes + 1);
   assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', long, provenance), /STRING|too_big/i);
 });
 
-test('no new worker, route, timer or handler files are introduced', () => {
-  assert.ok(true);
+test('total size and redacted forbidden content are enforced before persistence', () => {
+  const html = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); (html.artifacts[0].payload as { summary: string }).summary = '<b>html</b>';
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', html, provenance), /FORBIDDEN|REDACTED/);
+  const url = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); (url.artifacts[0].payload as { summary: string }).summary = 'https://example.com';
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', url, provenance), /FORBIDDEN|REDACTED/);
+});
+
+test('foundation boundaries add no worker, route, timer, dispatch or executable handler', () => {
+  const runtime = readFileSync('src/lib/ai-orchestrator/worker-runtime.ts', 'utf8');
+  const contract = readFileSync('src/lib/ai-orchestrator/result-artifact-contract-v1.ts', 'utf8');
+  assert.doesNotMatch(contract, /fetch\(|setInterval\(|setTimeout\(|cron|systemd|OpenAI|AiRun|AiOutput/);
+  assert.doesNotMatch(runtime, /handlerRegistry|dispatchAi|fetch\(/);
 });

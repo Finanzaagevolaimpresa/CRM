@@ -26,8 +26,8 @@ Domain separation: `ai.payload.v1`, `ai.artifact.v1`, `ai.manifest.v1`, `ai.resu
 ## Migration e retention
 La migration è additiva, crea `AiWorkflowJobResult`, `AiWorkflowJobArtifact` e `AiWorkflowJobSourceArtifact`, FK RESTRICT, indici mirati e trigger append-only. Preflight fail-closed blocca runtime SUCCEEDED preesistenti senza risultati canonici e verifica `AiOrchestratorSetting_dispatch_disabled_check`. La retention aggiunge solo policy code/version/hash, classe e retainUntil deterministico; nessun cleanup o purge.
 
-## Performance misurate
-Soglie documentate: lookup contratto O(1) sotto 1 ms su 13 contratti; validazione+hash del payload massimo sotto 50 ms su workstation CI; query primarie via indici su runtime/result/artifact. Dataset sintetico target: 10.000 record con `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`; nessun indice GIN sui payload.
+## Performance da verificare con PostgreSQL 16 effimero
+La fondazione mantiene lookup contratto O(1) tramite funzioni read-only e `Map` interna. Le query primarie usano indici mirati su runtime/result/artifact e non aggiungono indici GIN sui payload. Le misure `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` su dataset sintetico da 10.000 record e validazione+hash del payload massimo devono essere eseguite in un ambiente con PostgreSQL 16 effimero disponibile prima di dichiarare performance definitive.
 
 ## Deploy dormiente futuro
 Applicare migration solo in ambiente controllato con gate chiusi; non abilitare worker o capability nella stessa release. La compatibilità PR76 è preservata perché le nuove tabelle sono additive.
