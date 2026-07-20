@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { FAI_AUDIT_JOB_CODES, type FaiAuditJobCode } from '../src/lib/ai-orchestrator/job-catalog-v1';
 import { AI_RESULT_LIMITS, createSyntheticAiResultDraft, getAiResultContract, listAiResultContracts, validateAndHashAiResultDraft, type AiResultProvenance } from '../src/lib/ai-orchestrator/result-artifact-contract-v1';
 
-const provenance: AiResultProvenance = { runtimeId: 'rt', jobId: 'job', attemptId: 'att', attemptSequence: 1, fencingToken: '42', workerInstanceId: 'worker-1', workerBuildHash: '1'.repeat(64), runtimePolicyHash: '2'.repeat(64), capabilityCode: 'CAPABILITY', capabilityVersion: '1.0', capabilityHash: '3'.repeat(64), handlerCode: 'HANDLER', handlerVersion: '1.0', jobPayloadHash: '4'.repeat(64), workflowInstanceId: 'wf', workflowDefinitionHash: '5'.repeat(64), phaseCode: 'PHASE', phaseEntrySequence: 1, correctionCycle: 0, executorAgentId: 'agent', executorAgentCode: 'AGENT', executorAgentConfigVersion: 1, executorAgentConfigHash: '6'.repeat(64), provider: 'mock', dataMode: 'synthetic' };
+const provenance: AiResultProvenance = { runtimeId: 'rt', jobId: 'job', attemptId: 'att', attemptSequence: 1, fencingToken: '42', workerInstanceId: 'worker-1', workerBuildHash: '1'.repeat(64), runtimePolicyHash: '2'.repeat(64), capabilityCode: 'CAPABILITY', capabilityVersion: '1.0', capabilityHash: '3'.repeat(64), handlerCode: 'FAI_AUDIT_DOCUMENT_INGESTION_MOCK_HANDLER', handlerVersion: '1.0', jobPayloadHash: '4'.repeat(64), workflowInstanceId: 'wf', workflowDefinitionHash: '5'.repeat(64), phaseCode: 'PHASE', phaseEntrySequence: 1, correctionCycle: 0, executorAgentId: 'agent', executorAgentCode: 'verifica_ai_preliminare_fai', executorAgentConfigVersion: 1, executorAgentConfigHash: '6'.repeat(64), provider: 'mock', dataMode: 'synthetic' };
 
 test('result contract catalog covers exactly 13 canonical jobs and is immutable through public API', () => {
   assert.equal(listAiResultContracts().length, 13);
@@ -46,6 +46,30 @@ test('hashes are deterministic and golden vector is stable', () => {
   assert.equal(a.resultHash, validateAndHashAiResultDraft('DOCUMENT_INGESTION', createSyntheticAiResultDraft('DOCUMENT_INGESTION'), provenance).resultHash);
 });
 
+
+
+test('resultPayload is validated, hashed and compared with mono-artifact payload', () => {
+  const draft = createSyntheticAiResultDraft('DOCUMENT_INGESTION');
+  const changed = structuredClone(draft);
+  changed.resultPayload = { synthetic: true, summary: 'different synthetic summary', documentCount: 1 };
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', changed, provenance), /PAYLOAD_ARTIFACT_MISMATCH/);
+  const forbidden = structuredClone(draft);
+  forbidden.resultPayload = { synthetic: true, summary: '<b>html</b>', documentCount: 1 };
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', forbidden, provenance), /FORBIDDEN|REDACTED/);
+});
+
+test('CORRECTION result hashes bind to real artifact hashes and reject fake values', () => {
+  const draft = createSyntheticAiResultDraft('CORRECTION');
+  const hashed = validateAndHashAiResultDraft('CORRECTION', draft, provenance);
+  const corrected = hashed.artifacts.find((artifact) => artifact.artifactType === 'CORRECTED_REPORT')!;
+  const manifest = hashed.artifacts.find((artifact) => artifact.artifactType === 'CORRECTION_MANIFEST')!;
+  assert.equal((draft.resultPayload as { correctedReportHash: string }).correctedReportHash, corrected.artifactHash);
+  assert.equal((draft.resultPayload as { correctionManifestHash: string }).correctionManifestHash, manifest.artifactHash);
+  const fake = structuredClone(draft);
+  (fake.resultPayload as { correctedReportHash: string }).correctedReportHash = '0'.repeat(64);
+  assert.throws(() => validateAndHashAiResultDraft('CORRECTION', fake, provenance), /CORRECTION_HASH_MISMATCH/);
+});
+
 test('artifact order, media type, lineage and supersession negatives fail closed', () => {
   const badOrder = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); badOrder.artifacts[0].ordinal = 1;
   assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', badOrder, provenance), /ORDER/);
@@ -55,6 +79,8 @@ test('artifact order, media type, lineage and supersession negatives fail closed
   assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', badSource, provenance), /SOURCE_ORDER/);
   const correction = createSyntheticAiResultDraft('CORRECTION'); correction.artifacts[1].payload = { synthetic: true, summary: 'synthetic summary', correctionReasons: ['synthetic reason'] };
   assert.throws(() => validateAndHashAiResultDraft('CORRECTION', correction, provenance));
+  const forbiddenSupersession = createSyntheticAiResultDraft('DOCUMENT_INGESTION'); forbiddenSupersession.artifacts[0].supersedesArtifactId = 'ckzzzzzzzzzzzzzzzzzzzzzzz';
+  assert.throws(() => validateAndHashAiResultDraft('DOCUMENT_INGESTION', forbiddenSupersession, provenance), /SUPERSESSION_NOT_ALLOWED/);
 });
 
 test('limits -1, exact and +1 for artifact/source cardinality and strings', () => {
