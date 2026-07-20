@@ -890,6 +890,7 @@ model AiWorkflowInstance {
   jobOutboxEvents     AiWorkflowJobOutboxEvent[]
   jobRuntimes         AiWorkflowJobRuntime[]
   jobRuntimeEvents    AiWorkflowJobRuntimeEvent[]
+  jobResults          AiWorkflowJobResult[]
 
   @@index([workflowCode, workflowVersion])
   @@index([currentState, updatedAt])
@@ -1026,6 +1027,7 @@ model AiWorkflowJob {
   outboxEvents               AiWorkflowJobOutboxEvent[]
   runtime                    AiWorkflowJobRuntime?
   runtimeAttempts            AiWorkflowJobAttempt[]
+  results                    AiWorkflowJobResult[]
   outboxConsumptions         AiWorkflowOutboxConsumption[]
   runtimeEvents              AiWorkflowJobRuntimeEvent[]
 
@@ -1093,6 +1095,7 @@ model AiWorkflowJobRuntime {
   job                  AiWorkflowJob                @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   workflowInstance     AiWorkflowInstance           @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   attempts             AiWorkflowJobAttempt[]
+  results              AiWorkflowJobResult[]
   outboxConsumption    AiWorkflowOutboxConsumption?
   events               AiWorkflowJobRuntimeEvent[]
 
@@ -1135,12 +1138,115 @@ model AiWorkflowJobAttempt {
   createdAt                  DateTime             @default(now())
   runtime                    AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   job                        AiWorkflowJob        @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  result                     AiWorkflowJobResult?
 
   @@unique([runtimeId, attemptSequence])
   @@unique([runtimeId, fencingToken])
   @@index([jobId, attemptSequence])
   @@index([outcome, finishedAt])
   @@index([leaseExpiresAt])
+}
+
+model AiWorkflowJobResult {
+  id                         String   @id @default(cuid())
+  runtimeId                  String
+  jobId                      String
+  attemptId                  String   @unique
+  attemptSequence            Int
+  fencingToken               BigInt
+  workerInstanceId           String
+  workerBuildHash            String
+  runtimePolicyHash          String
+  capabilityCode             String
+  capabilityVersion          String
+  capabilityHash             String
+  handlerCode                String
+  handlerVersion             String
+  resultContractCode         String
+  resultContractVersion      String
+  resultContractHash         String
+  jobPayloadHash             String
+  workflowInstanceId         String
+  workflowDefinitionHash     String
+  phaseCode                  String
+  phaseEntrySequence         Int
+  correctionCycle            Int
+  executorAgentId            String
+  executorAgentCode          String
+  executorAgentConfigVersion Int
+  executorAgentConfigHash    String
+  provider                   String   @default("mock")
+  dataMode                   String   @default("synthetic")
+  payload                    Json
+  payloadHash                String
+  manifestHash               String
+  resultHash                 String   @unique
+  artifactCount              Int
+  totalPayloadBytes          Int
+  retentionPolicyCode        String
+  retentionPolicyVersion     String
+  retentionPolicyHash        String
+  retentionClass             String
+  retainUntil                DateTime?
+  createdAt                  DateTime @default(now())
+  runtime                    AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  job                        AiWorkflowJob @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempt                    AiWorkflowJobAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance           AiWorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  artifacts                  AiWorkflowJobArtifact[]
+  sourceReferences           AiWorkflowJobSourceArtifact[]
+
+  @@unique([runtimeId, jobId, attemptSequence])
+  @@index([runtimeId, resultHash])
+  @@index([jobId, createdAt])
+  @@index([workflowInstanceId, createdAt])
+}
+
+model AiWorkflowJobArtifact {
+  id                    String   @id @default(cuid())
+  resultId              String
+  ordinal               Int
+  slotCode              String
+  logicalKey            String
+  artifactType          String
+  artifactSchemaCode    String
+  artifactSchemaVersion String
+  artifactSchemaHash    String
+  artifactVersion       String
+  mediaType             String   @default("application/json")
+  payload               Json
+  payloadHash           String
+  artifactHash          String
+  payloadBytes          Int
+  supersedesArtifactId  String?
+  createdAt             DateTime @default(now())
+  result                AiWorkflowJobResult @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supersedesArtifact    AiWorkflowJobArtifact? @relation("AiWorkflowArtifactSupersession", fields: [supersedesArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supersededByArtifacts AiWorkflowJobArtifact[] @relation("AiWorkflowArtifactSupersession")
+  sourceUsages          AiWorkflowJobSourceArtifact[] @relation("AiWorkflowSourceArtifact")
+
+  @@unique([resultId, ordinal])
+  @@unique([resultId, slotCode])
+  @@unique([resultId, logicalKey])
+  @@index([resultId])
+  @@index([artifactHash])
+  @@index([artifactType, artifactHash])
+}
+
+model AiWorkflowJobSourceArtifact {
+  id                 String @id @default(cuid())
+  resultId           String
+  sourceArtifactId   String
+  sourceArtifactHash String
+  role               String
+  ordinal            Int
+  createdAt          DateTime @default(now())
+  result             AiWorkflowJobResult @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceArtifact     AiWorkflowJobArtifact @relation("AiWorkflowSourceArtifact", fields: [sourceArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([resultId, ordinal])
+  @@unique([resultId, sourceArtifactId])
+  @@index([sourceArtifactId])
 }
 
 model AiWorkflowOutboxConsumption {

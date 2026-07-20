@@ -513,3 +513,9 @@ La Worker Runtime Foundation v1 proposta aggiunge soltanto runtime, attempt, rec
 La Draft PR non autorizza merge o deploy. Dopo un eventuale merge e una distinta approvazione manuale della finestra production, prima della migration eseguire un backup validato; dopo `prisma migrate deploy` verificare health, permessi v2, flussi CRM esistenti e, in sola lettura, i valori sicuri del setting globale. La presenza delle nuove tabelle non autorizza l'attivazione della state machine, del dispatch o test con dati cliente reali.
 
 In caso di rollback mantenere o riportare `stateMachineEnabled=false`, mantenere `dispatchEnabled=false` e i provider esterni disabilitati, quindi ripristinare l'immagine applicativa precedente lasciando intatte le nuove tabelle: non eliminare volumi, snapshot, ledger, job, outbox o dati audit. Finché una migration non è unita né distribuita, non è richiesta alcuna operazione sul database. Contratto, test, procedura completa e rollback della prima fondazione sono descritti in [AI Orchestrator: State Machine Foundation v1.1](ai-orchestrator-state-machine-foundation.md); la correzione della specifica resta proposta nell'[ADR-0001](adr/0001-ai-audit-workflow-v1-1.md).
+
+## AI Orchestrator Result & Artifact Contract Foundation v1
+
+La fondazione result/artifact v1 è dormiente e non abilita worker, dispatch, provider esterni o accesso a dati CRM reali. Prima di qualunque deploy futuro devono restare chiusi `stateMachineEnabled=false`, `dispatchEnabled=false`, `syntheticDataOnly=true`, `provider=mock`, `externalProvidersEnabled=false`, `AI_ORCHESTRATOR_WORKER_ENABLED=0` o mancante e tutte le 13 capability worker `enabled=false`.
+
+Rollback applicativo: mantenere i gate chiusi, ripristinare l'immagine PR76 e lasciare intatte le tabelle `AiWorkflowJobResult`, `AiWorkflowJobArtifact` e `AiWorkflowJobSourceArtifact`. Non eseguire DROP/TRUNCATE/reset/down migration; un restore database è una procedura separata.

@@ -52,6 +52,7 @@ import {
   surrenderAiWorkflowJobLease,
   supersedeIneligibleAiWorkflowJobRuntimes,
 } from '../../src/lib/ai-orchestrator/worker-runtime';
+import { createSyntheticAiResultDraft } from '../../src/lib/ai-orchestrator/result-artifact-contract-v1';
 
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
@@ -3004,10 +3005,15 @@ test('recovery scaduta è singola e il vecchio fence non torna utilizzabile', { 
       AiOrchestratorLeaseLostError,
     );
     await assert.rejects(
-      completeAiWorkflowJob(oldClaim.lease, { resultHash: '4'.repeat(64) }),
+      completeAiWorkflowJob(oldClaim.lease, { resultDraft: createSyntheticAiResultDraft(oldClaim.jobCode) }),
       AiOrchestratorLeaseLostError,
     );
-    await completeAiWorkflowJob(newClaim.lease, { resultHash: '5'.repeat(64) });
+    const winningDraft = createSyntheticAiResultDraft(newClaim.jobCode);
+    await completeAiWorkflowJob(newClaim.lease, { resultDraft: winningDraft });
+    await assert.rejects(
+      completeAiWorkflowJob(oldClaim.lease, { resultDraft: winningDraft }),
+      AiOrchestratorLeaseLostError,
+    );
     assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
       where: { runtimeId: oldClaim.runtimeId, eventType: 'LEASE_RECOVERED' },
     }), 1);
@@ -3095,7 +3101,7 @@ test('heartbeat e success sono negati a gate chiusi e la durata massima non è s
   });
   await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease), AiOrchestratorWorkerDisabledError);
   await assert.rejects(
-    completeAiWorkflowJob(claim.lease, { resultHash: '6'.repeat(64) }),
+    completeAiWorkflowJob(claim.lease, { resultDraft: createSyntheticAiResultDraft(claim.jobCode) }),
     AiOrchestratorWorkerDisabledError,
   );
   await surrenderAiWorkflowJobLease(claim.lease);
@@ -3122,7 +3128,7 @@ test('kill switch capability è selettivo e blocca heartbeat/success senza imped
     await setWorkerCapabilityGates([]);
     await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease), AiOrchestratorWorkerDisabledError);
     await assert.rejects(
-      completeAiWorkflowJob(claim.lease, { resultHash: 'a'.repeat(64) }),
+      completeAiWorkflowJob(claim.lease, { resultDraft: createSyntheticAiResultDraft(claim.jobCode) }),
       AiOrchestratorWorkerDisabledError,
     );
     await surrenderAiWorkflowJobLease(claim.lease);
@@ -3288,7 +3294,7 @@ test('HUMAN_APPROVAL blocca admission, claim, heartbeat e successo e supersede g
       workflowInstanceId: id,
     }), null);
     await assert.rejects(heartbeatAiWorkflowJobLease(claim.lease));
-    const completion = await completeAiWorkflowJob(claim.lease, { resultHash: 'd'.repeat(64) });
+    const completion = await completeAiWorkflowJob(claim.lease, { resultDraft: createSyntheticAiResultDraft(claim.jobCode) });
     assert.deepEqual(completion, { replay: false, state: 'SUPERSEDED' });
   });
   await setWorkerRuntimeGates(true, false);

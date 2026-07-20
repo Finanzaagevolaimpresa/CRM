@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, type AiWorkflowJobResult } from '@prisma/client';
 import { assertSha256, canonicalSha256, sha256 } from '../canonical-json';
+import {
+  AiResultProvenanceSchema,
+  validateAndHashAiResultDraft,
+  type AiResultArtifactDraft,
+  type AiResultProvenance,
+} from './result-artifact-contract-v1';
 import { prisma } from '../prisma';
 import {
   AI_ORCHESTRATOR_RETRYABLE_FAILURE_CODES,
@@ -243,6 +249,7 @@ async function lockAndAssertCapabilityEnabled(tx: RuntimeDb, jobId: string) {
     || setting.capabilityVersion !== capability.capabilityVersion
     || setting.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode]
   ) throw new AiOrchestratorWorkerDisabledError('Capability runtime disabilitata o non canonica.');
+  return capability;
 }
 
 async function runtimeIneligibilityReason(tx: RuntimeDb, jobId: string) {
@@ -719,79 +726,86 @@ async function loadFencedRuntime(tx: RuntimeDb, claims: LeaseClaims, now: Date) 
 
 export async function completeAiWorkflowJob(
   lease: AiWorkflowJobLease,
-  options: { resultHash: string },
+  options: { resultDraft: AiResultArtifactDraft },
 ) {
   assertWorkerEnvironmentEnabled();
-  assertSha256(options.resultHash, 'Result hash');
+  const { resultDraft } = options;
   const claims = getLeaseClaims(lease);
   return prisma.$transaction(async (tx) => {
     await lockAndAssertRuntimeGates(tx);
-    await lockAndAssertCapabilityEnabled(tx, claims.jobId);
-    const existing = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId } });
-    if (existing?.state === 'SUCCEEDED' && existing.resultHash === options.resultHash) {
-      return { replay: true as const, state: 'SUCCEEDED' as const };
+    const capability = await lockAndAssertCapabilityEnabled(tx, claims.jobId);
+    const runtimeSnapshot = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId }, include: { job: true } });
+    if (runtimeSnapshot?.state === 'SUCCEEDED' && runtimeSnapshot.resultHash) {
+      const persisted = await tx.aiWorkflowJobResult.findFirst({
+        where: { runtimeId: claims.runtimeId, resultHash: runtimeSnapshot.resultHash },
+        include: { attempt: { select: { leaseTokenHash: true } } },
+      });
+      if (!persisted) throw new AiOrchestratorLeaseLostError('Replay completion senza risultato canonico persistito.');
+      if (
+        runtimeSnapshot.jobId !== claims.jobId
+        || persisted.runtimeId !== claims.runtimeId
+        || persisted.jobId !== claims.jobId
+        || persisted.attemptSequence !== claims.attemptSequence
+        || persisted.fencingToken !== claims.fencingToken
+        || persisted.workerInstanceId !== claims.workerInstanceId
+        || persisted.attempt.leaseTokenHash !== claims.tokenHash
+      ) throw new AiOrchestratorLeaseLostError('Replay completion con lease o fencing differente.');
+      const replayProvenance = buildPersistedResultProvenance(persisted);
+      const replayHash = validateAndHashAiResultDraft(runtimeSnapshot.job.jobCode, resultDraft, replayProvenance).resultHash;
+      if (replayHash !== persisted.resultHash) throw new AiOrchestratorLeaseLostError('Replay completion con hash risultato differente.');
+      return { replay: true as const, state: 'SUCCEEDED' as const, resultHash: persisted.resultHash };
     }
     const now = await databaseNow(tx);
     const runtime = await loadFencedRuntime(tx, claims, now);
+    if (runtime.runtimePolicyHash !== AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH || runtime.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode] || runtime.handlerCode !== capability.handlerCode || runtime.handlerVersion !== capability.handlerVersion) {
+      throw new AiOrchestratorLeaseLostError('Identità runtime/capability/handler non valida.');
+    }
+    const attempt = await tx.aiWorkflowJobAttempt.findFirst({ where: { runtimeId: claims.runtimeId, attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, leaseTokenHash: claims.tokenHash, finishedAt: null } });
+    if (!attempt) throw new AiOrchestratorLeaseLostError();
+    const provenance = buildRuntimeResultProvenance(runtime, attempt, claims);
+    const hashed = validateAndHashAiResultDraft(runtime.job.jobCode, resultDraft, provenance);
     const ineligibilityReason = await runtimeIneligibilityReason(tx, claims.jobId);
     if (ineligibilityReason) {
       await terminalizeSuperseded(tx, runtime, claims, now, ineligibilityReason);
       return { replay: false as const, state: 'SUPERSEDED' as const };
     }
-    const updated = await tx.aiWorkflowJobRuntime.updateMany({
-      where: {
-        id: claims.runtimeId,
-        state: 'LEASED',
-        attemptSequence: claims.attemptSequence,
-        fencingToken: claims.fencingToken,
-        leaseTokenHash: claims.tokenHash,
-        leaseExpiresAt: { gt: now },
-      },
-      data: {
-        state: 'SUCCEEDED',
-        leaseOwnerId: null,
-        leaseTokenHash: null,
-        leaseClaimedAt: null,
-        leaseExpiresAt: null,
-        leaseMaxExpiresAt: null,
-        terminalAt: now,
-        terminalReasonCode: 'SUCCEEDED',
-        resultHash: options.resultHash,
-        lastFailureCode: null,
-        updatedAt: now,
-      },
-    });
+    const result = await tx.aiWorkflowJobResult.create({ data: {
+      runtimeId: runtime.id, jobId: runtime.jobId, attemptId: attempt.id, attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, workerInstanceId: claims.workerInstanceId, workerBuildHash: attempt.workerBuildHash, runtimePolicyHash: runtime.runtimePolicyHash,
+      capabilityCode: runtime.capabilityCode, capabilityVersion: runtime.capabilityVersion, capabilityHash: runtime.capabilityHash, handlerCode: runtime.handlerCode, handlerVersion: runtime.handlerVersion, resultContractCode: hashed.contract.resultContractCode, resultContractVersion: hashed.contract.resultContractVersion, resultContractHash: hashed.resultContractHash, jobPayloadHash: runtime.job.payloadHash,
+      workflowInstanceId: runtime.workflowInstanceId, workflowDefinitionHash: runtime.job.workflowDefinitionHash, phaseCode: runtime.job.phaseCode, phaseEntrySequence: runtime.job.phaseEntrySequence, correctionCycle: runtime.job.correctionCycle, executorAgentId: runtime.job.executorAgentId, executorAgentCode: runtime.job.executorAgentCode, executorAgentConfigVersion: runtime.job.executorAgentConfigVersion, executorAgentConfigHash: runtime.job.executorAgentConfigHash,
+      provider: 'mock', dataMode: 'synthetic', payload: hashed.resultPayload, payloadHash: hashed.resultPayloadHash, manifestHash: hashed.manifestHash, resultHash: hashed.resultHash, artifactCount: hashed.artifacts.length, totalPayloadBytes: hashed.totalPayloadBytes, retentionPolicyCode: hashed.retention.policyCode, retentionPolicyVersion: hashed.retention.policyVersion, retentionPolicyHash: hashed.retention.retentionPolicyHash, retentionClass: hashed.retention.retentionClass, retainUntil: hashed.retention.retainUntil ? new Date(hashed.retention.retainUntil) : null, createdAt: now,
+    } });
+    for (const artifact of hashed.artifacts) await tx.aiWorkflowJobArtifact.create({ data: { resultId: result.id, ordinal: artifact.ordinal, slotCode: artifact.slotCode, logicalKey: artifact.logicalKey, artifactType: artifact.artifactType, artifactSchemaCode: artifact.artifactSchemaCode, artifactSchemaVersion: artifact.artifactSchemaVersion, artifactSchemaHash: artifact.artifactSchemaHash, artifactVersion: artifact.artifactVersion, mediaType: artifact.mediaType, payload: artifact.payload, payloadHash: artifact.payloadHash, artifactHash: artifact.artifactHash, payloadBytes: artifact.payloadBytes, supersedesArtifactId: artifact.supersedesArtifactId ?? null, createdAt: now } });
+    for (const source of hashed.sourceReferences) await tx.aiWorkflowJobSourceArtifact.create({ data: { resultId: result.id, ...source, createdAt: now } });
+    const terminalNow = await databaseNow(tx);
+    const updated = await tx.aiWorkflowJobRuntime.updateMany({ where: { id: claims.runtimeId, state: 'LEASED', attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, leaseTokenHash: claims.tokenHash, leaseExpiresAt: { gt: terminalNow } }, data: { state: 'SUCCEEDED', leaseOwnerId: null, leaseTokenHash: null, leaseClaimedAt: null, leaseExpiresAt: null, leaseMaxExpiresAt: null, terminalAt: terminalNow, terminalReasonCode: 'SUCCEEDED', resultHash: hashed.resultHash, lastFailureCode: null, updatedAt: terminalNow } });
     if (updated.count !== 1) throw new AiOrchestratorLeaseLostError();
-    const attempt = await tx.aiWorkflowJobAttempt.updateMany({
-      where: {
-        runtimeId: claims.runtimeId,
-        attemptSequence: claims.attemptSequence,
-        fencingToken: claims.fencingToken,
-        leaseTokenHash: claims.tokenHash,
-        finishedAt: null,
-      },
-      data: {
-        finishedAt: now,
-        outcome: 'SUCCEEDED',
-        retryable: false,
-        retryBudgetConsumed: false,
-        resultHash: options.resultHash,
-      },
-    });
-    if (attempt.count !== 1) throw new AiOrchestratorLeaseLostError();
-    await appendRuntimeEvent(tx, {
-      runtimeId: runtime.id,
-      jobId: runtime.jobId,
-      workflowInstanceId: runtime.workflowInstanceId,
-      eventType: 'SUCCEEDED',
-      attemptSequence: claims.attemptSequence,
-      fencingToken: claims.fencingToken,
-      reasonCode: 'SUCCEEDED',
-      payload: { resultHash: options.resultHash, provider: 'mock', workflowTransitionApplied: false },
-      occurredAt: now,
-    });
-    return { replay: false as const, state: 'SUCCEEDED' as const };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    const attemptUpdate = await tx.aiWorkflowJobAttempt.updateMany({ where: { id: attempt.id, finishedAt: null, leaseExpiresAt: { gt: terminalNow } }, data: { finishedAt: terminalNow, outcome: 'SUCCEEDED', retryable: false, retryBudgetConsumed: false, resultHash: hashed.resultHash } });
+    if (attemptUpdate.count !== 1) throw new AiOrchestratorLeaseLostError();
+    await appendRuntimeEvent(tx, { runtimeId: runtime.id, jobId: runtime.jobId, workflowInstanceId: runtime.workflowInstanceId, eventType: 'SUCCEEDED', attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, reasonCode: 'SUCCEEDED', payload: { resultHash: hashed.resultHash, manifestHash: hashed.manifestHash, resultId: result.id, artifactCount: hashed.artifacts.length, provider: 'mock', workflowTransitionApplied: false }, occurredAt: terminalNow });
+    return { replay: false as const, state: 'SUCCEEDED' as const, resultHash: hashed.resultHash };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+function buildRuntimeResultProvenance(
+  runtime: Awaited<ReturnType<typeof loadFencedRuntime>>,
+  attempt: { id: string; workerBuildHash: string },
+  claims: LeaseClaims,
+): AiResultProvenance {
+  return {
+    runtimeId: runtime.id, jobId: runtime.jobId, attemptId: attempt.id, attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken.toString(), workerInstanceId: claims.workerInstanceId, workerBuildHash: attempt.workerBuildHash,
+    runtimePolicyHash: runtime.runtimePolicyHash, capabilityCode: runtime.capabilityCode, capabilityVersion: runtime.capabilityVersion as '1.0', capabilityHash: runtime.capabilityHash, handlerCode: runtime.handlerCode, handlerVersion: runtime.handlerVersion as '1.0',
+    jobPayloadHash: runtime.job.payloadHash, workflowInstanceId: runtime.workflowInstanceId, workflowDefinitionHash: runtime.job.workflowDefinitionHash, phaseCode: runtime.job.phaseCode, phaseEntrySequence: runtime.job.phaseEntrySequence, correctionCycle: runtime.job.correctionCycle,
+    executorAgentId: runtime.job.executorAgentId, executorAgentCode: runtime.job.executorAgentCode, executorAgentConfigVersion: runtime.job.executorAgentConfigVersion, executorAgentConfigHash: runtime.job.executorAgentConfigHash, provider: 'mock', dataMode: 'synthetic',
+  };
+}
+
+function buildPersistedResultProvenance(result: AiWorkflowJobResult): AiResultProvenance {
+  return AiResultProvenanceSchema.parse({
+    runtimeId: result.runtimeId, jobId: result.jobId, attemptId: result.attemptId, attemptSequence: result.attemptSequence, fencingToken: result.fencingToken.toString(), workerInstanceId: result.workerInstanceId, workerBuildHash: result.workerBuildHash,
+    runtimePolicyHash: result.runtimePolicyHash, capabilityCode: result.capabilityCode, capabilityVersion: result.capabilityVersion, capabilityHash: result.capabilityHash, handlerCode: result.handlerCode, handlerVersion: result.handlerVersion, jobPayloadHash: result.jobPayloadHash,
+    workflowInstanceId: result.workflowInstanceId, workflowDefinitionHash: result.workflowDefinitionHash, phaseCode: result.phaseCode, phaseEntrySequence: result.phaseEntrySequence, correctionCycle: result.correctionCycle, executorAgentId: result.executorAgentId, executorAgentCode: result.executorAgentCode, executorAgentConfigVersion: result.executorAgentConfigVersion, executorAgentConfigHash: result.executorAgentConfigHash, provider: result.provider, dataMode: result.dataMode,
+  });
 }
 
 async function terminalizeSuperseded(
