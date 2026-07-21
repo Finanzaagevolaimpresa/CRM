@@ -83,6 +83,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Utenti", href: "/settings/users", requiredPermission: "user.read" },
       { label: "Ruoli", href: "/settings/roles", requiredPermission: "settings.manage" },
+      { label: "Orchestrator AI", href: "/settings/ai-orchestrator", requiredPermission: "ai.orchestrator.read" },
       { label: "Diagnostica sistema", href: "/settings/system", requiredPermission: "settings.manage" },
       {
         label: "Diagnostica AI",
