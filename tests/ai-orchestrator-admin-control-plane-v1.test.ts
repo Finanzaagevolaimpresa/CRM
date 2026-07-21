@@ -13,6 +13,10 @@ import {
   AiOrchestratorAdminSetGlobalPolicyCommandSchema,
   AiOrchestratorAdminSetScopePolicyCommandSchema,
 } from '../src/lib/ai-orchestrator/admin-control-plane-v1';
+import {
+  AI_ORCHESTRATOR_ADMIN_INVALID_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES,
+} from './fixtures/ai-orchestrator-admin-reason-corpus';
 
 const root = resolve(import.meta.dirname, '..');
 const requestId = '018f47a0-7b2c-4d1e-8a90-1234567890ab';
@@ -91,19 +95,79 @@ test('emergency stop non accetta CAS client e minimizza la motivazione', () => {
     reason: 'Arresto immediato per anomalia operativa confermata.',
     confirmed: true,
   }));
-  for (const unsafeReason of [
-    'Consultare https://example.test/segreto prima di procedere.',
-    'Usare password amministrativa temporanea per questa operazione.',
-    'Contattare nome@example.test per confermare questa operazione.',
-  ]) {
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_INVALID_REASON_CASES) {
     assert.throws(() => AiOrchestratorAdminEmergencyStopCommandSchema.parse({
       actorUserId: 'synthetic-admin',
       requestId,
       operationCode: 'EMERGENCY_STOP',
       reasonCode: 'SECURITY_RESPONSE',
-      reason: unsafeReason,
+      reason: reasonCase.reason,
       confirmed: true,
-    }));
+    }), reasonCase.code);
+  }
+});
+
+test('tutti i command schema riusano il corpus reason canonico', () => {
+  const scopeTarget = AI_ORCHESTRATOR_ADMIN_CONTROL_TARGETS.find(({ scopeType }) => scopeType === 'JOB');
+  assert.ok(scopeTarget);
+  const scopePolicy = createAiOrchestratorAdminGenesisPolicy(scopeTarget);
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES) {
+    assert.equal(AiOrchestratorAdminSetGlobalPolicyCommandSchema.parse({
+      actorUserId: 'synthetic-admin',
+      requestId,
+      operationCode: 'SET_GLOBAL_POLICY',
+      expectedVersion: 1,
+      expectedRevisionHash: hash,
+      policy: AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY,
+      reasonCode: 'MAINTENANCE',
+      reason: reasonCase.reason,
+      confirmed: true,
+    }).reason, reasonCase.reason, reasonCase.code);
+    assert.equal(AiOrchestratorAdminSetScopePolicyCommandSchema.parse({
+      actorUserId: 'synthetic-admin',
+      requestId,
+      operationCode: 'SET_SCOPE_POLICY',
+      expectedVersion: 1,
+      expectedRevisionHash: hash,
+      policy: scopePolicy,
+      reasonCode: 'MAINTENANCE',
+      reason: reasonCase.reason,
+      confirmed: true,
+    }).reason, reasonCase.reason, reasonCase.code);
+    assert.equal(AiOrchestratorAdminEmergencyStopCommandSchema.parse({
+      actorUserId: 'synthetic-admin',
+      requestId,
+      operationCode: 'EMERGENCY_STOP',
+      reasonCode: 'SECURITY_RESPONSE',
+      reason: reasonCase.reason,
+      confirmed: true,
+    }).reason, reasonCase.reason, reasonCase.code);
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_INVALID_REASON_CASES) {
+    assert.throws(() => AiOrchestratorAdminSetGlobalPolicyCommandSchema.parse({
+      actorUserId: 'synthetic-admin',
+      requestId,
+      operationCode: 'SET_GLOBAL_POLICY',
+      expectedVersion: 1,
+      expectedRevisionHash: hash,
+      policy: AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY,
+      reasonCode: 'MAINTENANCE',
+      reason: reasonCase.reason,
+      confirmed: true,
+    }), `global:${reasonCase.code}`);
+    assert.throws(() => AiOrchestratorAdminSetScopePolicyCommandSchema.parse({
+      actorUserId: 'synthetic-admin',
+      requestId,
+      operationCode: 'SET_SCOPE_POLICY',
+      expectedVersion: 1,
+      expectedRevisionHash: hash,
+      policy: scopePolicy,
+      reasonCode: 'MAINTENANCE',
+      reason: reasonCase.reason,
+      confirmed: true,
+    }), `scope:${reasonCase.code}`);
   }
 });
 
