@@ -894,6 +894,7 @@ model AiOrchestratorAdminPolicyRevision {
   @@index([actorUserId, createdAt], map: "AiOAdminPolicy_actor_audit_idx")
   @@index([operationCode, createdAt], map: "AiOAdminPolicy_operation_audit_idx")
   @@index([requestHash], map: "AiOAdminPolicy_requestHash_idx")
+  @@index([createdAt, id], map: "AiOAdminPolicy_audit_cursor_idx")
 }
 
 model AiWorkflowInstance {
