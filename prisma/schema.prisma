@@ -317,6 +317,7 @@ model User {
   permissionOverrides               UserPermissionOverride[]
   aiOrchestratorSettingsUpdated     AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
   aiWorkerCapabilitySettingsUpdated AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
+  aiOrchestratorAdminPolicyRevisions AiOrchestratorAdminPolicyRevision[]     @relation("AiOrchestratorAdminPolicyRevisionActor")
   aiWorkflowInstancesCreated        AiWorkflowInstance[]                    @relation("AiWorkflowInstanceCreatedBy")
   aiWorkflowCommandsRequested       AiWorkflowCommand[]                     @relation("AiWorkflowCommandRequestedByUser")
   aiWorkflowTransitionsPerformed    AiWorkflowTransition[]                  @relation("AiWorkflowTransitionActorUser")
@@ -858,6 +859,41 @@ model AiOrchestratorWorkerCapabilitySetting {
 
   @@index([enabled, jobCode])
   @@index([updatedById])
+}
+
+model AiOrchestratorAdminPolicyRevision {
+  id                       String   @id
+  scopeType                String
+  scopeCode                String
+  targetDefinitionHash     String
+  version                  Int
+  policy                   Json
+  policyHash               String
+  previousRevisionHash     String?
+  revisionHash             String   @unique(map: "AiOAdminPolicy_revisionHash_key")
+  requestId                String?  @unique(map: "AiOAdminPolicy_requestId_key")
+  requestHash              String
+  requestedPolicyHash      String
+  expectedVersion          Int?
+  expectedRevisionHash     String?
+  operationCode            String
+  requiredPermissions      Json
+  permissionDecisions      Json
+  actorUserId              String?
+  actorRole                String?
+  reasonCode               String
+  reason                   String
+  confirmed                Boolean
+  createdAt                DateTime @default(now())
+  actorUser                User?    @relation("AiOrchestratorAdminPolicyRevisionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiOAdminPolicy_actor_fkey")
+
+  @@unique([scopeType, scopeCode, version], map: "AiOAdminPolicy_scope_version_key")
+  @@unique([scopeType, scopeCode, previousRevisionHash], map: "AiOAdminPolicy_scope_previous_key")
+  @@index([scopeType, scopeCode, version], map: "AiOAdminPolicy_scope_latest_idx")
+  @@index([scopeType, scopeCode, createdAt], map: "AiOAdminPolicy_scope_audit_idx")
+  @@index([actorUserId, createdAt], map: "AiOAdminPolicy_actor_audit_idx")
+  @@index([operationCode, createdAt], map: "AiOAdminPolicy_operation_audit_idx")
+  @@index([requestHash], map: "AiOAdminPolicy_requestHash_idx")
 }
 
 model AiWorkflowInstance {

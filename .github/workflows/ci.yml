@@ -16,6 +16,9 @@ jobs:
       AUTH_SECRET: ci-only-secret-change-me
       AUTH_COOKIE_NAME: fai_crm_session
       AI_PROVIDER: mock
+      AI_ORCHESTRATOR_WORKER_ENABLED: "0"
+      AI_EXTERNAL_PROVIDERS_ENABLED: "false"
+      AI_ALLOWED_MODELS: ""
     services:
       postgres:
         image: postgres:16
@@ -62,6 +65,9 @@ jobs:
 
       - name: Run PostgreSQL permission tests
         run: RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit --incremental false
 
       - name: Build
         run: npm run build
