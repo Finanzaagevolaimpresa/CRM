@@ -549,4 +549,116 @@ externalProvidersEnabled=false
 
 L'emergency stop appende una revisione di riduzione del rischio e non cancella o riscrive job, lease, attempt, result o ledger. I limiti v1 sono hard upper bound, ma restano dichiarativi finché una futura activation epoch non viene collegata da una PR separata a un vero processo worker.
 
-La Draft PR #79 non autorizza merge, deploy o attivazione. Dopo un eventuale deploy separatamente autorizzato verificare in sola lettura il vincolo `AiOrchestratorSetting_dispatch_disabled_check`, le 36 revisioni bootstrap, i tredici kill switch e l'assenza di backfill. Il rollback ordinario ripristina l'immagine precedente mantenendo tutte le tabelle additive e lo storico append-only; non usare `DROP`, `TRUNCATE`, reset o down migration. Il contratto completo è descritto in [Admin Control Plane Foundation v1](ai-orchestrator-admin-control-plane-foundation-v1.md) e nell'[ADR-0006](adr/ADR-0006-ai-orchestrator-admin-control-plane-foundation-v1.md).
+La PR #79 è stata unita e distribuita in modalità dormiente il 21 luglio 2026; il collaudo production si è concluso con `PR79_SMOKE_OK`. La distribuzione non ha autorizzato l'attivazione di worker, state machine, dispatch o provider esterni. Continuare a verificare in sola lettura il vincolo `AiOrchestratorSetting_dispatch_disabled_check`, le 36 teste canoniche, i tredici kill switch e l'assenza di backfill operativo. Il rollback ordinario ripristina l'immagine precedente mantenendo tutte le tabelle additive e lo storico append-only; non usare `DROP`, `TRUNCATE`, reset o down migration. Il contratto completo è descritto in [Admin Control Plane Foundation v1](ai-orchestrator-admin-control-plane-foundation-v1.md) e nell'[ADR-0006](adr/ADR-0006-ai-orchestrator-admin-control-plane-foundation-v1.md).
+
+## AI Orchestrator Admin UI Foundation v1 — proposta PR80
+
+PR80 è attualmente presente soltanto sulla branch `codex/ai-orchestrator-admin-ui-foundation-v1`: non è unita né distribuita e non autorizza Ready for review, merge, deploy o attivazione. La pagina proposta `/settings/ai-orchestrator` registra esclusivamente policy `desired` nel ledger PR79 e mostra uno stato `effective` sempre fail-closed sotto `FOUNDATION_LOCKED_V1`. Non è collegata a worker, coda, runtime, handler, dispatch o provider.
+
+La migration additiva proposta:
+
+- esegue un preflight count-only sulle motivazioni immutabili;
+- si arresta senza stampare o modificare contenuti incompatibili;
+- aggiunge e valida `AiOAdminPolicy_reason_minimized_v1_check`;
+- conserva il precedente `AiOAdminPolicy_reason_check`;
+- aggiunge `AiOAdminPolicy_audit_cursor_idx(createdAt, id)`;
+- non aggiorna revisioni, hash, setting o record operativi.
+
+### Sequenza DB-first futura
+
+Eseguire questa sequenza soltanto dopo merge e autorizzazione esplicita della finestra production:
+
+1. identificare SHA e immagine approvati;
+2. verificare health di CRM e PostgreSQL;
+3. creare e validare un backup production;
+4. verificare in sola lettura tutti i gate dormienti;
+5. avviare PostgreSQL senza sostituire ancora l'immagine applicativa;
+6. eseguire `prisma migrate deploy` con la migration committata;
+7. fermarsi se il preflight rileva revisioni incompatibili;
+8. verificare vincolo reason, indice audit, catalogo e barriera dispatch;
+9. distribuire la nuova immagine;
+10. verificare health, login e pagina Admin Orchestrator in sola lettura.
+
+Comando migration, usando il flusso Compose production già documentato:
+
+```bash
+docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run prisma:migrate:deploy
+```
+
+Se la migration fallisce, non avviare l'immagine PR80 e non tentare di sanificare `reason`: il campo partecipa agli hash append-only. Conservare l'errore count-only, lasciare l'immagine PR79 e aprire una decisione tecnica separata.
+
+### Verifiche database post-migration
+
+Eseguire con un client PostgreSQL autorizzato e in modalità di sola lettura:
+
+```sql
+SELECT conname, convalidated
+FROM pg_constraint
+WHERE conrelid = '"AiOrchestratorAdminPolicyRevision"'::REGCLASS
+  AND conname IN (
+    'AiOAdminPolicy_reason_check',
+    'AiOAdminPolicy_reason_minimized_v1_check'
+  )
+ORDER BY conname;
+
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname = CURRENT_SCHEMA()
+  AND tablename = 'AiOrchestratorAdminPolicyRevision'
+  AND indexname = 'AiOAdminPolicy_audit_cursor_idx';
+
+SELECT COUNT(*) AS "canonicalHeads"
+FROM (
+  SELECT DISTINCT ON ("scopeType", "scopeCode") "scopeType", "scopeCode"
+  FROM "AiOrchestratorAdminPolicyRevision"
+  ORDER BY "scopeType", "scopeCode", "version" DESC
+) heads;
+
+SELECT "stateMachineEnabled", "dispatchEnabled", "syntheticDataOnly", "provider"
+FROM "AiOrchestratorSetting"
+WHERE "id" = 'global';
+
+SELECT COUNT(*) AS "enabledCapabilities"
+FROM "AiOrchestratorWorkerCapabilitySetting"
+WHERE "enabled" = true;
+```
+
+Risultati attesi immediatamente dopo la migration:
+
+- entrambi i vincoli reason presenti e validati;
+- indice audit presente;
+- 36 teste canoniche;
+- `stateMachineEnabled=false`;
+- `dispatchEnabled=false`;
+- `syntheticDataOnly=true`;
+- `provider=mock`;
+- zero capability abilitate.
+
+Verificare separatamente che `AiOrchestratorSetting_dispatch_disabled_check` resti presente, esatto e validato e che `externalProvidersEnabled=false`, `AI_ORCHESTRATOR_WORKER_ENABLED=0`, `AI_EXTERNAL_PROVIDERS_ENABLED=false` e `AI_ALLOWED_MODELS` sia vuota.
+
+### Smoke autenticato
+
+Dopo l'avvio della nuova immagine:
+
+- verificare `/api/health`;
+- accedere con un utente production autorizzato;
+- aprire `/settings/ai-orchestrator`;
+- confermare il banner **Configurazione desiderata, non operativa**;
+- confermare stato effective non operativo, barriera fisica presente e zero capability abilitate;
+- verificare che un utente privo di `ai.orchestrator.read` non veda né apra la pagina;
+- verificare che la motivazione completa sia visibile soltanto con `ai.orchestrator.audit`;
+- non inviare form, non creare revisioni di prova e non usare dati cliente reali.
+
+### Rollback PR80
+
+Il rollback ordinario è applicativo:
+
+1. mantenere chiusi worker, state machine, dispatch e provider esterni;
+2. ripristinare l'immagine PR79 approvata;
+3. riavviare lo stack senza eliminare volumi;
+4. verificare health, login e gate dormienti;
+5. lasciare nel database il nuovo vincolo reason, l'indice audit e tutte le revisioni append-only eventualmente create.
+
+Il codice PR79 è compatibile con il vincolo più restrittivo e non dipende dall'indice. Non eseguire down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta, da usare solo con un piano specifico e backup validato, non come rollback ordinario della UI.
+
+Contratto completo: [Admin UI Foundation v1](ai-orchestrator-admin-ui-foundation-v1.md) e [ADR-0007](adr/ADR-0007-ai-orchestrator-admin-ui-foundation-v1.md).

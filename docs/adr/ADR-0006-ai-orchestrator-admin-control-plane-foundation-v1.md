@@ -2,7 +2,7 @@
 
 ## Stato
 
-Proposto nella Draft PR #79. Nessuna autorizzazione di merge, deploy o attivazione.
+Accettato, unito e distribuito con PR #79 il 21 luglio 2026. Il deploy dormiente è stato verificato con `PR79_SMOKE_OK`; non ha autorizzato l'attivazione di worker, state machine, dispatch o provider esterni.
 
 ## Contesto
 
@@ -56,4 +56,4 @@ Questa decisione non introduce UI, route, server action, API pubblica, worker, w
 
 ## Rollback
 
-Prima di merge/deploy è sufficiente ritirare la Draft PR. Dopo un eventuale deploy separatamente autorizzato, il rollback è applicativo e mantiene tutti i gate chiusi; catalogo, revisioni e audit restano intatti. Non sono ammessi reset, down migration, `DROP`, `TRUNCATE` o cancellazioni dello storico.
+Dopo il deploy autorizzato della PR79, il rollback ordinario è applicativo e mantiene tutti i gate chiusi: si ripristina l'immagine precedente lasciando intatti catalogo, revisioni e audit. Non sono ammessi reset, down migration, `DROP`, `TRUNCATE` o cancellazioni dello storico.
