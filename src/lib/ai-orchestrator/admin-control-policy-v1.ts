@@ -67,6 +67,13 @@ export const AI_ORCHESTRATOR_ADMIN_CHANGE_REASON_CODES = Object.freeze([
   'MAINTENANCE',
 ] as const);
 
+export const AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER = Object.freeze({
+  STOPPED: 0,
+  PAUSED: 1,
+  DRAINING: 2,
+  READY: 3,
+} as const);
+
 export const AI_ORCHESTRATOR_ADMIN_PERMISSIONS = Object.freeze([
   'ai.orchestrator.read',
   'ai.orchestrator.configure',
@@ -89,7 +96,7 @@ const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const scopeCodeSchema = z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const actorIdSchema = z.string().trim().min(1).max(191);
 const reasonCodeSchema = z.string().regex(/^[A-Z][A-Z0-9_]{2,63}$/);
-const reasonControlCharacterPattern = /[\u0000-\u001f\u007f]/u;
+const reasonControlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/u;
 const forbiddenReasonContentPattern = /(?:https?:\/\/|<[^>]*>|@|(^|[^A-Za-z0-9_])(?:password|passwd|secret|token|prompt|authorization|cookie|api[ _-]?key)($|[^A-Za-z0-9_]))/iu;
 
 /**
@@ -106,6 +113,12 @@ export const AiOrchestratorAdminReasonSchema = z.string().trim().superRefine((re
     context.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'La motivazione deve contenere tra 10 e 500 caratteri Unicode.',
+    });
+  }
+  if (reason.length > 500) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'La motivazione supera il limite compatibile con il rollback PR79.',
     });
   }
   if (reasonControlCharacterPattern.test(reason)) {
@@ -690,7 +703,9 @@ export function diffAiOrchestratorAdminPolicies(
     if (canonicalSha256(before.limits) !== canonicalSha256(after.limits)) required.add('ai.orchestrator.limits');
     if (before.limits.maxRetryableFailures !== after.limits.maxRetryableFailures) required.add('ai.orchestrator.retry');
     if (before.desiredMode !== after.desiredMode) {
-      required.add(after.desiredMode === 'READY' ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');
+      const beforeRisk = AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[before.desiredMode];
+      const afterRisk = AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[after.desiredMode];
+      required.add(afterRisk > beforeRisk ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');
     }
     if (before.desiredStateMachineEnabled !== after.desiredStateMachineEnabled) {
       required.add(after.desiredStateMachineEnabled ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');

@@ -39,7 +39,11 @@ export const AI_ORCHESTRATOR_ADMIN_UI_RESULT_CODES = Object.freeze([
 
 export type AiOrchestratorAdminUiResultCode = typeof AI_ORCHESTRATOR_ADMIN_UI_RESULT_CODES[number];
 
+export const AI_ORCHESTRATOR_ADMIN_HISTORY_MODES = Object.freeze(['all', 'global', 'scope'] as const);
+export type AiOrchestratorAdminHistoryMode = typeof AI_ORCHESTRATOR_ADMIN_HISTORY_MODES[number];
+
 const uiResultCodeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_UI_RESULT_CODES);
+const historyModeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_HISTORY_MODES);
 
 export const AI_ORCHESTRATOR_ADMIN_UI_RESULT_MESSAGES: Readonly<Record<AiOrchestratorAdminUiResultCode, string>> = Object.freeze({
   UPDATED: 'Configurazione desiderata registrata nel ledger.',
@@ -57,6 +61,11 @@ export const AI_ORCHESTRATOR_ADMIN_UI_RESULT_MESSAGES: Readonly<Record<AiOrchest
 export function parseAiOrchestratorAdminUiResultCode(value: unknown) {
   const parsed = uiResultCodeSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+export function parseAiOrchestratorAdminHistoryMode(value: unknown): AiOrchestratorAdminHistoryMode {
+  const parsed = historyModeSchema.safeParse(value);
+  return parsed.success ? parsed.data : 'all';
 }
 
 export const AI_ORCHESTRATOR_ADMIN_SCOPE_LABELS: Readonly<Record<string, string>> = Object.freeze({

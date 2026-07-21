@@ -16,7 +16,9 @@ import {
   AI_ORCHESTRATOR_ADMIN_CONTROL_TARGETS,
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON,
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON_CODE,
+  AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY,
   AI_ORCHESTRATOR_ADMIN_GLOBAL_POLICY_CODE,
+  AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER,
   AiOrchestratorAdminGlobalPolicySchema,
   AiOrchestratorAdminScopePolicySchema,
   buildAiOrchestratorAdminRequestIdentity,
@@ -25,14 +27,17 @@ import {
   createAiOrchestratorAdminPolicyHash,
   createAiOrchestratorAdminRequestHash,
   createAiOrchestratorAdminRevisionHash,
+  diffAiOrchestratorAdminPolicies,
   getAiOrchestratorAdminControlTarget,
   validateAiOrchestratorAdminPolicyForTarget,
   type AiOrchestratorAdminControlTarget,
   type AiOrchestratorAdminGlobalPolicy,
 } from '../../src/lib/ai-orchestrator/admin-control-policy-v1';
 import {
+  AI_ORCHESTRATOR_ADMIN_DETERMINISTIC_CONTROL_REASON_CASES,
   AI_ORCHESTRATOR_ADMIN_FORBIDDEN_CONTENT_REASON_CASES,
   AI_ORCHESTRATOR_ADMIN_INVALID_SHAPE_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_ROLLBACK_INCOMPATIBLE_REASON_CASES,
   AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES,
 } from '../fixtures/ai-orchestrator-admin-reason-corpus';
 
@@ -396,6 +401,28 @@ test('PostgreSQL espone reason hardening validato e indice keyset PR80', {
   assert.match(indexes[0].definition, /USING btree \("createdAt", "?id"?\)/);
 });
 
+test('PostgreSQL e TypeScript condividono la matrice RBAC completa dei desiredMode', {
+  skip: !runDbTests,
+}, async () => {
+  const modes = Object.keys(AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER) as Array<keyof typeof AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER>;
+  for (const beforeMode of modes) {
+    for (const afterMode of modes) {
+      if (beforeMode === afterMode) continue;
+      const before = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: beforeMode };
+      const after = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: afterMode };
+      const expected = diffAiOrchestratorAdminPolicies(before, after, 'SET_GLOBAL_POLICY').requiredPermissions;
+      const rows = await db().$queryRaw<Array<{ permissions: unknown }>>(Prisma.sql`
+        SELECT "ai_orchestrator_admin_required_permissions_v1"(
+          CAST(${JSON.stringify(before)} AS JSONB),
+          CAST(${JSON.stringify(after)} AS JSONB),
+          'SET_GLOBAL_POLICY'
+        ) AS "permissions"
+      `);
+      assert.deepEqual(rows[0]?.permissions, expected, `${beforeMode} -> ${afterMode}`);
+    }
+  }
+});
+
 test('storico keyset pagina timestamp uguali senza duplicati, salti o cambio filtro', {
   skip: !runDbTests,
 }, async () => {
@@ -457,6 +484,20 @@ test('storico keyset pagina timestamp uguali senza duplicati, salti o cambio fil
     { ok: invalidFilter.ok, code: invalidFilter.ok ? null : invalidFilter.code },
     { ok: false, code: 'INVALID_FILTER' },
   );
+
+  const globalHistory = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeType: 'GLOBAL',
+    scopeCode: 'global',
+    limit: 7,
+  });
+  assert.equal(globalHistory.ok, true);
+  if (globalHistory.ok) {
+    assert.ok(globalHistory.revisions.length > 0);
+    assert.ok(globalHistory.revisions.every(({ scopeType, scopeCode }) => (
+      scopeType === 'GLOBAL' && scopeCode === 'global'
+    )));
+  }
 
   const denied = await listAiOrchestratorAdminPolicyRevisions(db(), {
     actorUserId: plainUser.id,
@@ -802,13 +843,36 @@ test('PostgreSQL rifiuta via SQL raw l’intero corpus reason non valido senza r
     );
   }
 
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_ROLLBACK_INCOMPATIBLE_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason_minimized_v1_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_DETERMINISTIC_CONTROL_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason(?:_minimized_v1)?_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
   assert.equal(await db().aiOrchestratorAdminPolicyRevision.count(), before);
   assert.equal(
     (await latestRevision(controlTarget.scopeType, controlTarget.scopeCode)).revisionHash,
     head.revisionHash,
   );
 
-  const safeReason = AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES[0].reason;
+  const safeReason = AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES.at(-1)?.reason;
+  assert.ok(safeReason);
   await rawScopeReasonInsert({ head, controlTarget, reason: safeReason });
   const accepted = await latestRevision(controlTarget.scopeType, controlTarget.scopeCode);
   assert.equal(accepted.version, head.version + 1);
@@ -986,6 +1050,22 @@ test('emergency stop è CAS-less e vince la race contro una proposta espansiva',
   assert.equal(finalPolicy.emergencyStopEngaged, true);
   assert.equal(finalPolicy.globalKillSwitch, true);
   assert.equal(finalHead.requestId, raceEmergencyId);
+
+  const globalHistory = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeType: 'GLOBAL',
+    scopeCode: 'global',
+    limit: 50,
+  });
+  assert.equal(globalHistory.ok, true);
+  if (globalHistory.ok) {
+    assert.ok(globalHistory.revisions.some(({ operationCode, requestId }) => (
+      operationCode === 'EMERGENCY_STOP' && requestId === emergencyRequestId
+    )));
+    assert.ok(globalHistory.revisions.some(({ operationCode, requestId }) => (
+      operationCode === 'EMERGENCY_STOP' && requestId === raceEmergencyId
+    )));
+  }
 });
 
 test('Control Plane non modifica gate o record operativi e resta effective fail-closed', {

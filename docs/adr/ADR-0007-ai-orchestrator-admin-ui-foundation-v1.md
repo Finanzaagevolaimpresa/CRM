@@ -2,7 +2,7 @@
 
 ## Stato
 
-Proposto nella branch PR80 `codex/ai-orchestrator-admin-ui-foundation-v1`. La branch non è unita né distribuita e non autorizza merge, deploy o attivazione operativa.
+Accettato per PR80. Questa decisione non autorizza l'attivazione operativa dell'AI Orchestrator.
 
 ## Contesto
 
@@ -21,7 +21,7 @@ La UI espone:
 - 35 scope non globali raggruppati in provider, agenti, capability, job e workflow;
 - modifica controllata della policy globale o di un singolo scope;
 - emergency stop monotono;
-- storico append-only, visibile solo con il permesso audit dedicato.
+- storico append-only con viste intero ledger, globale/emergenze e scope selezionato, visibile solo con il permesso audit dedicato.
 
 Le operazioni di modifica rimangono scritture sul solo ledger amministrativo. Un valore `desired=true` non apre alcun gate e non diventa una capability operativa.
 
@@ -31,19 +31,21 @@ L'accesso alla route e alla navigazione richiede `ai.orchestrator.read`. La UI d
 
 I form usano schemi strict e accettano soltanto campi esplicitamente previsti. Attore, ruolo, decisioni RBAC, hash canonici, provider, activation epoch, policy version, modalità synthetic-only e dispatch desiderato non sono liberamente forniti dal browser. Le modifiche normali richiedono CAS su versione e revision hash, UUIDv4 come chiave idempotente, reason code, motivazione minimizzata, checkbox e frase esatta di conferma. L'emergency stop resta CAS-less per contratto, ma richiede sessione valida, `ai.orchestrator.kill`, motivazione e conferma forte.
 
+Le modalità desiderate seguono l'ordine di rischio `STOPPED < PAUSED < DRAINING < READY`. Ogni avanzamento richiede `ai.orchestrator.enable`, ogni arretramento richiede `ai.orchestrator.disable`; TypeScript e la funzione PostgreSQL invocata dal trigger applicano la stessa matrice.
+
 Gli esiti mostrati dalla pagina sono codici e messaggi chiusi. Valori rifiutati, stack trace e contenuto integrale degli errori non vengono riflessi nell'URL o nel messaggio utente.
 
 ## Minimizzazione della motivazione
 
-Adottiamo un unico schema TypeScript per command, request identity, revision identity e rilettura del ledger. Una nuova migration additiva applica al database un vincolo versionato che respinge URL HTTP/HTTPS, tag HTML, `@`, caratteri di controllo e termini delimitati associati a password, segreti, token, prompt, authorization, cookie e API key.
+Adottiamo un unico schema TypeScript per command, request identity, revision identity e rilettura del ledger. Lo schema limita `reason` a 10–500 code point Unicode e a non più di 500 unità UTF-16, così ogni nuova revisione resta rileggibile anche dal codice PR79. Una nuova migration additiva applica al database lo stesso limite e un vincolo versionato che respinge URL HTTP/HTTPS, tag HTML, `@`, controlli C0/DEL/C1 e termini delimitati associati a password, segreti, token, prompt, authorization, cookie e API key. Le espressioni regolari ASCII usano esplicitamente la collation `C`.
 
-La migration esegue prima un controllo count-only. Se trova anche una sola revisione storica incompatibile, si arresta senza stampare il contenuto, senza aggiornare righe e senza ricalcolare hash. Il nuovo vincolo viene aggiunto `NOT VALID` e poi validato; il vincolo PR79 originario resta presente.
+La migration esegue prima un controllo count-only. Se trova anche una sola revisione storica incompatibile, l'intero blocco atomico si arresta senza stampare il contenuto, senza aggiornare righe, senza ricalcolare hash e senza lasciare DDL parziale. Il nuovo vincolo viene aggiunto `NOT VALID` e poi validato; il vincolo PR79 originario resta presente.
 
 Questa barriera riduce il rischio di persistenza accidentale. Non è un classificatore generale e non garantisce, da sola, l'assenza di dati personali o informazioni riservate: l'operatore deve comunque scrivere motivazioni tecniche minimizzate.
 
 ## Storico e performance
 
-Lo storico usa paginazione keyset su `createdAt + id`, cursore opaco e versionato, filtri canonici e un limite massimo di 50 revisioni. La query legge una riga aggiuntiva per determinare la pagina successiva e non usa `OFFSET`. Un indice additivo `AiOAdminPolicy_audit_cursor_idx` supporta l'ordinamento globale.
+Lo storico espone filtri chiusi per intero ledger, policy globale incluse le emergenze e singolo scope. Usa paginazione keyset su `createdAt + id`, cursore opaco e versionato legato al filtro, e un limite massimo di 50 revisioni. La query legge una riga aggiuntiva per determinare la pagina successiva e non usa `OFFSET`. Un indice additivo `AiOAdminPolicy_audit_cursor_idx` supporta l'ordinamento globale.
 
 La pagina non usa polling, timer o chiamate browser a servizi esterni. La snapshot corrente viene letta lato server; le motivazioni complete sono proiettate soltanto nella vista storico dopo la verifica di `ai.orchestrator.audit`.
 
@@ -69,6 +71,6 @@ Una futura attivazione richiederà una nuova ADR, una nuova activation epoch, un
 
 ## Rollout e rollback
 
-PR80 è ancora una proposta non distribuita. Un eventuale rollout autorizzato dovrà essere database-first: backup validato, preflight count-only, migration, verifica del vincolo e dell'indice, nuova immagine e smoke autenticato in sola lettura.
+Il rollout autorizzato deve essere database-first: backup validato, preflight count-only, migration, verifica del vincolo, della funzione RBAC e dell'indice, nuova immagine e smoke autenticato in sola lettura.
 
-Il rollback ordinario è applicativo: ripristinare l'immagine PR79 e lasciare nel database il vincolo additivo, l'indice e le eventuali revisioni append-only già create. Non usare down migration, reset, `DROP`, `TRUNCATE`, `UPDATE` o `DELETE` sul ledger. Se il preflight fallisce, la migration si arresta e la release applicativa non deve proseguire.
+Il rollback ordinario è applicativo: ripristinare l'immagine PR79 e lasciare nel database il vincolo additivo, la funzione RBAC più restrittiva, l'indice e le eventuali revisioni append-only già create. Il limite UTF-16 conserva la lettura con PR79; durante il rollback non effettuare mutazioni `PAUSED`/`DRAINING`, mantenere tutti i gate chiusi e usare l'immagine precedente per lettura/health. Non usare down migration, reset, `DROP`, `TRUNCATE`, `UPDATE` o `DELETE` sul ledger. Se il preflight fallisce, la migration si arresta e la release applicativa non deve proseguire.

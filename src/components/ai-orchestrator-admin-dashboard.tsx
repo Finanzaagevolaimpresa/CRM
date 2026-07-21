@@ -20,6 +20,7 @@ import {
   labelAiOrchestratorAdminBlockReason,
   minuteUtcToTime,
   type AiOrchestratorAdminAuditRevisionView,
+  type AiOrchestratorAdminHistoryMode,
   type AiOrchestratorAdminReadRevisionView,
   type AiOrchestratorAdminUiPermissions,
   type AiOrchestratorAdminUiResultCode,
@@ -41,6 +42,7 @@ interface DashboardProps {
   readonly permissions: AiOrchestratorAdminUiPermissions;
   readonly mutationIntegritySafe: boolean;
   readonly history: readonly AiOrchestratorAdminAuditRevisionView[] | null;
+  readonly historyMode: AiOrchestratorAdminHistoryMode;
   readonly historyNextHref: string | null;
   readonly historyMessage: string | null;
   readonly resultCode: AiOrchestratorAdminUiResultCode | null;
@@ -56,6 +58,17 @@ const labelClass = 'block text-xs font-black uppercase tracking-wide text-fai-na
 
 function hashPreview(value: string) {
   return `${value.slice(0, 12)}…${value.slice(-6)}`;
+}
+
+function historyHref(mode: AiOrchestratorAdminHistoryMode, selectedScope: ScopeRevisionView | null) {
+  const query = new URLSearchParams();
+  if (selectedScope) {
+    query.set('scopeType', selectedScope.scopeType);
+    query.set('scopeCode', selectedScope.scopeCode);
+  }
+  if (mode !== 'all') query.set('audit', mode);
+  const serialized = query.toString();
+  return `/settings/ai-orchestrator${serialized ? `?${serialized}` : ''}`;
 }
 
 function BooleanBadge({ value, goodWhen = true }: { value: boolean; goodWhen?: boolean }) {
@@ -109,12 +122,12 @@ function ReasonFields({ idPrefix, emergency = false }: { idPrefix: string; emerg
           id={reasonId}
           name="reason"
           minLength={10}
-          maxLength={1000}
+          maxLength={500}
           required
           autoComplete="off"
           placeholder="Descrivere il motivo tecnico senza nomi, dati cliente, URL, credenziali o contenuti operativi."
         />
-        <p className="mt-1 text-xs leading-5 text-slate-500">Da 10 a 500 caratteri Unicode. Il limite HTML ammette le coppie surrogate; il server applica il conteggio canonico. Il filtro riduce il rischio di persistenza accidentale e non sostituisce la minimizzazione manuale.</p>
+        <p className="mt-1 text-xs leading-5 text-slate-500">Da 10 a 500 caratteri Unicode, con massimo 500 unità UTF-16 per mantenere il rollback PR79 leggibile. Il filtro riduce il rischio di persistenza accidentale e non sostituisce la minimizzazione manuale.</p>
       </div>
       <div>
         <label className={labelClass} htmlFor={confirmationId}>Frase di conferma</label>
@@ -318,6 +331,7 @@ export function AiOrchestratorAdminDashboard(props: DashboardProps) {
                 {group.scopes.map((scope) => {
                   const active = props.selectedScope?.scopeType === scope.scopeType && props.selectedScope.scopeCode === scope.scopeCode;
                   const query = new URLSearchParams({ scopeType: scope.scopeType, scopeCode: scope.scopeCode });
+                  if (props.historyMode !== 'all') query.set('audit', props.historyMode);
                   return <Link className={`rounded-xl px-3 py-2 text-xs font-bold ring-1 ${active ? 'bg-fai-navy text-white ring-fai-navy' : 'bg-white text-slate-700 ring-slate-200 hover:ring-fai-blue'}`} href={`/settings/ai-orchestrator?${query.toString()}`} key={`${scope.scopeType}:${scope.scopeCode}`}>{scope.scopeCode}</Link>;
                 })}
               </div>
@@ -346,6 +360,21 @@ export function AiOrchestratorAdminDashboard(props: DashboardProps) {
 
       {props.permissions.canAudit ? (
         <Card title="Storico append-only" action={<Badge tone="purple">audit autorizzato</Badge>}>
+          <div className="mb-4 flex flex-wrap gap-2" aria-label="Filtro storico Orchestrator">
+            {([
+              ['all', 'Tutto il ledger'],
+              ['global', 'Policy globale ed emergenze'],
+              ['scope', props.selectedScope ? `Scope ${props.selectedScope.scopeCode}` : 'Scope selezionato'],
+            ] as const).map(([mode, label]) => (
+              <Link
+                className={`rounded-xl px-3 py-2 text-xs font-black ring-1 ${props.historyMode === mode ? 'bg-fai-navy text-white ring-fai-navy' : 'bg-white text-slate-700 ring-slate-200 hover:ring-fai-blue'}`}
+                href={historyHref(mode, props.selectedScope)}
+                key={mode}
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
           {props.historyMessage ? <p className="mb-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-900 ring-1 ring-amber-200">{props.historyMessage}</p> : null}
           {!props.history || props.history.length === 0 ? <EmptyState title="Nessuna revisione disponibile" /> : (
             <Table headers={['Data', 'Target', 'Operazione', 'Attore', 'Motivazione', 'Versione']} rows={props.history.map((revision) => [

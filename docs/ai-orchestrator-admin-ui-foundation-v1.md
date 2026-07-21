@@ -2,7 +2,7 @@
 
 ## Stato e perimetro
 
-Questa guida descrive la proposta PR80 sulla branch `codex/ai-orchestrator-admin-ui-foundation-v1`. La branch non è unita né distribuita. La documentazione non autorizza Ready for review, merge, deploy o attivazione dell'AI Orchestrator.
+Questa guida definisce il contratto della PR80. La documentazione descrive rollout e rollback, ma non costituisce da sola un'autorizzazione ad attivare l'AI Orchestrator.
 
 PR80 aggiunge una superficie amministrativa privata sopra il ledger PR79 e il relativo hardening della motivazione. Il perimetro resta additivo, reversibile e fail-closed:
 
@@ -74,7 +74,7 @@ I permessi PR79 restano separati:
 | Retry | `ai.orchestrator.retry` |
 | Policy agente | `ai.orchestrator.agents` |
 
-La UI usa i permessi della sessione solo per costruire la vista. Il command service rilegge l'utente attivo, il ruolo e gli override nel database, ricostruisce la differenza di policy e decide i permessi effettivamente richiesti nella stessa operazione transazionale. Nessun ruolo non-admin riceve nuovi permessi di default.
+La UI usa i permessi della sessione solo per costruire la vista. Il command service rilegge l'utente attivo, il ruolo e gli override nel database, ricostruisce la differenza di policy e decide i permessi effettivamente richiesti nella stessa operazione transazionale. Per `desiredMode` l'ordine di rischio è `STOPPED < PAUSED < DRAINING < READY`: ogni transizione verso destra richiede `ai.orchestrator.enable`, ogni transizione verso sinistra richiede `ai.orchestrator.disable`. La migration aggiorna atomicamente la funzione PostgreSQL che applica la stessa matrice nel trigger append-only. Nessun ruolo non-admin riceve nuovi permessi di default.
 
 ## Form e conferma forte
 
@@ -95,16 +95,16 @@ Gli esiti vengono riflessi nell'URL soltanto mediante codici chiusi, per esempio
 
 ## Reason Minimization Hardening
 
-`AiOrchestratorAdminReasonSchema` è il contratto TypeScript canonico usato da command, request identity, revision identity e rilettura del ledger. Accetta da 10 a 500 caratteri Unicode dopo normalizzazione degli spazi esterni e respinge:
+`AiOrchestratorAdminReasonSchema` è il contratto TypeScript canonico usato da command, request identity, revision identity e rilettura del ledger. Dopo la normalizzazione degli spazi esterni accetta da 10 a 500 code point Unicode e, contemporaneamente, non più di 500 unità UTF-16. Il secondo limite conserva la leggibilità del ledger con il codice PR79 durante un rollback. Lo schema respinge:
 
-- caratteri di controllo già vietati;
+- caratteri di controllo C0, DEL e C1;
 - URL `http://` e `https://`, senza distinzione fra maiuscole e minuscole;
 - tag con forma `<...>`;
 - qualsiasi `@`;
 - termini delimitati `password`, `passwd`, `secret`, `token`, `prompt`, `authorization`, `cookie`;
 - `api key`, `api_key`, `api-key` e `apikey`.
 
-La migration `20260721190000_ai_orchestrator_admin_ui_foundation_v1` esegue un preflight count-only. Una ragione incompatibile arresta la migration prima di installare vincolo o indice; il contenuto non viene stampato, sanificato o riscritto. La migration aggiunge e valida:
+La migration `20260721190000_ai_orchestrator_admin_ui_foundation_v1` applica lo stesso limite di unità UTF-16 contando ogni code point supplementare due volte. Le espressioni regolari sensibili alle classi ASCII usano esplicitamente la collation `C`. Il preflight è count-only: una ragione incompatibile arresta atomicamente la migration prima di lasciare vincolo, indice o funzione parzialmente installati; il contenuto non viene stampato, sanificato o riscritto. La migration aggiunge e valida:
 
 ```text
 AiOAdminPolicy_reason_minimized_v1_check
@@ -116,7 +116,7 @@ Il filtro è una difesa di minimizzazione e non una garanzia assoluta di assenza
 
 ## Storico cursor-based
 
-Lo storico è disponibile solo con `ai.orchestrator.audit` e usa:
+Lo storico è disponibile solo con `ai.orchestrator.audit`. La UI offre tre viste esplicite: intero ledger, policy globale incluse le revisioni `EMERGENCY_STOP`, oppure scope non globale selezionato. Ogni vista usa:
 
 - ordine stabile `createdAt DESC, id DESC`;
 - cursore base64url opaco e versionato;
@@ -160,7 +160,7 @@ Prima e dopo le verifiche PR80 devono restare invariati:
 
 La crescita del ledger `AiOrchestratorAdminPolicyRevision` e dei relativi eventi `AuditLog` è invece l'effetto previsto di una modifica amministrativa autorizzata.
 
-## Verifiche richieste prima della Draft PR
+## Verifiche richieste prima del merge
 
 ```bash
 npm ci
@@ -175,13 +175,13 @@ git diff --check
 bash -n scripts/smoke-docker-prod.sh
 ```
 
-I test PostgreSQL devono coprire la catena completa di 29 migration, l'upgrade PR79→PR80, il preflight negativo su uno schema effimero, il nuovo vincolo validato, l'indice cursor, le 36 GENESIS invariate, parità TypeScript/SQL del corpus reason, paginazione senza duplicati o salti, RBAC audit e invarianza dei record operativi.
+I test PostgreSQL devono coprire la catena completa di 29 migration, l'upgrade PR79→PR80, il preflight negativo su uno schema effimero, il nuovo vincolo validato, l'indice cursor, le 36 GENESIS invariate, parità TypeScript/SQL del corpus reason inclusi i limiti Unicode/UTF-16, matrice completa delle transizioni `desiredMode`, filtri audit globale/scope, paginazione senza duplicati o salti, RBAC audit e invarianza dei record operativi.
 
 L'esecuzione dei test DB è ammessa soltanto su database o schema effimero dedicato con `test` nel nome e con conferma esplicita. Non usare staging o produzione come target della suite.
 
-## Rollout futuro autorizzato
+## Rollout autorizzato
 
-PR80 non è attualmente autorizzata al deploy. Se una finestra production verrà approvata dopo merge, la sequenza obbligatoria sarà:
+Quando merge e finestra production sono esplicitamente autorizzati, la sequenza obbligatoria è:
 
 1. verificare baseline e creare un backup validato;
 2. confermare worker, state machine, dispatch e provider esterni disabilitati;
@@ -198,15 +198,13 @@ Se il preflight rileva una ragione incompatibile, interrompere il rollout. La ri
 
 ## Rollback
 
-Prima del merge il rollback consiste nel ritirare la branch; non eseguire operazioni sul database.
-
-Dopo un eventuale deploy autorizzato, il rollback ordinario consiste nel ripristinare l'immagine PR79 mantenendo:
+Il rollback ordinario dopo il deploy consiste nel ripristinare l'immagine PR79 mantenendo:
 
 - il vincolo `AiOAdminPolicy_reason_minimized_v1_check`;
 - l'indice `AiOAdminPolicy_audit_cursor_idx`;
 - tutte le revisioni e gli audit append-only eventualmente creati;
 - worker, state machine, dispatch e provider esterni disabilitati.
 
-Il codice PR79 è compatibile con il vincolo più restrittivo e ignora l'indice additivo. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta e non costituisce il rollback ordinario della UI.
+Il doppio limite Unicode/UTF-16 garantisce che PR79 possa rileggere tutte le ragioni accettate dopo la migration; PR79 ignora inoltre l'indice additivo. La funzione PostgreSQL dei permessi conserva invece la matrice RBAC più restrittiva di PR80: durante il rollback mantenere i gate chiusi e usare PR79 in lettura/health, senza proporre transizioni `PAUSED`/`DRAINING`. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta e non costituisce il rollback ordinario della UI.
 
 Decisione architetturale: [ADR-0007](adr/ADR-0007-ai-orchestrator-admin-ui-foundation-v1.md).

@@ -551,20 +551,22 @@ L'emergency stop appende una revisione di riduzione del rischio e non cancella o
 
 La PR #79 è stata unita e distribuita in modalità dormiente il 21 luglio 2026; il collaudo production si è concluso con `PR79_SMOKE_OK`. La distribuzione non ha autorizzato l'attivazione di worker, state machine, dispatch o provider esterni. Continuare a verificare in sola lettura il vincolo `AiOrchestratorSetting_dispatch_disabled_check`, le 36 teste canoniche, i tredici kill switch e l'assenza di backfill operativo. Il rollback ordinario ripristina l'immagine precedente mantenendo tutte le tabelle additive e lo storico append-only; non usare `DROP`, `TRUNCATE`, reset o down migration. Il contratto completo è descritto in [Admin Control Plane Foundation v1](ai-orchestrator-admin-control-plane-foundation-v1.md) e nell'[ADR-0006](adr/ADR-0006-ai-orchestrator-admin-control-plane-foundation-v1.md).
 
-## AI Orchestrator Admin UI Foundation v1 — proposta PR80
+## AI Orchestrator Admin UI Foundation v1 — PR80
 
-PR80 è attualmente presente soltanto sulla branch `codex/ai-orchestrator-admin-ui-foundation-v1`: non è unita né distribuita e non autorizza Ready for review, merge, deploy o attivazione. La pagina proposta `/settings/ai-orchestrator` registra esclusivamente policy `desired` nel ledger PR79 e mostra uno stato `effective` sempre fail-closed sotto `FOUNDATION_LOCKED_V1`. Non è collegata a worker, coda, runtime, handler, dispatch o provider.
+La pagina `/settings/ai-orchestrator` registra esclusivamente policy `desired` nel ledger PR79 e mostra uno stato `effective` sempre fail-closed sotto `FOUNDATION_LOCKED_V1`. Non è collegata a worker, coda, runtime, handler, dispatch o provider. Il deploy della UI non autorizza l'attivazione operativa.
 
 La migration additiva proposta:
 
 - esegue un preflight count-only sulle motivazioni immutabili;
 - si arresta senza stampare o modificare contenuti incompatibili;
 - aggiunge e valida `AiOAdminPolicy_reason_minimized_v1_check`;
+- limita `reason` anche a 500 unità UTF-16 per preservare la leggibilità in rollback PR79;
 - conserva il precedente `AiOAdminPolicy_reason_check`;
 - aggiunge `AiOAdminPolicy_audit_cursor_idx(createdAt, id)`;
+- allinea atomicamente la matrice permessi PostgreSQL a `STOPPED < PAUSED < DRAINING < READY`;
 - non aggiorna revisioni, hash, setting o record operativi.
 
-### Sequenza DB-first futura
+### Sequenza DB-first
 
 Eseguire questa sequenza soltanto dopo merge e autorizzazione esplicita della finestra production:
 
@@ -647,6 +649,7 @@ Dopo l'avvio della nuova immagine:
 - confermare stato effective non operativo, barriera fisica presente e zero capability abilitate;
 - verificare che un utente privo di `ai.orchestrator.read` non veda né apra la pagina;
 - verificare che la motivazione completa sia visibile soltanto con `ai.orchestrator.audit`;
+- verificare i filtri audit “Tutto il ledger”, “Policy globale ed emergenze” e scope selezionato;
 - non inviare form, non creare revisioni di prova e non usare dati cliente reali.
 
 ### Rollback PR80
@@ -659,6 +662,6 @@ Il rollback ordinario è applicativo:
 4. verificare health, login e gate dormienti;
 5. lasciare nel database il nuovo vincolo reason, l'indice audit e tutte le revisioni append-only eventualmente create.
 
-Il codice PR79 è compatibile con il vincolo più restrittivo e non dipende dall'indice. Non eseguire down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta, da usare solo con un piano specifico e backup validato, non come rollback ordinario della UI.
+Il doppio limite Unicode/UTF-16 mantiene il ledger rileggibile dal codice PR79, che non dipende dall'indice. La funzione PostgreSQL conserva però la matrice RBAC più restrittiva della PR80: durante il rollback mantenere i gate chiusi e non effettuare mutazioni `PAUSED`/`DRAINING`. Non eseguire down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta, da usare solo con un piano specifico e backup validato, non come rollback ordinario della UI.
 
 Contratto completo: [Admin UI Foundation v1](ai-orchestrator-admin-ui-foundation-v1.md) e [ADR-0007](adr/ADR-0007-ai-orchestrator-admin-ui-foundation-v1.md).

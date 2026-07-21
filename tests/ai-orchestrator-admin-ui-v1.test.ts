@@ -19,6 +19,7 @@ import {
   buildAiOrchestratorAdminGlobalPolicyFromForm,
   buildAiOrchestratorAdminScopePolicyFromForm,
   getAiOrchestratorAdminUiPermissions,
+  parseAiOrchestratorAdminHistoryMode,
   parseAiOrchestratorAdminEmergencyStopForm,
   parseAiOrchestratorAdminGlobalPolicyForm,
   parseAiOrchestratorAdminScopePolicyForm,
@@ -161,6 +162,13 @@ test('booleani, interi, orari e conferme non usano coercizioni permissive', () =
   const missingCheckbox = globalFormEntries.filter(([key]) => key !== 'confirmationChecked');
   assert.throws(() => parseAiOrchestratorAdminGlobalPolicyForm(asFormData(missingPhrase)));
   assert.throws(() => parseAiOrchestratorAdminGlobalPolicyForm(asFormData(missingCheckbox)));
+
+  for (const rollbackIncompatibleReason of ['😀'.repeat(251), `${'a'.repeat(499)}😀`]) {
+    const entries = globalFormEntries.map(([key, value]) => (
+      key === 'reason' ? [key, rollbackIncompatibleReason] as const : [key, value] as const
+    ));
+    assert.throws(() => parseAiOrchestratorAdminGlobalPolicyForm(asFormData(entries)));
+  }
 });
 
 test('i payload policy sono deterministici e ricostruiscono sempre i campi canonici server-side', () => {
@@ -251,6 +259,12 @@ test('codici e messaggi UI sono chiusi, minimizzati e non riflettono valori arbi
   for (const value of [null, undefined, '', 'UNKNOWN', reason, requestId, { code: 'UPDATED' }]) {
     assert.equal(parseAiOrchestratorAdminUiResultCode(value), null);
   }
+  assert.equal(parseAiOrchestratorAdminHistoryMode('all'), 'all');
+  assert.equal(parseAiOrchestratorAdminHistoryMode('global'), 'global');
+  assert.equal(parseAiOrchestratorAdminHistoryMode('scope'), 'scope');
+  for (const value of [null, undefined, '', 'GLOBAL', 'unknown', ['all']]) {
+    assert.equal(parseAiOrchestratorAdminHistoryMode(value), 'all');
+  }
 });
 
 test('la matrice UI e la navigazione applicano i permessi Orchestrator senza hard-code di ruolo', () => {
@@ -306,6 +320,9 @@ test('page, storico, moduli e azioni hanno guardie server-side indipendenti', ()
   assert.match(dashboard, /canMutate && props\.permissions\.canConfigure/);
   assert.match(dashboard, /canMutate && props\.permissions\.canEmergencyStop/);
   assert.match(dashboard, /props\.permissions\.canAudit \?/);
+  assert.match(dashboard, /Policy globale ed emergenze/);
+  assert.match(dashboard, /maxLength=\{500\}/);
+  assert.match(page, /historyMode === 'global'/);
 
   assert.match(actions, /requirePermission\('ai\.orchestrator\.read'\)/);
   assert.match(actions, /hasPermission\(session, 'ai\.orchestrator\.configure'\)/);

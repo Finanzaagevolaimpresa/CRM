@@ -16,6 +16,7 @@ import {
 import {
   AI_ORCHESTRATOR_ADMIN_UI_RESULT_MESSAGES,
   getAiOrchestratorAdminUiPermissions,
+  parseAiOrchestratorAdminHistoryMode,
   parseAiOrchestratorAdminUiResultCode,
   projectAiOrchestratorAdminAuditRevision,
   projectAiOrchestratorAdminReadRevision,
@@ -77,16 +78,22 @@ export default async function Page({ searchParams }: { searchParams?: PageSearch
   ) ?? null;
 
   const permissions = getAiOrchestratorAdminUiPermissions(getEffectivePermissions(session));
+  const historyMode = parseAiOrchestratorAdminHistoryMode(scalar(query.audit));
   let mutationIntegritySafe = true;
   let history: ReturnType<typeof projectAiOrchestratorAdminAuditRevision>[] | null = null;
   let historyNextHref: string | null = null;
   let historyMessage: string | null = null;
 
   if (permissions.canAudit) {
+    const historyTarget = historyMode === 'global'
+      ? { scopeType: 'GLOBAL' as const, scopeCode: 'global' }
+      : historyMode === 'scope' && selectedScope
+        ? { scopeType: selectedScope.scopeType, scopeCode: selectedScope.scopeCode }
+        : null;
     const historyResult = await listAiOrchestratorAdminPolicyRevisions(prisma, {
       actorUserId: session.userId,
-      scopeType: selectedScope?.scopeType,
-      scopeCode: selectedScope?.scopeCode,
+      scopeType: historyTarget?.scopeType,
+      scopeCode: historyTarget?.scopeCode,
       cursor: scalar(query.cursor),
       limit: 50,
     });
@@ -98,6 +105,7 @@ export default async function Page({ searchParams }: { searchParams?: PageSearch
           nextQuery.set('scopeType', selectedScope.scopeType);
           nextQuery.set('scopeCode', selectedScope.scopeCode);
         }
+        if (historyMode !== 'all') nextQuery.set('audit', historyMode);
         historyNextHref = `/settings/ai-orchestrator?${nextQuery.toString()}`;
       }
     } else {
@@ -119,6 +127,7 @@ export default async function Page({ searchParams }: { searchParams?: PageSearch
       permissions={permissions}
       mutationIntegritySafe={mutationIntegritySafe}
       history={history}
+      historyMode={historyMode}
       historyNextHref={historyNextHref}
       historyMessage={historyMessage}
       resultCode={parseAiOrchestratorAdminUiResultCode(scalar(query.result))}
