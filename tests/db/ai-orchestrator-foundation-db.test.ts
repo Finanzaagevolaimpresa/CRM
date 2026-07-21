@@ -2099,7 +2099,7 @@ test('trigger ledger rifiuta command cross-workflow e predecessore non immediato
   );
 });
 
-test('upgrade reale PR74→PR75→PR76→PR77→PR79 preserva replay legacy, barriera dispatch e bootstrap fail-closed', { skip: !runDbTests }, async () => {
+test('upgrade reale PR74→PR75→PR76→PR77→PR79→PR80 preserva replay, barriera e ledger', { skip: !runDbTests }, async () => {
   const databaseUrl = process.env.DATABASE_URL;
   assert.ok(databaseUrl);
   const schemaName = `orchestrator_upgrade_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -2121,6 +2121,7 @@ test('upgrade reale PR74→PR75→PR76→PR77→PR79 preserva replay legacy, bar
   const resultArtifactMigration = '20260719120000_ai_orchestrator_result_artifact_contract_foundation_v1';
   // PR78 is TypeScript-only and deliberately has no database migration.
   const adminControlPlaneMigration = '20260720170000_ai_orchestrator_admin_control_plane_foundation_v1';
+  const adminUiMigration = '20260721190000_ai_orchestrator_admin_ui_foundation_v1';
   for (const migrationName of readdirSync(migrationRoot).sort()) {
     if (/^\d/.test(migrationName) && migrationName <= pr74Migration) {
       cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
@@ -2505,8 +2506,216 @@ test('upgrade reale PR74→PR75→PR76→PR77→PR79 preserva replay legacy, bar
     await assert.rejects(upgradePrisma.$executeRawUnsafe(
       'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = true WHERE "id" = \'global\'',
     ));
+
+    const beforeAdminUiRevisions = await upgradePrisma.aiOrchestratorAdminPolicyRevision.findMany({
+      orderBy: [{ scopeType: 'asc' }, { scopeCode: 'asc' }, { version: 'asc' }],
+    });
+    cpSync(
+      join(migrationRoot, adminUiMigration),
+      join(tempMigrations, adminUiMigration),
+      { recursive: true },
+    );
+    deploy();
+
+    assert.deepEqual(
+      await upgradePrisma.aiOrchestratorAdminPolicyRevision.findMany({
+        orderBy: [{ scopeType: 'asc' }, { scopeCode: 'asc' }, { version: 'asc' }],
+      }),
+      beforeAdminUiRevisions,
+    );
+    assert.deepEqual(
+      await upgradePrisma.aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } }),
+      beforeAdminUpgradeSetting,
+    );
+    assert.deepEqual({
+      jobs: await upgradePrisma.aiWorkflowJob.count(),
+      outboxEvents: await upgradePrisma.aiWorkflowJobOutboxEvent.count(),
+      runtimes: await upgradePrisma.aiWorkflowJobRuntime.count(),
+      attempts: await upgradePrisma.aiWorkflowJobAttempt.count(),
+      results: await upgradePrisma.aiWorkflowJobResult.count(),
+      artifacts: await upgradePrisma.aiWorkflowJobArtifact.count(),
+      sources: await upgradePrisma.aiWorkflowJobSourceArtifact.count(),
+      aiRuns: await upgradePrisma.aiRun.count(),
+      aiOutputs: await upgradePrisma.aiOutput.count(),
+    }, beforeAdminUpgradeCounts);
+
+    const adminUiConstraints = await upgradePrisma.$queryRaw<Array<{
+      name: string;
+      validated: boolean;
+    }>>(Prisma.sql`
+      SELECT constraint_row.conname AS "name",
+             constraint_row.convalidated AS "validated"
+      FROM pg_constraint constraint_row
+      WHERE constraint_row.conrelid = '"AiOrchestratorAdminPolicyRevision"'::REGCLASS
+        AND constraint_row.conname IN (
+          'AiOAdminPolicy_reason_check',
+          'AiOAdminPolicy_reason_minimized_v1_check'
+        )
+      ORDER BY constraint_row.conname
+    `);
+    assert.deepEqual(adminUiConstraints, [
+      { name: 'AiOAdminPolicy_reason_check', validated: true },
+      { name: 'AiOAdminPolicy_reason_minimized_v1_check', validated: true },
+    ]);
+    const adminUiIndexes = await upgradePrisma.$queryRaw<Array<{ definition: string }>>(Prisma.sql`
+      SELECT indexdef AS "definition"
+      FROM pg_indexes
+      WHERE schemaname = CURRENT_SCHEMA()
+        AND tablename = 'AiOrchestratorAdminPolicyRevision'
+        AND indexname = 'AiOAdminPolicy_audit_cursor_idx'
+    `);
+    assert.equal(adminUiIndexes.length, 1);
+    assert.match(adminUiIndexes[0].definition, /USING btree \("createdAt", "?id"?\)/);
+
+    const migrationCount = await upgradePrisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      SELECT COUNT(*)::INTEGER AS "count"
+      FROM "_prisma_migrations"
+      WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL
+    `);
+    assert.deepEqual(migrationCount, [{ count: 29 }]);
   } finally {
     await upgradePrisma.$disconnect();
+  }
+});
+
+test('preflight PR80 fallisce count-only su reason PR79 incompatibile e non installa DDL parziale', {
+  skip: !runDbTests,
+}, async () => {
+  const databaseUrl = process.env.DATABASE_URL;
+  assert.ok(databaseUrl);
+  const schemaName = `orchestrator_pr80_preflight_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  assert.match(schemaName, /^[a-z0-9_]+$/);
+  await db().$executeRawUnsafe(`CREATE SCHEMA "${schemaName}"`);
+
+  const preflightUrl = new URL(databaseUrl);
+  preflightUrl.searchParams.set('schema', schemaName);
+  const tempRoot = mkdtempSync(join(tmpdir(), 'crm-orchestrator-pr80-preflight-test-'));
+  const tempPrisma = join(tempRoot, 'prisma');
+  const tempMigrations = join(tempPrisma, 'migrations');
+  mkdirSync(tempMigrations, { recursive: true });
+  cpSync(resolve(process.cwd(), 'prisma/schema.prisma'), join(tempPrisma, 'schema.prisma'));
+
+  const migrationRoot = resolve(process.cwd(), 'prisma/migrations');
+  const adminControlPlaneMigration = '20260720170000_ai_orchestrator_admin_control_plane_foundation_v1';
+  const adminUiMigration = '20260721190000_ai_orchestrator_admin_ui_foundation_v1';
+  for (const migrationName of readdirSync(migrationRoot).sort()) {
+    if (/^\d/.test(migrationName) && migrationName <= adminControlPlaneMigration) {
+      cpSync(join(migrationRoot, migrationName), join(tempMigrations, migrationName), { recursive: true });
+    }
+  }
+  const deploy = () => execFileSync(
+    resolve(process.cwd(), 'node_modules/.bin/prisma'),
+    ['migrate', 'deploy', '--schema', join(tempPrisma, 'schema.prisma')],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, DATABASE_URL: preflightUrl.toString() },
+      stdio: 'pipe',
+    },
+  );
+  deploy();
+
+  const preflightPrisma = new PrismaClient({
+    datasources: { db: { url: preflightUrl.toString() } },
+  });
+  try {
+    const actor = await preflightPrisma.user.create({
+      data: {
+        email: `pr80-preflight-${runId}@example.test`,
+        name: 'PR80 preflight synthetic admin',
+        passwordHash,
+        role: 'admin',
+        active: true,
+      },
+    });
+    const head = await preflightPrisma.aiOrchestratorAdminPolicyRevision.findFirstOrThrow({
+      where: { scopeType: 'GLOBAL', scopeCode: 'global' },
+      orderBy: { version: 'desc' },
+    });
+    const incompatiblePolicy = {
+      ...(head.policy as Prisma.JsonObject),
+      desiredMode: 'PAUSED',
+    };
+    const policyHashes = await preflightPrisma.$queryRaw<Array<{ hash: string }>>(Prisma.sql`
+      SELECT "ai_orchestrator_admin_policy_hash_v1"(
+        CAST(${JSON.stringify(incompatiblePolicy)} AS JSONB)
+      ) AS "hash"
+    `);
+    const requestedPolicyHash = policyHashes[0]?.hash;
+    assert.match(requestedPolicyHash ?? '', /^[0-9a-f]{64}$/);
+    const incompatibleReason = 'Consultare HTTPS://incompatible.invalid prima della modifica amministrativa.';
+    const requiredPermissions = [
+      'ai.orchestrator.configure',
+      'ai.orchestrator.disable',
+    ];
+    const permissionDecisions = requiredPermissions.map((permission) => ({
+      permission,
+      allowed: true,
+      source: 'ADMIN',
+    }));
+    await preflightPrisma.$executeRaw(Prisma.sql`
+      INSERT INTO "AiOrchestratorAdminPolicyRevision" (
+        "id", "scopeType", "scopeCode", "targetDefinitionHash", "version",
+        "policy", "policyHash", "previousRevisionHash", "revisionHash",
+        "requestId", "requestHash", "requestedPolicyHash", "expectedVersion",
+        "expectedRevisionHash", "operationCode", "requiredPermissions",
+        "permissionDecisions", "actorUserId", "actorRole", "reasonCode",
+        "reason", "confirmed"
+      ) VALUES (
+        ${randomUUID()}, 'GLOBAL', 'global', ${head.targetDefinitionHash}, 2,
+        CAST(${JSON.stringify(incompatiblePolicy)} AS JSONB), ${'0'.repeat(64)},
+        ${head.revisionHash}, ${'0'.repeat(64)}, ${randomUUID()}, ${'0'.repeat(64)},
+        ${requestedPolicyHash}, 1, ${head.revisionHash}, 'SET_GLOBAL_POLICY',
+        CAST(${JSON.stringify(requiredPermissions)} AS JSONB),
+        CAST(${JSON.stringify(permissionDecisions)} AS JSONB),
+        ${actor.id}, 'admin', 'MAINTENANCE', ${incompatibleReason}, true
+      )
+    `);
+    const beforeCount = await preflightPrisma.aiOrchestratorAdminPolicyRevision.count();
+    assert.equal(beforeCount, 37);
+
+    cpSync(
+      join(migrationRoot, adminUiMigration),
+      join(tempMigrations, adminUiMigration),
+      { recursive: true },
+    );
+    let failureOutput = '';
+    assert.throws(
+      () => deploy(),
+      (error: unknown) => {
+        const processError = error as Error & { stdout?: Buffer | string; stderr?: Buffer | string };
+        failureOutput = [
+          processError.message,
+          processError.stdout?.toString(),
+          processError.stderr?.toString(),
+        ].filter(Boolean).join('\n');
+        return /blocked by 1 immutable incompatible revision\(s\)/.test(failureOutput);
+      },
+    );
+    assert.doesNotMatch(failureOutput, /incompatible\.invalid|Consultare HTTPS/i);
+    assert.equal(await preflightPrisma.aiOrchestratorAdminPolicyRevision.count(), beforeCount);
+
+    const partialDdl = await preflightPrisma.$queryRaw<Array<{
+      constraintCount: number;
+      indexCount: number;
+    }>>(Prisma.sql`
+      SELECT
+        (
+          SELECT COUNT(*)::INTEGER
+          FROM pg_constraint
+          WHERE conrelid = '"AiOrchestratorAdminPolicyRevision"'::REGCLASS
+            AND conname = 'AiOAdminPolicy_reason_minimized_v1_check'
+        ) AS "constraintCount",
+        (
+          SELECT COUNT(*)::INTEGER
+          FROM pg_indexes
+          WHERE schemaname = CURRENT_SCHEMA()
+            AND tablename = 'AiOrchestratorAdminPolicyRevision'
+            AND indexname = 'AiOAdminPolicy_audit_cursor_idx'
+        ) AS "indexCount"
+    `);
+    assert.deepEqual(partialDdl, [{ constraintCount: 0, indexCount: 0 }]);
+  } finally {
+    await preflightPrisma.$disconnect();
   }
 });
 

@@ -93,6 +93,6 @@ I test PostgreSQL 16 devono verificare migration chain completa, 36 revisioni bo
 
 ## Stato operativo e rollback
 
-La Draft PR #79 non autorizza merge, deploy o attivazione. Un eventuale deploy futuro richiederà autorizzazione distinta, backup validato e verifica in sola lettura di tutti i gate. Non usare dati CRM reali per il collaudo.
+La PR #79 è stata unita e distribuita in modalità dormiente il 21 luglio 2026; il collaudo production si è concluso con `PR79_SMOKE_OK`. La distribuzione non ha autorizzato l'attivazione di worker, state machine, dispatch o provider esterni. I gate devono restare verificati in sola lettura e non devono essere usati dati CRM reali per collaudare l'Orchestrator.
 
 Il rollback ordinario è applicativo: mantenere worker e provider esterni disabilitati, ripristinare l'immagine precedente e lasciare intatti catalogo, revisioni e audit append-only. Non usare `DROP`, `TRUNCATE`, migration reset, down migration o cancellazione dello storico.

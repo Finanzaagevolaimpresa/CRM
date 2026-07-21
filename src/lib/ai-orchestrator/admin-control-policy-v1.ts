@@ -55,6 +55,25 @@ export const AI_ORCHESTRATOR_ADMIN_OPERATION_CODES = Object.freeze([
   'EMERGENCY_STOP',
 ] as const);
 
+export const AI_ORCHESTRATOR_ADMIN_CHANGE_REASON_CODES = Object.freeze([
+  'CONFIGURATION_CHANGE',
+  'ENABLEMENT_CHANGE',
+  'DISABLEMENT_CHANGE',
+  'LIMIT_CHANGE',
+  'OPERATING_WINDOW_CHANGE',
+  'KILL_SWITCH_CHANGE',
+  'EMERGENCY_STOP',
+  'SECURITY_RESPONSE',
+  'MAINTENANCE',
+] as const);
+
+export const AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER = Object.freeze({
+  STOPPED: 0,
+  PAUSED: 1,
+  DRAINING: 2,
+  READY: 3,
+} as const);
+
 export const AI_ORCHESTRATOR_ADMIN_PERMISSIONS = Object.freeze([
   'ai.orchestrator.read',
   'ai.orchestrator.configure',
@@ -71,20 +90,56 @@ export type AiOrchestratorAdminScopeType = typeof AI_ORCHESTRATOR_ADMIN_SCOPE_TY
 export type AiOrchestratorAdminNonGlobalScopeType = typeof AI_ORCHESTRATOR_ADMIN_NON_GLOBAL_SCOPE_TYPES[number];
 export type AiOrchestratorAdminOperationCode = typeof AI_ORCHESTRATOR_ADMIN_OPERATION_CODES[number];
 export type AiOrchestratorAdminPermission = typeof AI_ORCHESTRATOR_ADMIN_PERMISSIONS[number];
+export type AiOrchestratorAdminChangeReasonCode = typeof AI_ORCHESTRATOR_ADMIN_CHANGE_REASON_CODES[number];
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const scopeCodeSchema = z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const actorIdSchema = z.string().trim().min(1).max(191);
 const reasonCodeSchema = z.string().regex(/^[A-Z][A-Z0-9_]{2,63}$/);
-const reasonSchema = z.string().trim().min(10).max(500).refine(
-  (reason) => !/[\u0000-\u001f\u007f]/u.test(reason),
-  'La motivazione non può contenere caratteri di controllo.',
-);
+const reasonControlCharacterPattern = /[\u0000-\u001f\u007f-\u009f]/u;
+const forbiddenReasonContentPattern = /(?:https?:\/\/|<[^>]*>|@|(^|[^A-Za-z0-9_])(?:password|passwd|secret|token|prompt|authorization|cookie|api[ _-]?key)($|[^A-Za-z0-9_]))/iu;
+
+/**
+ * Contratto canonico di minimizzazione delle motivazioni persistite.
+ *
+ * Lo stesso schema protegge command, request identity, revision identity e
+ * rilettura del ledger. Il vincolo PostgreSQL versionato replica esattamente
+ * queste categorie; il filtro riduce il rischio di persistenza accidentale ma
+ * non costituisce una classificazione generale dei dati personali.
+ */
+export const AiOrchestratorAdminReasonSchema = z.string().trim().superRefine((reason, context) => {
+  const codePointLength = Array.from(reason).length;
+  if (codePointLength < 10 || codePointLength > 500) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'La motivazione deve contenere tra 10 e 500 caratteri Unicode.',
+    });
+  }
+  if (reason.length > 500) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'La motivazione supera il limite compatibile con il rollback PR79.',
+    });
+  }
+  if (reasonControlCharacterPattern.test(reason)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'La motivazione non può contenere caratteri di controllo.',
+    });
+  }
+  if (forbiddenReasonContentPattern.test(reason)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'La motivazione non rispetta il contratto di minimizzazione.',
+    });
+  }
+});
 
 export const AiOrchestratorAdminScopeTypeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_SCOPE_TYPES);
 export const AiOrchestratorAdminNonGlobalScopeTypeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_NON_GLOBAL_SCOPE_TYPES);
 export const AiOrchestratorAdminOperationCodeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_OPERATION_CODES);
 export const AiOrchestratorAdminPermissionSchema = z.enum(AI_ORCHESTRATOR_ADMIN_PERMISSIONS);
+export const AiOrchestratorAdminChangeReasonCodeSchema = z.enum(AI_ORCHESTRATOR_ADMIN_CHANGE_REASON_CODES);
 
 export const AiOrchestratorAdminLimitsSchema = z.object({
   maxConcurrentGlobal: z.number().int().min(0).max(1),
@@ -366,7 +421,7 @@ export const AiOrchestratorAdminRequestIdentitySchema = z.object({
   operationCode: AiOrchestratorAdminOperationCodeSchema,
   requestedPolicyHash: sha256Schema,
   reasonCode: reasonCodeSchema,
-  reason: reasonSchema,
+  reason: AiOrchestratorAdminReasonSchema,
   confirmed: z.boolean(),
 }).strict().superRefine((identity, context) => {
   const genesis = identity.operationCode === 'GENESIS';
@@ -482,7 +537,7 @@ export const AiOrchestratorAdminRevisionIdentitySchema = z.object({
   actorUserId: actorIdSchema.nullable(),
   actorRole: roleSchema.nullable(),
   reasonCode: reasonCodeSchema,
-  reason: reasonSchema,
+  reason: AiOrchestratorAdminReasonSchema,
   confirmed: z.boolean(),
 }).strict().superRefine((identity, context) => {
   const target = getAiOrchestratorAdminControlTarget(identity.scopeType, identity.scopeCode);
@@ -648,7 +703,9 @@ export function diffAiOrchestratorAdminPolicies(
     if (canonicalSha256(before.limits) !== canonicalSha256(after.limits)) required.add('ai.orchestrator.limits');
     if (before.limits.maxRetryableFailures !== after.limits.maxRetryableFailures) required.add('ai.orchestrator.retry');
     if (before.desiredMode !== after.desiredMode) {
-      required.add(after.desiredMode === 'READY' ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');
+      const beforeRisk = AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[before.desiredMode];
+      const afterRisk = AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[after.desiredMode];
+      required.add(afterRisk > beforeRisk ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');
     }
     if (before.desiredStateMachineEnabled !== after.desiredStateMachineEnabled) {
       required.add(after.desiredStateMachineEnabled ? 'ai.orchestrator.enable' : 'ai.orchestrator.disable');

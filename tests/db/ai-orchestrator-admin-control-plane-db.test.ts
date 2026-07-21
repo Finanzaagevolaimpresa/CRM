@@ -9,13 +9,16 @@ import {
 } from '@prisma/client';
 import {
   getAiOrchestratorAdminControlSnapshot,
+  listAiOrchestratorAdminPolicyRevisions,
   mutateAiOrchestratorAdminControlPolicy,
 } from '../../src/lib/ai-orchestrator/admin-control-plane-v1';
 import {
   AI_ORCHESTRATOR_ADMIN_CONTROL_TARGETS,
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON,
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON_CODE,
+  AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY,
   AI_ORCHESTRATOR_ADMIN_GLOBAL_POLICY_CODE,
+  AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER,
   AiOrchestratorAdminGlobalPolicySchema,
   AiOrchestratorAdminScopePolicySchema,
   buildAiOrchestratorAdminRequestIdentity,
@@ -24,11 +27,19 @@ import {
   createAiOrchestratorAdminPolicyHash,
   createAiOrchestratorAdminRequestHash,
   createAiOrchestratorAdminRevisionHash,
+  diffAiOrchestratorAdminPolicies,
   getAiOrchestratorAdminControlTarget,
   validateAiOrchestratorAdminPolicyForTarget,
   type AiOrchestratorAdminControlTarget,
   type AiOrchestratorAdminGlobalPolicy,
 } from '../../src/lib/ai-orchestrator/admin-control-policy-v1';
+import {
+  AI_ORCHESTRATOR_ADMIN_DETERMINISTIC_CONTROL_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_FORBIDDEN_CONTENT_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_INVALID_SHAPE_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_ROLLBACK_INCOMPATIBLE_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES,
+} from '../fixtures/ai-orchestrator-admin-reason-corpus';
 
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
@@ -354,6 +365,150 @@ test('bootstrap PostgreSQL contiene 36 genesis strict, hashate e interamente fai
   assert.equal(snapshot.effective.humanApprovalBypassAllowed, false);
 });
 
+test('PostgreSQL espone reason hardening validato e indice keyset PR80', {
+  skip: !runDbTests,
+}, async () => {
+  const constraints = await db().$queryRaw<Array<{
+    name: string;
+    validated: boolean;
+    definition: string;
+  }>>(Prisma.sql`
+    SELECT constraint_row.conname AS "name",
+           constraint_row.convalidated AS "validated",
+           PG_GET_CONSTRAINTDEF(constraint_row.oid) AS "definition"
+    FROM pg_constraint constraint_row
+    WHERE constraint_row.conrelid = '"AiOrchestratorAdminPolicyRevision"'::REGCLASS
+      AND constraint_row.conname IN (
+        'AiOAdminPolicy_reason_check',
+        'AiOAdminPolicy_reason_minimized_v1_check'
+      )
+    ORDER BY constraint_row.conname
+  `);
+  assert.equal(constraints.length, 2);
+  assert.ok(constraints.every(({ validated }) => validated));
+  const minimized = constraints.find(({ name }) => name === 'AiOAdminPolicy_reason_minimized_v1_check');
+  assert.ok(minimized);
+  assert.match(minimized.definition, /^CHECK /);
+
+  const indexes = await db().$queryRaw<Array<{ definition: string }>>(Prisma.sql`
+    SELECT indexdef AS "definition"
+    FROM pg_indexes
+    WHERE schemaname = CURRENT_SCHEMA()
+      AND tablename = 'AiOrchestratorAdminPolicyRevision'
+      AND indexname = 'AiOAdminPolicy_audit_cursor_idx'
+  `);
+  assert.equal(indexes.length, 1);
+  assert.match(indexes[0].definition, /USING btree \("createdAt", "?id"?\)/);
+});
+
+test('PostgreSQL e TypeScript condividono la matrice RBAC completa dei desiredMode', {
+  skip: !runDbTests,
+}, async () => {
+  const modes = Object.keys(AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER) as Array<keyof typeof AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER>;
+  for (const beforeMode of modes) {
+    for (const afterMode of modes) {
+      if (beforeMode === afterMode) continue;
+      const before = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: beforeMode };
+      const after = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: afterMode };
+      const expected = diffAiOrchestratorAdminPolicies(before, after, 'SET_GLOBAL_POLICY').requiredPermissions;
+      const rows = await db().$queryRaw<Array<{ permissions: unknown }>>(Prisma.sql`
+        SELECT "ai_orchestrator_admin_required_permissions_v1"(
+          CAST(${JSON.stringify(before)} AS JSONB),
+          CAST(${JSON.stringify(after)} AS JSONB),
+          'SET_GLOBAL_POLICY'
+        ) AS "permissions"
+      `);
+      assert.deepEqual(rows[0]?.permissions, expected, `${beforeMode} -> ${afterMode}`);
+    }
+  }
+});
+
+test('storico keyset pagina timestamp uguali senza duplicati, salti o cambio filtro', {
+  skip: !runDbTests,
+}, async () => {
+  const expectedRows = await db().aiOrchestratorAdminPolicyRevision.findMany({
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    select: { id: true, createdAt: true },
+  });
+  assert.equal(expectedRows.length, 36, 'La prova keyset deve precedere le revisioni umane della suite.');
+  assert.equal(new Set(expectedRows.map(({ createdAt }) => createdAt.getTime())).size, 1);
+
+  const collectedIds: string[] = [];
+  let cursor: string | undefined;
+  let firstCursor: string | null = null;
+  for (let pageNumber = 0; pageNumber < 10; pageNumber += 1) {
+    const page = await listAiOrchestratorAdminPolicyRevisions(db(), {
+      actorUserId: adminUser.id,
+      cursor,
+      limit: 7,
+    });
+    assert.equal(page.ok, true);
+    if (!page.ok) return;
+    collectedIds.push(...page.revisions.map(({ id }) => id));
+    if (pageNumber === 0) firstCursor = page.nextCursor;
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+
+  assert.deepEqual(collectedIds, expectedRows.map(({ id }) => id));
+  assert.equal(new Set(collectedIds).size, expectedRows.length);
+  assert.ok(firstCursor);
+
+  const changedFilter = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeType: 'GLOBAL',
+    cursor: firstCursor,
+    limit: 7,
+  });
+  assert.deepEqual(
+    { ok: changedFilter.ok, code: changedFilter.ok ? null : changedFilter.code },
+    { ok: false, code: 'INVALID_CURSOR' },
+  );
+
+  const malformed = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    cursor: `${firstCursor}!`,
+    limit: 7,
+  });
+  assert.deepEqual(
+    { ok: malformed.ok, code: malformed.ok ? null : malformed.code },
+    { ok: false, code: 'INVALID_CURSOR' },
+  );
+
+  const invalidFilter = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeCode: 'global',
+    limit: 7,
+  });
+  assert.deepEqual(
+    { ok: invalidFilter.ok, code: invalidFilter.ok ? null : invalidFilter.code },
+    { ok: false, code: 'INVALID_FILTER' },
+  );
+
+  const globalHistory = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeType: 'GLOBAL',
+    scopeCode: 'global',
+    limit: 7,
+  });
+  assert.equal(globalHistory.ok, true);
+  if (globalHistory.ok) {
+    assert.ok(globalHistory.revisions.length > 0);
+    assert.ok(globalHistory.revisions.every(({ scopeType, scopeCode }) => (
+      scopeType === 'GLOBAL' && scopeCode === 'global'
+    )));
+  }
+
+  const denied = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: plainUser.id,
+    limit: 7,
+  });
+  assert.deepEqual(
+    { ok: denied.ok, code: denied.ok ? null : denied.code },
+    { ok: false, code: 'ACTOR_NOT_AUTHORIZED' },
+  );
+});
+
 test('global mutation usa CAS, audit atomico, replay idempotente e collision detection', {
   skip: !runDbTests,
 }, async () => {
@@ -588,6 +743,43 @@ async function rawGlobalInsert(input: {
   `);
 }
 
+async function rawScopeReasonInsert(input: {
+  head: AiOrchestratorAdminPolicyRevision;
+  controlTarget: AiOrchestratorAdminControlTarget;
+  reason: string;
+}) {
+  const policy = scopePolicyFor(input.controlTarget, true, true);
+  const requestedPolicyHash = createAiOrchestratorAdminPolicyHash(policy);
+  const requiredPermissions = [
+    'ai.orchestrator.configure',
+    'ai.orchestrator.enable',
+  ];
+  const permissionDecisions = requiredPermissions.map((permission) => ({
+    permission,
+    allowed: true,
+    source: 'ADMIN',
+  }));
+  return db().$executeRaw(Prisma.sql`
+    INSERT INTO "AiOrchestratorAdminPolicyRevision" (
+      "id", "scopeType", "scopeCode", "targetDefinitionHash", "version",
+      "policy", "policyHash", "previousRevisionHash", "revisionHash",
+      "requestId", "requestHash", "requestedPolicyHash", "expectedVersion",
+      "expectedRevisionHash", "operationCode", "requiredPermissions",
+      "permissionDecisions", "actorUserId", "actorRole", "reasonCode",
+      "reason", "confirmed"
+    ) VALUES (
+      ${randomUUID()}, ${input.controlTarget.scopeType}, ${input.controlTarget.scopeCode},
+      ${input.controlTarget.targetDefinitionHash}, ${input.head.version + 1},
+      CAST(${JSON.stringify(policy)} AS JSONB), ${SHA_A}, ${input.head.revisionHash},
+      ${SHA_B}, ${randomUUID()}, ${SHA_A}, ${requestedPolicyHash},
+      ${input.head.version}, ${input.head.revisionHash}, 'SET_SCOPE_POLICY',
+      CAST(${JSON.stringify(requiredPermissions)} AS JSONB),
+      CAST(${JSON.stringify(permissionDecisions)} AS JSONB),
+      ${adminUser.id}, 'admin', 'ENABLEMENT_CHANGE', ${input.reason}, true
+    )
+  `);
+}
+
 test('trigger DB rifiuta policy, hash richiesto e snapshot permessi forgiati via SQL raw', {
   skip: !runDbTests,
 }, async () => {
@@ -619,6 +811,73 @@ test('trigger DB rifiuta policy, hash richiesto e snapshot permessi forgiati via
 
   assert.equal(await db().aiOrchestratorAdminPolicyRevision.count(), before);
   assert.equal((await latestRevision('GLOBAL', 'global')).revisionHash, head.revisionHash);
+});
+
+test('PostgreSQL rifiuta via SQL raw l’intero corpus reason non valido senza riscrivere il ledger', {
+  skip: !runDbTests,
+}, async () => {
+  const controlTarget = jobTargets.at(-1);
+  assert.ok(controlTarget);
+  const head = await latestRevision(controlTarget.scopeType, controlTarget.scopeCode);
+  const before = await db().aiOrchestratorAdminPolicyRevision.count();
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_FORBIDDEN_CONTENT_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason_minimized_v1_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_INVALID_SHAPE_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_ROLLBACK_INCOMPATIBLE_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason_minimized_v1_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_DETERMINISTIC_CONTROL_REASON_CASES) {
+    await assert.rejects(
+      rawScopeReasonInsert({ head, controlTarget, reason: reasonCase.reason }),
+      (error: unknown) => {
+        assert.match(String(error), /AiOAdminPolicy_reason(?:_minimized_v1)?_check/);
+        return true;
+      },
+      reasonCase.code,
+    );
+  }
+
+  assert.equal(await db().aiOrchestratorAdminPolicyRevision.count(), before);
+  assert.equal(
+    (await latestRevision(controlTarget.scopeType, controlTarget.scopeCode)).revisionHash,
+    head.revisionHash,
+  );
+
+  const safeReason = AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES.at(-1)?.reason;
+  assert.ok(safeReason);
+  await rawScopeReasonInsert({ head, controlTarget, reason: safeReason });
+  const accepted = await latestRevision(controlTarget.scopeType, controlTarget.scopeCode);
+  assert.equal(accepted.version, head.version + 1);
+  assert.equal(accepted.previousRevisionHash, head.revisionHash);
+  assert.equal(accepted.reason, safeReason);
 });
 
 class ExpectedProbeRollback extends Error {}
@@ -791,6 +1050,22 @@ test('emergency stop è CAS-less e vince la race contro una proposta espansiva',
   assert.equal(finalPolicy.emergencyStopEngaged, true);
   assert.equal(finalPolicy.globalKillSwitch, true);
   assert.equal(finalHead.requestId, raceEmergencyId);
+
+  const globalHistory = await listAiOrchestratorAdminPolicyRevisions(db(), {
+    actorUserId: adminUser.id,
+    scopeType: 'GLOBAL',
+    scopeCode: 'global',
+    limit: 50,
+  });
+  assert.equal(globalHistory.ok, true);
+  if (globalHistory.ok) {
+    assert.ok(globalHistory.revisions.some(({ operationCode, requestId }) => (
+      operationCode === 'EMERGENCY_STOP' && requestId === emergencyRequestId
+    )));
+    assert.ok(globalHistory.revisions.some(({ operationCode, requestId }) => (
+      operationCode === 'EMERGENCY_STOP' && requestId === raceEmergencyId
+    )));
+  }
 });
 
 test('Control Plane non modifica gate o record operativi e resta effective fail-closed', {

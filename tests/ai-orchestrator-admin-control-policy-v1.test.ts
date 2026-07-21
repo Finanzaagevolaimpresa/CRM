@@ -22,10 +22,12 @@ import {
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON,
   AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON_CODE,
   AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY,
+  AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER,
   AI_ORCHESTRATOR_ADMIN_PERMISSIONS,
   AiOrchestratorAdminGlobalPolicySchema,
   AiOrchestratorAdminLimitsSchema,
   AiOrchestratorAdminOperatingWindowSchema,
+  AiOrchestratorAdminReasonSchema,
   AiOrchestratorAdminScopePolicySchema,
   buildAiOrchestratorAdminRequestIdentity,
   buildAiOrchestratorAdminRevisionIdentity,
@@ -43,6 +45,10 @@ import {
   roleHasPermission,
   rolePermissions,
 } from '../src/lib/permissions';
+import {
+  AI_ORCHESTRATOR_ADMIN_INVALID_REASON_CASES,
+  AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES,
+} from './fixtures/ai-orchestrator-admin-reason-corpus';
 
 const SHA_A = 'a'.repeat(64);
 const REQUEST_ID = '018f47a2-4d12-4abc-8def-0123456789ab';
@@ -77,6 +83,48 @@ function genesisRequest() {
     reason: AI_ORCHESTRATOR_ADMIN_FOUNDATION_REASON,
     confirmed: false,
   });
+}
+
+function humanRequestWithReason(reason: string) {
+  return {
+    actorUserId: 'admin-1',
+    requestId: REQUEST_ID,
+    scopeType: 'GLOBAL' as const,
+    scopeCode: 'global',
+    expectedVersion: 1,
+    expectedRevisionHash: SHA_A,
+    operationCode: 'SET_GLOBAL_POLICY' as const,
+    requestedPolicyHash: createAiOrchestratorAdminPolicyHash(AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY),
+    reasonCode: 'OPERATOR_POLICY_CHANGE',
+    reason,
+    confirmed: true,
+  };
+}
+
+function humanRevisionWithReason(reason: string) {
+  const target = globalTarget();
+  return {
+    scopeType: target.scopeType,
+    scopeCode: target.scopeCode,
+    targetDefinitionHash: target.targetDefinitionHash,
+    version: 2,
+    policyHash: SHA_A,
+    previousRevisionHash: 'b'.repeat(64),
+    requestId: REQUEST_ID,
+    requestHash: 'c'.repeat(64),
+    operationCode: 'SET_GLOBAL_POLICY' as const,
+    requiredPermissions: ['ai.orchestrator.configure' as const],
+    permissionDecisions: [{
+      permission: 'ai.orchestrator.configure' as const,
+      allowed: true,
+      source: 'ADMIN' as const,
+    }],
+    actorUserId: 'admin-1',
+    actorRole: 'admin' as const,
+    reasonCode: 'OPERATOR_POLICY_CHANGE',
+    reason,
+    confirmed: true,
+  };
 }
 
 test('RBAC espone nove permessi dedicati, admin-only per default', () => {
@@ -222,6 +270,42 @@ test('request identity impone CAS, UUID v4, scope e intent di emergenza', () => 
   }));
 });
 
+test('un unico corpus reason protegge schema canonico, request identity e revision identity', () => {
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_VALID_REASON_CASES) {
+    assert.ok(reasonCase.reason.length <= 500, `${reasonCase.code}: compatibilità UTF-16 PR79`);
+    assert.equal(
+      AiOrchestratorAdminReasonSchema.parse(reasonCase.reason),
+      reasonCase.reason,
+      reasonCase.code,
+    );
+    assert.equal(
+      buildAiOrchestratorAdminRequestIdentity(humanRequestWithReason(reasonCase.reason)).reason,
+      reasonCase.reason,
+      reasonCase.code,
+    );
+    assert.equal(
+      buildAiOrchestratorAdminRevisionIdentity(humanRevisionWithReason(reasonCase.reason)).reason,
+      reasonCase.reason,
+      reasonCase.code,
+    );
+  }
+
+  for (const reasonCase of AI_ORCHESTRATOR_ADMIN_INVALID_REASON_CASES) {
+    assert.throws(
+      () => AiOrchestratorAdminReasonSchema.parse(reasonCase.reason),
+      reasonCase.code,
+    );
+    assert.throws(
+      () => buildAiOrchestratorAdminRequestIdentity(humanRequestWithReason(reasonCase.reason)),
+      reasonCase.code,
+    );
+    assert.throws(
+      () => buildAiOrchestratorAdminRevisionIdentity(humanRevisionWithReason(reasonCase.reason)),
+      reasonCase.code,
+    );
+  }
+});
+
 test('diff deriva permessi minimi e reducer emergency stop è monotono', () => {
   const next = AiOrchestratorAdminGlobalPolicySchema.parse(
     structuredClone(AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY),
@@ -256,6 +340,26 @@ test('diff deriva permessi minimi e reducer emergency stop è monotono', () => {
   assert.deepEqual(stopped.limits, ready.limits);
   assert.deepEqual(stopped.operatingWindow, ready.operatingWindow);
   assert.deepEqual(diffAiOrchestratorAdminPolicies(ready, stopped, 'EMERGENCY_STOP').requiredPermissions, ['ai.orchestrator.kill']);
+});
+
+test('ogni transizione desiredMode segue la matrice di rischio completa', () => {
+  const modes = Object.keys(AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER) as Array<keyof typeof AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER>;
+  for (const beforeMode of modes) {
+    for (const afterMode of modes) {
+      if (beforeMode === afterMode) continue;
+      const before = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: beforeMode };
+      const after = { ...AI_ORCHESTRATOR_ADMIN_GENESIS_GLOBAL_POLICY, desiredMode: afterMode };
+      const expectedPermission = AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[afterMode]
+        > AI_ORCHESTRATOR_ADMIN_MODE_RISK_ORDER[beforeMode]
+        ? 'ai.orchestrator.enable'
+        : 'ai.orchestrator.disable';
+      assert.deepEqual(
+        diffAiOrchestratorAdminPolicies(before, after, 'SET_GLOBAL_POLICY').requiredPermissions,
+        ['ai.orchestrator.configure', expectedPermission],
+        `${beforeMode} -> ${afterMode}`,
+      );
+    }
+  }
 });
 
 test('golden vectors fissano policy, request e revision hash TS/SQL', () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { Prisma, type PrismaClient, type RoleCode } from '@prisma/client';
 import { z } from 'zod';
 import { evaluatePermission } from '../permission-evaluator';
@@ -10,10 +11,12 @@ import {
   AI_ORCHESTRATOR_ADMIN_GLOBAL_POLICY_CODE,
   AI_ORCHESTRATOR_ADMIN_GLOBAL_SCOPE_CODE,
   AI_ORCHESTRATOR_ADMIN_SCOPE_POLICY_CODE,
+  AiOrchestratorAdminChangeReasonCodeSchema,
   AiOrchestratorAdminGlobalPolicySchema,
   AiOrchestratorAdminNonGlobalScopeTypeSchema,
   AiOrchestratorAdminPermissionDecisionSchema,
   AiOrchestratorAdminPermissionSchema,
+  AiOrchestratorAdminReasonSchema,
   AiOrchestratorAdminScopePolicySchema,
   AiOrchestratorAdminScopeTypeSchema,
   buildAiOrchestratorAdminRequestIdentity,
@@ -36,38 +39,19 @@ import {
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const FORBIDDEN_REASON_CONTENT = /(?:https?:\/\/|<[^>]*>|\b(?:password|passwd|secret|token|prompt|authorization|cookie|api[ _-]?key)\b|@)/iu;
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 const MAX_TRANSACTION_ATTEMPTS = 3;
+const MAX_REVISION_PAGE_SIZE = 50;
+const DEFAULT_REVISION_PAGE_SIZE = 25;
 
 const actorUserIdSchema = z.string().trim().min(1).max(191);
 const requestIdSchema = z.string().regex(UUID_V4_PATTERN, 'requestId deve essere un UUIDv4 lowercase.');
 const hashSchema = z.string().regex(SHA256_PATTERN);
-const reasonCodeSchema = z.enum([
-  'CONFIGURATION_CHANGE',
-  'ENABLEMENT_CHANGE',
-  'DISABLEMENT_CHANGE',
-  'LIMIT_CHANGE',
-  'OPERATING_WINDOW_CHANGE',
-  'KILL_SWITCH_CHANGE',
-  'EMERGENCY_STOP',
-  'SECURITY_RESPONSE',
-  'MAINTENANCE',
-]);
-const reasonSchema = z.string().trim().min(10).max(500).superRefine((reason, context) => {
-  if (CONTROL_CHARACTER_PATTERN.test(reason)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'La motivazione contiene caratteri di controllo.' });
-  }
-  if (FORBIDDEN_REASON_CONTENT.test(reason)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'La motivazione non può contenere URL, segreti, prompt o identificatori personali.' });
-  }
-});
 
 const commonCommandFields = {
   actorUserId: actorUserIdSchema,
   requestId: requestIdSchema,
-  reasonCode: reasonCodeSchema,
-  reason: reasonSchema,
+  reasonCode: AiOrchestratorAdminChangeReasonCodeSchema,
+  reason: AiOrchestratorAdminReasonSchema,
   confirmed: z.literal(true),
 } as const;
 
@@ -133,6 +117,84 @@ export interface AiOrchestratorAdminRevisionSnapshot {
   readonly reason: string;
   readonly confirmed: boolean;
   readonly createdAt: Date;
+}
+
+/** Read projection intentionally excludes reason, actor, request and RBAC proof. */
+export interface AiOrchestratorAdminDesiredPolicySnapshot {
+  readonly scopeType: AiOrchestratorAdminScopeType;
+  readonly scopeCode: string;
+  readonly targetDefinitionHash: string;
+  readonly version: number;
+  readonly policy: AiOrchestratorAdminPolicy;
+  readonly policyHash: string;
+  readonly revisionHash: string;
+  readonly createdAt: Date;
+}
+
+function projectDesiredPolicySnapshot(
+  revision: AiOrchestratorAdminRevisionSnapshot,
+): AiOrchestratorAdminDesiredPolicySnapshot {
+  return Object.freeze({
+    scopeType: revision.scopeType,
+    scopeCode: revision.scopeCode,
+    targetDefinitionHash: revision.targetDefinitionHash,
+    version: revision.version,
+    policy: revision.policy,
+    policyHash: revision.policyHash,
+    revisionHash: revision.revisionHash,
+    createdAt: revision.createdAt,
+  });
+}
+
+const revisionCursorPayloadSchema = z.object({
+  version: z.literal(1),
+  createdAt: z.string().datetime({ offset: true }),
+  id: z.string().min(1).max(191),
+  scopeType: AiOrchestratorAdminScopeTypeSchema.nullable(),
+  scopeCode: z.string().min(1).max(160).nullable(),
+}).strict();
+
+export interface AiOrchestratorAdminRevisionCursor {
+  readonly createdAt: Date;
+  readonly id: string;
+  readonly scopeType: AiOrchestratorAdminScopeType | null;
+  readonly scopeCode: string | null;
+}
+
+export function encodeAiOrchestratorAdminRevisionCursor(
+  cursor: AiOrchestratorAdminRevisionCursor,
+) {
+  const payload = revisionCursorPayloadSchema.parse({
+    version: 1,
+    createdAt: cursor.createdAt.toISOString(),
+    id: cursor.id,
+    scopeType: cursor.scopeType,
+    scopeCode: cursor.scopeCode,
+  });
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+export function decodeAiOrchestratorAdminRevisionCursor(
+  value: string,
+): AiOrchestratorAdminRevisionCursor {
+  if (!/^[A-Za-z0-9_-]{1,2048}$/.test(value)) {
+    throw new TypeError('AI_ORCHESTRATOR_ADMIN_CURSOR_INVALID');
+  }
+  try {
+    const decoded = Buffer.from(value, 'base64url');
+    if (decoded.toString('base64url') !== value) {
+      throw new TypeError('AI_ORCHESTRATOR_ADMIN_CURSOR_NON_CANONICAL');
+    }
+    const payload = revisionCursorPayloadSchema.parse(JSON.parse(decoded.toString('utf8')));
+    return Object.freeze({
+      createdAt: new Date(payload.createdAt),
+      id: payload.id,
+      scopeType: payload.scopeType,
+      scopeCode: payload.scopeCode,
+    });
+  } catch {
+    throw new TypeError('AI_ORCHESTRATOR_ADMIN_CURSOR_INVALID');
+  }
 }
 
 export type AiOrchestratorAdminControlMutationResult =
@@ -638,8 +700,8 @@ export type AiOrchestratorAdminSnapshotResult =
   | {
     readonly ok: true;
     readonly desired: {
-      readonly global: AiOrchestratorAdminRevisionSnapshot;
-      readonly scopes: readonly AiOrchestratorAdminRevisionSnapshot[];
+      readonly global: AiOrchestratorAdminDesiredPolicySnapshot;
+      readonly scopes: readonly AiOrchestratorAdminDesiredPolicySnapshot[];
     };
     readonly effective: AiOrchestratorAdminEffectiveState;
   }
@@ -721,8 +783,10 @@ export async function getAiOrchestratorAdminControlSnapshot(
     return {
       ok: true,
       desired: {
-        global,
-        scopes: Object.freeze(revisions.filter((revision) => revision.scopeType !== 'GLOBAL')),
+        global: projectDesiredPolicySnapshot(global),
+        scopes: Object.freeze(revisions
+          .filter((revision) => revision.scopeType !== 'GLOBAL')
+          .map(projectDesiredPolicySnapshot)),
       },
       effective: Object.freeze({
         operational: false,
@@ -745,32 +809,98 @@ export async function getAiOrchestratorAdminControlSnapshot(
 }
 
 export type AiOrchestratorAdminRevisionListResult =
-  | { readonly ok: true; readonly revisions: readonly AiOrchestratorAdminRevisionSnapshot[] }
-  | { readonly ok: false; readonly code: 'ACTOR_NOT_AUTHORIZED' | 'LEDGER_INTEGRITY_ERROR'; readonly message: string };
+  | {
+    readonly ok: true;
+    readonly revisions: readonly AiOrchestratorAdminRevisionSnapshot[];
+    readonly nextCursor: string | null;
+  }
+  | {
+    readonly ok: false;
+    readonly code: 'ACTOR_NOT_AUTHORIZED' | 'INVALID_CURSOR' | 'INVALID_FILTER' | 'LEDGER_INTEGRITY_ERROR';
+    readonly message: string;
+  };
 
 export async function listAiOrchestratorAdminPolicyRevisions(
   prisma: PrismaClient,
-  input: { actorUserId: string; scopeType?: string; scopeCode?: string; limit?: number },
+  input: { actorUserId: string; scopeType?: string; scopeCode?: string; cursor?: string; limit?: number },
 ): Promise<AiOrchestratorAdminRevisionListResult> {
-  const filter = z.object({
+  const parsedFilter = z.object({
     actorUserId: actorUserIdSchema,
     scopeType: AiOrchestratorAdminScopeTypeSchema.optional(),
-    scopeCode: z.string().trim().min(1).max(160).optional(),
-    limit: z.number().int().min(1).max(200).default(100),
-  }).strict().parse(input);
+    scopeCode: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    cursor: z.string().min(1).max(2_048).optional(),
+    limit: z.number().int().min(1).max(MAX_REVISION_PAGE_SIZE).default(DEFAULT_REVISION_PAGE_SIZE),
+  }).strict().superRefine((filter, context) => {
+    if (filter.scopeCode && !filter.scopeType) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['scopeType'],
+        message: 'Lo scope type è obbligatorio quando è presente lo scope code.',
+      });
+    }
+    if (
+      filter.scopeType
+      && filter.scopeCode
+      && !getAiOrchestratorAdminControlTarget(filter.scopeType, filter.scopeCode)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['scopeCode'],
+        message: 'Target storico non canonico.',
+      });
+    }
+  }).safeParse(input);
+  if (!parsedFilter.success) {
+    return { ok: false, code: 'INVALID_FILTER', message: 'Filtro storico AI Orchestrator non valido.' };
+  }
+  const filter = parsedFilter.data;
+  let cursor: AiOrchestratorAdminRevisionCursor | null = null;
+  if (filter.cursor) {
+    try {
+      cursor = decodeAiOrchestratorAdminRevisionCursor(filter.cursor);
+      if (
+        cursor.scopeType !== (filter.scopeType ?? null)
+        || cursor.scopeCode !== (filter.scopeCode ?? null)
+      ) throw new TypeError('AI_ORCHESTRATOR_ADMIN_CURSOR_FILTER_MISMATCH');
+    } catch {
+      return { ok: false, code: 'INVALID_CURSOR', message: 'Cursore storico AI Orchestrator non valido.' };
+    }
+  }
   return withSerializableTransaction(prisma, async (tx) => {
     const actorContext = await requireCurrentPermission(tx, filter.actorUserId, 'ai.orchestrator.audit');
     if (!actorContext) return { ok: false, code: 'ACTOR_NOT_AUTHORIZED', message: 'Permesso audit AI Orchestrator richiesto.' };
+    const cursorPredicate = cursor
+      ? Prisma.sql`AND ("createdAt", "id") < (
+        (${cursor.createdAt}::TIMESTAMPTZ AT TIME ZONE 'UTC'),
+        ${cursor.id}
+      )`
+      : Prisma.sql``;
     const rows = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
       SELECT *
       FROM "AiOrchestratorAdminPolicyRevision"
       WHERE (${filter.scopeType ?? null}::TEXT IS NULL OR "scopeType" = ${filter.scopeType ?? null})
         AND (${filter.scopeCode ?? null}::TEXT IS NULL OR "scopeCode" = ${filter.scopeCode ?? null})
-      ORDER BY "createdAt" DESC, "scopeType" COLLATE "C", "scopeCode" COLLATE "C", "version" DESC
-      LIMIT ${filter.limit}
+        ${cursorPredicate}
+      ORDER BY "createdAt" DESC, "id" DESC
+      LIMIT ${filter.limit + 1}
     `);
     try {
-      return { ok: true, revisions: Object.freeze(rows.map(assertPersistedRevision)) };
+      const validatedRows = rows.map(assertPersistedRevision);
+      const hasMore = rows.length > filter.limit;
+      const revisions = Object.freeze(validatedRows.slice(0, filter.limit));
+      const last = revisions.at(-1);
+      return {
+        ok: true,
+        revisions,
+        nextCursor: hasMore && last
+          ? encodeAiOrchestratorAdminRevisionCursor({
+            createdAt: last.createdAt,
+            id: last.id,
+            scopeType: filter.scopeType ?? null,
+            scopeCode: filter.scopeCode ?? null,
+          })
+          : null,
+      };
     } catch {
       return { ok: false, code: 'LEDGER_INTEGRITY_ERROR', message: 'Integrità del ledger Admin Control Plane non valida.' };
     }
