@@ -58,6 +58,7 @@ cleanup() {
 trap cleanup EXIT
 
 command -v docker >/dev/null 2>&1 || fail "docker is required for the production smoke test"
+command -v timeout >/dev/null 2>&1 || fail "timeout is required for bounded worker smoke tests"
 [[ "$(resource_count)" == "0" ]] || fail "Compose resources already exist for $COMPOSE_PROJECT_NAME; refusing to touch a pre-existing project"
 if docker image inspect "$SMOKE_APP_IMAGE" >/dev/null 2>&1; then
   fail "Image $SMOKE_APP_IMAGE already exists; refusing to remove or overwrite a pre-existing image"
@@ -106,8 +107,105 @@ compose build "$APP_SERVICE"
 SMOKE_CREATED="true"
 compose up -d postgres
 compose run --rm -T --entrypoint sh "$APP_SERVICE" -c \
-  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\")" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test "${AI_PROVIDER:-}" = "mock" && test "${AI_ORCHESTRATOR_WORKER_ENABLED:-}" = "0" && test "${AI_EXTERNAL_PROVIDERS_ENABLED:-}" = "false" && test -z "${AI_ALLOWED_MODELS:-}" && test -w "$1"' \
+  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\"); const p=require(\"./package.json\"); if(p.scripts[\"ai:orchestrator:worker\"]!==\"tsx scripts/ai-orchestrator-worker.ts\") process.exit(1)" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f scripts/ai-orchestrator-worker.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test -f src/lib/ai-orchestrator/dormant-worker-process-v1.ts && test "${AI_PROVIDER:-}" = "mock" && test "${AI_ORCHESTRATOR_WORKER_ENABLED:-}" = "0" && test "${AI_EXTERNAL_PROVIDERS_ENABLED:-}" = "false" && test -z "${AI_ALLOWED_MODELS:-}" && test -w "$1"' \
   sh "$DOCUMENTS_PATH"
+
+DORMANT_WORKER_CONTAINER="${COMPOSE_PROJECT_NAME}-dormant-worker"
+LOCKED_WORKER_CONTAINER="${COMPOSE_PROJECT_NAME}-locked-worker"
+for container_name in "$DORMANT_WORKER_CONTAINER" "$LOCKED_WORKER_CONTAINER"; do
+  if docker container inspect "$container_name" >/dev/null 2>&1; then
+    fail "Container $container_name already exists; refusing to replace it"
+  fi
+done
+
+docker run -d \
+  --name "$DORMANT_WORKER_CONTAINER" \
+  --label "com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  -e APP_ENV=production \
+  -e NODE_ENV=production \
+  -e AI_PROVIDER=mock \
+  -e AI_ORCHESTRATOR_WORKER_ENABLED=0 \
+  -e AI_EXTERNAL_PROVIDERS_ENABLED=false \
+  -e AI_ALLOWED_MODELS= \
+  -e 'DATABASE_URL=postgresql://127.0.0.1:1/must-not-connect?schema=public' \
+  --entrypoint node \
+  "$SMOKE_APP_IMAGE" \
+  --import tsx scripts/ai-orchestrator-worker.ts >/dev/null
+
+DORMANT_LOGS=""
+for _ in $(seq 1 150); do
+  DORMANT_LOGS="$(docker logs "$DORMANT_WORKER_CONTAINER" 2>&1)"
+  if printf '%s\n' "$DORMANT_LOGS" | grep -Fq '"state":"DORMANT"'; then
+    break
+  fi
+  [[ "$(docker inspect -f '{{.State.Running}}' "$DORMANT_WORKER_CONTAINER")" == "true" ]] \
+    || fail "Dormant worker exited before its initial heartbeat: $DORMANT_LOGS"
+  sleep 0.1
+done
+
+printf '%s\n' "$DORMANT_LOGS" | grep -Fq '"state":"DORMANT"' \
+  || fail "Dormant worker did not emit its initial heartbeat"
+docker kill --signal=TERM "$DORMANT_WORKER_CONTAINER" >/dev/null
+DORMANT_EXIT="$(timeout --kill-after=5s 15s docker wait "$DORMANT_WORKER_CONTAINER")" \
+  || fail "Dormant worker did not exit within 15s after SIGTERM"
+[[ "$DORMANT_EXIT" == "0" ]] \
+  || fail "Dormant worker did not stop cleanly after SIGTERM"
+DORMANT_LOGS="$(docker logs "$DORMANT_WORKER_CONTAINER" 2>&1)"
+printf '%s\n' "$DORMANT_LOGS" | node -e '
+  const fs = require("node:fs");
+  const lines = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean);
+  if (lines.length !== 1) process.exit(1);
+  const row = JSON.parse(lines[0]);
+  const keys = ["schemaVersion", "workerProcessVersion", "workerInstanceId", "workerBuildHash", "state", "sequence", "timestamp"];
+  if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) process.exit(1);
+  if (row.schemaVersion !== 1 || row.workerProcessVersion !== "1.0" || row.state !== "DORMANT" || row.sequence !== 1) process.exit(1);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.workerInstanceId)) process.exit(1);
+  if (!/^[0-9a-f]{64}$/.test(row.workerBuildHash)) process.exit(1);
+' || fail "Dormant worker heartbeat is not canonical"
+if printf '%s\n' "$DORMANT_LOGS" | grep -Eqi 'postgresql|must-not-connect|database_url|secret|stack|payload|url'; then
+  fail "Dormant worker logs contain prohibited data"
+fi
+docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
+
+set +e
+LOCKED_LOGS="$(timeout --kill-after=5s 15s docker run --rm \
+  --name "$LOCKED_WORKER_CONTAINER" \
+  --label "com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  -e APP_ENV=production \
+  -e NODE_ENV=production \
+  -e AI_PROVIDER=mock \
+  -e AI_ORCHESTRATOR_WORKER_ENABLED=1 \
+  -e AI_EXTERNAL_PROVIDERS_ENABLED=false \
+  -e AI_ALLOWED_MODELS= \
+  -e 'DATABASE_URL=postgresql://127.0.0.1:1/must-not-connect?schema=public' \
+  --entrypoint node \
+  "$SMOKE_APP_IMAGE" \
+  --import tsx scripts/ai-orchestrator-worker.ts 2>&1)"
+LOCKED_STATUS=$?
+set -e
+[[ "$LOCKED_STATUS" == "1" ]] || fail "Worker gate 1 was not rejected"
+printf '%s\n' "$LOCKED_LOGS" | node -e '
+  const fs = require("node:fs");
+  const lines = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean);
+  if (lines.length !== 1) process.exit(1);
+  const row = JSON.parse(lines[0]);
+  if (row.activationEpoch !== "FOUNDATION_LOCKED_V1") process.exit(1);
+  if (row.errorCode !== "AI_DORMANT_WORKER_FOUNDATION_LOCKED") process.exit(1);
+' || fail "Worker gate 1 refusal is not canonical"
+if printf '%s\n' "$LOCKED_LOGS" | grep -Eqi 'postgresql|must-not-connect|database_url|secret|stack|payload|url'; then
+  fail "Locked worker refusal contains prohibited data"
+fi
+
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
 reconcile_log="$(mktemp "${TMPDIR:-/tmp}/fai-crm-reconcile-log.XXXXXX")"
@@ -123,4 +221,4 @@ if ! grep -Fxq '{"reconciledRuns":0}' "$reconcile_log"; then
 fi
 rm -f "$reconcile_log"
 
-echo "Docker production smoke test completed: isolated migrations, production seed, ai:reconcile, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: isolated migrations, production seed, ai:reconcile, dormant worker shell, and cleanup succeeded for $COMPOSE_PROJECT_NAME."

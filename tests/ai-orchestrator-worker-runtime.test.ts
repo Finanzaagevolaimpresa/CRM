@@ -160,8 +160,12 @@ test('supersession idle è batch-limitata, lockata e non richiede gate positivi'
   assert.doesNotMatch(supersession, /lockAndAssertRuntimeGates|assertWorkerEnvironmentEnabled/);
 });
 
-test('la Foundation non introduce processo, route, provider, AiRun o modifica il reconciler', () => {
-  assert.equal(packageJson.scripts?.['ai:orchestrator:worker'], undefined);
+test('il runtime PR76 resta separato dal processo dormiente PR81 e da ogni esecuzione', () => {
+  assert.equal(
+    packageJson.scripts?.['ai:orchestrator:worker'],
+    'tsx scripts/ai-orchestrator-worker.ts',
+  );
+  assert.doesNotMatch(service, /dormant-worker-process-v1|ai-orchestrator-worker\.ts/);
   assert.doesNotMatch(service, /fetch\(|OpenAI|openai|axios|AiRun|aiRun|AiOutput|aiOutput/);
   assert.doesNotMatch(service, /applyAuditWorkflowTransition|WF-018|WF-019|WF-020|WF-021|WF-022|WF-023/);
   assert.match(service, /workflowTransitionApplied: false/);

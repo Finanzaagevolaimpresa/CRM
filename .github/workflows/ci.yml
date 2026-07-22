@@ -92,5 +92,5 @@ jobs:
             echo "systemd-analyze not available; skipping unit verification"
           fi
 
-      - name: Docker production reconciler smoke test
+      - name: Docker production reconciler and dormant worker packaging smoke test
         run: COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh
