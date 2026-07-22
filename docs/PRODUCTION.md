@@ -665,3 +665,40 @@ Il rollback ordinario è applicativo:
 Il doppio limite Unicode/UTF-16 mantiene il ledger rileggibile dal codice PR79, che non dipende dall'indice. La funzione PostgreSQL conserva però la matrice RBAC più restrittiva della PR80: durante il rollback mantenere i gate chiusi e non effettuare mutazioni `PAUSED`/`DRAINING`. Non eseguire down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` del ledger. Un restore database è una procedura distinta, da usare solo con un piano specifico e backup validato, non come rollback ordinario della UI.
 
 Contratto completo: [Admin UI Foundation v1](ai-orchestrator-admin-ui-foundation-v1.md) e [ADR-0007](adr/ADR-0007-ai-orchestrator-admin-ui-foundation-v1.md).
+
+## AI Orchestrator Dormant Worker Process Foundation v1 — PR81
+
+La PR81 include nell'immagine un entrypoint TypeScript manuale che definisce soltanto il lifecycle `DORMANT -> DRAINING -> STOPPED`, un polling interno senza datasource e un heartbeat JSONL minimizzato. `FOUNDATION_LOCKED_V1` mantiene `operational=false` e rifiuta sia `AI_ORCHESTRATOR_WORKER_ENABLED=1` sia valori ambigui.
+
+Il processo non importa Prisma o la Worker Runtime Foundation, non legge `DATABASE_URL`, non accede a job, queue, outbox, lease, result, artifact, handler, provider o dati CRM e non applica transizioni. Il polling termina sempre con `NO_WORK_FOUNDATION_LOCKED`.
+
+L'entrypoint è impacchettato ma **non installato**:
+
+- `npm start` resta `next start`;
+- il `CMD` Docker resta invariato;
+- Docker Compose continua ad avere soltanto `app` e `postgres`;
+- non vengono aggiunti systemd, timer, cron o scheduler;
+- il reconciler AI esistente non viene modificato;
+- Prisma resta a 29 migration.
+
+In produzione mantenere esattamente:
+
+```text
+AI_ORCHESTRATOR_WORKER_ENABLED=0
+AI_PROVIDER=mock
+AI_EXTERNAL_PROVIDERS_ENABLED=false
+AI_ALLOWED_MODELS=
+stateMachineEnabled=false
+dispatchEnabled=false
+syntheticDataOnly=true
+externalProvidersEnabled=false
+13 capability enabled=false
+```
+
+Non invocare `npm run ai:orchestrator:worker` sul VPS. L'entrypoint è destinato al collaudo isolato della fondazione e a successive PR autorizzate.
+
+Un eventuale deploy separatamente approvato deve verificare che non compaia alcun nuovo container o processo, che applicazione e PostgreSQL restino healthy e che tutti i gate siano invariati. Non sono richiesti `prisma migrate deploy` specifici per PR81 perché non esiste una migration nuova.
+
+Rollback: ripristinare l'immagine PR80 mantenendo tutti i gate chiusi. Lasciare database, 29 migration, ledger, job, outbox, runtime e artifact intatti. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` come rollback ordinario.
+
+Contratto completo: [Dormant Worker Process Foundation v1](ai-orchestrator-dormant-worker-process-foundation-v1.md) e [ADR-0008](adr/ADR-0008-ai-orchestrator-dormant-worker-process-foundation-v1.md).

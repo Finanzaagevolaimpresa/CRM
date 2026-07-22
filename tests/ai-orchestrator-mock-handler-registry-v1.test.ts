@@ -551,7 +551,11 @@ test('source and import boundaries prove no worker, database, network, provider 
     'utf8',
   );
   const workerRuntime = readFileSync('src/lib/ai-orchestrator/worker-runtime.ts', 'utf8');
-  const packageJson = readFileSync('package.json', 'utf8');
+  const dormantWorker = readFileSync(
+    'src/lib/ai-orchestrator/dormant-worker-process-v1.ts',
+    'utf8',
+  );
+  const workerScript = readFileSync('scripts/ai-orchestrator-worker.ts', 'utf8');
   const schema = readFileSync('prisma/schema.prisma', 'utf8');
 
   assert.doesNotMatch(source, /from\s+['"]@prisma\/client['"]/);
@@ -562,7 +566,9 @@ test('source and import boundaries prove no worker, database, network, provider 
   assert.doesNotMatch(source, /\bsetTimeout\s*\(|\bsetInterval\s*\(|\beval\s*\(|\bnew\s+Function\s*\(/);
   assert.doesNotMatch(source, /worker-runtime['"]/);
   assert.doesNotMatch(workerRuntime, /mock-handler-registry-v1/);
-  assert.doesNotMatch(packageJson, /ai-orchestrator.*(?:worker|dispatch)/i);
+  assert.doesNotMatch(source, /dormant-worker-process-v1/);
+  assert.doesNotMatch(dormantWorker, /mock-handler-registry-v1/);
+  assert.doesNotMatch(workerScript, /mock-handler-registry-v1/);
   assert.doesNotMatch(schema, /MockHandlerRegistry|MockHandlerDefinition/);
   assert.equal(
     readdirSync('prisma/migrations').some((name) => /mock_handler_registry/i.test(name)),
