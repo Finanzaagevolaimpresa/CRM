@@ -149,11 +149,11 @@ npx tsc --noEmit
 DATABASE_URL=postgresql://... npx prisma validate
 npm run prisma:generate
 npm run build
-RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 git diff --check
 ```
 
-La catena completa delle migration e i test DB devono essere eseguiti su PostgreSQL 16 effimero con `test` nel nome di database o schema. Le prove coprono mapping e cardinalità, replay senza duplicati, outbox uno-a-uno, hash canonici, rollback della transazione incompleta, stato `BLOCKED`, divieto `RUNNING`, immutabilità e assenza di nuovi `AiRun`.
+La catena completa delle migration e i test DB devono essere eseguiti su PostgreSQL 16 effimero con URL loopback verso il database esatto `fai_crm_test`, schema `public` e commento DB-bound `FAI_CRM_EPHEMERAL_TEST_ONLY_V1`, impostato prima della suite. Le prove coprono mapping e cardinalità, replay senza duplicati, outbox uno-a-uno, hash canonici, rollback della transazione incompleta, stato `BLOCKED`, divieto `RUNNING`, immutabilità e assenza di nuovi `AiRun`.
 
 ## Rischi residui e confini
 

@@ -322,21 +322,23 @@ export async function createAiOrchestratorWorkerRuntimeAdapterV1(
             // A gate denial must not prevent the risk-reduction surrender path.
           }
         }
-        await execute('SURRENDER', async () => {
-          await restrictedRuntime.surrenderAiWorkflowJobLease(entry.runtimeLease);
-        });
+        try {
+          await execute('SURRENDER', async () => {
+            await restrictedRuntime.surrenderAiWorkflowJobLease(entry.runtimeLease);
+          });
+        } catch (error) {
+          if (
+            error instanceof AiOrchestratorWorkerRuntimeAdapterError
+            && error.code === 'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE'
+          ) return;
+          throw error;
+        }
       })();
       entry.surrenderPromise = surrenderPromise;
       try {
         const surrendered = await surrenderPromise;
         leases.delete(lease);
         return surrendered;
-      } catch (error) {
-        if (
-          error instanceof AiOrchestratorWorkerRuntimeAdapterError
-          && error.code === 'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE'
-        ) leases.delete(lease);
-        throw error;
       } finally {
         if (entry.surrenderPromise === surrenderPromise) entry.surrenderPromise = null;
       }

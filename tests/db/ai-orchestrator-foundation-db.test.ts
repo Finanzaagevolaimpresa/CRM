@@ -52,33 +52,31 @@ import {
   surrenderAiWorkflowJobLease,
   supersedeIneligibleAiWorkflowJobRuntimes,
 } from '../../src/lib/ai-orchestrator/worker-runtime';
+import {
+  createAiOrchestratorWorkerRuntimeAdapterV1,
+  AiOrchestratorWorkerRuntimeAdapterError,
+  type AiOrchestratorWorkerRuntimeLeaseHandleV1,
+} from '../../src/lib/ai-orchestrator/worker-runtime-adapter-v1';
 import { createSyntheticAiResultDraft } from '../../src/lib/ai-orchestrator/result-artifact-contract-v1';
+import {
+  AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION,
+  AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME,
+  assertAiOrchestratorEphemeralDatabaseIdentity,
+  assertAiOrchestratorEphemeralDbTestConfiguration,
+  assertAiOrchestratorPhysicalDispatchBarrier,
+  readAiOrchestratorDispatchConstraintState,
+} from './ai-orchestrator-db-test-guard';
 
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
-
-function assertDedicatedTestDatabase(databaseUrl: string | undefined) {
-  if (!databaseUrl) throw new Error('DATABASE_URL obbligatorio per i test DB AI Orchestrator.');
-  let parsed: URL;
-  try {
-    parsed = new URL(databaseUrl);
-  } catch {
-    throw new Error('DATABASE_URL non valido per i test DB AI Orchestrator.');
-  }
-  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-  const schemaName = parsed.searchParams.get('schema') ?? 'public';
-  const testNamePattern = /(^|[_-])test($|[_-])/i;
-  if (!testNamePattern.test(databaseName) && !testNamePattern.test(schemaName)) {
-    throw new Error('I test DB AI Orchestrator richiedono un database o schema dedicato con "test" nel nome.');
-  }
-}
-
-if (dbTestsRequested && !destructiveDbTestsConfirmed) {
-  throw new Error('Impostare AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 per confermare il database effimero dedicato.');
-}
-if (dbTestsRequested) assertDedicatedTestDatabase(process.env.DATABASE_URL);
-
-const runDbTests = dbTestsRequested && destructiveDbTestsConfirmed;
+const runDbTests = assertAiOrchestratorEphemeralDbTestConfiguration({
+  requested: dbTestsRequested,
+  destructiveConfirmed: destructiveDbTestsConfirmed,
+  databaseUrl: process.env.DATABASE_URL,
+  sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL,
+  appEnvironment: process.env.APP_ENV,
+  nodeEnvironment: process.env.NODE_ENV,
+});
 const prisma = runDbTests ? new PrismaClient() : null;
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const safeEnv = { ...process.env, AI_EXTERNAL_PROVIDERS_ENABLED: 'false' };
@@ -104,51 +102,49 @@ function db() {
   return prisma;
 }
 
-function assertConfirmedRuntimeDbFixture() {
+async function assertConfirmedRuntimeDbFixture() {
   if (!runDbTests || !dbTestsRequested || !destructiveDbTestsConfirmed) {
     throw new Error('Fixture runtime consentita soltanto nel PostgreSQL effimero confermato.');
   }
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db());
 }
 
-async function dispatchConstraintState(client: PrismaClient | Prisma.TransactionClient = db()) {
-  const rows = await client.$queryRaw<Array<{ present: boolean; validated: boolean }>>(Prisma.sql`
-    SELECT true AS "present", constraint_row."convalidated" AS "validated"
-    FROM pg_constraint constraint_row
-    JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
-    WHERE table_row."relname" = 'AiOrchestratorSetting'
-      AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
-      AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
-  `);
-  return rows[0] ?? { present: false, validated: false };
+async function dispatchConstraintState() {
+  return readAiOrchestratorDispatchConstraintState(db());
 }
 
 async function restorePhysicalDispatchBarrier() {
   if (!runDbTests) return;
-  assertConfirmedRuntimeDbFixture();
+  await assertConfirmedRuntimeDbFixture();
   await db().$executeRawUnsafe(
     'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = false WHERE "id" = \'global\'',
   );
   const constraint = await dispatchConstraintState();
+  if (
+    constraint.present
+    && constraint.definition !== AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION
+  ) throw new Error('AI_ORCHESTRATOR_DB_TEST_PHYSICAL_DISPATCH_BARRIER_INVALID');
   if (!constraint.present) {
     await db().$executeRawUnsafe(
-      'ALTER TABLE "AiOrchestratorSetting" ADD CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check" CHECK ("dispatchEnabled" = false) NOT VALID',
+      `ALTER TABLE "AiOrchestratorSetting" ADD CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}" CHECK ("dispatchEnabled" = false) NOT VALID`,
     );
   }
   await db().$executeRawUnsafe(
-    'ALTER TABLE "AiOrchestratorSetting" VALIDATE CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+    `ALTER TABLE "AiOrchestratorSetting" VALIDATE CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}"`,
   );
-  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  await setWorkerCapabilityGates([]);
+  await assertAiOrchestratorPhysicalDispatchBarrier(db());
 }
 
 async function withTemporaryDispatchFixture<T>(
   callback: () => Promise<T>,
   options: { enabledJobCodes?: readonly string[] } = {},
 ) {
-  assertConfirmedRuntimeDbFixture();
+  await assertConfirmedRuntimeDbFixture();
   if (workerRuntimeDispatchFixtureOpen) throw new Error('Fixture dispatch runtime già aperta.');
   await restorePhysicalDispatchBarrier();
   await db().$executeRawUnsafe(
-    'ALTER TABLE "AiOrchestratorSetting" DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+    `ALTER TABLE "AiOrchestratorSetting" DROP CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}"`,
   );
   workerRuntimeDispatchFixtureOpen = true;
   try {
@@ -175,7 +171,7 @@ async function withRuntimeClockFixture(
   callback: (tx: Prisma.TransactionClient) => Promise<void>,
   options: { rewriteRuntimeEvents?: boolean } = {},
 ) {
-  assertConfirmedRuntimeDbFixture();
+  await assertConfirmedRuntimeDbFixture();
   let runtimeProtectionDisabled = false;
   let attemptProtectionDisabled = false;
   let eventProtectionDisabled = false;
@@ -426,6 +422,7 @@ async function createUser(name: string, role: 'admin' | 'collaboratore_limitato'
 
 test.before(async () => {
   if (!runDbTests) return;
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db());
   const setting = await db().aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } });
   migrationDefaults = {
     stateMachineEnabled: setting.stateMachineEnabled,
@@ -509,15 +506,51 @@ test.before(async () => {
 test.after(async () => {
   if (!runDbTests || !prisma) return;
   workerRuntimeDispatchFixtureOpen = false;
-  await setWorkerCapabilityGates([]);
-  await restorePhysicalDispatchBarrier();
-  if (migrationDefaults) {
-    await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: migrationDefaults });
+  try {
+    await setWorkerCapabilityGates([]);
+  } finally {
+    try {
+      await restorePhysicalDispatchBarrier();
+    } finally {
+      try {
+        if (migrationDefaults) {
+          await db().aiOrchestratorSetting.update({
+            where: { id: 'global' },
+            data: migrationDefaults,
+          });
+        }
+      } finally {
+        try {
+          await db().aiControlSetting.updateMany({
+            where: { id: 'global' },
+            data: { externalProvidersEnabled: false },
+          });
+        } finally {
+          if (originalWorkerGate === undefined) {
+            delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+          } else {
+            process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
+          }
+          await db().$disconnect();
+        }
+      }
+    }
   }
-  await db().aiControlSetting.updateMany({ where: { id: 'global' }, data: { externalProvidersEnabled: false } });
-  if (originalWorkerGate === undefined) delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
-  else process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
-  await db().$disconnect();
+});
+
+test('fixture dispatch ripristina barriera e capability dopo errore callback', { skip: !runDbTests }, async () => {
+  const callbackFailure = new Error('AI_ORCHESTRATOR_TEST_CALLBACK_FAILURE');
+  await assert.rejects(
+    withTemporaryDispatchFixture(
+      async () => {
+        throw callbackFailure;
+      },
+      { enabledJobCodes: FAI_AUDIT_JOB_CODES.slice(0, 1) },
+    ),
+    (error: unknown) => error === callbackFailure,
+  );
+  assert.equal(workerRuntimeDispatchFixtureOpen, false);
+  await assertAiOrchestratorPhysicalDispatchBarrier(db());
 });
 
 const human = (userId: string): AuditWorkflowActor => ({ kind: 'HUMAN', userId });
@@ -851,13 +884,21 @@ test('la migration crea il singleton fail-closed con state machine e dispatch di
 });
 
 test('la catena production preserva la barriera fisica dispatch PR74', { skip: !runDbTests }, async () => {
-  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  assert.deepEqual(await dispatchConstraintState(), {
+    present: true,
+    validated: true,
+    definition: AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION,
+  });
   await assert.rejects(db().$executeRawUnsafe(
     'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = true WHERE "id" = \'global\'',
   ));
   const setting = await db().aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } });
   assert.equal(setting.dispatchEnabled, false);
-  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  assert.deepEqual(await dispatchConstraintState(), {
+    present: true,
+    validated: true,
+    definition: AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION,
+  });
 });
 
 test('state machine e dispatch sono flag distinti e la foundation non autorizza mai dispatch', { skip: !runDbTests }, async () => {
@@ -2936,9 +2977,148 @@ test('Worker Runtime resta fail-closed, senza backfill e con dispatch fisicament
       await rawAdmissionWithoutAdmittedEvent(tx, created.job, created.outbox);
     }), /capability|disabled/i);
   }, { enabledJobCodes: [] });
-  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  assert.deepEqual(await dispatchConstraintState(), {
+    present: true,
+    validated: true,
+    definition: AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION,
+  });
   assert.equal(await db().aiOrchestratorWorkerCapabilitySetting.count({ where: { enabled: true } }), 0);
   assert.equal(await db().aiWorkflowJobRuntime.count({ where: { jobId: created.job.id } }), 0);
+});
+
+test('adapter reale normalizza surrender concorrenti di una lease già scaduta', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  const workerInstanceId = randomUUID();
+  const adapter = await createAiOrchestratorWorkerRuntimeAdapterV1({
+    workerInstanceId,
+    workerBuildHash: '8'.repeat(64),
+    workerEnabled: '1',
+  });
+  let lease: AiOrchestratorWorkerRuntimeLeaseHandleV1 | null = null;
+  let runtimeId: string | null = null;
+
+  try {
+    await withTemporaryDispatchFixture(async () => {
+      await adapter.admit();
+      const claim = await adapter.claim();
+      assert.ok(claim);
+      lease = claim.lease;
+      const runtime = await db().aiWorkflowJobRuntime.findFirstOrThrow({
+        where: { leaseOwnerId: workerInstanceId, state: 'LEASED' },
+      });
+      runtimeId = runtime.id;
+    }, { enabledJobCodes: [created.job.jobCode] });
+
+    assert.ok(lease);
+    assert.ok(runtimeId);
+    await expireLeaseForTest(runtimeId);
+    await assert.doesNotReject(Promise.all([
+      adapter.surrender(lease),
+      adapter.surrender(lease),
+    ]));
+
+    const stillLeased = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: runtimeId },
+    });
+    assert.equal(stillLeased.state, 'LEASED');
+    assert.equal(stillLeased.leaseOwnerId, workerInstanceId);
+    await assert.rejects(
+      adapter.heartbeat(lease),
+      (error: unknown) => (
+        error instanceof AiOrchestratorWorkerRuntimeAdapterError
+        && error.code === 'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE'
+      ),
+    );
+    assert.ok((await recoverExpiredAiWorkflowJobLeases({ batchSize: 25 })) >= 1);
+  } finally {
+    if (runtimeId) {
+      const runtime = await db().aiWorkflowJobRuntime.findUnique({ where: { id: runtimeId } });
+      if (runtime?.state === 'LEASED') {
+        await expireLeaseForTest(runtimeId);
+        await recoverExpiredAiWorkflowJobLeases({ batchSize: 25 });
+      }
+    }
+    await adapter.disconnect();
+  }
+});
+
+test('adapter reale tratta lo surrender fenced come no-op sul nuovo owner', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  const oldWorkerInstanceId = randomUUID();
+  const adapter = await createAiOrchestratorWorkerRuntimeAdapterV1({
+    workerInstanceId: oldWorkerInstanceId,
+    workerBuildHash: '9'.repeat(64),
+    workerEnabled: '1',
+  });
+  let oldLease: AiOrchestratorWorkerRuntimeLeaseHandleV1 | null = null;
+  let runtimeId: string | null = null;
+
+  try {
+    await withTemporaryDispatchFixture(async () => {
+      await adapter.admit();
+      const claim = await adapter.claim();
+      assert.ok(claim);
+      oldLease = claim.lease;
+      const runtime = await db().aiWorkflowJobRuntime.findFirstOrThrow({
+        where: { leaseOwnerId: oldWorkerInstanceId, state: 'LEASED' },
+        include: { job: { select: { jobCode: true } } },
+      });
+      runtimeId = runtime.id;
+    }, { enabledJobCodes: [created.job.jobCode] });
+
+    assert.ok(oldLease);
+    assert.ok(runtimeId);
+    const confirmedOldLease = oldLease;
+    const confirmedRuntimeId = runtimeId;
+    const oldRuntime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { id: confirmedRuntimeId },
+      include: { job: { select: { jobCode: true } } },
+    });
+    await expireLeaseForTest(confirmedRuntimeId);
+    assert.ok((await adapter.recover()).recovered >= 1);
+    await makeRetryImmediatelyAvailableForTest(confirmedRuntimeId);
+
+    await withTemporaryDispatchFixture(async () => {
+      const newWorkerInstanceId = randomUUID();
+      const newClaim = await claimNextAiWorkflowJob({
+        workerInstanceId: newWorkerInstanceId,
+        workerBuildHash: 'a'.repeat(64),
+        workflowInstanceId: oldRuntime.workflowInstanceId,
+      });
+      assert.ok(newClaim);
+      assert.equal(newClaim.runtimeId, confirmedRuntimeId);
+      assert.equal(newClaim.fencingToken, oldRuntime.fencingToken + 1n);
+
+      await assert.doesNotReject(Promise.all([
+        adapter.surrender(confirmedOldLease),
+        adapter.surrender(confirmedOldLease),
+      ]));
+      const newOwnerRuntime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+        where: { id: confirmedRuntimeId },
+      });
+      assert.equal(newOwnerRuntime.state, 'LEASED');
+      assert.equal(newOwnerRuntime.leaseOwnerId, newWorkerInstanceId);
+      assert.equal(newOwnerRuntime.fencingToken, newClaim.fencingToken);
+      await surrenderAiWorkflowJobLease(newClaim.lease);
+    }, { enabledJobCodes: [oldRuntime.job.jobCode] });
+  } finally {
+    if (runtimeId) {
+      let runtime = await db().aiWorkflowJobRuntime.findUnique({ where: { id: runtimeId } });
+      if (
+        runtime?.state === 'LEASED'
+        && runtime.leaseOwnerId === oldWorkerInstanceId
+        && oldLease
+      ) await adapter.surrender(oldLease);
+      runtime = await db().aiWorkflowJobRuntime.findUnique({ where: { id: runtimeId } });
+      if (runtime?.state === 'LEASED') {
+        await expireLeaseForTest(runtimeId);
+        await recoverExpiredAiWorkflowJobLeases({ batchSize: 25 });
+      }
+    }
+    await adapter.disconnect();
+  }
 });
 
 test('catalogo capability SQL e TypeScript coincidono per tutti i 13 job e ogni famiglia è ammissibile', { skip: !runDbTests }, async () => {

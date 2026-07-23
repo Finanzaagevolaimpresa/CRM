@@ -93,6 +93,15 @@ test('manifesto PR82 è autonomo, hashato, fail-closed e senza consumer producti
   );
   assert.equal(AI_ORCHESTRATOR_WORKER_WIRING_PROCESS_MANIFEST.authority.defaultDecision, 'DENY');
   assert.equal(
+    AI_ORCHESTRATOR_WORKER_WIRING_PROCESS_MANIFEST.authority
+      .authorityRecheckBeforeEachMutator,
+    true,
+  );
+  assert.deepEqual(
+    AI_ORCHESTRATOR_WORKER_WIRING_PROCESS_MANIFEST.authority.riskReductionOperations,
+    ['SURRENDER'],
+  );
+  assert.equal(
     AI_ORCHESTRATOR_WORKER_WIRING_PROCESS_MANIFEST.scheduling.overlappingOperationsAllowed,
     false,
   );
@@ -105,7 +114,7 @@ test('manifesto PR82 è autonomo, hashato, fail-closed e senza consumer producti
   );
   assert.equal(
     AI_ORCHESTRATOR_WORKER_WIRING_BUILD_HASH,
-    '3e17d9c2b169004779b7ecd69b36dd07bb74b97984ea518ec997bc3ff43447b5',
+    'c64d0131100a21fb5126b237acacab7b8f97fe9c932dfcbff68d1d1d99a207c6',
   );
 });
 
@@ -252,6 +261,122 @@ test('canAcceptLease false impedisce recovery, supersession, admission e claim',
   assert.equal(stopped.state, 'STOPPED');
 });
 
+test('authority e readiness vengono ricontrollate prima di ogni mutatore', async () => {
+  for (const scenario of [
+    { denyOnAuthorityRead: 2, expectedMutators: ['recover'] },
+    { denyOnAuthorityRead: 3, expectedMutators: ['recover', 'supersede'] },
+    { denyOnAuthorityRead: 4, expectedMutators: ['recover', 'supersede', 'admit'] },
+  ] as const) {
+    const calls: string[] = [];
+    let authorityReads = 0;
+    let observedCode: string | null = null;
+    let worker!: AiOrchestratorWorkerWiringProcessV1;
+    worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+      environment,
+      adapters: defaultAdapters({
+        readAuthority: () => {
+          calls.push('authority');
+          authorityReads += 1;
+          return authorityReads === scenario.denyOnAuthorityRead
+            ? foundationLocked
+            : authorized;
+        },
+        canAcceptLease: () => {
+          calls.push('accept');
+          return true;
+        },
+        recover: () => {
+          calls.push('recover');
+          return 0;
+        },
+        supersede: () => {
+          calls.push('supersede');
+          return 0;
+        },
+        admit: () => {
+          calls.push('admit');
+          return 0;
+        },
+        claim: () => {
+          calls.push('claim');
+          return null;
+        },
+        wait: async () => {
+          calls.push('wait');
+          observedCode = worker.getSnapshot().lastResultCode;
+          worker.requestShutdown();
+        },
+        disconnect: () => {
+          calls.push('disconnect');
+        },
+      }),
+    });
+
+    const stopped = await worker.start();
+    assert.deepEqual(
+      calls.filter((call) => ['recover', 'supersede', 'admit', 'claim'].includes(call)),
+      scenario.expectedMutators,
+    );
+    assert.equal(observedCode, 'AUTHORITY_FOUNDATION_LOCKED');
+    assert.equal(calls.at(-2), 'wait');
+    assert.equal(calls.at(-1), 'disconnect');
+    assert.equal(stopped.state, 'STOPPED');
+  }
+
+  const readinessCalls: string[] = [];
+  let acceptanceReads = 0;
+  let readinessCode: string | null = null;
+  let readinessWorker!: AiOrchestratorWorkerWiringProcessV1;
+  readinessWorker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+    environment,
+    adapters: defaultAdapters({
+      readAuthority: () => {
+        readinessCalls.push('authority');
+        return authorized;
+      },
+      canAcceptLease: () => {
+        readinessCalls.push('accept');
+        acceptanceReads += 1;
+        return acceptanceReads < 4;
+      },
+      recover: () => {
+        readinessCalls.push('recover');
+        return 0;
+      },
+      supersede: () => {
+        readinessCalls.push('supersede');
+        return 0;
+      },
+      admit: () => {
+        readinessCalls.push('admit');
+        return 0;
+      },
+      claim: () => {
+        readinessCalls.push('claim');
+        return null;
+      },
+      wait: async () => {
+        readinessCalls.push('wait');
+        readinessCode = readinessWorker.getSnapshot().lastResultCode;
+        readinessWorker.requestShutdown();
+      },
+      disconnect: () => {
+        readinessCalls.push('disconnect');
+      },
+    }),
+  });
+
+  const readinessStopped = await readinessWorker.start();
+  assert.deepEqual(
+    readinessCalls.filter((call) => ['recover', 'supersede', 'admit', 'claim'].includes(call)),
+    ['recover', 'supersede', 'admit'],
+  );
+  assert.equal(readinessCode, 'LEASE_ACCEPTANCE_DISABLED');
+  assert.equal(readinessCalls.at(-2), 'wait');
+  assert.equal(readinessCalls.at(-1), 'disconnect');
+  assert.equal(readinessStopped.state, 'STOPPED');
+});
+
 test('ciclo positivo è strettamente sequenziale e il claim nullo produce NO_WORK', async () => {
   const calls: string[] = [];
   let activeOperations = 0;
@@ -302,7 +427,22 @@ test('ciclo positivo è strettamente sequenziale e il claim nullo produce NO_WOR
   const stopped = await worker.start();
   assert.deepEqual(
     calls,
-    ['authority', 'accept', 'recover', 'supersede', 'admit', 'claim', 'wait', 'disconnect'],
+    [
+      'authority',
+      'accept',
+      'recover',
+      'authority',
+      'accept',
+      'supersede',
+      'authority',
+      'accept',
+      'admit',
+      'authority',
+      'accept',
+      'claim',
+      'wait',
+      'disconnect',
+    ],
   );
   assert.equal(maxActiveOperations, 1);
   assert.equal(activeOperations, 0);
@@ -313,7 +453,7 @@ test('ciclo positivo è strettamente sequenziale e il claim nullo produce NO_WOR
   assert.equal(capturedIdentity.workerInstanceId, worker.workerInstanceId);
   assert.equal(capturedIdentity.workerBuildHash, worker.workerBuildHash);
   assert.equal(observedCode, 'NO_WORK');
-  assert.equal(stopped.operationSequence, 7);
+  assert.equal(stopped.operationSequence, 13);
   assert.equal(stopped.heartbeatSequence, 0);
   assert.equal(stopped.surrenderSequence, 0);
 });
@@ -362,6 +502,82 @@ test('drain durante ogni mutazione interrompe il ciclo prima dell’operazione s
     assert.equal(stopped.activeLease, false);
     assert.equal(stopped.surrenderSequence, 0);
   }
+});
+
+test('drain durante il controllo readiness preserva DRAIN_REQUESTED', async () => {
+  const pendingInitialAcceptance = deferred<boolean>();
+  const initialCalls: string[] = [];
+  const initialWorker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+    environment,
+    adapters: defaultAdapters({
+      readAuthority: () => {
+        initialCalls.push('authority');
+        return authorized;
+      },
+      canAcceptLease: () => {
+        initialCalls.push('accept');
+        return pendingInitialAcceptance.promise;
+      },
+      recover: () => {
+        initialCalls.push('recover');
+        return 0;
+      },
+      disconnect: () => {
+        initialCalls.push('disconnect');
+      },
+    }),
+  });
+
+  const initialCompletion = initialWorker.start();
+  await waitUntil(() => initialCalls.includes('accept'));
+  assert.equal(initialWorker.requestShutdown(), true);
+  pendingInitialAcceptance.resolve(false);
+  const initialStopped = await initialCompletion;
+  assert.deepEqual(initialCalls, ['authority', 'accept', 'disconnect']);
+  assert.equal(initialStopped.lastResultCode, 'DRAIN_REQUESTED');
+
+  const pendingHeartbeatAcceptance = deferred<boolean>();
+  const heartbeatCalls: string[] = [];
+  let acceptanceReads = 0;
+  const heartbeatWorker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+    environment,
+    adapters: defaultAdapters({
+      readAuthority: () => {
+        heartbeatCalls.push('authority');
+        return authorized;
+      },
+      canAcceptLease: () => {
+        heartbeatCalls.push('accept');
+        acceptanceReads += 1;
+        return acceptanceReads === 5 ? pendingHeartbeatAcceptance.promise : true;
+      },
+      claim: () => {
+        heartbeatCalls.push('claim');
+        return opaqueLease();
+      },
+      wait: async () => undefined,
+      heartbeat: () => {
+        heartbeatCalls.push('heartbeat');
+        return 'LEASE_CURRENT';
+      },
+      surrender: () => {
+        heartbeatCalls.push('surrender');
+      },
+      disconnect: () => {
+        heartbeatCalls.push('disconnect');
+      },
+    }),
+  });
+
+  const heartbeatCompletion = heartbeatWorker.start();
+  await waitUntil(() => acceptanceReads === 5);
+  assert.equal(heartbeatWorker.requestShutdown(), true);
+  pendingHeartbeatAcceptance.resolve(false);
+  const heartbeatStopped = await heartbeatCompletion;
+  assert.equal(heartbeatCalls.includes('heartbeat'), false);
+  assert.deepEqual(heartbeatCalls.slice(-2), ['surrender', 'disconnect']);
+  assert.equal(heartbeatStopped.lastResultCode, 'DRAIN_REQUESTED');
+  assert.equal(heartbeatStopped.surrenderSequence, 1);
 });
 
 test('claim risolto dopo il drain registra la lease e la surrendera una sola volta', async () => {
@@ -425,8 +641,14 @@ test('claim risolto dopo il drain registra la lease e la surrendera una sola vol
     'authority',
     'accept',
     'recover',
+    'authority',
+    'accept',
     'supersede',
+    'authority',
+    'accept',
     'admit',
+    'authority',
+    'accept',
     'claim',
     'surrender',
     'disconnect',
@@ -487,8 +709,14 @@ test('heartbeat è sequenziale e il drain durante il battito surrendera una volt
     'authority',
     'accept',
     'recover',
+    'authority',
+    'accept',
     'supersede',
+    'authority',
+    'accept',
     'admit',
+    'authority',
+    'accept',
     'claim',
     'wait',
     'authority',
@@ -502,6 +730,7 @@ test('heartbeat è sequenziale e il drain durante il battito surrendera una volt
   assert.equal(stopped.heartbeatSequence, 1);
   assert.equal(stopped.surrenderSequence, 1);
   assert.equal(stopped.activeLease, false);
+  assert.equal(stopped.lastResultCode, 'DRAIN_REQUESTED');
 });
 
 test('heartbeat stale elimina definitivamente la lease senza surrender', async () => {
@@ -533,6 +762,7 @@ test('heartbeat stale elimina definitivamente la lease senza surrender', async (
   assert.equal(stopped.heartbeatSequence, 1);
   assert.equal(stopped.surrenderSequence, 0);
   assert.equal(stopped.activeLease, false);
+  assert.equal(stopped.lastResultCode, 'DRAIN_REQUESTED');
 });
 
 test('errore adapter è minimizzato e cleanup conserva surrender e disconnect', async () => {

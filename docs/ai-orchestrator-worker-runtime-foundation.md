@@ -103,10 +103,15 @@ npm test
 npx tsc --noEmit
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public" npx prisma validate
 npm run prisma:generate
-RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 npm run build
 git diff --check
 ```
+
+Prima della suite distruttiva il PostgreSQL 16 effimero deve usare il database
+esatto `fai_crm_test`, schema `public`, URL loopback e commento DB-bound
+`FAI_CRM_EPHEMERAL_TEST_ONLY_V1`. Il guard lo rilegge dal database e rifiuta
+ambienti production o una sentinel presente soltanto nell'environment.
 
 Migration chain, upgrade PR74→PR75→Worker Runtime e test di concorrenza devono
 essere eseguiti su PostgreSQL 16 effimero dedicato. La migration production

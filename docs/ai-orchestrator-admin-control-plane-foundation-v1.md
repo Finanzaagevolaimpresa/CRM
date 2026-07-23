@@ -84,10 +84,15 @@ npx tsc --noEmit --incremental false
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public" npx prisma validate
 npm run prisma:generate
 env -u DATABASE_URL npm run test:db
-RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 npm run build
 git diff --check
 ```
+
+La suite distruttiva richiede inoltre un PostgreSQL 16 effimero con URL
+loopback, database esatto `fai_crm_test`, schema `public` e commento DB-bound
+`FAI_CRM_EPHEMERAL_TEST_ONLY_V1` impostato prima dell'avvio. Il guard nega
+ambienti production e non accetta la sola variabile environment come prova.
 
 I test PostgreSQL 16 devono verificare migration chain completa, 36 revisioni bootstrap tutte off/killed, vincolo dispatch fisico invariato, CAS e replay idempotente, append-only/hash chain, concorrenza ed emergency stop. Prima e dopo le fixture devono risultare invariati i conteggi di job, outbox, runtime, attempt, result, artifact, `AiRun` e `AiOutput` non appartenenti al test.
 

@@ -720,7 +720,14 @@ La composizione production PR82 fissa `canAcceptLease=false` e non possiede un
 consumer. `FOUNDATION_LOCKED_V1` continua a restituire
 `operational=false`, `databaseEligible=false`, `canAdmit=false`,
 `canClaim=false` e `canHeartbeat=false`. I percorsi positivi admission/claim
-sono esercitati soltanto con adapter sintetici nei test.
+sono esercitati soltanto nei test, con adapter sintetici oppure con l'adapter
+runtime ristretto su fixture sintetiche in PostgreSQL effimero.
+
+Authority e `canAcceptLease` vengono rilette immediatamente prima di recovery,
+supersession, admission e claim. Soltanto il surrender di un handle locale già
+noto resta una primitiva di riduzione del rischio durante il drain; un esito
+stale/expired/fenced è trattato come chiusura idempotente e l'handle non viene
+riutilizzato.
 
 PR82 non invoca handler, non legge dati CRM reali, non persiste result,
 artifact, `AiRun` o `AiOutput`, non applica transizioni e non usa rete o
@@ -747,7 +754,8 @@ typecheck, build, assenza di delta schema/migration e smoke Docker isolato. Lo
 smoke avvia `app` e `postgres` dopo migration/seed, valida `/api/health`,
 richiede HTTP 404 da `/_next/image`, prova il gate `0` con rete disabilitata e
 confronta uno snapshot PostgreSQL prima/dopo il gate `1` sotto
-`FOUNDATION_LOCKED_V1`.
+`FOUNDATION_LOCKED_V1`. Verifica inoltre che `sharp` e i binari opzionali
+`@img` siano assenti dall'immagine runtime.
 
 La Draft PR **non autorizza merge, deploy o avvio sul VPS**. Un eventuale
 rollout richiede approvazione distinta e deve lasciare gate `0`, due soli
@@ -758,10 +766,11 @@ Rollback ordinario: ripristinare l'immagine PR81
 ledger, job, outbox, runtime o artifact. Verificare health, login, flussi CRM e
 processo dormiente PR81.
 
-Le eccezioni transitive temporanee `sharp`/`postcss`, con owner FAI Engineering
-e riesame entro il 31 agosto 2026, sono registrate nel
+Le eccezioni audit transitive temporanee `sharp`/`postcss`, con owner FAI
+Engineering e riesame entro il 31 agosto 2026, sono registrate nel
 [contratto PR82](ai-orchestrator-admission-claim-lease-wiring-v1.md). Non usare
-`npm audit fix --force`.
+`npm audit fix --force`; `sharp` resta nel grafo di install/build ma viene
+rimosso dall'immagine runtime.
 
 Contratto completo:
 [Admission, Claim & Lease Wiring Foundation v1](ai-orchestrator-admission-claim-lease-wiring-v1.md)

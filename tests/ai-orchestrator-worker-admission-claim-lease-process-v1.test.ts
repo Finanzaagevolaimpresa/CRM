@@ -190,12 +190,19 @@ test('smoke gate 1 richiede lifecycle vivo, SIGTERM pulito e snapshot invariato'
 test('image optimizer inutilizzato è chiuso esplicitamente prima della route Next', () => {
   const middleware = readFileSync('src/middleware.ts', 'utf8');
   const nextConfig = readFileSync('next.config.ts', 'utf8');
+  const dockerfile = readFileSync('Dockerfile.prod.example', 'utf8');
   const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
 
   assert.match(middleware, /pathname === ['"]\/_next\/image['"]/);
   assert.match(middleware, /new NextResponse\(null, \{ status: 404 \}\)/);
   assert.match(middleware, /matcher:\s*\[\s*['"]\/_next\/image['"]/);
   assert.match(nextConfig, /unoptimized:\s*true/);
+  assert.match(dockerfile, /rm -rf node_modules\/sharp node_modules\/@img/);
+  assert.match(smoke, /require\.resolve\(\\"sharp\\"\)/);
+  assert.match(smoke, /sharpPresent=false/);
+  assert.match(smoke, /test ! -e node_modules\/sharp/);
+  assert.match(smoke, /test ! -e node_modules\/@img/);
+  assert.match(smoke, /find node_modules -type d/);
   assert.match(smoke, /IMAGE_OPTIMIZER_STATUS/);
   assert.match(smoke, /\[\[ "\$IMAGE_OPTIMIZER_STATUS" == "404" \]\]/);
 });

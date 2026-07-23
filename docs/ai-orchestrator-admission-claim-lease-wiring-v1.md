@@ -21,8 +21,9 @@ externalProvidersEnabled=false
 ```
 
 `canAcceptLease` è una costante `false` nella composizione production PR82. Non
-esiste un lease consumer: admission e claim sono esercitati soltanto con
-adapter sintetici nei test.
+esiste un lease consumer: admission e claim sono esercitati soltanto nei test,
+con adapter sintetici oppure con l'adapter runtime ristretto su fixture
+sintetiche in PostgreSQL effimero.
 
 ## Obiettivo
 
@@ -94,25 +95,29 @@ PR76 conserva recovery, supersession e surrender come primitive di riduzione
 del rischio. La composizione PR82 applica tuttavia il vincolo più forte
 `FOUNDATION_LOCKED_V1 = zero scritture`: authority positiva e
 `canAcceptLease=true` precedono recovery, supersession, admission e claim.
+Entrambi i controlli vengono riletti immediatamente prima di ciascuna delle
+quattro primitive: una decisione letta per l'operazione precedente non viene
+riutilizzata per autorizzare quella successiva.
 Soltanto il surrender di una lease già posseduta resta disponibile durante il
 drain quando l'autorità viene successivamente chiusa.
 
 Il coordinatore esegue una sola operazione o attesa alla volta:
 
-1. lettura authority;
-2. verifica `canAcceptLease`;
-3. recovery bounded;
-4. supersession bounded;
-5. admission bounded;
-6. claim di al massimo una lease;
-7. heartbeat periodico solo sulla lease corrente;
-8. surrender una sola volta durante il drain;
-9. disconnect una sola volta.
+1. rilettura authority e `canAcceptLease`, poi recovery bounded;
+2. rilettura authority e `canAcceptLease`, poi supersession bounded;
+3. rilettura authority e `canAcceptLease`, poi admission bounded;
+4. rilettura authority e `canAcceptLease`, poi claim di al massimo una lease;
+5. heartbeat periodico solo sulla lease corrente;
+6. surrender una sola volta durante il drain;
+7. disconnect una sola volta.
 
 Nessuna transazione resta aperta durante polling, timer o callback. Se un claim
 termina dopo la richiesta di drain, l'handle viene prima registrato e poi
-surrenderato una sola volta. Una lease stale viene abbandonata definitivamente;
-il tempo autorevole e il fencing restano quelli PostgreSQL di PR76.
+surrenderato una sola volta. Lo surrender stale/expired/fenced di un handle
+locale ancora noto è un successo idempotente: tutte le chiamate concorrenti
+condividono lo stesso esito e l'handle viene eliminato. Un handle sconosciuto o
+già eliminato resta invece rifiutato come stale. Il tempo autorevole e il
+fencing restano quelli PostgreSQL di PR76.
 
 ## Esclusioni vincolanti
 
@@ -154,6 +159,25 @@ typecheck, build, 29 migration, seed ripetuto, `git diff --check`, sintassi
 shell e smoke Docker. Un gate `npm audit --omit=dev` rifiuta package o advisory
 oltre le sole eccezioni transitive e temporanee registrate sotto.
 
+Le fixture PostgreSQL che rimuovono temporaneamente la barriera dispatch
+richiedono contemporaneamente doppio opt-in, `APP_ENV`/`NODE_ENV` diversi da
+`production`, URL PostgreSQL loopback verso il database esatto
+`fai_crm_test`, schema `public` e commento DB-bound
+`FAI_CRM_EPHEMERAL_TEST_ONLY_V1`. La suite ricontrolla l'identità sul database
+prima di ogni DDL distruttivo e ripristina in `finally` capability spente,
+`dispatchEnabled=false` e il constraint validato con definizione canonica. La
+CI crea il commento sentinel sul solo database effimero prima dei test.
+
+Per una suite locale autorizzata, dopo le migration del database effimero:
+
+```bash
+printf '%s\n' "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1';" \
+  | npx prisma db execute --stdin --schema prisma/schema.prisma
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 \
+  AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 \
+  npm run test:db
+```
+
 Lo smoke Docker usa soltanto risorse `fai-crm-smoke-*` effimere e verifica:
 
 - servizi Compose esattamente `app` e `postgres`, senza worker automatico;
@@ -174,7 +198,7 @@ dipendenze transitive senza upgrade compatibile disponibile nel ramo Next 15:
 
 | Dipendenza | Advisory | Rischio e mitigazione | Owner | Riesame |
 |---|---|---|---|---|
-| `sharp@0.34.5` | `GHSA-f88m-g3jw-g9cj` (high) | il repository non usa `next/image`; `images.unoptimized=true` evita URL generate verso l'optimizer, il middleware chiude esplicitamente `/_next/image` con HTTP 404 e lo smoke verifica il blocco runtime | FAI Engineering | 2026-08-31 |
+| `sharp@0.34.5` | `GHSA-f88m-g3jw-g9cj` (high) | resta dipendenza opzionale transitiva durante install/build, ma viene rimossa dall'immagine runtime insieme ai binari `@img`; il repository non usa `next/image`, `images.unoptimized=true`, il middleware chiude `/_next/image` con HTTP 404 e lo smoke verifica sia l'assenza del modulo sia il blocco della route | FAI Engineering | 2026-08-31 |
 | `postcss@8.4.31` annidato in Next | `GHSA-qx2v-qp2m-jg93` (moderate) | viene usato soltanto in build su CSS versionato e trusted; nessun CSS utente viene serializzato | FAI Engineering | 2026-08-31 |
 
 Queste eccezioni sono temporanee, non autorizzano un deploy e devono essere

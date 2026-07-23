@@ -57,6 +57,7 @@ export const AI_ORCHESTRATOR_WORKER_WIRING_PROCESS_MANIFEST = Object.freeze({
     defaultDecision: 'DENY',
     authorityCheckRequired: true,
     authorityCheckScope: 'ALL_DATABASE_OPERATIONS',
+    authorityRecheckBeforeEachMutator: true,
     riskReductionOperations: Object.freeze(['SURRENDER'] as const),
     payloadAccessAllowed: false,
     crmDataAccessAllowed: false,
@@ -404,6 +405,25 @@ implements AiOrchestratorWorkerWiringProcessV1 {
     return accepted;
   }
 
+  async #authorizeNextMutationOrWait() {
+    const authority = await this.#readAuthority();
+    if (this.#isDraining()) return false;
+    if (!authority.allowed) {
+      this.#lastResultCode = authorityResultCodes[authority.code];
+    } else {
+      const canAcceptLease = await this.#readLeaseAcceptance();
+      if (this.#isDraining()) return false;
+      if (canAcceptLease) return true;
+      this.#lastResultCode = 'LEASE_ACCEPTANCE_DISABLED';
+    }
+
+    if (!this.#isDraining()) {
+      this.#setState('IDLE');
+      await this.#waitOnce(AI_ORCHESTRATOR_WORKER_WIRING_LIMITS.pollIntervalMs);
+    }
+    return false;
+  }
+
   async #waitOnce(delayMs: number) {
     if (!Number.isSafeInteger(delayMs) || delayMs < 0) {
       raise('AI_WORKER_WIRING_TIMER_FAILURE');
@@ -430,35 +450,22 @@ implements AiOrchestratorWorkerWiringProcessV1 {
   }
 
   async #runAvailableCycle() {
-    const authority = await this.#readAuthority();
-    if (this.#isDraining()) return;
-    if (!authority.allowed) {
-      this.#lastResultCode = authorityResultCodes[authority.code];
-      this.#setState('IDLE');
-      await this.#waitOnce(AI_ORCHESTRATOR_WORKER_WIRING_LIMITS.pollIntervalMs);
-      return;
-    }
-
-    if (!await this.#readLeaseAcceptance()) {
-      this.#lastResultCode = 'LEASE_ACCEPTANCE_DISABLED';
-      this.#setState('IDLE');
-      await this.#waitOnce(AI_ORCHESTRATOR_WORKER_WIRING_LIMITS.pollIntervalMs);
-      return;
-    }
-    if (this.#isDraining()) return;
-
+    if (!await this.#authorizeNextMutationOrWait()) return;
     this.#setState('RECOVERING');
     validateCount(await this.#invoke(this.#adapters.recover));
     if (this.#isDraining()) return;
 
+    if (!await this.#authorizeNextMutationOrWait()) return;
     this.#setState('SUPERSEDING');
     validateCount(await this.#invoke(this.#adapters.supersede));
     if (this.#isDraining()) return;
 
+    if (!await this.#authorizeNextMutationOrWait()) return;
     this.#setState('ADMITTING');
     validateCount(await this.#invoke(this.#adapters.admit));
     if (this.#isDraining()) return;
 
+    if (!await this.#authorizeNextMutationOrWait()) return;
     this.#setState('CLAIMING');
     const lease = validateLease(await this.#invoke(() => this.#adapters.claim(Object.freeze({
       workerInstanceId: this.workerInstanceId,
@@ -490,23 +497,25 @@ implements AiOrchestratorWorkerWiringProcessV1 {
       return;
     }
 
-    if (!await this.#readLeaseAcceptance()) {
+    const canAcceptLease = await this.#readLeaseAcceptance();
+    if (this.#isDraining() || !this.#activeLease) return;
+    if (!canAcceptLease) {
       this.#lastResultCode = 'LEASE_ACCEPTANCE_DISABLED';
       this.#beginDrain(false);
       return;
     }
-    if (this.#isDraining() || !this.#activeLease) return;
 
     this.#setState('LEASED');
     const heartbeat = validateHeartbeatResult(
       await this.#invoke(() => this.#adapters.heartbeat(this.#activeLease!.lease)),
     );
     this.#heartbeatSequence = incrementSequence(this.#heartbeatSequence);
-    this.#lastResultCode = heartbeat;
+    const drainingAfterHeartbeat = this.#isDraining();
     if (heartbeat === 'LEASE_STALE') {
       this.#activeLease = null;
-      this.#setState('IDLE');
+      if (!drainingAfterHeartbeat) this.#setState('IDLE');
     }
+    if (!drainingAfterHeartbeat) this.#lastResultCode = heartbeat;
   }
 
   async #surrenderActiveLeaseOnce() {
@@ -584,7 +593,12 @@ export function getAiOrchestratorWorkerWiringInvariantErrorsV1() {
   if (
     manifest.authority.defaultDecision !== 'DENY'
     || manifest.authority.authorityCheckRequired !== true
+    || manifest.authority.authorityRecheckBeforeEachMutator !== true
   ) errors.push('Authority default non fail-closed.');
+  if (
+    JSON.stringify(manifest.authority.riskReductionOperations)
+    !== JSON.stringify(['SURRENDER'])
+  ) errors.push('Catalogo operazioni risk-reduction non canonico.');
   if (
     manifest.authority.payloadAccessAllowed
     || manifest.authority.crmDataAccessAllowed

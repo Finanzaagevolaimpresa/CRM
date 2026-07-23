@@ -48,9 +48,13 @@ lease consumer. `FOUNDATION_LOCKED_V1` mantiene inoltre l'autorità
 PR76 mantiene recovery, supersession e surrender come primitive bounded di
 riduzione del rischio. PR82 sceglie però il vincolo più forte richiesto dalla
 foundation: authority positiva e lease acceptance precedono ogni mutatore DB,
-incluse recovery e supersession. Soltanto il surrender di una lease già
-posseduta resta consentito durante il drain se l'autorità viene successivamente
-chiusa. Con la composizione distribuita PR82, che resta
+incluse recovery e supersession. Authority e lease acceptance vengono rilette
+immediatamente prima di ogni mutatore; nessuna decisione viene riutilizzata
+tra due transazioni distinte. Questa precedenza ratifica il comportamento
+zero-write più restrittivo rispetto all'ordine recovery-first del piano
+iniziale. Soltanto il surrender di una lease già posseduta resta consentito
+durante il drain se l'autorità viene successivamente chiusa. Con la
+composizione distribuita PR82, che resta
 `FOUNDATION_LOCKED_V1` e `canAcceptLease=false`, nessun mutatore è
 raggiungibile.
 
@@ -62,8 +66,11 @@ durante polling o timer.
 
 Se il drain arriva mentre un claim è in corso, la risposta committata viene
 registrata localmente e surrenderata una sola volta. Heartbeat e surrender
-sulla stessa lease vengono serializzati. Un handle stale viene eliminato e non
-può essere riutilizzato. Disconnect e surrender sono once-only per lifecycle.
+sulla stessa lease vengono serializzati. Lo surrender stale/expired/fenced di
+un handle locale noto è normalizzato come successo idempotente dentro la
+promessa single-flight; l'handle viene eliminato e non può essere riutilizzato.
+Un handle sconosciuto o già eliminato continua a essere respinto come stale.
+Disconnect e surrender sono once-only per lifecycle.
 
 Gli errori DB transienti riconosciuti vengono ritentati dall'adapter con un
 massimo di tre tentativi complessivi, backoff breve e jitter deterministico.
@@ -84,7 +91,11 @@ Questa decisione non autorizza:
 - merge, deploy o avvio manuale sul VPS.
 
 Il database resta a 29 migration e tutti i test positivi usano dati sintetici
-e PostgreSQL effimero.
+e PostgreSQL effimero. Le fixture che rimuovono temporaneamente la barriera
+dispatch richiedono doppio opt-in, ambiente non-production, URL loopback,
+database esatto `fai_crm_test`, schema `public` e sentinel legata tramite
+commento al database stesso; barriera e capability vengono ripristinate e
+validate in `finally`.
 
 ## Alternative escluse
 
