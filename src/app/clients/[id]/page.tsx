@@ -391,7 +391,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-700 md:col-span-2">
           <p className="font-extrabold text-fai-navy">Dati minimizzati usati nel run</p>
           <ul className="grid list-disc gap-x-6 pl-5 md:grid-cols-2">
-            <li>configurazione dell'agente;</li>
+            <li>configurazione dell&apos;agente;</li>
             <li>profilo essenziale cliente e azienda;</li>
             <li>dati finanziari pertinenti;</li>
             <li>contesto di progetto e servizio;</li>
@@ -402,7 +402,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
           <p>Non vengono inviati file, contenuti binari, percorsi storage, checksum o chiavi. Documenti e checklist classificati come sensibili restano esclusi anche se puoi consultarli nel CRM.</p>
           <label className="flex items-start gap-2 font-bold text-fai-navy">
             <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDataConfirmed" />
-            <span>Se l'agente selezionato usa un provider esterno, confermo la trasmissione di queste categorie di dati minimizzate per questa singola esecuzione. La conferma non viene riutilizzata per run successivi.</span>
+            <span>Se l&apos;agente selezionato usa un provider esterno, confermo la trasmissione di queste categorie di dati minimizzate per questa singola esecuzione. La conferma non viene riutilizzata per run successivi.</span>
           </label>
           <p className="text-slate-500">Per gli agenti `mock` la conferma non è richiesta e nessun dato lascia il CRM. OpenAI richiede inoltre il permesso `ai.external.run` e tutti i gate del Control Plane attivi.</p>
         </div>

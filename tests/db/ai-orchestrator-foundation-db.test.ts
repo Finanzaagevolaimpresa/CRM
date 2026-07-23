@@ -3339,6 +3339,83 @@ test('doppio claim concorrente produce un vincitore e receipt/attempt/audit cano
   });
 });
 
+test('admission concorrente dello stesso outbox resta idempotente e atomica', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  const created = await createDataValidationRuntimeCase();
+  await withTemporaryDispatchFixture(async () => {
+    const admissions = await Promise.all([
+      admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }),
+      admitAiWorkflowJobOutbox({ workflowInstanceId: created.workflowInstanceId }),
+    ]);
+    assert.equal(admissions.reduce((sum, admitted) => sum + admitted, 0), 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({
+      where: { jobId: created.job.id },
+    });
+    assert.equal(await db().aiWorkflowJobRuntime.count({
+      where: { jobId: created.job.id },
+    }), 1);
+    assert.equal(await db().aiWorkflowOutboxConsumption.count({
+      where: { outboxEventId: created.outbox.id },
+    }), 1);
+    assert.equal(await db().aiWorkflowJobRuntimeEvent.count({
+      where: { runtimeId: runtime.id, eventType: 'ADMITTED' },
+    }), 1);
+  });
+});
+
+test('claim concorrenti su runtime differenti rispettano il limite globale senza oversubscription', { skip: !runDbTests }, async () => {
+  process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+  assert.equal(AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxConcurrentGlobal, 1);
+  assert.equal(AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxConcurrentPerWorkflow, 1);
+  assert.equal(AI_ORCHESTRATOR_WORKER_RUNTIME_LIMITS.maxConcurrentPerExecutorConfig, 1);
+  const first = await createDataValidationRuntimeCase();
+  const second = await createDataValidationRuntimeCase();
+
+  await withTemporaryDispatchFixture(async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: first.workflowInstanceId,
+    }), 1);
+    assert.equal(await admitAiWorkflowJobOutbox({
+      workflowInstanceId: second.workflowInstanceId,
+    }), 1);
+
+    const claims = await Promise.all([
+      claimNextAiWorkflowJob({
+        workerInstanceId: 'different-runtime-worker-a',
+        workerBuildHash: 'e'.repeat(64),
+        workflowInstanceId: first.workflowInstanceId,
+      }),
+      claimNextAiWorkflowJob({
+        workerInstanceId: 'different-runtime-worker-b',
+        workerBuildHash: 'f'.repeat(64),
+        workflowInstanceId: second.workflowInstanceId,
+      }),
+    ]);
+    const winners = claims.filter((claim) => claim !== null);
+    assert.equal(winners.length, 1);
+    const winner = winners[0];
+    assert.ok(winner);
+
+    const runtimes = await db().aiWorkflowJobRuntime.findMany({
+      where: {
+        workflowInstanceId: {
+          in: [first.workflowInstanceId, second.workflowInstanceId],
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+    assert.equal(runtimes.length, 2);
+    assert.deepEqual(
+      runtimes.map((runtime) => runtime.state).sort(),
+      ['AVAILABLE', 'LEASED'],
+    );
+    assert.equal(await db().aiWorkflowJobAttempt.count({
+      where: { runtimeId: { in: runtimes.map((runtime) => runtime.id) } },
+    }), 1);
+    await surrenderAiWorkflowJobLease(winner.lease);
+  });
+});
+
 test('recovery scaduta è singola e il vecchio fence non torna utilizzabile', { skip: !runDbTests }, async () => {
   process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
   const created = await createDataValidationRuntimeCase();

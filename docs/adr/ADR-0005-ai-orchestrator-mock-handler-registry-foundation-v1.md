@@ -2,7 +2,8 @@
 
 ## Stato
 
-Proposto nella Draft PR #78. Nessuna autorizzazione di merge, deploy o attivazione operativa.
+Accettato; fondazione presente in `main` dalla PR #78. Il merge non autorizza
+deploy o attivazione operativa.
 
 ## Contesto
 
@@ -62,7 +63,7 @@ La scelta di fixture costanti non simula ancora una pipeline AI reale né la lin
 
 La fondazione resta dormiente. Devono restare `stateMachineEnabled=false`, `dispatchEnabled=false`, `syntheticDataOnly=true`, `provider=mock`, `externalProvidersEnabled=false`, `AI_ORCHESTRATOR_WORKER_ENABLED=0` o assente e tutte le capability worker `enabled=false`.
 
-La Draft PR #78 non autorizza merge o deploy. L'esistenza del registry non autorizza l'avvio di processi, la creazione di unità systemd, l'abilitazione del dispatch o test con dati cliente.
+Il merge della PR #78 non autorizza deploy. L'esistenza del registry non autorizza l'avvio di processi, la creazione di unità systemd, l'abilitazione del dispatch o test con dati cliente.
 
 ## Rollback
 

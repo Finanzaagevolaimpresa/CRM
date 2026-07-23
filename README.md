@@ -14,7 +14,7 @@ MVP proprietario per Finanza Agevola Impresa S.r.l. basato su Next.js App Router
 1. Copiare `.env.example` in `.env`.
 2. Valorizzare `DATABASE_URL` con la connessione PostgreSQL locale.
 3. Valorizzare `AUTH_SECRET` con un segreto lungo e non condiviso.
-4. Eseguire `npm install`.
+4. Eseguire `npm ci`.
 5. Eseguire `npm run prisma:generate`.
 6. Eseguire `npm run prisma:migrate`.
 7. Eseguire `npm run prisma:seed`.
@@ -22,13 +22,9 @@ MVP proprietario per Finanza Agevola Impresa S.r.l. basato su Next.js App Router
 
 ### Lockfile npm
 
-In un ambiente con accesso al registry npm non bloccato da proxy/firewall, generare e committare il lockfile con:
-
-```bash
-npm install --package-lock-only
-```
-
-Dopo la generazione verificare che `package-lock.json` sia presente, quindi eseguire il primo avvio locale con la checklist sopra. Nell'ambiente Codex corrente il download di `@prisma/client` da `https://registry.npmjs.org/@prisma%2fclient` può restituire `403 Forbidden` per policy del proxy; in questo caso non forzare workaround e mantenere la CI con `npm install` finché `package-lock.json` non è disponibile nel repository.
+`package-lock.json` è versionato. Usare `npm ci` in CI, nei build Docker e per
+installazioni riproducibili; non rigenerare il lockfile e non eseguire
+`npm audit fix --force` come parte di un deploy.
 
 ## Login locale development
 
@@ -94,17 +90,17 @@ Dopo seed e avvio locale, verificare manualmente il flusso MVP interno:
 
 ## Validazione locale
 
-Eseguire questi comandi in un ambiente con accesso al registry npm non bloccato da proxy/firewall:
+Eseguire questi comandi:
 
 ```bash
-npm install --package-lock-only
-npm install
+npm ci
+npm run lint
+npx prisma validate
 npm run prisma:generate
+npm test
+npx tsc --noEmit --incremental false
 npm run build
-npm run dev
 ```
-
-`package-lock.json` deve essere generato e committato da un ambiente non bloccato a livello network/proxy. Nell'ambiente Codex corrente il download dei pacchetti npm può restituire `403 Forbidden` per policy del proxy, non per configurazione del progetto.
 
 ## CI GitHub Actions
 
@@ -113,12 +109,23 @@ Il workflow `.github/workflows/ci.yml` esegue su push e pull request:
 1. checkout del repository;
 2. setup Node.js 22;
 3. avvio servizio PostgreSQL 16;
-4. `npm install`;
-5. `npm run prisma:generate`;
-6. `npm run prisma:migrate:deploy`;
-7. `npm run build`.
+4. `npm ci`, validazione Prisma, generate e lint;
+5. test unitari e PostgreSQL, migration e seed production idempotente;
+6. typecheck e build;
+7. controlli diff/shell e smoke Docker isolato con health applicativa.
 
-La CI passerà a `npm ci` e riattiverà la cache npm in `actions/setup-node` solo dopo il commit di `package-lock.json`.
+Per la PR82 la CI verifica inoltre che le migration restino esattamente 29 e
+che non cambino né `prisma/schema.prisma` né `prisma/migrations`.
+
+## AI Orchestrator Worker Wiring PR82
+
+La Draft PR82 collega il processo PR81 alle primitive admission, claim e lease
+della PR76 tramite una facade ristretta e un'autorità Control Plane read-only.
+La composizione production resta non operativa: `AI_ORCHESTRATOR_WORKER_ENABLED=0`,
+`canAcceptLease=false`, provider `mock`, dati esclusivamente sintetici e nessun
+handler, result, artifact, provider esterno o nuova migration. Contratto,
+verifiche e rollback sono descritti in
+[`docs/ai-orchestrator-admission-claim-lease-wiring-v1.md`](docs/ai-orchestrator-admission-claim-lease-wiring-v1.md).
 
 ## Staging/Produzione
 

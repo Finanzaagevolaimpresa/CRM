@@ -203,7 +203,7 @@ export type AiOrchestratorAdminControlMutationResult =
 
 type Tx = Prisma.TransactionClient;
 
-interface RevisionRow {
+export interface AiOrchestratorAdminPersistedRevisionRowV1 {
   id: string;
   scopeType: string;
   scopeCode: string;
@@ -228,6 +228,9 @@ interface RevisionRow {
   confirmed: boolean;
   createdAt: Date;
 }
+
+/** @deprecated Use AiOrchestratorAdminPersistedRevisionRowV1. */
+export type RevisionRow = AiOrchestratorAdminPersistedRevisionRowV1;
 
 interface ActorRow {
   id: string;
@@ -334,7 +337,7 @@ async function lockScope(tx: Tx, target: AiOrchestratorAdminControlTarget) {
 }
 
 async function loadLatestRevision(tx: Tx, target: AiOrchestratorAdminControlTarget) {
-  const rows = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
+  const rows = await tx.$queryRaw<AiOrchestratorAdminPersistedRevisionRowV1[]>(Prisma.sql`
     SELECT *
     FROM "AiOrchestratorAdminPolicyRevision"
     WHERE "scopeType" = ${target.scopeType}
@@ -347,7 +350,7 @@ async function loadLatestRevision(tx: Tx, target: AiOrchestratorAdminControlTarg
 }
 
 async function loadRevisionByRequestId(tx: Tx, requestId: string) {
-  const rows = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
+  const rows = await tx.$queryRaw<AiOrchestratorAdminPersistedRevisionRowV1[]>(Prisma.sql`
     SELECT *
     FROM "AiOrchestratorAdminPolicyRevision"
     WHERE "requestId" = ${requestId}
@@ -356,7 +359,9 @@ async function loadRevisionByRequestId(tx: Tx, requestId: string) {
   return rows[0] ?? null;
 }
 
-function assertPersistedRevision(row: RevisionRow): AiOrchestratorAdminRevisionSnapshot {
+export function assertAiOrchestratorAdminPersistedRevisionV1(
+  row: AiOrchestratorAdminPersistedRevisionRowV1,
+): AiOrchestratorAdminRevisionSnapshot {
   const scopeType = AiOrchestratorAdminScopeTypeSchema.parse(row.scopeType);
   const target = getAiOrchestratorAdminControlTarget(scopeType, row.scopeCode);
   if (!target || target.targetDefinitionHash !== row.targetDefinitionHash) {
@@ -438,6 +443,9 @@ function assertPersistedRevision(row: RevisionRow): AiOrchestratorAdminRevisionS
   });
 }
 
+/** @deprecated Use assertAiOrchestratorAdminPersistedRevisionV1. */
+export const assertPersistedRevision = assertAiOrchestratorAdminPersistedRevisionV1;
+
 async function auditBlocked(
   tx: Tx,
   prepared: PreparedCommand,
@@ -493,7 +501,11 @@ async function mutateTx(tx: Tx, prepared: PreparedCommand): Promise<AiOrchestrat
       await auditBlocked(tx, prepared, 'REQUEST_ID_COLLISION', actorContext.actor.role);
       return rejected('REQUEST_ID_COLLISION', 'requestId già usato con contenuto differente.');
     }
-    return { ok: true, replayed: true, revision: assertPersistedRevision(existingRequest) };
+    return {
+      ok: true,
+      replayed: true,
+      revision: assertAiOrchestratorAdminPersistedRevisionV1(existingRequest),
+    };
   }
 
   const latestRow = await loadLatestRevision(tx, prepared.target);
@@ -504,7 +516,7 @@ async function mutateTx(tx: Tx, prepared: PreparedCommand): Promise<AiOrchestrat
 
   let latest: AiOrchestratorAdminRevisionSnapshot;
   try {
-    latest = assertPersistedRevision(latestRow);
+    latest = assertAiOrchestratorAdminPersistedRevisionV1(latestRow);
   } catch {
     await auditBlocked(tx, prepared, 'LEDGER_INTEGRITY_ERROR', actorContext.actor.role);
     return rejected('LEDGER_INTEGRITY_ERROR', 'Integrità del ledger Admin Control Plane non valida.');
@@ -641,7 +653,13 @@ async function mutateTx(tx: Tx, prepared: PreparedCommand): Promise<AiOrchestrat
     },
   });
 
-  return { ok: true, replayed: false, revision: assertPersistedRevision(created as unknown as RevisionRow) };
+  return {
+    ok: true,
+    replayed: false,
+    revision: assertAiOrchestratorAdminPersistedRevisionV1(
+      created as unknown as AiOrchestratorAdminPersistedRevisionRowV1,
+    ),
+  };
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -715,14 +733,14 @@ export async function getAiOrchestratorAdminControlSnapshot(
     const actorContext = await requireCurrentPermission(tx, input.actorUserId, 'ai.orchestrator.read');
     if (!actorContext) return { ok: false, code: 'ACTOR_NOT_AUTHORIZED', message: 'Permesso di lettura AI Orchestrator richiesto.' };
 
-    const latestRows = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
+    const latestRows = await tx.$queryRaw<AiOrchestratorAdminPersistedRevisionRowV1[]>(Prisma.sql`
       SELECT DISTINCT ON ("scopeType", "scopeCode") *
       FROM "AiOrchestratorAdminPolicyRevision"
       ORDER BY "scopeType", "scopeCode", "version" DESC
     `);
     let revisions: AiOrchestratorAdminRevisionSnapshot[];
     try {
-      revisions = latestRows.map(assertPersistedRevision);
+      revisions = latestRows.map(assertAiOrchestratorAdminPersistedRevisionV1);
     } catch {
       return { ok: false, code: 'LEDGER_INTEGRITY_ERROR', message: 'Integrità del ledger Admin Control Plane non valida.' };
     }
@@ -875,7 +893,7 @@ export async function listAiOrchestratorAdminPolicyRevisions(
         ${cursor.id}
       )`
       : Prisma.sql``;
-    const rows = await tx.$queryRaw<RevisionRow[]>(Prisma.sql`
+    const rows = await tx.$queryRaw<AiOrchestratorAdminPersistedRevisionRowV1[]>(Prisma.sql`
       SELECT *
       FROM "AiOrchestratorAdminPolicyRevision"
       WHERE (${filter.scopeType ?? null}::TEXT IS NULL OR "scopeType" = ${filter.scopeType ?? null})
@@ -885,7 +903,7 @@ export async function listAiOrchestratorAdminPolicyRevisions(
       LIMIT ${filter.limit + 1}
     `);
     try {
-      const validatedRows = rows.map(assertPersistedRevision);
+      const validatedRows = rows.map(assertAiOrchestratorAdminPersistedRevisionV1);
       const hasMore = rows.length > filter.limit;
       const revisions = Object.freeze(validatedRows.slice(0, filter.limit));
       const last = revisions.at(-1);
