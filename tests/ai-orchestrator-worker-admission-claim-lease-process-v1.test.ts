@@ -186,3 +186,16 @@ test('smoke gate 1 richiede lifecycle vivo, SIGTERM pulito e snapshot invariato'
   assert.doesNotMatch(smoke, /0\|1/);
   assert.doesNotMatch(smoke, /Gate 1 worker output is not canonical JSONL/);
 });
+
+test('image optimizer inutilizzato è chiuso esplicitamente prima della route Next', () => {
+  const middleware = readFileSync('src/middleware.ts', 'utf8');
+  const nextConfig = readFileSync('next.config.ts', 'utf8');
+  const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
+
+  assert.match(middleware, /pathname === ['"]\/_next\/image['"]/);
+  assert.match(middleware, /new NextResponse\(null, \{ status: 404 \}\)/);
+  assert.match(middleware, /matcher:\s*\[\s*['"]\/_next\/image['"]/);
+  assert.match(nextConfig, /unoptimized:\s*true/);
+  assert.match(smoke, /IMAGE_OPTIMIZER_STATUS/);
+  assert.match(smoke, /\[\[ "\$IMAGE_OPTIMIZER_STATUS" == "404" \]\]/);
+});

@@ -174,7 +174,7 @@ dipendenze transitive senza upgrade compatibile disponibile nel ramo Next 15:
 
 | Dipendenza | Advisory | Rischio e mitigazione | Owner | Riesame |
 |---|---|---|---|---|
-| `sharp@0.34.5` | `GHSA-f88m-g3jw-g9cj` (high) | il repository non usa `next/image`; `images.unoptimized=true` chiude `/_next/image` prima dell'optimizer e lo smoke richiede HTTP 404 | FAI Engineering | 2026-08-31 |
+| `sharp@0.34.5` | `GHSA-f88m-g3jw-g9cj` (high) | il repository non usa `next/image`; `images.unoptimized=true` evita URL generate verso l'optimizer, il middleware chiude esplicitamente `/_next/image` con HTTP 404 e lo smoke verifica il blocco runtime | FAI Engineering | 2026-08-31 |
 | `postcss@8.4.31` annidato in Next | `GHSA-qx2v-qp2m-jg93` (moderate) | viene usato soltanto in build su CSS versionato e trusted; nessun CSS utente viene serializzato | FAI Engineering | 2026-08-31 |
 
 Queste eccezioni sono temporanee, non autorizzano un deploy e devono essere
