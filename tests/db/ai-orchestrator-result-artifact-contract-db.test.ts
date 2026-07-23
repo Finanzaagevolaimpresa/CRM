@@ -32,11 +32,26 @@ import {
   type ApplyAuditWorkflowTransitionInput,
   type AuditWorkflowActor,
 } from '../../src/lib/ai-orchestrator/workflow-service';
+import {
+  AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION,
+  AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME,
+  assertAiOrchestratorEphemeralDatabaseIdentity,
+  assertAiOrchestratorEphemeralDbTestConfiguration,
+  assertAiOrchestratorPhysicalDispatchBarrier,
+  readAiOrchestratorDispatchConstraintState,
+} from './ai-orchestrator-db-test-guard';
 
 const migrationPath = 'prisma/migrations/20260719120000_ai_orchestrator_result_artifact_contract_foundation_v1/migration.sql';
 const dbTestsRequested = process.env.RUN_DB_TESTS === '1';
 const destructiveDbTestsConfirmed = process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1';
-const runDbTests = dbTestsRequested && destructiveDbTestsConfirmed;
+const runDbTests = assertAiOrchestratorEphemeralDbTestConfiguration({
+  requested: dbTestsRequested,
+  destructiveConfirmed: destructiveDbTestsConfirmed,
+  databaseUrl: process.env.DATABASE_URL,
+  sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL,
+  appEnvironment: process.env.APP_ENV,
+  nodeEnvironment: process.env.NODE_ENV,
+});
 const prisma = runDbTests ? new PrismaClient() : null;
 const runId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const safeEnv = { ...process.env, AI_EXTERNAL_PROVIDERS_ENABLED: 'false' };
@@ -56,49 +71,38 @@ function db() {
   return prisma;
 }
 
-function assertDedicatedTestDatabase(databaseUrl: string | undefined) {
-  if (!databaseUrl) throw new Error('DATABASE_URL obbligatorio per i test DB AI Orchestrator.');
-  const parsed = new URL(databaseUrl);
-  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-  const schemaName = parsed.searchParams.get('schema') ?? 'public';
-  const testNamePattern = /(^|[_-])test($|[_-])/i;
-  if (!testNamePattern.test(databaseName) && !testNamePattern.test(schemaName)) {
-    throw new Error('I test DB AI Orchestrator richiedono un database o schema dedicato con "test" nel nome.');
+async function assertConfirmedRuntimeDbFixture() {
+  if (!runDbTests || !dbTestsRequested || !destructiveDbTestsConfirmed) {
+    throw new Error('Fixture runtime consentita soltanto nel PostgreSQL effimero confermato.');
   }
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db());
 }
-
-if (dbTestsRequested && !destructiveDbTestsConfirmed) {
-  throw new Error('Impostare AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 per confermare il database effimero dedicato.');
-}
-if (runDbTests) assertDedicatedTestDatabase(process.env.DATABASE_URL);
 
 async function dispatchConstraintState() {
-  const rows = await db().$queryRaw<Array<{ present: boolean; validated: boolean }>>(Prisma.sql`
-    SELECT true AS "present", constraint_row."convalidated" AS "validated"
-    FROM pg_constraint constraint_row
-    JOIN pg_class table_row ON table_row.oid = constraint_row."conrelid"
-    WHERE table_row."relname" = 'AiOrchestratorSetting'
-      AND table_row."relnamespace" = TO_REGNAMESPACE(CURRENT_SCHEMA())
-      AND constraint_row."conname" = 'AiOrchestratorSetting_dispatch_disabled_check'
-  `);
-  return rows[0] ?? { present: false, validated: false };
+  return readAiOrchestratorDispatchConstraintState(db());
 }
 
 async function restorePhysicalDispatchBarrier() {
   if (!runDbTests) return;
+  await assertConfirmedRuntimeDbFixture();
   await db().$executeRawUnsafe(
     'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = false WHERE "id" = \'global\'',
   );
   const constraint = await dispatchConstraintState();
+  if (
+    constraint.present
+    && constraint.definition !== AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_DEFINITION
+  ) throw new Error('AI_ORCHESTRATOR_DB_TEST_PHYSICAL_DISPATCH_BARRIER_INVALID');
   if (!constraint.present) {
     await db().$executeRawUnsafe(
-      'ALTER TABLE "AiOrchestratorSetting" ADD CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check" CHECK ("dispatchEnabled" = false) NOT VALID',
+      `ALTER TABLE "AiOrchestratorSetting" ADD CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}" CHECK ("dispatchEnabled" = false) NOT VALID`,
     );
   }
   await db().$executeRawUnsafe(
-    'ALTER TABLE "AiOrchestratorSetting" VALIDATE CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+    `ALTER TABLE "AiOrchestratorSetting" VALIDATE CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}"`,
   );
-  assert.deepEqual(await dispatchConstraintState(), { present: true, validated: true });
+  await setCapabilityGates([]);
+  await assertAiOrchestratorPhysicalDispatchBarrier(db());
 }
 
 async function setCapabilityGates(enabledJobCodes: readonly string[]) {
@@ -124,9 +128,10 @@ async function withTemporaryDispatchFixture<T>(
   callback: () => Promise<T>,
 ) {
   if (!runDbTests || dispatchFixtureOpen) throw new Error('Fixture dispatch non disponibile.');
+  await assertConfirmedRuntimeDbFixture();
   await restorePhysicalDispatchBarrier();
   await db().$executeRawUnsafe(
-    'ALTER TABLE "AiOrchestratorSetting" DROP CONSTRAINT "AiOrchestratorSetting_dispatch_disabled_check"',
+    `ALTER TABLE "AiOrchestratorSetting" DROP CONSTRAINT "${AI_ORCHESTRATOR_DISPATCH_CONSTRAINT_NAME}"`,
   );
   dispatchFixtureOpen = true;
   try {
@@ -149,8 +154,14 @@ async function withTemporaryDispatchFixture<T>(
     try {
       await setCapabilityGates([]);
     } finally {
-      dispatchFixtureOpen = false;
-      await restorePhysicalDispatchBarrier();
+      try {
+        await db().$executeRawUnsafe(
+          'UPDATE "AiOrchestratorSetting" SET "dispatchEnabled" = false WHERE "id" = \'global\'',
+        );
+      } finally {
+        dispatchFixtureOpen = false;
+        await restorePhysicalDispatchBarrier();
+      }
     }
   }
 }
@@ -416,6 +427,7 @@ test('la migration PR77 dichiara hash DB, aggregati differiti, lineage/supersess
 
 test.before(async () => {
   if (!runDbTests) return;
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db());
   const setting = await db().aiOrchestratorSetting.findUniqueOrThrow({ where: { id: 'global' } });
   migrationDefaults = {
     stateMachineEnabled: setting.stateMachineEnabled,
@@ -455,18 +467,45 @@ test.after(async () => {
   try {
     await setCapabilityGates([]);
   } finally {
-    await restorePhysicalDispatchBarrier();
+    try {
+      await restorePhysicalDispatchBarrier();
+    } finally {
+      try {
+        if (migrationDefaults) {
+          await db().aiOrchestratorSetting.update({
+            where: { id: 'global' },
+            data: migrationDefaults,
+          });
+        }
+      } finally {
+        try {
+          await db().aiControlSetting.updateMany({
+            where: { id: 'global' },
+            data: { externalProvidersEnabled: false },
+          });
+        } finally {
+          if (originalWorkerGate === undefined) {
+            delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
+          } else {
+            process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
+          }
+          await prisma.$disconnect();
+        }
+      }
+    }
   }
-  if (migrationDefaults) {
-    await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: migrationDefaults });
-  }
-  await db().aiControlSetting.updateMany({
-    where: { id: 'global' },
-    data: { externalProvidersEnabled: false },
-  });
-  if (originalWorkerGate === undefined) delete process.env.AI_ORCHESTRATOR_WORKER_ENABLED;
-  else process.env.AI_ORCHESTRATOR_WORKER_ENABLED = originalWorkerGate;
-  await prisma.$disconnect();
+});
+
+test('fixture result ripristina barriera e capability dopo errore callback', { skip: !runDbTests }, async () => {
+  const callbackFailure = new Error('AI_ORCHESTRATOR_TEST_CALLBACK_FAILURE');
+  await assert.rejects(
+    withTemporaryDispatchFixture([], async () => {
+      throw callbackFailure;
+    }),
+    (error: unknown) => error === callbackFailure,
+  );
+  assert.equal(dispatchFixtureOpen, false);
+  await assertAiOrchestratorPhysicalDispatchBarrier(db());
 });
 
 test('PostgreSQL espone trigger e constraint trigger PR77 nel namespace corrente', { skip: !runDbTests }, async () => {

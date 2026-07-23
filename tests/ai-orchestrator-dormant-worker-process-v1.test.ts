@@ -422,10 +422,10 @@ test('entrypoint converte EPIPE reale in un solo errore minimizzato senza stack'
   assert.doesNotMatch(result.stderr, /EPIPE|node:events|Unhandled|Error:|\.ts:|stack/i);
 });
 
-test('entrypoint rifiuta gate 1 e ambiguo prima di creare timer o heartbeat', () => {
-  for (const [workerEnabled, expectedCode] of [
-    ['1', 'AI_DORMANT_WORKER_FOUNDATION_LOCKED'],
-    ['true', 'AI_DORMANT_WORKER_GATE_INVALID'],
+test('entrypoint instrada gate 1 a PR82 e rifiuta configurazioni ambigue prima del DB', () => {
+  for (const [workerEnabled, provider, expectedCode] of [
+    ['1', 'openai', 'AI_WORKER_WIRING_PROVIDER_NOT_MOCK'],
+    ['true', 'mock', 'AI_DORMANT_WORKER_GATE_INVALID'],
   ] as const) {
     const result = spawnSync(process.execPath, ['--import', 'tsx', scriptPath], {
       cwd: root,
@@ -434,7 +434,7 @@ test('entrypoint rifiuta gate 1 e ambiguo prima di creare timer o heartbeat', ()
       env: {
         ...process.env,
         AI_ORCHESTRATOR_WORKER_ENABLED: workerEnabled,
-        AI_PROVIDER: 'mock',
+        AI_PROVIDER: provider,
         AI_EXTERNAL_PROVIDERS_ENABLED: 'false',
         AI_ALLOWED_MODELS: '',
       },
@@ -448,7 +448,7 @@ test('entrypoint rifiuta gate 1 e ambiguo prima di creare timer o heartbeat', ()
     ]);
     assert.equal(failure.activationEpoch, 'FOUNDATION_LOCKED_V1');
     assert.equal(failure.errorCode, expectedCode);
-    assert.doesNotMatch(result.stderr, /true|stack|environment|process\.env/i);
+    assert.doesNotMatch(result.stderr, /openai|true|stack|environment|process\.env/i);
   }
 });
 

@@ -1,6 +1,6 @@
 # ADR-0003 — AI Orchestrator Worker Runtime Foundation v1
 
-- Stato: proposto
+- Stato: Accettato; fondazione presente in `main` dalla PR #76
 - Data: 2026-07-18
 - Dipendenze: ADR-0001, ADR-0002
 

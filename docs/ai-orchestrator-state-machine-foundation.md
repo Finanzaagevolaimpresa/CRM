@@ -219,7 +219,7 @@ Il contratto include WF-018..WF-023 per completezza del ciclo di vita, ma la por
 - UPDATE e DELETE del ledger rifiutati;
 - nessuna regressione sui test PostgreSQL, permessi v2, Control Plane e Runtime Reliability esistenti.
 
-I test DB devono isolare i dati con rollback della transazione o con un database effimero dedicato. La suite Orchestrator parte soltanto se `RUN_DB_TESTS=1`, `AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1` e il nome del database o dello schema contiene `test`; i record del ledger sono immutabili e restano confinati lì. Non usare `deleteMany` sul ledger: i trigger append-only rifiutano UPDATE e DELETE per progettazione. Un eventuale `TRUNCATE` è ammesso soltanto nel database effimero di test, mai in staging o produzione.
+I test DB devono isolare i dati con rollback della transazione o con un database effimero dedicato. La suite Orchestrator distruttiva parte soltanto con doppio opt-in, ambiente non-production, URL PostgreSQL loopback verso il database esatto `fai_crm_test`, schema `public` e commento DB-bound `FAI_CRM_EPHEMERAL_TEST_ONLY_V1`; i record del ledger sono immutabili e restano confinati lì. Il commento va applicato esplicitamente al database effimero prima della suite. Non usare `deleteMany` sul ledger: i trigger append-only rifiutano UPDATE e DELETE per progettazione. Un eventuale `TRUNCATE` è ammesso soltanto nel database effimero confermato, mai in staging o produzione.
 
 Prima di aggiornare la Draft PR devono risultare completate, senza saltare passaggi, le verifiche seguenti:
 
@@ -228,7 +228,7 @@ npm test
 npx tsc --noEmit
 npx prisma validate
 npm run prisma:generate
-RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 npm run build
 git diff --check
 ```

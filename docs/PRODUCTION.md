@@ -508,9 +508,9 @@ La State Machine Foundation non aggiungeva coda, worker, outbox, route pubbliche
 
 La Persistent Job Queue Foundation v1 è stata successivamente distribuita e aggiunge lo schema di una coda passiva e un outbox transazionale. I job possono essere esclusivamente `PLANNED` o `BLOCKED`; l'outbox originario è esclusivamente `PENDING`. Contratto e controlli sono descritti in [Persistent Job Queue Foundation v1](ai-orchestrator-persistent-job-queue-foundation.md) e nell'[ADR-0002](adr/0002-ai-orchestrator-persistent-job-queue-foundation.md).
 
-La Worker Runtime Foundation v1 proposta aggiunge soltanto runtime, attempt, receipt outbox, audit e primitive interne. Non installa un processo worker, script, timer o unità systemd; non crea `AiRun`, non applica transizioni e non invoca provider. Introduce il gate ambiente `AI_ORCHESTRATOR_WORKER_ENABLED`, che deve restare `0` in produzione, e tredici kill switch database separati per capability, tutti creati con `enabled=false`. Anche `stateMachineEnabled` e `dispatchEnabled` devono restare `false`; la migration non ne modifica i valori. Dettagli e rollback sono descritti in [Worker Runtime Foundation v1](ai-orchestrator-worker-runtime-foundation.md) e nell'[ADR-0003](adr/0003-ai-orchestrator-worker-runtime-foundation.md).
+La Worker Runtime Foundation v1, presente in `main` dalla PR76, aggiunge soltanto runtime, attempt, receipt outbox, audit e primitive interne. Non installa un processo worker, script, timer o unità systemd; non crea `AiRun`, non applica transizioni e non invoca provider. Introduce il gate ambiente `AI_ORCHESTRATOR_WORKER_ENABLED`, che deve restare `0` in produzione, e tredici kill switch database separati per capability, tutti creati con `enabled=false`. Anche `stateMachineEnabled` e `dispatchEnabled` devono restare `false`; la migration non ne modifica i valori. Dettagli e rollback sono descritti in [Worker Runtime Foundation v1](ai-orchestrator-worker-runtime-foundation.md) e nell'[ADR-0003](adr/0003-ai-orchestrator-worker-runtime-foundation.md).
 
-La Draft PR non autorizza merge o deploy. Dopo un eventuale merge e una distinta approvazione manuale della finestra production, prima della migration eseguire un backup validato; dopo `prisma migrate deploy` verificare health, permessi v2, flussi CRM esistenti e, in sola lettura, i valori sicuri del setting globale. La presenza delle nuove tabelle non autorizza l'attivazione della state machine, del dispatch o test con dati cliente reali.
+Il merge della fondazione non autorizza deploy. Prima di una distinta finestra production approvata eseguire un backup validato; dopo `prisma migrate deploy` verificare health, permessi v2, flussi CRM esistenti e, in sola lettura, i valori sicuri del setting globale. La presenza delle nuove tabelle non autorizza l'attivazione della state machine, del dispatch o test con dati cliente reali.
 
 In caso di rollback mantenere o riportare `stateMachineEnabled=false`, mantenere `dispatchEnabled=false` e i provider esterni disabilitati, quindi ripristinare l'immagine applicativa precedente lasciando intatte le nuove tabelle: non eliminare volumi, snapshot, ledger, job, outbox o dati audit. Finché una migration non è unita né distribuita, non è richiesta alcuna operazione sul database. Contratto, test, procedura completa e rollback della prima fondazione sono descritti in [AI Orchestrator: State Machine Foundation v1.1](ai-orchestrator-state-machine-foundation.md); la correzione della specifica resta proposta nell'[ADR-0001](adr/0001-ai-audit-workflow-v1-1.md).
 
@@ -522,9 +522,9 @@ Rollback applicativo: mantenere i gate chiusi, ripristinare l'immagine PR76 e la
 
 ## AI Orchestrator Mock Handler Registry Foundation v1
 
-La fondazione registry v1 definisce esclusivamente in TypeScript i 13 handler `mock`/`synthetic`, le loro identità hashate, l'invocation strict e le fixture deterministiche validate dal contratto result/artifact. Non introduce né avvia worker, runtime loop, scheduler, route o dispatch; non accede a rete, provider, database o dati CRM reali e non aggiunge schema Prisma, migration, seed o backfill.
+La fondazione registry v1, presente in `main` dalla PR78, definisce esclusivamente in TypeScript i 13 handler `mock`/`synthetic`, le loro identità hashate, l'invocation strict e le fixture deterministiche validate dal contratto result/artifact. Non introduce né avvia worker, runtime loop, scheduler, route o dispatch; non accede a rete, provider, database o dati CRM reali e non aggiunge schema Prisma, migration, seed o backfill.
 
-Il limite temporale del registry è un budget osservato post-esecuzione, non un hard timeout: il vero isolamento preemptive appartiene a una futura PR del processo worker. La Draft PR #78 non autorizza merge, deploy o attivazione. Tutti i gate e le 13 capability devono restare chiusi; un eventuale rollback è soltanto applicativo e non richiede alcuna operazione sul database.
+Il limite temporale del registry è un budget osservato post-esecuzione, non un hard timeout: il vero isolamento preemptive appartiene a una futura PR del processo worker. Il merge della PR #78 non autorizza deploy o attivazione. Tutti i gate e le 13 capability devono restare chiusi; un eventuale rollback è soltanto applicativo e non richiede alcuna operazione sul database.
 
 ## AI Orchestrator Admin Control Plane Foundation v1
 
@@ -668,7 +668,7 @@ Contratto completo: [Admin UI Foundation v1](ai-orchestrator-admin-ui-foundation
 
 ## AI Orchestrator Dormant Worker Process Foundation v1 — PR81
 
-La PR81 include nell'immagine un entrypoint TypeScript manuale che definisce soltanto il lifecycle `DORMANT -> DRAINING -> STOPPED`, un polling interno senza datasource e un heartbeat JSONL minimizzato. `FOUNDATION_LOCKED_V1` mantiene `operational=false` e rifiuta sia `AI_ORCHESTRATOR_WORKER_ENABLED=1` sia valori ambigui.
+La PR81 include nell'immagine un entrypoint TypeScript manuale che definisce soltanto il lifecycle `DORMANT -> DRAINING -> STOPPED`, un polling interno senza datasource e un heartbeat JSONL minimizzato. Nel contratto PR81 isolato, `FOUNDATION_LOCKED_V1` mantiene `operational=false` e rifiuta sia `AI_ORCHESTRATOR_WORKER_ENABLED=1` sia valori ambigui. PR82 conserva questo percorso quando il gate è assente o `0` e introduce un routing lazy separato per il valore esatto `1`; ciò non autorizza il valore `1` in produzione.
 
 Il processo non importa Prisma o la Worker Runtime Foundation, non legge `DATABASE_URL`, non accede a job, queue, outbox, lease, result, artifact, handler, provider o dati CRM e non applica transizioni. Il polling termina sempre con `NO_WORK_FOUNDATION_LOCKED`.
 
@@ -695,10 +695,83 @@ externalProvidersEnabled=false
 13 capability enabled=false
 ```
 
-Non invocare `npm run ai:orchestrator:worker` sul VPS. L'entrypoint è destinato al collaudo isolato della fondazione e a successive PR autorizzate.
+Non invocare `npm run ai:orchestrator:worker` sul VPS. L'entrypoint è destinato al collaudo isolato della fondazione e a successive PR autorizzate. Anche dopo PR82 il gate production deve restare `0`.
 
 Un eventuale deploy separatamente approvato deve verificare che non compaia alcun nuovo container o processo, che applicazione e PostgreSQL restino healthy e che tutti i gate siano invariati. Non sono richiesti `prisma migrate deploy` specifici per PR81 perché non esiste una migration nuova.
 
 Rollback: ripristinare l'immagine PR80 mantenendo tutti i gate chiusi. Lasciare database, 29 migration, ledger, job, outbox, runtime e artifact intatti. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` come rollback ordinario.
 
 Contratto completo: [Dormant Worker Process Foundation v1](ai-orchestrator-dormant-worker-process-foundation-v1.md) e [ADR-0008](adr/ADR-0008-ai-orchestrator-dormant-worker-process-foundation-v1.md).
+
+## AI Orchestrator Admission, Claim & Lease Wiring Foundation v1 — Draft PR82
+
+La Draft PR82 collega in modo fail-closed il processo PR81 alle primitive PR76
+tramite:
+
+- un coordinatore single-flight per recovery, supersession, authority,
+  admission, claim, heartbeat, surrender e drain;
+- una facade che non espone `complete`, `fail`, payload, handler, result o
+  artifact e conserva il token lease in un handle opaco;
+- una lettura Control Plane machine-safe, transazionale e `READ ONLY`, che
+  valida ledger, setting, capability e barriera dispatch senza simulare un
+  attore amministrativo.
+
+La composizione production PR82 fissa `canAcceptLease=false` e non possiede un
+consumer. `FOUNDATION_LOCKED_V1` continua a restituire
+`operational=false`, `databaseEligible=false`, `canAdmit=false`,
+`canClaim=false` e `canHeartbeat=false`. I percorsi positivi admission/claim
+sono esercitati soltanto nei test, con adapter sintetici oppure con l'adapter
+runtime ristretto su fixture sintetiche in PostgreSQL effimero.
+
+Authority e `canAcceptLease` vengono rilette immediatamente prima di recovery,
+supersession, admission e claim. Soltanto il surrender di un handle locale già
+noto resta una primitiva di riduzione del rischio durante il drain; un esito
+stale/expired/fenced è trattato come chiusura idempotente e l'handle non viene
+riutilizzato.
+
+PR82 non invoca handler, non legge dati CRM reali, non persiste result,
+artifact, `AiRun` o `AiOutput`, non applica transizioni e non usa rete o
+provider. Non aggiunge servizi Compose, systemd, cron o scheduler; `npm start`
+e il `CMD` Docker restano dedicati a Next.js. Schema e migration non cambiano:
+il totale resta **29**.
+
+In produzione mantenere:
+
+```text
+AI_ORCHESTRATOR_WORKER_ENABLED=0
+AI_PROVIDER=mock
+AI_EXTERNAL_PROVIDERS_ENABLED=false
+AI_ALLOWED_MODELS=
+stateMachineEnabled=false
+dispatchEnabled=false
+syntheticDataOnly=true
+externalProvidersEnabled=false
+13 capability enabled=false
+```
+
+La CI PR82 verifica lint, Prisma validate/generate, unit e PostgreSQL test,
+typecheck, build, assenza di delta schema/migration e smoke Docker isolato. Lo
+smoke avvia `app` e `postgres` dopo migration/seed, valida `/api/health`,
+richiede HTTP 404 da `/_next/image`, prova il gate `0` con rete disabilitata e
+confronta uno snapshot PostgreSQL prima/dopo il gate `1` sotto
+`FOUNDATION_LOCKED_V1`. Verifica inoltre che `sharp` e i binari opzionali
+`@img` siano assenti dall'immagine runtime.
+
+La Draft PR **non autorizza merge, deploy o avvio sul VPS**. Un eventuale
+rollout richiede approvazione distinta e deve lasciare gate `0`, due soli
+servizi Compose e nessun processo worker.
+
+Rollback ordinario: ripristinare l'immagine PR81
+`fai-crm:pr81-39ed9040ba83`, senza down migration e senza modificare database,
+ledger, job, outbox, runtime o artifact. Verificare health, login, flussi CRM e
+processo dormiente PR81.
+
+Le eccezioni audit transitive temporanee `sharp`/`postcss`, con owner FAI
+Engineering e riesame entro il 31 agosto 2026, sono registrate nel
+[contratto PR82](ai-orchestrator-admission-claim-lease-wiring-v1.md). Non usare
+`npm audit fix --force`; `sharp` resta nel grafo di install/build ma viene
+rimosso dall'immagine runtime.
+
+Contratto completo:
+[Admission, Claim & Lease Wiring Foundation v1](ai-orchestrator-admission-claim-lease-wiring-v1.md)
+e [ADR-0009](adr/ADR-0009-ai-orchestrator-admission-claim-lease-wiring-v1.md).

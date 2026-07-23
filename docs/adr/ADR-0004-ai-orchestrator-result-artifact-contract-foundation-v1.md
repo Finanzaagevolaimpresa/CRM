@@ -2,7 +2,8 @@
 
 ## Stato
 
-Proposto nella Draft PR #77. Nessuna autorizzazione di merge, deploy o attivazione operativa.
+Accettato; fondazione presente in `main` dalla PR #77. Il merge non autorizza
+deploy o attivazione operativa.
 
 ## Contesto
 

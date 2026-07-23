@@ -1,6 +1,6 @@
 # ADR-0008 — AI Orchestrator Dormant Worker Process Foundation v1
 
-- Stato: Proposto
+- Stato: Accettato; fondazione presente in `main` dalla PR #81
 - Data: 2026-07-22
 - Dipendenze: ADR-0003, ADR-0005, ADR-0006, ADR-0007
 

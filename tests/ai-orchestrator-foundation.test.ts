@@ -252,11 +252,20 @@ test('la migration storica PR1 resta priva di coda; la porta resta senza route o
   assert.doesNotMatch(permissionEvaluator, /next\/|\.\/prisma/);
 });
 
-test('i test DB immutabili richiedono conferma esplicita e database dedicato', () => {
+test('i test DB distruttivi richiedono conferma, target loopback e sentinel DB-bound', () => {
   const dbTest = readFileSync(resolve(root, 'tests/db/ai-orchestrator-foundation-db.test.ts'), 'utf8');
+  const guard = readFileSync(resolve(root, 'tests/db/ai-orchestrator-db-test-guard.ts'), 'utf8');
   const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
   assert.match(dbTest, /AI_ORCHESTRATOR_DB_TESTS_CONFIRMED/);
-  assert.match(dbTest, /testNamePattern/);
+  assert.match(dbTest, /assertAiOrchestratorEphemeralDatabaseIdentity/);
+  assert.match(guard, /AI_ORCHESTRATOR_DB_TEST_PRODUCTION_ENVIRONMENT_DENIED/);
+  assert.match(guard, /LOOPBACK_HOSTS/);
+  assert.match(guard, /SHOBJ_DESCRIPTION/);
+  assert.match(guard, /AI_ORCHESTRATOR_DB_TEST_PHYSICAL_DISPATCH_BARRIER_INVALID/);
   assert.match(ci, /fai_crm_test/);
-  assert.match(ci, /RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db/);
+  assert.match(ci, /COMMENT ON DATABASE fai_crm_test/);
+  assert.match(
+    ci,
+    /RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db/,
+  );
 });

@@ -64,7 +64,7 @@ export default async function Page() {
             </label>
             <label className="block text-xs font-black uppercase tracking-wide text-fai-navy" htmlFor="external-rate-limit">Run esterni massimi per utente / ora</label>
             <input id="external-rate-limit" name="maxExternalRunsPerUserPerHour" type="number" min={1} max={1000} required defaultValue={controlPolicy.maxExternalRunsPerUserPerHour} className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" />
-            <p className="text-xs leading-5 text-slate-600">L'attivazione non supera il gate ambiente, l'allowlist, i permessi o la conferma. Il salvataggio viene registrato nell'audit log.</p>
+            <p className="text-xs leading-5 text-slate-600">L&apos;attivazione non supera il gate ambiente, l&apos;allowlist, i permessi o la conferma. Il salvataggio viene registrato nell&apos;audit log.</p>
             <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue" type="submit">Salva Control Plane</button>
           </form> : <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">Visualizzazione in sola lettura. Serve `settings.manage` per modificare il kill switch.</div>}
         </div>

@@ -169,11 +169,16 @@ npm run prisma:generate
 npx prisma validate
 npx tsc --noEmit --incremental false
 env -u DATABASE_URL npm run test:db
-RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 npm run test:db
+RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 npm run build
 git diff --check
 bash -n scripts/smoke-docker-prod.sh
 ```
+
+La suite distruttiva richiede un PostgreSQL 16 effimero con URL loopback,
+database esatto `fai_crm_test`, schema `public` e commento DB-bound
+`FAI_CRM_EPHEMERAL_TEST_ONLY_V1` impostato prima dei test. Ambiente production,
+target remoti e sentinel presente soltanto nell'environment vengono rifiutati.
 
 I test PostgreSQL devono coprire la catena completa di 29 migration, l'upgrade PR79→PR80, il preflight negativo su uno schema effimero, il nuovo vincolo validato, l'indice cursor, le 36 GENESIS invariate, parità TypeScript/SQL del corpus reason inclusi i limiti Unicode/UTF-16, matrice completa delle transizioni `desiredMode`, filtri audit globale/scope, paginazione senza duplicati o salti, RBAC audit e invarianza dei record operativi.
 

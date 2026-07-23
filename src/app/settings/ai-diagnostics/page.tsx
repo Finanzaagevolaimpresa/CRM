@@ -57,7 +57,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
           <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
             <p className="text-xs font-black uppercase tracking-wide text-slate-500">Limite personale</p>
             <p className="mt-1 text-lg font-extrabold text-fai-navy">{controlPolicy.maxExternalRunsPerUserPerHour}/ora</p>
-            <p className="mt-1 text-xs text-slate-500">Conta gli AiRun esterni riservati nell'ultima ora</p>
+            <p className="mt-1 text-xs text-slate-500">Conta gli AiRun esterni riservati nell&apos;ultima ora</p>
           </div>
         </div>
         <div className="mt-5 grid gap-3 text-sm leading-6">
