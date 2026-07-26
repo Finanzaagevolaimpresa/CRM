@@ -20,6 +20,7 @@ import {
   getAiOrchestratorWorkerCapability,
   type AiOrchestratorFailureCode,
 } from './worker-runtime-policy-v1';
+import type { FaiAuditJobIntent } from './job-planner';
 
 export const AI_ORCHESTRATOR_WORKER_ENV_GATE = 'AI_ORCHESTRATOR_WORKER_ENABLED' as const;
 const OUTBOX_CONSUMER_CODE = 'AI_ORCHESTRATOR_JOB_PLANNED_CONSUMER' as const;
@@ -708,6 +709,111 @@ export async function heartbeatAiWorkflowJobLease(lease: AiWorkflowJobLease) {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   claims.leaseExpiresAt = leaseExpiresAt;
   return leaseExpiresAt;
+}
+
+export type AiWorkflowJobExecutionPreflight = Readonly<{
+  intent: FaiAuditJobIntent;
+  runtimeId: string;
+  jobId: string;
+  attemptId: string;
+  attemptSequence: number;
+  fencingToken: string;
+  workerInstanceId: string;
+  workerBuildHash: string;
+  leaseExpiresAt: string;
+  leaseMaxExpiresAt: string;
+  runtimePolicyCode: string;
+  runtimePolicyVersion: string;
+  runtimePolicyHash: string;
+  capabilityCode: string;
+  capabilityVersion: string;
+  capabilityHash: string;
+  handlerCode: string;
+  handlerVersion: string;
+}>;
+
+/** Read-only snapshot for the factory-scoped PR83 composition. */
+export async function preflightAiWorkflowJobExecution(
+  lease: AiWorkflowJobLease,
+): Promise<AiWorkflowJobExecutionPreflight> {
+  assertWorkerEnvironmentEnabled();
+  const claims = getLeaseClaims(lease);
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`SET TRANSACTION READ ONLY`);
+    const now = await databaseNow(tx);
+    const setting = await tx.aiOrchestratorSetting.findUnique({ where: { id: 'singleton' } });
+    const runtime = await tx.aiWorkflowJobRuntime.findUnique({
+      where: { id: claims.runtimeId },
+      include: { job: true, attempts: { where: { attemptSequence: claims.attemptSequence } } },
+    });
+    if (!runtime) throw new AiOrchestratorLeaseLostError();
+    const capabilitySetting = await tx.aiOrchestratorWorkerCapabilitySetting.findUnique({
+      where: { jobCode: runtime.job.jobCode },
+    });
+    const capability = getAiOrchestratorWorkerCapability(runtime.job.jobCode);
+    const attempt = runtime.attempts[0];
+    if (
+      !setting || !setting.stateMachineEnabled || !setting.dispatchEnabled
+      || !setting.syntheticDataOnly || setting.provider !== 'mock'
+      || !capabilitySetting?.enabled
+      || !capability
+      || capabilitySetting.capabilityCode !== capability.capabilityCode
+      || capabilitySetting.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode]
+      || runtime.jobId !== claims.jobId || runtime.state !== 'LEASED'
+      || runtime.attemptSequence !== claims.attemptSequence
+      || runtime.fencingToken !== claims.fencingToken
+      || runtime.leaseOwnerId !== claims.workerInstanceId
+      || runtime.leaseTokenHash !== claims.tokenHash
+      || !runtime.leaseExpiresAt || runtime.leaseExpiresAt <= now
+      || !runtime.leaseMaxExpiresAt || runtime.leaseMaxExpiresAt <= now
+      || !attempt || attempt.finishedAt
+      || attempt.fencingToken !== claims.fencingToken
+      || attempt.workerInstanceId !== claims.workerInstanceId
+      || attempt.leaseTokenHash !== claims.tokenHash
+      || attempt.leaseExpiresAt <= now || attempt.leaseMaxExpiresAt <= now
+    ) throw new AiOrchestratorLeaseLostError();
+    const job = runtime.job;
+    const intent = Object.freeze({
+      catalogCode: job.catalogCode,
+      catalogVersion: job.catalogVersion,
+      catalogHash: job.catalogHash,
+      workflowDefinitionHash: job.workflowDefinitionHash,
+      phaseCode: job.phaseCode,
+      phaseEntrySequence: job.phaseEntrySequence,
+      sourceState: job.sourceState,
+      sourceStateVersion: job.sourceStateVersion,
+      correctionCycle: job.correctionCycle,
+      executorAgentId: job.executorAgentId,
+      executorAgentCode: job.executorAgentCode,
+      executorAgentConfigVersion: job.executorAgentConfigVersion,
+      executorAgentConfigHash: job.executorAgentConfigHash,
+      jobCode: job.jobCode,
+      jobVersion: job.jobVersion,
+      jobDefinitionHash: job.jobDefinitionHash,
+      completionTransitionCode: job.completionTransitionCode,
+      completionMode: job.completionMode,
+      slotKey: job.slotKey,
+      bundleCode: job.bundleCode,
+      bundleKey: job.bundleKey,
+      dedupeKey: job.dedupeKey,
+      provider: job.provider,
+      dataMode: job.dataMode,
+      automaticDispatchAllowed: job.automaticDispatchAllowed,
+      availableAt: job.availableAt.toISOString(),
+      payload: job.payload,
+      payloadHash: job.payloadHash,
+    }) as unknown as FaiAuditJobIntent;
+    return Object.freeze({
+      intent, runtimeId: runtime.id, jobId: job.id, attemptId: attempt.id,
+      attemptSequence: attempt.attemptSequence, fencingToken: attempt.fencingToken.toString(),
+      workerInstanceId: attempt.workerInstanceId, workerBuildHash: attempt.workerBuildHash,
+      leaseExpiresAt: attempt.leaseExpiresAt.toISOString(), leaseMaxExpiresAt: attempt.leaseMaxExpiresAt.toISOString(),
+      runtimePolicyCode: runtime.runtimePolicyCode, runtimePolicyVersion: runtime.runtimePolicyVersion,
+      runtimePolicyHash: runtime.runtimePolicyHash, capabilityCode: runtime.capabilityCode,
+      capabilityVersion: runtime.capabilityVersion, capabilityHash: runtime.capabilityHash,
+      handlerCode: runtime.handlerCode, handlerVersion: runtime.handlerVersion,
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
 async function loadFencedRuntime(tx: RuntimeDb, claims: LeaseClaims, now: Date) {

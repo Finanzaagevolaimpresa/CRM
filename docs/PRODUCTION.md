@@ -1,5 +1,7 @@
 # Produzione CRM FAI
 
+> PR83 Mock Execution & Result Wiring è una Foundation non operativa. La composizione production conserva `consumer=NONE`, `canAcceptLease=false` e `FOUNDATION_LOCKED_V1`; il gate worker `1` non autorizza handler o result. Vedere `docs/ai-orchestrator-mock-execution-result-wiring-foundation-v1.md`.
+
 Questa guida prepara il CRM FAI a un deploy production-ready senza introdurre servizi esterni obbligatori. Non contiene segreti reali: usare solo valori generati e custoditi nel server o nel secret manager scelto.
 
 ## Prerequisiti server

@@ -110,8 +110,9 @@ test('facade espone solo authority, sei primitive ristrette e disconnect', () =>
     'disconnect',
   ]) assert.match(api, new RegExp(`\\b${method}\\b`));
   assert.doesNotMatch(api, /complete|fail|result|artifact|handler|payload/i);
-  assert.doesNotMatch(source, /completeAiWorkflowJob|failAiWorkflowJob/);
-  assert.doesNotMatch(source, /result-artifact-contract|mock-handler-registry|workflow-service/);
+  assert.match(source, /export interface AiOrchestratorMockExecutionAdapterV1/);
+  assert.match(source, /consumeMockResult\(lease:/);
+  assert.doesNotMatch(api, /consumeMockResult|completeAiWorkflowJob|failAiWorkflowJob/);
 });
 
 test('runtime, Prisma e authority vengono caricati solo dinamicamente dopo il gate esatto', () => {
@@ -137,7 +138,7 @@ test('claim adapter espone soltanto una seconda lease opaca', () => {
   assert.match(source, /new WeakMap<object, LeaseEntry>/);
   assert.match(source, /Object\.freeze\(Object\.create\(null\)\)/);
   assert.match(source, /runtimeLease: claimed\.lease/);
-  assert.doesNotMatch(source, /leases\.set\([^;]*claimed\)/);
+  assert.match(source, /claim: Object\.freeze\(claimed\)/);
 });
 
 test('surrender è single-flight e resta disponibile dopo un heartbeat negato', () => {

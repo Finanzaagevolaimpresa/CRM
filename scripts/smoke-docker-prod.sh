@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# PR83 is test-only: production must not instantiate its execution surface.
+if grep -Eq 'SyntheticTestingComposition|consumeMockResult' src/lib/ai-orchestrator/worker-admission-claim-lease-process-v1.ts; then
+  echo 'PR83 production consumer unexpectedly wired' >&2
+  exit 1
+fi
+
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
