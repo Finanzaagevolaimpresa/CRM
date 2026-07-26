@@ -23,9 +23,14 @@ import {
   AiOrchestratorLeaseLostError,
   claimNextAiWorkflowJob,
   completeAiWorkflowJob,
+  preflightAiWorkflowJobExecution,
   surrenderAiWorkflowJobLease,
   type ClaimedAiWorkflowJob,
 } from '../../src/lib/ai-orchestrator/worker-runtime';
+import {
+  createAiOrchestratorMockHandlerInvocation,
+  executeAiOrchestratorMockHandler,
+} from '../../src/lib/ai-orchestrator/mock-handler-registry-v1';
 import {
   applyAuditWorkflowTransition,
   createAuditWorkflowInstance,
@@ -737,7 +742,16 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       workflowInstanceId: firstCase.workflowInstanceId,
     });
     assert.ok(firstClaim);
-    const invalidDraft = createSyntheticAiResultDraft(firstClaim.jobCode);
+    const firstPreflight = await preflightAiWorkflowJobExecution(firstClaim.lease);
+    assert.equal(firstPreflight.jobId, firstCase.job.id);
+    assert.equal(firstPreflight.intent.dedupeKey, firstCase.job.dedupeKey);
+    const canonicalDraft = executeAiOrchestratorMockHandler(
+      createAiOrchestratorMockHandlerInvocation(firstPreflight.intent),
+    );
+    const secondPreflight = await preflightAiWorkflowJobExecution(firstClaim.lease);
+    assert.deepEqual(secondPreflight, firstPreflight);
+
+    const invalidDraft = structuredClone(canonicalDraft);
     invalidDraft.artifacts[0].payload = {};
     await assert.rejects(completeAiWorkflowJob(firstClaim.lease, { resultDraft: invalidDraft }));
     assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: firstClaim.runtimeId } }), 0);
@@ -745,7 +759,7 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       where: { id: firstClaim.runtimeId },
     })).state, 'LEASED');
 
-    const firstDraft = createSyntheticAiResultDraft(firstClaim.jobCode);
+    const firstDraft = canonicalDraft;
     const firstCompletion = await completeAiWorkflowJob(firstClaim.lease, { resultDraft: firstDraft });
     assert.equal(firstCompletion.replay, false);
     assert.equal(firstCompletion.state, 'SUCCEEDED');

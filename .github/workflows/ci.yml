@@ -67,7 +67,7 @@ jobs:
           const vulnerabilities = report.vulnerabilities;
           if (!counts || !vulnerabilities || report.auditReportVersion !== 2) process.exit(1);
           const allowedPackages = new Set(['next', 'postcss', 'sharp']);
-          const allowedSources = new Set([1117015, 1124066]);
+          const allowedSources = new Set([1117015, 1124066, 1124252, 1124288]);
           for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
             if (!allowedPackages.has(name)) process.exit(1);
             for (const via of vulnerability.via) {

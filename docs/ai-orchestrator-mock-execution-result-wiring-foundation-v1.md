@@ -8,7 +8,7 @@ La composizione production resta non operativa: `FOUNDATION_LOCKED_V1`, `operati
 
 ## Boundary
 
-La factory di test produce due superfici separate che condividono una `WeakMap`: la superficie runtime PR82 invariata e una superficie execution che accetta esclusivamente l'handle. Il processo production importa soltanto la prima.
+La factory nel modulo fisicamente separato `worker-runtime-testing-composition-v1.ts` produce due superfici che condividono una `WeakMap`: la superficie runtime PR82 invariata e una superficie execution che accetta esclusivamente l'handle. Entry point, processo e adapter production non importano la composizione test, il registry o il result wiring.
 
 Il preflight read-only usa tempo PostgreSQL e verifica due volte runtime, job, attempt, worker, lease, fencing, executor/config e cataloghi. Il payload e la dedupe key vengono letti dal job persistito e rivalidati dal costruttore canonico dell'invocazione. Nessuna transazione resta aperta durante l'handler.
 

@@ -1,7 +1,6 @@
 import { setTimeout as retryTimeout } from 'node:timers/promises';
 import { canonicalSha256 } from '../canonical-json';
-import type { AiWorkflowJobLease, ClaimedAiWorkflowJob, AiWorkflowJobExecutionPreflight } from './worker-runtime';
-import { createAiMockExecutionOperationV1, type AiMockExecutionOutcome } from './mock-execution-result-wiring-v1';
+import type { AiWorkflowJobLease } from './worker-runtime';
 import type { AiOrchestratorWorkerControlPlaneAuthorityV1 } from './worker-control-plane-authority-v1';
 
 const UUID_V4_PATTERN =
@@ -24,9 +23,6 @@ const RUNTIME_ADAPTER_OPERATIONS = Object.freeze([
   'CLAIM',
   'HEARTBEAT',
   'SURRENDER',
-  'PREFLIGHT',
-  'COMPLETE',
-  'FAIL',
 ] as const);
 
 type RuntimeAdapterOperation = typeof RUNTIME_ADAPTER_OPERATIONS[number];
@@ -118,9 +114,6 @@ type WorkerRuntimeModuleV1 = Pick<
   | 'admitAiWorkflowJobOutbox'
   | 'claimNextAiWorkflowJob'
   | 'heartbeatAiWorkflowJobLease'
-  | 'preflightAiWorkflowJobExecution'
-  | 'completeAiWorkflowJob'
-  | 'failAiWorkflowJob'
   | 'recoverExpiredAiWorkflowJobLeases'
   | 'surrenderAiWorkflowJobLease'
   | 'supersedeIneligibleAiWorkflowJobRuntimes'
@@ -128,23 +121,9 @@ type WorkerRuntimeModuleV1 = Pick<
 
 type LeaseEntry = {
   readonly runtimeLease: AiWorkflowJobLease;
-  claim: Readonly<ClaimedAiWorkflowJob>;
   heartbeatPromise: Promise<void> | null;
   surrenderPromise: Promise<void> | null;
-  executionPromise: Promise<AiMockExecutionOutcome> | null;
-  drainRequested: boolean;
-  terminalOutcome: AiMockExecutionOutcome | null;
-  closed: boolean;
 };
-
-export interface AiOrchestratorMockExecutionAdapterV1 {
-  consumeMockResult(lease: AiOrchestratorWorkerRuntimeLeaseHandleV1): Promise<AiMockExecutionOutcome>;
-}
-
-export interface AiOrchestratorWorkerTestingCompositionV1 {
-  readonly runtimeAdapter: Readonly<AiOrchestratorWorkerRuntimeAdapterV1>;
-  readonly executionAdapter: Readonly<AiOrchestratorMockExecutionAdapterV1>;
-}
 
 function fail(code: AiOrchestratorWorkerRuntimeAdapterErrorCode): never {
   throw new AiOrchestratorWorkerRuntimeAdapterError(code);
@@ -194,10 +173,9 @@ function createLeaseHandle() {
   return Object.freeze(Object.create(null)) as AiOrchestratorWorkerRuntimeLeaseHandleV1;
 }
 
-async function createAdapterCompositionV1(
+export async function createAiOrchestratorWorkerRuntimeAdapterV1(
   input: CreateAiOrchestratorWorkerRuntimeAdapterInputV1,
-  executionAuthority?: () => Promise<Readonly<{ allowed: boolean; capabilityAllowed: boolean }>>,
-): Promise<AiOrchestratorWorkerTestingCompositionV1> {
+): Promise<Readonly<AiOrchestratorWorkerRuntimeAdapterV1>> {
   if (
     !UUID_V4_PATTERN.test(input.workerInstanceId)
     || !SHA256_PATTERN.test(input.workerBuildHash)
@@ -304,13 +282,8 @@ async function createAdapterCompositionV1(
       const lease = createLeaseHandle();
       leases.set(lease, {
         runtimeLease: claimed.lease,
-        claim: Object.freeze(claimed),
         heartbeatPromise: null,
         surrenderPromise: null,
-        executionPromise: null,
-        drainRequested: false,
-        terminalOutcome: null,
-        closed: false,
       });
       return Object.freeze({ lease });
     },
@@ -318,11 +291,10 @@ async function createAdapterCompositionV1(
     heartbeat: async (lease) => {
       assertOpen();
       const entry = getLeaseEntry(lease);
-      if (entry.surrenderPromise || entry.executionPromise || entry.drainRequested || entry.terminalOutcome || entry.closed) fail('AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE');
+      if (entry.surrenderPromise) fail('AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE');
       if (entry.heartbeatPromise) return entry.heartbeatPromise;
       const heartbeatPromise = execute('HEARTBEAT', async () => {
-        const leaseExpiresAt = await restrictedRuntime.heartbeatAiWorkflowJobLease(entry.runtimeLease);
-        entry.claim = Object.freeze({ ...entry.claim, leaseExpiresAt });
+        await restrictedRuntime.heartbeatAiWorkflowJobLease(entry.runtimeLease);
       });
       entry.heartbeatPromise = heartbeatPromise;
       try {
@@ -341,13 +313,8 @@ async function createAdapterCompositionV1(
     surrender: async (lease) => {
       assertOpen();
       const entry = getLeaseEntry(lease);
-      entry.drainRequested = true;
       if (entry.surrenderPromise) return entry.surrenderPromise;
       const surrenderPromise = (async () => {
-        if (entry.executionPromise) {
-          try { await entry.executionPromise; } catch { /* risk-reduction continues */ }
-        }
-        if (entry.terminalOutcome || entry.closed) return;
         if (entry.heartbeatPromise) {
           try {
             await entry.heartbeatPromise;
@@ -370,7 +337,6 @@ async function createAdapterCompositionV1(
       entry.surrenderPromise = surrenderPromise;
       try {
         const surrendered = await surrenderPromise;
-        entry.closed = true;
         leases.delete(lease);
         return surrendered;
       } finally {
@@ -388,81 +354,5 @@ async function createAdapterCompositionV1(
     },
   };
 
-  const executionAdapter: AiOrchestratorMockExecutionAdapterV1 = Object.freeze({
-    consumeMockResult: async (lease: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
-      assertOpen();
-      const entry = getLeaseEntry(lease);
-      if (entry.closed) fail('AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE');
-      if (entry.terminalOutcome) return entry.terminalOutcome;
-      if (entry.executionPromise) return entry.executionPromise;
-      const assertClaimMatches = (snapshot: AiWorkflowJobExecutionPreflight) => {
-        const claim = entry.claim;
-        if (
-          snapshot.runtimeId !== claim.runtimeId || snapshot.jobId !== claim.jobId
-          || snapshot.intent.jobCode !== claim.jobCode || snapshot.intent.jobVersion !== claim.jobVersion
-          || snapshot.intent.payloadHash !== claim.jobPayloadHash
-          || snapshot.intent.workflowDefinitionHash !== claim.workflowDefinitionHash
-          || snapshot.intent.phaseCode !== claim.phaseCode
-          || snapshot.intent.phaseEntrySequence !== claim.phaseEntrySequence
-          || snapshot.intent.correctionCycle !== claim.correctionCycle
-          || snapshot.intent.executorAgentId !== claim.executorAgentId
-          || snapshot.intent.executorAgentCode !== claim.executorAgentCode
-          || snapshot.intent.executorAgentConfigVersion !== claim.executorAgentConfigVersion
-          || snapshot.intent.executorAgentConfigHash !== claim.executorAgentConfigHash
-          || snapshot.capabilityCode !== claim.capabilityCode
-          || snapshot.capabilityHash !== claim.capabilityHash
-          || snapshot.handlerCode !== claim.handlerCode || snapshot.handlerVersion !== claim.handlerVersion
-          || snapshot.attemptSequence !== claim.attemptSequence
-          || snapshot.fencingToken !== claim.fencingToken.toString()
-          || snapshot.leaseExpiresAt !== claim.leaseExpiresAt.toISOString()
-          || snapshot.workerInstanceId !== input.workerInstanceId
-          || snapshot.workerBuildHash !== input.workerBuildHash
-        ) fail('AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION');
-      };
-      const operation = createAiMockExecutionOperationV1({
-        readAuthority: executionAuthority ?? (async () => ({ allowed: false, capabilityAllowed: false })),
-        preflight: () => execute('PREFLIGHT', () => restrictedRuntime.preflightAiWorkflowJobExecution(entry.runtimeLease)),
-        complete: (draft) => execute('COMPLETE', () => restrictedRuntime.completeAiWorkflowJob(entry.runtimeLease, { resultDraft: draft })),
-        fail: async (failureCode) => {
-          const outcome = await execute('FAIL', () => restrictedRuntime.failAiWorkflowJob(entry.runtimeLease, { failureCode }));
-          return outcome as AiMockExecutionOutcome;
-        },
-        isDrainRequested: () => entry.drainRequested || entry.closed,
-        assertClaimMatches,
-      });
-      const executionPromise = operation();
-      entry.executionPromise = executionPromise;
-      try {
-        const outcome = await executionPromise;
-        entry.terminalOutcome = outcome;
-        entry.closed = ['SUCCEEDED', 'SUPERSEDED', 'FAILED_TERMINAL'].includes(outcome.state);
-        if (entry.closed) leases.delete(lease);
-        return outcome;
-      } catch (error) {
-        if (error instanceof AiOrchestratorWorkerRuntimeAdapterError && error.code === 'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE') {
-          entry.closed = true;
-          leases.delete(lease);
-        }
-        throw error;
-      } finally {
-        if (entry.executionPromise === executionPromise) entry.executionPromise = null;
-      }
-    },
-  });
-
-  return Object.freeze({ runtimeAdapter: Object.freeze(adapter), executionAdapter });
-}
-
-export async function createAiOrchestratorWorkerRuntimeAdapterV1(
-  input: CreateAiOrchestratorWorkerRuntimeAdapterInputV1,
-): Promise<Readonly<AiOrchestratorWorkerRuntimeAdapterV1>> {
-  return (await createAdapterCompositionV1(input)).runtimeAdapter;
-}
-
-/** Test-only composition; the production process never imports this factory. */
-export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
-  input: CreateAiOrchestratorWorkerRuntimeAdapterInputV1,
-  executionAuthority: () => Promise<Readonly<{ allowed: boolean; capabilityAllowed: boolean }>>,
-) {
-  return createAdapterCompositionV1(input, executionAuthority);
+  return Object.freeze(adapter);
 }

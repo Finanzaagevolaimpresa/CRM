@@ -7,6 +7,7 @@ import {
   AiOrchestratorMockHandlerError,
   createAiOrchestratorMockHandlerInvocation,
   executeAiOrchestratorMockHandler,
+  createAiOrchestratorMockHandlerRegistryHash,
   getAiOrchestratorMockHandlerDefinition,
 } from './mock-handler-registry-v1';
 import { AI_RESULT_CONTRACT_CATALOG_HASH, getAiResultContract } from './result-artifact-contract-v1';
@@ -19,6 +20,13 @@ import {
 } from './worker-runtime-policy-v1';
 import type { AiWorkflowJobExecutionPreflight } from './worker-runtime';
 import type { FaiAuditJobCode } from './job-catalog-v1';
+import {
+  AI_MOCK_EXECUTION_RESULT_WIRING_CODE,
+  AI_MOCK_EXECUTION_RESULT_WIRING_HASH,
+  AI_MOCK_EXECUTION_RESULT_WIRING_MANIFEST,
+  AI_MOCK_EXECUTION_RESULT_WIRING_VERSION,
+  createAiMockExecutionResultWiringHashV1,
+} from './mock-execution-result-wiring-contract-v1';
 
 export const AI_MOCK_EXECUTION_ERROR_CODES = Object.freeze([
   'AI_MOCK_EXECUTION_AUTHORITY_DENIED', 'AI_MOCK_EXECUTION_CAPABILITY_DENIED',
@@ -80,8 +88,11 @@ function assertCanonical(snapshot: AiWorkflowJobExecutionPreflight) {
     || handler.resultContractHash !== contract.resultContractHash
     || AI_ORCHESTRATOR_MOCK_HANDLER_REGISTRY_CODE !== 'FAI-AUDIT-MOCK-HANDLER-REGISTRY'
     || AI_ORCHESTRATOR_MOCK_HANDLER_REGISTRY_VERSION !== '1.0'
-    || !/^[0-9a-f]{64}$/.test(AI_ORCHESTRATOR_MOCK_HANDLER_REGISTRY_HASH)
-    || !/^[0-9a-f]{64}$/.test(AI_RESULT_CONTRACT_CATALOG_HASH)
+    || AI_MOCK_EXECUTION_RESULT_WIRING_CODE !== 'FAI-AI-ORCHESTRATOR-MOCK-EXECUTION-RESULT-WIRING'
+    || AI_MOCK_EXECUTION_RESULT_WIRING_VERSION !== '1.0'
+    || AI_MOCK_EXECUTION_RESULT_WIRING_HASH !== createAiMockExecutionResultWiringHashV1()
+    || AI_ORCHESTRATOR_MOCK_HANDLER_REGISTRY_HASH !== createAiOrchestratorMockHandlerRegistryHash()
+    || AI_RESULT_CONTRACT_CATALOG_HASH !== AI_MOCK_EXECUTION_RESULT_WIRING_MANIFEST.resultContractCatalogHash
     || canonicalSha256(snapshot.intent.payload) !== snapshot.intent.payloadHash
   ) deny('AI_MOCK_EXECUTION_POLICY_MISMATCH');
 }
@@ -93,7 +104,13 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
     assertAuthority(await ports.readAuthority());
     const first = await ports.preflight();
     ports.assertClaimMatches(first);
-    assertCanonical(first);
+    try { assertCanonical(first); }
+    catch (error) {
+      if (error instanceof AiMockExecutionError && error.code === 'AI_MOCK_EXECUTION_POLICY_MISMATCH') {
+        return ports.fail('POLICY_HASH_MISMATCH');
+      }
+      throw error;
+    }
     assertNotDraining(ports);
     let draft: ReturnType<typeof executeAiOrchestratorMockHandler>;
     try {
@@ -107,11 +124,15 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
     }
     assertNotDraining(ports);
     assertAuthority(await ports.readAuthority());
-    assertNotDraining(ports);
-    assertAuthority(await ports.readAuthority());
     const second = await ports.preflight();
     ports.assertClaimMatches(second);
-    assertCanonical(second);
+    try { assertCanonical(second); }
+    catch (error) {
+      if (error instanceof AiMockExecutionError && error.code === 'AI_MOCK_EXECUTION_POLICY_MISMATCH') {
+        return ports.fail('POLICY_HASH_MISMATCH');
+      }
+      throw error;
+    }
     if (canonicalSha256(first) !== canonicalSha256(second)) deny('AI_MOCK_EXECUTION_LEASE_STALE');
     assertNotDraining(ports);
     return ports.complete(draft);

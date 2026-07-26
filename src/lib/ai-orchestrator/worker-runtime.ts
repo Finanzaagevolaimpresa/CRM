@@ -741,7 +741,10 @@ export async function preflightAiWorkflowJobExecution(
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw(Prisma.sql`SET TRANSACTION READ ONLY`);
     const now = await databaseNow(tx);
-    const setting = await tx.aiOrchestratorSetting.findUnique({ where: { id: 'singleton' } });
+    const [setting, control] = await Promise.all([
+      tx.aiOrchestratorSetting.findUnique({ where: { id: 'global' } }),
+      tx.aiControlSetting.findUnique({ where: { id: 'global' } }),
+    ]);
     const runtime = await tx.aiWorkflowJobRuntime.findUnique({
       where: { id: claims.runtimeId },
       include: { job: true, attempts: { where: { attemptSequence: claims.attemptSequence } } },
@@ -755,6 +758,7 @@ export async function preflightAiWorkflowJobExecution(
     if (
       !setting || !setting.stateMachineEnabled || !setting.dispatchEnabled
       || !setting.syntheticDataOnly || setting.provider !== 'mock'
+      || !control || control.externalProvidersEnabled
       || !capabilitySetting?.enabled
       || !capability
       || capabilitySetting.capabilityCode !== capability.capabilityCode
@@ -802,7 +806,7 @@ export async function preflightAiWorkflowJobExecution(
       availableAt: job.availableAt.toISOString(),
       payload: job.payload,
       payloadHash: job.payloadHash,
-    }) as unknown as FaiAuditJobIntent;
+    }) as FaiAuditJobIntent;
     return Object.freeze({
       intent, runtimeId: runtime.id, jobId: job.id, attemptId: attempt.id,
       attemptSequence: attempt.attemptSequence, fencingToken: attempt.fencingToken.toString(),

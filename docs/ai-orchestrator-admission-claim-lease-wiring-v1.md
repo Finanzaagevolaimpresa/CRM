@@ -199,7 +199,7 @@ dipendenze transitive senza upgrade compatibile disponibile nel ramo Next 15:
 | Dipendenza | Advisory | Rischio e mitigazione | Owner | Riesame |
 |---|---|---|---|---|
 | `sharp@0.34.5` | `GHSA-f88m-g3jw-g9cj` (high) | resta dipendenza opzionale transitiva durante install/build, ma viene rimossa dall'immagine runtime insieme ai binari `@img`; il repository non usa `next/image`, `images.unoptimized=true`, il middleware chiude `/_next/image` con HTTP 404 e lo smoke verifica sia l'assenza del modulo sia il blocco della route | FAI Engineering | 2026-08-31 |
-| `postcss@8.4.31` annidato in Next | `GHSA-qx2v-qp2m-jg93` (moderate) | viene usato soltanto in build su CSS versionato e trusted; nessun CSS utente viene serializzato | FAI Engineering | 2026-08-31 |
+| `postcss@8.4.31` annidato in Next | `GHSA-qx2v-qp2m-jg93` (moderate), `GHSA-6g55-p6wh-862q` (high), `GHSA-r28c-9q8g-f849` (high) | viene usato soltanto in build su CSS versionato e trusted; nessun CSS utente o source map controllata dall'utente viene elaborata. Le due advisory source `1124252` e `1124288` sono comparse nel registry dopo il lockfile invariato e non hanno un upgrade compatibile nel ramo Next 15 | FAI Engineering | 2026-08-31 |
 
 Queste eccezioni sono temporanee, non autorizzano un deploy e devono essere
 rimosse appena esiste un aggiornamento compatibile. Non usare
