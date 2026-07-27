@@ -18,7 +18,10 @@ import {
   AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION,
   getAiOrchestratorWorkerCapability,
 } from './worker-runtime-policy-v1';
-import type { AiWorkflowJobExecutionPreflight } from './worker-runtime';
+import {
+  AiOrchestratorPersistedJobPolicyMismatchError,
+  type AiWorkflowJobExecutionPreflight,
+} from './worker-runtime';
 import type { FaiAuditJobCode } from './job-catalog-v1';
 import {
   AI_MOCK_EXECUTION_RESULT_WIRING_CODE,
@@ -102,7 +105,12 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
   return async (): Promise<AiMockExecutionOutcome> => {
     assertNotDraining(ports);
     assertAuthority(await ports.readAuthority());
-    const first = await ports.preflight();
+    let first: AiWorkflowJobExecutionPreflight;
+    try { first = await ports.preflight(); }
+    catch (error) {
+      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return ports.fail('POLICY_HASH_MISMATCH');
+      throw error;
+    }
     ports.assertClaimMatches(first);
     try { assertCanonical(first); }
     catch (error) {
@@ -124,7 +132,12 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
     }
     assertNotDraining(ports);
     assertAuthority(await ports.readAuthority());
-    const second = await ports.preflight();
+    let second: AiWorkflowJobExecutionPreflight;
+    try { second = await ports.preflight(); }
+    catch (error) {
+      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return ports.fail('POLICY_HASH_MISMATCH');
+      throw error;
+    }
     ports.assertClaimMatches(second);
     try { assertCanonical(second); }
     catch (error) {

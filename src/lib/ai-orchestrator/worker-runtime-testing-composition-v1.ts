@@ -2,7 +2,10 @@ import { prisma } from '../prisma';
 import { setTimeout as retryTimeout } from 'node:timers/promises';
 import { canonicalSha256 } from '../canonical-json';
 import {
+  AiOrchestratorExecutionCapabilityDeniedError,
+  AiOrchestratorExecutionGateDeniedError,
   AiOrchestratorLeaseLostError,
+  AiOrchestratorPersistedJobPolicyMismatchError,
   admitAiWorkflowJobOutbox,
   claimNextAiWorkflowJob,
   completeAiWorkflowJob,
@@ -99,6 +102,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   };
   const pending = new Set<Promise<unknown>>();
   let disconnected = false;
+  let disconnectPromise: Promise<void> | null = null;
   const entryFor = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
     if (disconnected || !handle || typeof handle !== 'object') stale();
     const entry = leases.get(handle);
@@ -126,7 +130,17 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
         if (code === 'P1001' || code === 'P1002' || code === 'P1008' || code === 'P1017') {
           throw new AiMockExecutionError('AI_MOCK_EXECUTION_DB_UNAVAILABLE');
         }
-        if (error instanceof AiOrchestratorLeaseLostError || error instanceof AiMockExecutionError) throw error;
+        if (error instanceof AiOrchestratorExecutionGateDeniedError) {
+          throw new AiMockExecutionError('AI_MOCK_EXECUTION_AUTHORITY_DENIED');
+        }
+        if (error instanceof AiOrchestratorExecutionCapabilityDeniedError) {
+          throw new AiMockExecutionError('AI_MOCK_EXECUTION_CAPABILITY_DENIED');
+        }
+        if (
+          error instanceof AiOrchestratorLeaseLostError
+          || error instanceof AiOrchestratorPersistedJobPolicyMismatchError
+          || error instanceof AiMockExecutionError
+        ) throw error;
         throw new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
       }
     }
@@ -166,11 +180,19 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     supersede: async () => Object.freeze({ superseded: await runtime.supersede() }),
     admit: async () => Object.freeze({ admitted: await runtime.admit() }),
     claim: async () => {
-      const claim = await runtime.claim({ workerInstanceId: input.workerInstanceId, workerBuildHash: input.workerBuildHash });
-      if (!claim) return null;
-      const handle = opaqueLease();
-      leases.set(handle, { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: false, terminalOutcome: null, closed: false });
-      return Object.freeze({ lease: handle });
+      if (disconnected) throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
+      const claimPromise = tracked((async () => {
+        const claim = await runtime.claim({ workerInstanceId: input.workerInstanceId, workerBuildHash: input.workerBuildHash });
+        if (!claim) return null;
+        if (disconnected) {
+          try { await runtime.surrender(claim.lease); } catch { /* shutdown risk reduction */ }
+          throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
+        }
+        const handle = opaqueLease();
+        leases.set(handle, { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: false, terminalOutcome: null, closed: false });
+        return Object.freeze({ lease: handle });
+      })());
+      return claimPromise;
     },
     heartbeat: async (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
       const entry = entryFor(handle);
@@ -197,9 +219,13 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       try { await promise; } finally { if (entry.surrenderPromise === promise) entry.surrenderPromise = null; }
     },
     disconnect: async () => {
+      if (disconnectPromise) return disconnectPromise;
       disconnected = true;
-      await Promise.allSettled([...pending]);
-      await runtime.disconnect();
+      disconnectPromise = (async () => {
+        while (pending.size) await Promise.allSettled([...pending]);
+        await runtime.disconnect();
+      })();
+      return disconnectPromise;
     },
   });
 

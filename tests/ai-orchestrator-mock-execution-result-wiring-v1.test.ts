@@ -3,12 +3,19 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { AiMockExecutionError, createAiMockExecutionOperationV1 } from '../src/lib/ai-orchestrator/mock-execution-result-wiring-v1';
-import { createFaiAuditJobPlan } from '../src/lib/ai-orchestrator/job-planner';
+import { createFaiAuditJobPlan, parsePersistedFaiAuditJobIntent } from '../src/lib/ai-orchestrator/job-planner';
 import { FAI_AUDIT_WORKFLOW_DEFINITION_HASH, FAI_AUDIT_WORKFLOW_ID, FAI_AUDIT_WORKFLOW_VERSION } from '../src/lib/ai-orchestrator/audit-workflow-v1-1';
 import { getFaiAuditExecutorBinding } from '../src/lib/ai-orchestrator/job-catalog-v1';
 import { AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_CODE, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION, getAiOrchestratorWorkerCapability } from '../src/lib/ai-orchestrator/worker-runtime-policy-v1';
 import { createAiOrchestratorWorkerSyntheticTestingCompositionV1, calculateAiMockExecutionRetryDelayMsV1 } from '../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
-import type { AiWorkflowJobLease, ClaimedAiWorkflowJob } from '../src/lib/ai-orchestrator/worker-runtime';
+import {
+  AiOrchestratorExecutionCapabilityDeniedError,
+  AiOrchestratorExecutionGateDeniedError,
+  AiOrchestratorLeaseLostError,
+  AiOrchestratorPersistedJobPolicyMismatchError,
+  type AiWorkflowJobLease,
+  type ClaimedAiWorkflowJob,
+} from '../src/lib/ai-orchestrator/worker-runtime';
 
 const root = resolve(import.meta.dirname, '..');
 const facadeSource = readFileSync(resolve(root, 'src/lib/ai-orchestrator/mock-execution-result-wiring-v1.ts'), 'utf8');
@@ -245,4 +252,115 @@ test('database transient, unavailable and invariant errors map to closed PR83 co
     assert.equal(surrenders, 1);
     await composition.runtimeAdapter.disconnect();
   }
+});
+
+test('persisted policy mismatch in either preflight terminalizes exactly once without surrender', async () => {
+  for (const mismatchAt of [1, 2]) {
+    const { claim, snapshot } = syntheticExecutionFixture();
+    let preflights = 0; let failures = 0; let surrenders = 0; let completions = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claim,
+        preflight: async () => {
+          preflights += 1;
+          if (preflights === mismatchAt) throw new AiOrchestratorPersistedJobPolicyMismatchError();
+          return snapshot;
+        },
+        fail: async (_lease, options) => {
+          failures += 1; assert.equal(options.failureCode, 'POLICY_HASH_MISMATCH');
+          return { state: 'FAILED_TERMINAL' };
+        },
+        complete: async () => { completions += 1; return { state: 'SUCCEEDED' }; },
+        surrender: async () => { surrenders += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+        disconnect: async () => undefined,
+      },
+    );
+    const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+    assert.deepEqual(await composition.executionAdapter.consumeMockResult(leased.lease), { state: 'FAILED_TERMINAL' });
+    assert.equal(failures, 1); assert.equal(surrenders, 0); assert.equal(completions, 0);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), /LEASE_STALE/);
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('persisted intent and runtime identities reject every closed policy mismatch family', async () => {
+  const { snapshot } = syntheticExecutionFixture();
+  for (const mutate of [
+    (value: Record<string, unknown>) => { value.payloadHash = '0'.repeat(64); },
+    (value: Record<string, unknown>) => { value.dedupeKey = '0'.repeat(64); },
+    (value: Record<string, unknown>) => { value.catalogHash = '0'.repeat(64); },
+    (value: Record<string, unknown>) => { value.executorAgentConfigHash = '0'.repeat(64); },
+  ]) {
+    const persisted = structuredClone(snapshot.intent) as unknown as Record<string, unknown>;
+    mutate(persisted);
+    assert.throws(() => parsePersistedFaiAuditJobIntent(persisted));
+  }
+  for (const changed of [
+    { ...snapshot, runtimePolicyHash: '0'.repeat(64) },
+    { ...snapshot, handlerVersion: '9.9' },
+    { ...snapshot, capabilityHash: '0'.repeat(64) },
+  ]) {
+    let failures = 0;
+    const outcome = await createAiMockExecutionOperationV1({
+      readAuthority: async () => ({ allowed: true, capabilityAllowed: true }),
+      preflight: async () => changed,
+      assertClaimMatches: () => undefined,
+      isDrainRequested: () => false,
+      complete: async () => { throw new Error('must not complete'); },
+      fail: async (code) => { failures += 1; assert.equal(code, 'POLICY_HASH_MISMATCH'); return { state: 'FAILED_TERMINAL' }; },
+    })();
+    assert.equal(outcome.state, 'FAILED_TERMINAL'); assert.equal(failures, 1);
+  }
+});
+
+test('gate and capability denial surrender once while a genuinely stale lease never surrenders', async () => {
+  for (const scenario of [
+    { error: new AiOrchestratorExecutionGateDeniedError(), code: 'AI_MOCK_EXECUTION_AUTHORITY_DENIED', surrender: 1 },
+    { error: new AiOrchestratorExecutionCapabilityDeniedError(), code: 'AI_MOCK_EXECUTION_CAPABILITY_DENIED', surrender: 1 },
+    { error: new AiOrchestratorLeaseLostError(), code: null, surrender: 0 },
+  ] as const) {
+    const { claim } = syntheticExecutionFixture(); let surrenders = 0; let failures = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claim, preflight: async () => { throw scenario.error; },
+        fail: async () => { failures += 1; return { state: 'FAILED_TERMINAL' }; },
+        surrender: async () => { surrenders += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+        disconnect: async () => undefined,
+      },
+    );
+    const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), (error) => (
+      scenario.code ? error instanceof AiMockExecutionError && error.code === scenario.code : error instanceof AiOrchestratorLeaseLostError
+    ));
+    assert.equal(surrenders, scenario.surrender); assert.equal(failures, 0);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), /LEASE_STALE/);
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('disconnect fences an in-flight claim, surrenders its runtime lease once and prevents later claims', async () => {
+  const { claim } = syntheticExecutionFixture();
+  const databaseClaim = deferred<ClaimedAiWorkflowJob | null>();
+  let surrenders = 0; let disconnects = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => databaseClaim.promise,
+      surrender: async () => { surrenders += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+      disconnect: async () => { disconnects += 1; },
+    },
+  );
+  const pendingClaim = composition.runtimeAdapter.claim();
+  const shutdown = composition.runtimeAdapter.disconnect();
+  databaseClaim.resolve(claim);
+  await assert.rejects(pendingClaim, /ADAPTER_CLOSED/);
+  await shutdown;
+  assert.equal(surrenders, 1); assert.equal(disconnects, 1);
+  await assert.rejects(composition.runtimeAdapter.claim(), /ADAPTER_CLOSED/);
+  assert.equal(surrenders, 1); assert.equal(disconnects, 1);
 });

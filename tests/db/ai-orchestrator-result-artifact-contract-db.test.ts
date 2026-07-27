@@ -23,6 +23,7 @@ import {
   AiOrchestratorLeaseLostError,
   claimNextAiWorkflowJob,
   completeAiWorkflowJob,
+  AiOrchestratorPersistedJobPolicyMismatchError,
   preflightAiWorkflowJobExecution,
   surrenderAiWorkflowJobLease,
   type ClaimedAiWorkflowJob,
@@ -996,4 +997,86 @@ test('PR83 execution adapter esegue admission, claim opaco, registry e completio
   assert.equal(await db().aiRun.count(), before.runs);
   assert.equal(await db().aiOutput.count(), before.outputs);
   assert.deepEqual(await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id: fixture.workflowInstanceId } }), before.workflow);
+});
+
+test('PR83 distingue denial PostgreSQL da lease stale e surrendera senza lasciare slot LEASED', { skip: !runDbTests }, async () => {
+  for (const scenario of ['CAPABILITY_BEFORE', 'CAPABILITY_AFTER', 'DISPATCH_AFTER', 'EXTERNAL_AFTER'] as const) {
+    const fixture = await createDataValidationCase();
+    await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+      let preflightCount = 0;
+      const mutateGate = async () => {
+        if (scenario.startsWith('CAPABILITY')) {
+          await db().aiOrchestratorWorkerCapabilitySetting.update({
+            where: { jobCode: fixture.job.jobCode }, data: { enabled: false, version: { increment: 1 } },
+          });
+        } else if (scenario === 'DISPATCH_AFTER') {
+          await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: { dispatchEnabled: false } });
+        } else {
+          await db().aiControlSetting.update({ where: { id: 'global' }, data: { externalProvidersEnabled: true } });
+        }
+      };
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `pr83-denial-${randomUUID()}`, workerBuildHash: 'c'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+          preflight: async (lease) => {
+            preflightCount += 1;
+            if ((scenario === 'CAPABILITY_BEFORE' && preflightCount === 1) || (scenario !== 'CAPABILITY_BEFORE' && preflightCount === 2)) {
+              await mutateGate();
+            }
+            return preflightAiWorkflowJobExecution(lease);
+          },
+        },
+      );
+      try {
+        assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+        const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+        await assert.rejects(
+          composition.executionAdapter.consumeMockResult(claim.lease),
+          scenario.startsWith('CAPABILITY') ? /CAPABILITY_DENIED/ : /AUTHORITY_DENIED/,
+        );
+        const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+        assert.notEqual(runtime.state, 'LEASED');
+        assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+        assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      } finally {
+        await db().aiControlSetting.update({ where: { id: 'global' }, data: { externalProvidersEnabled: false } });
+        await composition.runtimeAdapter.disconnect();
+      }
+    });
+  }
+});
+
+test('PR83 terminalizza un persisted policy mismatch senza result, artifact o re-claim', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-policy-${randomUUID()}`, workerBuildHash: 'b'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+    try {
+      const outcome = await composition.executionAdapter.consumeMockResult(claim.lease);
+      assert.equal(outcome.state, 'FAILED_TERMINAL');
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'FAILED_TERMINAL');
+      assert.equal(attempt.outcome, 'FAILED_TERMINAL');
+      assert.equal(attempt.failureCode, 'POLICY_HASH_MISMATCH');
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await composition.runtimeAdapter.claim(), null);
+      await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /LEASE_STALE/);
+    } finally {
+      await composition.runtimeAdapter.disconnect();
+    }
+  });
 });

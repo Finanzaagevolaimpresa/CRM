@@ -732,6 +732,16 @@ export type AiWorkflowJobExecutionPreflight = Readonly<{
   handlerVersion: string;
 }>;
 
+export class AiOrchestratorExecutionGateDeniedError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_EXECUTION_GATE_DENIED'); this.name = 'AiOrchestratorExecutionGateDeniedError'; }
+}
+export class AiOrchestratorExecutionCapabilityDeniedError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_EXECUTION_CAPABILITY_DENIED'); this.name = 'AiOrchestratorExecutionCapabilityDeniedError'; }
+}
+export class AiOrchestratorPersistedJobPolicyMismatchError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_PERSISTED_JOB_POLICY_MISMATCH'); this.name = 'AiOrchestratorPersistedJobPolicyMismatchError'; }
+}
+
 /** Read-only snapshot for the factory-scoped PR83 composition. */
 export async function preflightAiWorkflowJobExecution(
   lease: AiWorkflowJobLease,
@@ -759,11 +769,15 @@ export async function preflightAiWorkflowJobExecution(
       !setting || !setting.stateMachineEnabled || !setting.dispatchEnabled
       || !setting.syntheticDataOnly || setting.provider !== 'mock'
       || !control || control.externalProvidersEnabled
-      || !capabilitySetting?.enabled
+    ) throw new AiOrchestratorExecutionGateDeniedError();
+    if (
+      !capabilitySetting?.enabled
       || !capability
       || capabilitySetting.capabilityCode !== capability.capabilityCode
       || capabilitySetting.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode]
-      || runtime.jobId !== claims.jobId || runtime.state !== 'LEASED'
+    ) throw new AiOrchestratorExecutionCapabilityDeniedError();
+    if (
+      runtime.jobId !== claims.jobId || runtime.state !== 'LEASED'
       || runtime.attemptSequence !== claims.attemptSequence
       || runtime.fencingToken !== claims.fencingToken
       || runtime.leaseOwnerId !== claims.workerInstanceId
@@ -777,7 +791,8 @@ export async function preflightAiWorkflowJobExecution(
       || attempt.leaseExpiresAt <= now || attempt.leaseMaxExpiresAt <= now
     ) throw new AiOrchestratorLeaseLostError();
     const job = runtime.job;
-    const intent = parsePersistedFaiAuditJobIntent({
+    let intent: FaiAuditJobIntent;
+    try { intent = parsePersistedFaiAuditJobIntent({
       catalogCode: job.catalogCode,
       catalogVersion: job.catalogVersion,
       catalogHash: job.catalogHash,
@@ -806,7 +821,9 @@ export async function preflightAiWorkflowJobExecution(
       availableAt: job.availableAt.toISOString(),
       payload: job.payload,
       payloadHash: job.payloadHash,
-    });
+    }); } catch {
+      throw new AiOrchestratorPersistedJobPolicyMismatchError();
+    }
     return Object.freeze({
       intent, runtimeId: runtime.id, jobId: job.id, attemptId: attempt.id,
       attemptSequence: attempt.attemptSequence, fencingToken: attempt.fencingToken.toString(),
