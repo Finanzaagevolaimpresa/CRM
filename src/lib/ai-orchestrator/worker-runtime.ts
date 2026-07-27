@@ -20,7 +20,7 @@ import {
   getAiOrchestratorWorkerCapability,
   type AiOrchestratorFailureCode,
 } from './worker-runtime-policy-v1';
-import type { FaiAuditJobIntent } from './job-planner';
+import { parsePersistedFaiAuditJobIntent, type FaiAuditJobIntent } from './job-planner';
 
 export const AI_ORCHESTRATOR_WORKER_ENV_GATE = 'AI_ORCHESTRATOR_WORKER_ENABLED' as const;
 const OUTBOX_CONSUMER_CODE = 'AI_ORCHESTRATOR_JOB_PLANNED_CONSUMER' as const;
@@ -777,7 +777,7 @@ export async function preflightAiWorkflowJobExecution(
       || attempt.leaseExpiresAt <= now || attempt.leaseMaxExpiresAt <= now
     ) throw new AiOrchestratorLeaseLostError();
     const job = runtime.job;
-    const intent = Object.freeze({
+    const intent = parsePersistedFaiAuditJobIntent({
       catalogCode: job.catalogCode,
       catalogVersion: job.catalogVersion,
       catalogHash: job.catalogHash,
@@ -806,7 +806,7 @@ export async function preflightAiWorkflowJobExecution(
       availableAt: job.availableAt.toISOString(),
       payload: job.payload,
       payloadHash: job.payloadHash,
-    }) as FaiAuditJobIntent;
+    });
     return Object.freeze({
       intent, runtimeId: runtime.id, jobId: job.id, attemptId: attempt.id,
       attemptSequence: attempt.attemptSequence, fencingToken: attempt.fencingToken.toString(),

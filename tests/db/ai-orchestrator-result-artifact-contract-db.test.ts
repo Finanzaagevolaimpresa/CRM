@@ -31,6 +31,7 @@ import {
   createAiOrchestratorMockHandlerInvocation,
   executeAiOrchestratorMockHandler,
 } from '../../src/lib/ai-orchestrator/mock-handler-registry-v1';
+import { createAiOrchestratorWorkerSyntheticTestingCompositionV1 } from '../../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
 import {
   applyAuditWorkflowTransition,
   createAuditWorkflowInstance,
@@ -956,4 +957,43 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       where: { resultId: { in: [firstResult.id, secondResult.id] } },
     }), 0);
   });
+});
+
+test('PR83 execution adapter esegue admission, claim opaco, registry e completion fenced reali', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = {
+    runs: await db().aiRun.count(), outputs: await db().aiOutput.count(),
+    workflow: await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id: fixture.workflowInstanceId } }),
+  };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-${randomUUID()}`, workerBuildHash: 'd'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim();
+    assert.ok(claim);
+    assert.deepEqual(Object.keys(claim), ['lease']);
+    const outcome = await composition.executionAdapter.consumeMockResult(claim.lease);
+    assert.equal(outcome.state, 'SUCCEEDED');
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const [results, artifacts, attempt, event] = await Promise.all([
+      db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }),
+      db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }),
+      db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } }),
+      db().aiWorkflowJobRuntimeEvent.findFirstOrThrow({ where: { runtimeId: runtime.id, eventType: 'SUCCEEDED' } }),
+    ]);
+    assert.equal(results, 1); assert.equal(artifacts, 1);
+    assert.equal(runtime.state, 'SUCCEEDED'); assert.equal(attempt.outcome, 'SUCCEEDED');
+    assert.equal((event.payload as { workflowTransitionApplied?: unknown }).workflowTransitionApplied, false);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /LEASE_STALE/);
+    await composition.runtimeAdapter.disconnect();
+  });
+  assert.equal(await db().aiRun.count(), before.runs);
+  assert.equal(await db().aiOutput.count(), before.outputs);
+  assert.deepEqual(await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id: fixture.workflowInstanceId } }), before.workflow);
 });
