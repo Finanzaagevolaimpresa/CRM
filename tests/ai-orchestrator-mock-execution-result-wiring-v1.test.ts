@@ -364,3 +364,84 @@ test('disconnect fences an in-flight claim, surrenders its runtime lease once an
   await assert.rejects(composition.runtimeAdapter.claim(), /ADAPTER_CLOSED/);
   assert.equal(surrenders, 1); assert.equal(disconnects, 1);
 });
+
+test('completion-time gate and capability denial surrender, while stale completion only closes the handle', async () => {
+  for (const scenario of [
+    { error: new AiOrchestratorExecutionGateDeniedError(), code: 'AI_MOCK_EXECUTION_AUTHORITY_DENIED', surrenders: 1 },
+    { error: new AiOrchestratorExecutionCapabilityDeniedError(), code: 'AI_MOCK_EXECUTION_CAPABILITY_DENIED', surrenders: 1 },
+    { error: new AiOrchestratorLeaseLostError(), code: null, surrenders: 0 },
+  ] as const) {
+    const { claim, snapshot } = syntheticExecutionFixture(); let completions = 0; let surrenders = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claim, preflight: async () => snapshot,
+        complete: async () => { completions += 1; throw scenario.error; },
+        surrender: async () => { surrenders += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+        disconnect: async () => undefined,
+      },
+    );
+    const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), (error) => (
+      scenario.code ? error instanceof AiMockExecutionError && error.code === scenario.code : error instanceof AiOrchestratorLeaseLostError
+    ));
+    assert.equal(completions, 1); assert.equal(surrenders, scenario.surrenders);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), /LEASE_STALE/);
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('cleanup surrender retries transient failures and preserves a drained handle after exhausted or unavailable DB', async () => {
+  for (const scenario of [
+    { failures: ['P2024', 'P2024'] as const, expected: 'AI_MOCK_EXECUTION_AUTHORITY_DENIED', firstAttempts: 3 },
+    { failures: ['P2024', 'P2024', 'P2024'] as const, expected: 'AI_MOCK_EXECUTION_DB_TRANSIENT', firstAttempts: 3 },
+    { failures: ['P1001'] as const, expected: 'AI_MOCK_EXECUTION_DB_UNAVAILABLE', firstAttempts: 1 },
+  ]) {
+    const { claim } = syntheticExecutionFixture(); let attempts = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: false, capabilityAllowed: false }),
+      {
+        claim: async () => claim,
+        surrender: async () => {
+          const code = scenario.failures[attempts]; attempts += 1;
+          if (code) throw Object.assign(new Error('redacted'), { code });
+          return { state: 'RETRY_WAIT', availableAt: new Date() };
+        },
+        disconnect: async () => undefined,
+      },
+    );
+    const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), (error) => (
+      error instanceof AiMockExecutionError && error.code === scenario.expected
+    ));
+    assert.equal(attempts, scenario.firstAttempts);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), /LEASE_STALE/);
+    await assert.rejects(composition.runtimeAdapter.heartbeat(leased.lease), /LEASE_STALE/);
+    if (scenario.expected !== 'AI_MOCK_EXECUTION_AUTHORITY_DENIED') {
+      await composition.runtimeAdapter.surrender(leased.lease);
+      assert.equal(attempts, scenario.firstAttempts + 1);
+      await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
+    }
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('a stale cleanup surrender is idempotent and closes the drained handle', async () => {
+  const { claim } = syntheticExecutionFixture(); let attempts = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: false, capabilityAllowed: false }),
+    {
+      claim: async () => claim,
+      surrender: async () => { attempts += 1; throw new AiOrchestratorLeaseLostError(); },
+      disconnect: async () => undefined,
+    },
+  );
+  const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+  await assert.rejects(composition.executionAdapter.consumeMockResult(leased.lease), /AUTHORITY_DENIED/);
+  assert.equal(attempts, 1);
+  await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
+  await composition.runtimeAdapter.disconnect();
+});

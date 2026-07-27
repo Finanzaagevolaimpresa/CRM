@@ -19,6 +19,7 @@ import {
   calculateAiOrchestratorRetryDelayMs,
   getAiOrchestratorWorkerCapability,
   type AiOrchestratorFailureCode,
+  type AiOrchestratorWorkerCapability,
 } from './worker-runtime-policy-v1';
 import { parsePersistedFaiAuditJobIntent, type FaiAuditJobIntent } from './job-planner';
 
@@ -851,16 +852,30 @@ async function loadFencedRuntime(tx: RuntimeDb, claims: LeaseClaims, now: Date) 
   return runtime;
 }
 
-export async function completeAiWorkflowJob(
+async function completeAiWorkflowJobInternal(
   lease: AiWorkflowJobLease,
   options: { resultDraft: AiResultArtifactDraft },
+  executionSpecificErrors: boolean,
 ) {
-  assertWorkerEnvironmentEnabled();
+  try { assertWorkerEnvironmentEnabled(); }
+  catch (error) {
+    if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionGateDeniedError();
+    throw error;
+  }
   const { resultDraft } = options;
   const claims = getLeaseClaims(lease);
   return prisma.$transaction(async (tx) => {
-    await lockAndAssertRuntimeGates(tx);
-    const capability = await lockAndAssertCapabilityEnabled(tx, claims.jobId);
+    try { await lockAndAssertRuntimeGates(tx); }
+    catch (error) {
+      if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionGateDeniedError();
+      throw error;
+    }
+    let capability: AiOrchestratorWorkerCapability;
+    try { capability = await lockAndAssertCapabilityEnabled(tx, claims.jobId); }
+    catch (error) {
+      if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionCapabilityDeniedError();
+      throw error;
+    }
     const runtimeSnapshot = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId }, include: { job: true } });
     if (runtimeSnapshot?.state === 'SUCCEEDED' && runtimeSnapshot.resultHash) {
       const persisted = await tx.aiWorkflowJobResult.findFirst({
@@ -885,6 +900,7 @@ export async function completeAiWorkflowJob(
     const now = await databaseNow(tx);
     const runtime = await loadFencedRuntime(tx, claims, now);
     if (runtime.runtimePolicyHash !== AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH || runtime.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode] || runtime.handlerCode !== capability.handlerCode || runtime.handlerVersion !== capability.handlerVersion) {
+      if (executionSpecificErrors) throw new AiOrchestratorPersistedJobPolicyMismatchError();
       throw new AiOrchestratorLeaseLostError('Identità runtime/capability/handler non valida.');
     }
     const attempt = await tx.aiWorkflowJobAttempt.findFirst({ where: { runtimeId: claims.runtimeId, attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, leaseTokenHash: claims.tokenHash, finishedAt: null } });
@@ -912,6 +928,15 @@ export async function completeAiWorkflowJob(
     await appendRuntimeEvent(tx, { runtimeId: runtime.id, jobId: runtime.jobId, workflowInstanceId: runtime.workflowInstanceId, eventType: 'SUCCEEDED', attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, reasonCode: 'SUCCEEDED', payload: { resultHash: hashed.resultHash, manifestHash: hashed.manifestHash, resultId: result.id, artifactCount: hashed.artifacts.length, provider: 'mock', workflowTransitionApplied: false }, occurredAt: terminalNow });
     return { replay: false as const, state: 'SUCCEEDED' as const, resultHash: hashed.resultHash };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export function completeAiWorkflowJob(lease: AiWorkflowJobLease, options: { resultDraft: AiResultArtifactDraft }) {
+  return completeAiWorkflowJobInternal(lease, options, false);
+}
+
+/** PR83-only completion wrapper; preserves the public PR77/PR76 error surface. */
+export function completeAiWorkflowJobExecution(lease: AiWorkflowJobLease, options: { resultDraft: AiResultArtifactDraft }) {
+  return completeAiWorkflowJobInternal(lease, options, true);
 }
 
 function buildRuntimeResultProvenance(

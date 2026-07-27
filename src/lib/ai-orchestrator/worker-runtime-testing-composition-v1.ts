@@ -8,7 +8,7 @@ import {
   AiOrchestratorPersistedJobPolicyMismatchError,
   admitAiWorkflowJobOutbox,
   claimNextAiWorkflowJob,
-  completeAiWorkflowJob,
+  completeAiWorkflowJobExecution,
   failAiWorkflowJob,
   heartbeatAiWorkflowJobLease,
   preflightAiWorkflowJobExecution,
@@ -30,7 +30,7 @@ import { readAiOrchestratorWorkerControlPlaneAuthorityV1 } from './worker-contro
 import { AiMockExecutionError, createAiMockExecutionOperationV1, type AiMockExecutionOutcome } from './mock-execution-result-wiring-v1';
 import type { AiResultArtifactDraft } from './result-artifact-contract-v1';
 
-type ExecutionDatabaseOperation = 'PREFLIGHT_BEFORE' | 'PREFLIGHT_AFTER' | 'COMPLETE' | 'FAIL';
+type ExecutionDatabaseOperation = 'PREFLIGHT_BEFORE' | 'PREFLIGHT_AFTER' | 'COMPLETE' | 'FAIL' | 'SURRENDER';
 export function calculateAiMockExecutionRetryDelayMsV1(input: {
   workerInstanceId: string; workerBuildHash: string; operation: ExecutionDatabaseOperation; failedAttempt: number;
 }) {
@@ -88,7 +88,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   const runtime: AiOrchestratorTestingRuntimePortsV1 = {
     admit: admitAiWorkflowJobOutbox, claim: claimNextAiWorkflowJob, heartbeat: heartbeatAiWorkflowJobLease,
     surrender: surrenderAiWorkflowJobLease, preflight: preflightAiWorkflowJobExecution,
-    complete: completeAiWorkflowJob,
+    complete: completeAiWorkflowJobExecution,
     fail: async (lease, options) => {
       const outcome = await failAiWorkflowJob(lease, options);
       if (!['SUPERSEDED', 'RETRY_WAIT', 'FAILED_TERMINAL'].includes(outcome.state)) {
@@ -149,6 +149,18 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   const close = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
     entry.closed = true;
     leases.delete(handle);
+  };
+  const surrenderEntry = async (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
+    try {
+      await boundedDatabaseOperation('SURRENDER', () => runtime.surrender(entry.runtimeLease));
+      close(handle, entry);
+    } catch (error) {
+      if (error instanceof AiOrchestratorLeaseLostError) {
+        close(handle, entry);
+        return;
+      }
+      throw error;
+    }
   };
   const assertClaim = (entry: Entry, snapshot: AiWorkflowJobExecutionPreflight) => {
     const claim = entry.claim;
@@ -211,9 +223,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
         if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* risk reduction */ } }
         if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* risk reduction */ } }
         if (entry.terminalOutcome || entry.closed) return;
-        try { await runtime.surrender(entry.runtimeLease); }
-        catch (error) { if (!(error instanceof AiOrchestratorLeaseLostError)) throw error; }
-        close(handle, entry);
+        await surrenderEntry(handle, entry);
       })());
       entry.surrenderPromise = promise;
       try { await promise; } finally { if (entry.surrenderPromise === promise) entry.surrenderPromise = null; }
@@ -255,8 +265,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
           if (error instanceof AiOrchestratorLeaseLostError) close(handle, entry);
           else {
             entry.drainRequested = true;
-            try { await runtime.surrender(entry.runtimeLease); } catch { /* best-effort */ }
-            close(handle, entry);
+            await surrenderEntry(handle, entry);
           }
           throw error;
         }
