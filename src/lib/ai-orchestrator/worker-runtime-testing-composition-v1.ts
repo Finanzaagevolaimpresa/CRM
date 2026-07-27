@@ -30,7 +30,7 @@ import { readAiOrchestratorWorkerControlPlaneAuthorityV1 } from './worker-contro
 import { AiMockExecutionError, createAiMockExecutionOperationV1, type AiMockExecutionOutcome } from './mock-execution-result-wiring-v1';
 import type { AiResultArtifactDraft } from './result-artifact-contract-v1';
 
-type ExecutionDatabaseOperation = 'PREFLIGHT_BEFORE' | 'PREFLIGHT_AFTER' | 'COMPLETE' | 'FAIL' | 'SURRENDER';
+type ExecutionDatabaseOperation = 'AUTHORITY' | 'PREFLIGHT_BEFORE' | 'PREFLIGHT_AFTER' | 'COMPLETE' | 'FAIL' | 'SURRENDER';
 export function calculateAiMockExecutionRetryDelayMsV1(input: {
   workerInstanceId: string; workerBuildHash: string; operation: ExecutionDatabaseOperation; failedAttempt: number;
 }) {
@@ -245,7 +245,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       if (entry.executionPromise) return entry.executionPromise;
       if (entry.drainRequested || entry.heartbeatPromise || entry.surrenderPromise) stale();
       const operation = createAiMockExecutionOperationV1({
-        readAuthority: readExecutionAuthority,
+        readAuthority: () => boundedDatabaseOperation('AUTHORITY', readExecutionAuthority),
         preflight: (() => {
           let preflightSequence = 0;
           return () => boundedDatabaseOperation(preflightSequence++ === 0 ? 'PREFLIGHT_BEFORE' : 'PREFLIGHT_AFTER', () => runtime.preflight(entry.runtimeLease));

@@ -1125,3 +1125,34 @@ test('PR83 surrendera denial di dispatch/capability tra secondo preflight e comp
     });
   }
 });
+
+test('PR83 authority denial PostgreSQL dopo handler surrendera senza persistenza o retry budget', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    let authorityReads = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-authority-${randomUUID()}`, workerBuildHash: '9'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: ++authorityReads === 1, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+      },
+    );
+    try {
+      assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+      const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+      await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /AUTHORITY_DENIED/);
+      assert.equal(authorityReads, 2);
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'RETRY_WAIT');
+      assert.equal(attempt.outcome, 'SURRENDERED');
+      assert.equal(attempt.retryBudgetConsumed, false);
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    } finally {
+      await composition.runtimeAdapter.disconnect();
+    }
+  });
+});
