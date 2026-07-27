@@ -623,3 +623,52 @@ test('disconnect cleanup is retry-safe after transient or unavailable surrender 
     await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
   }
 });
+
+test('multi-handle disconnect drains every snapshot entry and retries only failed cleanups', async () => {
+  for (const scenario of ['TRANSIENT_FIRST', 'UNAVAILABLE_AND_STALE', 'MIXED_PRIORITY'] as const) {
+    const base = syntheticExecutionFixture().claim;
+    const runtimeLeases = Array.from({ length: 3 }, () => Object.freeze({}) as AiWorkflowJobLease);
+    let claimIndex = 0; const attempts = [0, 0, 0]; let disconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => {
+          const index = claimIndex; claimIndex += 1;
+          return { ...base, runtimeId: `runtime-${index}`, lease: runtimeLeases[index] };
+        },
+        surrender: async (lease) => {
+          const index = runtimeLeases.indexOf(lease); attempts[index] += 1;
+          if (scenario === 'TRANSIENT_FIRST' && index === 0 && attempts[index] <= 3) {
+            throw Object.assign(new Error('private'), { code: 'P2024' });
+          }
+          if (scenario === 'UNAVAILABLE_AND_STALE' && index === 0 && attempts[index] === 1) {
+            throw Object.assign(new Error('private'), { code: 'P1001' });
+          }
+          if (scenario === 'UNAVAILABLE_AND_STALE' && index === 2) throw new AiOrchestratorLeaseLostError();
+          if (scenario === 'MIXED_PRIORITY' && index === 0 && attempts[index] <= 3) {
+            throw Object.assign(new Error('private'), { code: 'P2024' });
+          }
+          if (scenario === 'MIXED_PRIORITY' && index === 1 && attempts[index] === 1) {
+            throw Object.assign(new Error('private'), { code: 'P1001' });
+          }
+          return { state: 'RETRY_WAIT', availableAt: new Date() };
+        },
+        disconnect: async () => { disconnects += 1; },
+      },
+    );
+    const handles = await Promise.all(Array.from({ length: 3 }, () => composition.runtimeAdapter.claim()));
+    assert.ok(handles.every(Boolean));
+    const expected = scenario === 'TRANSIENT_FIRST' ? 'DB_TRANSIENT' : 'DB_UNAVAILABLE';
+    await assert.rejects(composition.runtimeAdapter.disconnect(), new RegExp(expected));
+    assert.equal(disconnects, 0);
+    assert.ok(attempts[1] >= 1); assert.ok(attempts[2] >= 1);
+    const firstPassAttempts = [...attempts];
+    await composition.runtimeAdapter.disconnect();
+    assert.equal(disconnects, 1);
+    assert.equal(attempts[2], firstPassAttempts[2]);
+    if (scenario === 'TRANSIENT_FIRST') assert.deepEqual(attempts, [4, 1, 1]);
+    if (scenario === 'UNAVAILABLE_AND_STALE') assert.deepEqual(attempts, [2, 1, 1]);
+    if (scenario === 'MIXED_PRIORITY') assert.deepEqual(attempts, [4, 2, 1]);
+  }
+});

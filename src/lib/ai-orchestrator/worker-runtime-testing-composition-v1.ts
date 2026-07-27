@@ -182,6 +182,22 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     void promise.finally(() => { if (entry.surrenderPromise === promise) entry.surrenderPromise = null; }).catch(() => undefined);
     return promise;
   };
+  const normalizeCleanupError = (error: unknown) => {
+    if (error instanceof AiMockExecutionError && (
+      error.code === 'AI_MOCK_EXECUTION_DB_UNAVAILABLE'
+      || error.code === 'AI_MOCK_EXECUTION_DB_TRANSIENT'
+      || error.code === 'AI_MOCK_EXECUTION_INVARIANT_VIOLATION'
+    )) return new AiMockExecutionError(error.code);
+    return new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
+  };
+  const selectCleanupError = (errors: readonly AiMockExecutionError[]) => {
+    for (const code of [
+      'AI_MOCK_EXECUTION_DB_UNAVAILABLE',
+      'AI_MOCK_EXECUTION_DB_TRANSIENT',
+      'AI_MOCK_EXECUTION_INVARIANT_VIOLATION',
+    ] as const) if (errors.some((error) => error.code === code)) return new AiMockExecutionError(code);
+    return new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
+  };
   const assertClaim = (entry: Entry, snapshot: AiWorkflowJobExecutionPreflight) => {
     const claim = entry.claim;
     if (
@@ -255,16 +271,21 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       for (const entry of activeEntries.values()) if (!entry.terminalOutcome && !entry.closed) entry.drainRequested = true;
       const attempt = (async () => {
         while (pendingClaims.size) await Promise.allSettled([...pendingClaims]);
+        const cleanupErrors: AiMockExecutionError[] = [];
         if (shutdownClaimCleanupError) {
-          const error = shutdownClaimCleanupError; shutdownClaimCleanupError = null; throw error;
+          cleanupErrors.push(normalizeCleanupError(shutdownClaimCleanupError));
+          shutdownClaimCleanupError = null;
         }
-        for (const [handle, entry] of [...activeEntries]) {
+        const entriesToDrain = [...activeEntries.entries()];
+        for (const [handle, entry] of entriesToDrain) {
           entry.drainRequested = true;
           if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* cleanup continues */ } }
           if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* cleanup continues */ } }
           if (entry.closed || entry.terminalOutcome) { close(handle, entry); continue; }
-          await surrenderSingleFlight(handle, entry);
+          try { await surrenderSingleFlight(handle, entry); }
+          catch (error) { cleanupErrors.push(normalizeCleanupError(error)); }
         }
+        if (cleanupErrors.length) throw selectCleanupError(cleanupErrors);
         if (activeEntries.size !== 0) throw new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
         await runtime.disconnect();
       })();
