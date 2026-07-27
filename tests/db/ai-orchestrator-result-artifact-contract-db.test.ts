@@ -79,6 +79,12 @@ function db() {
   return prisma;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function assertConfirmedRuntimeDbFixture() {
   if (!runDbTests || !dbTestsRequested || !destructiveDbTestsConfirmed) {
     throw new Error('Fixture runtime consentita soltanto nel PostgreSQL effimero confermato.');
@@ -1155,4 +1161,39 @@ test('PR83 authority denial PostgreSQL dopo handler surrendera senza persistenza
       await composition.runtimeAdapter.disconnect();
     }
   });
+});
+
+test('PR83 disconnect drena claim reali inattive o con heartbeat pendente', { skip: !runDbTests }, async () => {
+  for (const pendingHeartbeat of [false, true]) {
+    const fixture = await createDataValidationCase();
+    const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+    await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+      const heartbeat = deferred<Date>();
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `pr83-disconnect-${randomUUID()}`, workerBuildHash: '8'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+          ...(pendingHeartbeat ? { heartbeat: async () => heartbeat.promise } : {}),
+        },
+      );
+      assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+      const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+      const beating = pendingHeartbeat ? composition.runtimeAdapter.heartbeat(claim.lease) : null;
+      const shutdown = composition.runtimeAdapter.disconnect();
+      if (beating) { await new Promise((resolve) => setImmediate(resolve)); heartbeat.resolve(new Date()); await beating; }
+      await shutdown;
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'RETRY_WAIT');
+      assert.equal(attempt.outcome, 'SURRENDERED');
+      assert.equal(attempt.retryBudgetConsumed, false);
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    });
+    assert.equal(await db().aiRun.count(), before.runs);
+    assert.equal(await db().aiOutput.count(), before.outputs);
+  }
 });

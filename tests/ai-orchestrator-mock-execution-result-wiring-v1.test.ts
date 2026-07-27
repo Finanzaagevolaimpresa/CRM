@@ -535,3 +535,91 @@ test('authority failure plus unavailable surrender preserves the drained handle 
   await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
   await composition.runtimeAdapter.disconnect();
 });
+
+test('disconnect drains one or multiple installed idle leases before Prisma disconnect', async () => {
+  for (const leaseCount of [1, 2]) {
+    const { claim } = syntheticExecutionFixture(); const calls: string[] = [];
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => ({ ...claim, runtimeId: `runtime-${calls.filter((value) => value === 'claim').length}`, lease: Object.freeze({}) as AiWorkflowJobLease }),
+        surrender: async () => { calls.push('surrender'); return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+        disconnect: async () => { calls.push('disconnect'); },
+      },
+    );
+    const handles = [];
+    for (let index = 0; index < leaseCount; index += 1) { calls.push('claim'); handles.push(await composition.runtimeAdapter.claim()); }
+    assert.ok(handles.every(Boolean));
+    await composition.runtimeAdapter.disconnect();
+    assert.equal(calls.filter((value) => value === 'surrender').length, leaseCount);
+    assert.equal(calls.at(-1), 'disconnect');
+    for (const leased of handles) if (leased) await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
+  }
+});
+
+test('disconnect waits for an existing heartbeat and then surrenders without deadlock', async () => {
+  const { claim } = syntheticExecutionFixture(); const heartbeat = deferred<Date>(); const calls: string[] = [];
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => claim, heartbeat: async () => heartbeat.promise,
+      surrender: async () => { calls.push('surrender'); return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+      disconnect: async () => { calls.push('disconnect'); },
+    },
+  );
+  const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+  const beating = composition.runtimeAdapter.heartbeat(leased.lease);
+  const shutdown = composition.runtimeAdapter.disconnect();
+  await new Promise((resolve) => setImmediate(resolve)); assert.deepEqual(calls, []);
+  heartbeat.resolve(new Date()); await beating; await shutdown;
+  assert.deepEqual(calls, ['surrender', 'disconnect']);
+});
+
+test('disconnect waits for a completing execution and does not surrender a successful lease', async () => {
+  const { claim, snapshot } = syntheticExecutionFixture(); const completion = deferred<{ state: 'SUCCEEDED'; resultHash: string }>();
+  let completionCalls = 0; let surrenders = 0; let disconnects = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => claim, preflight: async () => snapshot,
+      complete: async () => { completionCalls += 1; return completion.promise; },
+      surrender: async () => { surrenders += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+      disconnect: async () => { disconnects += 1; },
+    },
+  );
+  const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+  const execution = composition.executionAdapter.consumeMockResult(leased.lease);
+  while (completionCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+  const shutdown = composition.runtimeAdapter.disconnect();
+  completion.resolve({ state: 'SUCCEEDED', resultHash: 'b'.repeat(64) });
+  assert.equal((await execution).state, 'SUCCEEDED'); await shutdown;
+  assert.equal(surrenders, 0); assert.equal(disconnects, 1);
+});
+
+test('disconnect cleanup is retry-safe after transient or unavailable surrender failure', async () => {
+  for (const codes of [['P2024', 'P2024', 'P2024'], ['P1001']] as const) {
+    const { claim } = syntheticExecutionFixture(); let attempts = 0; let disconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claim,
+        surrender: async () => {
+          const code = codes[attempts]; attempts += 1;
+          if (code) throw Object.assign(new Error('redacted'), { code });
+          return { state: 'RETRY_WAIT', availableAt: new Date() };
+        },
+        disconnect: async () => { disconnects += 1; },
+      },
+    );
+    const leased = await composition.runtimeAdapter.claim(); assert.ok(leased);
+    await assert.rejects(composition.runtimeAdapter.disconnect(), codes[0] === 'P1001' ? /DB_UNAVAILABLE/ : /DB_TRANSIENT/);
+    assert.equal(disconnects, 0);
+    await composition.runtimeAdapter.disconnect();
+    assert.equal(disconnects, 1); assert.equal(attempts, codes.length + 1);
+    await assert.rejects(composition.runtimeAdapter.surrender(leased.lease), /LEASE_STALE/);
+  }
+});

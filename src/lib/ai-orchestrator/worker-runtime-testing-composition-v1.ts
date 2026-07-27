@@ -85,6 +85,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_GATE_DENIED');
   }
   const leases = new WeakMap<object, Entry>();
+  const activeEntries = new Map<AiOrchestratorWorkerRuntimeLeaseHandleV1, Entry>();
   const runtime: AiOrchestratorTestingRuntimePortsV1 = {
     admit: admitAiWorkflowJobOutbox, claim: claimNextAiWorkflowJob, heartbeat: heartbeatAiWorkflowJobLease,
     surrender: surrenderAiWorkflowJobLease, preflight: preflightAiWorkflowJobExecution,
@@ -101,8 +102,10 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     ...overrides,
   };
   const pending = new Set<Promise<unknown>>();
+  const pendingClaims = new Set<Promise<unknown>>();
   let disconnected = false;
   let disconnectPromise: Promise<void> | null = null;
+  let shutdownClaimCleanupError: unknown = null;
   const entryFor = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
     if (disconnected || !handle || typeof handle !== 'object') stale();
     const entry = leases.get(handle);
@@ -149,6 +152,11 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   const close = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
     entry.closed = true;
     leases.delete(handle);
+    activeEntries.delete(handle);
+  };
+  const install = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
+    leases.set(handle, entry);
+    activeEntries.set(handle, entry);
   };
   const surrenderEntry = async (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
     try {
@@ -161,6 +169,18 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       }
       throw error;
     }
+  };
+  const surrenderSingleFlight = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1, entry: Entry) => {
+    if (entry.surrenderPromise) return entry.surrenderPromise;
+    const promise = tracked((async () => {
+      if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* cleanup continues */ } }
+      if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* cleanup continues */ } }
+      if (entry.terminalOutcome || entry.closed) { close(handle, entry); return; }
+      await surrenderEntry(handle, entry);
+    })());
+    entry.surrenderPromise = promise;
+    void promise.finally(() => { if (entry.surrenderPromise === promise) entry.surrenderPromise = null; }).catch(() => undefined);
+    return promise;
   };
   const assertClaim = (entry: Entry, snapshot: AiWorkflowJobExecutionPreflight) => {
     const claim = entry.claim;
@@ -197,13 +217,22 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
         const claim = await runtime.claim({ workerInstanceId: input.workerInstanceId, workerBuildHash: input.workerBuildHash });
         if (!claim) return null;
         if (disconnected) {
-          try { await runtime.surrender(claim.lease); } catch { /* shutdown risk reduction */ }
+          try { await boundedDatabaseOperation('SURRENDER', () => runtime.surrender(claim.lease)); }
+          catch (error) {
+            const handle = opaqueLease();
+            const entry: Entry = { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: true, terminalOutcome: null, closed: false };
+            install(handle, entry);
+            shutdownClaimCleanupError = error;
+            throw error;
+          }
           throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
         }
         const handle = opaqueLease();
-        leases.set(handle, { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: false, terminalOutcome: null, closed: false });
+        install(handle, { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: false, terminalOutcome: null, closed: false });
         return Object.freeze({ lease: handle });
       })());
+      pendingClaims.add(claimPromise);
+      void claimPromise.finally(() => pendingClaims.delete(claimPromise)).catch(() => undefined);
       return claimPromise;
     },
     heartbeat: async (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
@@ -218,24 +247,30 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     surrender: async (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
       const entry = entryFor(handle);
       entry.drainRequested = true;
-      if (entry.surrenderPromise) return entry.surrenderPromise;
-      const promise = tracked((async () => {
-        if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* risk reduction */ } }
-        if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* risk reduction */ } }
-        if (entry.terminalOutcome || entry.closed) return;
-        await surrenderEntry(handle, entry);
-      })());
-      entry.surrenderPromise = promise;
-      try { await promise; } finally { if (entry.surrenderPromise === promise) entry.surrenderPromise = null; }
+      return surrenderSingleFlight(handle, entry);
     },
     disconnect: async () => {
       if (disconnectPromise) return disconnectPromise;
       disconnected = true;
-      disconnectPromise = (async () => {
-        while (pending.size) await Promise.allSettled([...pending]);
+      for (const entry of activeEntries.values()) if (!entry.terminalOutcome && !entry.closed) entry.drainRequested = true;
+      const attempt = (async () => {
+        while (pendingClaims.size) await Promise.allSettled([...pendingClaims]);
+        if (shutdownClaimCleanupError) {
+          const error = shutdownClaimCleanupError; shutdownClaimCleanupError = null; throw error;
+        }
+        for (const [handle, entry] of [...activeEntries]) {
+          entry.drainRequested = true;
+          if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* cleanup continues */ } }
+          if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* cleanup continues */ } }
+          if (entry.closed || entry.terminalOutcome) { close(handle, entry); continue; }
+          await surrenderSingleFlight(handle, entry);
+        }
+        if (activeEntries.size !== 0) throw new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
         await runtime.disconnect();
       })();
-      return disconnectPromise;
+      disconnectPromise = attempt;
+      try { await attempt; }
+      catch (error) { if (disconnectPromise === attempt) disconnectPromise = null; throw error; }
     },
   });
 
