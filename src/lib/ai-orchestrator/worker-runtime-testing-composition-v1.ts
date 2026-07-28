@@ -239,6 +239,9 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
         if (disconnected) {
           try { await boundedDatabaseOperation('SURRENDER', () => runtime.surrender(claim.lease)); }
           catch (error) {
+            if (error instanceof AiOrchestratorLeaseLostError) {
+              throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
+            }
             const handle = opaqueLease();
             const entry: Entry = { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: true, terminalOutcome: null, closed: false };
             install(handle, entry);

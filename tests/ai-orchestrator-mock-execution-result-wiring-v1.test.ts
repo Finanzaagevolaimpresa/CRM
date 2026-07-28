@@ -8,6 +8,7 @@ import { FAI_AUDIT_WORKFLOW_DEFINITION_HASH, FAI_AUDIT_WORKFLOW_ID, FAI_AUDIT_WO
 import { getFaiAuditExecutorBinding } from '../src/lib/ai-orchestrator/job-catalog-v1';
 import { AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_CODE, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION, getAiOrchestratorWorkerCapability } from '../src/lib/ai-orchestrator/worker-runtime-policy-v1';
 import { createAiOrchestratorWorkerSyntheticTestingCompositionV1, calculateAiMockExecutionRetryDelayMsV1 } from '../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
+import { AiOrchestratorWorkerRuntimeAdapterError } from '../src/lib/ai-orchestrator/worker-runtime-adapter-v1';
 import {
   AiOrchestratorExecutionCapabilityDeniedError,
   AiOrchestratorExecutionGateDeniedError,
@@ -712,5 +713,69 @@ test('crossing claims collect every error, preserve priority, and defer all retr
     await composition.runtimeAdapter.disconnect();
     assert.deepEqual(surrenderCalls, [2, 4]);
     assert.equal(prismaDisconnects, 1);
+  }
+});
+
+test('stale crossing claims are idempotently cleaned without entries or later surrender attempts', async () => {
+  const base = syntheticExecutionFixture().claim;
+  const deferredClaims = Array.from({ length: 3 }, () => deferred<ClaimedAiWorkflowJob | null>());
+  const leases = Array.from({ length: 3 }, () => Object.freeze({}) as AiWorkflowJobLease);
+  let claimIndex = 0; const surrenderCalls = [0, 0, 0]; let prismaDisconnects = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => deferredClaims[claimIndex++].promise,
+      surrender: async (lease) => { surrenderCalls[leases.indexOf(lease)] += 1; throw new AiOrchestratorLeaseLostError('private stale detail'); },
+      disconnect: async () => { prismaDisconnects += 1; },
+    },
+  );
+  const claims = Array.from({ length: 3 }, () => composition.runtimeAdapter.claim());
+  const claimAssertions = claims.map((claim) => assert.rejects(claim, (error) => (
+    error instanceof AiOrchestratorWorkerRuntimeAdapterError
+    && error.code === 'AI_WORKER_RUNTIME_ADAPTER_CLOSED' && !error.message.includes('private')
+  )));
+  const shutdown = composition.runtimeAdapter.disconnect();
+  deferredClaims.forEach((pending, index) => pending.resolve({ ...base, runtimeId: `stale-${index}`, lease: leases[index] }));
+  await Promise.all(claimAssertions); await shutdown;
+  assert.deepEqual(surrenderCalls, [1, 1, 1]); assert.equal(prismaDisconnects, 1);
+  await composition.runtimeAdapter.disconnect();
+  assert.deepEqual(surrenderCalls, [1, 1, 1]); assert.equal(prismaDisconnects, 1);
+});
+
+test('stale crossing cleanup does not affect unavailable/transient priority or deferred retry', async () => {
+  for (const kind of ['UNAVAILABLE', 'TRANSIENT'] as const) for (const reverseCompletion of [false, true]) {
+    const base = syntheticExecutionFixture().claim;
+    const deferredClaims = [deferred<ClaimedAiWorkflowJob | null>(), deferred<ClaimedAiWorkflowJob | null>()];
+    const leases = [Object.freeze({}) as AiWorkflowJobLease, Object.freeze({}) as AiWorkflowJobLease];
+    let claimIndex = 0; const surrenderCalls = [0, 0]; let prismaDisconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => deferredClaims[claimIndex++].promise,
+        surrender: async (lease) => {
+          const index = leases.indexOf(lease); surrenderCalls[index] += 1;
+          if (index === 0) throw new AiOrchestratorLeaseLostError('private stale detail');
+          if (kind === 'UNAVAILABLE' && surrenderCalls[index] === 1) throw Object.assign(new Error('private DB URL'), { code: 'P1001' });
+          if (kind === 'TRANSIENT' && surrenderCalls[index] <= 3) throw Object.assign(new Error('private query'), { code: 'P2024' });
+          return { state: 'RETRY_WAIT', availableAt: new Date() };
+        },
+        disconnect: async () => { prismaDisconnects += 1; },
+      },
+    );
+    const claims = [composition.runtimeAdapter.claim(), composition.runtimeAdapter.claim()];
+    const claimAssertions = [assert.rejects(claims[0], /ADAPTER_CLOSED/), assert.rejects(claims[1], new RegExp(kind === 'UNAVAILABLE' ? 'DB_UNAVAILABLE' : 'DB_TRANSIENT'))];
+    const shutdown = composition.runtimeAdapter.disconnect();
+    const shutdownAssertion = assert.rejects(shutdown, (error) => error instanceof AiMockExecutionError
+      && error.code === (kind === 'UNAVAILABLE' ? 'AI_MOCK_EXECUTION_DB_UNAVAILABLE' : 'AI_MOCK_EXECUTION_DB_TRANSIENT')
+      && !error.message.includes('private'));
+    const resolveClaim = (index: number) => deferredClaims[index].resolve({ ...base, runtimeId: `mixed-${index}`, lease: leases[index] });
+    if (reverseCompletion) { resolveClaim(1); await new Promise((resolve) => setImmediate(resolve)); resolveClaim(0); }
+    else { resolveClaim(0); await new Promise((resolve) => setImmediate(resolve)); resolveClaim(1); }
+    await Promise.all([...claimAssertions, shutdownAssertion]);
+    assert.deepEqual(surrenderCalls, kind === 'UNAVAILABLE' ? [1, 1] : [1, 3]); assert.equal(prismaDisconnects, 0);
+    await composition.runtimeAdapter.disconnect();
+    assert.deepEqual(surrenderCalls, kind === 'UNAVAILABLE' ? [1, 2] : [1, 4]); assert.equal(prismaDisconnects, 1);
   }
 });
