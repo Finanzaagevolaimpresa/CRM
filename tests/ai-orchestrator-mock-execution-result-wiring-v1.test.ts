@@ -873,3 +873,137 @@ test('disconnect settles a rejected runtime operation before disconnecting and s
   assert.deepEqual(calls, ['disconnect']);
   await assert.rejects(composition.runtimeAdapter.admit(), /ADAPTER_CLOSED/);
 });
+
+test('FAIL retries recheck drain before every database write attempt', { timeout: 2_000 }, async () => {
+  for (const transientCodes of [['P2024'], ['P2024', 'P2034']] as const) {
+    const { claim } = syntheticExecutionFixture();
+    const retryReached = deferred<void>(); let failCalls = 0; let surrenderCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claim,
+        preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+        fail: async (_lease, options) => {
+          assert.equal(options.failureCode, 'POLICY_HASH_MISMATCH');
+          const code = transientCodes[failCalls]; failCalls += 1;
+          if (failCalls === transientCodes.length) retryReached.resolve();
+          if (code) throw Object.assign(new Error('private query'), { code });
+          return { state: 'FAILED_TERMINAL' };
+        },
+        surrender: async () => { surrenderCalls += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+        disconnect: async () => undefined,
+      },
+    );
+    const claimed = await composition.runtimeAdapter.claim(); assert.ok(claimed);
+    const execution = composition.executionAdapter.consumeMockResult(claimed.lease);
+    await retryReached.promise;
+    const drain = composition.runtimeAdapter.surrender(claimed.lease);
+    await assert.rejects(execution, /AI_MOCK_EXECUTION_DRAINING/); await drain;
+    assert.equal(failCalls, transientCodes.length); assert.equal(surrenderCalls, 1);
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('FAIL retains all three bounded attempts when drain is never requested', async () => {
+  const { claim } = syntheticExecutionFixture(); let failCalls = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => claim,
+      preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+      fail: async () => {
+        failCalls += 1;
+        if (failCalls < 3) throw Object.assign(new Error('private query'), { code: failCalls === 1 ? 'P2024' : 'P2034' });
+        return { state: 'FAILED_TERMINAL' };
+      },
+      disconnect: async () => undefined,
+    },
+  );
+  const claimed = await composition.runtimeAdapter.claim(); assert.ok(claimed);
+  assert.equal((await composition.executionAdapter.consumeMockResult(claimed.lease)).state, 'FAILED_TERMINAL');
+  assert.equal(failCalls, 3); await composition.runtimeAdapter.disconnect();
+});
+
+test('each runtime operation can request reentrant disconnect without self-await', { timeout: 3_000 }, async () => {
+  for (const operationName of ['readAuthority', 'admit', 'recover', 'supersede'] as const) {
+    let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
+    let disconnectCalls = 0; let operationCalls = 0;
+    const overrides = {
+      readAuthority: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return Object.freeze({}) as Readonly<AiOrchestratorWorkerControlPlaneAuthorityV1>; },
+      admit: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return 0; },
+      recover: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return 0; },
+      supersede: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return 0; },
+      disconnect: async () => { disconnectCalls += 1; },
+    };
+    composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      { [operationName]: overrides[operationName], disconnect: overrides.disconnect },
+    );
+    await composition.runtimeAdapter[operationName]();
+    assert.equal(operationCalls, 1); assert.equal(disconnectCalls, 1);
+    await assert.rejects(composition.runtimeAdapter[operationName](), /ADAPTER_CLOSED/);
+  }
+});
+
+test('reentrant disconnect excludes only its caller and awaits another runtime operation', { timeout: 2_000 }, async () => {
+  const otherOperation = deferred<number>(); const reentrantStarted = deferred<void>();
+  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
+  let disconnectCalls = 0;
+  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      recover: async () => otherOperation.promise,
+      admit: async () => { reentrantStarted.resolve(); await composition.runtimeAdapter.disconnect(); return 0; },
+      disconnect: async () => { disconnectCalls += 1; },
+    },
+  );
+  const recovering = composition.runtimeAdapter.recover();
+  const admitting = composition.runtimeAdapter.admit();
+  await reentrantStarted.promise; await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(disconnectCalls, 0); otherOperation.resolve(0);
+  await Promise.all([recovering, admitting]); assert.equal(disconnectCalls, 1);
+});
+
+test('two reentrant runtime operations share one shutdown and exclude only themselves', { timeout: 2_000 }, async () => {
+  const entered = [deferred<void>(), deferred<void>()];
+  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
+  let disconnectCalls = 0;
+  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      admit: async () => { entered[0].resolve(); await entered[1].promise; await composition.runtimeAdapter.disconnect(); return 0; },
+      recover: async () => { entered[1].resolve(); await entered[0].promise; await composition.runtimeAdapter.disconnect(); return 0; },
+      disconnect: async () => { disconnectCalls += 1; },
+    },
+  );
+  await Promise.all([composition.runtimeAdapter.admit(), composition.runtimeAdapter.recover()]);
+  assert.equal(disconnectCalls, 1);
+});
+
+test('reentrant disconnect during FAIL backoff drains once and blocks the retry', { timeout: 2_000 }, async () => {
+  const { claim } = syntheticExecutionFixture(); const failedOnce = deferred<void>();
+  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
+  let failCalls = 0; let surrenderCalls = 0; let disconnectCalls = 0;
+  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      claim: async () => claim,
+      preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+      fail: async () => { failCalls += 1; failedOnce.resolve(); throw Object.assign(new Error('private query'), { code: 'P2024' }); },
+      admit: async () => { await failedOnce.promise; await composition.runtimeAdapter.disconnect(); return 0; },
+      surrender: async () => { surrenderCalls += 1; return { state: 'RETRY_WAIT', availableAt: new Date() }; },
+      disconnect: async () => { disconnectCalls += 1; },
+    },
+  );
+  const claimed = await composition.runtimeAdapter.claim(); assert.ok(claimed);
+  const admission = composition.runtimeAdapter.admit();
+  await assert.rejects(composition.executionAdapter.consumeMockResult(claimed.lease), /AI_MOCK_EXECUTION_DRAINING/);
+  await admission;
+  assert.equal(failCalls, 1); assert.equal(surrenderCalls, 1); assert.equal(disconnectCalls, 1);
+});

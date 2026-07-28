@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { setTimeout as retryTimeout } from 'node:timers/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { canonicalSha256 } from '../canonical-json';
 import {
   AiOrchestratorExecutionCapabilityDeniedError,
@@ -52,6 +53,8 @@ type Entry = {
 type DisconnectCleanupAttempt = {
   readonly attemptedCrossingClaimHandles: Set<AiOrchestratorWorkerRuntimeLeaseHandleV1>;
   readonly crossingClaimErrors: AiMockExecutionError[];
+  readonly excludedRuntimeOperationTokens: Set<object>;
+  readonly runtimeWaiters: Set<() => void>;
 };
 
 export interface AiOrchestratorMockExecutionAdapterV1 {
@@ -108,8 +111,9 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     ...overrides,
   };
   const pendingLeaseOperations = new Set<Promise<unknown>>();
-  const pendingRuntimeOperations = new Set<Promise<unknown>>();
+  const pendingRuntimeOperations = new Map<object, Promise<unknown>>();
   const pendingClaims = new Set<Promise<unknown>>();
+  const runtimeOperationContext = new AsyncLocalStorage<object>();
   let disconnected = false;
   let disconnectPromise: Promise<void> | null = null;
   let activeDisconnectCleanupAttempt: DisconnectCleanupAttempt | null = null;
@@ -130,13 +134,33 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     }
     // Defer invocation by one microtask so the promise is registered before the
     // underlying runtime/Prisma operation can settle or trigger shutdown.
-    const promise = Promise.resolve().then(operation).catch((error) => {
+    const operationToken = Object.freeze(Object.create(null)) as object;
+    const promise = Promise.resolve().then(() => runtimeOperationContext.run(operationToken, operation)).catch((error) => {
       if (error instanceof AiOrchestratorWorkerRuntimeAdapterError) throw error;
       throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION');
     });
-    pendingRuntimeOperations.add(promise);
-    void promise.finally(() => pendingRuntimeOperations.delete(promise)).catch(() => undefined);
+    pendingRuntimeOperations.set(operationToken, promise);
+    void promise.finally(() => pendingRuntimeOperations.delete(operationToken)).catch(() => undefined);
     return promise;
+  };
+  const excludeReentrantRuntimeOperation = (attempt: DisconnectCleanupAttempt, token: object | undefined) => {
+    if (!token || attempt.excludedRuntimeOperationTokens.has(token)) return;
+    attempt.excludedRuntimeOperationTokens.add(token);
+    for (const notify of attempt.runtimeWaiters) notify();
+    attempt.runtimeWaiters.clear();
+  };
+  const waitForRuntimeOperations = async (attempt: DisconnectCleanupAttempt) => {
+    for (;;) {
+      const waitable = [...pendingRuntimeOperations]
+        .filter(([token]) => !attempt.excludedRuntimeOperationTokens.has(token))
+        .map(([, promise]) => promise);
+      if (!waitable.length) return;
+      let notify!: () => void;
+      const exclusionChanged = new Promise<void>((resolve) => { notify = resolve; });
+      attempt.runtimeWaiters.add(notify);
+      await Promise.race([Promise.allSettled(waitable).then(() => undefined), exclusionChanged]);
+      attempt.runtimeWaiters.delete(notify);
+    }
   };
   const boundedDatabaseOperation = async <T>(operationCode: ExecutionDatabaseOperation, operation: () => Promise<T>) => {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -294,16 +318,25 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       return surrenderSingleFlight(handle, entry);
     },
     disconnect: async () => {
-      if (disconnectPromise) return disconnectPromise;
+      const callerRuntimeOperationToken = runtimeOperationContext.getStore();
+      if (disconnectPromise) {
+        if (activeDisconnectCleanupAttempt) {
+          excludeReentrantRuntimeOperation(activeDisconnectCleanupAttempt, callerRuntimeOperationToken);
+        }
+        return disconnectPromise;
+      }
       const cleanupAttempt: DisconnectCleanupAttempt = {
         attemptedCrossingClaimHandles: new Set(),
         crossingClaimErrors: [],
+        excludedRuntimeOperationTokens: new Set(),
+        runtimeWaiters: new Set(),
       };
       activeDisconnectCleanupAttempt = cleanupAttempt;
+      excludeReentrantRuntimeOperation(cleanupAttempt, callerRuntimeOperationToken);
       disconnected = true;
       for (const entry of activeEntries.values()) if (!entry.terminalOutcome && !entry.closed) entry.drainRequested = true;
       const attempt = (async () => {
-        while (pendingRuntimeOperations.size) await Promise.allSettled([...pendingRuntimeOperations]);
+        await waitForRuntimeOperations(cleanupAttempt);
         while (pendingClaims.size) await Promise.allSettled([...pendingClaims]);
         const cleanupErrors: AiMockExecutionError[] = [...cleanupAttempt.crossingClaimErrors];
         const entriesToDrain = [...activeEntries.entries()];
@@ -339,7 +372,12 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
           return () => boundedDatabaseOperation(preflightSequence++ === 0 ? 'PREFLIGHT_BEFORE' : 'PREFLIGHT_AFTER', () => runtime.preflight(entry.runtimeLease));
         })(),
         complete: (draft) => boundedDatabaseOperation('COMPLETE', () => runtime.complete(entry.runtimeLease, { resultDraft: draft })),
-        fail: (failureCode) => boundedDatabaseOperation('FAIL', () => runtime.fail(entry.runtimeLease, { failureCode })) as Promise<AiMockExecutionOutcome>,
+        fail: (failureCode) => boundedDatabaseOperation('FAIL', async () => {
+          if (entry.drainRequested || entry.closed) {
+            throw new AiMockExecutionError('AI_MOCK_EXECUTION_DRAINING');
+          }
+          return runtime.fail(entry.runtimeLease, { failureCode });
+        }) as Promise<AiMockExecutionOutcome>,
         isDrainRequested: () => entry.drainRequested || entry.closed,
         assertClaimMatches: (snapshot) => assertClaim(entry, snapshot),
       });
