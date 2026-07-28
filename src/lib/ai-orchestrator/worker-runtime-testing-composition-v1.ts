@@ -59,6 +59,7 @@ export interface AiOrchestratorMockExecutionAdapterV1 {
 }
 
 export interface AiOrchestratorTestingRuntimePortsV1 {
+  readAuthority: () => ReturnType<typeof readAiOrchestratorWorkerControlPlaneAuthorityV1>;
   admit: typeof admitAiWorkflowJobOutbox;
   claim: typeof claimNextAiWorkflowJob;
   heartbeat: typeof heartbeatAiWorkflowJobLease;
@@ -91,6 +92,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   const leases = new WeakMap<object, Entry>();
   const activeEntries = new Map<AiOrchestratorWorkerRuntimeLeaseHandleV1, Entry>();
   const runtime: AiOrchestratorTestingRuntimePortsV1 = {
+    readAuthority: () => readAiOrchestratorWorkerControlPlaneAuthorityV1(prisma),
     admit: admitAiWorkflowJobOutbox, claim: claimNextAiWorkflowJob, heartbeat: heartbeatAiWorkflowJobLease,
     surrender: surrenderAiWorkflowJobLease, preflight: preflightAiWorkflowJobExecution,
     complete: completeAiWorkflowJobExecution,
@@ -105,7 +107,8 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     supersede: supersedeIneligibleAiWorkflowJobRuntimes, disconnect: () => prisma.$disconnect(),
     ...overrides,
   };
-  const pending = new Set<Promise<unknown>>();
+  const pendingLeaseOperations = new Set<Promise<unknown>>();
+  const pendingRuntimeOperations = new Set<Promise<unknown>>();
   const pendingClaims = new Set<Promise<unknown>>();
   let disconnected = false;
   let disconnectPromise: Promise<void> | null = null;
@@ -117,8 +120,22 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     return entry;
   };
   const tracked = <T>(promise: Promise<T>) => {
-    pending.add(promise);
-    void promise.finally(() => pending.delete(promise)).catch(() => undefined);
+    pendingLeaseOperations.add(promise);
+    void promise.finally(() => pendingLeaseOperations.delete(promise)).catch(() => undefined);
+    return promise;
+  };
+  const runRuntimeOperation = <T>(operation: () => Promise<T>) => {
+    if (disconnected) {
+      return Promise.reject(new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED'));
+    }
+    // Defer invocation by one microtask so the promise is registered before the
+    // underlying runtime/Prisma operation can settle or trigger shutdown.
+    const promise = Promise.resolve().then(operation).catch((error) => {
+      if (error instanceof AiOrchestratorWorkerRuntimeAdapterError) throw error;
+      throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION');
+    });
+    pendingRuntimeOperations.add(promise);
+    void promise.finally(() => pendingRuntimeOperations.delete(promise)).catch(() => undefined);
     return promise;
   };
   const boundedDatabaseOperation = async <T>(operationCode: ExecutionDatabaseOperation, operation: () => Promise<T>) => {
@@ -227,10 +244,10 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
 
   const runtimeAdapter: AiOrchestratorWorkerRuntimeAdapterV1 = Object.freeze({
     adapterVersion: AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_VERSION,
-    readAuthority: () => readAiOrchestratorWorkerControlPlaneAuthorityV1(prisma),
-    recover: async () => Object.freeze({ recovered: await runtime.recover() }),
-    supersede: async () => Object.freeze({ superseded: await runtime.supersede() }),
-    admit: async () => Object.freeze({ admitted: await runtime.admit() }),
+    readAuthority: () => runRuntimeOperation(runtime.readAuthority),
+    recover: () => runRuntimeOperation(async () => Object.freeze({ recovered: await runtime.recover() })),
+    supersede: () => runRuntimeOperation(async () => Object.freeze({ superseded: await runtime.supersede() })),
+    admit: () => runRuntimeOperation(async () => Object.freeze({ admitted: await runtime.admit() })),
     claim: async () => {
       if (disconnected) throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
       const claimPromise = tracked((async () => {
@@ -286,6 +303,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       disconnected = true;
       for (const entry of activeEntries.values()) if (!entry.terminalOutcome && !entry.closed) entry.drainRequested = true;
       const attempt = (async () => {
+        while (pendingRuntimeOperations.size) await Promise.allSettled([...pendingRuntimeOperations]);
         while (pendingClaims.size) await Promise.allSettled([...pendingClaims]);
         const cleanupErrors: AiMockExecutionError[] = [...cleanupAttempt.crossingClaimErrors];
         const entriesToDrain = [...activeEntries.entries()];

@@ -9,6 +9,7 @@ import { getFaiAuditExecutorBinding } from '../src/lib/ai-orchestrator/job-catal
 import { AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_CODE, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH, AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_VERSION, getAiOrchestratorWorkerCapability } from '../src/lib/ai-orchestrator/worker-runtime-policy-v1';
 import { createAiOrchestratorWorkerSyntheticTestingCompositionV1, calculateAiMockExecutionRetryDelayMsV1 } from '../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
 import { AiOrchestratorWorkerRuntimeAdapterError } from '../src/lib/ai-orchestrator/worker-runtime-adapter-v1';
+import type { AiOrchestratorWorkerControlPlaneAuthorityV1 } from '../src/lib/ai-orchestrator/worker-control-plane-authority-v1';
 import {
   AiOrchestratorExecutionCapabilityDeniedError,
   AiOrchestratorExecutionGateDeniedError,
@@ -778,4 +779,97 @@ test('stale crossing cleanup does not affect unavailable/transient priority or d
     await composition.runtimeAdapter.disconnect();
     assert.deepEqual(surrenderCalls, kind === 'UNAVAILABLE' ? [1, 2] : [1, 4]); assert.equal(prismaDisconnects, 1);
   }
+});
+
+test('drain wins over persisted-policy failure writes in either preflight', async () => {
+  for (const mismatchAt of [1, 2] as const) {
+    const { snapshot } = syntheticExecutionFixture();
+    const pendingMismatch = deferred<never>();
+    let preflights = 0; let draining = false; let failures = 0; let completions = 0;
+    const operation = createAiMockExecutionOperationV1({
+      readAuthority: async () => ({ allowed: true, capabilityAllowed: true }),
+      preflight: async () => {
+        preflights += 1;
+        if (preflights === mismatchAt) return pendingMismatch.promise;
+        return snapshot;
+      },
+      assertClaimMatches: () => undefined,
+      complete: async () => { completions += 1; return { state: 'SUCCEEDED' }; },
+      fail: async () => { failures += 1; return { state: 'FAILED_TERMINAL' }; },
+      isDrainRequested: () => draining,
+    })();
+    await new Promise((resolve) => setImmediate(resolve));
+    draining = true;
+    pendingMismatch.reject(new AiOrchestratorPersistedJobPolicyMismatchError());
+    await assert.rejects(operation, (error) => (
+      error instanceof AiMockExecutionError && error.code === 'AI_MOCK_EXECUTION_DRAINING'
+    ));
+    assert.equal(failures, 0); assert.equal(completions, 0);
+  }
+});
+
+test('the drain check immediately before fail prevents the policy terminalization race', async () => {
+  let drainChecks = 0; let failures = 0;
+  await assert.rejects(createAiMockExecutionOperationV1({
+    readAuthority: async () => ({ allowed: true, capabilityAllowed: true }),
+    preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+    assertClaimMatches: () => undefined,
+    complete: async () => ({ state: 'SUCCEEDED' }),
+    fail: async () => { failures += 1; return { state: 'FAILED_TERMINAL' }; },
+    isDrainRequested: () => ++drainChecks === 2,
+  })(), /AI_MOCK_EXECUTION_DRAINING/);
+  assert.equal(drainChecks, 2); assert.equal(failures, 0);
+});
+
+test('disconnect fences and awaits every non-lease runtime operation', async () => {
+  const authority = deferred<Readonly<AiOrchestratorWorkerControlPlaneAuthorityV1>>();
+  const admit = deferred<number>(); const recover = deferred<number>(); const supersede = deferred<number>();
+  const calls: string[] = [];
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      readAuthority: async () => authority.promise,
+      admit: async () => admit.promise,
+      recover: async () => recover.promise,
+      supersede: async () => supersede.promise,
+      disconnect: async () => { calls.push('disconnect'); },
+    },
+  );
+  const operations = [
+    composition.runtimeAdapter.readAuthority(), composition.runtimeAdapter.admit(),
+    composition.runtimeAdapter.recover(), composition.runtimeAdapter.supersede(),
+  ];
+  const firstDisconnect = composition.runtimeAdapter.disconnect();
+  const secondDisconnect = composition.runtimeAdapter.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, []);
+  await assert.rejects(composition.runtimeAdapter.readAuthority(), /ADAPTER_CLOSED/);
+  await assert.rejects(composition.runtimeAdapter.admit(), /ADAPTER_CLOSED/);
+  await assert.rejects(composition.runtimeAdapter.recover(), /ADAPTER_CLOSED/);
+  await assert.rejects(composition.runtimeAdapter.supersede(), /ADAPTER_CLOSED/);
+  authority.resolve(Object.freeze({}) as Readonly<AiOrchestratorWorkerControlPlaneAuthorityV1>);
+  admit.resolve(0); recover.resolve(0); supersede.resolve(0);
+  await Promise.all(operations); await Promise.all([firstDisconnect, secondDisconnect]);
+  assert.deepEqual(calls, ['disconnect']);
+});
+
+test('disconnect settles a rejected runtime operation before disconnecting and stays fenced', async () => {
+  const gate = deferred<never>(); const calls: string[] = [];
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    { admit: async () => gate.promise, disconnect: async () => { calls.push('disconnect'); } },
+  );
+  const admission = composition.runtimeAdapter.admit();
+  const shutdown = composition.runtimeAdapter.disconnect();
+  gate.reject(new Error('private runtime detail'));
+  await assert.rejects(admission, (error) => (
+    error instanceof AiOrchestratorWorkerRuntimeAdapterError
+    && error.code === 'AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION'
+    && !error.message.includes('private')
+  ));
+  await shutdown;
+  assert.deepEqual(calls, ['disconnect']);
+  await assert.rejects(composition.runtimeAdapter.admit(), /ADAPTER_CLOSED/);
 });

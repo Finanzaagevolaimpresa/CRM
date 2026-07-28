@@ -1329,3 +1329,74 @@ test('PR83 crossing claim realmente stale completa disconnect senza entry o seco
   });
   assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
 });
+
+test('PR83 drain durante policy mismatch preflight prevale sulla failure terminale', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const mismatch = deferred<void>(); let preflights = 0; let failureCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-drain-policy-${randomUUID()}`, workerBuildHash: '4'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        preflight: async (lease) => {
+          preflights += 1;
+          await preflightAiWorkflowJobExecution(lease);
+          if (preflights === 1) { await mismatch.promise; throw new AiOrchestratorPersistedJobPolicyMismatchError(); }
+          throw new Error('unexpected second preflight');
+        },
+        fail: async () => { failureCalls += 1; throw new Error('failure write must not run while draining'); },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+    const execution = composition.executionAdapter.consumeMockResult(claim.lease);
+    await new Promise((resolve) => setImmediate(resolve));
+    const drain = composition.runtimeAdapter.surrender(claim.lease);
+    mismatch.resolve();
+    await assert.rejects(execution, /AI_MOCK_EXECUTION_DRAINING/); await drain;
+    assert.equal(failureCalls, 0);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.failureCode, null); assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    await composition.runtimeAdapter.disconnect();
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 disconnect attende una admission PostgreSQL già avviata e mantiene il fence', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const settled = deferred<void>(); let underlyingSettled = false; let disconnectCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-runtime-fence-${randomUUID()}`, workerBuildHash: '3'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: async () => {
+          const admitted = await admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId });
+          await settled.promise; underlyingSettled = true; return admitted;
+        },
+        disconnect: async () => { assert.equal(underlyingSettled, true); disconnectCalls += 1; },
+      },
+    );
+    const admission = composition.runtimeAdapter.admit();
+    await new Promise((resolve) => setImmediate(resolve));
+    const shutdown = composition.runtimeAdapter.disconnect();
+    assert.equal(disconnectCalls, 0); settled.resolve();
+    await admission; await shutdown;
+    assert.equal(disconnectCalls, 1);
+    for (const operation of [
+      () => composition.runtimeAdapter.readAuthority(), () => composition.runtimeAdapter.admit(),
+      () => composition.runtimeAdapter.recover(), () => composition.runtimeAdapter.supersede(),
+    ]) await assert.rejects(operation(), /ADAPTER_CLOSED/);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { job: { workflowInstanceId: fixture.workflowInstanceId } } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});

@@ -102,20 +102,26 @@ function assertCanonical(snapshot: AiWorkflowJobExecutionPreflight) {
 
 /** Factory-scoped orchestration; callers cannot supply operational identities or handler callbacks. */
 export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) {
+  const failUnlessDraining = (code: 'POLICY_HASH_MISMATCH' | 'MOCK_HANDLER_TRANSIENT') => {
+    // This check intentionally lives immediately next to the write. A preflight,
+    // validation, or handler failure is not authority to terminalize after drain.
+    assertNotDraining(ports);
+    return ports.fail(code);
+  };
   return async (): Promise<AiMockExecutionOutcome> => {
     assertNotDraining(ports);
     assertAuthority(await ports.readAuthority());
     let first: AiWorkflowJobExecutionPreflight;
     try { first = await ports.preflight(); }
     catch (error) {
-      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return ports.fail('POLICY_HASH_MISMATCH');
+      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return failUnlessDraining('POLICY_HASH_MISMATCH');
       throw error;
     }
     ports.assertClaimMatches(first);
     try { assertCanonical(first); }
     catch (error) {
       if (error instanceof AiMockExecutionError && error.code === 'AI_MOCK_EXECUTION_POLICY_MISMATCH') {
-        return ports.fail('POLICY_HASH_MISMATCH');
+        return failUnlessDraining('POLICY_HASH_MISMATCH');
       }
       throw error;
     }
@@ -124,9 +130,9 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
     try {
       draft = executeAiOrchestratorMockHandler(createAiOrchestratorMockHandlerInvocation(first.intent));
     } catch (error) {
-      if (ports.explicitlyClassifyTransient?.(error)) return ports.fail('MOCK_HANDLER_TRANSIENT');
+      if (ports.explicitlyClassifyTransient?.(error)) return failUnlessDraining('MOCK_HANDLER_TRANSIENT');
       if (error instanceof AiOrchestratorMockHandlerError || error instanceof TypeError) {
-        return ports.fail('POLICY_HASH_MISMATCH');
+        return failUnlessDraining('POLICY_HASH_MISMATCH');
       }
       deny('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
     }
@@ -135,14 +141,14 @@ export function createAiMockExecutionOperationV1(ports: AiMockExecutionPortsV1) 
     let second: AiWorkflowJobExecutionPreflight;
     try { second = await ports.preflight(); }
     catch (error) {
-      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return ports.fail('POLICY_HASH_MISMATCH');
+      if (error instanceof AiOrchestratorPersistedJobPolicyMismatchError) return failUnlessDraining('POLICY_HASH_MISMATCH');
       throw error;
     }
     ports.assertClaimMatches(second);
     try { assertCanonical(second); }
     catch (error) {
       if (error instanceof AiMockExecutionError && error.code === 'AI_MOCK_EXECUTION_POLICY_MISMATCH') {
-        return ports.fail('POLICY_HASH_MISMATCH');
+        return failUnlessDraining('POLICY_HASH_MISMATCH');
       }
       throw error;
     }
