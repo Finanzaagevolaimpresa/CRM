@@ -21,8 +21,11 @@ import {
   type ClaimedAiWorkflowJob,
 } from './worker-runtime';
 import {
+  AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS,
   AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_VERSION,
   AiOrchestratorWorkerRuntimeAdapterError,
+  calculateAiOrchestratorWorkerRuntimeAdapterRetryDelayMsV1,
+  mapAiOrchestratorWorkerRuntimeAdapterDatabaseErrorV1,
   type AiOrchestratorWorkerRuntimeAdapterV1,
   type AiOrchestratorWorkerRuntimeLeaseHandleV1,
   type CreateAiOrchestratorWorkerRuntimeAdapterInputV1,
@@ -128,17 +131,44 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     void promise.finally(() => pendingLeaseOperations.delete(promise)).catch(() => undefined);
     return promise;
   };
-  const runRuntimeOperation = <T>(operation: () => Promise<T>) => {
+  const runRuntimeOperation = <T>(
+    operationCode: 'READ_AUTHORITY' | 'RECOVER' | 'SUPERSEDE' | 'ADMIT',
+    operation: () => Promise<T>,
+  ) => {
     if (disconnected) {
       return Promise.reject(new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED'));
     }
     // Defer invocation by one microtask so the promise is registered before the
     // underlying runtime/Prisma operation can settle or trigger shutdown.
     const operationToken = Object.freeze(Object.create(null)) as object;
-    const promise = Promise.resolve().then(() => runtimeOperationContext.run(operationToken, operation)).catch((error) => {
-      if (error instanceof AiOrchestratorWorkerRuntimeAdapterError) throw error;
+    const execute = async () => {
+      for (
+        let attempt = 1;
+        attempt <= AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxAttempts;
+        attempt += 1
+      ) {
+        try {
+          return await operation();
+        } catch (error) {
+          const mapped = mapAiOrchestratorWorkerRuntimeAdapterDatabaseErrorV1(error);
+          if (
+            mapped.code !== 'AI_WORKER_RUNTIME_ADAPTER_DB_TRANSIENT'
+            || attempt >= AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxAttempts
+          ) throw mapped;
+          await retryTimeout(calculateAiOrchestratorWorkerRuntimeAdapterRetryDelayMsV1({
+            workerInstanceId: input.workerInstanceId,
+            workerBuildHash: input.workerBuildHash,
+            operation: operationCode,
+            failedAttempt: attempt,
+          }));
+          if (disconnected) {
+            throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
+          }
+        }
+      }
       throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION');
-    });
+    };
+    const promise = Promise.resolve().then(() => runtimeOperationContext.run(operationToken, execute));
     pendingRuntimeOperations.set(operationToken, promise);
     void promise.finally(() => pendingRuntimeOperations.delete(operationToken)).catch(() => undefined);
     return promise;
@@ -268,10 +298,10 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
 
   const runtimeAdapter: AiOrchestratorWorkerRuntimeAdapterV1 = Object.freeze({
     adapterVersion: AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_VERSION,
-    readAuthority: () => runRuntimeOperation(runtime.readAuthority),
-    recover: () => runRuntimeOperation(async () => Object.freeze({ recovered: await runtime.recover() })),
-    supersede: () => runRuntimeOperation(async () => Object.freeze({ superseded: await runtime.supersede() })),
-    admit: () => runRuntimeOperation(async () => Object.freeze({ admitted: await runtime.admit() })),
+    readAuthority: () => runRuntimeOperation('READ_AUTHORITY', runtime.readAuthority),
+    recover: () => runRuntimeOperation('RECOVER', async () => Object.freeze({ recovered: await runtime.recover() })),
+    supersede: () => runRuntimeOperation('SUPERSEDE', async () => Object.freeze({ superseded: await runtime.supersede() })),
+    admit: () => runRuntimeOperation('ADMIT', async () => Object.freeze({ admitted: await runtime.admit() })),
     claim: async () => {
       if (disconnected) throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
       const claimPromise = tracked((async () => {

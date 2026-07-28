@@ -1369,7 +1369,7 @@ test('PR83 drain durante policy mismatch preflight prevale sulla failure termina
   assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
 });
 
-test('PR83 disconnect attende una admission PostgreSQL già avviata e mantiene il fence', { skip: !runDbTests }, async () => {
+test('post-merge PR83: operazioni PostgreSQL e shutdown restano fenced senza residui', { skip: !runDbTests }, async () => {
   const fixture = await createDataValidationCase();
   const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
   await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
@@ -1385,6 +1385,10 @@ test('PR83 disconnect attende una admission PostgreSQL già avviata e mantiene i
         disconnect: async () => { assert.equal(underlyingSettled, true); disconnectCalls += 1; },
       },
     );
+    const authority = await composition.runtimeAdapter.readAuthority();
+    assert.equal(authority.operational, false);
+    assert.equal(typeof (await composition.runtimeAdapter.recover()).recovered, 'number');
+    assert.equal(typeof (await composition.runtimeAdapter.supersede()).superseded, 'number');
     const admission = composition.runtimeAdapter.admit();
     await new Promise((resolve) => setImmediate(resolve));
     const shutdown = composition.runtimeAdapter.disconnect();
@@ -1397,6 +1401,7 @@ test('PR83 disconnect attende una admission PostgreSQL già avviata e mantiene i
     ]) await assert.rejects(operation(), /ADAPTER_CLOSED/);
     assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
     assert.equal(await db().aiWorkflowJobResult.count({ where: { job: { workflowInstanceId: fixture.workflowInstanceId } } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { job: { workflowInstanceId: fixture.workflowInstanceId } } } }), 0);
   });
   assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
 });
