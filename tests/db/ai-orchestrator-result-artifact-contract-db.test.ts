@@ -1240,3 +1240,54 @@ test('PR83 disconnect continua il drain PostgreSQL dopo un surrender fallito e r
   assert.equal(await db().aiRun.count(), before.runs);
   assert.equal(await db().aiOutput.count(), before.outputs);
 });
+
+test('PR83 accumula due crossing-claim cleanup errors e differisce entrambi i retry', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }), 1);
+    const identity = { workerInstanceId: `pr83-crossing-${randomUUID()}`, workerBuildHash: '6'.repeat(64) };
+    const realClaim = await claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId });
+    assert.ok(realClaim);
+    const seamLease = Object.freeze({}) as AiWorkflowJobLease;
+    const crossingClaims = [deferred<ClaimedAiWorkflowJob | null>(), deferred<ClaimedAiWorkflowJob | null>()];
+    let claimIndex = 0; const surrenderCalls = [0, 0]; let prismaDisconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { ...identity, workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => crossingClaims[claimIndex++].promise,
+        surrender: async (lease) => {
+          const index = lease === seamLease ? 0 : 1; surrenderCalls[index] += 1;
+          if (index === 0 && surrenderCalls[index] === 1) throw Object.assign(new Error('redacted'), { code: 'P1001' });
+          if (index === 1 && surrenderCalls[index] <= 3) throw Object.assign(new Error('redacted'), { code: 'P2024' });
+          if (index === 0) return { state: 'RETRY_WAIT' as const, availableAt: new Date() };
+          return surrenderAiWorkflowJobLease(lease);
+        },
+        disconnect: async () => { prismaDisconnects += 1; },
+      },
+    );
+    const claims = [composition.runtimeAdapter.claim(), composition.runtimeAdapter.claim()];
+    const firstDisconnect = composition.runtimeAdapter.disconnect();
+    const assertions = [
+      assert.rejects(claims[0], /DB_UNAVAILABLE/), assert.rejects(claims[1], /DB_TRANSIENT/),
+      assert.rejects(firstDisconnect, /DB_UNAVAILABLE/),
+    ];
+    crossingClaims[0].resolve({ ...realClaim, runtimeId: 'test-only-crossing-unavailable', lease: seamLease });
+    crossingClaims[1].resolve(realClaim);
+    await Promise.all(assertions);
+    assert.deepEqual(surrenderCalls, [1, 3]); assert.equal(prismaDisconnects, 0);
+    const leased = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    assert.equal(leased.state, 'LEASED');
+    await composition.runtimeAdapter.disconnect();
+    assert.deepEqual(surrenderCalls, [2, 4]); assert.equal(prismaDisconnects, 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});

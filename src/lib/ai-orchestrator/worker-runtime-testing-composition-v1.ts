@@ -49,6 +49,10 @@ type Entry = {
   terminalOutcome: AiMockExecutionOutcome | null;
   closed: boolean;
 };
+type DisconnectCleanupAttempt = {
+  readonly attemptedCrossingClaimHandles: Set<AiOrchestratorWorkerRuntimeLeaseHandleV1>;
+  readonly crossingClaimErrors: AiMockExecutionError[];
+};
 
 export interface AiOrchestratorMockExecutionAdapterV1 {
   consumeMockResult(lease: AiOrchestratorWorkerRuntimeLeaseHandleV1): Promise<AiMockExecutionOutcome>;
@@ -105,7 +109,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
   const pendingClaims = new Set<Promise<unknown>>();
   let disconnected = false;
   let disconnectPromise: Promise<void> | null = null;
-  let shutdownClaimCleanupError: unknown = null;
+  let activeDisconnectCleanupAttempt: DisconnectCleanupAttempt | null = null;
   const entryFor = (handle: AiOrchestratorWorkerRuntimeLeaseHandleV1) => {
     if (disconnected || !handle || typeof handle !== 'object') stale();
     const entry = leases.get(handle);
@@ -238,8 +242,12 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
             const handle = opaqueLease();
             const entry: Entry = { claim: Object.freeze(claim), runtimeLease: claim.lease, heartbeatPromise: null, executionPromise: null, surrenderPromise: null, drainRequested: true, terminalOutcome: null, closed: false };
             install(handle, entry);
-            shutdownClaimCleanupError = error;
-            throw error;
+            const cleanupAttempt = activeDisconnectCleanupAttempt;
+            const normalized = normalizeCleanupError(error);
+            if (!cleanupAttempt) throw new AiMockExecutionError('AI_MOCK_EXECUTION_INVARIANT_VIOLATION');
+            cleanupAttempt.attemptedCrossingClaimHandles.add(handle);
+            cleanupAttempt.crossingClaimErrors.push(normalized);
+            throw normalized;
           }
           throw new AiOrchestratorWorkerRuntimeAdapterError('AI_WORKER_RUNTIME_ADAPTER_CLOSED');
         }
@@ -267,18 +275,20 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     },
     disconnect: async () => {
       if (disconnectPromise) return disconnectPromise;
+      const cleanupAttempt: DisconnectCleanupAttempt = {
+        attemptedCrossingClaimHandles: new Set(),
+        crossingClaimErrors: [],
+      };
+      activeDisconnectCleanupAttempt = cleanupAttempt;
       disconnected = true;
       for (const entry of activeEntries.values()) if (!entry.terminalOutcome && !entry.closed) entry.drainRequested = true;
       const attempt = (async () => {
         while (pendingClaims.size) await Promise.allSettled([...pendingClaims]);
-        const cleanupErrors: AiMockExecutionError[] = [];
-        if (shutdownClaimCleanupError) {
-          cleanupErrors.push(normalizeCleanupError(shutdownClaimCleanupError));
-          shutdownClaimCleanupError = null;
-        }
+        const cleanupErrors: AiMockExecutionError[] = [...cleanupAttempt.crossingClaimErrors];
         const entriesToDrain = [...activeEntries.entries()];
         for (const [handle, entry] of entriesToDrain) {
           entry.drainRequested = true;
+          if (cleanupAttempt.attemptedCrossingClaimHandles.has(handle)) continue;
           if (entry.heartbeatPromise) { try { await entry.heartbeatPromise; } catch { /* cleanup continues */ } }
           if (entry.executionPromise) { try { await entry.executionPromise; } catch { /* cleanup continues */ } }
           if (entry.closed || entry.terminalOutcome) { close(handle, entry); continue; }
@@ -292,6 +302,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       disconnectPromise = attempt;
       try { await attempt; }
       catch (error) { if (disconnectPromise === attempt) disconnectPromise = null; throw error; }
+      finally { if (activeDisconnectCleanupAttempt === cleanupAttempt) activeDisconnectCleanupAttempt = null; }
     },
   });
 

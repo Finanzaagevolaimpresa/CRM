@@ -672,3 +672,45 @@ test('multi-handle disconnect drains every snapshot entry and retries only faile
     if (scenario === 'MIXED_PRIORITY') assert.deepEqual(attempts, [4, 2, 1]);
   }
 });
+
+test('crossing claims collect every error, preserve priority, and defer all retries to the next disconnect', async () => {
+  for (const reverseCompletion of [false, true]) {
+    const base = syntheticExecutionFixture().claim;
+    const claimDeferred = [deferred<ClaimedAiWorkflowJob | null>(), deferred<ClaimedAiWorkflowJob | null>()];
+    const leases = [Object.freeze({}) as AiWorkflowJobLease, Object.freeze({}) as AiWorkflowJobLease];
+    let claimCall = 0; const surrenderCalls = [0, 0]; let prismaDisconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => claimDeferred[claimCall++].promise,
+        surrender: async (lease) => {
+          const index = leases.indexOf(lease); surrenderCalls[index] += 1;
+          if (index === 0 && surrenderCalls[index] === 1) throw Object.assign(new Error('private P1001 detail'), { code: 'P1001' });
+          if (index === 1 && surrenderCalls[index] <= 3) throw Object.assign(new Error('private P2024 detail'), { code: 'P2024' });
+          return { state: 'RETRY_WAIT', availableAt: new Date() };
+        },
+        disconnect: async () => { prismaDisconnects += 1; },
+      },
+    );
+    const claims = [composition.runtimeAdapter.claim(), composition.runtimeAdapter.claim()];
+    const firstDisconnect = composition.runtimeAdapter.disconnect();
+    const concurrentDisconnect = composition.runtimeAdapter.disconnect();
+    const claimAssertions = [assert.rejects(claims[0], /DB_UNAVAILABLE/), assert.rejects(claims[1], /DB_TRANSIENT/)];
+    const disconnectAssertions = [
+      assert.rejects(firstDisconnect, (error) => error instanceof AiMockExecutionError
+        && error.code === 'AI_MOCK_EXECUTION_DB_UNAVAILABLE' && !error.message.includes('private')),
+      assert.rejects(concurrentDisconnect, /DB_UNAVAILABLE/),
+    ];
+    const resolveClaim = (index: number) => claimDeferred[index].resolve({ ...base, runtimeId: `crossing-${index}`, lease: leases[index] });
+    if (reverseCompletion) { resolveClaim(1); await new Promise((resolve) => setImmediate(resolve)); resolveClaim(0); }
+    else { resolveClaim(0); await new Promise((resolve) => setImmediate(resolve)); resolveClaim(1); }
+    await Promise.all([...claimAssertions, ...disconnectAssertions]);
+    assert.deepEqual(surrenderCalls, [1, 3]);
+    assert.equal(prismaDisconnects, 0);
+    await assert.rejects(composition.runtimeAdapter.claim(), /ADAPTER_CLOSED/);
+    await composition.runtimeAdapter.disconnect();
+    assert.deepEqual(surrenderCalls, [2, 4]);
+    assert.equal(prismaDisconnects, 1);
+  }
+});
