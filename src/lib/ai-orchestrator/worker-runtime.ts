@@ -19,7 +19,9 @@ import {
   calculateAiOrchestratorRetryDelayMs,
   getAiOrchestratorWorkerCapability,
   type AiOrchestratorFailureCode,
+  type AiOrchestratorWorkerCapability,
 } from './worker-runtime-policy-v1';
+import { parsePersistedFaiAuditJobIntent, type FaiAuditJobIntent } from './job-planner';
 
 export const AI_ORCHESTRATOR_WORKER_ENV_GATE = 'AI_ORCHESTRATOR_WORKER_ENABLED' as const;
 const OUTBOX_CONSUMER_CODE = 'AI_ORCHESTRATOR_JOB_PLANNED_CONSUMER' as const;
@@ -710,6 +712,132 @@ export async function heartbeatAiWorkflowJobLease(lease: AiWorkflowJobLease) {
   return leaseExpiresAt;
 }
 
+export type AiWorkflowJobExecutionPreflight = Readonly<{
+  intent: FaiAuditJobIntent;
+  runtimeId: string;
+  jobId: string;
+  attemptId: string;
+  attemptSequence: number;
+  fencingToken: string;
+  workerInstanceId: string;
+  workerBuildHash: string;
+  leaseExpiresAt: string;
+  leaseMaxExpiresAt: string;
+  runtimePolicyCode: string;
+  runtimePolicyVersion: string;
+  runtimePolicyHash: string;
+  capabilityCode: string;
+  capabilityVersion: string;
+  capabilityHash: string;
+  handlerCode: string;
+  handlerVersion: string;
+}>;
+
+export class AiOrchestratorExecutionGateDeniedError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_EXECUTION_GATE_DENIED'); this.name = 'AiOrchestratorExecutionGateDeniedError'; }
+}
+export class AiOrchestratorExecutionCapabilityDeniedError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_EXECUTION_CAPABILITY_DENIED'); this.name = 'AiOrchestratorExecutionCapabilityDeniedError'; }
+}
+export class AiOrchestratorPersistedJobPolicyMismatchError extends Error {
+  constructor() { super('AI_ORCHESTRATOR_PERSISTED_JOB_POLICY_MISMATCH'); this.name = 'AiOrchestratorPersistedJobPolicyMismatchError'; }
+}
+
+/** Read-only snapshot for the factory-scoped PR83 composition. */
+export async function preflightAiWorkflowJobExecution(
+  lease: AiWorkflowJobLease,
+): Promise<AiWorkflowJobExecutionPreflight> {
+  assertWorkerEnvironmentEnabled();
+  const claims = getLeaseClaims(lease);
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`SET TRANSACTION READ ONLY`);
+    const now = await databaseNow(tx);
+    const [setting, control] = await Promise.all([
+      tx.aiOrchestratorSetting.findUnique({ where: { id: 'global' } }),
+      tx.aiControlSetting.findUnique({ where: { id: 'global' } }),
+    ]);
+    const runtime = await tx.aiWorkflowJobRuntime.findUnique({
+      where: { id: claims.runtimeId },
+      include: { job: true, attempts: { where: { attemptSequence: claims.attemptSequence } } },
+    });
+    if (!runtime) throw new AiOrchestratorLeaseLostError();
+    const capabilitySetting = await tx.aiOrchestratorWorkerCapabilitySetting.findUnique({
+      where: { jobCode: runtime.job.jobCode },
+    });
+    const capability = getAiOrchestratorWorkerCapability(runtime.job.jobCode);
+    const attempt = runtime.attempts[0];
+    if (
+      !setting || !setting.stateMachineEnabled || !setting.dispatchEnabled
+      || !setting.syntheticDataOnly || setting.provider !== 'mock'
+      || !control || control.externalProvidersEnabled
+    ) throw new AiOrchestratorExecutionGateDeniedError();
+    if (
+      !capabilitySetting?.enabled
+      || !capability
+      || capabilitySetting.capabilityCode !== capability.capabilityCode
+      || capabilitySetting.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode]
+    ) throw new AiOrchestratorExecutionCapabilityDeniedError();
+    if (
+      runtime.jobId !== claims.jobId || runtime.state !== 'LEASED'
+      || runtime.attemptSequence !== claims.attemptSequence
+      || runtime.fencingToken !== claims.fencingToken
+      || runtime.leaseOwnerId !== claims.workerInstanceId
+      || runtime.leaseTokenHash !== claims.tokenHash
+      || !runtime.leaseExpiresAt || runtime.leaseExpiresAt <= now
+      || !runtime.leaseMaxExpiresAt || runtime.leaseMaxExpiresAt <= now
+      || !attempt || attempt.finishedAt
+      || attempt.fencingToken !== claims.fencingToken
+      || attempt.workerInstanceId !== claims.workerInstanceId
+      || attempt.leaseTokenHash !== claims.tokenHash
+      || attempt.leaseExpiresAt <= now || attempt.leaseMaxExpiresAt <= now
+    ) throw new AiOrchestratorLeaseLostError();
+    const job = runtime.job;
+    let intent: FaiAuditJobIntent;
+    try { intent = parsePersistedFaiAuditJobIntent({
+      catalogCode: job.catalogCode,
+      catalogVersion: job.catalogVersion,
+      catalogHash: job.catalogHash,
+      workflowDefinitionHash: job.workflowDefinitionHash,
+      phaseCode: job.phaseCode,
+      phaseEntrySequence: job.phaseEntrySequence,
+      sourceState: job.sourceState,
+      sourceStateVersion: job.sourceStateVersion,
+      correctionCycle: job.correctionCycle,
+      executorAgentId: job.executorAgentId,
+      executorAgentCode: job.executorAgentCode,
+      executorAgentConfigVersion: job.executorAgentConfigVersion,
+      executorAgentConfigHash: job.executorAgentConfigHash,
+      jobCode: job.jobCode,
+      jobVersion: job.jobVersion,
+      jobDefinitionHash: job.jobDefinitionHash,
+      completionTransitionCode: job.completionTransitionCode,
+      completionMode: job.completionMode,
+      slotKey: job.slotKey,
+      bundleCode: job.bundleCode,
+      bundleKey: job.bundleKey,
+      dedupeKey: job.dedupeKey,
+      provider: job.provider,
+      dataMode: job.dataMode,
+      automaticDispatchAllowed: job.automaticDispatchAllowed,
+      availableAt: job.availableAt.toISOString(),
+      payload: job.payload,
+      payloadHash: job.payloadHash,
+    }); } catch {
+      throw new AiOrchestratorPersistedJobPolicyMismatchError();
+    }
+    return Object.freeze({
+      intent, runtimeId: runtime.id, jobId: job.id, attemptId: attempt.id,
+      attemptSequence: attempt.attemptSequence, fencingToken: attempt.fencingToken.toString(),
+      workerInstanceId: attempt.workerInstanceId, workerBuildHash: attempt.workerBuildHash,
+      leaseExpiresAt: attempt.leaseExpiresAt.toISOString(), leaseMaxExpiresAt: attempt.leaseMaxExpiresAt.toISOString(),
+      runtimePolicyCode: runtime.runtimePolicyCode, runtimePolicyVersion: runtime.runtimePolicyVersion,
+      runtimePolicyHash: runtime.runtimePolicyHash, capabilityCode: runtime.capabilityCode,
+      capabilityVersion: runtime.capabilityVersion, capabilityHash: runtime.capabilityHash,
+      handlerCode: runtime.handlerCode, handlerVersion: runtime.handlerVersion,
+    });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
 async function loadFencedRuntime(tx: RuntimeDb, claims: LeaseClaims, now: Date) {
   const runtime = await tx.aiWorkflowJobRuntime.findUnique({
     where: { id: claims.runtimeId },
@@ -724,16 +852,30 @@ async function loadFencedRuntime(tx: RuntimeDb, claims: LeaseClaims, now: Date) 
   return runtime;
 }
 
-export async function completeAiWorkflowJob(
+async function completeAiWorkflowJobInternal(
   lease: AiWorkflowJobLease,
   options: { resultDraft: AiResultArtifactDraft },
+  executionSpecificErrors: boolean,
 ) {
-  assertWorkerEnvironmentEnabled();
+  try { assertWorkerEnvironmentEnabled(); }
+  catch (error) {
+    if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionGateDeniedError();
+    throw error;
+  }
   const { resultDraft } = options;
   const claims = getLeaseClaims(lease);
   return prisma.$transaction(async (tx) => {
-    await lockAndAssertRuntimeGates(tx);
-    const capability = await lockAndAssertCapabilityEnabled(tx, claims.jobId);
+    try { await lockAndAssertRuntimeGates(tx); }
+    catch (error) {
+      if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionGateDeniedError();
+      throw error;
+    }
+    let capability: AiOrchestratorWorkerCapability;
+    try { capability = await lockAndAssertCapabilityEnabled(tx, claims.jobId); }
+    catch (error) {
+      if (executionSpecificErrors && error instanceof AiOrchestratorWorkerDisabledError) throw new AiOrchestratorExecutionCapabilityDeniedError();
+      throw error;
+    }
     const runtimeSnapshot = await tx.aiWorkflowJobRuntime.findUnique({ where: { id: claims.runtimeId }, include: { job: true } });
     if (runtimeSnapshot?.state === 'SUCCEEDED' && runtimeSnapshot.resultHash) {
       const persisted = await tx.aiWorkflowJobResult.findFirst({
@@ -758,6 +900,7 @@ export async function completeAiWorkflowJob(
     const now = await databaseNow(tx);
     const runtime = await loadFencedRuntime(tx, claims, now);
     if (runtime.runtimePolicyHash !== AI_ORCHESTRATOR_WORKER_RUNTIME_POLICY_HASH || runtime.capabilityHash !== AI_ORCHESTRATOR_WORKER_CAPABILITY_HASHES[capability.jobCode] || runtime.handlerCode !== capability.handlerCode || runtime.handlerVersion !== capability.handlerVersion) {
+      if (executionSpecificErrors) throw new AiOrchestratorPersistedJobPolicyMismatchError();
       throw new AiOrchestratorLeaseLostError('Identità runtime/capability/handler non valida.');
     }
     const attempt = await tx.aiWorkflowJobAttempt.findFirst({ where: { runtimeId: claims.runtimeId, attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, leaseTokenHash: claims.tokenHash, finishedAt: null } });
@@ -785,6 +928,15 @@ export async function completeAiWorkflowJob(
     await appendRuntimeEvent(tx, { runtimeId: runtime.id, jobId: runtime.jobId, workflowInstanceId: runtime.workflowInstanceId, eventType: 'SUCCEEDED', attemptSequence: claims.attemptSequence, fencingToken: claims.fencingToken, reasonCode: 'SUCCEEDED', payload: { resultHash: hashed.resultHash, manifestHash: hashed.manifestHash, resultId: result.id, artifactCount: hashed.artifacts.length, provider: 'mock', workflowTransitionApplied: false }, occurredAt: terminalNow });
     return { replay: false as const, state: 'SUCCEEDED' as const, resultHash: hashed.resultHash };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export function completeAiWorkflowJob(lease: AiWorkflowJobLease, options: { resultDraft: AiResultArtifactDraft }) {
+  return completeAiWorkflowJobInternal(lease, options, false);
+}
+
+/** PR83-only completion wrapper; preserves the public PR77/PR76 error surface. */
+export function completeAiWorkflowJobExecution(lease: AiWorkflowJobLease, options: { resultDraft: AiResultArtifactDraft }) {
+  return completeAiWorkflowJobInternal(lease, options, true);
 }
 
 function buildRuntimeResultProvenance(

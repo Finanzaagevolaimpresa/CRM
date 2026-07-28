@@ -52,6 +52,7 @@ import {
   surrenderAiWorkflowJobLease,
   supersedeIneligibleAiWorkflowJobRuntimes,
 } from '../../src/lib/ai-orchestrator/worker-runtime';
+import { createAiOrchestratorWorkerSyntheticTestingCompositionV1 } from '../../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
 import {
   createAiOrchestratorWorkerRuntimeAdapterV1,
   AiOrchestratorWorkerRuntimeAdapterError,
@@ -1549,6 +1550,30 @@ test('vertical slice sintetica termina a HUMAN_APPROVAL e rifiuta WF-018..WF-023
     let instance = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });
     assert.equal(instance.currentState, 'NEEDS_CORRECTION');
     assert.equal(instance.correctionCycle, expectedCycle);
+    const correctionJob = await db().aiWorkflowJob.findFirstOrThrow({
+      where: { workflowInstanceId: id, jobCode: 'CORRECTION', correctionCycle: expectedCycle },
+    });
+    await withTemporaryDispatchFixture(async () => {
+      process.env.AI_ORCHESTRATOR_WORKER_ENABLED = '1';
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `correction-${expectedCycle}-${randomUUID()}`, workerBuildHash: 'e'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: id }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: id }),
+        },
+      );
+      assert.ok((await composition.runtimeAdapter.admit()).admitted >= 1);
+      const claimed = await composition.runtimeAdapter.claim();
+      assert.ok(claimed);
+      const outcome = await composition.executionAdapter.consumeMockResult(claimed.lease);
+      assert.equal(outcome.state, 'SUCCEEDED');
+      const result = await db().aiWorkflowJobResult.findFirstOrThrow({
+        where: { jobId: correctionJob.id }, include: { artifacts: true },
+      });
+      assert.equal(result.artifacts.length, 2);
+      await composition.runtimeAdapter.disconnect();
+    }, { enabledJobCodes: ['CORRECTION'] });
     await applyOk(id, 'WF-016', agent());
     await applyOk(id, 'WF-014', system());
     instance = await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id } });

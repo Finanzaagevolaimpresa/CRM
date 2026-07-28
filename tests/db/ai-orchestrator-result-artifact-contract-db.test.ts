@@ -23,9 +23,18 @@ import {
   AiOrchestratorLeaseLostError,
   claimNextAiWorkflowJob,
   completeAiWorkflowJob,
+  completeAiWorkflowJobExecution,
+  AiOrchestratorPersistedJobPolicyMismatchError,
+  preflightAiWorkflowJobExecution,
   surrenderAiWorkflowJobLease,
   type ClaimedAiWorkflowJob,
+  type AiWorkflowJobLease,
 } from '../../src/lib/ai-orchestrator/worker-runtime';
+import {
+  createAiOrchestratorMockHandlerInvocation,
+  executeAiOrchestratorMockHandler,
+} from '../../src/lib/ai-orchestrator/mock-handler-registry-v1';
+import { createAiOrchestratorWorkerSyntheticTestingCompositionV1 } from '../../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
 import {
   applyAuditWorkflowTransition,
   createAuditWorkflowInstance,
@@ -69,6 +78,12 @@ let migrationDefaults: {
 function db() {
   if (!prisma) throw new Error('DB tests disabled');
   return prisma;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 async function assertConfirmedRuntimeDbFixture() {
@@ -737,7 +752,16 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       workflowInstanceId: firstCase.workflowInstanceId,
     });
     assert.ok(firstClaim);
-    const invalidDraft = createSyntheticAiResultDraft(firstClaim.jobCode);
+    const firstPreflight = await preflightAiWorkflowJobExecution(firstClaim.lease);
+    assert.equal(firstPreflight.jobId, firstCase.job.id);
+    assert.equal(firstPreflight.intent.dedupeKey, firstCase.job.dedupeKey);
+    const canonicalDraft = executeAiOrchestratorMockHandler(
+      createAiOrchestratorMockHandlerInvocation(firstPreflight.intent),
+    );
+    const secondPreflight = await preflightAiWorkflowJobExecution(firstClaim.lease);
+    assert.deepEqual(secondPreflight, firstPreflight);
+
+    const invalidDraft = structuredClone(canonicalDraft);
     invalidDraft.artifacts[0].payload = {};
     await assert.rejects(completeAiWorkflowJob(firstClaim.lease, { resultDraft: invalidDraft }));
     assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: firstClaim.runtimeId } }), 0);
@@ -745,7 +769,7 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       where: { id: firstClaim.runtimeId },
     })).state, 'LEASED');
 
-    const firstDraft = createSyntheticAiResultDraft(firstClaim.jobCode);
+    const firstDraft = canonicalDraft;
     const firstCompletion = await completeAiWorkflowJob(firstClaim.lease, { resultDraft: firstDraft });
     assert.equal(firstCompletion.replay, false);
     assert.equal(firstCompletion.state, 'SUCCEEDED');
@@ -942,4 +966,506 @@ test('completion atomica, rollback, replay, conflitto, stale lease e persistenza
       where: { resultId: { in: [firstResult.id, secondResult.id] } },
     }), 0);
   });
+});
+
+test('PR83 execution adapter esegue admission, claim opaco, registry e completion fenced reali', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = {
+    runs: await db().aiRun.count(), outputs: await db().aiOutput.count(),
+    workflow: await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id: fixture.workflowInstanceId } }),
+  };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-${randomUUID()}`, workerBuildHash: 'd'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim();
+    assert.ok(claim);
+    assert.deepEqual(Object.keys(claim), ['lease']);
+    const outcome = await composition.executionAdapter.consumeMockResult(claim.lease);
+    assert.equal(outcome.state, 'SUCCEEDED');
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const [results, artifacts, attempt, event] = await Promise.all([
+      db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }),
+      db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }),
+      db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } }),
+      db().aiWorkflowJobRuntimeEvent.findFirstOrThrow({ where: { runtimeId: runtime.id, eventType: 'SUCCEEDED' } }),
+    ]);
+    assert.equal(results, 1); assert.equal(artifacts, 1);
+    assert.equal(runtime.state, 'SUCCEEDED'); assert.equal(attempt.outcome, 'SUCCEEDED');
+    assert.equal((event.payload as { workflowTransitionApplied?: unknown }).workflowTransitionApplied, false);
+    await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /LEASE_STALE/);
+    await composition.runtimeAdapter.disconnect();
+  });
+  assert.equal(await db().aiRun.count(), before.runs);
+  assert.equal(await db().aiOutput.count(), before.outputs);
+  assert.deepEqual(await db().aiWorkflowInstance.findUniqueOrThrow({ where: { id: fixture.workflowInstanceId } }), before.workflow);
+});
+
+test('PR83 distingue denial PostgreSQL da lease stale e surrendera senza lasciare slot LEASED', { skip: !runDbTests }, async () => {
+  for (const scenario of ['CAPABILITY_BEFORE', 'CAPABILITY_AFTER', 'DISPATCH_AFTER', 'EXTERNAL_AFTER'] as const) {
+    const fixture = await createDataValidationCase();
+    await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+      let preflightCount = 0;
+      const mutateGate = async () => {
+        if (scenario.startsWith('CAPABILITY')) {
+          await db().aiOrchestratorWorkerCapabilitySetting.update({
+            where: { jobCode: fixture.job.jobCode }, data: { enabled: false, version: { increment: 1 } },
+          });
+        } else if (scenario === 'DISPATCH_AFTER') {
+          await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: { dispatchEnabled: false } });
+        } else {
+          await db().aiControlSetting.update({ where: { id: 'global' }, data: { externalProvidersEnabled: true } });
+        }
+      };
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `pr83-denial-${randomUUID()}`, workerBuildHash: 'c'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+          preflight: async (lease) => {
+            preflightCount += 1;
+            if ((scenario === 'CAPABILITY_BEFORE' && preflightCount === 1) || (scenario !== 'CAPABILITY_BEFORE' && preflightCount === 2)) {
+              await mutateGate();
+            }
+            return preflightAiWorkflowJobExecution(lease);
+          },
+        },
+      );
+      try {
+        assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+        const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+        await assert.rejects(
+          composition.executionAdapter.consumeMockResult(claim.lease),
+          scenario.startsWith('CAPABILITY') ? /CAPABILITY_DENIED/ : /AUTHORITY_DENIED/,
+        );
+        const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+        assert.notEqual(runtime.state, 'LEASED');
+        assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+        assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      } finally {
+        await db().aiControlSetting.update({ where: { id: 'global' }, data: { externalProvidersEnabled: false } });
+        await composition.runtimeAdapter.disconnect();
+      }
+    });
+  }
+});
+
+test('PR83 terminalizza un persisted policy mismatch senza result, artifact o re-claim', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-policy-${randomUUID()}`, workerBuildHash: 'b'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+    try {
+      const outcome = await composition.executionAdapter.consumeMockResult(claim.lease);
+      assert.equal(outcome.state, 'FAILED_TERMINAL');
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'FAILED_TERMINAL');
+      assert.equal(attempt.outcome, 'FAILED_TERMINAL');
+      assert.equal(attempt.failureCode, 'POLICY_HASH_MISMATCH');
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await composition.runtimeAdapter.claim(), null);
+      await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /LEASE_STALE/);
+    } finally {
+      await composition.runtimeAdapter.disconnect();
+    }
+  });
+});
+
+test('PR83 surrendera denial di dispatch/capability tra secondo preflight e completion', { skip: !runDbTests }, async () => {
+  for (const scenario of ['DISPATCH', 'CAPABILITY'] as const) {
+    const fixture = await createDataValidationCase();
+    await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `pr83-final-denial-${randomUUID()}`, workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+          complete: async (lease, options) => {
+            if (scenario === 'DISPATCH') {
+              await db().aiOrchestratorSetting.update({ where: { id: 'global' }, data: { dispatchEnabled: false } });
+            } else {
+              await db().aiOrchestratorWorkerCapabilitySetting.update({
+                where: { jobCode: fixture.job.jobCode }, data: { enabled: false, version: { increment: 1 } },
+              });
+            }
+            return completeAiWorkflowJobExecution(lease, options);
+          },
+        },
+      );
+      try {
+        assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+        const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+        await assert.rejects(
+          composition.executionAdapter.consumeMockResult(claim.lease),
+          scenario === 'DISPATCH' ? /AUTHORITY_DENIED/ : /CAPABILITY_DENIED/,
+        );
+        const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+        const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+        assert.equal(runtime.state, 'RETRY_WAIT');
+        assert.equal(attempt.outcome, 'SURRENDERED');
+        assert.equal(attempt.retryBudgetConsumed, false);
+        assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+        assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+        assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+      } finally {
+        await composition.runtimeAdapter.disconnect();
+      }
+    });
+  }
+});
+
+test('PR83 authority denial PostgreSQL dopo handler surrendera senza persistenza o retry budget', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    let authorityReads = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-authority-${randomUUID()}`, workerBuildHash: '9'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: ++authorityReads === 1, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+      },
+    );
+    try {
+      assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+      const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+      await assert.rejects(composition.executionAdapter.consumeMockResult(claim.lease), /AUTHORITY_DENIED/);
+      assert.equal(authorityReads, 2);
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'RETRY_WAIT');
+      assert.equal(attempt.outcome, 'SURRENDERED');
+      assert.equal(attempt.retryBudgetConsumed, false);
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    } finally {
+      await composition.runtimeAdapter.disconnect();
+    }
+  });
+});
+
+test('PR83 disconnect drena claim reali inattive o con heartbeat pendente', { skip: !runDbTests }, async () => {
+  for (const pendingHeartbeat of [false, true]) {
+    const fixture = await createDataValidationCase();
+    const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+    await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+      const heartbeat = deferred<Date>();
+      const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+        { workerInstanceId: `pr83-disconnect-${randomUUID()}`, workerBuildHash: '8'.repeat(64), workerEnabled: '1' },
+        async () => ({ allowed: true, capabilityAllowed: true }),
+        {
+          admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+          claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+          ...(pendingHeartbeat ? { heartbeat: async () => heartbeat.promise } : {}),
+        },
+      );
+      assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+      const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+      const beating = pendingHeartbeat ? composition.runtimeAdapter.heartbeat(claim.lease) : null;
+      const shutdown = composition.runtimeAdapter.disconnect();
+      if (beating) { await new Promise((resolve) => setImmediate(resolve)); heartbeat.resolve(new Date()); await beating; }
+      await shutdown;
+      const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+      const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+      assert.equal(runtime.state, 'RETRY_WAIT');
+      assert.equal(attempt.outcome, 'SURRENDERED');
+      assert.equal(attempt.retryBudgetConsumed, false);
+      assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+      assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+      assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    });
+    assert.equal(await db().aiRun.count(), before.runs);
+    assert.equal(await db().aiOutput.count(), before.outputs);
+  }
+});
+
+test('PR83 disconnect continua il drain PostgreSQL dopo un surrender fallito e ritenta solo il residuo', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    let realClaim: ClaimedAiWorkflowJob | null = null; let claimIndex = 0; let failedFirst = false;
+    const seamLease = Object.freeze({}) as AiWorkflowJobLease;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-multi-drain-${randomUUID()}`, workerBuildHash: '7'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: async (identity) => {
+          claimIndex += 1;
+          if (!realClaim) realClaim = await claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId });
+          if (!realClaim) return null;
+          return claimIndex === 1 ? { ...realClaim, runtimeId: 'test-only-failed-cleanup-entry', lease: seamLease } : realClaim;
+        },
+        surrender: async (lease) => {
+          if (lease === seamLease && !failedFirst) {
+            failedFirst = true; throw Object.assign(new Error('redacted'), { code: 'P1001' });
+          }
+          if (lease === seamLease) return { state: 'RETRY_WAIT' as const, availableAt: new Date() };
+          return surrenderAiWorkflowJobLease(lease);
+        },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    assert.ok(await composition.runtimeAdapter.claim()); assert.ok(await composition.runtimeAdapter.claim());
+    await assert.rejects(composition.runtimeAdapter.disconnect(), /DB_UNAVAILABLE/);
+    const firstPass = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    assert.equal(firstPass.state, 'RETRY_WAIT');
+    await composition.runtimeAdapter.disconnect();
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: firstPass.id } });
+    assert.equal(attempt.outcome, 'SURRENDERED'); assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: firstPass.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: firstPass.id } } }), 0);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs);
+  assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 accumula due crossing-claim cleanup errors e differisce entrambi i retry', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }), 1);
+    const identity = { workerInstanceId: `pr83-crossing-${randomUUID()}`, workerBuildHash: '6'.repeat(64) };
+    const realClaim = await claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId });
+    assert.ok(realClaim);
+    const seamLease = Object.freeze({}) as AiWorkflowJobLease;
+    const crossingClaims = [deferred<ClaimedAiWorkflowJob | null>(), deferred<ClaimedAiWorkflowJob | null>()];
+    let claimIndex = 0; const surrenderCalls = [0, 0]; let prismaDisconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { ...identity, workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => crossingClaims[claimIndex++].promise,
+        surrender: async (lease) => {
+          const index = lease === seamLease ? 0 : 1; surrenderCalls[index] += 1;
+          if (index === 0 && surrenderCalls[index] === 1) throw Object.assign(new Error('redacted'), { code: 'P1001' });
+          if (index === 1 && surrenderCalls[index] <= 3) throw Object.assign(new Error('redacted'), { code: 'P2024' });
+          if (index === 0) return { state: 'RETRY_WAIT' as const, availableAt: new Date() };
+          return surrenderAiWorkflowJobLease(lease);
+        },
+        disconnect: async () => { prismaDisconnects += 1; },
+      },
+    );
+    const claims = [composition.runtimeAdapter.claim(), composition.runtimeAdapter.claim()];
+    const firstDisconnect = composition.runtimeAdapter.disconnect();
+    const assertions = [
+      assert.rejects(claims[0], /DB_UNAVAILABLE/), assert.rejects(claims[1], /DB_TRANSIENT/),
+      assert.rejects(firstDisconnect, /DB_UNAVAILABLE/),
+    ];
+    crossingClaims[0].resolve({ ...realClaim, runtimeId: 'test-only-crossing-unavailable', lease: seamLease });
+    crossingClaims[1].resolve(realClaim);
+    await Promise.all(assertions);
+    assert.deepEqual(surrenderCalls, [1, 3]); assert.equal(prismaDisconnects, 0);
+    const leased = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    assert.equal(leased.state, 'LEASED');
+    await composition.runtimeAdapter.disconnect();
+    assert.deepEqual(surrenderCalls, [2, 4]); assert.equal(prismaDisconnects, 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 crossing claim realmente stale completa disconnect senza entry o secondo surrender', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    assert.equal(await admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }), 1);
+    const identity = { workerInstanceId: `pr83-stale-crossing-${randomUUID()}`, workerBuildHash: '5'.repeat(64) };
+    const realClaim = await claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId });
+    assert.ok(realClaim);
+    await surrenderAiWorkflowJobLease(realClaim.lease);
+    const crossing = deferred<ClaimedAiWorkflowJob | null>(); let surrenderCalls = 0; let prismaDisconnects = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { ...identity, workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        claim: async () => crossing.promise,
+        surrender: async (lease) => { surrenderCalls += 1; return surrenderAiWorkflowJobLease(lease); },
+        disconnect: async () => { prismaDisconnects += 1; },
+      },
+    );
+    const claim = composition.runtimeAdapter.claim();
+    const claimAssertion = assert.rejects(claim, /ADAPTER_CLOSED/);
+    const shutdown = composition.runtimeAdapter.disconnect();
+    crossing.resolve(realClaim);
+    await claimAssertion; await shutdown;
+    assert.equal(surrenderCalls, 1); assert.equal(prismaDisconnects, 1);
+    await composition.runtimeAdapter.disconnect();
+    assert.equal(surrenderCalls, 1); assert.equal(prismaDisconnects, 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 drain durante policy mismatch preflight prevale sulla failure terminale', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const mismatch = deferred<void>(); let preflights = 0; let failureCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-drain-policy-${randomUUID()}`, workerBuildHash: '4'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        preflight: async (lease) => {
+          preflights += 1;
+          await preflightAiWorkflowJobExecution(lease);
+          if (preflights === 1) { await mismatch.promise; throw new AiOrchestratorPersistedJobPolicyMismatchError(); }
+          throw new Error('unexpected second preflight');
+        },
+        fail: async () => { failureCalls += 1; throw new Error('failure write must not run while draining'); },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+    const execution = composition.executionAdapter.consumeMockResult(claim.lease);
+    await new Promise((resolve) => setImmediate(resolve));
+    const drain = composition.runtimeAdapter.surrender(claim.lease);
+    mismatch.resolve();
+    await assert.rejects(execution, /AI_MOCK_EXECUTION_DRAINING/); await drain;
+    assert.equal(failureCalls, 0);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.failureCode, null); assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    await composition.runtimeAdapter.disconnect();
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 disconnect attende una admission PostgreSQL già avviata e mantiene il fence', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const settled = deferred<void>(); let underlyingSettled = false; let disconnectCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-runtime-fence-${randomUUID()}`, workerBuildHash: '3'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: async () => {
+          const admitted = await admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId });
+          await settled.promise; underlyingSettled = true; return admitted;
+        },
+        disconnect: async () => { assert.equal(underlyingSettled, true); disconnectCalls += 1; },
+      },
+    );
+    const admission = composition.runtimeAdapter.admit();
+    await new Promise((resolve) => setImmediate(resolve));
+    const shutdown = composition.runtimeAdapter.disconnect();
+    assert.equal(disconnectCalls, 0); settled.resolve();
+    await admission; await shutdown;
+    assert.equal(disconnectCalls, 1);
+    for (const operation of [
+      () => composition.runtimeAdapter.readAuthority(), () => composition.runtimeAdapter.admit(),
+      () => composition.runtimeAdapter.recover(), () => composition.runtimeAdapter.supersede(),
+    ]) await assert.rejects(operation(), /ADAPTER_CLOSED/);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { job: { workflowInstanceId: fixture.workflowInstanceId } } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 drain nel backoff FAIL impedisce il retry e surrendera la lease reale', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const firstFail = deferred<void>(); let failCalls = 0;
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-fail-retry-drain-${randomUUID()}`, workerBuildHash: '2'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        preflight: async () => { throw new AiOrchestratorPersistedJobPolicyMismatchError(); },
+        fail: async () => { failCalls += 1; firstFail.resolve(); throw Object.assign(new Error('redacted'), { code: 'P2024' }); },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    const claim = await composition.runtimeAdapter.claim(); assert.ok(claim);
+    const execution = composition.executionAdapter.consumeMockResult(claim.lease);
+    await firstFail.promise;
+    const drain = composition.runtimeAdapter.surrender(claim.lease);
+    await assert.rejects(execution, /AI_MOCK_EXECUTION_DRAINING/); await drain;
+    assert.equal(failCalls, 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.failureCode, null); assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+    await composition.runtimeAdapter.disconnect();
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
+});
+
+test('PR83 disconnect reentrante attende altra operazione e drena la lease PostgreSQL', { skip: !runDbTests }, async () => {
+  const fixture = await createDataValidationCase();
+  const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
+  await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
+    const otherOperation = deferred<number>(); const reentrantStarted = deferred<void>();
+    let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
+    let disconnectCalls = 0;
+    composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+      { workerInstanceId: `pr83-reentrant-${randomUUID()}`, workerBuildHash: '1'.repeat(64), workerEnabled: '1' },
+      async () => ({ allowed: true, capabilityAllowed: true }),
+      {
+        admit: () => admitAiWorkflowJobOutbox({ workflowInstanceId: fixture.workflowInstanceId }),
+        claim: (identity) => claimNextAiWorkflowJob({ ...identity, workflowInstanceId: fixture.workflowInstanceId }),
+        recover: async () => { reentrantStarted.resolve(); await composition.runtimeAdapter.disconnect(); return 0; },
+        supersede: async () => otherOperation.promise,
+        disconnect: async () => { disconnectCalls += 1; },
+      },
+    );
+    assert.equal((await composition.runtimeAdapter.admit()).admitted, 1);
+    assert.ok(await composition.runtimeAdapter.claim());
+    const other = composition.runtimeAdapter.supersede();
+    const reentrant = composition.runtimeAdapter.recover();
+    await reentrantStarted.promise; await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(disconnectCalls, 0); otherOperation.resolve(0);
+    await Promise.all([other, reentrant]); assert.equal(disconnectCalls, 1);
+    const runtime = await db().aiWorkflowJobRuntime.findUniqueOrThrow({ where: { jobId: fixture.job.id } });
+    const attempt = await db().aiWorkflowJobAttempt.findFirstOrThrow({ where: { runtimeId: runtime.id } });
+    assert.equal(runtime.state, 'RETRY_WAIT'); assert.equal(attempt.outcome, 'SURRENDERED');
+    assert.equal(attempt.retryBudgetConsumed, false);
+    assert.equal(await db().aiWorkflowJobRuntime.count({ where: { state: 'LEASED' } }), 0);
+    assert.equal(await db().aiWorkflowJobResult.count({ where: { runtimeId: runtime.id } }), 0);
+    assert.equal(await db().aiWorkflowJobArtifact.count({ where: { result: { runtimeId: runtime.id } } }), 0);
+  });
+  assert.equal(await db().aiRun.count(), before.runs); assert.equal(await db().aiOutput.count(), before.outputs);
 });

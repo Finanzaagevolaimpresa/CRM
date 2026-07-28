@@ -1,11 +1,13 @@
 import { canonicalSha256 } from '../canonical-json';
-import type { FaiAuditState, FaiAuditTransitionCode } from './audit-workflow-v1-1';
+import { z } from 'zod';
+import { FAI_AUDIT_STATES, FAI_AUDIT_TRANSITION_CODES, type FaiAuditState, type FaiAuditTransitionCode } from './audit-workflow-v1-1';
 import {
   FAI_AUDIT_EXECUTOR_BINDING_VERSION,
   FAI_AUDIT_JOB_CATALOG_CODE,
   FAI_AUDIT_JOB_CATALOG_HASH,
   FAI_AUDIT_JOB_CATALOG_KEY,
   FAI_AUDIT_JOB_CATALOG_VERSION,
+  FAI_AUDIT_JOB_CODES,
   FAI_AUDIT_JOB_DEFINITION_HASHES,
   getFaiAuditJobDefinition,
   getFaiAuditJobPlanningRule,
@@ -76,6 +78,91 @@ export interface FaiAuditJobPlan {
   readonly catalogHash: string;
   readonly planHash: string;
   readonly jobs: readonly FaiAuditJobIntent[];
+}
+
+const persistedJobIntentSchema = z.object({
+  catalogCode: z.literal(FAI_AUDIT_JOB_CATALOG_CODE),
+  catalogVersion: z.literal(FAI_AUDIT_JOB_CATALOG_VERSION),
+  catalogHash: z.literal(FAI_AUDIT_JOB_CATALOG_HASH),
+  workflowDefinitionHash: z.string().regex(/^[0-9a-f]{64}$/),
+  phaseCode: z.enum(FAI_AUDIT_STATES), phaseEntrySequence: z.number().int().min(1),
+  sourceState: z.enum(FAI_AUDIT_STATES), sourceStateVersion: z.number().int().min(1),
+  correctionCycle: z.number().int().min(0),
+  executorAgentId: z.string().min(1), executorAgentCode: z.string().min(1),
+  executorAgentConfigVersion: z.number().int().min(1), executorAgentConfigHash: z.string().regex(/^[0-9a-f]{64}$/),
+  jobCode: z.enum(FAI_AUDIT_JOB_CODES),
+  jobVersion: z.literal('1.0'), jobDefinitionHash: z.string().regex(/^[0-9a-f]{64}$/),
+  completionTransitionCode: z.enum(FAI_AUDIT_TRANSITION_CODES), completionMode: z.enum(['SINGLE', 'ALL_OF_BUNDLE']),
+  slotKey: z.string().min(1), bundleCode: z.custom<FaiAuditJobBundleCode>((value) => typeof value === 'string'), bundleKey: z.string().regex(/^[0-9a-f]{64}$/),
+  dedupeKey: z.string().regex(/^[0-9a-f]{64}$/), provider: z.literal('mock'), dataMode: z.literal('synthetic'),
+  automaticDispatchAllowed: z.literal(false), availableAt: z.string().datetime({ offset: true }),
+  payload: z.record(z.unknown()), payloadHash: z.string().regex(/^[0-9a-f]{64}$/),
+}).strict();
+
+/** Strictly validates a persisted row and recomputes all canonical v2 planning identities. */
+export function parsePersistedFaiAuditJobIntent(input: unknown): FaiAuditJobIntent {
+  const parsed = persistedJobIntentSchema.parse(input);
+  const intent: FaiAuditJobIntent = {
+    catalogCode: FAI_AUDIT_JOB_CATALOG_CODE, catalogVersion: FAI_AUDIT_JOB_CATALOG_VERSION,
+    catalogHash: FAI_AUDIT_JOB_CATALOG_HASH, workflowDefinitionHash: parsed.workflowDefinitionHash,
+    phaseCode: parsed.phaseCode, phaseEntrySequence: parsed.phaseEntrySequence,
+    sourceState: parsed.sourceState, sourceStateVersion: parsed.sourceStateVersion,
+    correctionCycle: parsed.correctionCycle, executorAgentId: parsed.executorAgentId,
+    executorAgentCode: parsed.executorAgentCode, executorAgentConfigVersion: parsed.executorAgentConfigVersion,
+    executorAgentConfigHash: parsed.executorAgentConfigHash, jobCode: parsed.jobCode,
+    jobVersion: parsed.jobVersion, jobDefinitionHash: parsed.jobDefinitionHash,
+    completionTransitionCode: parsed.completionTransitionCode, completionMode: parsed.completionMode,
+    slotKey: parsed.slotKey, bundleCode: parsed.bundleCode, bundleKey: parsed.bundleKey,
+    dedupeKey: parsed.dedupeKey, provider: parsed.provider, dataMode: parsed.dataMode,
+    automaticDispatchAllowed: parsed.automaticDispatchAllowed, availableAt: parsed.availableAt,
+    payload: parsed.payload, payloadHash: parsed.payloadHash,
+  };
+  const payload = intent.payload as Record<string, unknown>;
+  const workflow = payload.workflow as Record<string, unknown> | undefined;
+  const phase = payload.phase as Record<string, unknown> | undefined;
+  const transition = payload.sourceTransition as Record<string, unknown> | undefined;
+  const executor = payload.executor as Record<string, unknown> | undefined;
+  const job = payload.job as Record<string, unknown> | undefined;
+  if (
+    Object.keys(payload).sort().join(',') !== 'catalogHash,catalogKey,executor,job,phase,schemaVersion,sourceTransition,workflow'
+    || payload.schemaVersion !== 2 || payload.catalogKey !== FAI_AUDIT_JOB_CATALOG_KEY
+    || payload.catalogHash !== FAI_AUDIT_JOB_CATALOG_HASH || !workflow || !phase || !transition || !executor || !job
+  ) throw new TypeError('AI_PERSISTED_JOB_PAYLOAD_INVALID');
+  const definition = getFaiAuditJobDefinition(intent.jobCode);
+  const transitionCode = FAI_AUDIT_TRANSITION_CODES.find((code) => code === transition.transitionCode);
+  const rule = transitionCode ? getFaiAuditJobPlanningRule(transitionCode) : null;
+  const index = rule?.jobCodes.indexOf(intent.jobCode) ?? -1;
+  const planningIdentity = {
+    schemaVersion: 2, catalogKey: FAI_AUDIT_JOB_CATALOG_KEY, catalogHash: FAI_AUDIT_JOB_CATALOG_HASH,
+    workflowInstanceId: workflow.workflowInstanceId, workflowDefinitionHash: workflow.workflowDefinitionHash,
+    phaseCode: phase.phaseCode, phaseEntrySequence: phase.phaseEntrySequence,
+    sourceCommandIdempotencyKey: transition.idempotencyKey, sourceTransitionCode: transition.transitionCode,
+    sourceTransitionSequence: transition.sequence, sourceState: transition.sourceState,
+    sourceStateVersion: transition.sourceStateVersion, correctionCycle: phase.correctionCycle,
+  };
+  const executorIdentity = {
+    executorAgentId: executor.agentId, executorAgentCode: executor.agentCode,
+    executorAgentConfigVersion: executor.configVersion, executorAgentConfigHash: executor.configHash,
+  };
+  const expectedSlot = `${String(index + 1).padStart(2, '0')}:${intent.jobCode}`;
+  if (
+    !definition || index < 0 || canonicalSha256(payload) !== intent.payloadHash
+    || intent.jobDefinitionHash !== FAI_AUDIT_JOB_DEFINITION_HASHES[intent.jobCode]
+    || intent.completionTransitionCode !== definition.completionTransitionCode
+    || intent.completionMode !== definition.completionMode || intent.bundleCode !== definition.bundleCode
+    || intent.slotKey !== expectedSlot
+    || canonicalSha256({ ...planningIdentity, bundleCode: definition.bundleCode }) !== intent.bundleKey
+    || canonicalSha256({ ...planningIdentity, ...executorIdentity, jobKey: `${intent.jobCode}@${intent.jobVersion}`, slotKey: expectedSlot }) !== intent.dedupeKey
+    || intent.workflowDefinitionHash !== workflow.workflowDefinitionHash || intent.phaseCode !== phase.phaseCode
+    || intent.phaseEntrySequence !== phase.phaseEntrySequence || intent.sourceState !== transition.sourceState
+    || intent.sourceStateVersion !== transition.sourceStateVersion || intent.correctionCycle !== phase.correctionCycle
+    || intent.executorAgentId !== executor.agentId || intent.executorAgentCode !== executor.agentCode
+    || intent.executorAgentConfigVersion !== executor.configVersion || intent.executorAgentConfigHash !== executor.configHash
+    || job.jobCode !== intent.jobCode || job.jobVersion !== intent.jobVersion || job.jobDefinitionHash !== intent.jobDefinitionHash
+    || job.slotKey !== intent.slotKey || job.bundleCode !== intent.bundleCode || job.bundleKey !== intent.bundleKey
+    || job.provider !== 'mock' || job.automaticDispatchAllowed !== false || workflow.dataMode !== 'synthetic'
+  ) throw new TypeError('AI_PERSISTED_JOB_IDENTITY_MISMATCH');
+  return Object.freeze(intent);
 }
 
 function canonicalPlanningIdentity(input: FaiAuditJobPlanInput) {
