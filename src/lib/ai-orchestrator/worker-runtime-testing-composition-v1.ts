@@ -24,7 +24,6 @@ import {
   AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS,
   AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_VERSION,
   AiOrchestratorWorkerRuntimeAdapterError,
-  calculateAiOrchestratorWorkerRuntimeAdapterRetryDelayMsV1,
   mapAiOrchestratorWorkerRuntimeAdapterDatabaseErrorV1,
   type AiOrchestratorWorkerRuntimeAdapterV1,
   type AiOrchestratorWorkerRuntimeLeaseHandleV1,
@@ -33,6 +32,54 @@ import {
 import { readAiOrchestratorWorkerControlPlaneAuthorityV1 } from './worker-control-plane-authority-v1';
 import { AiMockExecutionError, createAiMockExecutionOperationV1, type AiMockExecutionOutcome } from './mock-execution-result-wiring-v1';
 import type { AiResultArtifactDraft } from './result-artifact-contract-v1';
+
+const SYNTHETIC_WORKER_INSTANCE_ID_MAX_LENGTH = 128;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const SYNTHETIC_RUNTIME_RETRY_OPERATIONS = Object.freeze([
+  'READ_AUTHORITY',
+  'RECOVER',
+  'SUPERSEDE',
+  'ADMIT',
+] as const);
+type SyntheticRuntimeRetryOperation = typeof SYNTHETIC_RUNTIME_RETRY_OPERATIONS[number];
+
+/**
+ * Test-only equivalent of the canonical runtime delay algorithm. Synthetic
+ * fixture identities are intentionally supported; production UUID validation
+ * remains exclusively in worker-runtime-adapter-v1.ts.
+ */
+export function calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1(input: {
+  readonly workerInstanceId: string;
+  readonly workerBuildHash: string;
+  readonly operation: SyntheticRuntimeRetryOperation;
+  readonly failedAttempt: number;
+}) {
+  if (
+    input.workerInstanceId.length < 1
+    || input.workerInstanceId.length > SYNTHETIC_WORKER_INSTANCE_ID_MAX_LENGTH
+    || !SHA256_PATTERN.test(input.workerBuildHash)
+    || !(SYNTHETIC_RUNTIME_RETRY_OPERATIONS as readonly string[]).includes(input.operation)
+    || !Number.isSafeInteger(input.failedAttempt)
+    || input.failedAttempt < 1
+    || input.failedAttempt >= AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxAttempts
+  ) {
+    throw new AiOrchestratorWorkerRuntimeAdapterError(
+      'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID',
+    );
+  }
+  const exponential = AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.baseDelayMs
+    * (2 ** (input.failedAttempt - 1));
+  const entropy = canonicalSha256({
+    domain: 'ai.syntheticTestingWorkerRuntimeTransientRetry.v1',
+    workerInstanceId: input.workerInstanceId,
+    workerBuildHash: input.workerBuildHash,
+    operation: input.operation,
+    failedAttempt: input.failedAttempt,
+  });
+  const jitter = Number.parseInt(entropy.slice(0, 8), 16)
+    % (AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxJitterMs + 1);
+  return exponential + jitter;
+}
 
 type ExecutionDatabaseOperation = 'AUTHORITY' | 'PREFLIGHT_BEFORE' | 'PREFLIGHT_AFTER' | 'COMPLETE' | 'FAIL' | 'SURRENDER';
 export function calculateAiMockExecutionRetryDelayMsV1(input: {
@@ -132,7 +179,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     return promise;
   };
   const runRuntimeOperation = <T>(
-    operationCode: 'READ_AUTHORITY' | 'RECOVER' | 'SUPERSEDE' | 'ADMIT',
+    operationCode: SyntheticRuntimeRetryOperation,
     operation: () => Promise<T>,
   ) => {
     if (disconnected) {
@@ -155,7 +202,7 @@ export function createAiOrchestratorWorkerSyntheticTestingCompositionV1(
             mapped.code !== 'AI_WORKER_RUNTIME_ADAPTER_DB_TRANSIENT'
             || attempt >= AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxAttempts
           ) throw mapped;
-          await retryTimeout(calculateAiOrchestratorWorkerRuntimeAdapterRetryDelayMsV1({
+          await retryTimeout(calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
             workerInstanceId: input.workerInstanceId,
             workerBuildHash: input.workerBuildHash,
             operation: operationCode,
