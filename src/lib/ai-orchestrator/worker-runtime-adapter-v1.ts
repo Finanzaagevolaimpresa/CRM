@@ -136,18 +136,9 @@ function prismaErrorCode(error: unknown) {
   return typeof candidate.errorCode === 'string' ? candidate.errorCode : null;
 }
 
-function mapRuntimeError(error: unknown, runtime: WorkerRuntimeModuleV1) {
+/** Closed, detail-free mapping shared with test-only adapter compositions. */
+export function mapAiOrchestratorWorkerRuntimeAdapterDatabaseErrorV1(error: unknown) {
   if (error instanceof AiOrchestratorWorkerRuntimeAdapterError) return error;
-  if (error instanceof runtime.AiOrchestratorLeaseLostError) {
-    return new AiOrchestratorWorkerRuntimeAdapterError(
-      'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE',
-    );
-  }
-  if (error instanceof runtime.AiOrchestratorWorkerDisabledError) {
-    return new AiOrchestratorWorkerRuntimeAdapterError(
-      'AI_WORKER_RUNTIME_ADAPTER_RUNTIME_DENIED',
-    );
-  }
   if (error instanceof TypeError) {
     return new AiOrchestratorWorkerRuntimeAdapterError(
       'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID',
@@ -167,6 +158,21 @@ function mapRuntimeError(error: unknown, runtime: WorkerRuntimeModuleV1) {
   return new AiOrchestratorWorkerRuntimeAdapterError(
     'AI_WORKER_RUNTIME_ADAPTER_INVARIANT_VIOLATION',
   );
+}
+
+function mapRuntimeError(error: unknown, runtime: WorkerRuntimeModuleV1) {
+  if (error instanceof AiOrchestratorWorkerRuntimeAdapterError) return error;
+  if (error instanceof runtime.AiOrchestratorLeaseLostError) {
+    return new AiOrchestratorWorkerRuntimeAdapterError(
+      'AI_WORKER_RUNTIME_ADAPTER_LEASE_STALE',
+    );
+  }
+  if (error instanceof runtime.AiOrchestratorWorkerDisabledError) {
+    return new AiOrchestratorWorkerRuntimeAdapterError(
+      'AI_WORKER_RUNTIME_ADAPTER_RUNTIME_DENIED',
+    );
+  }
+  return mapAiOrchestratorWorkerRuntimeAdapterDatabaseErrorV1(error);
 }
 
 function createLeaseHandle() {
