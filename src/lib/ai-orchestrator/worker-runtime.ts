@@ -26,7 +26,8 @@ import { parsePersistedFaiAuditJobIntent, type FaiAuditJobIntent } from './job-p
 export const AI_ORCHESTRATOR_WORKER_ENV_GATE = 'AI_ORCHESTRATOR_WORKER_ENABLED' as const;
 const OUTBOX_CONSUMER_CODE = 'AI_ORCHESTRATOR_JOB_PLANNED_CONSUMER' as const;
 const OUTBOX_CONSUMER_VERSION = '1.0' as const;
-const WORKER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+export const AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH = 200 as const;
+export const AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 
 export class AiOrchestratorWorkerDisabledError extends Error {
   constructor(message = 'AI Orchestrator Worker Runtime disabilitato o configurazione fail-closed.') {
@@ -192,7 +193,7 @@ function normalizeBatchSize(value: number | undefined, maximum: number) {
 }
 
 function assertWorkerIdentity(workerInstanceId: string, workerBuildHash: string) {
-  if (!WORKER_ID_PATTERN.test(workerInstanceId)) throw new TypeError('Identità worker non valida.');
+  if (!AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN.test(workerInstanceId)) throw new TypeError('Identità worker non valida.');
   assertSha256(workerBuildHash, 'Worker build hash');
 }
 

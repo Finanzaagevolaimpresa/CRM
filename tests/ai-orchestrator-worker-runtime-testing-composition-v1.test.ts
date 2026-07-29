@@ -11,6 +11,10 @@ import {
   createAiOrchestratorWorkerSyntheticTestingCompositionV1,
   type AiOrchestratorTestingRuntimePortsV1,
 } from '../src/lib/ai-orchestrator/worker-runtime-testing-composition-v1';
+import {
+  AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH,
+  AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN,
+} from '../src/lib/ai-orchestrator/worker-runtime';
 
 const identity = {
   workerInstanceId: '12345678-1234-4123-8123-123456789abc',
@@ -158,7 +162,7 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
     { workerInstanceId: {} },
     { workerInstanceId: [] },
     { workerInstanceId: '' },
-    { workerInstanceId: 'x'.repeat(129) },
+    { workerInstanceId: 'x'.repeat(201) },
     { workerBuildHash: undefined },
     { workerBuildHash: null },
     { workerBuildHash: 42 },
@@ -188,6 +192,78 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
     );
   }
   assert.equal(runtimeCalls, 0);
+});
+
+test('helper sintetico condivide limite e pattern canonici per worker ID da 128 a 201', () => {
+  assert.equal(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH, 200);
+  for (const length of [128, 129, 160, 199, 200]) {
+    const workerInstanceId = 'w'.repeat(length);
+    assert.equal(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN.test(workerInstanceId), true);
+    assert.doesNotThrow(() => calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
+      workerInstanceId,
+      workerBuildHash: identity.workerBuildHash,
+      operation: 'READ_AUTHORITY',
+      failedAttempt: 1,
+    }));
+  }
+  const overLimit = 'w'.repeat(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH + 1);
+  assert.equal(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN.test(overLimit), false);
+  assert.throws(
+    () => calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
+      workerInstanceId: overLimit,
+      workerBuildHash: identity.workerBuildHash,
+      operation: 'READ_AUTHORITY',
+      failedAttempt: 1,
+    }),
+    (error: unknown) => error instanceof AiOrchestratorWorkerRuntimeAdapterError
+      && error.code === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID',
+  );
+});
+
+test('worker ID canonico di 200 caratteri ritenta ogni operazione runtime', async () => {
+  const workerInstanceId = 'w'.repeat(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH);
+  for (const operation of operations) {
+    let calls = 0;
+    const composition = compositionFor(operation, async () => {
+      calls += 1;
+      if (calls === 1) throw prisma('P2024');
+      return successValue(operation);
+    }, undefined, workerInstanceId);
+    assert.deepEqual(await invoke(composition, operation), expectedResult(operation));
+    assert.equal(calls, 2);
+    await composition.runtimeAdapter.disconnect();
+  }
+});
+
+test('worker ID canonico di 200 caratteri esaurisce tre transient come DB_TRANSIENT', async () => {
+  let calls = 0;
+  const composition = compositionFor('readAuthority', async () => {
+    calls += 1;
+    throw prisma(calls % 2 === 1 ? 'P2024' : 'P2034');
+  }, undefined, 'w'.repeat(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH));
+  await assert.rejects(composition.runtimeAdapter.readAuthority(), (error: unknown) => (
+    error instanceof AiOrchestratorWorkerRuntimeAdapterError
+    && error.code === 'AI_WORKER_RUNTIME_ADAPTER_DB_TRANSIENT'
+  ));
+  assert.equal(calls, 3);
+  await composition.runtimeAdapter.disconnect();
+});
+
+test('worker ID di 201 caratteri fallisce chiuso dopo il primo transient e può disconnettersi', async () => {
+  let calls = 0; let disconnects = 0;
+  const composition = compositionFor('admit', async () => {
+    calls += 1;
+    throw prisma('P2024');
+  }, async () => { disconnects += 1; }, 'w'.repeat(AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH + 1));
+  await assert.rejects(composition.runtimeAdapter.admit(), (error: unknown) => (
+    error instanceof AiOrchestratorWorkerRuntimeAdapterError
+    && error.code === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID'
+    && error.message === error.code
+  ));
+  assert.equal(calls, 1);
+  await composition.runtimeAdapter.disconnect();
+  assert.equal(disconnects, 1);
+  assert.equal(calls, 1);
 });
 
 test('P2024 con workerInstanceId non-stringa fallisce chiuso senza retry e consente disconnect', async () => {

@@ -7,6 +7,8 @@ import {
   AiOrchestratorExecutionGateDeniedError,
   AiOrchestratorLeaseLostError,
   AiOrchestratorPersistedJobPolicyMismatchError,
+  AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH,
+  AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN,
   admitAiWorkflowJobOutbox,
   claimNextAiWorkflowJob,
   completeAiWorkflowJobExecution,
@@ -33,7 +35,6 @@ import { readAiOrchestratorWorkerControlPlaneAuthorityV1 } from './worker-contro
 import { AiMockExecutionError, createAiMockExecutionOperationV1, type AiMockExecutionOutcome } from './mock-execution-result-wiring-v1';
 import type { AiResultArtifactDraft } from './result-artifact-contract-v1';
 
-const SYNTHETIC_WORKER_INSTANCE_ID_MAX_LENGTH = 128;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const SYNTHETIC_RUNTIME_RETRY_OPERATIONS = Object.freeze([
   'READ_AUTHORITY',
@@ -57,7 +58,8 @@ export function calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1(inp
   if (
     typeof input.workerInstanceId !== 'string'
     || input.workerInstanceId.length < 1
-    || input.workerInstanceId.length > SYNTHETIC_WORKER_INSTANCE_ID_MAX_LENGTH
+    || input.workerInstanceId.length > AI_ORCHESTRATOR_WORKER_INSTANCE_ID_MAX_LENGTH
+    || !AI_ORCHESTRATOR_WORKER_INSTANCE_ID_PATTERN.test(input.workerInstanceId)
     || typeof input.workerBuildHash !== 'string'
     || !SHA256_PATTERN.test(input.workerBuildHash)
     || typeof input.operation !== 'string'
