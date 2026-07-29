@@ -55,10 +55,14 @@ export function calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1(inp
   readonly failedAttempt: number;
 }) {
   if (
-    input.workerInstanceId.length < 1
+    typeof input.workerInstanceId !== 'string'
+    || input.workerInstanceId.length < 1
     || input.workerInstanceId.length > SYNTHETIC_WORKER_INSTANCE_ID_MAX_LENGTH
+    || typeof input.workerBuildHash !== 'string'
     || !SHA256_PATTERN.test(input.workerBuildHash)
+    || typeof input.operation !== 'string'
     || !(SYNTHETIC_RUNTIME_RETRY_OPERATIONS as readonly string[]).includes(input.operation)
+    || typeof input.failedAttempt !== 'number'
     || !Number.isSafeInteger(input.failedAttempt)
     || input.failedAttempt < 1
     || input.failedAttempt >= AI_ORCHESTRATOR_WORKER_RUNTIME_ADAPTER_RETRY_LIMITS.maxAttempts

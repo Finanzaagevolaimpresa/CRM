@@ -144,6 +144,78 @@ test('helper retry test-only accetta ID sintetici bounded e conserva i parametri
   );
 });
 
+test('helper retry test-only chiude ogni identità e parametro runtime non type-safe', () => {
+  const valid = {
+    workerInstanceId: 'worker',
+    workerBuildHash: identity.workerBuildHash,
+    operation: 'READ_AUTHORITY',
+    failedAttempt: 1,
+  };
+  const invalidCases: ReadonlyArray<Readonly<Record<string, unknown>>> = [
+    { workerInstanceId: undefined },
+    { workerInstanceId: null },
+    { workerInstanceId: 42 },
+    { workerInstanceId: {} },
+    { workerInstanceId: [] },
+    { workerInstanceId: '' },
+    { workerInstanceId: 'x'.repeat(129) },
+    { workerBuildHash: undefined },
+    { workerBuildHash: null },
+    { workerBuildHash: 42 },
+    { workerBuildHash: 'not-a-sha256' },
+    { operation: undefined },
+    { operation: 'UNKNOWN' },
+    { failedAttempt: undefined },
+    { failedAttempt: Number.NaN },
+    { failedAttempt: 1.5 },
+    { failedAttempt: 0 },
+    { failedAttempt: 3 },
+  ];
+  let runtimeCalls = 0;
+  for (const invalid of invalidCases) {
+    assert.throws(
+      () => calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
+        ...valid,
+        ...invalid,
+      } as Parameters<typeof calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1>[0]),
+      (error: unknown) => (
+        error instanceof AiOrchestratorWorkerRuntimeAdapterError
+        && !(error instanceof TypeError)
+        && error.code === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID'
+        && error.message === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID'
+        && !error.message.includes('RETRY_INPUT_INVALID')
+      ),
+    );
+  }
+  assert.equal(runtimeCalls, 0);
+});
+
+test('P2024 con workerInstanceId non-stringa fallisce chiuso senza retry e consente disconnect', async () => {
+  let runtimeCalls = 0; let disconnectCalls = 0;
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    {
+      ...identity,
+      workerInstanceId: 42 as unknown as string,
+    },
+    async () => ({ allowed: true, capabilityAllowed: true }),
+    {
+      admit: async () => { runtimeCalls += 1; throw prisma('P2024'); },
+      disconnect: async () => { disconnectCalls += 1; },
+    },
+  );
+  await assert.rejects(composition.runtimeAdapter.admit(), (error: unknown) => (
+    error instanceof AiOrchestratorWorkerRuntimeAdapterError
+    && !(error instanceof TypeError)
+    && error.code === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID'
+    && error.message === 'AI_WORKER_RUNTIME_ADAPTER_CONFIG_INVALID'
+    && !error.message.includes('RETRY_INPUT_INVALID')
+  ));
+  assert.equal(runtimeCalls, 1);
+  await composition.runtimeAdapter.disconnect();
+  assert.equal(disconnectCalls, 1);
+  assert.equal(runtimeCalls, 1);
+});
+
 test('identità PR83 sintetica ritenta P2034 senza errore di validazione', async () => {
   let calls = 0;
   const composition = compositionFor('recover', async () => {
