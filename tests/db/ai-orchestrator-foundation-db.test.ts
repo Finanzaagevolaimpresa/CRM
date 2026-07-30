@@ -450,7 +450,7 @@ test.before(async () => {
     createUser('orchestrator-runner', 'admin'),
     createUser('orchestrator-reviewer', 'admin'),
     createUser('orchestrator-limited', 'collaboratore_limitato'),
-    createUser('orchestrator-role-runner', 'consulente'),
+    createUser('orchestrator-role-runner', 'admin'),
     createUser('orchestrator-override-runner', 'collaboratore_limitato'),
   ]);
   runnerId = runner.id;
@@ -1734,7 +1734,7 @@ test('guard snapshot persistito è minimo, ricostruibile, hashato esattamente e 
 
 test('guard snapshot distingue la fonte effettiva ROLE e OVERRIDE', { skip: !runDbTests }, async () => {
   const fixtures = [
-    { userId: roleRunnerId, expectedRole: 'consulente', expectedSource: 'ROLE' },
+    { userId: roleRunnerId, expectedRole: 'admin', expectedSource: 'ROLE' },
     { userId: overrideRunnerId, expectedRole: 'collaboratore_limitato', expectedSource: 'OVERRIDE' },
   ] as const;
 
