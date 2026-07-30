@@ -681,7 +681,7 @@ L'entrypoint è impacchettato ma **non installato**:
 - Docker Compose continua ad avere soltanto `app` e `postgres`;
 - non vengono aggiunti systemd, timer, cron o scheduler;
 - il reconciler AI esistente non viene modificato;
-- Prisma resta a 29 migration.
+- Prisma resta a 30 migration dalla foundation PR85.
 
 In produzione mantenere esattamente:
 
@@ -701,7 +701,7 @@ Non invocare `npm run ai:orchestrator:worker` sul VPS. L'entrypoint è destinato
 
 Un eventuale deploy separatamente approvato deve verificare che non compaia alcun nuovo container o processo, che applicazione e PostgreSQL restino healthy e che tutti i gate siano invariati. Non sono richiesti `prisma migrate deploy` specifici per PR81 perché non esiste una migration nuova.
 
-Rollback: ripristinare l'immagine PR80 mantenendo tutti i gate chiusi. Lasciare database, 29 migration, ledger, job, outbox, runtime e artifact intatti. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` come rollback ordinario.
+Rollback: ripristinare l'immagine applicativa precedente mantenendo tutti i gate chiusi. Lasciare database, 30 migration, ledger, richieste AI, notifiche, grant, job, outbox, runtime e artifact intatti. Non usare down migration, `DROP`, `TRUNCATE`, reset, `UPDATE` o `DELETE` come rollback ordinario.
 
 Contratto completo: [Dormant Worker Process Foundation v1](ai-orchestrator-dormant-worker-process-foundation-v1.md) e [ADR-0008](adr/ADR-0008-ai-orchestrator-dormant-worker-process-foundation-v1.md).
 

@@ -27,7 +27,7 @@ test.after(async () => {
   await prisma?.$disconnect();
 });
 
-test('PostgreSQL PR83 usa i record global canonici e la catena completa di 29 migration', { skip: !runDbTests }, async () => {
+test('PostgreSQL PR85 usa i record global canonici e la catena completa di 30 migration', { skip: !runDbTests }, async () => {
   const [orchestrator, control, migrations] = await Promise.all([
     db().aiOrchestratorSetting.findUnique({ where: { id: 'global' } }),
     db().aiControlSetting.findUnique({ where: { id: 'global' } }),
@@ -38,6 +38,6 @@ test('PostgreSQL PR83 usa i record global canonici e la catena completa di 29 mi
   assert.equal(control.externalProvidersEnabled, false);
   assert.equal(orchestrator.provider, 'mock');
   assert.equal(orchestrator.syntheticDataOnly, true);
-  assert.equal(Number(migrations[0]?.count), 29);
+  assert.equal(Number(migrations[0]?.count), 30);
   assert.equal(await db().aiOrchestratorSetting.count({ where: { id: 'singleton' } }), 0);
 });

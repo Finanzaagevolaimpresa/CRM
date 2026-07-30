@@ -127,6 +127,15 @@ handler, result, artifact, provider esterno o nuova migration. Contratto,
 verifiche e rollback sono descritti in
 [`docs/ai-orchestrator-admission-claim-lease-wiring-v1.md`](docs/ai-orchestrator-admission-claim-lease-wiring-v1.md).
 
+## Global AI Manual Authorization Foundation PR85
+
+La Draft PR85 introduce la migration 30 con richiesta persistente, decision
+ledger append-only, grant immutabile monouso e notifica persistente per ogni
+Admin attivo. La foundation non invoca adapter e non attiva provider, worker,
+dispatch, sito o consumer. Il contratto e i limiti del primo commit sono
+descritti in
+[`docs/adr/ADR-0011-global-ai-manual-authorization-notification-gate-v1.md`](docs/adr/ADR-0011-global-ai-manual-authorization-notification-gate-v1.md).
+
 ## Staging/Produzione
 
 Per preparare il CRM FAI a staging o produzione usare la guida dedicata [`docs/PRODUCTION.md`](docs/PRODUCTION.md). La guida copre prerequisiti server, variabili ambiente, build, Prisma generate, migration deploy solo per migration già esistenti, reverse proxy HTTPS, storage documenti, backup/restore, health check `GET /api/health` e checklist sicurezza produzione.

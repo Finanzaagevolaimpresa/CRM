@@ -151,10 +151,9 @@ test('conferma FormData usa parsing booleano rigoroso e non accetta stringhe tru
   assert.equal(aiAgentConfigUpdateSchema.safeParse({ ...configBase, provider: 'mock', futureModel: 'gpt-approved' }).success, false);
 });
 
-test('RBAC esterno è ristretto ad admin e direzione', () => {
+test('RBAC esterno diretto resta solo Admin nella foundation del gate manuale', () => {
   assert.equal(hasPermission({ role: 'admin', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
-  assert.equal(hasPermission({ role: 'direzione', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
-  for (const role of ['consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
+  for (const role of ['direzione', 'consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
     assert.equal(hasPermission({ role, active: true, permissionOverrides: [] }, 'ai.external.run'), false, `${role} non deve eseguire provider esterni`);
   }
 });

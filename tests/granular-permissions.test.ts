@@ -39,7 +39,7 @@ test('la decisione espone la fonte effettiva ADMIN, OVERRIDE o ROLE', () => {
   );
   assert.deepEqual(
     evaluatePermission(session('consulente'), 'ai.run'),
-    { allowed: true, source: 'ROLE' },
+    { allowed: false, source: 'ROLE' },
   );
   assert.deepEqual(
     evaluatePermission(session('collaboratore_limitato'), 'ai.run'),
@@ -59,9 +59,20 @@ test('admin sempre consentito, inattivo negato e permission sconosciuta rifiutat
   assert.equal(hasPermission(session('admin'), 'unknown.permission' as never), false);
 });
 
-test('catalogo include ai.external.run e tipo derivato', () => {
+test('catalogo espone il gate AI e rimuove i permessi di esecuzione diretta dai collaboratori', () => {
   assert.ok(permissionCatalog.some((p) => p.code === 'ai.external.run'));
-  assert.ok(getEffectivePermissions(session('direzione')).includes('ai.external.run'));
+  assert.ok(permissionCatalog.some((p) => p.code === 'ai.execution.request'));
+  assert.ok(permissionCatalog.some((p) => p.code === 'ai.execution.consume'));
+  assert.ok(getEffectivePermissions(session('direzione')).includes('ai.execution.request'));
+  assert.ok(!getEffectivePermissions(session('direzione')).includes('ai.run'));
+  assert.ok(!getEffectivePermissions(session('direzione')).includes('ai.external.run'));
+  assert.ok(!getEffectivePermissions(session('consulente')).includes('ai.run'));
+  for (const permission of ['ai.execution.approve', 'ai.execution.reject', 'ai.execution.revoke', 'ai.execution.audit', 'ai.execution.consume'] as const) {
+    assert.equal(roleHasPermission('admin', permission), true);
+    for (const role of ['direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'] as const) {
+      assert.equal(roleHasPermission(role, permission), false, `${role} non deve ereditare ${permission}`);
+    }
+  }
 });
 
 test('override immediato senza nuovo login e reset', () => {
