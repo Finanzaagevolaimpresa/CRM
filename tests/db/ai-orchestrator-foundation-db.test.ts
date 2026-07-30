@@ -1732,9 +1732,9 @@ test('guard snapshot persistito è minimo, ricostruibile, hashato esattamente e 
   }));
 });
 
-test('guard snapshot distingue la fonte effettiva ROLE e OVERRIDE', { skip: !runDbTests }, async () => {
+test('guard snapshot distingue la fonte effettiva ADMIN e OVERRIDE', { skip: !runDbTests }, async () => {
   const fixtures = [
-    { userId: roleRunnerId, expectedRole: 'admin', expectedSource: 'ROLE' },
+    { userId: roleRunnerId, expectedRole: 'admin', expectedSource: 'ADMIN' },
     { userId: overrideRunnerId, expectedRole: 'collaboratore_limitato', expectedSource: 'OVERRIDE' },
   ] as const;
 
