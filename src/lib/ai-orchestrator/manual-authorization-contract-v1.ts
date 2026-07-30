@@ -8,6 +8,7 @@ export const AI_ORCHESTRATOR_MANUAL_AUTHORIZATION_CONTRACT_V1 = Object.freeze({
     'requestId',
     'authorizationGrantId',
     'inputFingerprint',
+    'executionInputHash',
     'agentId',
     'agentConfigVersion',
     'provider',
@@ -23,6 +24,7 @@ export type AiOrchestratorManualAuthorizationBindingV1 = Readonly<{
   requestId: string;
   authorizationGrantId: string;
   inputFingerprint: string;
+  executionInputHash: string;
   agentId: string;
   agentConfigVersion: number;
   provider: string;
@@ -45,6 +47,7 @@ export function assertAiOrchestratorManualAuthorizationBindingV1(
     || !binding.requestId
     || !binding.authorizationGrantId
     || !/^[a-f0-9]{64}$/u.test(binding.inputFingerprint)
+    || !/^[a-f0-9]{64}$/u.test(binding.executionInputHash)
     || !binding.agentId
     || !Number.isSafeInteger(binding.agentConfigVersion)
     || binding.agentConfigVersion < 1

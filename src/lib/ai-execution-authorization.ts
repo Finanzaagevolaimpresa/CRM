@@ -57,6 +57,7 @@ type RequestBinding = {
   correlationId: string;
   idempotencyKey: string;
   inputFingerprint: string;
+  executionInputHash: string;
   clientId?: string | null;
   companyId?: string | null;
   projectId?: string | null;
@@ -119,6 +120,7 @@ function sameRequestBinding(
     && existing.correlationId === input.correlationId
     && existing.idempotencyKey === input.idempotencyKey
     && existing.inputFingerprint === input.inputFingerprint
+    && existing.executionInputHash === input.executionInputHash
     && canonicalJson(existing.dataCategories) === canonicalJson([...input.dataCategories])
     && existing.clientId === (input.clientId ?? null)
     && existing.companyId === (input.companyId ?? null)
@@ -257,6 +259,7 @@ export async function createAiExecutionRequest(
           correlationId: input.correlationId,
           idempotencyKey: input.idempotencyKey,
           inputFingerprint: input.inputFingerprint,
+          executionInputHash: input.executionInputHash,
           expiresAt: new Date(now.getTime() + REQUEST_TTL_MS),
           status: 'PENDING_ADMIN_APPROVAL',
           stateVersion: 1,
@@ -481,6 +484,7 @@ export type AuthorizedAiRunReservation = {
 export async function reserveAuthorizedAiRun(
   input: AuthorizedAiRunReservationInput,
 ): Promise<AuthorizedAiRunReservation> {
+  const executionInputHash = canonicalSha256(input.input ?? null);
   const result = await withSerializableTransaction(async (tx) => {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "AiExecutionRequest" WHERE "id" = ${input.requestId} FOR UPDATE`,
@@ -499,6 +503,8 @@ export async function reserveAuthorizedAiRun(
       || request.status !== 'APPROVED'
       || input.inputFingerprint !== request.inputFingerprint
       || input.inputFingerprint !== request.authorizationGrant.inputFingerprint
+      || executionInputHash !== request.executionInputHash
+      || executionInputHash !== request.authorizationGrant.executionInputHash
     ) {
       throw new UserFacingActionError(
         'Autorizzazione AI non valida, non approvata o riferita a input modificati.',
@@ -538,6 +544,7 @@ export async function reserveAuthorizedAiRun(
         promptVersion: request.agentConfig.promptVersion,
         requestKey: request.idempotencyKey,
         requestFingerprint: input.inputFingerprint,
+        executionInputHash,
         leaseExpiresAt: lease.leaseExpiresAt,
         leaseTokenHash: lease.leaseTokenHash,
         input: input.input ?? Prisma.DbNull,
@@ -561,7 +568,7 @@ export async function reserveAuthorizedAiRun(
       provider: result.run.provider,
       model: result.run.model,
       inputFingerprint: input.inputFingerprint,
-      executionInputHash: canonicalSha256(input.input ?? null),
+      executionInputHash,
     }),
   };
 }

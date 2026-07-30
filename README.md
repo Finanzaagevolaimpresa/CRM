@@ -136,7 +136,8 @@ approvazione e richiesta sono azioni separate. PostgreSQL impedisce ogni nuovo
 `AiRun` senza grant valido e ne registra atomicamente il singolo consumo.
 Gli adapter mock/OpenAI e la diagnostica richiedono inoltre un capability token
 runtime monouso, emesso soltanto dalla riserva autorizzata e vincolato
-all'input esatto. La scadenza viene registrata nel ledger alla lettura, alla
+all'input esatto mediante un hash persistito su richiesta, grant e run e
+ricalcolato prima della riserva. La scadenza viene registrata nel ledger alla lettura, alla
 decisione o al tentativo di consumo senza cron. La Draft non espone però alcun
 comando di consumo, non invoca adapter e non attiva provider, worker, dispatch,
 sito o consumer. Il contratto è descritto in

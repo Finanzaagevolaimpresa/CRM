@@ -1435,6 +1435,7 @@ model AiRun {
   promptVersion           String?
   requestKey              String?
   requestFingerprint      String?
+  executionInputHash      String?
   leaseExpiresAt          DateTime?
   leaseTokenHash          String?
   egressPermitHash        String?
@@ -1488,6 +1489,7 @@ model AiExecutionRequest {
   correlationId      String
   idempotencyKey     String
   inputFingerprint   String
+  executionInputHash String
   expiresAt          DateTime
   status             AiExecutionRequestStatus       @default(PENDING_ADMIN_APPROVAL)
   stateVersion       Int                            @default(1)
@@ -1545,6 +1547,7 @@ model AiExecutionAuthorizationGrant {
   requestId          String               @unique(map: "AiExecGrant_requestId_key")
   approvalDecisionId String               @unique(map: "AiExecGrant_decisionId_key")
   inputFingerprint   String
+  executionInputHash String
   agentId            String
   agentConfigVersion Int
   provider           String

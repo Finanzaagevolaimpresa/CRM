@@ -679,7 +679,8 @@ La superficie applicativa crea soltanto richieste e decisioni. Non esiste un
 pulsante, route, worker, scheduler o consumer production capace di consumare il
 grant; anche la diagnostica e il mock restano request-only. Ogni adapter
 richiede comunque il capability token runtime monouso emesso dal gate e
-vincolato all'input esatto. L'apertura della coda o del dettaglio persiste nel
+vincolato all'input esatto mediante un hash persistito su richiesta, grant e
+run e ricalcolato prima della riserva. L'apertura della coda o del dettaglio persiste nel
 ledger le scadenze rilevate, senza cron. Verificare dopo
 l’applicazione che:
 

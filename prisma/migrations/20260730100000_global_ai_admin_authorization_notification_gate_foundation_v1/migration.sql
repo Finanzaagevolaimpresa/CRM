@@ -20,6 +20,7 @@ BEGIN
     OR TO_REGCLASS('"AiOrchestratorSetting"') IS NULL
     OR TO_REGCLASS('"AiOrchestratorWorkerCapabilitySetting"') IS NULL
     OR TO_REGCLASS('"AiControlSetting"') IS NULL
+    OR TO_REGPROCEDURE('canonicalize_ai_workflow_jsonb(jsonb)') IS NULL
   THEN
     RAISE EXCEPTION 'PR85 requires the complete CRM and dormant Orchestrator foundation';
   END IF;
@@ -145,6 +146,7 @@ CREATE TABLE "AiExecutionRequest" (
   "correlationId" TEXT NOT NULL,
   "idempotencyKey" TEXT NOT NULL,
   "inputFingerprint" TEXT NOT NULL,
+  "executionInputHash" TEXT NOT NULL,
   "expiresAt" TIMESTAMP(3) NOT NULL,
   "status" "AiExecutionRequestStatus" NOT NULL DEFAULT 'PENDING_ADMIN_APPROVAL',
   "stateVersion" INTEGER NOT NULL DEFAULT 1,
@@ -208,6 +210,7 @@ CREATE TABLE "AiExecutionRequest" (
   ),
   CONSTRAINT "AiExecRequest_fingerprint_check" CHECK (
     "inputFingerprint" ~ '^[0-9a-f]{64}$'
+    AND "executionInputHash" ~ '^[0-9a-f]{64}$'
   ),
   CONSTRAINT "AiExecRequest_initial_state_check" CHECK ("stateVersion" >= 1),
   CONSTRAINT "AiExecRequest_expiry_check" CHECK (
@@ -308,6 +311,7 @@ CREATE TABLE "AiExecutionAuthorizationGrant" (
   "requestId" TEXT NOT NULL,
   "approvalDecisionId" TEXT NOT NULL,
   "inputFingerprint" TEXT NOT NULL,
+  "executionInputHash" TEXT NOT NULL,
   "agentId" TEXT NOT NULL,
   "agentConfigVersion" INTEGER NOT NULL,
   "provider" TEXT NOT NULL,
@@ -323,6 +327,7 @@ CREATE TABLE "AiExecutionAuthorizationGrant" (
   CONSTRAINT "AiExecGrant_attempts_check" CHECK ("maxAttempts" = 1),
   CONSTRAINT "AiExecGrant_fingerprint_check" CHECK (
     "inputFingerprint" ~ '^[0-9a-f]{64}$'
+    AND "executionInputHash" ~ '^[0-9a-f]{64}$'
   ),
   CONSTRAINT "AiExecGrant_hash_check" CHECK ("grantHash" ~ '^[0-9a-f]{64}$'),
   CONSTRAINT "AiExecGrant_expiry_check" CHECK ("expiresAt" > "createdAt")
@@ -431,9 +436,18 @@ ALTER TABLE "AiExecutionAdminNotification"
 ALTER TABLE "AiRun"
   ADD COLUMN "aiExecutionRequestId" TEXT,
   ADD COLUMN "authorizationGrantId" TEXT,
+  ADD COLUMN "executionInputHash" TEXT,
   ADD CONSTRAINT "AiRun_execution_binding_pair_check" CHECK (
-    ("aiExecutionRequestId" IS NULL AND "authorizationGrantId" IS NULL)
-    OR ("aiExecutionRequestId" IS NOT NULL AND "authorizationGrantId" IS NOT NULL)
+    (
+      "aiExecutionRequestId" IS NULL
+      AND "authorizationGrantId" IS NULL
+      AND "executionInputHash" IS NULL
+    )
+    OR (
+      "aiExecutionRequestId" IS NOT NULL
+      AND "authorizationGrantId" IS NOT NULL
+      AND "executionInputHash" ~ '^[0-9a-f]{64}$'
+    )
   ),
   ADD CONSTRAINT "AiRun_aiExecutionRequestId_fkey"
   FOREIGN KEY ("aiExecutionRequestId") REFERENCES "AiExecutionRequest"("id")
@@ -668,7 +682,7 @@ BEGIN
 
   IF NEW."decisionType" = 'APPROVED' THEN
     INSERT INTO "AiExecutionAuthorizationGrant" (
-      "id", "requestId", "approvalDecisionId", "inputFingerprint",
+      "id", "requestId", "approvalDecisionId", "inputFingerprint", "executionInputHash",
       "agentId", "agentConfigVersion", "provider", "model", "purposeCode",
       "maxAttempts", "expiresAt", "approvedById", "grantHash", "createdAt"
     ) VALUES (
@@ -676,6 +690,7 @@ BEGIN
       request_row."id",
       NEW."id",
       request_row."inputFingerprint",
+      request_row."executionInputHash",
       request_row."agentId",
       request_row."agentConfigVersion",
       request_row."provider",
@@ -760,6 +775,7 @@ BEGIN
       'purposeCode', NEW."purposeCode",
       'correlationId', NEW."correlationId",
       'inputFingerprint', NEW."inputFingerprint",
+      'executionInputHash', NEW."executionInputHash",
       'status', NEW."status"::TEXT
     ),
     CLOCK_TIMESTAMP()
@@ -804,14 +820,14 @@ BEGIN
     NEW."clientServiceId", NEW."functionCode", NEW."agentId",
     NEW."agentConfigVersion", NEW."provider", NEW."model", NEW."purposeCode",
     NEW."dataCategories", NEW."correlationId", NEW."idempotencyKey",
-    NEW."inputFingerprint", NEW."expiresAt", NEW."createdAt"
+    NEW."inputFingerprint", NEW."executionInputHash", NEW."expiresAt", NEW."createdAt"
   ) IS DISTINCT FROM ROW(
     OLD."id", OLD."origin", OLD."requesterKind", OLD."requesterUserId",
     OLD."requesterIdentity", OLD."clientId", OLD."companyId", OLD."projectId",
     OLD."clientServiceId", OLD."functionCode", OLD."agentId",
     OLD."agentConfigVersion", OLD."provider", OLD."model", OLD."purposeCode",
     OLD."dataCategories", OLD."correlationId", OLD."idempotencyKey",
-    OLD."inputFingerprint", OLD."expiresAt", OLD."createdAt"
+    OLD."inputFingerprint", OLD."executionInputHash", OLD."expiresAt", OLD."createdAt"
   ) THEN
     RAISE EXCEPTION 'AI execution request binding is immutable';
   END IF;
@@ -897,6 +913,7 @@ BEGIN
     OR grant_row."expiresAt" <= CURRENT_TIMESTAMP
     OR grant_row."maxAttempts" <> 1
     OR grant_row."inputFingerprint" IS DISTINCT FROM request_row."inputFingerprint"
+    OR grant_row."executionInputHash" IS DISTINCT FROM request_row."executionInputHash"
     OR grant_row."agentId" IS DISTINCT FROM request_row."agentId"
     OR grant_row."agentConfigVersion" IS DISTINCT FROM request_row."agentConfigVersion"
     OR grant_row."provider" IS DISTINCT FROM request_row."provider"
@@ -917,6 +934,11 @@ BEGIN
     OR NEW."status" <> 'running'
     OR NEW."requestKey" IS DISTINCT FROM request_row."idempotencyKey"
     OR NEW."requestFingerprint" IS DISTINCT FROM request_row."inputFingerprint"
+    OR NEW."executionInputHash" IS DISTINCT FROM request_row."executionInputHash"
+    OR NEW."executionInputHash" IS DISTINCT FROM ENCODE(SHA256(CONVERT_TO(
+      "canonicalize_ai_workflow_jsonb"(COALESCE(NEW."input", 'null'::JSONB)),
+      'UTF8'
+    )), 'hex')
     OR NEW."agentId" IS DISTINCT FROM request_row."agentId"
     OR NEW."agentConfigVersion" IS DISTINCT FROM request_row."agentConfigVersion"
     OR NEW."promptVersion" IS DISTINCT FROM expected_prompt_version
@@ -956,12 +978,12 @@ BEGIN
   IF ROW(
     NEW."aiExecutionRequestId", NEW."authorizationGrantId",
     NEW."agentId", NEW."agentConfigVersion", NEW."provider", NEW."model",
-    NEW."requestKey", NEW."requestFingerprint", NEW."clientId",
+    NEW."requestKey", NEW."requestFingerprint", NEW."executionInputHash", NEW."clientId",
     NEW."clientServiceId", NEW."projectId", NEW."createdById", NEW."createdAt"
   ) IS DISTINCT FROM ROW(
     OLD."aiExecutionRequestId", OLD."authorizationGrantId",
     OLD."agentId", OLD."agentConfigVersion", OLD."provider", OLD."model",
-    OLD."requestKey", OLD."requestFingerprint", OLD."clientId",
+    OLD."requestKey", OLD."requestFingerprint", OLD."executionInputHash", OLD."clientId",
     OLD."clientServiceId", OLD."projectId", OLD."createdById", OLD."createdAt"
   ) THEN
     RAISE EXCEPTION 'AiRun authorization binding is immutable';
@@ -997,6 +1019,7 @@ BEGIN
     WHERE run."aiExecutionRequestId" = NEW."id"
       AND auth_grant."requestId" = NEW."id"
       AND run."requestFingerprint" = NEW."inputFingerprint"
+      AND run."executionInputHash" = NEW."executionInputHash"
   ) <> 1 THEN
     RAISE EXCEPTION 'Consumed AI execution request requires exactly one bound AiRun';
   END IF;
@@ -1043,6 +1066,7 @@ BEGIN
   END IF;
 
   IF NEW."inputFingerprint" IS DISTINCT FROM request_row."inputFingerprint"
+    OR NEW."executionInputHash" IS DISTINCT FROM request_row."executionInputHash"
     OR NEW."agentId" IS DISTINCT FROM request_row."agentId"
     OR NEW."agentConfigVersion" IS DISTINCT FROM request_row."agentConfigVersion"
     OR NEW."provider" IS DISTINCT FROM request_row."provider"
@@ -1061,6 +1085,7 @@ BEGIN
       'requestId', NEW."requestId",
       'approvalDecisionHash', decision_row."decisionHash",
       'inputFingerprint', NEW."inputFingerprint",
+      'executionInputHash', NEW."executionInputHash",
       'agentId', NEW."agentId",
       'agentConfigVersion', NEW."agentConfigVersion",
       'provider', NEW."provider",

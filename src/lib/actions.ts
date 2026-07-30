@@ -25,6 +25,7 @@ import {
   isExternalModelAllowed,
 } from './ai-control-plane';
 import {
+  canonicalSha256,
   createAiRequestFingerprint,
 } from './ai-run-reliability';
 import { scanForbiddenPhrases } from './compliance';
@@ -250,6 +251,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(exactDiagnosticBody),
   });
   redirect(`/settings/ai-authorizations/${request.id}`);
 }
@@ -1349,6 +1351,9 @@ export async function runClientAiAgent(form: FormData) {
   const exactProviderBody = requestedRuntime.provider === 'openai'
     ? createOpenAiResponseRequestBody(snapshotRuntime, externalPayload, requestedRuntime.model)
     : { agent: snapshotRuntime, input: mockProviderInput };
+  const executionInput = requestedRuntime.provider === 'openai'
+    ? externalPayload
+    : mockProviderInput;
   const requestFingerprint = createAiRequestFingerprint({
     kind: 'client_ai_agent_run_v1',
     requestKey: data.requestKey,
@@ -1383,6 +1388,7 @@ export async function runClientAiAgent(form: FormData) {
     correlationId: data.requestKey,
     idempotencyKey: data.requestKey,
     inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(executionInput),
     clientId: data.clientId,
     companyId: linkedCompanyId ?? null,
     projectId: data.projectId ?? null,
@@ -1433,6 +1439,7 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(safeInput),
   });
 }
 

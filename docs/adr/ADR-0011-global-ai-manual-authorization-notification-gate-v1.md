@@ -15,7 +15,8 @@ richiesta approvata né a un’autorizzazione monouso.
 
 Ogni futuro utilizzo AI, incluso il provider `mock`, dovrà essere preceduto da:
 
-1. `AiExecutionRequest` persistente e vincolata al fingerprint degli input;
+1. `AiExecutionRequest` persistente e vincolata sia al fingerprint completo
+   della richiesta sia all'hash dell'input esatto destinato all'adapter;
 2. evento iniziale, audit minimizzato e una notifica persistente per ogni Admin
    attivo, creati atomicamente dalla stessa transazione PostgreSQL;
 3. `AiExecutionDecision` append-only con attore canonico, motivazione
@@ -49,7 +50,8 @@ propria richiesta, ma richiesta e decisione restano azioni distinte.
 
 `runClientAiAgent`, quick mock e diagnostica provider:
 
-- calcolano il fingerprint sul body esatto e sulla configurazione immutabile;
+- calcolano il fingerprint sul body esatto e sulla configurazione immutabile,
+  oltre all'hash separato dell'input esatto destinato all'adapter;
 - applicano permessi e ABAC;
 - persistono soltanto `AiExecutionRequest`;
 - non creano `AiRun`, permit, output o dossier;
@@ -61,8 +63,12 @@ integrate nella pagina Notifiche, nel contatore, nella dashboard e nelle schede
 cliente/progetto.
 
 Il trigger `AiRun_authorization_before_insert_v1` blocca ogni nuovo run privo di
-binding e verifica richiesta, grant, fingerprint, agente/versione, provider,
-modello, contesto, richiedente, idempotenza, scadenza, stato e affidabilità.
+binding e verifica richiesta, grant, fingerprint, hash dell'input esatto,
+agente/versione, provider, modello, contesto, richiedente, idempotenza,
+scadenza, stato e affidabilità.
+PostgreSQL ricalcola inoltre l'hash canonico dal JSON del nuovo `AiRun`, così
+un inserimento SQL diretto non può dichiarare un hash corretto per un input
+diverso.
 L’inserimento valido registra `CONSUMED`; il vincolo deferred richiede
 esattamente un run collegato. Binding di run, ledger e grant sono immutabili e
 un run autorizzato non può essere cancellato.
@@ -71,8 +77,9 @@ Il solo helper interno `reserveAuthorizedAiRun` può riservare il run; non è
 importato da route, server action, worker, scheduler o UI. La PR85 non installa
 quindi un consumer operativo e l’approvazione non esegue AI. La riserva emette
 un capability token opaco monouso, legato a provider, modello e hash dell'input
-esatto: adapter mock, adapter OpenAI e diagnostica lo consumano prima di
-qualunque elaborazione. La lettura dell'elenco o del dettaglio registra inoltre
+esatto. La riserva ricalcola tale hash e lo confronta con richiesta e grant
+prima di creare il run; adapter mock, adapter OpenAI e diagnostica consumano il
+token prima di qualunque elaborazione. La lettura dell'elenco o del dettaglio registra inoltre
 `EXPIRED` nel ledger con transazione serializzabile; decisione e consumo
 eseguono lo stesso controllo senza dipendere da cron o scheduler.
 

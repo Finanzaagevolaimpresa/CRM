@@ -565,6 +565,13 @@ async function main() {
       projectId: project.id,
     }))
     .digest("hex");
+  const aiExecutionInput = {
+    source: "development_seed",
+    synthetic: true,
+  };
+  const aiExecutionInputHash = createHash("sha256")
+    .update(JSON.stringify(aiExecutionInput))
+    .digest("hex");
   const aiExecutionRequest = await prisma.aiExecutionRequest.create({
     data: {
       origin: "CRM_UI",
@@ -584,6 +591,7 @@ async function main() {
       correlationId: aiRequestKey,
       idempotencyKey: aiRequestKey,
       inputFingerprint: aiRequestFingerprint,
+      executionInputHash: aiExecutionInputHash,
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     },
   });

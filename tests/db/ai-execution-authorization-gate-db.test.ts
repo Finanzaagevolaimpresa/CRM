@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { PrismaClient, type AiAgentConfigVersion, type User } from '@prisma/client';
+import {
+  PrismaClient,
+  type AiAgentConfigVersion,
+  type Prisma,
+  type User,
+} from '@prisma/client';
 import { MockAiAdapter } from '../../src/lib/ai';
 import { reserveAuthorizedAiRun } from '../../src/lib/ai-execution-authorization';
+import { canonicalSha256 } from '../../src/lib/canonical-json';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
@@ -41,10 +47,13 @@ async function createRequest(options: {
   requester?: User;
   expiresInMs?: number;
   purposeCode?: string;
+  executionInput?: Prisma.InputJsonValue;
 } = {}) {
   const requester = options.requester ?? collaborator;
   const key = randomUUID();
   const fingerprint = sha(`pr85:${runId}:${key}`);
+  const executionInput = options.executionInput ?? { synthetic: true };
+  const executionInputHash = canonicalSha256(executionInput);
   const request = await db().aiExecutionRequest.create({
     data: {
       origin: 'CRM_UI',
@@ -60,10 +69,11 @@ async function createRequest(options: {
       correlationId: key,
       idempotencyKey: key,
       inputFingerprint: fingerprint,
+      executionInputHash,
       expiresAt: new Date(Date.now() + (options.expiresInMs ?? 60_000)),
     },
   });
-  return { request, key, fingerprint, requester };
+  return { request, key, fingerprint, executionInput, executionInputHash, requester };
 }
 
 async function decide(
@@ -84,7 +94,11 @@ async function decide(
   });
 }
 
-async function approvedRequest(options: { requester?: User; expiresInMs?: number } = {}) {
+async function approvedRequest(options: {
+  requester?: User;
+  expiresInMs?: number;
+  executionInput?: Prisma.InputJsonValue;
+} = {}) {
   const fixture = await createRequest(options);
   await decide(fixture.request.id, adminOne, 'APPROVED');
   const grant = await db().aiExecutionAuthorizationGrant.findUniqueOrThrow({
@@ -95,6 +109,8 @@ async function approvedRequest(options: { requester?: User; expiresInMs?: number
 
 async function createBoundRun(fixture: Awaited<ReturnType<typeof approvedRequest>>, overrides: {
   requestFingerprint?: string;
+  executionInputHash?: string;
+  input?: Prisma.InputJsonValue;
   authorizationGrantId?: string;
   requestKey?: string;
 } = {}) {
@@ -109,9 +125,10 @@ async function createBoundRun(fixture: Awaited<ReturnType<typeof approvedRequest
       promptVersion: agentConfig.promptVersion,
       requestKey: overrides.requestKey ?? fixture.key,
       requestFingerprint: overrides.requestFingerprint ?? fixture.fingerprint,
+      executionInputHash: overrides.executionInputHash ?? fixture.executionInputHash,
       leaseExpiresAt: new Date(Date.now() + 60_000),
       leaseTokenHash: sha(`lease:${randomUUID()}`),
-      input: { synthetic: true },
+      input: overrides.input ?? fixture.executionInput,
       createdById: fixture.requester.id,
       aiExecutionRequestId: fixture.request.id,
       authorizationGrantId: overrides.authorizationGrantId ?? fixture.grant.id,
@@ -209,6 +226,7 @@ test('nessun Admin attivo impedisce e annulla fisicamente la richiesta', { skip:
           correlationId: key,
           idempotencyKey: key,
           inputFingerprint: sha(key),
+          executionInputHash: sha(`input:${key}`),
           expiresAt: new Date(Date.now() + 60_000),
         },
       });
@@ -267,6 +285,13 @@ test('fingerprint, richiesta e grant devono coincidere prima del consumo', { ski
   await assert.rejects(
     createBoundRun(first, { authorizationGrantId: second.grant.id }),
     /invalid, expired, revoked or mismatched/i,
+  );
+  await assert.rejects(
+    createBoundRun(first, {
+      executionInputHash: first.executionInputHash,
+      input: { synthetic: false },
+    }),
+    /immutable authorization request binding/i,
   );
   await assert.rejects(
     db().aiExecutionRequest.update({
@@ -334,9 +359,22 @@ test('consumo è atomico, monouso e vincola un solo AiRun affidabile', { skip: !
   assert.equal(await db().aiRun.count({ where: { authorizationGrantId: fixture.grant.id } }), 1);
 });
 
-test('input modificato invalida il capability token prima del provider mock', { skip: !runDbTests }, async () => {
-  const fixture = await approvedRequest();
+test('input modificato invalida reservation e capability token prima del provider mock', { skip: !runDbTests }, async () => {
   const authorizedInput = { synthetic: true, version: 1 };
+  const fixture = await approvedRequest({ executionInput: authorizedInput });
+  await assert.rejects(
+    reserveAuthorizedAiRun({
+      requestId: fixture.request.id,
+      authorizationGrantId: fixture.grant.id,
+      inputFingerprint: fixture.fingerprint,
+      input: { ...authorizedInput, version: 2 },
+    }),
+    /input modificati/i,
+  );
+  assert.equal(
+    await db().aiRun.count({ where: { authorizationGrantId: fixture.grant.id } }),
+    0,
+  );
   const reservation = await reserveAuthorizedAiRun({
     requestId: fixture.request.id,
     authorizationGrantId: fixture.grant.id,

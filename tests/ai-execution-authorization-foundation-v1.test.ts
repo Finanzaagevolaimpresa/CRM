@@ -72,6 +72,7 @@ test('decision ledger e grant sono immutabili, hash-chain e monouso', () => {
   assert.match(migration, /AiExecDecision_approval_once_key/);
   assert.match(migration, /AiExecDecision_consumption_once_key/);
   assert.match(migration, /AiRun_authorizationGrantId_key/);
+  assert.match(migration, /"executionInputHash" TEXT NOT NULL/);
   assert.match(migration, /"maxAttempts" = 1/);
   assert.match(migration, /CREATE FUNCTION "ai_execution_decision_after_insert_v1"/);
   assert.match(migration, /NEW\."decisionType" = 'APPROVED'[\s\S]*INSERT INTO "AiExecutionAuthorizationGrant"/);
@@ -122,6 +123,7 @@ test('barriera AiRun verifica binding e consuma il grant nello stesso inseriment
   assert.match(migration, /Every new AiRun requires a manual Admin authorization grant/);
   for (const field of [
     'requestFingerprint',
+    'executionInputHash',
     'agentId',
     'agentConfigVersion',
     'promptVersion',
@@ -135,6 +137,7 @@ test('barriera AiRun verifica binding e consuma il grant nello stesso inseriment
   assert.match(migration, /NEW\."reliabilityVersion" IS DISTINCT FROM 1/);
   assert.match(migration, /NEW\."status" <> 'running'/);
   assert.match(migration, /NEW\."requestKey" IS DISTINCT FROM request_row\."idempotencyKey"/);
+  assert.match(migration, /canonicalize_ai_workflow_jsonb"\(COALESCE\(NEW\."input", 'null'::JSONB\)\)/);
   assert.match(migration, /'CONSUMED'/);
   assert.match(migration, /Consumed AI execution request requires exactly one bound AiRun/);
   assert.match(migration, /Authorized AiRun is append-only and cannot be deleted/);
@@ -142,6 +145,9 @@ test('barriera AiRun verifica binding e consuma il grant nello stesso inseriment
   assert.match(service, /inputFingerprint: string/);
   assert.match(service, /input\.inputFingerprint !== request\.inputFingerprint/);
   assert.match(service, /input\.inputFingerprint !== request\.authorizationGrant\.inputFingerprint/);
+  assert.match(service, /const executionInputHash = canonicalSha256\(input\.input \?\? null\)/);
+  assert.match(service, /executionInputHash !== request\.executionInputHash/);
+  assert.match(service, /executionInputHash !== request\.authorizationGrant\.executionInputHash/);
   assert.match(service, /export function consumeAiExecutionRuntimePermit/);
   assert.match(service, /executionInputHash !== canonicalSha256\(expected\.input \?\? null\)/);
   assert.match(service, /export async function expireAiExecutionRequestsOnRead/);
@@ -161,6 +167,7 @@ test('UI privata, notifiche e Orchestrator espongono il contratto senza consumo'
   assert.match(notifications, /aiExecutionAdminNotification\.findMany/);
   assert.match(notifications, /Autorizzazione AI da decidere/);
   assert.match(orchestratorContract, /requiresAuthorizationAt:[\s\S]*'ADMISSION'[\s\S]*'CLAIM'[\s\S]*'EXECUTION'/);
+  assert.match(orchestratorContract, /'executionInputHash'/);
   assert.match(orchestratorContract, /productionConsumer: 'NONE'/);
   assert.match(orchestratorContract, /canAcceptLease: false/);
   assert.doesNotMatch(websiteLeadRoute, /AiRun|AiExecutionRequest|adapter|provider|agent/i);
