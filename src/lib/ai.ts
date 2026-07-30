@@ -6,10 +6,21 @@ import {
   type ExternalAiDataCategory,
   type ExternalAiPermit,
 } from './ai-control-plane';
+import {
+  consumeAiExecutionRuntimePermit,
+  type AiExecutionRuntimePermit,
+} from './ai-execution-authorization';
 
 export type AiDraft = { title: string; content: string; metadata?: Record<string, unknown> };
 export type AiAgentRuntime = { code: string; role?: string | null; systemPrompt?: string | null };
-export interface AiProviderAdapter { run(agent: AiAgentRuntime | string, input: unknown, permit?: ExternalAiPermit): Promise<AiDraft>; }
+export interface AiProviderAdapter {
+  run(
+    agent: AiAgentRuntime | string,
+    input: unknown,
+    runtimePermit: AiExecutionRuntimePermit,
+    externalPermit?: ExternalAiPermit,
+  ): Promise<AiDraft>;
+}
 
 export type AiProviderUsageMetadata = {
   inputTokens?: number;
@@ -332,7 +343,16 @@ export function createOpenAiDiagnosticRequestBody(model: string): OpenAiResponse
 }
 
 export class MockAiAdapter implements AiProviderAdapter {
-  async run(agent: AiAgentRuntime | string, input: unknown): Promise<AiDraft> {
+  async run(
+    agent: AiAgentRuntime | string,
+    input: unknown,
+    runtimePermit: AiExecutionRuntimePermit,
+  ): Promise<AiDraft> {
+    consumeAiExecutionRuntimePermit(runtimePermit, {
+      provider: 'mock',
+      model: 'mock-template-v1',
+      input,
+    });
     const runtime = normalizeAgent(agent);
     const ctx = contextFrom(input);
     return { title: `Bozza interna ${runtime.code} - ${buildClientServiceLabel(ctx.clientService, findServiceCatalogLabel(ctx.clientService, ctx.serviceCatalog), 'Pratica cliente')}`, content: buildMockContent(runtime.code, ctx) };
@@ -348,7 +368,17 @@ export class OpenAiAdapter implements AiProviderAdapter {
     this.model = normalized;
   }
 
-  async run(agent: AiAgentRuntime | string, input: unknown, permit?: ExternalAiPermit): Promise<AiDraft> {
+  async run(
+    agent: AiAgentRuntime | string,
+    input: unknown,
+    runtimePermit: AiExecutionRuntimePermit,
+    permit?: ExternalAiPermit,
+  ): Promise<AiDraft> {
+    consumeAiExecutionRuntimePermit(runtimePermit, {
+      provider: 'openai',
+      model: this.model,
+      input,
+    });
     const runtime = normalizeAgent(agent);
     const externalPayload = requiredExternalPayload(input);
     const apiKey = process.env.AI_API_KEY?.trim();
@@ -447,7 +477,10 @@ export function getAiProviderDiagnostics(): AiProviderDiagnostics {
   };
 }
 
-export async function testAiProviderDiagnostic(permit?: ExternalAiPermit): Promise<AiProviderDiagnosticTestResult> {
+export async function testAiProviderDiagnostic(
+  runtimePermit: AiExecutionRuntimePermit,
+  permit?: ExternalAiPermit,
+): Promise<AiProviderDiagnosticTestResult> {
   const diagnostics = getAiProviderDiagnostics();
   if (diagnostics.provider === 'mock') {
     await new MockAiAdapter().run({ code: 'diagnostic_test', role: 'Diagnostica provider AI' }, {
@@ -455,15 +488,20 @@ export async function testAiProviderDiagnostic(permit?: ExternalAiPermit): Promi
       humanReviewRequired: true,
       prompt: 'Test diagnostico interno minimale.',
       context: {},
-    });
+    }, runtimePermit);
     return { success: true, message: 'Provider mock raggiungibile: risposta sintetica generata correttamente.', provider: diagnostics.provider, model: diagnostics.model };
   }
 
+  const requestBody = createOpenAiDiagnosticRequestBody(diagnostics.model);
+  consumeAiExecutionRuntimePermit(runtimePermit, {
+    provider: 'openai',
+    model: diagnostics.model,
+    input: requestBody,
+  });
   const apiKey = process.env.AI_API_KEY?.trim();
   if (!apiKey) {
     return { success: false, message: 'Provider OpenAI selezionato ma AI_API_KEY non è configurata lato server.', provider: diagnostics.provider, model: diagnostics.model };
   }
-  const requestBody = createOpenAiDiagnosticRequestBody(diagnostics.model);
   await consumeExternalAiPermit(permit, diagnostics.model, requestBody);
 
   const controller = new AbortController();

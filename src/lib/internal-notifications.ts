@@ -47,7 +47,31 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const openTaskWhere = taskAccessWhere(session);
   const leadWhere = leadAccessWhere(session);
 
-  const [tasks, communicationsToReview, approvedCommunications, practices, leads, offers, clients] = await Promise.all([
+  const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers, clients] = await Promise.all([
+    session.role === "admin"
+      ? prisma.aiExecutionAdminNotification.findMany({
+          where: {
+            recipientAdminId: session.userId,
+            isRead: false,
+            decidedAt: null,
+            request: {
+              status: "PENDING_ADMIN_APPROVAL",
+              expiresAt: { gt: now },
+            },
+          },
+          include: {
+            request: {
+              include: {
+                requester: { select: { name: true } },
+                client: { select: { displayName: true } },
+                project: { select: { title: true } },
+              },
+            },
+          },
+          orderBy: { createdAt: "asc" },
+          take: limit,
+        })
+      : [],
     canReadServices
       ? prisma.task.findMany({
           where: { ...openTaskWhere, dueAt: { lte: endOfToday } },
@@ -117,6 +141,15 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const visiblePractices = practices.filter(canSeeByOwnership);
   const visibleOffers = offers.filter(canSeeByOwnership);
   const notifications: InternalNotification[] = [
+    ...aiAuthorizationNotifications.map((notification) => ({
+      id: `ai-authorization-${notification.id}`,
+      title: `${notification.request.functionCode.replaceAll("_", " ")} · ${notification.request.requester?.name ?? "Sistema"}`,
+      category: "Autorizzazione AI da decidere",
+      priority: notification.priority === "HIGH" || notification.priority === "URGENT" ? "alta" as const : "media" as const,
+      date: notification.createdAt,
+      related: notification.request.client?.displayName ?? notification.request.project?.title ?? "Richiesta amministrativa",
+      href: notification.approvalPath,
+    })),
     ...tasks.map((task) => ({
       id: `task-${task.id}`,
       title: task.title,

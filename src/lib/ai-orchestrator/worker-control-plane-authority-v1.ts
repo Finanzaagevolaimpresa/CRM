@@ -18,6 +18,7 @@ export const AI_ORCHESTRATOR_WORKER_CONTROL_PLANE_AUTHORITY_VERSION = '1.0' as c
 
 export const AI_ORCHESTRATOR_WORKER_AUTHORITY_BLOCK_REASONS = Object.freeze([
   'FOUNDATION_LOCKED_V1',
+  'AI_EXECUTION_AUTHORIZATION_REQUIRED',
   'LEDGER_INTEGRITY_ERROR',
   'DATABASE_GATE_INTEGRITY_ERROR',
   'DATABASE_STATE_MACHINE_GATE_CLOSED',
@@ -139,7 +140,10 @@ function addReason(
 export function evaluateAiOrchestratorWorkerControlPlaneAuthorityV1(
   input: EvaluateAiOrchestratorWorkerControlPlaneAuthorityInputV1,
 ): Readonly<AiOrchestratorWorkerControlPlaneAuthorityV1> {
-  const blockReasons: AiOrchestratorWorkerAuthorityBlockReason[] = ['FOUNDATION_LOCKED_V1'];
+  const blockReasons: AiOrchestratorWorkerAuthorityBlockReason[] = [
+    'FOUNDATION_LOCKED_V1',
+    'AI_EXECUTION_AUTHORIZATION_REQUIRED',
+  ];
   let ledgerValid = false;
   let targetCount = 0;
   let revisionCount = input.revisions.length;

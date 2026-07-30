@@ -1,31 +1,23 @@
 export const dynamic = 'force-dynamic';
 
 import { Badge, Card, PageHeader, Table } from '@/components/ui';
-import { requirePermission, rolePermissions, type Permission } from '@/lib/auth';
+import { permissionCodes, requirePermission, rolePermissions } from '@/lib/auth';
 
 const roleDescriptions: Record<string, string> = {
   admin: 'Accesso completo a CRM, settings, utenti, ruoli, audit, documenti anche sensibili e funzioni operative.',
   direzione: 'Vista direzionale completa su dati operativi, documenti sensibili, AI, dossier, contratti, pagamenti e audit.',
   commerciale: 'Lavora lead e clienti assegnati, con visibilità operativa limitata a progetti e servizi collegati.',
-  consulente: 'Gestisce progetti e servizi assegnati, upload/download documenti consentiti, AI in bozza e dossier operativi.',
-  revisore: 'Revisiona output AI e dossier, consulta documenti necessari inclusi sensibili dove autorizzato.',
+  consulente: 'Gestisce progetti e servizi assegnati, upload/download documenti consentiti, richieste AI e dossier operativi.',
+  revisore: 'Revisiona output AI e dossier senza rilasciarli, consulta documenti necessari inclusi sensibili dove autorizzato.',
   backoffice: 'Gestisce task, servizi operativi e documenti non sensibili secondo assegnazioni e permessi.',
   amministrazione: 'Consulta e gestisce contratti, pagamenti e documenti amministrativi autorizzati.',
   collaboratore_limitato: 'Vede solo elementi assegnati e documenti non sensibili autorizzati; nessun accesso settings/audit.',
 };
 
-const permissionCatalog: Permission[] = [
-  'user.read','user.write','settings.manage',
-  'lead.read','lead.write','client.read','client.write','company.read','company.write','project.read','project.write',
-  'document.upload','document.download','document.sensitive.read',
-  'service.read','service.write','service.assign','service.close',
-  'ai.run','ai.review','ai.approve','ai_agents.read','ai_agents.write',
-  'dossier.read','dossier.write','dossier.approve',
-  'contract.read','contract.write','payment.read','payment.write','audit.read',
-];
+const visiblePermissionCodes = permissionCodes.filter((permission) => permission !== 'ai.execution.consume');
 
 function describePermissions(perms: readonly string[]) {
-  const effective = perms.includes('*') ? ['*', ...permissionCatalog.filter((permission) => !perms.includes(permission))] : perms;
+  const effective = perms.includes('*') ? ['*', ...visiblePermissionCodes.filter((permission) => !perms.includes(permission))] : perms;
   return effective.map((permission) => permission === '*' ? 'Tutti i permessi' : permission.replaceAll('.', ' → ')).join(', ');
 }
 
@@ -54,6 +46,8 @@ export default async function Page() {
         <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-fai-gray">
           <li>Le pagine settings e audit sono protette server-side con permessi dedicati.</li>
           <li>Admin e direzione possono consultare utenti, ruoli, audit log e gestire le bozze dossier/pre-analisi e la configurazione degli agenti AI interni.</li>
+          <li>Ogni ruolo può soltanto richiedere l&apos;uso dell&apos;AI nel proprio perimetro; approvazione, rifiuto, revoca e audit completo sono riservati all&apos;Admin.</li>
+          <li>Il consumo monouso di un grant AI è un&apos;operazione tecnica interna e non viene esposto come permesso interattivo, nemmeno all&apos;Admin.</li>
           <li>Gli altri ruoli non vedono i link in sidebar e, se aprono la rotta diretta, vengono reindirizzati.</li>
           <li>I permessi documentali restano invariati: i percorsi privati di storage non vengono esposti.</li>
         </ul>

@@ -784,7 +784,11 @@ export async function getAiOrchestratorAdminControlSnapshot(
     const gates = operational[0];
     if (!gates) return { ok: false, code: 'LEDGER_INTEGRITY_ERROR', message: 'Gate operativi globali mancanti.' };
     const env = input.env ?? process.env;
-    const blockReasons = ['FOUNDATION_LOCKED_V1', 'HUMAN_APPROVAL_BARRIER'];
+    const blockReasons = [
+      'FOUNDATION_LOCKED_V1',
+      'HUMAN_APPROVAL_BARRIER',
+      'AI_EXECUTION_AUTHORIZATION_REQUIRED',
+    ];
     if (env.AI_ORCHESTRATOR_WORKER_ENABLED !== '1') blockReasons.push('ENVIRONMENT_WORKER_GATE_CLOSED');
     if (!gates.stateMachineEnabled) blockReasons.push('DATABASE_STATE_MACHINE_GATE_CLOSED');
     if (!gates.dispatchEnabled) blockReasons.push('DATABASE_DISPATCH_GATE_CLOSED');

@@ -101,22 +101,18 @@ test('la conversione output AI richiede prova umana completa ed è idempotente a
   assert.match(body, /getClientDossierReadAccess/);
 });
 
-test('il run cliente usa il provider configurato sull agente e persiste il lifecycle prima della chiamata', () => {
+test('la richiesta cliente vincola provider e configurazione senza aprire il lifecycle runtime', () => {
   const body = functionBody('runClientAiAgent');
-  const createRun = body.indexOf('tx.aiRun.create');
-  const providerCall = body.indexOf('agentRuntime.adapter.run');
-
-  assert.match(body, /resolveAiAgentRuntime\(currentAgent\.provider, currentAgent\.futureModel\)/);
-  assert.match(functionBody('resolveAiAgentRuntime'), /new MockAiAdapter/);
-  assert.match(functionBody('resolveAiAgentRuntime'), /new OpenAiAdapter/);
-  assert.match(functionBody('resolveAiAgentRuntime'), /configuredModel\?\.trim\(\)/);
-  assert.ok(createRun >= 0 && createRun < providerCall, 'AiRun running deve esistere prima della chiamata al provider');
-  assert.match(body.slice(createRun, providerCall), /status: 'running'/);
-  assert.match(body.slice(createRun, providerCall), /provider: currentRuntime\.provider/);
-  assert.match(body.slice(createRun, providerCall), /promptVersion: currentSnapshot\.promptVersion/);
-  assert.match(body, /markAiRunFailedBestEffort/);
-  assert.match(functionBody('markAiRunFailedBestEffort'), /failAiRunWithLease\(tx, options\.lease/);
-  assert.match(body, /completeAiRunWithLease\(tx, reservation\.lease/);
+  const binding = functionBody('resolveAiAgentBinding');
+  assert.match(body, /resolveAiAgentBinding\(requestedSnapshot\.provider, requestedSnapshot\.model\)/);
+  assert.match(binding, /provider === 'mock'/);
+  assert.match(binding, /provider === 'openai'/);
+  assert.match(binding, /configuredModel\?\.trim\(\)/);
+  assert.match(body, /agentId: requestedSnapshot\.agentId/);
+  assert.match(body, /agentConfigVersion: requestedSnapshot\.version/);
+  assert.match(body, /provider: requestedRuntime\.provider/);
+  assert.match(body, /createAiExecutionRequest/);
+  assert.doesNotMatch(body, /tx\.aiRun\.create|adapter\.run|completeAiRunWithLease|markAiRunFailedBestEffort/);
   assert.doesNotMatch(body, /getAiAdapter|normalizeAiProvider/);
 });
 
@@ -138,14 +134,9 @@ test('il payload AI usa task accessibili e non inoltra campi liberi o identifica
   assert.match(body, /linkedCompanyId \|\| canViewWholeClient/);
 });
 
-test('output completo e messaggi di errore non vengono duplicati in AiRun o audit', () => {
+test('la richiesta non persiste output o messaggi provider prima dell autorizzazione', () => {
   const runBody = functionBody('runClientAiAgent');
-  const summary = functionBody('aiRunOutputSummary');
-
-  assert.doesNotMatch(runBody, /output: draft/);
-  assert.match(runBody, /output: aiRunOutputSummary\(draft\)/);
-  assert.match(summary, /contentLength/);
-  assert.doesNotMatch(summary, /content:\s*draft\.content/);
-  assert.doesNotMatch(runBody, /error\.message/);
-  assert.match(runBody, /errorCode:/);
+  assert.match(runBody, /inputFingerprint: requestFingerprint/);
+  assert.doesNotMatch(runBody, /AiOutput|output: draft|error\.message|errorCode:|providerRequestId/);
+  assert.doesNotMatch(runBody, /tx\.aiRun\.create|adapter\.run/);
 });

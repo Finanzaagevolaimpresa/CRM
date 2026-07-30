@@ -1,24 +1,17 @@
 'use server';
-import { Prisma, type AiAgentConfigVersion, type AiOutput } from '@prisma/client';
+import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
-import { hasPermission, requirePermission, type AuthSession, type Permission } from './auth';
+import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
-  AiProviderCallError,
-  aiProviderErrorMetadata,
   createExternalAiPayload,
   externalAiDataCategories,
-  prepareAiOutput,
-  MockAiAdapter,
-  OpenAiAdapter,
   createOpenAiDiagnosticRequestBody,
   createOpenAiResponseRequestBody,
   getAiProviderDiagnostics,
-  minimizeProviderRequestId,
-  testAiProviderDiagnostic,
   type ExternalAiPayload,
 } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
@@ -29,22 +22,11 @@ import { AI_AGENT_CODES } from './ai-agent-configs';
 import { isPrimaryOperationalAiAgent } from './ai-agent-catalog';
 import {
   AI_CONTROL_SETTING_ID,
-  assertExternalAiRunAllowed,
-  issueExternalAiPermit,
   isExternalModelAllowed,
-  prepareExternalAiPermit,
-  type ExternalAiPermit,
 } from './ai-control-plane';
 import {
-  AI_RUN_RELIABILITY_VERSION,
   canonicalSha256,
-  completeAiRunWithLease,
   createAiRequestFingerprint,
-  createAiRunLeaseWithDbClock,
-  failAiRunWithLease,
-  reconcileExpiredAiRuns,
-  resolveIdempotentAiRunState,
-  type AiRunLease,
 } from './ai-run-reliability';
 import { scanForbiddenPhrases } from './compliance';
 import {
@@ -69,28 +51,12 @@ import {
   requireTechnicalPracticeEditAccess,
   requireTechnicalPracticeViewAccess,
 } from './write-access';
+import { createAiExecutionRequest } from './ai-execution-authorization';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
 
 class ConcurrentLeadConversionError extends Error {}
-type ReliableAiRunRecord = {
-  id: string;
-  reliabilityVersion: number | null;
-  status: string;
-  requestFingerprint: string | null;
-};
-const reliableAiRunSelect = {
-  id: true,
-  reliabilityVersion: true,
-  status: true,
-  requestFingerprint: true,
-} satisfies Prisma.AiRunSelect;
-class ExistingAiRunReservationError extends Error {
-  constructor(readonly run: ReliableAiRunRecord) {
-    super('AI run request already reserved');
-  }
-}
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -158,57 +124,17 @@ function minimizeAiInstructions(value?: string) {
     .slice(0, 2000);
 }
 
-function resolveAiAgentRuntime(providerValue: string, configuredModel?: string | null) {
+function resolveAiAgentBinding(providerValue: string, configuredModel?: string | null) {
   const provider = providerValue.trim().toLowerCase();
   if (provider === 'mock') {
-    return { provider, model: 'mock-template-v1', adapter: new MockAiAdapter() };
+    return { provider, model: 'mock-template-v1' };
   }
   if (provider === 'openai') {
     const model = configuredModel?.trim();
     if (!model) throw new UserFacingActionError('Un agente OpenAI richiede un modello esplicito autorizzato.');
-    return { provider, model, adapter: new OpenAiAdapter(model) };
+    return { provider, model };
   }
   throw new UserFacingActionError(`Provider AI non supportato per questo agente: ${providerValue}.`);
-}
-
-function aiRunOutputSummary(draft: { title: string; content: string; metadata?: Record<string, unknown> }) {
-  const metadata = draft.metadata && typeof draft.metadata === 'object'
-    ? {
-        provider: typeof draft.metadata.provider === 'string' ? draft.metadata.provider : undefined,
-        model: typeof draft.metadata.model === 'string' ? draft.metadata.model : undefined,
-      }
-    : undefined;
-  return JSON.parse(JSON.stringify({
-    titleLength: draft.title.length,
-    contentLength: draft.content.length,
-    metadata,
-  })) as Prisma.InputJsonValue;
-}
-
-function safeAiTokenCount(value: unknown) {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-}
-
-function aiProviderPersistenceMetadata(draft: { metadata?: Record<string, unknown> }) {
-  const metadata = draft.metadata && typeof draft.metadata === 'object' ? draft.metadata : {};
-  return {
-    inputTokens: safeAiTokenCount(metadata.inputTokens),
-    outputTokens: safeAiTokenCount(metadata.outputTokens),
-    totalTokens: safeAiTokenCount(metadata.totalTokens),
-    providerRequestId: typeof metadata.providerRequestId === 'string'
-      ? minimizeProviderRequestId(metadata.providerRequestId)
-      : undefined,
-  };
-}
-
-function aiProviderFailureMetadata(error: unknown) {
-  const metadata = aiProviderErrorMetadata(error);
-  return {
-    inputTokens: safeAiTokenCount(metadata.inputTokens),
-    outputTokens: safeAiTokenCount(metadata.outputTokens),
-    totalTokens: safeAiTokenCount(metadata.totalTokens),
-    providerRequestId: minimizeProviderRequestId(metadata.providerRequestId),
-  };
 }
 
 function aiAgentConfigFingerprint(snapshot: AiAgentConfigVersion) {
@@ -247,43 +173,6 @@ async function currentAiAgentWithSnapshot(agentId: string) {
   return { agent, snapshot };
 }
 
-async function existingAiRunForRequest(userId: string, requestKey: string) {
-  return prisma.aiRun.findUnique({
-    where: { createdById_requestKey: { createdById: userId, requestKey } },
-    select: reliableAiRunSelect,
-  });
-}
-
-function assertReliableDuplicate(run: ReliableAiRunRecord, requestFingerprint: string) {
-  if (run.reliabilityVersion !== AI_RUN_RELIABILITY_VERSION) {
-    throw new UserFacingActionError('Chiave richiesta AI già utilizzata da un run non compatibile. Ricarica la pagina.');
-  }
-  return resolveIdempotentAiRunState(run, requestFingerprint);
-}
-
-async function resolveExistingAiOutput(
-  session: AuthSession,
-  run: ReliableAiRunRecord,
-  requestFingerprint: string,
-  permission: Permission,
-): Promise<AiOutput> {
-  assertReliableDuplicate(run, requestFingerprint);
-  const currentSession = await requirePermission(permission);
-  if (currentSession.userId !== session.userId) {
-    throw new UserFacingActionError('Sessione AI modificata. Ricarica la pagina.');
-  }
-  const outputs = await prisma.aiOutput.findMany({
-    where: { aiRunId: run.id },
-    select: { id: true },
-    orderBy: { createdAt: 'asc' },
-    take: 2,
-  });
-  if (outputs.length !== 1) {
-    throw new UserFacingActionError('Output del run AI completato non coerente. Contatta un amministratore.');
-  }
-  const access = await requireAiOutputReadAccess(currentSession, outputs[0].id);
-  return access.output;
-}
 
 function externalNumericValue(value: unknown): string | number | null {
   if (value === null || value === undefined || value === '') return null;
@@ -293,49 +182,11 @@ function externalNumericValue(value: unknown): string | number | null {
   return serialized && serialized !== '[object Object]' ? serialized : null;
 }
 
-async function markAiRunFailedBestEffort(options: {
-  runId: string;
-  lease: AiRunLease;
-  actorId: string;
-  event: string;
-  errorCode: string;
-  trace: Record<string, unknown>;
-  telemetry?: ReturnType<typeof aiProviderPersistenceMetadata>;
-}) {
-  const telemetry: ReturnType<typeof aiProviderPersistenceMetadata> = options.telemetry ?? {
-    inputTokens: undefined,
-    outputTokens: undefined,
-    totalTokens: undefined,
-    providerRequestId: undefined,
-  };
-  try {
-    return await prisma.$transaction(async (tx) => {
-      await failAiRunWithLease(tx, options.lease, {
-        failureCode: options.errorCode,
-        telemetry,
-      });
-      await tx.auditLog.create({ data: {
-        actorId: options.actorId,
-        event: options.event,
-        entityType: 'AiRun',
-        entityId: options.runId,
-        after: JSON.parse(JSON.stringify({
-          ...options.trace,
-          status: 'failed',
-          errorCode: options.errorCode,
-          ...telemetry,
-        })) as Prisma.InputJsonValue,
-      } });
-      return true;
-    });
-  } catch {
-    return false;
-  }
-}
-
 export async function runAiProviderDiagnosticTest(form: FormData) {
-  const s = await requirePermission('ai_agents.read');
-  await reconcileExpiredAiRuns({ actorId: s.userId });
+  const s = await requirePermission('ai.execution.request');
+  if (!hasPermission(s, 'ai_agents.read')) {
+    throw new UserFacingActionError('La diagnostica richiede anche il permesso ai_agents.read.');
+  }
   const diagnostics = getAiProviderDiagnostics();
   const requestKey = aiRequestKeySchema.parse(String(form.get('requestKey') ?? ''));
   const externalDiagnostic = diagnostics.provider === 'openai';
@@ -374,7 +225,6 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
         prompt: 'Test diagnostico interno minimale.',
         context: {},
       };
-  const externalPayloadHash = externalDiagnostic ? canonicalSha256(exactDiagnosticBody) : null;
   const requestFingerprint = createAiRequestFingerprint({
     kind: 'ai_provider_diagnostic_v1',
     requestKey,
@@ -384,216 +234,26 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     body: exactDiagnosticBody,
     externalDiagnosticConfirmed,
   });
-  const existing = await existingAiRunForRequest(s.userId, requestKey);
-  if (existing) {
-    assertReliableDuplicate(existing, requestFingerprint);
-    const params = new URLSearchParams({ status: 'ok', message: 'Test provider già completato per questa richiesta.' });
-    redirect(`/settings/ai-diagnostics?${params.toString()}`);
-  }
-
-  if (externalDiagnostic && (!hasPermission(s, 'ai.run') || !hasPermission(s, 'ai.external.run'))) {
-    throw new UserFacingActionError('La diagnostica OpenAI richiede i permessi ai.run e ai.external.run.');
-  }
   if (externalDiagnostic && !externalDiagnosticConfirmed) {
-    throw new UserFacingActionError('Conferma esplicitamente il test OpenAI e il possibile costo della singola chiamata.');
+    throw new UserFacingActionError(
+      'Conferma che la futura esecuzione autorizzata potrà generare il costo della singola chiamata OpenAI.',
+    );
   }
-  let reservation;
-  try {
-    reservation = await withSerializableAiTransaction(async (tx) => {
-      const duplicate = await tx.aiRun.findUnique({
-        where: { createdById_requestKey: { createdById: s.userId, requestKey: requestKey } },
-        select: reliableAiRunSelect,
-      });
-      if (duplicate) throw new ExistingAiRunReservationError(duplicate);
-      const lease = await createAiRunLeaseWithDbClock(tx);
-      const confirmedAt = lease.leaseStartedAt;
-
-      const currentAgent = await tx.aiAgent.findUniqueOrThrow({ where: { id: requestedAgent.id } });
-      const currentSnapshot = await tx.aiAgentConfigVersion.findUnique({
-        where: { agentId_version: { agentId: currentAgent.id, version: currentAgent.configVersion } },
-      });
-      if (
-        !currentAgent.active
-        || currentAgent.configVersion !== requestedSnapshot.version
-        || currentAgent.provider !== diagnostics.provider
-        || (externalDiagnostic && currentAgent.futureModel !== runtimeModel)
-        || !currentSnapshot
-        || !currentSnapshot.active
-        || currentSnapshot.provider !== diagnostics.provider
-        || (externalDiagnostic && currentSnapshot.model !== runtimeModel)
-        || canonicalSha256(aiAgentConfigFingerprint(currentSnapshot)) !== canonicalSha256(aiAgentConfigFingerprint(requestedSnapshot))
-      ) {
-        throw new UserFacingActionError('Configurazione diagnostica modificata prima della prenotazione. Ricarica la pagina.');
-      }
-
-      let authorizedCategories = [] as readonly string[];
-      let permitMaterial: ReturnType<typeof prepareExternalAiPermit> | undefined;
-      if (externalDiagnostic) {
-        const authorization = await assertExternalAiRunAllowed({
-          userId: s.userId,
-          permissionGranted: hasPermission(s, 'ai.external.run'),
-          model: runtimeModel,
-          dataCategories: ['agent_configuration'],
-          confirmedAt,
-          db: tx,
-        });
-        authorizedCategories = authorization.dataCategories;
-        permitMaterial = prepareExternalAiPermit();
-      }
-      const run = await tx.aiRun.create({ data: {
-        id: lease.runId,
-        reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-        agentId: currentAgent.id,
-        agentConfigVersion: currentSnapshot.version,
-        status: 'running',
-        provider: diagnostics.provider,
-        model: runtimeModel,
-        promptVersion: currentSnapshot.promptVersion,
-        requestKey,
-        requestFingerprint,
-        leaseExpiresAt: lease.leaseExpiresAt,
-        leaseTokenHash: lease.leaseTokenHash,
-        egressPermitHash: permitMaterial?.egressPermitHash ?? null,
-        externalPayloadHash,
-        externalConfirmedAt: externalDiagnostic ? confirmedAt : null,
-        externalDataCategories: externalDiagnostic ? [...authorizedCategories] : Prisma.DbNull,
-        input: externalDiagnostic ? Prisma.DbNull : exactDiagnosticBody as Prisma.InputJsonValue,
-        createdById: s.userId,
-        createdAt: lease.leaseStartedAt,
-      } });
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_provider_diagnostic_reserved',
-        entityType: 'AiRun',
-        entityId: run.id,
-        after: {
-          aiRunId: run.id,
-          agentId: currentAgent.id,
-          configVersion: currentSnapshot.version,
-          provider: diagnostics.provider,
-          model: runtimeModel,
-          externalConfirmedAt: externalDiagnostic ? confirmedAt : null,
-          dataCategories: authorizedCategories,
-          reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-          status: 'running',
-        },
-      } });
-      const permit = permitMaterial && externalPayloadHash
-        ? await issueExternalAiPermit({
-            seed: permitMaterial.seed,
-            lease: lease.lease,
-            runId: run.id,
-            userId: s.userId,
-            requestKey,
-            requestFingerprint,
-            agentId: currentAgent.id,
-            agentConfigVersion: currentSnapshot.version,
-            model: runtimeModel,
-            dataCategories: authorizedCategories,
-            externalPayloadHash,
-            db: tx,
-          })
-        : undefined;
-      return { run, lease: lease.lease, permit, authorizedCategories };
-    });
-  } catch (error) {
-    const duplicate = error instanceof ExistingAiRunReservationError
-      ? error.run
-      : isUniqueConstraintError(error) ? await existingAiRunForRequest(s.userId, requestKey) : null;
-    if (duplicate) {
-      assertReliableDuplicate(duplicate, requestFingerprint);
-      const params = new URLSearchParams({ status: 'ok', message: 'Test provider già completato per questa richiesta.' });
-      redirect(`/settings/ai-diagnostics?${params.toString()}`);
-    }
-    throw error;
-  }
-
-  try {
-    const executionSession = await requirePermission('ai_agents.read');
-    if (
-      executionSession.userId !== s.userId
-      || (externalDiagnostic && (
-        !hasPermission(executionSession, 'ai.run')
-        || !hasPermission(executionSession, 'ai.external.run')
-      ))
-    ) {
-      throw new UserFacingActionError('Autorizzazioni diagnostica AI revocate prima dell’esecuzione.');
-    }
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_provider_diagnostic_access_revoked',
-      errorCode: 'AI_RUNTIME_PERMISSION_REVOKED',
-      trace: { aiRunId: reservation.run.id, provider: diagnostics.provider, model: runtimeModel },
-    });
-    throw error;
-  }
-
-  let result;
-  try {
-    result = await testAiProviderDiagnostic(reservation.permit);
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_provider_diagnostic_failed',
-      errorCode: 'AI_DIAGNOSTIC_PROVIDER_FAILURE',
-      trace: { aiRunId: reservation.run.id, provider: diagnostics.provider, model: runtimeModel },
-      telemetry: aiProviderFailureMetadata(error),
-    });
-    if (error instanceof UserFacingActionError) throw error;
-    throw new UserFacingActionError('Errore controllato durante il test OpenAI. Nessun output AI salvato.');
-  }
-  const usage = result.usage ?? {};
-  const diagnosticTelemetry = {
-    inputTokens: safeAiTokenCount(usage.inputTokens),
-    outputTokens: safeAiTokenCount(usage.outputTokens),
-    totalTokens: safeAiTokenCount(usage.totalTokens),
-    providerRequestId: minimizeProviderRequestId(usage.providerRequestId),
-  };
-  try {
-    await prisma.$transaction(async (tx) => {
-      if (result.success) {
-        await completeAiRunWithLease(tx, reservation.lease, { telemetry: diagnosticTelemetry });
-      } else {
-        await failAiRunWithLease(tx, reservation.lease, {
-          failureCode: 'AI_DIAGNOSTIC_FAILED',
-          telemetry: diagnosticTelemetry,
-        });
-      }
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_provider_diagnostic_test',
-        entityType: 'AiRun',
-        entityId: reservation.run.id,
-        after: {
-          aiRunId: reservation.run.id,
-          provider: result.provider,
-          model: runtimeModel,
-          success: result.success,
-          status: result.success ? 'completed' : 'failed',
-          failureCode: result.success ? null : 'AI_DIAGNOSTIC_FAILED',
-          ...diagnosticTelemetry,
-        },
-      } });
-    });
-  } catch {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_provider_diagnostic_persistence_failed',
-      errorCode: 'AI_DIAGNOSTIC_PERSISTENCE_FAILURE',
-      trace: { aiRunId: reservation.run.id, provider: result.provider, model: runtimeModel },
-      telemetry: diagnosticTelemetry,
-    });
-    throw new UserFacingActionError('Risposta diagnostica ricevuta ma salvataggio stato non completato. Riprova.');
-  }
-  const params = new URLSearchParams({ status: result.success ? 'ok' : 'error', message: result.message });
-  redirect(`/settings/ai-diagnostics?${params.toString()}`);
+  const request = await createAiExecutionRequest(s, {
+    origin: 'CRM_UI',
+    functionCode: 'AI_PROVIDER_DIAGNOSTIC',
+    agentId: requestedSnapshot.agentId,
+    agentConfigVersion: requestedSnapshot.version,
+    provider: diagnostics.provider,
+    model: runtimeModel,
+    purposeCode: 'PROVIDER_DIAGNOSTIC',
+    dataCategories: ['agent_configuration'],
+    correlationId: requestKey,
+    idempotencyKey: requestKey,
+    inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(exactDiagnosticBody),
+  });
+  redirect(`/settings/ai-authorizations/${request.id}`);
 }
 
 export async function updateAiAgentConfig(form: FormData) {
@@ -1531,13 +1191,12 @@ export async function updateDocumentSection(form: FormData) {
 
 
 export async function runClientAiAgent(form: FormData) {
-  const s = await requirePermission('ai.run');
-  await reconcileExpiredAiRuns({ actorId: s.userId });
+  const s = await requirePermission('ai.execution.request');
   const data = clientAiRunSchema.parse(clean(form));
   const { agent: requestedAgent, snapshot: requestedSnapshot } = await currentAiAgentWithSnapshot(data.agentId);
   if (!requestedAgent.active) throw new UserFacingActionError('Agente AI disattivato: esecuzione non consentita.');
   if (!requestedSnapshot.active || !isPrimaryOperationalAiAgent(requestedSnapshot.code)) throw new UserFacingActionError('Agente AI non abilitato al workflow operativo cliente.');
-  const requestedRuntime = resolveAiAgentRuntime(requestedSnapshot.provider, requestedSnapshot.model);
+  const requestedRuntime = resolveAiAgentBinding(requestedSnapshot.provider, requestedSnapshot.model);
   const externalProviderRequested = requestedRuntime.provider === 'openai';
 
   const access = await requireClientContextReadAccess(s, data);
@@ -1689,13 +1348,12 @@ export async function runClientAiAgent(form: FormData) {
   });
   const externalDataCategories = externalAiDataCategories(externalPayload);
   const snapshotRuntime = aiAgentSnapshotRuntime(requestedSnapshot);
-  const providerInput = requestedRuntime.provider === 'openai' ? externalPayload : mockProviderInput;
   const exactProviderBody = requestedRuntime.provider === 'openai'
     ? createOpenAiResponseRequestBody(snapshotRuntime, externalPayload, requestedRuntime.model)
     : { agent: snapshotRuntime, input: mockProviderInput };
-  const externalPayloadHash = requestedRuntime.provider === 'openai'
-    ? canonicalSha256(exactProviderBody)
-    : null;
+  const executionInput = requestedRuntime.provider === 'openai'
+    ? externalPayload
+    : mockProviderInput;
   const requestFingerprint = createAiRequestFingerprint({
     kind: 'client_ai_agent_run_v1',
     requestKey: data.requestKey,
@@ -1709,277 +1367,41 @@ export async function runClientAiAgent(form: FormData) {
     agentConfig: aiAgentConfigFingerprint(requestedSnapshot),
     body: exactProviderBody,
   });
-  const existing = await existingAiRunForRequest(s.userId, data.requestKey);
-  if (existing) return resolveExistingAiOutput(s, existing, requestFingerprint, 'ai.run');
-  if (externalProviderRequested && !hasPermission(s, 'ai.external.run')) {
-    throw new UserFacingActionError('Il provider OpenAI richiede anche il permesso ai.external.run.');
-  }
   if (externalProviderRequested && !data.externalDataConfirmed) {
-    throw new UserFacingActionError('Conferma esplicitamente l’invio dei dati minimizzati al provider OpenAI.');
-  }
-
-  // Access is evaluated again after the DTO has been assembled, immediately
-  // before a durable reservation can authorize execution.
-  await requireClientContextReadAccess(s, data);
-  let reservation;
-  try {
-    reservation = await withSerializableAiTransaction(async (tx) => {
-      const duplicate = await tx.aiRun.findUnique({
-        where: { createdById_requestKey: { createdById: s.userId, requestKey: data.requestKey } },
-        select: reliableAiRunSelect,
-      });
-      if (duplicate) throw new ExistingAiRunReservationError(duplicate);
-      const lease = await createAiRunLeaseWithDbClock(tx);
-      const externalConfirmedAt = requestedRuntime.provider === 'openai' ? lease.leaseStartedAt : null;
-
-      const currentAgent = await tx.aiAgent.findUniqueOrThrow({ where: { id: data.agentId } });
-      const currentSnapshot = await tx.aiAgentConfigVersion.findUnique({
-        where: { agentId_version: { agentId: currentAgent.id, version: currentAgent.configVersion } },
-      });
-      if (
-        !currentAgent.active
-        || currentAgent.configVersion !== requestedSnapshot.version
-        || currentAgent.promptVersion !== currentSnapshot?.promptVersion
-        || !currentSnapshot
-        || !currentSnapshot.active
-        || !isPrimaryOperationalAiAgent(currentSnapshot.code)
-        || canonicalSha256(aiAgentConfigFingerprint(currentSnapshot)) !== canonicalSha256(aiAgentConfigFingerprint(requestedSnapshot))
-      ) {
-        throw new UserFacingActionError('Configurazione agente modificata prima dell’esecuzione. Ricarica la pagina.');
-      }
-      const liveRuntime = resolveAiAgentRuntime(currentAgent.provider, currentAgent.futureModel);
-      const currentRuntime = resolveAiAgentRuntime(currentSnapshot.provider, currentSnapshot.model);
-      if (
-        liveRuntime.provider !== currentRuntime.provider
-        || liveRuntime.model !== currentRuntime.model
-        || currentRuntime.provider !== requestedRuntime.provider
-        || currentRuntime.model !== requestedRuntime.model
-      ) {
-        throw new UserFacingActionError('Provider o modello agente modificato prima dell’esecuzione. Ricarica la pagina.');
-      }
-
-      let authorizedCategories = [] as readonly (typeof externalDataCategories)[number][];
-      let permitMaterial: ReturnType<typeof prepareExternalAiPermit> | undefined;
-      if (currentRuntime.provider === 'openai') {
-        if (!hasPermission(s, 'ai.external.run') || !data.externalDataConfirmed) {
-          throw new UserFacingActionError('Permesso e conferma esplicita sono obbligatori per OpenAI.');
-        }
-        const authorization = await assertExternalAiRunAllowed({
-          userId: s.userId,
-          permissionGranted: hasPermission(s, 'ai.external.run'),
-          model: currentRuntime.model,
-          dataCategories: externalDataCategories,
-          confirmedAt: externalConfirmedAt,
-          db: tx,
-        });
-        authorizedCategories = authorization.dataCategories;
-        permitMaterial = prepareExternalAiPermit();
-      }
-      const run = await tx.aiRun.create({ data: {
-        id: lease.runId,
-        reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-        agentId: currentSnapshot.agentId,
-        agentConfigVersion: currentSnapshot.version,
-        clientId: data.clientId,
-        clientServiceId: data.clientServiceId,
-        projectId: data.projectId,
-        status: 'running',
-        provider: currentRuntime.provider,
-        model: currentRuntime.model,
-        promptVersion: currentSnapshot.promptVersion,
-        requestKey: data.requestKey,
-        requestFingerprint,
-        leaseExpiresAt: lease.leaseExpiresAt,
-        leaseTokenHash: lease.leaseTokenHash,
-        egressPermitHash: permitMaterial?.egressPermitHash ?? null,
-        externalPayloadHash,
-        externalConfirmedAt: currentRuntime.provider === 'openai' ? externalConfirmedAt : null,
-        externalDataCategories: currentRuntime.provider === 'openai' ? [...authorizedCategories] : Prisma.DbNull,
-        input: currentRuntime.provider === 'openai' ? Prisma.DbNull : input as Prisma.InputJsonValue,
-        operationalInstructions: currentRuntime.provider === 'openai' ? null : operationalInstructions,
-        createdById: s.userId,
-        createdAt: lease.leaseStartedAt,
-      } });
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_agent_run_reserved',
-        entityType: 'AiRun',
-        entityId: run.id,
-        after: {
-          aiRunId: run.id,
-          agentId: currentSnapshot.agentId,
-          agentCode: currentSnapshot.code,
-          clientId: data.clientId,
-          clientServiceId: data.clientServiceId ?? null,
-          projectId: data.projectId ?? null,
-          provider: currentRuntime.provider,
-          model: currentRuntime.model,
-          promptVersion: currentSnapshot.promptVersion,
-          configVersion: currentSnapshot.version,
-          externalConfirmedAt: currentRuntime.provider === 'openai' ? externalConfirmedAt : null,
-          externalDataCategories: currentRuntime.provider === 'openai' ? authorizedCategories : [],
-          reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-          status: 'running',
-        },
-      } });
-      const externalPermit = permitMaterial && externalPayloadHash
-        ? await issueExternalAiPermit({
-            seed: permitMaterial.seed,
-            lease: lease.lease,
-            runId: run.id,
-            userId: s.userId,
-            requestKey: data.requestKey,
-            requestFingerprint,
-            agentId: currentSnapshot.agentId,
-            agentConfigVersion: currentSnapshot.version,
-            model: currentRuntime.model,
-            dataCategories: authorizedCategories,
-            externalPayloadHash,
-            db: tx,
-          })
-        : undefined;
-      return { run, agent: currentSnapshot, runtime: currentRuntime, authorizedCategories, externalPermit, lease: lease.lease };
-    });
-  } catch (error) {
-    const duplicate = error instanceof ExistingAiRunReservationError
-      ? error.run
-      : isUniqueConstraintError(error) ? await existingAiRunForRequest(s.userId, data.requestKey) : null;
-    if (duplicate) return resolveExistingAiOutput(s, duplicate, requestFingerprint, 'ai.run');
-    throw error;
-  }
-  const { run, agent, runtime: agentRuntime } = reservation;
-
-  try {
-    // A reservation is not authority to egress forever: permissions and the
-    // client relationship are checked once more immediately before execution.
-    const executionSession = await requirePermission('ai.run');
-    if (
-      executionSession.userId !== s.userId
-      || (agentRuntime.provider === 'openai' && !hasPermission(executionSession, 'ai.external.run'))
-    ) {
-      throw new UserFacingActionError('Autorizzazioni AI revocate prima dell’esecuzione.');
-    }
-    await requireClientContextReadAccess(executionSession, data);
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_agent_run_access_revoked',
-      errorCode: 'AI_CLIENT_ACCESS_REVOKED',
-      trace: {
-        aiRunId: run.id,
-        agentId: agent.agentId,
-        clientId: data.clientId,
-        clientServiceId: data.clientServiceId ?? null,
-        projectId: data.projectId ?? null,
-      },
-    });
-    throw error;
-  }
-
-  let draft;
-  try {
-    draft = await agentRuntime.adapter.run(
-      aiAgentSnapshotRuntime(agent),
-      providerInput,
-      reservation.externalPermit,
+    throw new UserFacingActionError(
+      'Conferma le categorie di dati minimizzati previste per la futura esecuzione OpenAI.',
     );
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_agent_run_failed',
-      errorCode: error instanceof AiProviderCallError
-        ? error.errorCode
-        : error instanceof UserFacingActionError ? 'AI_PROVIDER_REJECTED' : 'AI_PROVIDER_FAILURE',
-      trace: {
-        aiRunId: run.id,
-        agentId: agent.agentId,
-        agentCode: agent.code,
-        clientId: data.clientId,
-        clientServiceId: data.clientServiceId ?? null,
-        projectId: data.projectId ?? null,
-        provider: agentRuntime.provider,
-        model: agentRuntime.model,
-        promptVersion: agent.promptVersion,
-        configVersion: agent.version,
-        externalConfirmedAt: run.externalConfirmedAt,
-        externalDataCategories: reservation.authorizedCategories,
-      },
-      telemetry: aiProviderFailureMetadata(error),
-    });
-    if (error instanceof UserFacingActionError) throw error;
-    throw new UserFacingActionError('Errore operativo durante l’esecuzione AI. Nessun output è stato salvato.');
   }
-  const providerMetadata = aiProviderPersistenceMetadata(draft);
-  try {
-    const prepared = prepareAiOutput(draft);
-    return await prisma.$transaction(async (tx) => {
-      await completeAiRunWithLease(tx, reservation.lease, {
-        output: aiRunOutputSummary(draft),
-        telemetry: providerMetadata,
-      });
-      const output = await tx.aiOutput.create({ data: { aiRunId: run.id, clientId: data.clientId, clientServiceId: data.clientServiceId, projectId: data.projectId, title: prepared.title, content: prepared.content, status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review', requiresHumanReview: true, forbiddenPhrases: prepared.forbiddenPhrases } });
-      const trace = {
-        aiRunId: run.id,
-        outputId: output.id,
-        agentId: agent.agentId,
-        agentCode: agent.code,
-        clientId: data.clientId,
-        clientServiceId: data.clientServiceId ?? null,
-        projectId: data.projectId ?? null,
-        provider: agentRuntime.provider,
-        model: agentRuntime.model,
-        promptVersion: agent.promptVersion,
-        configVersion: agent.version,
-        externalConfirmedAt: run.externalConfirmedAt,
-        externalDataCategories: reservation.authorizedCategories,
-        inputTokens: providerMetadata.inputTokens,
-        outputTokens: providerMetadata.outputTokens,
-        totalTokens: providerMetadata.totalTokens,
-        providerRequestId: providerMetadata.providerRequestId,
-        status: 'completed',
-        outputStatus: output.status,
-      };
-      await tx.auditLog.createMany({ data: [
-        { actorId: s.userId, event: 'ai_agent_run', entityType: 'AiRun', entityId: run.id, after: trace },
-        { actorId: s.userId, event: 'ai_output_generation', entityType: 'AiOutput', entityId: output.id, after: trace },
-      ] });
-      return output;
-    });
-  } catch {
-    await markAiRunFailedBestEffort({
-      runId: run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_output_persistence_failed',
-      errorCode: 'AI_OUTPUT_PERSISTENCE_FAILURE',
-      trace: {
-        aiRunId: run.id,
-        agentId: agent.agentId,
-        agentCode: agent.code,
-        clientId: data.clientId,
-        clientServiceId: data.clientServiceId ?? null,
-        projectId: data.projectId ?? null,
-        provider: agentRuntime.provider,
-        model: agentRuntime.model,
-        promptVersion: agent.promptVersion,
-        configVersion: agent.version,
-        externalConfirmedAt: run.externalConfirmedAt,
-        externalDataCategories: reservation.authorizedCategories,
-      },
-      telemetry: providerMetadata,
-    });
-    throw new UserFacingActionError('Risposta AI ricevuta ma output non salvato correttamente. Riprova.');
-  }
+
+  // Recheck ABAC immediately before persisting the request. No AiRun, adapter,
+  // permit or provider call is created by this action.
+  await requireClientContextReadAccess(s, data);
+  return createAiExecutionRequest(s, {
+    origin: 'CRM_UI',
+    functionCode: 'CLIENT_AI_AGENT',
+    agentId: requestedSnapshot.agentId,
+    agentConfigVersion: requestedSnapshot.version,
+    provider: requestedRuntime.provider,
+    model: requestedRuntime.model,
+    purposeCode: 'CLIENT_ADVISORY_ANALYSIS',
+    dataCategories: externalDataCategories,
+    correlationId: data.requestKey,
+    idempotencyKey: data.requestKey,
+    inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(executionInput),
+    clientId: data.clientId,
+    companyId: linkedCompanyId ?? null,
+    projectId: data.projectId ?? null,
+    clientServiceId: data.clientServiceId ?? null,
+  });
 }
 
 export async function runMockAgent(agentCode: string, input: unknown, requestKeyValue: string) {
-  const s = await requirePermission('ai_agents.write');
+  const s = await requirePermission('ai.execution.request');
+  if (!hasPermission(s, 'ai_agents.write')) {
+    throw new UserFacingActionError('Il quick mock richiede anche il permesso ai_agents.write.');
+  }
   if (!hasGlobalAccess(s)) denyWriteAccess();
-  await reconcileExpiredAiRuns({ actorId: s.userId });
   const requestKey = aiRequestKeySchema.parse(requestKeyValue);
   const prompt = typeof input === 'object' && input && typeof (input as { prompt?: unknown }).prompt === 'string'
     ? (input as { prompt: string }).prompt.trim()
@@ -2005,170 +1427,20 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     agentConfig: aiAgentConfigFingerprint(snapshot),
     body: exactMockBody,
   });
-  const existing = await existingAiRunForRequest(s.userId, requestKey);
-  if (existing) return resolveExistingAiOutput(s, existing, requestFingerprint, 'ai_agents.write');
-
-  let reservation;
-  try {
-    reservation = await withSerializableAiTransaction(async (tx) => {
-      const duplicate = await tx.aiRun.findUnique({
-        where: { createdById_requestKey: { createdById: s.userId, requestKey: requestKey } },
-        select: reliableAiRunSelect,
-      });
-      if (duplicate) throw new ExistingAiRunReservationError(duplicate);
-      const lease = await createAiRunLeaseWithDbClock(tx);
-
-      const currentAgent = await tx.aiAgent.findUniqueOrThrow({ where: { id: agent.id } });
-      const currentSnapshot = await tx.aiAgentConfigVersion.findUnique({
-        where: { agentId_version: { agentId: currentAgent.id, version: currentAgent.configVersion } },
-      });
-      if (
-        !currentAgent.active
-        || currentAgent.configVersion !== snapshot.version
-        || !currentSnapshot
-        || !currentSnapshot.active
-        || currentAgent.code !== currentSnapshot.code
-        || !isPrimaryOperationalAiAgent(currentSnapshot.code)
-        || canonicalSha256(aiAgentConfigFingerprint(currentSnapshot)) !== canonicalSha256(aiAgentConfigFingerprint(snapshot))
-      ) {
-        throw new UserFacingActionError('Configurazione agente modificata prima del quick-run. Ricarica la pagina.');
-      }
-      const run = await tx.aiRun.create({ data: {
-        id: lease.runId,
-        reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-        agentId: currentSnapshot.agentId,
-        agentConfigVersion: currentSnapshot.version,
-        status: 'running',
-        provider: 'mock',
-        model: 'mock-template-v1',
-        promptVersion: currentSnapshot.promptVersion,
-        requestKey,
-        requestFingerprint,
-        leaseExpiresAt: lease.leaseExpiresAt,
-        leaseTokenHash: lease.leaseTokenHash,
-        input: safeInput,
-        createdById: s.userId,
-        createdAt: lease.leaseStartedAt,
-      } });
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_mock_run_reserved',
-        entityType: 'AiRun',
-        entityId: run.id,
-        after: {
-          aiRunId: run.id,
-          agentId: currentSnapshot.agentId,
-          provider: 'mock',
-          model: 'mock-template-v1',
-          promptVersion: currentSnapshot.promptVersion,
-          configVersion: currentSnapshot.version,
-          reliabilityVersion: AI_RUN_RELIABILITY_VERSION,
-          status: 'running',
-        },
-      } });
-      return { run, snapshot: currentSnapshot, lease: lease.lease };
-    });
-  } catch (error) {
-    const duplicate = error instanceof ExistingAiRunReservationError
-      ? error.run
-      : isUniqueConstraintError(error) ? await existingAiRunForRequest(s.userId, requestKey) : null;
-    if (duplicate) return resolveExistingAiOutput(s, duplicate, requestFingerprint, 'ai_agents.write');
-    throw error;
-  }
-
-  try {
-    const executionSession = await requirePermission('ai_agents.write');
-    if (executionSession.userId !== s.userId || !hasGlobalAccess(executionSession)) {
-      throw new UserFacingActionError('Autorizzazioni quick-run revocate prima dell’esecuzione.');
-    }
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_mock_run_access_revoked',
-      errorCode: 'AI_RUNTIME_PERMISSION_REVOKED',
-      trace: {
-        aiRunId: reservation.run.id,
-        agentId: reservation.snapshot.agentId,
-        configVersion: reservation.snapshot.version,
-      },
-    });
-    throw error;
-  }
-
-  let draft;
-  try {
-    draft = await new MockAiAdapter().run(aiAgentSnapshotRuntime(reservation.snapshot), safeInput);
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_mock_run_failed',
-      errorCode: error instanceof UserFacingActionError ? 'AI_MOCK_REJECTED' : 'AI_MOCK_FAILURE',
-      trace: {
-        aiRunId: reservation.run.id,
-        agentId: reservation.snapshot.agentId,
-        configVersion: reservation.snapshot.version,
-        provider: 'mock',
-        model: 'mock-template-v1',
-      },
-    });
-    if (error instanceof UserFacingActionError) throw error;
-    throw new UserFacingActionError('Errore operativo durante il quick-run mock. Nessun output è stato salvato.');
-  }
-
-  const prepared = prepareAiOutput(draft);
-  try {
-    return await prisma.$transaction(async (tx) => {
-      await completeAiRunWithLease(tx, reservation.lease, {
-        output: aiRunOutputSummary(draft),
-      });
-      const createdOutput = await tx.aiOutput.create({ data: {
-        aiRunId: reservation.run.id,
-        title: prepared.title,
-        content: prepared.content,
-        status: prepared.forbiddenPhrases.length ? 'flagged' : 'needs_review',
-        requiresHumanReview: true,
-        forbiddenPhrases: prepared.forbiddenPhrases,
-      } });
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'ai_mock_generation',
-        entityType: 'AiOutput',
-        entityId: createdOutput.id,
-        after: {
-          outputId: createdOutput.id,
-          aiRunId: reservation.run.id,
-          agentId: reservation.snapshot.agentId,
-          provider: 'mock',
-          model: 'mock-template-v1',
-          promptVersion: reservation.snapshot.promptVersion,
-          configVersion: reservation.snapshot.version,
-          status: createdOutput.status,
-        },
-      } });
-      return createdOutput;
-    });
-  } catch (error) {
-    await markAiRunFailedBestEffort({
-      runId: reservation.run.id,
-      lease: reservation.lease,
-      actorId: s.userId,
-      event: 'ai_mock_output_persistence_failed',
-      errorCode: 'AI_OUTPUT_PERSISTENCE_FAILURE',
-      trace: {
-        aiRunId: reservation.run.id,
-        agentId: reservation.snapshot.agentId,
-        configVersion: reservation.snapshot.version,
-        provider: 'mock',
-        model: 'mock-template-v1',
-      },
-    });
-    if (error instanceof UserFacingActionError) throw error;
-    throw new UserFacingActionError('Bozza mock ricevuta ma output non salvato correttamente. Ricarica la pagina.');
-  }
+  return createAiExecutionRequest(s, {
+    origin: 'CRM_UI',
+    functionCode: 'ADMIN_MOCK_QUICK_RUN',
+    agentId: snapshot.agentId,
+    agentConfigVersion: snapshot.version,
+    provider: 'mock',
+    model: 'mock-template-v1',
+    purposeCode: 'ADMINISTRATIVE_DRAFT',
+    dataCategories: ['agent_configuration', 'operator_instructions'],
+    correlationId: requestKey,
+    idempotencyKey: requestKey,
+    inputFingerprint: requestFingerprint,
+    executionInputHash: canonicalSha256(safeInput),
+  });
 }
 
 function hydratedAiPolicyContext(context: Awaited<ReturnType<typeof requireAiOutputReadAccess>>) {

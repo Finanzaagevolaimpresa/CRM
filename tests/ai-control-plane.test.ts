@@ -151,10 +151,9 @@ test('conferma FormData usa parsing booleano rigoroso e non accetta stringhe tru
   assert.equal(aiAgentConfigUpdateSchema.safeParse({ ...configBase, provider: 'mock', futureModel: 'gpt-approved' }).success, false);
 });
 
-test('RBAC esterno è ristretto ad admin e direzione', () => {
+test('RBAC esterno diretto resta solo Admin nella foundation del gate manuale', () => {
   assert.equal(hasPermission({ role: 'admin', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
-  assert.equal(hasPermission({ role: 'direzione', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
-  for (const role of ['consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
+  for (const role of ['direzione', 'consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
     assert.equal(hasPermission({ role, active: true, permissionOverrides: [] }, 'ai.external.run'), false, `${role} non deve eseguire provider esterni`);
   }
 });
@@ -178,57 +177,40 @@ test('Responses API disabilita sempre lo storage e minimizza usage e request id'
   assert.equal(minimizeProviderRequestId('x'.repeat(256)), undefined);
 });
 
-test('run esterno richiede doppio permesso, conferma, gate e rate reservation atomica prima del provider', () => {
+test('richiesta esterna richiede conferma e persiste il binding senza provider', () => {
   const body = functionBody('runClientAiAgent');
-  const guardPermission = body.indexOf("hasPermission(s, 'ai.external.run')");
   const guardConfirmation = body.indexOf('data.externalDataConfirmed');
-  const controlPlane = body.indexOf('assertExternalAiRunAllowed');
-  const createRun = body.indexOf('tx.aiRun.create');
-  const providerCall = body.indexOf('agentRuntime.adapter.run');
+  const request = body.indexOf('createAiExecutionRequest');
 
-  assert.match(body, /requirePermission\('ai\.run'\)/);
-  assert.ok(guardPermission >= 0 && guardPermission < providerCall);
-  assert.ok(guardConfirmation >= 0 && guardConfirmation < providerCall);
-  assert.ok(controlPlane >= 0 && controlPlane < createRun && createRun < providerCall);
-  assert.match(body.slice(controlPlane, createRun), /db: tx/);
-  assert.match(body.slice(controlPlane, createRun), /permissionGranted: hasPermission\(s, 'ai\.external\.run'\)/);
-  assert.match(body, /withSerializableAiTransaction/);
-  assert.match(functionBody('withSerializableAiTransaction'), /isolationLevel: 'Serializable'/);
-  assert.match(functionBody('withSerializableAiTransaction'), /attempt <= 3/);
-  assert.match(functionBody('isSerializableConflict'), /P2034/);
-  assert.match(body, /externalConfirmedAt:/);
-  assert.match(body, /externalDataCategories:/);
-  assert.match(body, /providerRequestId: providerMetadata\.providerRequestId/);
-  assert.match(body, /inputTokens: providerMetadata\.inputTokens/);
-  assert.match(body, /reservation\.externalPermit/);
-  assert.doesNotMatch(functionBody('resolveAiAgentRuntime'), /getAiProviderDiagnostics/);
-  assert.match(functionBody('resolveAiAgentRuntime'), /if \(!model\) throw new UserFacingActionError/);
+  assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
+  assert.ok(guardConfirmation >= 0 && guardConfirmation < request);
+  assert.match(body, /externalAiDataCategories\(externalPayload\)/);
+  assert.match(body, /inputFingerprint: requestFingerprint/);
+  assert.match(body, /provider: requestedRuntime\.provider/);
+  assert.doesNotMatch(body, /assertExternalAiRunAllowed|tx\.aiRun\.create|adapter\.run|issueExternalAiPermit/);
+  assert.match(functionBody('resolveAiAgentBinding'), /if \(!model\) throw new UserFacingActionError/);
 });
 
-test('mock resta disponibile con ai.run senza conferma e non marca il run come esterno', () => {
+test('mock resta richiedibile senza conferma ma non crea un run', () => {
   const body = functionBody('runClientAiAgent');
-  assert.match(body, /if \(currentRuntime\.provider === 'openai'\)/);
-  assert.match(body, /externalConfirmedAt: currentRuntime\.provider === 'openai' \? externalConfirmedAt : null/);
-  assert.match(body, /externalDataCategories: currentRuntime\.provider === 'openai'/);
-  assert.match(functionBody('resolveAiAgentRuntime'), /provider === 'mock'[\s\S]*mock-template-v1/);
+  assert.match(body, /if \(externalProviderRequested && !data\.externalDataConfirmed\)/);
+  assert.match(functionBody('resolveAiAgentBinding'), /provider === 'mock'[\s\S]*mock-template-v1/);
+  assert.doesNotMatch(body, /tx\.aiRun\.create|adapter\.run/);
 });
 
-test('diagnostica OpenAI non aggira permessi, kill switch, allowlist o rate limit', () => {
+test('diagnostica OpenAI crea soltanto la richiesta soggetta a decisione Admin', () => {
   const body = functionBody('runAiProviderDiagnosticTest');
   const diagnosticPage = readFileSync(resolve(root, 'src/app/settings/ai-diagnostics/page.tsx'), 'utf8');
-  const assertion = body.indexOf('assertExternalAiRunAllowed');
-  const reservation = body.indexOf('tx.aiRun.create');
-  const providerCall = body.indexOf('testAiProviderDiagnostic(reservation.permit)', assertion);
+  const fingerprint = body.indexOf('createAiRequestFingerprint');
+  const request = body.indexOf('createAiExecutionRequest');
 
-  assert.match(body, /hasPermission\(s, 'ai\.run'\)/);
-  assert.match(body, /hasPermission\(s, 'ai\.external\.run'\)/);
+  assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
   assert.match(body, /form\.get\('externalDiagnosticConfirmed'\) === 'on'/);
   assert.doesNotMatch(body, /form\.has\('externalDiagnosticConfirmed'\)/);
   assert.match(diagnosticPage, /name="externalDiagnosticConfirmed" required/);
-  assert.ok(assertion >= 0 && assertion < reservation && reservation < providerCall);
-  assert.match(body.slice(assertion, reservation), /dataCategories: \['agent_configuration'\]/);
-  assert.match(body.slice(assertion, reservation), /db: tx/);
-  assert.match(body, /status: result\.success \? 'completed' : 'failed'/);
+  assert.ok(fingerprint >= 0 && fingerprint < request);
+  assert.match(body, /dataCategories: \['agent_configuration'\]/);
+  assert.doesNotMatch(body, /assertExternalAiRunAllowed|tx\.aiRun\.create|testAiProviderDiagnostic|fetch\(/);
   assert.doesNotMatch(body, /systemPrompt|operationalInstructions|clientId:/);
 });
 
@@ -245,14 +227,10 @@ test('permit single-use chiude ogni fetch OpenAI importato fuori dalle action au
   assert.ok(diagnosticStart >= 0 && diagnosticPermit > diagnosticStart && diagnosticPermit < diagnosticFetch);
 });
 
-test('OpenAI non persiste payload o istruzioni e recupera gli errori post-provider con telemetria', () => {
+test('la richiesta OpenAI minimizza il payload e non apre lifecycle runtime', () => {
   const body = functionBody('runClientAiAgent');
-  const createRun = body.slice(body.indexOf('const run = await tx.aiRun.create'), body.indexOf('await tx.auditLog.create', body.indexOf('const run = await tx.aiRun.create')));
   const externalDto = body.slice(body.indexOf('const externalPayload'), body.indexOf('const externalDataCategories'));
-  const failureHelper = functionBody('markAiRunFailedBestEffort');
 
-  assert.match(createRun, /input: currentRuntime\.provider === 'openai' \? Prisma\.DbNull/);
-  assert.match(createRun, /operationalInstructions: currentRuntime\.provider === 'openai' \? null/);
   assert.match(body, /externalAiDataCategories\(externalPayload\)/);
   assert.doesNotMatch(externalDto, /serviceCatalogId/);
   for (const field of ['legalForm', 'atecoCode', 'employees', 'durcStatus', 'priority', 'startTiming', 'sector', 'hasLinkedDocument']) {
@@ -260,11 +238,9 @@ test('OpenAI non persiste payload o istruzioni e recupera gli errori post-provid
   }
   assert.match(body, /aiEligibleDocuments = visibleDocuments\.filter\(\(document\) => !isSensitiveDocument\(document\)\)/);
   assert.match(body, /isSensitiveDocument\([\s\S]*item\.title[\s\S]*\)\) return false/);
-  assert.match(body, /markAiRunFailedBestEffort/);
-  assert.match(body, /AI_OUTPUT_PERSISTENCE_FAILURE/);
-  assert.match(failureHelper, /failAiRunWithLease\(tx, options\.lease/);
-  assert.match(failureHelper, /failureCode: options\.errorCode/);
-  assert.match(failureHelper, /telemetry,/);
+  assert.match(body, /createOpenAiResponseRequestBody/);
+  assert.match(body, /createAiRequestFingerprint/);
+  assert.doesNotMatch(body, /tx\.aiRun\.create|adapter\.run|markAiRunFailedBestEffort/);
 });
 
 test('config agente usa CAS, versioni append-only e audit minimizzato nella stessa transazione', () => {

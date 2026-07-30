@@ -194,6 +194,46 @@ enum AiOutputStatus {
   archived
 }
 
+enum AiExecutionRequestOrigin {
+  CRM_UI
+  WEBSITE
+  CLIENT_PORTAL
+  INTERNAL_API
+}
+
+enum AiExecutionRequesterKind {
+  HUMAN_USER
+  SYSTEM_IDENTITY
+}
+
+enum AiExecutionRequestStatus {
+  PENDING_ADMIN_APPROVAL
+  NEEDS_INFORMATION
+  APPROVED
+  REJECTED
+  REVOKED
+  CANCELLED
+  EXPIRED
+  CONSUMED
+}
+
+enum AiExecutionDecisionType {
+  REQUESTED
+  NEEDS_INFORMATION
+  APPROVED
+  REJECTED
+  REVOKED
+  CANCELLED
+  EXPIRED
+  CONSUMED
+}
+
+enum AiExecutionNotificationPriority {
+  NORMAL
+  HIGH
+  URGENT
+}
+
 enum ServiceStatus {
   richiesto
   pagato
@@ -304,23 +344,27 @@ enum TaskPriority {
 }
 
 model User {
-  id                                String                                  @id @default(cuid())
-  email                             String                                  @unique
-  name                              String
-  passwordHash                      String
-  role                              RoleCode
-  active                            Boolean                                 @default(true)
-  createdAt                         DateTime                                @default(now())
-  updatedAt                         DateTime                                @updatedAt
-  deletedAt                         DateTime?
-  lastLoginAt                       DateTime?
-  permissionOverrides               UserPermissionOverride[]
-  aiOrchestratorSettingsUpdated     AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
-  aiWorkerCapabilitySettingsUpdated AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
+  id                                 String                                  @id @default(cuid())
+  email                              String                                  @unique
+  name                               String
+  passwordHash                       String
+  role                               RoleCode
+  active                             Boolean                                 @default(true)
+  createdAt                          DateTime                                @default(now())
+  updatedAt                          DateTime                                @updatedAt
+  deletedAt                          DateTime?
+  lastLoginAt                        DateTime?
+  permissionOverrides                UserPermissionOverride[]
+  aiOrchestratorSettingsUpdated      AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
+  aiWorkerCapabilitySettingsUpdated  AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
   aiOrchestratorAdminPolicyRevisions AiOrchestratorAdminPolicyRevision[]     @relation("AiOrchestratorAdminPolicyRevisionActor")
-  aiWorkflowInstancesCreated        AiWorkflowInstance[]                    @relation("AiWorkflowInstanceCreatedBy")
-  aiWorkflowCommandsRequested       AiWorkflowCommand[]                     @relation("AiWorkflowCommandRequestedByUser")
-  aiWorkflowTransitionsPerformed    AiWorkflowTransition[]                  @relation("AiWorkflowTransitionActorUser")
+  aiWorkflowInstancesCreated         AiWorkflowInstance[]                    @relation("AiWorkflowInstanceCreatedBy")
+  aiWorkflowCommandsRequested        AiWorkflowCommand[]                     @relation("AiWorkflowCommandRequestedByUser")
+  aiWorkflowTransitionsPerformed     AiWorkflowTransition[]                  @relation("AiWorkflowTransitionActorUser")
+  aiExecutionRequests                AiExecutionRequest[]                    @relation("AiExecutionRequestRequester")
+  aiExecutionDecisions               AiExecutionDecision[]                   @relation("AiExecutionDecisionActor")
+  aiExecutionGrantsApproved          AiExecutionAuthorizationGrant[]         @relation("AiExecutionGrantApprover")
+  aiExecutionAdminNotifications      AiExecutionAdminNotification[]          @relation("AiExecutionNotificationRecipient")
 }
 
 model UserPermissionOverride {
@@ -410,6 +454,7 @@ model Client {
   updatedAt           DateTime             @updatedAt
   deletedAt           DateTime?
   aiWorkflowInstances AiWorkflowInstance[]
+  aiExecutionRequests AiExecutionRequest[] @relation("AiExecutionRequestClient")
 }
 
 model Company {
@@ -440,6 +485,7 @@ model Company {
   updatedAt           DateTime             @updatedAt
   deletedAt           DateTime?
   aiWorkflowInstances AiWorkflowInstance[]
+  aiExecutionRequests AiExecutionRequest[] @relation("AiExecutionRequestCompany")
 }
 
 model Person {
@@ -499,6 +545,7 @@ model Project {
   updatedAt              DateTime             @updatedAt
   deletedAt              DateTime?
   aiWorkflowInstances    AiWorkflowInstance[]
+  aiExecutionRequests    AiExecutionRequest[] @relation("AiExecutionRequestProject")
 }
 
 model ProjectExpense {
@@ -862,30 +909,30 @@ model AiOrchestratorWorkerCapabilitySetting {
 }
 
 model AiOrchestratorAdminPolicyRevision {
-  id                       String   @id
-  scopeType                String
-  scopeCode                String
-  targetDefinitionHash     String
-  version                  Int
-  policy                   Json
-  policyHash               String
-  previousRevisionHash     String?
-  revisionHash             String   @unique(map: "AiOAdminPolicy_revisionHash_key")
-  requestId                String?  @unique(map: "AiOAdminPolicy_requestId_key")
-  requestHash              String
-  requestedPolicyHash      String
-  expectedVersion          Int?
-  expectedRevisionHash     String?
-  operationCode            String
-  requiredPermissions      Json
-  permissionDecisions      Json
-  actorUserId              String?
-  actorRole                String?
-  reasonCode               String
-  reason                   String
-  confirmed                Boolean
-  createdAt                DateTime @default(now())
-  actorUser                User?    @relation("AiOrchestratorAdminPolicyRevisionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiOAdminPolicy_actor_fkey")
+  id                   String   @id
+  scopeType            String
+  scopeCode            String
+  targetDefinitionHash String
+  version              Int
+  policy               Json
+  policyHash           String
+  previousRevisionHash String?
+  revisionHash         String   @unique(map: "AiOAdminPolicy_revisionHash_key")
+  requestId            String?  @unique(map: "AiOAdminPolicy_requestId_key")
+  requestHash          String
+  requestedPolicyHash  String
+  expectedVersion      Int?
+  expectedRevisionHash String?
+  operationCode        String
+  requiredPermissions  Json
+  permissionDecisions  Json
+  actorUserId          String?
+  actorRole            String?
+  reasonCode           String
+  reason               String
+  confirmed            Boolean
+  createdAt            DateTime @default(now())
+  actorUser            User?    @relation("AiOrchestratorAdminPolicyRevisionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiOAdminPolicy_actor_fkey")
 
   @@unique([scopeType, scopeCode, version], map: "AiOAdminPolicy_scope_version_key")
   @@unique([scopeType, scopeCode, previousRevisionHash], map: "AiOAdminPolicy_scope_previous_key")
@@ -1185,10 +1232,10 @@ model AiWorkflowJobAttempt {
 }
 
 model AiWorkflowJobResult {
-  id                         String   @id @default(cuid())
+  id                         String                        @id @default(cuid())
   runtimeId                  String
   jobId                      String
-  attemptId                  String   @unique
+  attemptId                  String                        @unique
   attemptSequence            Int
   fencingToken               BigInt
   workerInstanceId           String
@@ -1212,12 +1259,12 @@ model AiWorkflowJobResult {
   executorAgentCode          String
   executorAgentConfigVersion Int
   executorAgentConfigHash    String
-  provider                   String   @default("mock")
-  dataMode                   String   @default("synthetic")
+  provider                   String                        @default("mock")
+  dataMode                   String                        @default("synthetic")
   payload                    Json
   payloadHash                String
   manifestHash               String
-  resultHash                 String   @unique
+  resultHash                 String                        @unique
   artifactCount              Int
   totalPayloadBytes          Int
   retentionPolicyCode        String
@@ -1225,11 +1272,11 @@ model AiWorkflowJobResult {
   retentionPolicyHash        String
   retentionClass             String
   retainUntil                DateTime?
-  createdAt                  DateTime @default(now())
-  runtime                    AiWorkflowJobRuntime @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  job                        AiWorkflowJob @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  attempt                    AiWorkflowJobAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  workflowInstance           AiWorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt                  DateTime                      @default(now())
+  runtime                    AiWorkflowJobRuntime          @relation(fields: [runtimeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  job                        AiWorkflowJob                 @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempt                    AiWorkflowJobAttempt          @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workflowInstance           AiWorkflowInstance            @relation(fields: [workflowInstanceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   artifacts                  AiWorkflowJobArtifact[]
   sourceReferences           AiWorkflowJobSourceArtifact[]
 
@@ -1240,7 +1287,7 @@ model AiWorkflowJobResult {
 }
 
 model AiWorkflowJobArtifact {
-  id                    String   @id @default(cuid())
+  id                    String                        @id @default(cuid())
   resultId              String
   ordinal               Int
   slotCode              String
@@ -1250,16 +1297,16 @@ model AiWorkflowJobArtifact {
   artifactSchemaVersion String
   artifactSchemaHash    String
   artifactVersion       String
-  mediaType             String   @default("application/json")
+  mediaType             String                        @default("application/json")
   payload               Json
   payloadHash           String
   artifactHash          String
   payloadBytes          Int
   supersedesArtifactId  String?
-  createdAt             DateTime @default(now())
-  result                AiWorkflowJobResult @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  supersedesArtifact    AiWorkflowJobArtifact? @relation("AiWorkflowArtifactSupersession", fields: [supersedesArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  supersededByArtifacts AiWorkflowJobArtifact[] @relation("AiWorkflowArtifactSupersession")
+  createdAt             DateTime                      @default(now())
+  result                AiWorkflowJobResult           @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supersedesArtifact    AiWorkflowJobArtifact?        @relation("AiWorkflowArtifactSupersession", fields: [supersedesArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supersededByArtifacts AiWorkflowJobArtifact[]       @relation("AiWorkflowArtifactSupersession")
   sourceUsages          AiWorkflowJobSourceArtifact[] @relation("AiWorkflowSourceArtifact")
 
   @@unique([resultId, ordinal])
@@ -1271,14 +1318,14 @@ model AiWorkflowJobArtifact {
 }
 
 model AiWorkflowJobSourceArtifact {
-  id                 String @id @default(cuid())
+  id                 String                @id @default(cuid())
   resultId           String
   sourceArtifactId   String
   sourceArtifactHash String
   role               String
   ordinal            Int
-  createdAt          DateTime @default(now())
-  result             AiWorkflowJobResult @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdAt          DateTime              @default(now())
+  result             AiWorkflowJobResult   @relation(fields: [resultId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   sourceArtifact     AiWorkflowJobArtifact @relation("AiWorkflowSourceArtifact", fields: [sourceArtifactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([resultId, ordinal])
@@ -1343,7 +1390,7 @@ model AiWorkflowJobRuntimeEvent {
 }
 
 model AiAgentConfigVersion {
-  id                    String                 @id @default(cuid())
+  id                    String                          @id @default(cuid())
   agentId               String
   version               Int
   code                  String
@@ -1361,31 +1408,34 @@ model AiAgentConfigVersion {
   inputSchema           Json
   outputSchema          Json
   createdById           String?
-  createdAt             DateTime               @default(now())
-  agent                 AiAgent                @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  runs                  AiRun[]                @relation("AiRunAgentConfigVersion")
-  workflowCommands      AiWorkflowCommand[]    @relation("AiWorkflowCommandRequestedByAgentConfig")
-  workflowTransitions   AiWorkflowTransition[] @relation("AiWorkflowTransitionActorAgentConfig")
-  executorJobs          AiWorkflowJob[]        @relation("AiWorkflowJobExecutorConfig")
+  createdAt             DateTime                        @default(now())
+  agent                 AiAgent                         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  runs                  AiRun[]                         @relation("AiRunAgentConfigVersion")
+  workflowCommands      AiWorkflowCommand[]             @relation("AiWorkflowCommandRequestedByAgentConfig")
+  workflowTransitions   AiWorkflowTransition[]          @relation("AiWorkflowTransitionActorAgentConfig")
+  executorJobs          AiWorkflowJob[]                 @relation("AiWorkflowJobExecutorConfig")
+  executionRequests     AiExecutionRequest[]            @relation("AiExecutionRequestAgentConfig")
+  executionGrants       AiExecutionAuthorizationGrant[] @relation("AiExecutionGrantAgentConfig")
 
   @@unique([agentId, version])
   @@index([agentId, createdAt])
 }
 
 model AiRun {
-  id                      String                @id @default(cuid())
+  id                      String                         @id @default(cuid())
   reliabilityVersion      Int?
   agentId                 String
   agentConfigVersion      Int?
   clientId                String?
   clientServiceId         String?
   projectId               String?
-  status                  String                @default("completed")
-  provider                String                @default("unknown")
+  status                  String                         @default("completed")
+  provider                String                         @default("unknown")
   model                   String?
   promptVersion           String?
   requestKey              String?
   requestFingerprint      String?
+  executionInputHash      String?
   leaseExpiresAt          DateTime?
   leaseTokenHash          String?
   egressPermitHash        String?
@@ -1403,8 +1453,12 @@ model AiRun {
   output                  Json?
   operationalInstructions String?
   createdById             String?
-  createdAt               DateTime              @default(now())
-  agentConfig             AiAgentConfigVersion? @relation("AiRunAgentConfigVersion", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  aiExecutionRequestId    String?
+  authorizationGrantId    String?                        @unique(map: "AiRun_authorizationGrantId_key")
+  createdAt               DateTime                       @default(now())
+  agentConfig             AiAgentConfigVersion?          @relation("AiRunAgentConfigVersion", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  aiExecutionRequest      AiExecutionRequest?            @relation(fields: [aiExecutionRequestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_aiExecutionRequestId_fkey")
+  authorizationGrant      AiExecutionAuthorizationGrant? @relation(fields: [authorizationGrantId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_authorizationGrantId_fkey")
 
   @@unique([createdById, requestKey])
   @@index([agentId, agentConfigVersion])
@@ -1412,6 +1466,127 @@ model AiRun {
   @@index([clientId])
   @@index([clientServiceId])
   @@index([projectId])
+  @@index([aiExecutionRequestId])
+}
+
+model AiExecutionRequest {
+  id                 String                         @id @default(cuid())
+  origin             AiExecutionRequestOrigin
+  requesterKind      AiExecutionRequesterKind
+  requesterUserId    String?
+  requesterIdentity  String?
+  clientId           String?
+  companyId          String?
+  projectId          String?
+  clientServiceId    String?
+  functionCode       String
+  agentId            String
+  agentConfigVersion Int
+  provider           String
+  model              String?
+  purposeCode        String
+  dataCategories     Json
+  correlationId      String
+  idempotencyKey     String
+  inputFingerprint   String
+  executionInputHash String
+  expiresAt          DateTime
+  status             AiExecutionRequestStatus       @default(PENDING_ADMIN_APPROVAL)
+  stateVersion       Int                            @default(1)
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+  requester          User?                          @relation("AiExecutionRequestRequester", fields: [requesterUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_requester_fkey")
+  client             Client?                        @relation("AiExecutionRequestClient", fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_client_fkey")
+  company            Company?                       @relation("AiExecutionRequestCompany", fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_company_fkey")
+  project            Project?                       @relation("AiExecutionRequestProject", fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_project_fkey")
+  clientService      ClientService?                 @relation("AiExecutionRequestClientService", fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_service_fkey")
+  agentConfig        AiAgentConfigVersion           @relation("AiExecutionRequestAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_agentConfig_fkey")
+  decisions          AiExecutionDecision[]
+  authorizationGrant AiExecutionAuthorizationGrant?
+  adminNotifications AiExecutionAdminNotification[]
+  runs               AiRun[]
+
+  @@unique([origin, idempotencyKey], map: "AiExecRequest_origin_idempotency_key")
+  @@index([status, expiresAt], map: "AiExecRequest_status_expiry_idx")
+  @@index([requesterUserId, createdAt], map: "AiExecRequest_requester_idx")
+  @@index([clientId, createdAt], map: "AiExecRequest_client_idx")
+  @@index([companyId, createdAt], map: "AiExecRequest_company_idx")
+  @@index([projectId, createdAt], map: "AiExecRequest_project_idx")
+  @@index([clientServiceId, createdAt], map: "AiExecRequest_service_idx")
+  @@index([correlationId], map: "AiExecRequest_correlation_idx")
+  @@index([agentId, agentConfigVersion], map: "AiExecRequest_agentConfig_idx")
+}
+
+model AiExecutionDecision {
+  id                   String                         @id @default(cuid())
+  requestId            String
+  sequence             Int                            @default(0)
+  decisionType         AiExecutionDecisionType
+  actorUserId          String?
+  actorRole            String?
+  reasonCode           String
+  reason               String
+  requestFingerprint   String
+  previousDecisionHash String?
+  decisionHash         String                         @default("")
+  createdAt            DateTime                       @default(now())
+  request              AiExecutionRequest             @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecDecision_request_fkey")
+  actor                User?                          @relation("AiExecutionDecisionActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecDecision_actor_fkey")
+  authorizationGrant   AiExecutionAuthorizationGrant?
+
+  @@unique([requestId, sequence], map: "AiExecDecision_request_sequence_key")
+  @@unique([requestId, previousDecisionHash], map: "AiExecDecision_request_previous_key")
+  @@unique([decisionHash], map: "AiExecDecision_hash_key")
+  @@index([requestId, createdAt], map: "AiExecDecision_request_audit_idx")
+  @@index([actorUserId, createdAt], map: "AiExecDecision_actor_audit_idx")
+  @@index([decisionType, createdAt], map: "AiExecDecision_type_audit_idx")
+}
+
+model AiExecutionAuthorizationGrant {
+  id                 String               @id @default(cuid())
+  requestId          String               @unique(map: "AiExecGrant_requestId_key")
+  approvalDecisionId String               @unique(map: "AiExecGrant_decisionId_key")
+  inputFingerprint   String
+  executionInputHash String
+  agentId            String
+  agentConfigVersion Int
+  provider           String
+  model              String?
+  purposeCode        String
+  maxAttempts        Int                  @default(1)
+  expiresAt          DateTime
+  approvedById       String
+  grantHash          String               @unique(map: "AiExecGrant_hash_key") @default("")
+  createdAt          DateTime             @default(now())
+  request            AiExecutionRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_request_fkey")
+  approvalDecision   AiExecutionDecision  @relation(fields: [approvalDecisionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_decision_fkey")
+  agentConfig        AiAgentConfigVersion @relation("AiExecutionGrantAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_agentConfig_fkey")
+  approvedBy         User                 @relation("AiExecutionGrantApprover", fields: [approvedById], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_approver_fkey")
+  run                AiRun?
+
+  @@index([expiresAt], map: "AiExecGrant_expiry_idx")
+  @@index([approvedById, createdAt], map: "AiExecGrant_approver_idx")
+  @@index([agentId, agentConfigVersion], map: "AiExecGrant_agentConfig_idx")
+}
+
+model AiExecutionAdminNotification {
+  id               String                          @id @default(cuid())
+  requestId        String
+  recipientAdminId String
+  priority         AiExecutionNotificationPriority @default(NORMAL)
+  isRead           Boolean                         @default(false)
+  readAt           DateTime?
+  decidedAt        DateTime?
+  dedupeKey        String                          @unique(map: "AiExecNotification_dedupe_key")
+  approvalPath     String
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+  request          AiExecutionRequest              @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecNotification_request_fkey")
+  recipientAdmin   User                            @relation("AiExecutionNotificationRecipient", fields: [recipientAdminId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecNotification_recipient_fkey")
+
+  @@unique([requestId, recipientAdminId], map: "AiExecNotification_request_recipient_key")
+  @@index([recipientAdminId, isRead, createdAt], map: "AiExecNotification_inbox_idx")
+  @@index([requestId, createdAt], map: "AiExecNotification_request_idx")
 }
 
 model AiOutput {
@@ -1484,6 +1659,7 @@ model ClientService {
   updatedAt           DateTime                 @updatedAt
   deletedAt           DateTime?
   aiWorkflowInstances AiWorkflowInstance[]
+  aiExecutionRequests AiExecutionRequest[]     @relation("AiExecutionRequestClientService")
 
   @@index([operationalStatus])
   @@index([statusUpdatedAt])

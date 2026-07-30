@@ -20,7 +20,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
   const status = params?.status;
   const message = params?.message;
   const externalDiagnostic = diagnostics.provider === 'openai';
-  const canRunExternalDiagnostic = hasPermission(session, 'ai.run') && hasPermission(session, 'ai.external.run');
+  const canRequestDiagnostic = hasPermission(session, 'ai.execution.request');
   const selectedModelAllowed = controlPolicy.allowedModels.includes(diagnostics.model);
   const diagnosticAgent = externalDiagnostic ? await prisma.aiAgent.findFirst({
     where: { active: true, provider: 'openai', futureModel: diagnostics.model },
@@ -35,7 +35,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Diagnostica provider AI" description="Pannello admin/direzione per verificare configurazione e raggiungibilità del provider AI senza esporre chiavi, prompt sensibili o dati cliente." />
+      <PageHeader title="Diagnostica provider AI" description="Pannello admin/direzione per verificare la configurazione e richiedere separatamente una futura diagnostica, senza contattare il provider o esporre chiavi e dati cliente." />
 
       <Card title="Control Plane provider esterni" action={<Badge tone={externalRuntimeReady ? 'green' : 'orange'}>{externalRuntimeReady ? 'pronto' : 'fail-closed'}</Badge>}>
         <div className="grid gap-4 text-sm leading-6 text-slate-700 md:grid-cols-2 xl:grid-cols-4">
@@ -91,7 +91,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
           </div>
           <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
             <p className="text-xs font-black uppercase tracking-wide text-slate-500">Output diagnostici</p>
-            <p className="mt-1 font-semibold text-slate-600">Nessun AiOutput o dossier. Il test esterno registra un AiRun tecnico minimizzato e auditato.</p>
+            <p className="mt-1 font-semibold text-slate-600">Nessun AiOutput, dossier o AiRun. Il comando crea soltanto una richiesta persistente da decidere separatamente.</p>
           </div>
         </div>
 
@@ -101,20 +101,20 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
         </div>
       </Card>
 
-      <Card title="Test provider" action={<Badge tone="purple">server-side</Badge>}>
+      <Card title="Richiesta diagnostica provider" action={<Badge tone="purple">server-side</Badge>}>
         <div className="space-y-4 text-sm leading-6 text-slate-700">
-          <p>Il test usa un prompt tecnico minimale interno, non usa dati cliente reali, non crea AiOutput o dossier e non registra API key. Il test OpenAI riserva un AiRun tecnico con soli metadati minimizzati, stato, utilizzo token e audit; valgono doppio kill switch, allowlist, `ai.run`, `ai.external.run` e `store: false`.</p>
+          <p>Il comando prepara il fingerprint del test tecnico minimale e crea richiesta, ledger, audit e notifiche Admin nella stessa transazione. Non usa dati cliente, non riserva un AiRun e non chiama alcun provider. L’eventuale approvazione resta separata e non avvia l’esecuzione.</p>
           {message ? <div className={`rounded-2xl p-4 font-bold ring-1 ${status === 'ok' ? 'bg-fai-teal/10 text-fai-green ring-fai-teal/20' : 'bg-fai-orange/10 text-fai-orange ring-fai-orange/20'}`}>{status === 'ok' ? 'ok' : 'errore controllato'} · {message}</div> : null}
           <form action={runAiProviderDiagnosticTest} className="space-y-3">
             <input type="hidden" name="requestKey" value={diagnosticRequestKey} />
             {externalDiagnostic ? <label className="flex items-start gap-2 rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">
               <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDiagnosticConfirmed" required />
-              <span>Confermo questo singolo test OpenAI, la chiamata al provider esterno e il possibile costo. Il test non usa dati cliente e la conferma non viene riutilizzata.</span>
+              <span>Confermo provider, modello e possibile costo previsti qualora questa richiesta fosse eseguita in futuro. Il click attuale non chiama OpenAI e non genera costi.</span>
             </label> : null}
-            <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={externalDiagnostic && (!canRunExternalDiagnostic || !externalRuntimeReady)}>Esegui test provider</button>
+            <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={!canRequestDiagnostic}>Richiedi autorizzazione diagnostica</button>
           </form>
-          {externalDiagnostic && !canRunExternalDiagnostic ? <p className="font-bold text-fai-orange">Il test OpenAI richiede i permessi `ai.run` e `ai.external.run`.</p> : null}
-          {externalDiagnostic && canRunExternalDiagnostic && !externalRuntimeReady ? <p className="font-bold text-fai-orange">Test OpenAI bloccato: completare gate ambiente, switch database, allowlist, modello, chiave server-side e configurare un agente OpenAI attivo con il modello diagnostico.</p> : null}
+          {!canRequestDiagnostic ? <p className="font-bold text-fai-orange">La richiesta richiede il permesso `ai.execution.request`.</p> : null}
+          {externalDiagnostic && !externalRuntimeReady ? <p className="font-bold text-fai-orange">Il runtime OpenAI resta fail-closed. La richiesta può essere registrata, ma nessuna esecuzione sarebbe ammissibile senza tutti i gate tecnici futuri.</p> : null}
         </div>
       </Card>
     </div>
