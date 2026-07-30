@@ -992,10 +992,10 @@ BEGIN
   IF NEW."status" = 'CONSUMED' AND (
     SELECT COUNT(*)
     FROM "AiRun" run
-    JOIN "AiExecutionAuthorizationGrant" grant
-      ON grant."id" = run."authorizationGrantId"
+    JOIN "AiExecutionAuthorizationGrant" auth_grant
+      ON auth_grant."id" = run."authorizationGrantId"
     WHERE run."aiExecutionRequestId" = NEW."id"
-      AND grant."requestId" = NEW."id"
+      AND auth_grant."requestId" = NEW."id"
       AND run."requestFingerprint" = NEW."inputFingerprint"
   ) <> 1 THEN
     RAISE EXCEPTION 'Consumed AI execution request requires exactly one bound AiRun';
