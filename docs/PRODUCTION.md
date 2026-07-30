@@ -668,6 +668,34 @@ Il doppio limite Unicode/UTF-16 mantiene il ledger rileggibile dal codice PR79, 
 
 Contratto completo: [Admin UI Foundation v1](ai-orchestrator-admin-ui-foundation-v1.md) e [ADR-0007](adr/ADR-0007-ai-orchestrator-admin-ui-foundation-v1.md).
 
+## Global AI Manual Authorization Gate v1 — Draft PR85
+
+La migration 30 aggiunge richiesta, ledger, grant monouso e notifica Admin
+persistenti. Ogni nuovo `AiRun` viene rifiutato da PostgreSQL se non è collegato
+a una richiesta `APPROVED` e al relativo grant integro, non scaduto e non
+revocato. Il consumo valido è atomico e rende la richiesta `CONSUMED`.
+
+La superficie applicativa crea soltanto richieste e decisioni. Non esiste un
+pulsante, route, worker, scheduler o consumer production capace di consumare il
+grant; anche la diagnostica e il mock restano request-only. Ogni adapter
+richiede comunque il capability token runtime monouso emesso dal gate e
+vincolato all'input esatto. L'apertura della coda o del dettaglio persiste nel
+ledger le scadenze rilevate, senza cron. Verificare dopo
+l’applicazione che:
+
+- le migration applicate siano 30;
+- `AiRun_authorization_before_insert_v1` e
+  `AiRun_authorization_protect_update_v1` siano presenti;
+- `stateMachineEnabled=false`, `dispatchEnabled=false`,
+  `syntheticDataOnly=true`, provider Orchestrator `mock`;
+- `externalProvidersEnabled=false`, tredici capability disabilitate e
+  `AI_ORCHESTRATOR_WORKER_ENABLED=0`;
+- nessun job, run o output sia stato creato dalla migration.
+
+Rollback: ripristinare l’immagine precedente e lasciare intatti ledger,
+richieste, notifiche, grant e binding. Non rimuovere la migration o i trigger e
+non usare `DROP`, `TRUNCATE`, reset o cancellazioni manuali.
+
 ## AI Orchestrator Dormant Worker Process Foundation v1 — PR81
 
 La PR81 include nell'immagine un entrypoint TypeScript manuale che definisce soltanto il lifecycle `DORMANT -> DRAINING -> STOPPED`, un polling interno senza datasource e un heartbeat JSONL minimizzato. Nel contratto PR81 isolato, `FOUNDATION_LOCKED_V1` mantiene `operational=false` e rifiuta sia `AI_ORCHESTRATOR_WORKER_ENABLED=1` sia valori ambigui. PR82 conserva questo percorso quando il gate è assente o `0` e introduce un routing lazy separato per il valore esatto `1`; ciò non autorizza il valore `1` in produzione.

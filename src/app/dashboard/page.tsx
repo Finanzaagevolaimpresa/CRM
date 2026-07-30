@@ -105,6 +105,17 @@ export default async function Dashboard() {
   const accessibleAiContexts = canReadAiOutputs
     ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
     : [];
+  const pendingAiAuthorizationRequests = session.role === "admin"
+    ? await prisma.aiExecutionRequest.findMany({
+        where: { status: "PENDING_ADMIN_APPROVAL", expiresAt: { gt: now } },
+        include: {
+          requester: { select: { name: true } },
+          client: { select: { displayName: true } },
+        },
+        orderBy: { createdAt: "asc" },
+        take: 20,
+      })
+    : [];
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
     "pre_analisi",
@@ -612,6 +623,13 @@ export default async function Dashboard() {
   );
   const operationalCards = [
     [
+      "Autorizzazioni AI in attesa",
+      pendingAiAuthorizationRequests.length,
+      "Richieste da decidere con azione Admin separata",
+      "/settings/ai-authorizations",
+      "orange",
+    ],
+    [
       "Task in scadenza oggi",
       todayTasksCount,
       "Da completare entro oggi",
@@ -658,6 +676,15 @@ export default async function Dashboard() {
     ],
   ] as const;
   const priorityItems = [
+    ...pendingAiAuthorizationRequests.map((request) => ({
+      id: `ai-authorization-${request.id}`,
+      rank: -1,
+      title: `${request.functionCode.replaceAll("_", " ")} · ${request.requester?.name ?? "Sistema"}`,
+      related: request.client?.displayName ?? "Richiesta amministrativa",
+      type: "Autorizzazione AI da decidere",
+      date: request.createdAt,
+      href: `/settings/ai-authorizations/${request.id}`,
+    })),
     ...operationalTasks.map((task) => ({
       id: `task-${task.id}`,
       rank: task.dueAt && task.dueAt < startOfToday ? 0 : 1,

@@ -215,25 +215,27 @@ test('la route DOCX verifica l offerta prima di generare il documento', () => {
   assert.ok(guardIndex < exportIndex, 'GET: il controllo ABAC deve precedere la generazione DOCX');
 });
 
-test('esecuzione AI applica contesto, filtro documenti e allowlist prima del provider', () => {
+test('richiesta AI applica contesto e filtro documenti prima del gate persistente', () => {
   const body = functionBody('runClientAiAgent');
   const contextIndex = body.indexOf('requireClientContextReadAccess');
   const documentPolicyIndex = body.indexOf('canViewDocument');
   const inputIndex = body.indexOf('const input');
-  const providerIndex = body.indexOf('agentRuntime.adapter.run');
-  assert.ok(contextIndex >= 0 && contextIndex < providerIndex, 'guardia contesto AI assente o tardiva');
+  const requestIndex = body.indexOf('createAiExecutionRequest');
+  assert.ok(contextIndex >= 0 && contextIndex < requestIndex, 'guardia contesto AI assente o tardiva');
   assert.ok(documentPolicyIndex >= 0 && documentPolicyIndex < inputIndex, 'documenti non filtrati prima del payload AI');
-  assert.ok(inputIndex >= 0 && inputIndex < providerIndex, 'payload AI costruito dopo il provider');
-  assert.doesNotMatch(body.slice(inputIndex, providerIndex), /storagePath|checksum|fileName|clientDossiers|legacyDossiers/);
+  assert.ok(inputIndex >= 0 && inputIndex < requestIndex, 'fingerprint costruito dopo la richiesta');
+  assert.doesNotMatch(body.slice(inputIndex, requestIndex), /storagePath|checksum|fileName|clientDossiers|legacyDossiers/);
   assert.match(body, /isPrimaryOperationalAiAgent/);
-  assert.match(body, /prisma\.\$transaction/);
+  assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
+  assert.doesNotMatch(body, /adapter\.run|tx\.aiRun\.create|new (?:MockAiAdapter|OpenAiAdapter)/);
 });
 
-test('quick-run mock e forzatamente locale e riservato alla configurazione AI', () => {
+test('quick-run mock crea soltanto una richiesta persistente', () => {
   const body = functionBody('runMockAgent');
-  assert.match(body, /requirePermission\('ai_agents\.write'\)/);
-  assert.match(body, /new MockAiAdapter\(\)\.run/);
-  assert.doesNotMatch(body, /getAiAdapter\(\)/);
+  assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
+  assert.match(body, /hasPermission\(s, 'ai_agents\.write'\)/);
+  assert.match(body, /createAiExecutionRequest/);
+  assert.doesNotMatch(body, /adapter\.run|tx\.aiRun\.create|new MockAiAdapter/);
   assert.match(body, /prompt\.length > 2000/);
 });
 

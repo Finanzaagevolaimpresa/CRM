@@ -14,6 +14,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
 import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
+import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -73,9 +74,9 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canViewAiOutputs = hasPermission(session, 'ai.review');
   const canViewAudit = hasPermission(session, 'audit.read');
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
-  const canRunAiAgents = hasPermission(session, 'ai.run');
-  const aiRequestKey = canRunAiAgents ? randomUUID() : null;
-  const canRunExternalAiAgents = hasPermission(session, 'ai.external.run');
+  const canRequestAi = hasPermission(session, 'ai.execution.request');
+  const canAuditAiRequests = session.role === 'admin' && hasPermission(session, 'ai.execution.audit');
+  const aiRequestKey = canRequestAi ? randomUUID() : null;
 
   const [companyContextRows, companies, projectRows, clientServiceRows, documentRows, contractRows, paymentRows, tasks, preAnalysisRows, dossierRows, clientDossierRows, bankabilityRows, financingRows, checklistItems, activeAgents, technicalPracticeRows, practiceCommunicationRows] = await Promise.all([
     prisma.company.findMany({ where: { clientId: id, deletedAt: null }, select: { id: true, clientId: true } }),
@@ -92,10 +93,21 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     canReadSensitive ? prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canReadSensitive ? prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : Promise.resolve([]),
-    canRunAiAgents ? prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    canRequestAi ? prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
     canViewTechnical ? prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canViewCommunications ? prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
   ]);
+  const aiExecutionRequests = canRequestAi || canAuditAiRequests
+    ? await prisma.aiExecutionRequest.findMany({
+        where: {
+          clientId: id,
+          ...(canAuditAiRequests ? {} : { requesterUserId: session.userId }),
+        },
+        include: { requester: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 15,
+      })
+    : [];
 
   const companyContextById = new Map(companyContextRows.map((company) => [company.id, company]));
   const projects = projectRows.filter((project) => (
@@ -378,18 +390,15 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       ]; })} />}
     </Card>
     <Card id="output-ai" title="Agenti AI / Output interni">
-      {canRunAiAgents ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
+      {canRequestAi ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
         <input type="hidden" name="requestKey" value={aiRequestKey ?? ''}/>
         <input type="hidden" name="clientId" value={client.id}/>
-        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => {
-          const external = agent.provider === 'openai';
-          return <option key={agent.id} value={agent.id} disabled={external && !canRunExternalAiAgents}>{agent.name} · {getAiAgentCategory(agent.code)} · provider {agent.provider}{external && !canRunExternalAiAgents ? ' (serve ai.external.run)' : ''}</option>;
-        })}</select>
+        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {getAiAgentCategory(agent.code)} · provider previsto {agent.provider}</option>)}</select>
         <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Fascicolo cliente generale</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
         <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Nessun progetto specifico</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
         <textarea className="rounded-xl border p-2 text-sm md:col-span-2" name="operationalInstructions" rows={3} placeholder="Istruzioni operative opzionali per questa esecuzione" />
         <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-700 md:col-span-2">
-          <p className="font-extrabold text-fai-navy">Dati minimizzati usati nel run</p>
+          <p className="font-extrabold text-fai-navy">Dati minimizzati vincolati alla richiesta</p>
           <ul className="grid list-disc gap-x-6 pl-5 md:grid-cols-2">
             <li>configurazione dell&apos;agente;</li>
             <li>profilo essenziale cliente e azienda;</li>
@@ -402,12 +411,20 @@ export default async function Page({ params, searchParams }: { params: Promise<{
           <p>Non vengono inviati file, contenuti binari, percorsi storage, checksum o chiavi. Documenti e checklist classificati come sensibili restano esclusi anche se puoi consultarli nel CRM.</p>
           <label className="flex items-start gap-2 font-bold text-fai-navy">
             <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDataConfirmed" />
-            <span>Se l&apos;agente selezionato usa un provider esterno, confermo la trasmissione di queste categorie di dati minimizzate per questa singola esecuzione. La conferma non viene riutilizzata per run successivi.</span>
+            <span>Se l&apos;agente selezionato usa un provider esterno, confermo le categorie minimizzate previste per una futura esecuzione autorizzata. Questa azione non effettua alcuna trasmissione.</span>
           </label>
-          <p className="text-slate-500">Per gli agenti `mock` la conferma non è richiesta e nessun dato lascia il CRM. OpenAI richiede inoltre il permesso `ai.external.run` e tutti i gate del Control Plane attivi.</p>
+          <p className="text-slate-500">Il click crea soltanto richiesta, audit e notifiche Admin atomiche. Non viene creato alcun run e nessun adapter viene invocato, incluso il mock.</p>
         </div>
-        <div className="md:col-span-2"><PrimaryButton type="submit" disabled={activeAgents.length === 0}>Esegui agente AI</PrimaryButton></div>
-      </form> : <EmptyState title="Esecuzione agenti non autorizzata">Serve il permesso ai.run per lanciare agenti dal fascicolo.</EmptyState>}
+        <div className="md:col-span-2"><PrimaryButton type="submit" disabled={activeAgents.length === 0}>Richiedi utilizzo AI</PrimaryButton></div>
+      </form> : <EmptyState title="Richiesta AI non autorizzata">Serve il permesso ai.execution.request per creare una richiesta dal fascicolo.</EmptyState>}
+      {aiExecutionRequests.length === 0 ? null : <div className="mb-5"><Table headers={['Richiesta','Richiedente','Funzione','Stato','Creata','Dettaglio']} rows={aiExecutionRequests.map((request) => [
+        <span key="request" className="font-mono text-xs">{request.id}</span>,
+        request.requester?.name ?? 'Sistema',
+        request.functionCode.replaceAll('_', ' '),
+        <StatusBadge key="status" status={effectiveAiExecutionRequestStatus(request)} />,
+        formatDateTime(request.createdAt),
+        <Link key="open" className="font-bold text-fai-blue underline" href={`/settings/ai-authorizations/${request.id}`}>Apri</Link>,
+      ])} /></div>}
       {aiOutputs.length === 0 ? <EmptyState title="Nessun output AI" /> : <Table headers={['Agente / Titolo','Stato','Sintesi output','Contesto','Generato il','Dettaglio']} rows={aiOutputs.map((o) => { const run = runById.get(o.aiRunId); const agent = run ? agentById.get(run.agentId) : null; const service = o.clientServiceId ? serviceById.get(o.clientServiceId) : null; const project = o.projectId ? projectById.get(o.projectId) : null; const linkedDossierId = dossierByOutputId.get(o.id); return [<span key="title" className="font-semibold text-fai-navy">{agent?.name ?? 'Agente AI'}<br/><span className="text-xs font-normal text-slate-500">{o.title}</span></span>, <StatusBadge status={o.status} key='s' />, <span key="content" className="line-clamp-3 text-sm">{o.content}</span>, <span key="ctx">{client.displayName}<br/><span className="text-xs text-slate-500">{labelOf(service)}{project ? ` · ${project.title}` : ''}</span></span>, formatDateTime(o.createdAt), <span className="grid gap-1" key="open"><Link className="font-bold text-fai-blue underline" href={`/ai/outputs/${o.id}`}>Apri</Link>{linkedDossierId ? <Link className="text-xs font-bold text-fai-green underline" href={`/client-dossiers/${linkedDossierId}`}>Bozza dossier creata</Link> : null}</span>]; })} />}
     </Card>
     <Card id="timeline-operativa" title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/clients/${client.id}?timelineFilter=${value}#timeline-operativa`}>{label}</Link>)}</div>}>

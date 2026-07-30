@@ -33,7 +33,7 @@ export default async function Page() {
                 : <span className="text-xs text-fai-gray">Serve un revisore diverso dal generatore</span>
               : approvalAllowed
                 ? <form action={approveAiOutputAndRefresh}><input type="hidden" name="id" value={output.id} /><PrimaryButton type="submit">Approva</PrimaryButton></form>
-                : <span className="text-xs text-fai-gray">Revisionato · permesso ai.approve richiesto</span>;
+                : <span className="text-xs text-fai-gray">Revisionato · rilascio riservato a un Admin distinto dal revisore</span>;
           return [
             output.title,
             <StatusBadge status={output.status} key="s" />,

@@ -372,6 +372,7 @@ export function canReviewAiOutput(user: Actor, output: AiOutputAccessContext) {
 }
 
 export function canApproveAiOutput(user: Actor, output: AiOutputAccessContext) {
+  if (user.role !== 'admin') return false;
   if (!canViewAiOutput(user, output)) return false;
   if (output.status !== 'needs_review' || output.requiresHumanReview !== true) return false;
   if (!output.reviewedById || !output.reviewedAt || hasForbiddenPhrases(output.forbiddenPhrases)) return false;

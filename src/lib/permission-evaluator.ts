@@ -1,5 +1,11 @@
 import type { RoleCode, UserPermissionOverride } from '@prisma/client';
-import { isPermission, permissionCodes, roleHasPermission, type Permission } from './permissions';
+import {
+  adminOnlyAiExecutionPermissions,
+  isPermission,
+  permissionCodes,
+  roleHasPermission,
+  type Permission,
+} from './permissions';
 
 export type PermissionOverrideSnapshot = Pick<UserPermissionOverride, 'permission' | 'allowed'>;
 
@@ -18,7 +24,13 @@ export interface PermissionDecision {
 
 export function evaluatePermission(session: PermissionSession, permission: Permission): PermissionDecision {
   if (!isPermission(permission) || session.active !== true) return { allowed: false, source: 'ROLE' };
+  if (permission === 'ai.execution.consume') {
+    return { allowed: false, source: session.role === 'admin' ? 'ADMIN' : 'ROLE' };
+  }
   if (session.role === 'admin') return { allowed: true, source: 'ADMIN' };
+  if ((adminOnlyAiExecutionPermissions as readonly Permission[]).includes(permission)) {
+    return { allowed: false, source: 'ROLE' };
+  }
   const override = session.permissionOverrides.find((item) => item.permission === permission);
   if (override) return { allowed: override.allowed, source: 'OVERRIDE' };
   return { allowed: roleHasPermission(session.role, permission), source: 'ROLE' };

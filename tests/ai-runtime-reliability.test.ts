@@ -329,123 +329,59 @@ test('resolver idempotente riusa solo completed con stesso fingerprint e non aut
   );
 });
 
-test('tutti gli ingressi runtime riservano per utente e requestKey prima di invocare il provider', () => {
-  const cases = [
-    ['runAiProviderDiagnosticTest', 'testAiProviderDiagnostic(reservation.permit)'],
-    ['runClientAiAgent', 'agentRuntime.adapter.run'],
-    ['runMockAgent', 'new MockAiAdapter().run'],
-  ] as const;
-
-  for (const [name, providerMarker] of cases) {
+test('tutti gli ingressi AI persistono una richiesta e non invocano provider', () => {
+  for (const name of ['runAiProviderDiagnosticTest', 'runClientAiAgent', 'runMockAgent'] as const) {
     const body = functionBody('src/lib/actions.ts', name);
-    const reconcile = body.indexOf('reconcileExpiredAiRuns');
     const fingerprint = body.indexOf('createAiRequestFingerprint');
-    const firstExistingRead = body.indexOf('existingAiRunForRequest');
-    const reservation = body.indexOf('withSerializableAiTransaction');
-    const createRun = body.indexOf('tx.aiRun.create', reservation);
-    const provider = body.indexOf(providerMarker);
-
-    assert.ok(
-      reconcile >= 0
-      && reconcile < fingerprint
-      && fingerprint < firstExistingRead
-      && firstExistingRead < reservation
-      && reservation < createRun
-      && createRun < provider,
-      name,
-    );
-    assert.match(body, /createdById_requestKey: \{ createdById: s\.userId, requestKey/);
-    assert.match(body, /ExistingAiRunReservationError/);
-    assert.match(body, /isUniqueConstraintError\(error\)[\s\S]*existingAiRunForRequest/);
-    assert.match(body, /reliabilityVersion: AI_RUN_RELIABILITY_VERSION/);
-    assert.match(body, /agentConfigVersion:/);
-    assert.match(body, /requestKey[:,]/);
-    assert.match(body, /requestFingerprint[,\n]/);
-    assert.match(body, /createAiRunLeaseWithDbClock\(tx\)/);
-    assert.match(body, /createdAt: lease\.leaseStartedAt/);
-    assert.match(body, /leaseExpiresAt: lease\.leaseExpiresAt/);
-    assert.match(body, /leaseTokenHash: lease\.leaseTokenHash/);
+    const request = body.indexOf('createAiExecutionRequest');
+    assert.ok(fingerprint >= 0 && fingerprint < request, name);
+    assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
+    assert.match(body, /idempotencyKey:/);
+    assert.match(body, /inputFingerprint: requestFingerprint/);
+    assert.doesNotMatch(body, /tx\.aiRun\.create|adapter\.run|testAiProviderDiagnostic|new MockAiAdapter/);
   }
 });
 
-test('duplicate completed riusa un solo output dopo ABAC mentre running e failed non raggiungono il provider', () => {
-  const resolver = functionBody('src/lib/actions.ts', 'resolveExistingAiOutput');
-  const client = functionBody('src/lib/actions.ts', 'runClientAiAgent');
-  const quickMock = functionBody('src/lib/actions.ts', 'runMockAgent');
-  const diagnostic = functionBody('src/lib/actions.ts', 'runAiProviderDiagnosticTest');
-
-  assert.match(resolver, /assertReliableDuplicate\(run, requestFingerprint\)/);
-  assert.match(resolver, /const currentSession = await requirePermission\(permission\)/);
-  assert.match(resolver, /currentSession\.userId !== session\.userId/);
-  assert.match(resolver, /where: \{ aiRunId: run\.id \}/);
-  assert.match(resolver, /select: \{ id: true \}/);
-  assert.match(resolver, /outputs\.length !== 1/);
-  assert.match(resolver, /requireAiOutputReadAccess\(currentSession, outputs\[0\]\.id\)/);
-
-  const clientExisting = client.indexOf('if (existing) return resolveExistingAiOutput');
-  const clientProvider = client.indexOf('agentRuntime.adapter.run');
-  const mockExisting = quickMock.indexOf('if (existing) return resolveExistingAiOutput');
-  const mockProvider = quickMock.indexOf('new MockAiAdapter().run');
-  const diagnosticExisting = diagnostic.indexOf('if (existing)');
-  const diagnosticProvider = diagnostic.indexOf('testAiProviderDiagnostic(reservation.permit)');
-  assert.ok(clientExisting >= 0 && clientExisting < clientProvider);
-  assert.ok(mockExisting >= 0 && mockExisting < mockProvider);
-  assert.ok(diagnosticExisting >= 0 && diagnosticExisting < diagnosticProvider);
-  assert.match(diagnostic.slice(diagnosticExisting, diagnosticProvider), /assertReliableDuplicate\(existing, requestFingerprint\)/);
+test('idempotenza della richiesta riusa soltanto il medesimo binding immutabile', () => {
+  const create = functionBody('src/lib/ai-execution-authorization.ts', 'createAiExecutionRequest');
+  const binding = functionBody('src/lib/ai-execution-authorization.ts', 'sameRequestBinding');
+  assert.match(create, /origin_idempotencyKey/);
+  assert.match(create, /sameRequestBinding\(existing, session, input\)/);
+  assert.match(create, /sameRequestBinding\(duplicate, session, input\)/);
+  assert.match(create, /withSerializableTransaction/);
+  assert.match(create, /isUniqueConstraintError\(error\)/);
+  for (const field of ['requesterUserId', 'functionCode', 'agentConfigVersion', 'provider', 'model', 'purposeCode', 'inputFingerprint', 'clientId', 'projectId']) {
+    assert.ok(binding.includes(field), `binding ${field} assente`);
+  }
 });
 
-test('reservation OpenAI deriva e persiste il digest dal body condiviso prima di emettere il permit', () => {
+test('il fingerprint deriva dal body esatto e viene persistito prima di ogni futura esecuzione', () => {
   const cases = [
-    ['runAiProviderDiagnosticTest', 'exactDiagnosticBody', 'testAiProviderDiagnostic(reservation.permit)'],
-    ['runClientAiAgent', 'exactProviderBody', 'agentRuntime.adapter.run'],
+    ['runAiProviderDiagnosticTest', 'exactDiagnosticBody'],
+    ['runClientAiAgent', 'exactProviderBody'],
   ] as const;
 
-  for (const [name, bodyVariable, providerMarker] of cases) {
+  for (const [name, bodyVariable] of cases) {
     const body = functionBody('src/lib/actions.ts', name);
     const exactBody = body.indexOf(`const ${bodyVariable}`);
-    const digest = body.indexOf(`canonicalSha256(${bodyVariable})`, exactBody);
-    const preparePermit = body.indexOf('prepareExternalAiPermit()', digest);
-    const createRun = body.indexOf('tx.aiRun.create', preparePermit);
-    const persistDigest = body.indexOf('externalPayloadHash', createRun);
-    const issuePermit = body.indexOf('issueExternalAiPermit', createRun);
-    const provider = body.indexOf(providerMarker, issuePermit);
-
-    assert.ok(
-      exactBody >= 0
-      && exactBody < digest
-      && exactBody < preparePermit
-      && Math.max(digest, preparePermit) < createRun
-      && createRun < persistDigest
-      && persistDigest < issuePermit
-      && issuePermit < provider,
-      name,
-    );
-    assert.match(body.slice(issuePermit, provider), /externalPayloadHash/);
-    assert.match(body.slice(issuePermit, provider), /lease: lease\.lease/);
-    assert.match(body.slice(issuePermit, provider), /agentConfigVersion: currentSnapshot\.version/);
+    const fingerprint = body.indexOf('createAiRequestFingerprint', exactBody);
+    const request = body.indexOf('createAiExecutionRequest', fingerprint);
+    assert.ok(exactBody >= 0 && exactBody < fingerprint && fingerprint < request, name);
+    assert.match(body.slice(fingerprint, request), new RegExp(`body: ${bodyVariable}`));
+    assert.match(body.slice(request), /inputFingerprint: requestFingerprint/);
   }
 });
 
-test('transizioni terminali di diagnostica, cliente e quick mock sono tutte fenced dalla lease', () => {
-  const failure = functionBody('src/lib/actions.ts', 'markAiRunFailedBestEffort');
-  const transition = functionBody('src/lib/ai-run-reliability.ts', 'transitionAiRunWithLease');
-  assert.match(failure, /failAiRunWithLease\(tx, options\.lease/);
-  assert.match(failure, /failureCode: options\.errorCode/);
-
-  for (const name of ['runAiProviderDiagnosticTest', 'runClientAiAgent', 'runMockAgent']) {
-    const body = functionBody('src/lib/actions.ts', name);
-    assert.match(body, /completeAiRunWithLease\(tx, reservation\.lease/, name);
-    assert.match(body, /markAiRunFailedBestEffort\(\{[\s\S]*lease: reservation\.lease/, name);
-    assert.doesNotMatch(body, /where: \{ id: [^}]+, status: 'running' \}[\s\S]*status: 'completed'/, name);
-  }
-
-  assert.match(transition, /"leaseTokenHash" = \$\{binding\.leaseTokenHash\}/);
-  assert.match(transition, /"leaseExpiresAt" = \$\{binding\.leaseExpiresAt\}/);
-  assert.match(transition, /"leaseExpiresAt" > \(clock_timestamp\(\) AT TIME ZONE 'UTC'\)/);
-  assert.match(transition, /"finishedAt" = GREATEST\(clock_timestamp\(\) AT TIME ZONE 'UTC', "createdAt"\)/);
-  for (const field of ['leaseExpiresAt', 'leaseTokenHash', 'egressPermitHash']) {
-    assert.match(transition, new RegExp(`"${field}" = NULL`));
-  }
+test('il solo confine interno crea un AiRun e consuma il grant senza invocare adapter', () => {
+  const reserve = functionBody('src/lib/ai-execution-authorization.ts', 'reserveAuthorizedAiRun');
+  assert.match(reserve, /withSerializableTransaction/);
+  assert.match(reserve, /FOR UPDATE/);
+  assert.match(reserve, /request\.status !== 'APPROVED'/);
+  assert.match(reserve, /request\.authorizationGrant\.expiresAt <= now/);
+  assert.match(reserve, /tx\.aiRun\.create/);
+  assert.match(reserve, /aiExecutionRequestId: request\.id/);
+  assert.match(reserve, /authorizationGrantId: request\.authorizationGrant\.id/);
+  assert.doesNotMatch(reserve, /adapter|fetch\(|testAiProviderDiagnostic|OpenAiAdapter|MockAiAdapter/);
 });
 
 test('la lease opaca usa il clock UTC del database e non espone il segreto', async () => {

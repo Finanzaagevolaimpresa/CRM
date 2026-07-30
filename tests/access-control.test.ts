@@ -310,7 +310,7 @@ test('output AI richiedono contesto run identico e revisione indipendente dal ge
   assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, forbiddenPhrases: ['garantito'] }), false);
   assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, run: { ...run, createdById: null } }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), output), false);
-  assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), true);
+  assert.equal(canApproveAiOutput(actor('admin', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), true);
   assert.equal(canApproveAiOutput(actor('revisore', 'reviewer-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), { ...output, reviewedById: 'generator-1', reviewedAt: new Date() }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'generator-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);

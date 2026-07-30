@@ -127,13 +127,19 @@ handler, result, artifact, provider esterno o nuova migration. Contratto,
 verifiche e rollback sono descritti in
 [`docs/ai-orchestrator-admission-claim-lease-wiring-v1.md`](docs/ai-orchestrator-admission-claim-lease-wiring-v1.md).
 
-## Global AI Manual Authorization Foundation PR85
+## Global AI Manual Authorization Gate PR85
 
 La Draft PR85 introduce la migration 30 con richiesta persistente, decision
 ledger append-only, grant immutabile monouso e notifica persistente per ogni
-Admin attivo. La foundation non invoca adapter e non attiva provider, worker,
-dispatch, sito o consumer. Il contratto e i limiti del primo commit sono
-descritti in
+Admin attivo. Tutti gli ingressi AI applicativi creano soltanto la richiesta;
+approvazione e richiesta sono azioni separate. PostgreSQL impedisce ogni nuovo
+`AiRun` senza grant valido e ne registra atomicamente il singolo consumo.
+Gli adapter mock/OpenAI e la diagnostica richiedono inoltre un capability token
+runtime monouso, emesso soltanto dalla riserva autorizzata e vincolato
+all'input esatto. La scadenza viene registrata nel ledger alla lettura, alla
+decisione o al tentativo di consumo senza cron. La Draft non espone però alcun
+comando di consumo, non invoca adapter e non attiva provider, worker, dispatch,
+sito o consumer. Il contratto è descritto in
 [`docs/adr/ADR-0011-global-ai-manual-authorization-notification-gate-v1.md`](docs/adr/ADR-0011-global-ai-manual-authorization-notification-gate-v1.md).
 
 ## Staging/Produzione

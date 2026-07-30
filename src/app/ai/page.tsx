@@ -13,7 +13,8 @@ export default async function Page() {
   const session = await requirePermission('ai.review');
   const agents = sortAiAgentsByCategory(await prisma.aiAgent.findMany({ orderBy: { name: 'asc' } }));
   const activeAgents = agents.filter((agent) => agent.active && isPrimaryOperationalAiAgent(agent.code));
-  const canQuickRunMock = hasPermission(session, 'ai_agents.write');
+  const canQuickRunMock = hasPermission(session, 'ai_agents.write')
+    && hasPermission(session, 'ai.execution.request');
   const quickRunRequestKey = canQuickRunMock ? randomUUID() : null;
 
   return (
@@ -38,8 +39,8 @@ export default async function Page() {
                 {activeAgents.map((agent) => <option key={agent.code} value={agent.code}>{agent.name} · {getAiAgentCategory(agent.code)}</option>)}
               </select>
               <textarea name="prompt" className="w-full rounded-xl border p-3" placeholder="Input interno per bozza AI" defaultValue="Genera una bozza interna da revisionare." />
-              <p className="text-xs leading-5 text-slate-500">Questo quick-run senza fascicolo resta locale e non effettua chiamate a provider esterni. Ogni output è una bozza soggetta a revisione umana.</p>
-              <PrimaryButton type="submit">Genera bozza interna</PrimaryButton>
+              <p className="text-xs leading-5 text-slate-500">Crea una richiesta persistente e notifica tutti gli Admin attivi. Non genera output, non crea un AiRun e non invoca nemmeno il provider mock.</p>
+              <PrimaryButton type="submit">Richiedi autorizzazione quick mock</PrimaryButton>
             </form>
           )}
         </Card>

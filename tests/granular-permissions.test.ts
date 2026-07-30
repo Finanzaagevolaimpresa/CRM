@@ -67,12 +67,24 @@ test('catalogo espone il gate AI e rimuove i permessi di esecuzione diretta dai 
   assert.ok(!getEffectivePermissions(session('direzione')).includes('ai.run'));
   assert.ok(!getEffectivePermissions(session('direzione')).includes('ai.external.run'));
   assert.ok(!getEffectivePermissions(session('consulente')).includes('ai.run'));
-  for (const permission of ['ai.execution.approve', 'ai.execution.reject', 'ai.execution.revoke', 'ai.execution.audit', 'ai.execution.consume'] as const) {
+  for (const permission of ['ai.execution.approve', 'ai.execution.reject', 'ai.execution.revoke', 'ai.execution.audit'] as const) {
     assert.equal(roleHasPermission('admin', permission), true);
     for (const role of ['direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'] as const) {
       assert.equal(roleHasPermission(role, permission), false, `${role} non deve ereditare ${permission}`);
     }
   }
+  assert.equal(roleHasPermission('admin', 'ai.execution.consume'), false);
+  assert.equal(hasPermission(session('admin'), 'ai.execution.consume'), false);
+  assert.ok(!getEffectivePermissions(session('admin')).includes('ai.execution.consume'));
+  for (const permission of ['ai.execution.approve', 'ai.execution.reject', 'ai.execution.revoke', 'ai.execution.audit'] as const) {
+    assert.equal(
+      hasPermission(session('consulente', [{ permission, allowed: true }]), permission),
+      false,
+      `un override non deve rendere interattivo ${permission} per un non-Admin`,
+    );
+  }
+  assert.ok(!getEffectivePermissions(session('direzione')).includes('ai.approve'));
+  assert.ok(!getEffectivePermissions(session('revisore')).includes('ai.approve'));
 });
 
 test('override immediato senza nuovo login e reset', () => {

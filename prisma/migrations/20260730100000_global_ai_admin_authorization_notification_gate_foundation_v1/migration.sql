@@ -210,7 +210,10 @@ CREATE TABLE "AiExecutionRequest" (
     "inputFingerprint" ~ '^[0-9a-f]{64}$'
   ),
   CONSTRAINT "AiExecRequest_initial_state_check" CHECK ("stateVersion" >= 1),
-  CONSTRAINT "AiExecRequest_expiry_check" CHECK ("expiresAt" > "createdAt")
+  CONSTRAINT "AiExecRequest_expiry_check" CHECK (
+    "expiresAt" > "createdAt"
+    AND "expiresAt" <= "createdAt" + INTERVAL '30 minutes'
+  )
 );
 
 CREATE UNIQUE INDEX "AiExecRequest_origin_idempotency_key"
@@ -469,7 +472,7 @@ BEGIN
     INTO requester_active
     FROM "User"
     WHERE "id" = NEW."requesterUserId"
-    FOR KEY SHARE;
+    FOR SHARE;
     IF NOT FOUND OR requester_active IS NOT TRUE THEN
       RAISE EXCEPTION 'AI execution requester must be an active internal user';
     END IF;
@@ -478,7 +481,7 @@ BEGIN
   PERFORM 1
   FROM "User"
   WHERE "role" = 'admin' AND "active" = true AND "deletedAt" IS NULL
-  FOR KEY SHARE;
+  FOR SHARE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'AI execution request denied because no active Admin exists';
   END IF;
@@ -499,6 +502,8 @@ DECLARE
   actor_active BOOLEAN;
   latest_sequence INTEGER;
   latest_hash TEXT;
+  latest_type "AiExecutionDecisionType";
+  expected_latest_type "AiExecutionDecisionType";
 BEGIN
   SELECT *
   INTO request_row
@@ -514,7 +519,7 @@ BEGIN
     INTO actor_role, actor_active
     FROM "User"
     WHERE "id" = NEW."actorUserId"
-    FOR KEY SHARE;
+    FOR SHARE;
     IF NOT FOUND OR actor_active IS NOT TRUE OR NEW."actorRole" IS DISTINCT FROM actor_role THEN
       RAISE EXCEPTION 'AI execution decision actor is not an active canonical user';
     END IF;
@@ -547,12 +552,64 @@ BEGIN
     END IF;
   END IF;
 
-  SELECT "sequence", "decisionHash"
-  INTO latest_sequence, latest_hash
+  SELECT "sequence", "decisionHash", "decisionType"
+  INTO latest_sequence, latest_hash, latest_type
   FROM "AiExecutionDecision"
   WHERE "requestId" = NEW."requestId"
   ORDER BY "sequence" DESC
   LIMIT 1;
+
+  expected_latest_type := CASE request_row."status"
+    WHEN 'PENDING_ADMIN_APPROVAL' THEN 'REQUESTED'::"AiExecutionDecisionType"
+    WHEN 'NEEDS_INFORMATION' THEN 'NEEDS_INFORMATION'::"AiExecutionDecisionType"
+    WHEN 'APPROVED' THEN 'APPROVED'::"AiExecutionDecisionType"
+    WHEN 'REJECTED' THEN 'REJECTED'::"AiExecutionDecisionType"
+    WHEN 'REVOKED' THEN 'REVOKED'::"AiExecutionDecisionType"
+    WHEN 'CANCELLED' THEN 'CANCELLED'::"AiExecutionDecisionType"
+    WHEN 'EXPIRED' THEN 'EXPIRED'::"AiExecutionDecisionType"
+    WHEN 'CONSUMED' THEN 'CONSUMED'::"AiExecutionDecisionType"
+  END;
+
+  IF latest_sequence IS NULL THEN
+    IF NEW."decisionType" <> 'REQUESTED'
+      OR request_row."status" <> 'PENDING_ADMIN_APPROVAL'
+    THEN
+      RAISE EXCEPTION 'AI execution ledger must start with REQUESTED';
+    END IF;
+  ELSE
+    IF latest_type IS DISTINCT FROM expected_latest_type THEN
+      RAISE EXCEPTION 'AI execution request status and latest decision are inconsistent';
+    END IF;
+    IF NOT (
+      (
+        request_row."status" = 'PENDING_ADMIN_APPROVAL'
+        AND NEW."decisionType" IN (
+          'NEEDS_INFORMATION', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'
+        )
+      )
+      OR (
+        request_row."status" = 'NEEDS_INFORMATION'
+        AND NEW."decisionType" IN ('CANCELLED', 'EXPIRED')
+      )
+      OR (
+        request_row."status" = 'APPROVED'
+        AND NEW."decisionType" IN ('REVOKED', 'EXPIRED', 'CONSUMED')
+      )
+    ) THEN
+      RAISE EXCEPTION 'Invalid AI execution decision transition';
+    END IF;
+  END IF;
+
+  IF NEW."decisionType" IN ('APPROVED', 'CONSUMED')
+    AND request_row."expiresAt" <= CURRENT_TIMESTAMP
+  THEN
+    RAISE EXCEPTION 'Expired AI execution request cannot be approved or consumed';
+  END IF;
+  IF NEW."decisionType" = 'EXPIRED'
+    AND request_row."expiresAt" > CURRENT_TIMESTAMP
+  THEN
+    RAISE EXCEPTION 'AI execution request is not expired';
+  END IF;
 
   NEW."sequence" := COALESCE(latest_sequence, 0) + 1;
   NEW."previousDecisionHash" := latest_hash;
@@ -574,6 +631,90 @@ BEGIN
     )::TEXT,
     'UTF8'
   )), 'hex');
+  RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION "ai_execution_decision_after_insert_v1"()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  request_row "AiExecutionRequest"%ROWTYPE;
+  target_status "AiExecutionRequestStatus";
+BEGIN
+  SELECT *
+  INTO request_row
+  FROM "AiExecutionRequest"
+  WHERE "id" = NEW."requestId"
+  FOR UPDATE;
+
+  target_status := CASE NEW."decisionType"
+    WHEN 'REQUESTED' THEN 'PENDING_ADMIN_APPROVAL'::"AiExecutionRequestStatus"
+    WHEN 'NEEDS_INFORMATION' THEN 'NEEDS_INFORMATION'::"AiExecutionRequestStatus"
+    WHEN 'APPROVED' THEN 'APPROVED'::"AiExecutionRequestStatus"
+    WHEN 'REJECTED' THEN 'REJECTED'::"AiExecutionRequestStatus"
+    WHEN 'REVOKED' THEN 'REVOKED'::"AiExecutionRequestStatus"
+    WHEN 'CANCELLED' THEN 'CANCELLED'::"AiExecutionRequestStatus"
+    WHEN 'EXPIRED' THEN 'EXPIRED'::"AiExecutionRequestStatus"
+    WHEN 'CONSUMED' THEN 'CONSUMED'::"AiExecutionRequestStatus"
+  END;
+
+  IF request_row."status" IS DISTINCT FROM target_status THEN
+    UPDATE "AiExecutionRequest"
+    SET "status" = target_status
+    WHERE "id" = NEW."requestId";
+  END IF;
+
+  IF NEW."decisionType" = 'APPROVED' THEN
+    INSERT INTO "AiExecutionAuthorizationGrant" (
+      "id", "requestId", "approvalDecisionId", "inputFingerprint",
+      "agentId", "agentConfigVersion", "provider", "model", "purposeCode",
+      "maxAttempts", "expiresAt", "approvedById", "grantHash", "createdAt"
+    ) VALUES (
+      GEN_RANDOM_UUID()::TEXT,
+      request_row."id",
+      NEW."id",
+      request_row."inputFingerprint",
+      request_row."agentId",
+      request_row."agentConfigVersion",
+      request_row."provider",
+      request_row."model",
+      request_row."purposeCode",
+      1,
+      request_row."expiresAt",
+      NEW."actorUserId",
+      REPEAT('0', 64),
+      NEW."createdAt"
+    );
+  END IF;
+
+  IF NEW."decisionType" <> 'REQUESTED' THEN
+    UPDATE "AiExecutionAdminNotification"
+    SET
+      "decidedAt" = COALESCE("decidedAt", NEW."createdAt"),
+      "updatedAt" = NEW."createdAt"
+    WHERE "requestId" = NEW."requestId";
+  END IF;
+
+  INSERT INTO "AuditLog" (
+    "id", "actorId", "event", "entityType", "entityId", "after", "createdAt"
+  ) VALUES (
+    GEN_RANDOM_UUID()::TEXT,
+    NEW."actorUserId",
+    'ai_execution_decision_recorded',
+    'AiExecutionRequest',
+    NEW."requestId",
+    JSONB_BUILD_OBJECT(
+      'decisionType', NEW."decisionType"::TEXT,
+      'reasonCode', NEW."reasonCode",
+      'requestFingerprint', NEW."requestFingerprint",
+      'sequence', NEW."sequence",
+      'status', target_status::TEXT
+    ),
+    NEW."createdAt"
+  );
+
   RETURN NEW;
 END;
 $$;
@@ -686,7 +827,7 @@ BEGIN
       'NEEDS_INFORMATION', 'APPROVED', 'REJECTED', 'CANCELLED', 'EXPIRED'
     ))
     OR (OLD."status" = 'NEEDS_INFORMATION' AND NEW."status" IN (
-      'PENDING_ADMIN_APPROVAL', 'CANCELLED', 'EXPIRED'
+      'CANCELLED', 'EXPIRED'
     ))
     OR (OLD."status" = 'APPROVED' AND NEW."status" IN (
       'REVOKED', 'EXPIRED', 'CONSUMED'
@@ -706,19 +847,160 @@ BEGIN
     WHEN 'CONSUMED' THEN 'CONSUMED'::"AiExecutionDecisionType"
   END;
 
-  IF NOT EXISTS (
-    SELECT 1
+  IF (
+    SELECT ROW("decisionType", "requestFingerprint")
     FROM "AiExecutionDecision"
     WHERE "requestId" = OLD."id"
-      AND "decisionType" = required_decision
-      AND "requestFingerprint" = OLD."inputFingerprint"
-  ) THEN
+    ORDER BY "sequence" DESC
+    LIMIT 1
+  ) IS DISTINCT FROM ROW(required_decision, OLD."inputFingerprint") THEN
     RAISE EXCEPTION 'AI execution request transition requires its append-only decision';
   END IF;
 
   NEW."stateVersion" := OLD."stateVersion" + 1;
   NEW."updatedAt" := CLOCK_TIMESTAMP();
   RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION "ai_execution_run_before_insert_v1"()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  request_row "AiExecutionRequest"%ROWTYPE;
+  grant_row "AiExecutionAuthorizationGrant"%ROWTYPE;
+  expected_prompt_version TEXT;
+BEGIN
+  IF NEW."aiExecutionRequestId" IS NULL OR NEW."authorizationGrantId" IS NULL THEN
+    RAISE EXCEPTION 'Every new AiRun requires a manual Admin authorization grant';
+  END IF;
+
+  SELECT *
+  INTO request_row
+  FROM "AiExecutionRequest"
+  WHERE "id" = NEW."aiExecutionRequestId"
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'AiRun authorization request does not exist';
+  END IF;
+
+  SELECT *
+  INTO grant_row
+  FROM "AiExecutionAuthorizationGrant"
+  WHERE "id" = NEW."authorizationGrantId"
+  FOR SHARE;
+  IF NOT FOUND
+    OR grant_row."requestId" IS DISTINCT FROM request_row."id"
+    OR request_row."status" <> 'APPROVED'
+    OR request_row."expiresAt" <= CURRENT_TIMESTAMP
+    OR grant_row."expiresAt" <= CURRENT_TIMESTAMP
+    OR grant_row."maxAttempts" <> 1
+    OR grant_row."inputFingerprint" IS DISTINCT FROM request_row."inputFingerprint"
+    OR grant_row."agentId" IS DISTINCT FROM request_row."agentId"
+    OR grant_row."agentConfigVersion" IS DISTINCT FROM request_row."agentConfigVersion"
+    OR grant_row."provider" IS DISTINCT FROM request_row."provider"
+    OR grant_row."model" IS DISTINCT FROM request_row."model"
+    OR grant_row."purposeCode" IS DISTINCT FROM request_row."purposeCode"
+  THEN
+    RAISE EXCEPTION 'AiRun authorization grant is invalid, expired, revoked or mismatched';
+  END IF;
+
+  SELECT "promptVersion"
+  INTO expected_prompt_version
+  FROM "AiAgentConfigVersion"
+  WHERE "agentId" = request_row."agentId"
+    AND "version" = request_row."agentConfigVersion"
+  FOR KEY SHARE;
+
+  IF NEW."reliabilityVersion" IS DISTINCT FROM 1
+    OR NEW."status" <> 'running'
+    OR NEW."requestKey" IS DISTINCT FROM request_row."idempotencyKey"
+    OR NEW."requestFingerprint" IS DISTINCT FROM request_row."inputFingerprint"
+    OR NEW."agentId" IS DISTINCT FROM request_row."agentId"
+    OR NEW."agentConfigVersion" IS DISTINCT FROM request_row."agentConfigVersion"
+    OR NEW."promptVersion" IS DISTINCT FROM expected_prompt_version
+    OR NEW."provider" IS DISTINCT FROM request_row."provider"
+    OR NEW."model" IS DISTINCT FROM request_row."model"
+    OR NEW."clientId" IS DISTINCT FROM request_row."clientId"
+    OR NEW."clientServiceId" IS DISTINCT FROM request_row."clientServiceId"
+    OR NEW."projectId" IS DISTINCT FROM request_row."projectId"
+    OR NEW."createdById" IS DISTINCT FROM request_row."requesterUserId"
+  THEN
+    RAISE EXCEPTION 'AiRun does not match the immutable authorization request binding';
+  END IF;
+
+  INSERT INTO "AiExecutionDecision" (
+    "id", "requestId", "decisionType", "actorUserId", "actorRole",
+    "reasonCode", "reason", "requestFingerprint"
+  ) VALUES (
+    GEN_RANDOM_UUID()::TEXT,
+    request_row."id",
+    'CONSUMED',
+    NULL,
+    NULL,
+    'AI_EXECUTION_CONSUMED',
+    'Autorizzazione consumata per la creazione atomica del singolo run AI.',
+    request_row."inputFingerprint"
+  );
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION "ai_execution_run_protect_binding_v1"()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF ROW(
+    NEW."aiExecutionRequestId", NEW."authorizationGrantId",
+    NEW."agentId", NEW."agentConfigVersion", NEW."provider", NEW."model",
+    NEW."requestKey", NEW."requestFingerprint", NEW."clientId",
+    NEW."clientServiceId", NEW."projectId", NEW."createdById", NEW."createdAt"
+  ) IS DISTINCT FROM ROW(
+    OLD."aiExecutionRequestId", OLD."authorizationGrantId",
+    OLD."agentId", OLD."agentConfigVersion", OLD."provider", OLD."model",
+    OLD."requestKey", OLD."requestFingerprint", OLD."clientId",
+    OLD."clientServiceId", OLD."projectId", OLD."createdById", OLD."createdAt"
+  ) THEN
+    RAISE EXCEPTION 'AiRun authorization binding is immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION "ai_execution_run_deny_bound_delete_v1"()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD."authorizationGrantId" IS NOT NULL
+    OR OLD."aiExecutionRequestId" IS NOT NULL
+  THEN
+    RAISE EXCEPTION 'Authorized AiRun is append-only and cannot be deleted';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+CREATE FUNCTION "ai_execution_consumed_request_consistency_v1"()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW."status" = 'CONSUMED' AND (
+    SELECT COUNT(*)
+    FROM "AiRun" run
+    JOIN "AiExecutionAuthorizationGrant" grant
+      ON grant."id" = run."authorizationGrantId"
+    WHERE run."aiExecutionRequestId" = NEW."id"
+      AND grant."requestId" = NEW."id"
+      AND run."requestFingerprint" = NEW."inputFingerprint"
+  ) <> 1 THEN
+    RAISE EXCEPTION 'Consumed AI execution request requires exactly one bound AiRun';
+  END IF;
+  RETURN NULL;
 END;
 $$;
 
@@ -755,7 +1037,7 @@ BEGIN
   INTO approver_role, approver_active
   FROM "User"
   WHERE "id" = NEW."approvedById"
-  FOR KEY SHARE;
+  FOR SHARE;
   IF NOT FOUND OR approver_role <> 'admin' OR approver_active IS NOT TRUE THEN
     RAISE EXCEPTION 'AI execution grant approver must be an active Admin';
   END IF;
@@ -800,13 +1082,15 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   recipient_is_admin BOOLEAN;
+  latest_decision_type "AiExecutionDecisionType";
+  latest_decision_at TIMESTAMP(3);
 BEGIN
   IF TG_OP = 'INSERT' THEN
     SELECT ("role" = 'admin' AND "active" = true AND "deletedAt" IS NULL)
     INTO recipient_is_admin
     FROM "User"
     WHERE "id" = NEW."recipientAdminId"
-    FOR KEY SHARE;
+    FOR SHARE;
     IF NOT FOUND OR recipient_is_admin IS NOT TRUE THEN
       RAISE EXCEPTION 'AI execution notification recipient must be an active Admin';
     END IF;
@@ -820,6 +1104,33 @@ BEGIN
       OLD."dedupeKey", OLD."approvalPath", OLD."createdAt"
     ) THEN
       RAISE EXCEPTION 'AI execution notification routing is immutable';
+    END IF;
+    IF OLD."isRead" = true
+      AND (
+        NEW."isRead" <> true
+        OR NEW."readAt" IS DISTINCT FROM OLD."readAt"
+      )
+    THEN
+      RAISE EXCEPTION 'AI execution notification read state is monotonic';
+    END IF;
+    IF OLD."decidedAt" IS NOT NULL
+      AND NEW."decidedAt" IS DISTINCT FROM OLD."decidedAt"
+    THEN
+      RAISE EXCEPTION 'AI execution notification decision timestamp is immutable';
+    END IF;
+    IF OLD."decidedAt" IS NULL AND NEW."decidedAt" IS NOT NULL THEN
+      SELECT "decisionType", "createdAt"
+      INTO latest_decision_type, latest_decision_at
+      FROM "AiExecutionDecision"
+      WHERE "requestId" = NEW."requestId"
+      ORDER BY "sequence" DESC
+      LIMIT 1;
+      IF NOT FOUND
+        OR latest_decision_type = 'REQUESTED'
+        OR NEW."decidedAt" IS DISTINCT FROM latest_decision_at
+      THEN
+        RAISE EXCEPTION 'AI execution notification decision requires the latest ledger event';
+      END IF;
     END IF;
   END IF;
   NEW."updatedAt" := CLOCK_TIMESTAMP();
@@ -843,13 +1154,25 @@ CREATE TRIGGER "AiExecRequest_deny_delete_v1"
 BEFORE DELETE ON "AiExecutionRequest"
 FOR EACH ROW EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
 
+CREATE TRIGGER "AiExecRequest_deny_truncate_v1"
+BEFORE TRUNCATE ON "AiExecutionRequest"
+FOR EACH STATEMENT EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
+
 CREATE TRIGGER "AiExecDecision_before_insert_v1"
 BEFORE INSERT ON "AiExecutionDecision"
 FOR EACH ROW EXECUTE FUNCTION "ai_execution_decision_before_insert_v1"();
 
+CREATE TRIGGER "AiExecDecision_after_insert_v1"
+AFTER INSERT ON "AiExecutionDecision"
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_decision_after_insert_v1"();
+
 CREATE TRIGGER "AiExecDecision_immutable_v1"
 BEFORE UPDATE OR DELETE ON "AiExecutionDecision"
 FOR EACH ROW EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
+
+CREATE TRIGGER "AiExecDecision_deny_truncate_v1"
+BEFORE TRUNCATE ON "AiExecutionDecision"
+FOR EACH STATEMENT EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
 
 CREATE TRIGGER "AiExecGrant_before_insert_v1"
 BEFORE INSERT ON "AiExecutionAuthorizationGrant"
@@ -859,15 +1182,45 @@ CREATE TRIGGER "AiExecGrant_immutable_v1"
 BEFORE UPDATE OR DELETE ON "AiExecutionAuthorizationGrant"
 FOR EACH ROW EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
 
+CREATE TRIGGER "AiExecGrant_deny_truncate_v1"
+BEFORE TRUNCATE ON "AiExecutionAuthorizationGrant"
+FOR EACH STATEMENT EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
+
 CREATE TRIGGER "AiExecNotification_guard_v1"
 BEFORE INSERT OR UPDATE ON "AiExecutionAdminNotification"
 FOR EACH ROW EXECUTE FUNCTION "ai_execution_notification_guard_v1"();
+
+CREATE TRIGGER "AiExecNotification_deny_delete_v1"
+BEFORE DELETE ON "AiExecutionAdminNotification"
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
+
+CREATE TRIGGER "AiExecNotification_deny_truncate_v1"
+BEFORE TRUNCATE ON "AiExecutionAdminNotification"
+FOR EACH STATEMENT EXECUTE FUNCTION "ai_execution_deny_immutable_change_v1"();
+
+CREATE TRIGGER "AiRun_authorization_before_insert_v1"
+BEFORE INSERT ON "AiRun"
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_run_before_insert_v1"();
+
+CREATE TRIGGER "AiRun_authorization_protect_update_v1"
+BEFORE UPDATE ON "AiRun"
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_run_protect_binding_v1"();
+
+CREATE TRIGGER "AiRun_authorization_deny_delete_v1"
+BEFORE DELETE ON "AiRun"
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_run_deny_bound_delete_v1"();
+
+CREATE CONSTRAINT TRIGGER "AiExecRequest_consumed_consistency_v1"
+AFTER UPDATE ON "AiExecutionRequest"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "ai_execution_consumed_request_consistency_v1"();
 
 DO $verify$
 DECLARE
   dispatch_constraints INTEGER;
   foundation_tables INTEGER;
   foundation_triggers INTEGER;
+  run_authorization_triggers INTEGER;
 BEGIN
   SELECT COUNT(*) INTO dispatch_constraints
   FROM pg_constraint
@@ -897,10 +1250,23 @@ BEGIN
   )
     AND NOT tgisinternal;
 
+  SELECT COUNT(*) INTO run_authorization_triggers
+  FROM pg_trigger
+  WHERE tgrelid = '"AiRun"'::REGCLASS
+    AND tgname IN (
+      'AiRun_authorization_before_insert_v1',
+      'AiRun_authorization_protect_update_v1',
+      'AiRun_authorization_deny_delete_v1'
+    )
+    AND NOT tgisinternal;
+
   IF dispatch_constraints <> 1 THEN
     RAISE EXCEPTION 'PR85 changed the physical dispatch-disabled barrier';
   END IF;
-  IF foundation_tables <> 4 OR foundation_triggers <> 9 THEN
+  IF foundation_tables <> 4
+    OR foundation_triggers <> 16
+    OR run_authorization_triggers <> 3
+  THEN
     RAISE EXCEPTION 'PR85 authorization foundation is incomplete';
   END IF;
   IF EXISTS (

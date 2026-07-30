@@ -52,8 +52,8 @@ export default async function Page() {
 
         <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_420px]">
           <div className="space-y-3 text-sm leading-6 text-slate-700">
-            <p className="rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">Fail-closed: gate ambiente e switch database devono essere entrambi attivi; una allowlist vuota o un modello non autorizzato blocca comunque il run esterno.</p>
-            <p>Ogni run OpenAI richiede inoltre agente attivo, modello ammesso, chiave API server-side, permessi `ai.run` e `ai.external.run`, conferma per la singola esecuzione e limite personale disponibile. Disattivare questo switch ferma nuove chiamate esterne senza modificare i singoli agenti.</p>
+            <p className="rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">Fail-closed: gate ambiente e switch database devono essere entrambi attivi; una allowlist vuota o un modello non autorizzato blocca comunque una futura esecuzione esterna.</p>
+            <p>Questa pagina configura soltanto il Control Plane e non esegue AI. Ogni futura esecuzione, inclusi mock e diagnostica, richiede una richiesta persistente, una decisione Admin separata e un grant monouso valido; i permessi storici `ai.run` e `ai.external.run` non possono sostituire tale autorizzazione.</p>
             <p className="text-xs text-slate-500">Ultimo aggiornamento switch: {controlPolicy.updatedAt ? controlPolicy.updatedAt.toLocaleString('it-IT') : 'nessuna configurazione salvata; default disabilitato'}.</p>
           </div>
           {canManageControlPlane ? <form action={updateAiControlSetting} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
@@ -64,7 +64,7 @@ export default async function Page() {
             </label>
             <label className="block text-xs font-black uppercase tracking-wide text-fai-navy" htmlFor="external-rate-limit">Run esterni massimi per utente / ora</label>
             <input id="external-rate-limit" name="maxExternalRunsPerUserPerHour" type="number" min={1} max={1000} required defaultValue={controlPolicy.maxExternalRunsPerUserPerHour} className="w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" />
-            <p className="text-xs leading-5 text-slate-600">L&apos;attivazione non supera il gate ambiente, l&apos;allowlist, i permessi o la conferma. Il salvataggio viene registrato nell&apos;audit log.</p>
+            <p className="text-xs leading-5 text-slate-600">L&apos;attivazione non supera il gate ambiente, l&apos;allowlist né l&apos;autorizzazione Admin monouso. Il salvataggio viene registrato nell&apos;audit log.</p>
             <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue" type="submit">Salva Control Plane</button>
           </form> : <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">Visualizzazione in sola lettura. Serve `settings.manage` per modificare il kill switch.</div>}
         </div>

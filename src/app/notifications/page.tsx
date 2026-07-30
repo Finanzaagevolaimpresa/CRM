@@ -19,7 +19,7 @@ export default async function NotificationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Notifiche"
-        description="Priorità operative interne calcolate dai dati già presenti nel CRM, senza invii automatici o canali esterni."
+        description="Priorità operative interne e notifiche persistenti delle richieste AI destinate all’Admin, senza invii automatici o canali esterni."
       />
 
       <Card
@@ -28,7 +28,7 @@ export default async function NotificationsPage() {
       >
         {notifications.length === 0 ? (
           <EmptyState title="Nessuna notifica attiva">
-            Non risultano task scaduti, attività in scadenza oggi, comunicazioni da gestire, pratiche tecniche aperte o follow-up commerciali per il tuo ruolo.
+            Non risultano autorizzazioni AI da decidere, task scaduti, attività in scadenza oggi, comunicazioni da gestire, pratiche tecniche aperte o follow-up commerciali per il tuo ruolo.
           </EmptyState>
         ) : (
           <div className="space-y-3">

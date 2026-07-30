@@ -4,6 +4,7 @@ import { seedAiAgentConfig } from "./seed-ai-agent";
 import bcrypt from "bcryptjs";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
+import { createHash, randomUUID } from "node:crypto";
 
 const prisma = new PrismaClient();
 async function main() {
@@ -552,46 +553,49 @@ async function main() {
   const agent = await prisma.aiAgent.findUniqueOrThrow({
     where: { code: AI_AGENT_CODES.bancabilita },
   });
-  const aiRun = await prisma.aiRun.create({
-    data: {
+  const aiRequestKey = randomUUID();
+  const aiRequestFingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      schemaVersion: 1,
+      source: "development_seed",
       agentId: agent.id,
+      agentConfigVersion: agent.configVersion,
       clientId: client.id,
       clientServiceId: service.id,
       projectId: project.id,
-      status: "completed",
+    }))
+    .digest("hex");
+  const aiExecutionRequest = await prisma.aiExecutionRequest.create({
+    data: {
+      origin: "CRM_UI",
+      requesterKind: "HUMAN_USER",
+      requesterUserId: reviewer.id,
+      clientId: client.id,
+      companyId: company.id,
+      projectId: project.id,
+      clientServiceId: service.id,
+      functionCode: "DEVELOPMENT_SEED_STATIC_OUTPUT",
+      agentId: agent.id,
+      agentConfigVersion: agent.configVersion,
       provider: "mock",
       model: "seed-demo-static-v1",
-      promptVersion: agent.promptVersion,
-      agentConfigVersion: agent.configVersion,
-      createdById: reviewer.id,
-      input: {
-        cliente: client.displayName,
-        richiesta: "40-50K",
-        provincia: "Brescia",
-      },
-      output: {
-        sintesi:
-          "Bozza interna: dati dichiarati coerenti ma da verificare documentalmente.",
-      },
+      purposeCode: "DEVELOPMENT_DEMO",
+      dataCategories: ["synthetic_demo"],
+      correlationId: aiRequestKey,
+      idempotencyKey: aiRequestKey,
+      inputFingerprint: aiRequestFingerprint,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     },
   });
-  await prisma.aiOutput.create({
+  await prisma.aiExecutionDecision.create({
     data: {
-      aiRunId: aiRun.id,
-      clientId: client.id,
-      clientServiceId: service.id,
-      projectId: project.id,
-      title: "Bozza Audit AI Bancabilità - Eventi & Video Brescia SRL",
-      content:
-        "Output interno da revisionare: richiesta 40-50K per marketing, attrezzature, eventi, liquidità affitto e furgone. DURC e CRIF/Centrale Rischi dichiarati ok; servono verifiche documentali e revisione umana.",
-      status: "needs_review",
-      requiresHumanReview: true,
-      forbiddenPhrases: [
-        "finanziamento garantito",
-        "contributo garantito",
-        "approvazione sicura",
-        "risultato certo",
-      ],
+      requestId: aiExecutionRequest.id,
+      decisionType: "APPROVED",
+      actorUserId: admin.id,
+      actorRole: "admin",
+      reasonCode: "AI_EXECUTION_APPROVED",
+      reason: "Autorizzazione development separata per il solo output demo sintetico.",
+      requestFingerprint: aiRequestFingerprint,
     },
   });
   await prisma.bankabilityAssessment.create({
