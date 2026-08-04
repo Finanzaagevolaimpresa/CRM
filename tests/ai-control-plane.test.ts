@@ -201,7 +201,7 @@ test('mock resta richiedibile senza conferma ma non crea un run', () => {
 test('diagnostica OpenAI crea soltanto la richiesta soggetta a decisione Admin', () => {
   const body = functionBody('runAiProviderDiagnosticTest');
   const diagnosticPage = readFileSync(resolve(root, 'src/app/settings/ai-diagnostics/page.tsx'), 'utf8');
-  const fingerprint = body.indexOf('createAiRequestFingerprint');
+  const fingerprint = body.indexOf('aiExecutionRequestFingerprintV2');
   const request = body.indexOf('createAiExecutionRequest');
 
   assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
@@ -239,7 +239,7 @@ test('la richiesta OpenAI minimizza il payload e non apre lifecycle runtime', ()
   assert.match(body, /aiEligibleDocuments = visibleDocuments\.filter\(\(document\) => !isSensitiveDocument\(document\)\)/);
   assert.match(body, /isSensitiveDocument\([\s\S]*item\.title[\s\S]*\)\) return false/);
   assert.match(body, /createOpenAiResponseRequestBody/);
-  assert.match(body, /createAiRequestFingerprint/);
+  assert.match(body, /aiExecutionRequestFingerprintV2/);
   assert.doesNotMatch(body, /tx\.aiRun\.create|adapter\.run|markAiRunFailedBestEffort/);
 });
 

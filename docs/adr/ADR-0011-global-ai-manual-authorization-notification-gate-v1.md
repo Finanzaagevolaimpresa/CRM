@@ -112,3 +112,7 @@ grant. Non usare down migration, `DROP`, `TRUNCATE`, reset, riscrittura del
 ledger o cancellazione dei binding. La migration resta additiva e i dati
 storici `AiRun` precedenti restano nullable; ogni nuovo inserimento continua a
 essere protetto dal trigger finché la migration è presente.
+
+## Correzione successiva
+
+Il lifecycle terminale di `NEEDS_INFORMATION` e il version binding della canonicalizzazione exact-input sono definiti additivamente da [ADR-0012](ADR-0012-ai-manual-authorization-corrective-lifecycle-exact-input-hash-v1.md); questa ADR resta invariata come decisione storica PR85.

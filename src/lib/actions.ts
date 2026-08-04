@@ -25,9 +25,10 @@ import {
   isExternalModelAllowed,
 } from './ai-control-plane';
 import {
-  canonicalSha256,
-  createAiRequestFingerprint,
-} from './ai-run-reliability';
+  AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+  aiExecutionCanonicalSha256V2,
+  aiExecutionRequestFingerprintV2,
+} from './canonical-json';
 import { scanForbiddenPhrases } from './compliance';
 import {
   getClientDossierReadAccess,
@@ -225,7 +226,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
         prompt: 'Test diagnostico interno minimale.',
         context: {},
       };
-  const requestFingerprint = createAiRequestFingerprint({
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'ai_provider_diagnostic_v1',
     requestKey,
     provider: diagnostics.provider,
@@ -251,7 +252,8 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(exactDiagnosticBody),
+    executionInputHash: aiExecutionCanonicalSha256V2(exactDiagnosticBody),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
   });
   redirect(`/settings/ai-authorizations/${request.id}`);
 }
@@ -1354,7 +1356,7 @@ export async function runClientAiAgent(form: FormData) {
   const executionInput = requestedRuntime.provider === 'openai'
     ? externalPayload
     : mockProviderInput;
-  const requestFingerprint = createAiRequestFingerprint({
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'client_ai_agent_run_v1',
     requestKey: data.requestKey,
     agentId: data.agentId,
@@ -1388,7 +1390,8 @@ export async function runClientAiAgent(form: FormData) {
     correlationId: data.requestKey,
     idempotencyKey: data.requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(executionInput),
+    executionInputHash: aiExecutionCanonicalSha256V2(executionInput),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
     clientId: data.clientId,
     companyId: linkedCompanyId ?? null,
     projectId: data.projectId ?? null,
@@ -1418,7 +1421,7 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
   const safeInput = { prompt: minimizeAiInstructions(prompt), source: 'CRM interno FAI', humanReviewRequired: true, context: {} };
   const snapshotRuntime = aiAgentSnapshotRuntime(snapshot);
   const exactMockBody = { agent: snapshotRuntime, input: safeInput };
-  const requestFingerprint = createAiRequestFingerprint({
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'administrative_mock_quick_run_v1',
     requestKey,
     agentCode,
@@ -1439,7 +1442,8 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(safeInput),
+    executionInputHash: aiExecutionCanonicalSha256V2(safeInput),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
   });
 }
 

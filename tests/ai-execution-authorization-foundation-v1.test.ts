@@ -30,8 +30,8 @@ const nonAdminRoles = [
   'collaboratore_limitato',
 ] as const;
 
-test('PR85 aggiunge la trentesima migration e i quattro record persistenti del gate', () => {
-  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 30);
+test('PR85 conserva la trentesima migration e i quattro record persistenti del gate', () => {
+  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 31);
   for (const model of [
     'AiExecutionRequest',
     'AiExecutionDecision',
@@ -145,11 +145,11 @@ test('barriera AiRun verifica binding e consuma il grant nello stesso inseriment
   assert.match(service, /inputFingerprint: string/);
   assert.match(service, /input\.inputFingerprint !== request\.inputFingerprint/);
   assert.match(service, /input\.inputFingerprint !== request\.authorizationGrant\.inputFingerprint/);
-  assert.match(service, /const executionInputHash = canonicalSha256\(input\.input \?\? null\)/);
+  assert.match(service, /request\.hashCanonicalizationVersion === 2[\s\S]*aiExecutionCanonicalSha256V2\(input\.input \?\? null\)[\s\S]*canonicalSha256\(input\.input \?\? null\)/);
   assert.match(service, /executionInputHash !== request\.executionInputHash/);
   assert.match(service, /executionInputHash !== request\.authorizationGrant\.executionInputHash/);
   assert.match(service, /export function consumeAiExecutionRuntimePermit/);
-  assert.match(service, /executionInputHash !== canonicalSha256\(expected\.input \?\? null\)/);
+  assert.match(service, /claims\.hashCanonicalizationVersion === 2[\s\S]*aiExecutionCanonicalSha256V2\(expected\.input \?\? null\)[\s\S]*canonicalSha256\(expected\.input \?\? null\)/);
   assert.match(service, /export async function expireAiExecutionRequestsOnRead/);
   assert.match(service, /decisionType: 'EXPIRED'/);
   assert.match(service, /tx\.aiRun\.create/);

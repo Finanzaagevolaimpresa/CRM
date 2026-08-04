@@ -9,7 +9,7 @@ import {
 } from '@prisma/client';
 import { MockAiAdapter } from '../../src/lib/ai';
 import { reserveAuthorizedAiRun } from '../../src/lib/ai-execution-authorization';
-import { canonicalSha256 } from '../../src/lib/canonical-json';
+import { aiExecutionCanonicalSha256V2, canonicalSha256 } from '../../src/lib/canonical-json';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
@@ -48,12 +48,15 @@ async function createRequest(options: {
   expiresInMs?: number;
   purposeCode?: string;
   executionInput?: Prisma.InputJsonValue;
+  hashCanonicalizationVersion?: 1 | 2;
+  supersedesRequestId?: string;
 } = {}) {
   const requester = options.requester ?? collaborator;
   const key = randomUUID();
-  const fingerprint = sha(`pr85:${runId}:${key}`);
+  const version = options.hashCanonicalizationVersion ?? 1;
+  const fingerprint = version === 2 ? aiExecutionCanonicalSha256V2({ runId, key }) : sha(`pr85:${runId}:${key}`);
   const executionInput = options.executionInput ?? { synthetic: true };
-  const executionInputHash = canonicalSha256(executionInput);
+  const executionInputHash = version === 2 ? aiExecutionCanonicalSha256V2(executionInput) : canonicalSha256(executionInput);
   const request = await db().aiExecutionRequest.create({
     data: {
       origin: 'CRM_UI',
@@ -70,6 +73,8 @@ async function createRequest(options: {
       idempotencyKey: key,
       inputFingerprint: fingerprint,
       executionInputHash,
+      hashCanonicalizationVersion: version,
+      supersedesRequestId: options.supersedesRequestId,
       expiresAt: new Date(Date.now() + (options.expiresInMs ?? 60_000)),
     },
   });
@@ -98,6 +103,7 @@ async function approvedRequest(options: {
   requester?: User;
   expiresInMs?: number;
   executionInput?: Prisma.InputJsonValue;
+  hashCanonicalizationVersion?: 1 | 2;
 } = {}) {
   const fixture = await createRequest(options);
   await decide(fixture.request.id, adminOne, 'APPROVED');
@@ -113,6 +119,7 @@ async function createBoundRun(fixture: Awaited<ReturnType<typeof approvedRequest
   input?: Prisma.InputJsonValue;
   authorizationGrantId?: string;
   requestKey?: string;
+  hashCanonicalizationVersion?: number | null;
 } = {}) {
   return db().aiRun.create({
     data: {
@@ -126,6 +133,8 @@ async function createBoundRun(fixture: Awaited<ReturnType<typeof approvedRequest
       requestKey: overrides.requestKey ?? fixture.key,
       requestFingerprint: overrides.requestFingerprint ?? fixture.fingerprint,
       executionInputHash: overrides.executionInputHash ?? fixture.executionInputHash,
+      hashCanonicalizationVersion: overrides.hashCanonicalizationVersion === undefined
+        ? fixture.request.hashCanonicalizationVersion : overrides.hashCanonicalizationVersion,
       leaseExpiresAt: new Date(Date.now() + 60_000),
       leaseTokenHash: sha(`lease:${randomUUID()}`),
       input: overrides.input ?? fixture.executionInput,
@@ -426,4 +435,53 @@ test('una rigenerazione usa una nuova richiesta e non riutilizza il grant preced
   assert.notEqual(second.fingerprint, first.fingerprint);
   assert.equal(second.request.status, 'PENDING_ADMIN_APPROVAL');
   assert.equal(await db().aiExecutionAuthorizationGrant.count({ where: { requestId: second.request.id } }), 0);
+});
+
+test('NEEDS_INFORMATION è terminale e la sostituzione v2 crea identità, ledger e notifiche indipendenti', { skip: !runDbTests }, async () => {
+  const first = await createRequest();
+  await decide(first.request.id, adminOne, 'NEEDS_INFORMATION');
+  for (const decisionType of ['APPROVED', 'CANCELLED', 'EXPIRED'] as const) {
+    await assert.rejects(db().aiExecutionDecision.create({ data: {
+      requestId: first.request.id, decisionType,
+      actorUserId: decisionType === 'EXPIRED' ? null : adminOne.id,
+      actorRole: decisionType === 'EXPIRED' ? null : adminOne.role,
+      reasonCode: `AI_EXECUTION_${decisionType}`,
+      reason: `Decisione sintetica ${decisionType.toLowerCase()} vietata sul terminale.`,
+      requestFingerprint: first.fingerprint,
+    } }), /terminal/i);
+  }
+  const replacements = await Promise.allSettled([
+    createRequest({ requester: first.requester, hashCanonicalizationVersion: 2,
+      supersedesRequestId: first.request.id, executionInput: { synthetic: true, integrated: 'new' } }),
+    createRequest({ requester: first.requester, hashCanonicalizationVersion: 2,
+      supersedesRequestId: first.request.id, executionInput: { synthetic: true, integrated: 'concurrent' } }),
+  ]);
+  assert.equal(replacements.filter(x => x.status === 'fulfilled').length, 1);
+  const winner = replacements.find((x): x is PromiseFulfilledResult<Awaited<ReturnType<typeof createRequest>>> => x.status === 'fulfilled');
+  assert.ok(winner);
+  const second = winner.value;
+  assert.notEqual(second.request.id, first.request.id);
+  assert.notEqual(second.key, first.key);
+  assert.notEqual(second.fingerprint, first.fingerprint);
+  assert.notEqual(second.executionInputHash, first.executionInputHash);
+  assert.equal(second.request.hashCanonicalizationVersion, 2);
+  assert.equal(second.request.supersedesRequestId, first.request.id);
+  assert.deepEqual((await db().aiExecutionDecision.findMany({ where: { requestId: second.request.id } })).map(x => x.decisionType), ['REQUESTED']);
+  assert.ok(await db().aiExecutionAdminNotification.count({ where: { requestId: second.request.id } }) >= 2);
+  assert.equal(await db().aiExecutionAuthorizationGrant.count({ where: { requestId: first.request.id } }), 0);
+  await assert.rejects(createRequest({ requester: first.requester, hashCanonicalizationVersion: 2,
+    supersedesRequestId: first.request.id, executionInput: { synthetic: true, integrated: 'another' } }), /Unique constraint|supersedes/i);
+});
+
+test('request, grant, AiRun e permit applicano version binding v2 fail-closed', { skip: !runDbTests }, async () => {
+  const input = { amount: 1e-7, nested: [1e21, -0, '😀'] };
+  const fixture = await approvedRequest({ hashCanonicalizationVersion: 2, executionInput: input });
+  assert.equal(fixture.grant.hashCanonicalizationVersion, 2);
+  await assert.rejects(createBoundRun(fixture, { hashCanonicalizationVersion: 1 }), /version.*mismatch/i);
+  await assert.rejects(createBoundRun(fixture, { hashCanonicalizationVersion: null }), /version.*missing/i);
+  const reservation = await reserveAuthorizedAiRun({ requestId: fixture.request.id,
+    authorizationGrantId: fixture.grant.id, inputFingerprint: fixture.fingerprint, input });
+  assert.equal(reservation.run.hashCanonicalizationVersion, 2);
+  const consumed = new MockAiAdapter().run({ code: agentConfig.code, role: agentConfig.name }, input, reservation.runtimePermit);
+  assert.ok(consumed);
 });

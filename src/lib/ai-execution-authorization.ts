@@ -12,11 +12,29 @@ import {
   createAiRunLeaseWithDbClock,
   type AiRunLease,
 } from './ai-run-reliability';
-import { canonicalJson, canonicalSha256 } from './canonical-json';
+import {
+  AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+  aiExecutionCanonicalSha256V2,
+  canonicalJson,
+  canonicalSha256,
+} from './canonical-json';
 import { prisma } from './prisma';
 
 const REQUEST_TTL_MS = 30 * 60 * 1000;
 const SERIALIZABLE_ATTEMPTS = 3;
+
+async function assertAiExecutionAuthorizationSchemaV2() {
+  const rows = await prisma.$queryRaw<Array<{ ready: boolean }>>(Prisma.sql`
+    SELECT (
+      TO_REGPROCEDURE('canonicalize_ai_execution_jsonb_v2(jsonb)') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'AiExecutionRequest' AND column_name = 'hashCanonicalizationVersion')
+      AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'AiRun' AND column_name = 'hashCanonicalizationVersion')
+    ) AS "ready"
+  `);
+  if (rows[0]?.ready !== true) {
+    throw new UserFacingActionError('Schema DB PR86 non disponibile. Autorizzazione AI bloccata fail-closed.');
+  }
+}
 
 export const AI_EXECUTION_DECISION_COPY = Object.freeze({
   APPROVED: {
@@ -29,7 +47,7 @@ export const AI_EXECUTION_DECISION_COPY = Object.freeze({
   },
   NEEDS_INFORMATION: {
     reasonCode: 'AI_EXECUTION_NEEDS_INFORMATION',
-    reason: 'Richiesta sospesa in attesa di informazioni operative integrative.',
+    reason: 'Richiesta chiusa: le informazioni integrative richiedono una nuova richiesta indipendente.',
   },
   REVOKED: {
     reasonCode: 'AI_EXECUTION_REVOKED',
@@ -58,6 +76,8 @@ type RequestBinding = {
   idempotencyKey: string;
   inputFingerprint: string;
   executionInputHash: string;
+  hashCanonicalizationVersion: 2;
+  supersedesRequestId?: string | null;
   clientId?: string | null;
   companyId?: string | null;
   projectId?: string | null;
@@ -75,6 +95,7 @@ function isSerializableConflict(error: unknown) {
 async function withSerializableTransaction<T>(
   operation: (tx: Prisma.TransactionClient) => Promise<T>,
 ) {
+  await assertAiExecutionAuthorizationSchemaV2();
   for (let attempt = 1; attempt <= SERIALIZABLE_ATTEMPTS; attempt += 1) {
     try {
       return await prisma.$transaction(operation, {
@@ -121,6 +142,8 @@ function sameRequestBinding(
     && existing.idempotencyKey === input.idempotencyKey
     && existing.inputFingerprint === input.inputFingerprint
     && existing.executionInputHash === input.executionInputHash
+    && existing.hashCanonicalizationVersion === input.hashCanonicalizationVersion
+    && existing.supersedesRequestId === (input.supersedesRequestId ?? null)
     && canonicalJson(existing.dataCategories) === canonicalJson([...input.dataCategories])
     && existing.clientId === (input.clientId ?? null)
     && existing.companyId === (input.companyId ?? null)
@@ -134,7 +157,7 @@ export function effectiveAiExecutionRequestStatus(
 ) {
   if (
     request.expiresAt <= now
-    && ['PENDING_ADMIN_APPROVAL', 'NEEDS_INFORMATION', 'APPROVED'].includes(request.status)
+    && ['PENDING_ADMIN_APPROVAL', 'APPROVED'].includes(request.status)
   ) return 'EXPIRED' as const;
   return request.status;
 }
@@ -165,7 +188,6 @@ export async function expireAiExecutionRequestsOnRead(requestIds: readonly strin
         WHERE "id" IN (${Prisma.join(ids)})
           AND "status" IN (
             'PENDING_ADMIN_APPROVAL'::"AiExecutionRequestStatus",
-            'NEEDS_INFORMATION'::"AiExecutionRequestStatus",
             'APPROVED'::"AiExecutionRequestStatus"
           )
           AND "expiresAt" <= CURRENT_TIMESTAMP
@@ -198,6 +220,10 @@ export async function createAiExecutionRequest(
   session: AuthSession,
   input: RequestBinding,
 ) {
+  await assertAiExecutionAuthorizationSchemaV2();
+  if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
+    throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
+  }
   if (!hasPermission(session, 'ai.execution.request')) {
     throw new UserFacingActionError('Permesso ai.execution.request obbligatorio.');
   }
@@ -260,6 +286,8 @@ export async function createAiExecutionRequest(
           idempotencyKey: input.idempotencyKey,
           inputFingerprint: input.inputFingerprint,
           executionInputHash: input.executionInputHash,
+          hashCanonicalizationVersion: input.hashCanonicalizationVersion,
+          supersedesRequestId: input.supersedesRequestId ?? null,
           expiresAt: new Date(now.getTime() + REQUEST_TTL_MS),
           status: 'PENDING_ADMIN_APPROVAL',
           stateVersion: 1,
@@ -283,6 +311,14 @@ export async function createAiExecutionRequest(
       'Richiesta AI non creata. Verifica che esista almeno un Admin attivo e riprova.',
     );
   }
+}
+
+export async function createAiExecutionReplacementRequest(
+  session: AuthSession,
+  supersedesRequestId: string,
+  input: Omit<RequestBinding, 'supersedesRequestId'>,
+) {
+  return createAiExecutionRequest(session, { ...input, supersedesRequestId });
 }
 
 async function createDecision(
@@ -319,7 +355,7 @@ async function createDecision(
     const now = await databaseNow(tx);
     if (
       request.expiresAt <= now
-      && ['PENDING_ADMIN_APPROVAL', 'NEEDS_INFORMATION', 'APPROVED'].includes(request.status)
+      && ['PENDING_ADMIN_APPROVAL', 'APPROVED'].includes(request.status)
     ) {
       await tx.aiExecutionDecision.create({
         data: {
@@ -425,6 +461,7 @@ type AiExecutionRuntimePermitClaims = {
   model: string | null;
   inputFingerprint: string;
   executionInputHash: string;
+  hashCanonicalizationVersion: 1 | 2;
 };
 
 const activeAiExecutionRuntimePermits = new WeakMap<object, AiExecutionRuntimePermitClaims>();
@@ -457,7 +494,9 @@ export function consumeAiExecutionRuntimePermit(
     !claims
     || claims.provider !== expected.provider
     || claims.model !== (expected.model ?? null)
-    || claims.executionInputHash !== canonicalSha256(expected.input ?? null)
+    || claims.executionInputHash !== (claims.hashCanonicalizationVersion === 2
+      ? aiExecutionCanonicalSha256V2(expected.input ?? null)
+      : canonicalSha256(expected.input ?? null))
   ) {
     throw new UserFacingActionError(
       'Autorizzazione runtime AI non valida o riferita a input modificati.',
@@ -484,7 +523,7 @@ export type AuthorizedAiRunReservation = {
 export async function reserveAuthorizedAiRun(
   input: AuthorizedAiRunReservationInput,
 ): Promise<AuthorizedAiRunReservation> {
-  const executionInputHash = canonicalSha256(input.input ?? null);
+  await assertAiExecutionAuthorizationSchemaV2();
   const result = await withSerializableTransaction(async (tx) => {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "AiExecutionRequest" WHERE "id" = ${input.requestId} FOR UPDATE`,
@@ -496,15 +535,21 @@ export async function reserveAuthorizedAiRun(
         agentConfig: { select: { promptVersion: true } },
       },
     });
+    if (!request || ![1, 2].includes(request.hashCanonicalizationVersion)) {
+      throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI assente o sconosciuta.');
+    }
+    const executionInputHash = request.hashCanonicalizationVersion === 2
+      ? aiExecutionCanonicalSha256V2(input.input ?? null)
+      : canonicalSha256(input.input ?? null);
     if (
-      !request
-      || !request.authorizationGrant
+      !request.authorizationGrant
       || request.authorizationGrant.id !== input.authorizationGrantId
       || request.status !== 'APPROVED'
       || input.inputFingerprint !== request.inputFingerprint
       || input.inputFingerprint !== request.authorizationGrant.inputFingerprint
       || executionInputHash !== request.executionInputHash
       || executionInputHash !== request.authorizationGrant.executionInputHash
+      || request.authorizationGrant.hashCanonicalizationVersion !== request.hashCanonicalizationVersion
     ) {
       throw new UserFacingActionError(
         'Autorizzazione AI non valida, non approvata o riferita a input modificati.',
@@ -545,6 +590,7 @@ export async function reserveAuthorizedAiRun(
         requestKey: request.idempotencyKey,
         requestFingerprint: input.inputFingerprint,
         executionInputHash,
+        hashCanonicalizationVersion: request.hashCanonicalizationVersion,
         leaseExpiresAt: lease.leaseExpiresAt,
         leaseTokenHash: lease.leaseTokenHash,
         input: input.input ?? Prisma.DbNull,
@@ -555,7 +601,7 @@ export async function reserveAuthorizedAiRun(
         createdAt: lease.leaseStartedAt,
       },
     });
-    return { expired: false as const, run, lease: lease.lease };
+    return { expired: false as const, run, lease: lease.lease, executionInputHash };
   });
   if (result.expired) {
     throw new UserFacingActionError('Autorizzazione AI scaduta.');
@@ -568,7 +614,8 @@ export async function reserveAuthorizedAiRun(
       provider: result.run.provider,
       model: result.run.model,
       inputFingerprint: input.inputFingerprint,
-      executionInputHash,
+      executionInputHash: result.executionInputHash,
+      hashCanonicalizationVersion: result.run.hashCanonicalizationVersion as 1 | 2,
     }),
   };
 }

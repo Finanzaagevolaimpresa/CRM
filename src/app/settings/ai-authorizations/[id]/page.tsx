@@ -42,6 +42,8 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
         orderBy: { createdAt: 'asc' },
       },
       runs: { select: { id: true, status: true, createdAt: true } },
+      supersedesRequest: { select: { id: true } },
+      supersededBy: { select: { id: true } },
     },
   });
   let request = await loadRequest();
@@ -67,7 +69,7 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
     && status === 'APPROVED'
     && request.runs.length === 0;
   const canCancel = (isRequester || isAdmin)
-    && ['PENDING_ADMIN_APPROVAL', 'NEEDS_INFORMATION'].includes(status);
+    && status === 'PENDING_ADMIN_APPROVAL';
 
   return (
     <div className="space-y-6">
@@ -90,6 +92,9 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
           <div><dt className="font-black text-slate-500">Creata / scade</dt><dd>{formatDateTime(request.createdAt)} · {formatDateTime(request.expiresAt)}</dd></div>
           <div><dt className="font-black text-slate-500">Categorie dati</dt><dd>{Array.isArray(request.dataCategories) ? request.dataCategories.join(', ') : 'minimizzate'}</dd></div>
           <div className="md:col-span-2 xl:col-span-3"><dt className="font-black text-slate-500">Fingerprint input</dt><dd className="break-all font-mono text-xs">{request.inputFingerprint}</dd></div>
+          <div><dt className="font-black text-slate-500">Canonicalizzazione hash</dt><dd>v{request.hashCanonicalizationVersion}</dd></div>
+          {request.supersedesRequest ? <div><dt className="font-black text-slate-500">Sostituisce</dt><dd><Link className="font-mono underline" href={`/settings/ai-authorizations/${request.supersedesRequest.id}`}>{request.supersedesRequest.id}</Link></dd></div> : null}
+          {request.supersededBy ? <div><dt className="font-black text-slate-500">Sostituita da</dt><dd><Link className="font-mono underline" href={`/settings/ai-authorizations/${request.supersededBy.id}`}>{request.supersededBy.id}</Link></dd></div> : null}
         </dl>
         <div className="mt-4 flex flex-wrap gap-3">
           {request.client ? <Link className="font-bold text-fai-blue underline" href={`/clients/${request.client.id}`}>Cliente: {request.client.displayName}</Link> : null}
@@ -109,6 +114,11 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
           {canCancel ? <form action={cancelAiExecutionRequestAndRedirect}><input type="hidden" name="id" value={request.id} /><PrimaryButton type="submit">Annulla richiesta</PrimaryButton></form> : null}
           {!canApprove && !canReject && !canRevoke && !canCancel ? <EmptyState title="Nessuna azione disponibile" /> : null}
         </div>
+        {status === 'NEEDS_INFORMATION' ? (
+          <p className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-900">
+            Questa richiesta è chiusa e immutabile. Integra le informazioni nel contesto CRM originario e invia una nuova richiesta: ID, fingerprint, hash, ledger e notifiche non vengono riutilizzati.
+          </p>
+        ) : null}
       </Card>
 
       <Card title="Grant monouso">
