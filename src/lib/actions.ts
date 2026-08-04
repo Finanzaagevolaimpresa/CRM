@@ -1,7 +1,7 @@
 'use server';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -52,7 +52,10 @@ import {
   requireTechnicalPracticeEditAccess,
   requireTechnicalPracticeViewAccess,
 } from './write-access';
-import { createAiExecutionRequest } from './ai-execution-authorization';
+import {
+  createAiExecutionReplacementRequest,
+  createAiExecutionRequest,
+} from './ai-execution-authorization';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
@@ -190,6 +193,9 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
   }
   const diagnostics = getAiProviderDiagnostics();
   const requestKey = aiRequestKeySchema.parse(String(form.get('requestKey') ?? ''));
+  const supersedesRequestId = aiExecutionSupersedesRequestIdSchema.parse(
+    String(form.get('supersedesRequestId') ?? '') || undefined,
+  );
   const externalDiagnostic = diagnostics.provider === 'openai';
   const externalDiagnosticConfirmed = form.get('externalDiagnosticConfirmed') === 'on';
   const runtimeModel = externalDiagnostic ? diagnostics.model : 'mock-template-v1';
@@ -240,7 +246,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
       'Conferma che la futura esecuzione autorizzata potrà generare il costo della singola chiamata OpenAI.',
     );
   }
-  const request = await createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'AI_PROVIDER_DIAGNOSTIC',
     agentId: requestedSnapshot.agentId,
@@ -254,7 +260,10 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     inputFingerprint: requestFingerprint,
     executionInputHash: aiExecutionCanonicalSha256V2(exactDiagnosticBody),
     hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
-  });
+  } as const;
+  const request = supersedesRequestId
+    ? await createAiExecutionReplacementRequest(s, supersedesRequestId, requestBinding)
+    : await createAiExecutionRequest(s, requestBinding);
   redirect(`/settings/ai-authorizations/${request.id}`);
 }
 
@@ -1378,7 +1387,7 @@ export async function runClientAiAgent(form: FormData) {
   // Recheck ABAC immediately before persisting the request. No AiRun, adapter,
   // permit or provider call is created by this action.
   await requireClientContextReadAccess(s, data);
-  return createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'CLIENT_AI_AGENT',
     agentId: requestedSnapshot.agentId,
@@ -1396,16 +1405,27 @@ export async function runClientAiAgent(form: FormData) {
     companyId: linkedCompanyId ?? null,
     projectId: data.projectId ?? null,
     clientServiceId: data.clientServiceId ?? null,
-  });
+  } as const;
+  return data.supersedesRequestId
+    ? createAiExecutionReplacementRequest(s, data.supersedesRequestId, requestBinding)
+    : createAiExecutionRequest(s, requestBinding);
 }
 
-export async function runMockAgent(agentCode: string, input: unknown, requestKeyValue: string) {
+export async function runMockAgent(
+  agentCode: string,
+  input: unknown,
+  requestKeyValue: string,
+  supersedesRequestIdValue?: string,
+) {
   const s = await requirePermission('ai.execution.request');
   if (!hasPermission(s, 'ai_agents.write')) {
     throw new UserFacingActionError('Il quick mock richiede anche il permesso ai_agents.write.');
   }
   if (!hasGlobalAccess(s)) denyWriteAccess();
   const requestKey = aiRequestKeySchema.parse(requestKeyValue);
+  const supersedesRequestId = aiExecutionSupersedesRequestIdSchema.parse(
+    supersedesRequestIdValue || undefined,
+  );
   const prompt = typeof input === 'object' && input && typeof (input as { prompt?: unknown }).prompt === 'string'
     ? (input as { prompt: string }).prompt.trim()
     : '';
@@ -1430,7 +1450,7 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     agentConfig: aiAgentConfigFingerprint(snapshot),
     body: exactMockBody,
   });
-  return createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'ADMIN_MOCK_QUICK_RUN',
     agentId: snapshot.agentId,
@@ -1444,7 +1464,10 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     inputFingerprint: requestFingerprint,
     executionInputHash: aiExecutionCanonicalSha256V2(safeInput),
     hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
-  });
+  } as const;
+  return supersedesRequestId
+    ? createAiExecutionReplacementRequest(s, supersedesRequestId, requestBinding)
+    : createAiExecutionRequest(s, requestBinding);
 }
 
 function hydratedAiPolicyContext(context: Awaited<ReturnType<typeof requireAiOutputReadAccess>>) {

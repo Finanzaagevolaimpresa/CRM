@@ -211,8 +211,8 @@ BEGIN
   IF EXISTS (SELECT 1 FROM "AiExecutionRequest" WHERE "hashCanonicalizationVersion" <> 1 OR "supersedesRequestId" IS NOT NULL)
     OR EXISTS (SELECT 1 FROM "AiExecutionAuthorizationGrant" WHERE "hashCanonicalizationVersion" <> 1)
     OR EXISTS (SELECT 1 FROM "AiRun" WHERE "hashCanonicalizationVersion" = 2)
-    OR EXISTS (SELECT 1 FROM "AiExecutionRequest" WHERE "status" = 'NEEDS_INFORMATION' AND "expiresAt" <= CURRENT_TIMESTAMP) THEN
-    RAISE EXCEPTION 'PR85 application rollback is unsafe: v2, replacement, or expired NEEDS_INFORMATION rows exist';
+    OR EXISTS (SELECT 1 FROM "AiExecutionRequest" WHERE "status" = 'NEEDS_INFORMATION') THEN
+    RAISE EXCEPTION 'PR85 application rollback is unsafe: v2, replacement, or any NEEDS_INFORMATION rows exist';
   END IF;
 END $$;
 

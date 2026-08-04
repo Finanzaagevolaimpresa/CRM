@@ -77,11 +77,14 @@ type RequestBinding = {
   inputFingerprint: string;
   executionInputHash: string;
   hashCanonicalizationVersion: 2;
-  supersedesRequestId?: string | null;
   clientId?: string | null;
   companyId?: string | null;
   projectId?: string | null;
   clientServiceId?: string | null;
+};
+
+type PersistedRequestBinding = RequestBinding & {
+  supersedesRequestId?: string | null;
 };
 
 function isUniqueConstraintError(error: unknown) {
@@ -127,7 +130,7 @@ async function databaseNow(tx: Prisma.TransactionClient) {
 function sameRequestBinding(
   existing: AiExecutionRequest,
   session: AuthSession,
-  input: RequestBinding,
+  input: PersistedRequestBinding,
 ) {
   return existing.requesterKind === 'HUMAN_USER'
     && existing.requesterUserId === session.userId
@@ -149,6 +152,32 @@ function sameRequestBinding(
     && existing.companyId === (input.companyId ?? null)
     && existing.projectId === (input.projectId ?? null)
     && existing.clientServiceId === (input.clientServiceId ?? null);
+}
+
+function sameReplacementContinuity(
+  predecessor: AiExecutionRequest,
+  session: AuthSession,
+  input: RequestBinding,
+) {
+  return predecessor.requesterKind === 'HUMAN_USER'
+    && predecessor.requesterUserId === session.userId
+    && predecessor.requesterIdentity === null
+    && predecessor.origin === input.origin
+    && predecessor.functionCode === input.functionCode
+    && predecessor.purposeCode === input.purposeCode
+    && predecessor.clientId === (input.clientId ?? null)
+    && predecessor.companyId === (input.companyId ?? null)
+    && predecessor.projectId === (input.projectId ?? null)
+    && predecessor.clientServiceId === (input.clientServiceId ?? null);
+}
+
+function assertRequestCreationAllowed(session: AuthSession, input: RequestBinding) {
+  if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
+    throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
+  }
+  if (!hasPermission(session, 'ai.execution.request')) {
+    throw new UserFacingActionError('Permesso ai.execution.request obbligatorio.');
+  }
 }
 
 export function effectiveAiExecutionRequestStatus(
@@ -220,30 +249,19 @@ export async function createAiExecutionRequest(
   session: AuthSession,
   input: RequestBinding,
 ) {
-  await assertAiExecutionAuthorizationSchemaV2();
-  if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
-    throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
-  }
-  if (!hasPermission(session, 'ai.execution.request')) {
-    throw new UserFacingActionError('Permesso ai.execution.request obbligatorio.');
-  }
+  return createAiExecutionRequestInternal(session, input);
+}
 
-  const existing = await prisma.aiExecutionRequest.findUnique({
-    where: {
-      origin_idempotencyKey: {
-        origin: input.origin,
-        idempotencyKey: input.idempotencyKey,
-      },
-    },
-  });
-  if (existing) {
-    if (!sameRequestBinding(existing, session, input)) {
-      throw new UserFacingActionError(
-        'Chiave richiesta AI già utilizzata con un contenuto differente. Ricarica la pagina.',
-      );
-    }
-    return existing;
-  }
+async function createAiExecutionRequestInternal(
+  session: AuthSession,
+  input: RequestBinding,
+  supersedesRequestId?: string,
+) {
+  assertRequestCreationAllowed(session, input);
+  const binding: PersistedRequestBinding = {
+    ...input,
+    supersedesRequestId: supersedesRequestId ?? null,
+  };
 
   try {
     return await withSerializableTransaction(async (tx) => {
@@ -256,12 +274,48 @@ export async function createAiExecutionRequest(
         },
       });
       if (duplicate) {
-        if (!sameRequestBinding(duplicate, session, input)) {
+        if (!sameRequestBinding(duplicate, session, binding)) {
           throw new UserFacingActionError(
             'Chiave richiesta AI già utilizzata con un contenuto differente. Ricarica la pagina.',
           );
         }
         return duplicate;
+      }
+
+      if (supersedesRequestId) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "AiExecutionRequest" WHERE "id" = ${supersedesRequestId} FOR UPDATE`,
+        );
+        const predecessor = await tx.aiExecutionRequest.findUnique({
+          where: { id: supersedesRequestId },
+          include: {
+            authorizationGrant: { select: { id: true } },
+            runs: { select: { id: true }, take: 1 },
+            supersededBy: { select: { id: true } },
+          },
+        });
+        if (
+          !predecessor
+          || predecessor.status !== 'NEEDS_INFORMATION'
+          || !sameReplacementContinuity(predecessor, session, input)
+          || predecessor.authorizationGrant !== null
+          || predecessor.runs.length > 0
+          || predecessor.supersededBy !== null
+        ) {
+          throw new UserFacingActionError(
+            'Richiesta originaria non disponibile per una sostituzione nel perimetro autorizzato.',
+          );
+        }
+        if (
+          predecessor.correlationId === input.correlationId
+          || predecessor.idempotencyKey === input.idempotencyKey
+          || predecessor.inputFingerprint === input.inputFingerprint
+          || predecessor.executionInputHash === input.executionInputHash
+        ) {
+          throw new UserFacingActionError(
+            'La richiesta sostitutiva deve contenere informazioni aggiornate e una nuova identità tecnica.',
+          );
+        }
       }
 
       const now = await databaseNow(tx);
@@ -287,7 +341,7 @@ export async function createAiExecutionRequest(
           inputFingerprint: input.inputFingerprint,
           executionInputHash: input.executionInputHash,
           hashCanonicalizationVersion: input.hashCanonicalizationVersion,
-          supersedesRequestId: input.supersedesRequestId ?? null,
+          supersedesRequestId: supersedesRequestId ?? null,
           expiresAt: new Date(now.getTime() + REQUEST_TTL_MS),
           status: 'PENDING_ADMIN_APPROVAL',
           stateVersion: 1,
@@ -305,7 +359,12 @@ export async function createAiExecutionRequest(
           },
         },
       });
-      if (duplicate && sameRequestBinding(duplicate, session, input)) return duplicate;
+      if (duplicate && sameRequestBinding(duplicate, session, binding)) return duplicate;
+      if (supersedesRequestId) {
+        throw new UserFacingActionError(
+          'La richiesta originaria è già stata sostituita oppure non è più disponibile.',
+        );
+      }
     }
     throw new UserFacingActionError(
       'Richiesta AI non creata. Verifica che esista almeno un Admin attivo e riprova.',
@@ -316,9 +375,15 @@ export async function createAiExecutionRequest(
 export async function createAiExecutionReplacementRequest(
   session: AuthSession,
   supersedesRequestId: string,
-  input: Omit<RequestBinding, 'supersedesRequestId'>,
+  input: RequestBinding,
 ) {
-  return createAiExecutionRequest(session, { ...input, supersedesRequestId });
+  const predecessorId = supersedesRequestId.trim();
+  if (!predecessorId || predecessorId.length > 200) {
+    throw new UserFacingActionError(
+      'Richiesta originaria non disponibile per una sostituzione nel perimetro autorizzato.',
+    );
+  }
+  return createAiExecutionRequestInternal(session, input, predecessorId);
 }
 
 async function createDecision(

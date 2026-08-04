@@ -8,8 +8,12 @@ import {
   type User,
 } from '@prisma/client';
 import { MockAiAdapter } from '../../src/lib/ai';
-import { reserveAuthorizedAiRun } from '../../src/lib/ai-execution-authorization';
+import {
+  createAiExecutionReplacementRequest,
+  reserveAuthorizedAiRun,
+} from '../../src/lib/ai-execution-authorization';
 import { aiExecutionCanonicalSha256V2, canonicalSha256 } from '../../src/lib/canonical-json';
+import type { AuthSession } from '../../src/lib/auth';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
@@ -145,6 +149,36 @@ async function createBoundRun(fixture: Awaited<ReturnType<typeof approvedRequest
   });
 }
 
+function sessionFor(user: User): AuthSession {
+  return {
+    userId: user.id,
+    expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    role: user.role,
+    active: true,
+    permissionOverrides: [],
+  };
+}
+
+function replacementBinding(suffix: string) {
+  const key = randomUUID();
+  const executionInput = { synthetic: true, integrated: suffix };
+  return {
+    origin: 'CRM_UI' as const,
+    functionCode: 'PR85_SYNTHETIC_DB_TEST',
+    agentId: agentConfig.agentId,
+    agentConfigVersion: agentConfig.version,
+    provider: 'mock',
+    model: 'mock-template-v1',
+    purposeCode: 'SYNTHETIC_TEST',
+    dataCategories: ['synthetic_test'] as const,
+    correlationId: key,
+    idempotencyKey: key,
+    inputFingerprint: aiExecutionCanonicalSha256V2({ runId, key, suffix }),
+    executionInputHash: aiExecutionCanonicalSha256V2(executionInput),
+    hashCanonicalizationVersion: 2 as const,
+  };
+}
+
 test.before(async () => {
   if (!runDbTests) return;
   await assertAiOrchestratorEphemeralDatabaseIdentity(db());
@@ -185,6 +219,19 @@ test.before(async () => {
 
 test.after(async () => {
   if (prisma) await prisma.$disconnect();
+});
+
+test('rollback guard PR85 è sicuro prima di dati PR86 incompatibili', { skip: !runDbTests }, async () => {
+  await db().$queryRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`;
+});
+
+test('rollback guard PR85 rifiuta NEEDS_INFORMATION anche con scadenza futura', { skip: !runDbTests }, async () => {
+  const source = await createRequest({ expiresInMs: 60 * 60 * 1000 });
+  await decide(source.request.id, adminOne, 'NEEDS_INFORMATION');
+  await assert.rejects(
+    db().$queryRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`,
+    /any NEEDS_INFORMATION rows exist/i,
+  );
 });
 
 test('richiesta, genesis, audit e notifiche Admin sono atomici', { skip: !runDbTests }, async () => {
@@ -471,6 +518,47 @@ test('NEEDS_INFORMATION è terminale e la sostituzione v2 crea identità, ledger
   assert.equal(await db().aiExecutionAuthorizationGrant.count({ where: { requestId: first.request.id } }), 0);
   await assert.rejects(createRequest({ requester: first.requester, hashCanonicalizationVersion: 2,
     supersedesRequestId: first.request.id, executionInput: { synthetic: true, integrated: 'another' } }), /Unique constraint|supersedes/i);
+});
+
+test('il replacement service valida richiedente e continuità e serializza due reinvii concorrenti', { skip: !runDbTests }, async () => {
+  const first = await createRequest();
+  await decide(first.request.id, adminOne, 'NEEDS_INFORMATION');
+
+  await assert.rejects(
+    createAiExecutionReplacementRequest(sessionFor(adminOne), first.request.id, replacementBinding('wrong-requester')),
+    /non disponibile.*perimetro autorizzato/i,
+  );
+  await assert.rejects(
+    createAiExecutionReplacementRequest(sessionFor(collaborator), first.request.id, {
+      ...replacementBinding('wrong-function'),
+      functionCode: 'OTHER_FUNCTION',
+    }),
+    /non disponibile.*perimetro autorizzato/i,
+  );
+  assert.equal(await db().aiExecutionRequest.count({ where: { supersedesRequestId: first.request.id } }), 0);
+
+  const concurrent = await Promise.allSettled([
+    createAiExecutionReplacementRequest(sessionFor(collaborator), first.request.id, replacementBinding('service-one')),
+    createAiExecutionReplacementRequest(sessionFor(collaborator), first.request.id, replacementBinding('service-two')),
+  ]);
+  assert.equal(concurrent.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(concurrent.filter((result) => result.status === 'rejected').length, 1);
+  const winner = concurrent.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof createAiExecutionReplacementRequest>>> => result.status === 'fulfilled');
+  assert.ok(winner);
+  assert.equal(winner.value.supersedesRequestId, first.request.id);
+  assert.equal(winner.value.requesterUserId, collaborator.id);
+  assert.equal(winner.value.hashCanonicalizationVersion, 2);
+  assert.equal(await db().aiExecutionRequest.count({ where: { supersedesRequestId: first.request.id } }), 1);
+  assert.deepEqual(
+    (await db().aiExecutionDecision.findMany({ where: { requestId: winner.value.id } })).map((decision) => decision.decisionType),
+    ['REQUESTED'],
+  );
+  const activeAdminCount = await db().user.count({ where: { role: 'admin', active: true, deletedAt: null } });
+  assert.equal(await db().aiExecutionAdminNotification.count({ where: { requestId: winner.value.id } }), activeAdminCount);
+  const unchanged = await db().aiExecutionRequest.findUniqueOrThrow({ where: { id: first.request.id } });
+  assert.equal(unchanged.status, 'NEEDS_INFORMATION');
+  assert.equal(await db().aiExecutionAuthorizationGrant.count({ where: { requestId: first.request.id } }), 0);
+  assert.equal(await db().aiRun.count({ where: { aiExecutionRequestId: first.request.id } }), 0);
 });
 
 test('request, grant, AiRun e permit applicano version binding v2 fail-closed', { skip: !runDbTests }, async () => {

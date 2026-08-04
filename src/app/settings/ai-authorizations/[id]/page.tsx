@@ -70,6 +70,16 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
     && request.runs.length === 0;
   const canCancel = (isRequester || isAdmin)
     && status === 'PENDING_ADMIN_APPROVAL';
+  const replacementQuery = `supersedesRequestId=${encodeURIComponent(request.id)}`;
+  const replacementHref = status === 'NEEDS_INFORMATION' && isRequester && !request.supersededBy
+    ? request.functionCode === 'AI_PROVIDER_DIAGNOSTIC'
+      ? `/settings/ai-diagnostics?${replacementQuery}`
+      : request.functionCode === 'ADMIN_MOCK_QUICK_RUN'
+        ? `/ai?${replacementQuery}`
+        : request.functionCode === 'CLIENT_AI_AGENT' && request.clientId
+          ? `/clients/${request.clientId}?${replacementQuery}#output-ai`
+          : null
+    : null;
 
   return (
     <div className="space-y-6">
@@ -115,9 +125,11 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
           {!canApprove && !canReject && !canRevoke && !canCancel ? <EmptyState title="Nessuna azione disponibile" /> : null}
         </div>
         {status === 'NEEDS_INFORMATION' ? (
-          <p className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-900">
-            Questa richiesta è chiusa e immutabile. Integra le informazioni nel contesto CRM originario e invia una nuova richiesta: ID, fingerprint, hash, ledger e notifiche non vengono riutilizzati.
-          </p>
+          <div className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-900">
+            <p>Questa richiesta è chiusa e immutabile. Integra le informazioni nel contesto CRM originario e invia una nuova richiesta: ID, fingerprint, hash, ledger e notifiche non vengono riutilizzati.</p>
+            {replacementHref ? <Link className="mt-3 inline-flex rounded-xl bg-amber-900 px-4 py-2 text-white" href={replacementHref}>Integra e crea richiesta sostitutiva</Link> : null}
+            {!replacementHref && request.supersededBy ? <p className="mt-3">La richiesta sostitutiva è già stata creata ed è collegata nella sezione Richiesta.</p> : null}
+          </div>
         ) : null}
       </Card>
 
