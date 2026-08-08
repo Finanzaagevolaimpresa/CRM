@@ -222,14 +222,14 @@ test.after(async () => {
 });
 
 test('rollback guard PR85 è sicuro prima di dati PR86 incompatibili', { skip: !runDbTests }, async () => {
-  await db().$queryRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`;
+  await db().$executeRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`;
 });
 
 test('rollback guard PR85 rifiuta NEEDS_INFORMATION anche con scadenza futura', { skip: !runDbTests }, async () => {
-  const source = await createRequest({ expiresInMs: 60 * 60 * 1000 });
+  const source = await createRequest({ expiresInMs: 30 * 60 * 1000 });
   await decide(source.request.id, adminOne, 'NEEDS_INFORMATION');
   await assert.rejects(
-    db().$queryRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`,
+    db().$executeRaw`SELECT "assert_ai_execution_pr85_rollback_safe_v2"()`,
     /any NEEDS_INFORMATION rows exist/i,
   );
 });
