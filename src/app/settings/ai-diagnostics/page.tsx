@@ -126,6 +126,17 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
           <form action={runAiProviderDiagnosticTest} className="space-y-3">
             <input type="hidden" name="requestKey" value={diagnosticRequestKey} />
             {replacementSource ? <input type="hidden" name="supersedesRequestId" value={replacementSource.id} /> : null}
+            {replacementSource ? <label className="block rounded-2xl bg-amber-50 p-4 text-amber-950 ring-1 ring-amber-200">
+              <span className="block font-black">Integrazione tecnica obbligatoria</span>
+              <span className="mt-1 block text-xs leading-5">Descrivi esclusivamente la correzione tecnica applicata a provider, modello o configurazione. Non inserire nomi, contatti, documenti o altri dati cliente.</span>
+              <textarea
+                className="mt-3 min-h-28 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                name="diagnosticIntegration"
+                minLength={1}
+                maxLength={2000}
+                required
+              />
+            </label> : null}
             {externalDiagnostic ? <label className="flex items-start gap-2 rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">
               <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDiagnosticConfirmed" required />
               <span>Confermo provider, modello e possibile costo previsti qualora questa richiesta fosse eseguita in futuro. Il click attuale non chiama OpenAI e non genera costi.</span>

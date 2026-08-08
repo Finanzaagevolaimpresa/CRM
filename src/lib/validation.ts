@@ -68,6 +68,7 @@ export const aiRequestKeySchema = z.string().regex(
   'Chiave richiesta AI non valida.',
 );
 export const aiExecutionSupersedesRequestIdSchema = z.string().trim().min(1).max(200).optional();
+export const aiDiagnosticReplacementIntegrationSchema = z.string().trim().min(1).max(2000);
 export const clientAiRunSchema = z.object({
   requestKey: aiRequestKeySchema,
   supersedesRequestId: aiExecutionSupersedesRequestIdSchema,

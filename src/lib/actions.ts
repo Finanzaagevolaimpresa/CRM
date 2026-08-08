@@ -1,7 +1,7 @@
 'use server';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -9,7 +9,7 @@ import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOf
 import {
   createExternalAiPayload,
   externalAiDataCategories,
-  createOpenAiDiagnosticRequestBody,
+  createAiProviderDiagnosticExecutionBody,
   createOpenAiResponseRequestBody,
   getAiProviderDiagnostics,
   type ExternalAiPayload,
@@ -196,6 +196,15 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
   const supersedesRequestId = aiExecutionSupersedesRequestIdSchema.parse(
     String(form.get('supersedesRequestId') ?? '') || undefined,
   );
+  const diagnosticIntegrationResult = supersedesRequestId
+    ? aiDiagnosticReplacementIntegrationSchema.safeParse(String(form.get('diagnosticIntegration') ?? ''))
+    : null;
+  if (diagnosticIntegrationResult && !diagnosticIntegrationResult.success) {
+    throw new UserFacingActionError(
+      'Inserisci un’integrazione tecnica valida, senza dati cliente e non superiore a 2.000 caratteri.',
+    );
+  }
+  const diagnosticIntegration = diagnosticIntegrationResult?.data;
   const externalDiagnostic = diagnostics.provider === 'openai';
   const externalDiagnosticConfirmed = form.get('externalDiagnosticConfirmed') === 'on';
   const runtimeModel = externalDiagnostic ? diagnostics.model : 'mock-template-v1';
@@ -224,14 +233,11 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     throw new UserFacingActionError('Snapshot dell’agente diagnostico non coerente con provider e modello correnti. Test bloccato.');
   }
 
-  const exactDiagnosticBody = externalDiagnostic
-    ? createOpenAiDiagnosticRequestBody(runtimeModel)
-    : {
-        source: 'CRM interno FAI',
-        humanReviewRequired: true,
-        prompt: 'Test diagnostico interno minimale.',
-        context: {},
-      };
+  const exactDiagnosticBody = createAiProviderDiagnosticExecutionBody(
+    diagnostics.provider,
+    runtimeModel,
+    diagnosticIntegration,
+  );
   const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'ai_provider_diagnostic_v1',
     requestKey,

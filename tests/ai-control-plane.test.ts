@@ -13,13 +13,15 @@ import {
 } from '../src/lib/ai-control-plane';
 import {
   createExternalAiPayload,
+  createAiProviderDiagnosticExecutionBody,
   externalAiDataCategories,
   extractOpenAiUsage,
   minimizeProviderRequestId,
   type ExternalAiPayload,
 } from '../src/lib/ai';
 import { hasPermission } from '../src/lib/auth';
-import { aiAgentConfigUpdateSchema, clientAiRunSchema } from '../src/lib/validation';
+import { aiExecutionCanonicalSha256V2 } from '../src/lib/canonical-json';
+import { aiAgentConfigUpdateSchema, aiDiagnosticReplacementIntegrationSchema, clientAiRunSchema } from '../src/lib/validation';
 
 const root = process.cwd();
 const actionsPath = resolve(root, 'src/lib/actions.ts');
@@ -151,6 +153,34 @@ test('conferma FormData usa parsing booleano rigoroso e non accetta stringhe tru
   assert.equal(aiAgentConfigUpdateSchema.safeParse({ ...configBase, provider: 'mock', futureModel: 'gpt-approved' }).success, false);
 });
 
+test('diagnostica sostitutiva richiede integrazione tecnica minimizzata e produce un nuovo hash', () => {
+  assert.equal(aiDiagnosticReplacementIntegrationSchema.safeParse('').success, false);
+  assert.equal(aiDiagnosticReplacementIntegrationSchema.safeParse(' '.repeat(8)).success, false);
+  assert.equal(aiDiagnosticReplacementIntegrationSchema.safeParse('x'.repeat(2001)).success, false);
+
+  const baseBody = createAiProviderDiagnosticExecutionBody('mock', 'mock-template-v1');
+  const replacementBody = createAiProviderDiagnosticExecutionBody(
+    'mock',
+    'mock-template-v1',
+    'Aggiornato endpoint tecnico; verifica inviata da mario.rossi@example.it.',
+  );
+  const serializedReplacement = JSON.stringify(replacementBody);
+  assert.notEqual(
+    aiExecutionCanonicalSha256V2(baseBody),
+    aiExecutionCanonicalSha256V2(replacementBody),
+  );
+  assert.match(serializedReplacement, /\[email rimossa\]/);
+  assert.doesNotMatch(serializedReplacement, /mario\.rossi@example\.it|clientId|projectId|document/);
+
+  const openAiReplacement = createAiProviderDiagnosticExecutionBody(
+    'openai',
+    'gpt-approved',
+    'Confermata allowlist del modello.',
+  );
+  assert.match(openAiReplacement.input, /Integrazione tecnica verificata dall’operatore/);
+  assert.equal(openAiReplacement.store, false);
+});
+
 test('RBAC esterno diretto resta solo Admin nella foundation del gate manuale', () => {
   assert.equal(hasPermission({ role: 'admin', active: true, permissionOverrides: [] }, 'ai.external.run'), true);
   for (const role of ['direzione', 'consulente', 'revisore', 'backoffice', 'commerciale', 'amministrazione', 'collaboratore_limitato'] as const) {
@@ -208,6 +238,9 @@ test('diagnostica OpenAI crea soltanto la richiesta soggetta a decisione Admin',
   assert.match(body, /form\.get\('externalDiagnosticConfirmed'\) === 'on'/);
   assert.doesNotMatch(body, /form\.has\('externalDiagnosticConfirmed'\)/);
   assert.match(diagnosticPage, /name="externalDiagnosticConfirmed" required/);
+  assert.match(diagnosticPage, /name="diagnosticIntegration"[\s\S]*required/);
+  assert.match(body, /aiDiagnosticReplacementIntegrationSchema\.safeParse/);
+  assert.match(body, /createAiProviderDiagnosticExecutionBody/);
   assert.ok(fingerprint >= 0 && fingerprint < request);
   assert.match(body, /dataCategories: \['agent_configuration'\]/);
   assert.doesNotMatch(body, /assertExternalAiRunAllowed|tx\.aiRun\.create|testAiProviderDiagnostic|fetch\(/);

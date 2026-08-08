@@ -46,6 +46,25 @@ test('i tre flussi CRM instradano le sostitutive attraverso il helper dedicato',
   assert.match(authorizationDetail, /Integra e crea richiesta sostitutiva/);
 });
 
+test('la diagnostica sostitutiva richiede un input tecnico che cambia body, fingerprint e hash', () => {
+  const diagnosticAction = actions.slice(
+    actions.indexOf('export async function runAiProviderDiagnosticTest'),
+    actions.indexOf('export async function updateAiAgentConfig'),
+  );
+  const integration = diagnosticAction.indexOf('aiDiagnosticReplacementIntegrationSchema.safeParse');
+  const body = diagnosticAction.indexOf('createAiProviderDiagnosticExecutionBody');
+  const fingerprint = diagnosticAction.indexOf('aiExecutionRequestFingerprintV2');
+  const hash = diagnosticAction.indexOf('aiExecutionCanonicalSha256V2(exactDiagnosticBody)');
+  const successor = diagnosticAction.indexOf('createAiExecutionReplacementRequest');
+
+  assert.ok(integration >= 0 && integration < body && body < fingerprint && fingerprint < hash && hash < successor);
+  assert.match(diagnosticAction, /supersedesRequestId[\s\S]*diagnosticIntegrationResult/);
+  assert.match(diagnosticAction, /diagnosticIntegrationResult[\s\S]*UserFacingActionError/);
+  assert.match(diagnosticAction, /createAiProviderDiagnosticExecutionBody\([\s\S]*diagnosticIntegration/);
+  assert.match(diagnosticPage, /replacementSource \? <label[\s\S]*name="diagnosticIntegration"[\s\S]*required/);
+  assert.match(diagnosticPage, /Non inserire nomi, contatti, documenti o altri dati cliente/);
+});
+
 test('il rollback guard PR85 rifiuta ogni NEEDS_INFORMATION senza dipendere dalla scadenza', () => {
   const guardStart = migration.indexOf('CREATE FUNCTION "assert_ai_execution_pr85_rollback_safe_v2"');
   const guardEnd = migration.indexOf('DO $verify$', guardStart);

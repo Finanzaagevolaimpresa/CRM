@@ -342,6 +342,54 @@ export function createOpenAiDiagnosticRequestBody(model: string): OpenAiResponse
   };
 }
 
+export type MockAiProviderDiagnosticExecutionBody = {
+  source: 'CRM interno FAI';
+  humanReviewRequired: true;
+  prompt: 'Test diagnostico interno minimale.';
+  context: { diagnosticIntegration?: string };
+};
+
+export function minimizeAiProviderDiagnosticIntegration(value: string) {
+  return sanitizeExternalFreeText(value, 2000);
+}
+
+export function createAiProviderDiagnosticExecutionBody(
+  provider: 'openai',
+  model: string,
+  diagnosticIntegration?: string,
+): OpenAiResponseRequestBody;
+export function createAiProviderDiagnosticExecutionBody(
+  provider: 'mock',
+  model: string,
+  diagnosticIntegration?: string,
+): MockAiProviderDiagnosticExecutionBody;
+export function createAiProviderDiagnosticExecutionBody(
+  provider: AiProviderName,
+  model: string,
+  diagnosticIntegration?: string,
+): OpenAiResponseRequestBody | MockAiProviderDiagnosticExecutionBody;
+export function createAiProviderDiagnosticExecutionBody(
+  provider: AiProviderName,
+  model: string,
+  diagnosticIntegration?: string,
+): OpenAiResponseRequestBody | MockAiProviderDiagnosticExecutionBody {
+  const minimizedIntegration = diagnosticIntegration
+    ? minimizeAiProviderDiagnosticIntegration(diagnosticIntegration)
+    : undefined;
+  if (provider === 'openai') {
+    const body = createOpenAiDiagnosticRequestBody(model);
+    return minimizedIntegration
+      ? { ...body, input: `${body.input}\nIntegrazione tecnica verificata dall’operatore: ${minimizedIntegration}` }
+      : body;
+  }
+  return {
+    source: 'CRM interno FAI' as const,
+    humanReviewRequired: true as const,
+    prompt: 'Test diagnostico interno minimale.' as const,
+    context: minimizedIntegration ? { diagnosticIntegration: minimizedIntegration } : {},
+  };
+}
+
 export class MockAiAdapter implements AiProviderAdapter {
   async run(
     agent: AiAgentRuntime | string,
@@ -483,16 +531,15 @@ export async function testAiProviderDiagnostic(
 ): Promise<AiProviderDiagnosticTestResult> {
   const diagnostics = getAiProviderDiagnostics();
   if (diagnostics.provider === 'mock') {
-    await new MockAiAdapter().run({ code: 'diagnostic_test', role: 'Diagnostica provider AI' }, {
-      source: 'CRM interno FAI',
-      humanReviewRequired: true,
-      prompt: 'Test diagnostico interno minimale.',
-      context: {},
-    }, runtimePermit);
+    await new MockAiAdapter().run(
+      { code: 'diagnostic_test', role: 'Diagnostica provider AI' },
+      createAiProviderDiagnosticExecutionBody('mock', 'mock-template-v1'),
+      runtimePermit,
+    );
     return { success: true, message: 'Provider mock raggiungibile: risposta sintetica generata correttamente.', provider: diagnostics.provider, model: diagnostics.model };
   }
 
-  const requestBody = createOpenAiDiagnosticRequestBody(diagnostics.model);
+  const requestBody = createAiProviderDiagnosticExecutionBody('openai', diagnostics.model);
   consumeAiExecutionRuntimePermit(runtimePermit, {
     provider: 'openai',
     model: diagnostics.model,
