@@ -57,62 +57,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify production dependency audit boundary
+      - name: Verify dependency audits
         run: |
-          npm audit --omit=dev --json > "$RUNNER_TEMP/npm-audit.json" || true
-          node - "$RUNNER_TEMP/npm-audit.json" <<'NODE'
-          const fs = require('node:fs');
-          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const counts = report.metadata?.vulnerabilities;
-          const vulnerabilities = report.vulnerabilities;
-          const failures = [];
-          if (!counts || !vulnerabilities || report.auditReportVersion !== 2) {
-            console.error('audit-boundary: invalid npm audit report');
-            process.exit(1);
-          }
-          // Temporary exact lockfile boundary. Owner: CRM maintainers.
-          // Review by: 2026-08-15. Remove when the supported Next.js line no longer
-          // installs vulnerable postcss/sharp ranges; do not widen counts or sources.
-          const expected = {
-            next: { severity: 'high', nodes: ['node_modules/next'], viaPackages: ['postcss', 'sharp'], sources: [] },
-            postcss: { severity: 'high', nodes: ['node_modules/next/node_modules/postcss'], viaPackages: [], sources: [1117015, 1124252, 1124288] },
-            sharp: { severity: 'high', nodes: ['node_modules/sharp'], viaPackages: [], sources: [1124066] },
-          };
-          for (const [name, vulnerability] of Object.entries(vulnerabilities)) {
-            const rule = expected[name];
-            if (!rule) { failures.push(`unexpected package:${name}`); continue; }
-            if (vulnerability.severity !== rule.severity) failures.push(`severity:${name}:${vulnerability.severity}`);
-            const nodes = [...vulnerability.nodes].sort();
-            if (JSON.stringify(nodes) !== JSON.stringify(rule.nodes)) failures.push(`nodes:${name}:${nodes.join(',')}`);
-            const seenPackages = [];
-            const seenSources = [];
-            for (const via of vulnerability.via) {
-              if (typeof via === 'string') {
-                seenPackages.push(via);
-              } else seenSources.push(via.source);
-            }
-            if (JSON.stringify(seenPackages.sort()) !== JSON.stringify([...rule.viaPackages].sort())) failures.push(`via-packages:${name}:${seenPackages.join(',')}`);
-            if (JSON.stringify(seenSources.sort()) !== JSON.stringify([...rule.sources].sort())) failures.push(`sources:${name}:${seenSources.join(',')}`);
-          }
-          for (const name of Object.keys(expected)) if (!vulnerabilities[name]) failures.push(`missing expected package:${name}`);
-          const exactCounts = { info: 0, low: 0, moderate: 0, high: 3, critical: 0, total: 3 };
-          for (const [severity, expectedCount] of Object.entries(exactCounts)) {
-            if (counts[severity] !== expectedCount) failures.push(`count:${severity}:${counts[severity]}`);
-          }
-          console.log('audit-boundary summary:', JSON.stringify(Object.fromEntries(
-            Object.entries(vulnerabilities).map(([name, value]) => [name, {
-              severity: value.severity,
-              nodes: value.nodes,
-              sources: value.via.filter((item) => typeof item !== 'string').map((item) => item.source),
-              viaPackages: value.via.filter((item) => typeof item === 'string'),
-              fixAvailable: value.fixAvailable,
-            }]),
-          )));
-          if (failures.length) {
-            console.error('audit-boundary failures:', failures.join('; '));
-            process.exit(1);
-          }
-          NODE
+          npm audit --omit=dev --audit-level=low
+          npm audit --audit-level=low
 
       - name: Verify patch and shell syntax
         env:
