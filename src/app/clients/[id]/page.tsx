@@ -54,7 +54,7 @@ const auditLabel = (event: string) => auditEventLabels[event] ?? event.replaceAl
 const isRedundantOperationalAudit = (event: { category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }, events: Array<{ category: string; type: string; entity?: string | null; dedupeKey?: string | null; date: Date | string }>) => event.category === 'audit' && events.some((candidate) => candidate.category !== 'audit' && candidate.dedupeKey && candidate.dedupeKey === event.dedupeKey && Math.abs(+new Date(candidate.date) - +new Date(event.date)) <= 120000 && ((event.type === 'Cambio stato pratica tecnica' && candidate.type === 'stato pratica tecnica') || (event.type === 'Aggiornamento pratica tecnica' && ['stato pratica tecnica', 'aggiornamento pratica tecnica'].includes(candidate.type))));
 
 
-export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string; timelineFilter?: string }> }) {
+export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams?: Promise<{ uploadError?: string; timelineFilter?: string; supersedesRequestId?: string }> }) {
   const { id } = await params;
   const query = await searchParams;
   const session = await requirePermission('client.read');
@@ -77,6 +77,24 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const canRequestAi = hasPermission(session, 'ai.execution.request');
   const canAuditAiRequests = session.role === 'admin' && hasPermission(session, 'ai.execution.audit');
   const aiRequestKey = canRequestAi ? randomUUID() : null;
+  const replacementSource = query?.supersedesRequestId && canRequestAi
+    ? await prisma.aiExecutionRequest.findFirst({
+        where: {
+          id: query.supersedesRequestId,
+          origin: 'CRM_UI',
+          requesterKind: 'HUMAN_USER',
+          requesterUserId: session.userId,
+          status: 'NEEDS_INFORMATION',
+          functionCode: 'CLIENT_AI_AGENT',
+          purposeCode: 'CLIENT_ADVISORY_ANALYSIS',
+          clientId: client.id,
+          authorizationGrant: null,
+          runs: { none: {} },
+          supersededBy: null,
+        },
+        select: { id: true, agentId: true, clientServiceId: true, projectId: true },
+      })
+    : null;
 
   const [companyContextRows, companies, projectRows, clientServiceRows, documentRows, contractRows, paymentRows, tasks, preAnalysisRows, dossierRows, clientDossierRows, bankabilityRows, financingRows, checklistItems, activeAgents, technicalPracticeRows, practiceCommunicationRows] = await Promise.all([
     prisma.company.findMany({ where: { clientId: id, deletedAt: null }, select: { id: true, clientId: true } }),
@@ -392,10 +410,12 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card id="output-ai" title="Agenti AI / Output interni">
       {canRequestAi ? <form action={runClientAiAgentAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-2">
         <input type="hidden" name="requestKey" value={aiRequestKey ?? ''}/>
+        {replacementSource ? <input type="hidden" name="supersedesRequestId" value={replacementSource.id}/> : null}
         <input type="hidden" name="clientId" value={client.id}/>
-        <select className="rounded-xl border p-2 text-sm" name="agentId" required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {getAiAgentCategory(agent.code)} · provider previsto {agent.provider}</option>)}</select>
-        <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue=""><option value="">Fascicolo cliente generale</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
-        <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue=""><option value="">Nessun progetto specifico</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
+        {replacementSource ? <p className="rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-900 ring-1 ring-amber-200 md:col-span-2">Richiesta sostitutiva: integra le istruzioni o aggiorna i dati del fascicolo prima del nuovo invio. La richiesta chiusa resta immutabile.</p> : null}
+        <select className="rounded-xl border p-2 text-sm" name="agentId" defaultValue={replacementSource?.agentId ?? ''} required><option value="">Seleziona agente ufficiale/specialistico attivo</option>{sortAiAgentsByCategory(activeAgents.filter((agent) => isPrimaryOperationalAiAgent(agent.code))).map((agent) => <option key={agent.id} value={agent.id}>{agent.name} · {getAiAgentCategory(agent.code)} · provider previsto {agent.provider}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="clientServiceId" defaultValue={replacementSource?.clientServiceId ?? ''}><option value="">Fascicolo cliente generale</option>{clientServices.map((service) => <option key={service.id} value={service.id}>{nameOf(service.serviceCatalogId)}</option>)}</select>
+        <select className="rounded-xl border p-2 text-sm" name="projectId" defaultValue={replacementSource?.projectId ?? ''}><option value="">Nessun progetto specifico</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select>
         <textarea className="rounded-xl border p-2 text-sm md:col-span-2" name="operationalInstructions" rows={3} placeholder="Istruzioni operative opzionali per questa esecuzione" />
         <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-xs leading-5 text-slate-700 md:col-span-2">
           <p className="font-extrabold text-fai-navy">Dati minimizzati vincolati alla richiesta</p>
@@ -415,7 +435,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
           </label>
           <p className="text-slate-500">Il click crea soltanto richiesta, audit e notifiche Admin atomiche. Non viene creato alcun run e nessun adapter viene invocato, incluso il mock.</p>
         </div>
-        <div className="md:col-span-2"><PrimaryButton type="submit" disabled={activeAgents.length === 0}>Richiedi utilizzo AI</PrimaryButton></div>
+        <div className="md:col-span-2"><PrimaryButton type="submit" disabled={activeAgents.length === 0}>{replacementSource ? 'Invia richiesta sostitutiva' : 'Richiedi utilizzo AI'}</PrimaryButton></div>
       </form> : <EmptyState title="Richiesta AI non autorizzata">Serve il permesso ai.execution.request per creare una richiesta dal fascicolo.</EmptyState>}
       {aiExecutionRequests.length === 0 ? null : <div className="mb-5"><Table headers={['Richiesta','Richiedente','Funzione','Stato','Creata','Dettaglio']} rows={aiExecutionRequests.map((request) => [
         <span key="request" className="font-mono text-xs">{request.id}</span>,

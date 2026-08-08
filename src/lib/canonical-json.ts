@@ -45,6 +45,31 @@ export function createAiRequestFingerprint(value: unknown) {
   return canonicalSha256(value);
 }
 
+export const AI_EXECUTION_HASH_CANONICALIZATION_VERSION = 2 as const;
+
+/**
+ * Dedicated JCS/ECMAScript canonicalization contract for PR86 authorization
+ * bindings. Keep the legacy exports above byte-for-byte compatible with v1.
+ */
+export function canonicalAiExecutionJsonV2(value: unknown) {
+  return canonicalize(value, '$');
+}
+
+function versionedAiExecutionValue(value: unknown) {
+  return {
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+    value,
+  };
+}
+
+export function aiExecutionCanonicalSha256V2(value: unknown) {
+  return sha256(canonicalAiExecutionJsonV2(versionedAiExecutionValue(value)));
+}
+
+export function aiExecutionRequestFingerprintV2(value: unknown) {
+  return aiExecutionCanonicalSha256V2(value);
+}
+
 export function assertSha256(value: string, label = 'Hash') {
   if (!HASH_PATTERN.test(value)) throw new TypeError(`${label} non valido.`);
   return value;

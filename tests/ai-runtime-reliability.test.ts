@@ -332,7 +332,7 @@ test('resolver idempotente riusa solo completed con stesso fingerprint e non aut
 test('tutti gli ingressi AI persistono una richiesta e non invocano provider', () => {
   for (const name of ['runAiProviderDiagnosticTest', 'runClientAiAgent', 'runMockAgent'] as const) {
     const body = functionBody('src/lib/actions.ts', name);
-    const fingerprint = body.indexOf('createAiRequestFingerprint');
+    const fingerprint = body.indexOf('aiExecutionRequestFingerprintV2');
     const request = body.indexOf('createAiExecutionRequest');
     assert.ok(fingerprint >= 0 && fingerprint < request, name);
     assert.match(body, /requirePermission\('ai\.execution\.request'\)/);
@@ -343,11 +343,10 @@ test('tutti gli ingressi AI persistono una richiesta e non invocano provider', (
 });
 
 test('idempotenza della richiesta riusa soltanto il medesimo binding immutabile', () => {
-  const create = functionBody('src/lib/ai-execution-authorization.ts', 'createAiExecutionRequest');
+  const create = functionBody('src/lib/ai-execution-authorization.ts', 'createAiExecutionRequestInternal');
   const binding = functionBody('src/lib/ai-execution-authorization.ts', 'sameRequestBinding');
   assert.match(create, /origin_idempotencyKey/);
-  assert.match(create, /sameRequestBinding\(existing, session, input\)/);
-  assert.match(create, /sameRequestBinding\(duplicate, session, input\)/);
+  assert.match(create, /sameRequestBinding\(duplicate, session, binding\)/);
   assert.match(create, /withSerializableTransaction/);
   assert.match(create, /isUniqueConstraintError\(error\)/);
   for (const field of ['requesterUserId', 'functionCode', 'agentConfigVersion', 'provider', 'model', 'purposeCode', 'inputFingerprint', 'clientId', 'projectId']) {
@@ -364,11 +363,11 @@ test('il fingerprint deriva dal body esatto e viene persistito prima di ogni fut
   for (const [name, bodyVariable] of cases) {
     const body = functionBody('src/lib/actions.ts', name);
     const exactBody = body.indexOf(`const ${bodyVariable}`);
-    const fingerprint = body.indexOf('createAiRequestFingerprint', exactBody);
+    const fingerprint = body.indexOf('aiExecutionRequestFingerprintV2', exactBody);
     const request = body.indexOf('createAiExecutionRequest', fingerprint);
     assert.ok(exactBody >= 0 && exactBody < fingerprint && fingerprint < request, name);
     assert.match(body.slice(fingerprint, request), new RegExp(`body: ${bodyVariable}`));
-    assert.match(body.slice(request), /inputFingerprint: requestFingerprint/);
+    assert.match(body.slice(fingerprint, request), /inputFingerprint: requestFingerprint/);
   }
 });
 

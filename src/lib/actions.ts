@@ -1,7 +1,7 @@
 'use server';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -9,7 +9,7 @@ import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOf
 import {
   createExternalAiPayload,
   externalAiDataCategories,
-  createOpenAiDiagnosticRequestBody,
+  createAiProviderDiagnosticExecutionBody,
   createOpenAiResponseRequestBody,
   getAiProviderDiagnostics,
   type ExternalAiPayload,
@@ -25,9 +25,10 @@ import {
   isExternalModelAllowed,
 } from './ai-control-plane';
 import {
-  canonicalSha256,
-  createAiRequestFingerprint,
-} from './ai-run-reliability';
+  AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+  aiExecutionCanonicalSha256V2,
+  aiExecutionRequestFingerprintV2,
+} from './canonical-json';
 import { scanForbiddenPhrases } from './compliance';
 import {
   getClientDossierReadAccess,
@@ -51,7 +52,10 @@ import {
   requireTechnicalPracticeEditAccess,
   requireTechnicalPracticeViewAccess,
 } from './write-access';
-import { createAiExecutionRequest } from './ai-execution-authorization';
+import {
+  createAiExecutionReplacementRequest,
+  createAiExecutionRequest,
+} from './ai-execution-authorization';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
@@ -189,6 +193,18 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
   }
   const diagnostics = getAiProviderDiagnostics();
   const requestKey = aiRequestKeySchema.parse(String(form.get('requestKey') ?? ''));
+  const supersedesRequestId = aiExecutionSupersedesRequestIdSchema.parse(
+    String(form.get('supersedesRequestId') ?? '') || undefined,
+  );
+  const diagnosticIntegrationResult = supersedesRequestId
+    ? aiDiagnosticReplacementIntegrationSchema.safeParse(String(form.get('diagnosticIntegration') ?? ''))
+    : null;
+  if (diagnosticIntegrationResult && !diagnosticIntegrationResult.success) {
+    throw new UserFacingActionError(
+      'Inserisci un’integrazione tecnica valida, senza dati cliente e non superiore a 2.000 caratteri.',
+    );
+  }
+  const diagnosticIntegration = diagnosticIntegrationResult?.data;
   const externalDiagnostic = diagnostics.provider === 'openai';
   const externalDiagnosticConfirmed = form.get('externalDiagnosticConfirmed') === 'on';
   const runtimeModel = externalDiagnostic ? diagnostics.model : 'mock-template-v1';
@@ -217,15 +233,12 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     throw new UserFacingActionError('Snapshot dell’agente diagnostico non coerente con provider e modello correnti. Test bloccato.');
   }
 
-  const exactDiagnosticBody = externalDiagnostic
-    ? createOpenAiDiagnosticRequestBody(runtimeModel)
-    : {
-        source: 'CRM interno FAI',
-        humanReviewRequired: true,
-        prompt: 'Test diagnostico interno minimale.',
-        context: {},
-      };
-  const requestFingerprint = createAiRequestFingerprint({
+  const exactDiagnosticBody = createAiProviderDiagnosticExecutionBody(
+    diagnostics.provider,
+    runtimeModel,
+    diagnosticIntegration,
+  );
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'ai_provider_diagnostic_v1',
     requestKey,
     provider: diagnostics.provider,
@@ -239,7 +252,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
       'Conferma che la futura esecuzione autorizzata potrà generare il costo della singola chiamata OpenAI.',
     );
   }
-  const request = await createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'AI_PROVIDER_DIAGNOSTIC',
     agentId: requestedSnapshot.agentId,
@@ -251,8 +264,12 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(exactDiagnosticBody),
-  });
+    executionInputHash: aiExecutionCanonicalSha256V2(exactDiagnosticBody),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+  } as const;
+  const request = supersedesRequestId
+    ? await createAiExecutionReplacementRequest(s, supersedesRequestId, requestBinding)
+    : await createAiExecutionRequest(s, requestBinding);
   redirect(`/settings/ai-authorizations/${request.id}`);
 }
 
@@ -1354,7 +1371,7 @@ export async function runClientAiAgent(form: FormData) {
   const executionInput = requestedRuntime.provider === 'openai'
     ? externalPayload
     : mockProviderInput;
-  const requestFingerprint = createAiRequestFingerprint({
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'client_ai_agent_run_v1',
     requestKey: data.requestKey,
     agentId: data.agentId,
@@ -1376,7 +1393,7 @@ export async function runClientAiAgent(form: FormData) {
   // Recheck ABAC immediately before persisting the request. No AiRun, adapter,
   // permit or provider call is created by this action.
   await requireClientContextReadAccess(s, data);
-  return createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'CLIENT_AI_AGENT',
     agentId: requestedSnapshot.agentId,
@@ -1388,21 +1405,33 @@ export async function runClientAiAgent(form: FormData) {
     correlationId: data.requestKey,
     idempotencyKey: data.requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(executionInput),
+    executionInputHash: aiExecutionCanonicalSha256V2(executionInput),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
     clientId: data.clientId,
     companyId: linkedCompanyId ?? null,
     projectId: data.projectId ?? null,
     clientServiceId: data.clientServiceId ?? null,
-  });
+  } as const;
+  return data.supersedesRequestId
+    ? createAiExecutionReplacementRequest(s, data.supersedesRequestId, requestBinding)
+    : createAiExecutionRequest(s, requestBinding);
 }
 
-export async function runMockAgent(agentCode: string, input: unknown, requestKeyValue: string) {
+export async function runMockAgent(
+  agentCode: string,
+  input: unknown,
+  requestKeyValue: string,
+  supersedesRequestIdValue?: string,
+) {
   const s = await requirePermission('ai.execution.request');
   if (!hasPermission(s, 'ai_agents.write')) {
     throw new UserFacingActionError('Il quick mock richiede anche il permesso ai_agents.write.');
   }
   if (!hasGlobalAccess(s)) denyWriteAccess();
   const requestKey = aiRequestKeySchema.parse(requestKeyValue);
+  const supersedesRequestId = aiExecutionSupersedesRequestIdSchema.parse(
+    supersedesRequestIdValue || undefined,
+  );
   const prompt = typeof input === 'object' && input && typeof (input as { prompt?: unknown }).prompt === 'string'
     ? (input as { prompt: string }).prompt.trim()
     : '';
@@ -1418,7 +1447,7 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
   const safeInput = { prompt: minimizeAiInstructions(prompt), source: 'CRM interno FAI', humanReviewRequired: true, context: {} };
   const snapshotRuntime = aiAgentSnapshotRuntime(snapshot);
   const exactMockBody = { agent: snapshotRuntime, input: safeInput };
-  const requestFingerprint = createAiRequestFingerprint({
+  const requestFingerprint = aiExecutionRequestFingerprintV2({
     kind: 'administrative_mock_quick_run_v1',
     requestKey,
     agentCode,
@@ -1427,7 +1456,7 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     agentConfig: aiAgentConfigFingerprint(snapshot),
     body: exactMockBody,
   });
-  return createAiExecutionRequest(s, {
+  const requestBinding = {
     origin: 'CRM_UI',
     functionCode: 'ADMIN_MOCK_QUICK_RUN',
     agentId: snapshot.agentId,
@@ -1439,8 +1468,12 @@ export async function runMockAgent(agentCode: string, input: unknown, requestKey
     correlationId: requestKey,
     idempotencyKey: requestKey,
     inputFingerprint: requestFingerprint,
-    executionInputHash: canonicalSha256(safeInput),
-  });
+    executionInputHash: aiExecutionCanonicalSha256V2(safeInput),
+    hashCanonicalizationVersion: AI_EXECUTION_HASH_CANONICALIZATION_VERSION,
+  } as const;
+  return supersedesRequestId
+    ? createAiExecutionReplacementRequest(s, supersedesRequestId, requestBinding)
+    : createAiExecutionRequest(s, requestBinding);
 }
 
 function hydratedAiPolicyContext(context: Awaited<ReturnType<typeof requireAiOutputReadAccess>>) {

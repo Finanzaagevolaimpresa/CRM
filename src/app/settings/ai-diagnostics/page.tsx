@@ -12,7 +12,7 @@ function yesNo(value: boolean) {
   return value ? 'sì' : 'no';
 }
 
-export default async function Page({ searchParams }: { searchParams?: Promise<{ status?: string; message?: string }> }) {
+export default async function Page({ searchParams }: { searchParams?: Promise<{ status?: string; message?: string; supersedesRequestId?: string }> }) {
   const session = await requirePermission('ai_agents.read');
   const diagnostics = getAiProviderDiagnostics();
   const controlPolicy = await getAiControlPolicy();
@@ -32,6 +32,23 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     && diagnostics.hasApiKey
     && Boolean(diagnosticAgent);
   const diagnosticRequestKey = randomUUID();
+  const replacementSource = params?.supersedesRequestId && canRequestDiagnostic
+    ? await prisma.aiExecutionRequest.findFirst({
+        where: {
+          id: params.supersedesRequestId,
+          origin: 'CRM_UI',
+          requesterKind: 'HUMAN_USER',
+          requesterUserId: session.userId,
+          status: 'NEEDS_INFORMATION',
+          functionCode: 'AI_PROVIDER_DIAGNOSTIC',
+          purposeCode: 'PROVIDER_DIAGNOSTIC',
+          authorizationGrant: null,
+          runs: { none: {} },
+          supersededBy: null,
+        },
+        select: { id: true },
+      })
+    : null;
 
   return (
     <div className="space-y-6">
@@ -104,14 +121,27 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       <Card title="Richiesta diagnostica provider" action={<Badge tone="purple">server-side</Badge>}>
         <div className="space-y-4 text-sm leading-6 text-slate-700">
           <p>Il comando prepara il fingerprint del test tecnico minimale e crea richiesta, ledger, audit e notifiche Admin nella stessa transazione. Non usa dati cliente, non riserva un AiRun e non chiama alcun provider. L’eventuale approvazione resta separata e non avvia l’esecuzione.</p>
+          {replacementSource ? <p className="rounded-2xl bg-amber-50 p-4 font-bold text-amber-900 ring-1 ring-amber-200">Richiesta sostitutiva: verifica o integra la configurazione diagnostica prima del nuovo invio. La richiesta chiusa resta immutabile.</p> : null}
           {message ? <div className={`rounded-2xl p-4 font-bold ring-1 ${status === 'ok' ? 'bg-fai-teal/10 text-fai-green ring-fai-teal/20' : 'bg-fai-orange/10 text-fai-orange ring-fai-orange/20'}`}>{status === 'ok' ? 'ok' : 'errore controllato'} · {message}</div> : null}
           <form action={runAiProviderDiagnosticTest} className="space-y-3">
             <input type="hidden" name="requestKey" value={diagnosticRequestKey} />
+            {replacementSource ? <input type="hidden" name="supersedesRequestId" value={replacementSource.id} /> : null}
+            {replacementSource ? <label className="block rounded-2xl bg-amber-50 p-4 text-amber-950 ring-1 ring-amber-200">
+              <span className="block font-black">Integrazione tecnica obbligatoria</span>
+              <span className="mt-1 block text-xs leading-5">Descrivi esclusivamente la correzione tecnica applicata a provider, modello o configurazione. Non inserire nomi, contatti, documenti o altri dati cliente.</span>
+              <textarea
+                className="mt-3 min-h-28 w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                name="diagnosticIntegration"
+                minLength={1}
+                maxLength={2000}
+                required
+              />
+            </label> : null}
             {externalDiagnostic ? <label className="flex items-start gap-2 rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">
               <input className="mt-1 h-4 w-4 rounded border-slate-300" type="checkbox" name="externalDiagnosticConfirmed" required />
               <span>Confermo provider, modello e possibile costo previsti qualora questa richiesta fosse eseguita in futuro. Il click attuale non chiama OpenAI e non genera costi.</span>
             </label> : null}
-            <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={!canRequestDiagnostic}>Richiedi autorizzazione diagnostica</button>
+            <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue disabled:cursor-not-allowed disabled:opacity-50" type="submit" disabled={!canRequestDiagnostic}>{replacementSource ? 'Invia diagnostica sostitutiva' : 'Richiedi autorizzazione diagnostica'}</button>
           </form>
           {!canRequestDiagnostic ? <p className="font-bold text-fai-orange">La richiesta richiede il permesso `ai.execution.request`.</p> : null}
           {externalDiagnostic && !externalRuntimeReady ? <p className="font-bold text-fai-orange">Il runtime OpenAI resta fail-closed. La richiesta può essere registrata, ma nessuna esecuzione sarebbe ammissibile senza tutti i gate tecnici futuri.</p> : null}

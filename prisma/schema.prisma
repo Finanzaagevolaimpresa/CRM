@@ -1422,43 +1422,44 @@ model AiAgentConfigVersion {
 }
 
 model AiRun {
-  id                      String                         @id @default(cuid())
-  reliabilityVersion      Int?
-  agentId                 String
-  agentConfigVersion      Int?
-  clientId                String?
-  clientServiceId         String?
-  projectId               String?
-  status                  String                         @default("completed")
-  provider                String                         @default("unknown")
-  model                   String?
-  promptVersion           String?
-  requestKey              String?
-  requestFingerprint      String?
-  executionInputHash      String?
-  leaseExpiresAt          DateTime?
-  leaseTokenHash          String?
-  egressPermitHash        String?
-  egressStartedAt         DateTime?
-  externalPayloadHash     String?
-  finishedAt              DateTime?
-  failureCode             String?
-  externalConfirmedAt     DateTime?
-  externalDataCategories  Json?
-  inputTokens             Int?
-  outputTokens            Int?
-  totalTokens             Int?
-  providerRequestId       String?
-  input                   Json?
-  output                  Json?
-  operationalInstructions String?
-  createdById             String?
-  aiExecutionRequestId    String?
-  authorizationGrantId    String?                        @unique(map: "AiRun_authorizationGrantId_key")
-  createdAt               DateTime                       @default(now())
-  agentConfig             AiAgentConfigVersion?          @relation("AiRunAgentConfigVersion", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
-  aiExecutionRequest      AiExecutionRequest?            @relation(fields: [aiExecutionRequestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_aiExecutionRequestId_fkey")
-  authorizationGrant      AiExecutionAuthorizationGrant? @relation(fields: [authorizationGrantId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_authorizationGrantId_fkey")
+  id                          String                         @id @default(cuid())
+  reliabilityVersion          Int?
+  agentId                     String
+  agentConfigVersion          Int?
+  clientId                    String?
+  clientServiceId             String?
+  projectId                   String?
+  status                      String                         @default("completed")
+  provider                    String                         @default("unknown")
+  model                       String?
+  promptVersion               String?
+  requestKey                  String?
+  requestFingerprint          String?
+  executionInputHash          String?
+  hashCanonicalizationVersion Int?
+  leaseExpiresAt              DateTime?
+  leaseTokenHash              String?
+  egressPermitHash            String?
+  egressStartedAt             DateTime?
+  externalPayloadHash         String?
+  finishedAt                  DateTime?
+  failureCode                 String?
+  externalConfirmedAt         DateTime?
+  externalDataCategories      Json?
+  inputTokens                 Int?
+  outputTokens                Int?
+  totalTokens                 Int?
+  providerRequestId           String?
+  input                       Json?
+  output                      Json?
+  operationalInstructions     String?
+  createdById                 String?
+  aiExecutionRequestId        String?
+  authorizationGrantId        String?                        @unique(map: "AiRun_authorizationGrantId_key")
+  createdAt                   DateTime                       @default(now())
+  agentConfig                 AiAgentConfigVersion?          @relation("AiRunAgentConfigVersion", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict)
+  aiExecutionRequest          AiExecutionRequest?            @relation(fields: [aiExecutionRequestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_aiExecutionRequestId_fkey")
+  authorizationGrant          AiExecutionAuthorizationGrant? @relation(fields: [authorizationGrantId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiRun_authorizationGrantId_fkey")
 
   @@unique([createdById, requestKey])
   @@index([agentId, agentConfigVersion])
@@ -1470,41 +1471,45 @@ model AiRun {
 }
 
 model AiExecutionRequest {
-  id                 String                         @id @default(cuid())
-  origin             AiExecutionRequestOrigin
-  requesterKind      AiExecutionRequesterKind
-  requesterUserId    String?
-  requesterIdentity  String?
-  clientId           String?
-  companyId          String?
-  projectId          String?
-  clientServiceId    String?
-  functionCode       String
-  agentId            String
-  agentConfigVersion Int
-  provider           String
-  model              String?
-  purposeCode        String
-  dataCategories     Json
-  correlationId      String
-  idempotencyKey     String
-  inputFingerprint   String
-  executionInputHash String
-  expiresAt          DateTime
-  status             AiExecutionRequestStatus       @default(PENDING_ADMIN_APPROVAL)
-  stateVersion       Int                            @default(1)
-  createdAt          DateTime                       @default(now())
-  updatedAt          DateTime                       @updatedAt
-  requester          User?                          @relation("AiExecutionRequestRequester", fields: [requesterUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_requester_fkey")
-  client             Client?                        @relation("AiExecutionRequestClient", fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_client_fkey")
-  company            Company?                       @relation("AiExecutionRequestCompany", fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_company_fkey")
-  project            Project?                       @relation("AiExecutionRequestProject", fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_project_fkey")
-  clientService      ClientService?                 @relation("AiExecutionRequestClientService", fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_service_fkey")
-  agentConfig        AiAgentConfigVersion           @relation("AiExecutionRequestAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_agentConfig_fkey")
-  decisions          AiExecutionDecision[]
-  authorizationGrant AiExecutionAuthorizationGrant?
-  adminNotifications AiExecutionAdminNotification[]
-  runs               AiRun[]
+  id                          String                         @id @default(cuid())
+  origin                      AiExecutionRequestOrigin
+  requesterKind               AiExecutionRequesterKind
+  requesterUserId             String?
+  requesterIdentity           String?
+  clientId                    String?
+  companyId                   String?
+  projectId                   String?
+  clientServiceId             String?
+  functionCode                String
+  agentId                     String
+  agentConfigVersion          Int
+  provider                    String
+  model                       String?
+  purposeCode                 String
+  dataCategories              Json
+  correlationId               String
+  idempotencyKey              String
+  inputFingerprint            String
+  executionInputHash          String
+  hashCanonicalizationVersion Int                            @default(1)
+  supersedesRequestId         String?                        @unique(map: "AiExecRequest_supersedes_key")
+  expiresAt                   DateTime
+  status                      AiExecutionRequestStatus       @default(PENDING_ADMIN_APPROVAL)
+  stateVersion                Int                            @default(1)
+  createdAt                   DateTime                       @default(now())
+  updatedAt                   DateTime                       @updatedAt
+  requester                   User?                          @relation("AiExecutionRequestRequester", fields: [requesterUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_requester_fkey")
+  client                      Client?                        @relation("AiExecutionRequestClient", fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_client_fkey")
+  company                     Company?                       @relation("AiExecutionRequestCompany", fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_company_fkey")
+  project                     Project?                       @relation("AiExecutionRequestProject", fields: [projectId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_project_fkey")
+  clientService               ClientService?                 @relation("AiExecutionRequestClientService", fields: [clientServiceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_service_fkey")
+  agentConfig                 AiAgentConfigVersion           @relation("AiExecutionRequestAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_agentConfig_fkey")
+  decisions                   AiExecutionDecision[]
+  authorizationGrant          AiExecutionAuthorizationGrant?
+  adminNotifications          AiExecutionAdminNotification[]
+  runs                        AiRun[]
+  supersedesRequest           AiExecutionRequest?            @relation("AiExecutionRequestSupersession", fields: [supersedesRequestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecRequest_supersedes_fkey")
+  supersededBy                AiExecutionRequest?            @relation("AiExecutionRequestSupersession")
 
   @@unique([origin, idempotencyKey], map: "AiExecRequest_origin_idempotency_key")
   @@index([status, expiresAt], map: "AiExecRequest_status_expiry_idx")
@@ -1543,26 +1548,27 @@ model AiExecutionDecision {
 }
 
 model AiExecutionAuthorizationGrant {
-  id                 String               @id @default(cuid())
-  requestId          String               @unique(map: "AiExecGrant_requestId_key")
-  approvalDecisionId String               @unique(map: "AiExecGrant_decisionId_key")
-  inputFingerprint   String
-  executionInputHash String
-  agentId            String
-  agentConfigVersion Int
-  provider           String
-  model              String?
-  purposeCode        String
-  maxAttempts        Int                  @default(1)
-  expiresAt          DateTime
-  approvedById       String
-  grantHash          String               @unique(map: "AiExecGrant_hash_key") @default("")
-  createdAt          DateTime             @default(now())
-  request            AiExecutionRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_request_fkey")
-  approvalDecision   AiExecutionDecision  @relation(fields: [approvalDecisionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_decision_fkey")
-  agentConfig        AiAgentConfigVersion @relation("AiExecutionGrantAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_agentConfig_fkey")
-  approvedBy         User                 @relation("AiExecutionGrantApprover", fields: [approvedById], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_approver_fkey")
-  run                AiRun?
+  id                          String               @id @default(cuid())
+  requestId                   String               @unique(map: "AiExecGrant_requestId_key")
+  approvalDecisionId          String               @unique(map: "AiExecGrant_decisionId_key")
+  inputFingerprint            String
+  executionInputHash          String
+  hashCanonicalizationVersion Int                  @default(1)
+  agentId                     String
+  agentConfigVersion          Int
+  provider                    String
+  model                       String?
+  purposeCode                 String
+  maxAttempts                 Int                  @default(1)
+  expiresAt                   DateTime
+  approvedById                String
+  grantHash                   String               @unique(map: "AiExecGrant_hash_key") @default("")
+  createdAt                   DateTime             @default(now())
+  request                     AiExecutionRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_request_fkey")
+  approvalDecision            AiExecutionDecision  @relation(fields: [approvalDecisionId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_decision_fkey")
+  agentConfig                 AiAgentConfigVersion @relation("AiExecutionGrantAgentConfig", fields: [agentId, agentConfigVersion], references: [agentId, version], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_agentConfig_fkey")
+  approvedBy                  User                 @relation("AiExecutionGrantApprover", fields: [approvedById], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "AiExecGrant_approver_fkey")
+  run                         AiRun?
 
   @@index([expiresAt], map: "AiExecGrant_expiry_idx")
   @@index([approvedById, createdAt], map: "AiExecGrant_approver_idx")
