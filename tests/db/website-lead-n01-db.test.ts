@@ -138,14 +138,22 @@ test('advisory locks remain authoritative across isolated application processes'
   assert.deepEqual(await counts(), { leads:20, audits:20, receipts:20, buckets:1 });
 });
 
-test('overlapping email and phone identities lock deterministically without duplicates', { skip: !runDbTests }, async () => {
-  const responses = await Promise.all([
-    POST(request('overlap-1', 'overlap-a', { phone:'+390001' })),
-    POST(request('overlap-2', 'overlap-a', { phone:'+390002' })),
-    POST(request('overlap-3', 'overlap-b', { phone:'+390001' })),
+test('overlapping identities converge on a bridge Lead that already exists', { skip: !runDbTests }, async () => {
+  const bridge = await POST(request('overlap-existing-bridge', 'overlap-a', { phone:'+390001' }));
+  const directMatches = await Promise.all([
+    POST(request('overlap-existing-email', 'overlap-a', { phone:'+390002' })),
+    POST(request('overlap-existing-phone', 'overlap-b', { phone:'+390001' })),
   ]);
-  assert.deepEqual(responses.map(({ status }) => status), [201,201,201]);
+  assert.deepEqual([bridge.status, ...directMatches.map(({ status }) => status)], [201,201,201]);
   assert.deepEqual(await counts(), { leads:1, audits:3, receipts:3, buckets:1 });
+});
+
+test('a bridge request does not automatically merge two existing Leads', { skip: !runDbTests }, async () => {
+  const emailLead = await POST(request('overlap-disjoint-email', 'overlap-a', { phone:'+390002' }));
+  const phoneLead = await POST(request('overlap-disjoint-phone', 'overlap-b', { phone:'+390001' }));
+  const bridge = await POST(request('overlap-disjoint-bridge', 'overlap-a', { phone:'+390001' }));
+  assert.deepEqual([emailLead.status, phoneLead.status, bridge.status], [201,201,201]);
+  assert.deepEqual(await counts(), { leads:2, audits:3, receipts:3, buckets:1 });
 });
 
 test('FOR UPDATE observes a committed external writer before appending duplicate notes', { skip: !runDbTests }, async () => {
