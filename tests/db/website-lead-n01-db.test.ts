@@ -153,12 +153,16 @@ test('FOR UPDATE observes a committed external writer before appending duplicate
   let locked!: () => void; const rowLocked = new Promise<void>((resolveLock) => { locked = resolveLock; });
   const writer = db.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id" = ${lead.id} FOR UPDATE`; locked();
-    await tx.$queryRaw`SELECT pg_sleep(0.2)`;
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await tx.lead.update({ where:{ id:lead.id }, data:{ notes:'external-writer-committed' } });
   });
   await rowLocked;
   const responsePromise = POST(request('writer-contention', 'writer'));
-  await writer; assert.equal((await responsePromise).status, 201);
+  const [writerResult, responseResult] = await Promise.allSettled([writer, responsePromise]);
+  assert.equal(writerResult.status, 'fulfilled');
+  assert.equal(responseResult.status, 'fulfilled');
+  if (responseResult.status !== 'fulfilled') return;
+  assert.equal(responseResult.value.status, 201);
   const updated = await db.lead.findUniqueOrThrow({ where:{ id:lead.id }, select:{ notes:true } });
   assert.match(updated.notes ?? '', /external-writer-committed/); assert.match(updated.notes ?? '', /Nuova richiesta sito web/);
   assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, buckets:1 });

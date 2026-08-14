@@ -18,8 +18,12 @@ function input(index: number) {
     body:JSON.stringify({ firstName:'Synthetic', lastName:'Multiprocess', email, privacyAccepted:true }),
   });
 }
-try {
-  const responses = await Promise.all(Array.from({ length:count }, (_, index) => POST(input(index))));
-  const statuses = new Map<number, number>(); for (const response of responses) statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
-  process.stdout.write(JSON.stringify(Object.fromEntries(statuses)));
-} finally { await prisma.$disconnect(); }
+async function main() {
+  try {
+    const responses = await Promise.all(Array.from({ length:count }, (_, index) => POST(input(index))));
+    const statuses = new Map<number, number>(); for (const response of responses) statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
+    process.stdout.write(JSON.stringify(Object.fromEntries(statuses)));
+  } finally { await prisma.$disconnect(); }
+}
+
+void main().catch(() => { process.exitCode = 1; });
