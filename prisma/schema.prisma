@@ -1784,3 +1784,24 @@ model AuditLog {
   ipAddress  String?
   createdAt  DateTime @default(now())
 }
+
+model WebsiteLeadReceipt {
+  id          String   @id @default(uuid()) @db.Uuid
+  namespace   String
+  keyDigest   String
+  payloadHash String
+  status      String
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@unique([namespace, keyDigest])
+  @@index([createdAt])
+}
+
+model WebsiteLeadRateLimitBucket {
+  namespace      String   @id
+  callerDigest   String
+  windowStartedAt DateTime
+  requestCount   Int
+  updatedAt      DateTime @updatedAt
+}
