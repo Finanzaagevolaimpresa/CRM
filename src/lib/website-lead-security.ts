@@ -1,4 +1,4 @@
-import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const MAX_WEBSITE_LEAD_BYTES = 16 * 1024;
 export const WEBSITE_LEAD_TIMEOUT_MS = 5_000;
@@ -38,59 +38,21 @@ function retryableDatabaseError(error: unknown) {
 export async function runWebsiteLeadTransactionWithRetry<T>(
   deadline: WebsiteLeadDeadline,
   operation: (timeoutMs: number, attempt: number) => Promise<T>,
-  options: { sleep?: (milliseconds: number) => Promise<void>; jitter?: (maximum: number) => number } = {},
+  options: { sleep?: (milliseconds: number) => Promise<void> } = {},
 ) {
   const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  const jitter = options.jitter ?? ((maximum: number) => randomInt(maximum));
   for (let attempt = 0; attempt < 3; attempt++) {
     deadline.assertRemaining();
     try { return await operation(deadline.remainingMs(), attempt); }
     catch (error) {
       if (!retryableDatabaseError(error) || attempt === 2) throw error;
       deadline.assertRemaining();
-      const maximumDelay = Math.min(1_200, Math.max(0, deadline.remainingMs() - 50));
-      if (maximumDelay > 0) await sleep(jitter(maximumDelay));
+      const deterministicDelay = Math.min(25 * (attempt + 1), Math.max(0, deadline.remainingMs() - 50));
+      if (deterministicDelay > 0) await sleep(deterministicDelay);
       deadline.assertRemaining();
     }
   }
   throw new WebsiteLeadDeadlineError();
-}
-
-type CoordinationEntry = { tail: Promise<void>; pending: number };
-const coordination = new Map<string, CoordinationEntry>();
-async function acquireCoordination(key: string, deadline: WebsiteLeadDeadline) {
-  let entry = coordination.get(key);
-  if (!entry) { entry = { tail: Promise.resolve(), pending: 0 }; coordination.set(key, entry); }
-  const previous = entry.tail;
-  let unlock!: () => void;
-  const current = new Promise<void>((resolve) => { unlock = resolve; });
-  entry.tail = previous.then(() => current);
-  entry.pending++;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    deadline.assertRemaining();
-    await Promise.race([
-      previous,
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new WebsiteLeadDeadlineError()), deadline.remainingMs()); }),
-    ]);
-    deadline.assertRemaining();
-  } catch (error) {
-    unlock(); entry.pending--; if (entry.pending === 0) coordination.delete(key); throw error;
-  } finally { if (timer) clearTimeout(timer); }
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true; unlock(); entry!.pending--; if (entry!.pending === 0) coordination.delete(key);
-  };
-}
-export async function withWebsiteLeadLocalCoordination<T>(keys: readonly string[], deadline: WebsiteLeadDeadline, operation: () => Promise<T>) {
-  const releases: Array<() => void> = [];
-  try {
-    for (const key of [...new Set(keys)].sort()) releases.push(await acquireCoordination(key, deadline));
-    return await operation();
-  } finally {
-    for (const release of releases.reverse()) release();
-  }
 }
 export async function readBoundedBody(request: Request, signal: AbortSignal) {
   const length = request.headers.get('content-length');

@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
 import { POST } from '../src/app/api/integrations/website/leads/route';
-import { authenticateWebsiteLead, MAX_WEBSITE_LEAD_BYTES, readBoundedBody, runWebsiteLeadTransactionWithRetry, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode, withWebsiteLeadLocalCoordination } from '../src/lib/website-lead-security';
+import { authenticateWebsiteLead, MAX_WEBSITE_LEAD_BYTES, readBoundedBody, runWebsiteLeadTransactionWithRetry, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '../src/lib/website-lead-security';
 
 test('N01 defaults every unknown mode, including v2, to disabled', () => {
   for (const value of [undefined, '', 'invalid', 'v2']) assert.equal(websiteLeadMode(value), 'disabled');
@@ -61,35 +61,25 @@ test('the route interrupts a genuinely slow shadow body at the shared five-secon
 test('retry policy is dynamic, bounded to three, and shares one deadline', async () => {
   for (const error of [{ code:'P2034' }, { meta:{ code:'40001' } }, { meta:{ code:'40P01' } }]) {
     let attempts = 0; const deadline = new WebsiteLeadDeadline(0, () => 0);
-    const result = await runWebsiteLeadTransactionWithRetry(deadline, async () => { attempts++; if (attempts === 1) throw error; return 'ok'; }, { sleep: async () => {}, jitter: () => 0 });
+    const result = await runWebsiteLeadTransactionWithRetry(deadline, async () => { attempts++; if (attempts === 1) throw error; return 'ok'; }, { sleep: async () => {} });
     assert.equal(result, 'ok'); assert.equal(attempts, 2);
   }
   let semanticAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { semanticAttempts++; throw { code:'P2002' }; }, { sleep: async () => {}, jitter: () => 0 }));
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { semanticAttempts++; throw { code:'P2002' }; }, { sleep: async () => {} }));
   assert.equal(semanticAttempts, 1);
   let boundedAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { boundedAttempts++; throw { code:'P2034' }; }, { sleep: async () => {}, jitter: () => 0 }));
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { boundedAttempts++; throw { code:'P2034' }; }, { sleep: async () => {} }));
   assert.equal(boundedAttempts, 3);
   let now = 0; let expiredAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => now), async () => { expiredAttempts++; now = 5_000; throw { code:'P2034' }; }, { sleep: async () => {}, jitter: () => 0 }), WebsiteLeadDeadlineError);
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => now), async () => { expiredAttempts++; now = 5_000; throw { code:'P2034' }; }, { sleep: async () => {} }), WebsiteLeadDeadlineError);
   assert.equal(expiredAttempts, 1);
-});
-test('opaque keyed local coordination is FIFO, bounded, and releases its entry', async () => {
-  const order: number[] = []; let active = 0; let maximumActive = 0;
-  const operations = Array.from({ length: 20 }, (_, index) => withWebsiteLeadLocalCoordination(['opaque-digest'], new WebsiteLeadDeadline(), async () => {
-    active++; maximumActive = Math.max(maximumActive, active); order.push(index);
-    await new Promise((resolve) => setTimeout(resolve, 1)); active--;
-  }));
-  await Promise.all(operations);
-  assert.equal(maximumActive, 1); assert.deepEqual(order, Array.from({ length: 20 }, (_, index) => index));
-  await withWebsiteLeadLocalCoordination(['opaque-digest'], new WebsiteLeadDeadline(), async () => { active++; active--; });
 });
 test('migration 32 is additive and route contains containment invariants', () => {
   assert.equal(readdirSync('prisma/migrations').length, 32);
   const sql=readFileSync('prisma/migrations/20260813120000_website_lead_containment_atomicity_v1/migration.sql','utf8');
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');
-  assert.match(route,/mode === 'disabled'/); assert.match(route,/mode === 'shadow'/); assert.match(route,/Serializable/); assert.doesNotMatch(route,/request\.text\(/);
+  assert.match(route,/mode === 'disabled'/); assert.match(route,/mode === 'shadow'/); assert.match(route,/ReadCommitted/); assert.match(route,/FOR UPDATE/); assert.doesNotMatch(route,/request\.text\(/);
   const helper=readFileSync('src/lib/website-lead-security.ts','utf8');
   assert.match(helper, /attempt < 3/); assert.match(helper, /candidate\.code === 'P2034'/);
   assert.match(helper, /candidate\.meta\?\.code === '40001'/); assert.match(helper, /candidate\.meta\?\.code === '40P01'/);

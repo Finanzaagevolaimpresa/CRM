@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import test, { after, before, beforeEach } from 'node:test';
 import { NextRequest } from 'next/server';
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -13,6 +14,7 @@ const runDbTests = process.env.RUN_DB_TESTS === '1';
 const db = new PrismaClient();
 const syntheticDomain = 'n01-ci.invalid';
 const secret = 'n01-ci-synthetic-secret';
+const execFileAsync = promisify(execFile);
 
 function request(key: string, suffix = 'same', overrides: Record<string, unknown> = {}) {
   return new NextRequest('http://localhost/api/integrations/website/leads', {
@@ -107,11 +109,59 @@ test('100 keys with one normalized identity create one Lead without lost effects
 test('rate threshold is atomic and returns Retry-After', { skip: !runDbTests }, async () => {
   process.env.WEBSITE_LEAD_RATE_LIMIT_REQUESTS = '30';
   try {
-    const responses = await Promise.all(Array.from({ length: 31 }, (_, index) => POST(request(`rate-${index}`, `rate-${index}`))));
-    assert.equal(responses.filter((r) => r.status === 201).length, 30);
-    const limited = responses.filter((r) => r.status === 429); assert.equal(limited.length, 1); assert.ok(limited[0].headers.get('retry-after'));
-    assert.deepEqual(await counts(), { leads: 30, audits: 30, receipts: 30, buckets: 1 });
+    for (let repetition = 0; repetition < 5; repetition++) {
+      await clean();
+      const responses = await Promise.all(Array.from({ length: 31 }, (_, index) => POST(request(`rate-${repetition}-${index}`, `rate-${repetition}-${index}`))));
+      assert.equal(responses.filter((r) => r.status === 201).length, 30);
+      assert.equal(responses.filter((r) => r.status === 503).length, 0);
+      const limited = responses.filter((r) => r.status === 429); assert.equal(limited.length, 1); assert.ok(limited[0].headers.get('retry-after'));
+      assert.deepEqual(await counts(), { leads: 30, audits: 30, receipts: 30, buckets: 1 });
+    }
   } finally { process.env.WEBSITE_LEAD_RATE_LIMIT_REQUESTS = '1000'; }
+});
+
+async function runIsolatedProcesses(scenario: 'same-key' | 'same-identity' | 'different-identities') {
+  const fixture = resolve('tests/db/website-lead-n01-multiprocess-fixture.ts');
+  const outputs = await Promise.all([0, 1].map((worker) => execFileAsync(process.execPath, ['--import', 'tsx', fixture, scenario, String(worker), '10'], { env:process.env, timeout:20_000, maxBuffer:1024*1024 })));
+  const aggregate: Record<string, number> = {};
+  for (const { stdout } of outputs) for (const [status, value] of Object.entries(JSON.parse(stdout))) aggregate[status] = (aggregate[status] ?? 0) + Number(value);
+  return aggregate;
+}
+test('advisory locks remain authoritative across isolated application processes', { skip: !runDbTests, timeout:60_000 }, async () => {
+  assert.deepEqual(await runIsolatedProcesses('same-key'), { '200':19, '201':1 });
+  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, buckets:1 });
+  await clean();
+  assert.deepEqual(await runIsolatedProcesses('same-identity'), { '201':20 });
+  assert.deepEqual(await counts(), { leads:1, audits:20, receipts:20, buckets:1 });
+  await clean();
+  assert.deepEqual(await runIsolatedProcesses('different-identities'), { '201':20 });
+  assert.deepEqual(await counts(), { leads:20, audits:20, receipts:20, buckets:1 });
+});
+
+test('overlapping email and phone identities lock deterministically without duplicates', { skip: !runDbTests }, async () => {
+  const responses = await Promise.all([
+    POST(request('overlap-1', 'overlap-a', { phone:'+390001' })),
+    POST(request('overlap-2', 'overlap-a', { phone:'+390002' })),
+    POST(request('overlap-3', 'overlap-b', { phone:'+390001' })),
+  ]);
+  assert.deepEqual(responses.map(({ status }) => status), [201,201,201]);
+  assert.deepEqual(await counts(), { leads:1, audits:3, receipts:3, buckets:1 });
+});
+
+test('FOR UPDATE observes a committed external writer before appending duplicate notes', { skip: !runDbTests }, async () => {
+  const lead = await db.lead.create({ data:{ firstName:'Synthetic', lastName:'Writer', email:`writer@${syntheticDomain}`, source:'finanzaagevolaimpresa.it', leadSource:'sito', notes:'initial' } });
+  let locked!: () => void; const rowLocked = new Promise<void>((resolveLock) => { locked = resolveLock; });
+  const writer = db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id" = ${lead.id} FOR UPDATE`; locked();
+    await tx.$queryRaw`SELECT pg_sleep(0.2)`;
+    await tx.lead.update({ where:{ id:lead.id }, data:{ notes:'external-writer-committed' } });
+  });
+  await rowLocked;
+  const responsePromise = POST(request('writer-contention', 'writer'));
+  await writer; assert.equal((await responsePromise).status, 201);
+  const updated = await db.lead.findUniqueOrThrow({ where:{ id:lead.id }, select:{ notes:true } });
+  assert.match(updated.notes ?? '', /external-writer-committed/); assert.match(updated.notes ?? '', /Nuova richiesta sito web/);
+  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, buckets:1 });
 });
 
 test('replay is stable and changed payload conflicts without extra effects', { skip: !runDbTests }, async () => {

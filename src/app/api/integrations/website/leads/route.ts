@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { authenticateWebsiteLead, readBoundedBody, runWebsiteLeadTransactionWithRetry, sha256, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode, withWebsiteLeadLocalCoordination } from '@/lib/website-lead-security';
+import { authenticateWebsiteLead, readBoundedBody, runWebsiteLeadTransactionWithRetry, sha256, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '@/lib/website-lead-security';
 
 const NAMESPACE = 'website-lead:legacy:v1';
 const RECENT_DUPLICATE_DAYS = 30;
@@ -73,17 +73,24 @@ async function processLegacy(data: Input, keyDigest: string, payloadHash: string
       const receipt = await tx.websiteLeadReceipt.create({ data: { namespace: NAMESPACE, keyDigest, payloadHash, status: 'processing' } });
       const identityDigests = [data.email && sha256(`email:${data.email}`), data.phone && sha256(`phone:${data.phone}`)].filter(Boolean).sort() as string[];
       for (const identityDigest of identityDigests) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identityDigest}`}, 0))`;
-      const duplicateChecks: Prisma.LeadWhereInput[] = [];
-      if (data.email) duplicateChecks.push({ email: { equals: data.email, mode: 'insensitive' } });
-      if (data.phone) duplicateChecks.push({ phone: data.phone });
-      const duplicate = await tx.lead.findFirst({ where: { deletedAt: null, createdAt: { gte: new Date(Date.now() - RECENT_DUPLICATE_DAYS * 86400000) }, OR: duplicateChecks }, orderBy: { updatedAt: 'desc' } });
+      const duplicateSince = new Date(Date.now() - RECENT_DUPLICATE_DAYS * 86400000);
+      const duplicateConditions: Prisma.Sql[] = [];
+      if (data.email) duplicateConditions.push(Prisma.sql`LOWER("email") = ${data.email}`);
+      if (data.phone) duplicateConditions.push(Prisma.sql`"phone" = ${data.phone}`);
+      const lockedCandidates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id" FROM "Lead"
+        WHERE "deletedAt" IS NULL AND "createdAt" >= ${duplicateSince}
+          AND (${Prisma.join(duplicateConditions, ' OR ')})
+        ORDER BY "updatedAt" DESC, "id" ASC
+        LIMIT 1 FOR UPDATE`);
+      const duplicate = lockedCandidates[0] ? await tx.lead.findUnique({ where: { id: lockedCandidates[0].id } }) : null;
       const amount = requestedAmount(data.requestedAmount); if (amount === null) throw new Error('invalid_amount');
       const lead = duplicate ? await tx.lead.update({ where: { id: duplicate.id }, data: { notes: [duplicate.notes, notes(data, true)].filter(Boolean).join('\n\n---\n'), nextActionNote: 'Verificare nuova richiesta sito web potenzialmente duplicata', interest: duplicate.interest ?? data.serviceInterest ?? data.interest ?? data.message } }) : await tx.lead.create({ data: { firstName:data.firstName ?? 'Contatto',lastName:data.lastName ?? 'Sito web',companyName:data.companyName,contactPerson:[data.firstName,data.lastName].filter(Boolean).join(' ') || undefined,email:data.email,phone:data.phone,city:data.city,region:data.region,source:'finanzaagevolaimpresa.it',leadSource:'sito',priority:'media',status:'nuovo',interest:data.serviceInterest ?? data.interest ?? data.message,requestedAmount:amount,notes:notes(data,false),nextActionNote:'Contattare lead ricevuto dal sito web' } });
       await tx.auditLog.create({ data: { event: duplicate ? 'website_lead_duplicate_detected' : 'website_lead_received', entityType: 'Lead', entityId: lead.id, after: { mode:'legacy', outcome:duplicate ? 'updated' : 'created', contractVersion:'v1', receipt:receipt.id } } });
       await tx.websiteLeadReceipt.update({ where: { id: receipt.id }, data: { status:'completed', completedAt:new Date() } });
       deadline.assertRemaining();
       return { replay:false, receipt:receipt.id };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: timeout, timeout }));
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: timeout, timeout }));
 }
 
 export async function POST(request: NextRequest) {
@@ -109,8 +116,7 @@ export async function POST(request: NextRequest) {
     if (mode === 'shadow') return unavailable();
     const key = request.headers.get('idempotency-key');
     if (!key || key.length > 200 || !/^[\x21-\x7E]+$/.test(key)) return response(400);
-    const coordinationKeys = [parsed.data.email && sha256(`email:${parsed.data.email}`), parsed.data.phone && sha256(`phone:${parsed.data.phone}`)].filter(Boolean) as string[];
-    const result = await withWebsiteLeadLocalCoordination(coordinationKeys, deadline, () => processLegacy(parsed.data, sha256(key), sha256(canonicalPayload(parsed.data)), deadline));
+    const result = await processLegacy(parsed.data, sha256(key), sha256(canonicalPayload(parsed.data)), deadline);
     deadline.assertRemaining();
     return response(result.replay ? 200 : 201, { ok:true, receipt:result.receipt });
   } catch (error) {
