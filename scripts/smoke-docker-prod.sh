@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=31
+EXPECTED_MIGRATION_COUNT=32
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -319,4 +319,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 31 migrations, production seed, app health, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 32 migrations, production seed, app health, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
