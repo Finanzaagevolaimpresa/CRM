@@ -24,12 +24,35 @@ const response = (status: number, body: Record<string, unknown> = { ok: false, m
   NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 const unavailable = () => response(503);
 
-function requestedAmount(value: Input['requestedAmount']) {
+export function requestedAmount(value: Input['requestedAmount']) {
   if (value === undefined || value === null || value === '') return undefined;
-  const text = typeof value === 'number' ? String(value) : value.replace(/[^\d.,+-]/g, '');
-  const normalized = text.includes(',') ? text.replace(/\./g, '').replace(',', '.') : text;
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? new Prisma.Decimal(String(value)) : null;
+
+  const withoutCurrency = value.replace(/[^\d.,+-]/g, '');
+  if (!withoutCurrency || withoutCurrency === '-' || withoutCurrency === '+') return null;
+  const lastComma = withoutCurrency.lastIndexOf(',');
+  const lastDot = withoutCurrency.lastIndexOf('.');
+  const decimalSeparator = lastComma > lastDot ? ',' : lastDot > lastComma ? '.' : null;
+  let normalized: string;
+  if (!decimalSeparator) normalized = withoutCurrency.replace(/[^\d+-]/g, '');
+  else {
+    const separatorCount = (withoutCurrency.match(new RegExp(`\\${decimalSeparator}`, 'g')) ?? []).length;
+    if (separatorCount === 1) {
+      const [integerPart, decimalPart] = withoutCurrency.split(decimalSeparator);
+      normalized = decimalPart.length > 0 && decimalPart.length <= 2
+        ? `${integerPart.replace(/[^\d+-]/g, '')}.${decimalPart.replace(/[^\d]/g, '')}`
+        : withoutCurrency.replace(/[^\d+-]/g, '');
+    } else normalized = withoutCurrency.replace(/[^\d+-]/g, '');
+  }
+  if (!normalized) return null;
   const number = Number(normalized);
   return Number.isFinite(number) && number >= 0 ? new Prisma.Decimal(normalized) : null;
+}
+export function websiteLeadTransactionBudget(deadline: WebsiteLeadDeadline) {
+  deadline.assertRemaining();
+  const timeout = deadline.remainingMs();
+  if (timeout <= 0) throw new WebsiteLeadDeadlineError();
+  return timeout;
 }
 function notes(data: Input, duplicate: boolean) {
   return [duplicate ? 'Nuova richiesta sito web potenzialmente duplicata.' : 'Richiesta ricevuta dal sito web FAI.', data.message, data.serviceInterest, data.interest].filter(Boolean).join('\n');
@@ -45,9 +68,10 @@ async function consumeRateLimit(callerDigest: string, deadline: WebsiteLeadDeadl
   const seconds = boundedInteger(process.env.WEBSITE_LEAD_RATE_LIMIT_WINDOW_SECONDS, 1, 86_400);
   if (!limit || !seconds) return null;
   deadline.assertRemaining();
-  const timeout = deadline.remainingMs();
+  const timeout = websiteLeadTransactionBudget(deadline);
   const rows = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeout)}, true)`;
+    const transactionTimeout = websiteLeadTransactionBudget(deadline);
+    await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(transactionTimeout)}, true), set_config('lock_timeout', ${String(transactionTimeout)}, true)`;
     const result = await tx.$queryRaw<Array<{ requestCount: number; retryAfter: number }>>(Prisma.sql`
     INSERT INTO "WebsiteLeadRateLimitBucket" ("namespace", "callerDigest", "windowStartedAt", "requestCount", "updatedAt")
     VALUES (${NAMESPACE}, ${callerDigest}, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
@@ -66,7 +90,8 @@ class Conflict extends Error {}
 async function processLegacy(data: Input, keyDigest: string, payloadHash: string, deadline: WebsiteLeadDeadline) {
   return runWebsiteLeadTransactionWithRetry(deadline, async (timeout) =>
     prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeout)}, true), set_config('lock_timeout', ${String(timeout)}, true)`;
+      const transactionTimeout = websiteLeadTransactionBudget(deadline);
+      await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(transactionTimeout)}, true), set_config('lock_timeout', ${String(transactionTimeout)}, true)`;
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${keyDigest}`}, 0))`;
       const existing = await tx.websiteLeadReceipt.findUnique({ where: { namespace_keyDigest: { namespace: NAMESPACE, keyDigest } } });
       if (existing) { if (existing.payloadHash !== payloadHash) throw new Conflict(); deadline.assertRemaining(); return { replay: true, receipt: existing.id }; }
