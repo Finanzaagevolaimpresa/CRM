@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
-import { POST } from '../src/app/api/integrations/website/leads/route';
+import { POST, requestedAmount, websiteLeadTransactionBudget } from '../src/app/api/integrations/website/leads/route';
 import { authenticateWebsiteLead, MAX_WEBSITE_LEAD_BYTES, readBoundedBody, runWebsiteLeadTransactionWithRetry, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '../src/lib/website-lead-security';
 
 test('N01 defaults every unknown mode, including v2, to disabled', () => {
@@ -13,6 +13,24 @@ test('N01 constant-time authentication has uniform invalid inputs', () => {
   assert.equal(authenticateWebsiteLead('correct', 'correct'), true);
   for (const pair of [[undefined,null],['correct',null],['correct','wrong'],['x'.repeat(513),'x'.repeat(513)] ] as const) assert.equal(authenticateWebsiteLead(pair[0], pair[1]), false);
   assert.match(readFileSync('src/lib/website-lead-security.ts','utf8'), /timingSafeEqual\(expected, supplied\)/);
+});
+test('N01 preserves PR86 requested amount parsing', () => {
+  for (const [input, expected] of [['50.000', '50000'], ['1.234,56', '1234.56'], ['1234.56', '1234.56'], [1234.56, '1234.56']] as const) {
+    assert.equal(requestedAmount(input)?.toString(), expected);
+  }
+  assert.equal(requestedAmount(undefined), undefined);
+  for (const invalid of ['', '-', '+', 'not-an-amount', '-1', Number.NaN, Number.POSITIVE_INFINITY] as const) {
+    assert.equal(requestedAmount(invalid), invalid === '' ? undefined : null);
+  }
+});
+test('transaction callbacks recompute the shared deadline budget after acquisition', () => {
+  let now = 4_000;
+  const deadline = new WebsiteLeadDeadline(0, () => now);
+  assert.equal(websiteLeadTransactionBudget(deadline), 1_000);
+  now = 4_999;
+  assert.equal(websiteLeadTransactionBudget(deadline), 1);
+  now = 5_000;
+  assert.throws(() => websiteLeadTransactionBudget(deadline), WebsiteLeadDeadlineError);
 });
 test('bounded stream accepts exactly 16 KiB and rejects one byte over', async () => {
   const exact = new Request('http://local', { method:'POST', body:'a'.repeat(MAX_WEBSITE_LEAD_BYTES), duplex:'half' } as RequestInit);
@@ -80,6 +98,7 @@ test('migration 32 is additive and route contains containment invariants', () =>
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');
   assert.match(route,/mode === 'disabled'/); assert.match(route,/mode === 'shadow'/); assert.match(route,/ReadCommitted/); assert.match(route,/FOR UPDATE/); assert.doesNotMatch(route,/request\.text\(/);
+  assert.equal(route.match(/const transactionTimeout = websiteLeadTransactionBudget\(deadline\)/g)?.length, 2);
   const helper=readFileSync('src/lib/website-lead-security.ts','utf8');
   assert.match(helper, /attempt < 3/); assert.match(helper, /candidate\.code === 'P2034'/);
   assert.match(helper, /candidate\.meta\?\.code === '40001'/); assert.match(helper, /candidate\.meta\?\.code === '40P01'/);
