@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
 import { POST } from '../src/app/api/integrations/website/leads/route';
-import { authenticateWebsiteLead, MAX_WEBSITE_LEAD_BYTES, readBoundedBody, runWebsiteLeadTransactionWithRetry, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '../src/lib/website-lead-security';
+import { authenticateWebsiteLead, MAX_WEBSITE_LEAD_BYTES, readBoundedBody, runWebsiteLeadTransactionWithRetry, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode, withWebsiteLeadLocalCoordination } from '../src/lib/website-lead-security';
 
 test('N01 defaults every unknown mode, including v2, to disabled', () => {
   for (const value of [undefined, '', 'invalid', 'v2']) assert.equal(websiteLeadMode(value), 'disabled');
@@ -73,6 +73,16 @@ test('retry policy is dynamic, bounded to three, and shares one deadline', async
   let now = 0; let expiredAttempts = 0;
   await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => now), async () => { expiredAttempts++; now = 5_000; throw { code:'P2034' }; }, { sleep: async () => {}, jitter: () => 0 }), WebsiteLeadDeadlineError);
   assert.equal(expiredAttempts, 1);
+});
+test('opaque keyed local coordination is FIFO, bounded, and releases its entry', async () => {
+  const order: number[] = []; let active = 0; let maximumActive = 0;
+  const operations = Array.from({ length: 20 }, (_, index) => withWebsiteLeadLocalCoordination(['opaque-digest'], new WebsiteLeadDeadline(), async () => {
+    active++; maximumActive = Math.max(maximumActive, active); order.push(index);
+    await new Promise((resolve) => setTimeout(resolve, 1)); active--;
+  }));
+  await Promise.all(operations);
+  assert.equal(maximumActive, 1); assert.deepEqual(order, Array.from({ length: 20 }, (_, index) => index));
+  await withWebsiteLeadLocalCoordination(['opaque-digest'], new WebsiteLeadDeadline(), async () => { active++; active--; });
 });
 test('migration 32 is additive and route contains containment invariants', () => {
   assert.equal(readdirSync('prisma/migrations').length, 32);

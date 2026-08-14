@@ -55,6 +55,43 @@ export async function runWebsiteLeadTransactionWithRetry<T>(
   }
   throw new WebsiteLeadDeadlineError();
 }
+
+type CoordinationEntry = { tail: Promise<void>; pending: number };
+const coordination = new Map<string, CoordinationEntry>();
+async function acquireCoordination(key: string, deadline: WebsiteLeadDeadline) {
+  let entry = coordination.get(key);
+  if (!entry) { entry = { tail: Promise.resolve(), pending: 0 }; coordination.set(key, entry); }
+  const previous = entry.tail;
+  let unlock!: () => void;
+  const current = new Promise<void>((resolve) => { unlock = resolve; });
+  entry.tail = previous.then(() => current);
+  entry.pending++;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    deadline.assertRemaining();
+    await Promise.race([
+      previous,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new WebsiteLeadDeadlineError()), deadline.remainingMs()); }),
+    ]);
+    deadline.assertRemaining();
+  } catch (error) {
+    unlock(); entry.pending--; if (entry.pending === 0) coordination.delete(key); throw error;
+  } finally { if (timer) clearTimeout(timer); }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true; unlock(); entry!.pending--; if (entry!.pending === 0) coordination.delete(key);
+  };
+}
+export async function withWebsiteLeadLocalCoordination<T>(keys: readonly string[], deadline: WebsiteLeadDeadline, operation: () => Promise<T>) {
+  const releases: Array<() => void> = [];
+  try {
+    for (const key of [...new Set(keys)].sort()) releases.push(await acquireCoordination(key, deadline));
+    return await operation();
+  } finally {
+    for (const release of releases.reverse()) release();
+  }
+}
 export async function readBoundedBody(request: Request, signal: AbortSignal) {
   const length = request.headers.get('content-length');
   if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_WEBSITE_LEAD_BYTES)) throw new WebsiteLeadBodyError(Number(length) > MAX_WEBSITE_LEAD_BYTES ? 413 : 400);

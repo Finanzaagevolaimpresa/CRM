@@ -73,14 +73,21 @@ async function withMigrationSchema(upgrade: boolean) {
           (COUNT(DISTINCT indexname) FILTER (WHERE indexname IN ('WebsiteLeadReceipt_namespace_keyDigest_key','WebsiteLeadReceipt_createdAt_idx')))::bigint AS indexes,
           (SELECT COUNT(*)::bigint FROM information_schema.table_constraints WHERE table_schema = ${schema} AND constraint_name IN ('WebsiteLeadReceipt_pkey','WebsiteLeadRateLimitBucket_pkey','WebsiteLeadReceipt_namespace_keyDigest_key')) AS constraints
         FROM pg_indexes WHERE schemaname = ${schema}`);
-      return { applied: Number(applied[0]?.count), tables: Number(catalog[0]?.tables), indexes: Number(catalog[0]?.indexes), constraints: Number(catalog[0]?.constraints) };
+      const uniqueReceiptIndex = await client.$queryRaw<Array<{ unique: boolean }>>(Prisma.sql`
+        SELECT index_row.indisunique AS unique
+        FROM pg_index index_row
+        JOIN pg_class index_class ON index_class.oid = index_row.indexrelid
+        WHERE index_class.relnamespace = TO_REGNAMESPACE(${schema})
+          AND index_class.relname = 'WebsiteLeadReceipt_namespace_keyDigest_key'`);
+      return { applied: Number(applied[0]?.count), tables: Number(catalog[0]?.tables), indexes: Number(catalog[0]?.indexes), constraints: Number(catalog[0]?.constraints), uniqueReceiptIndex: uniqueReceiptIndex[0]?.unique ?? false };
     } finally { await client.$disconnect(); }
   } finally { await db.$executeRawUnsafe(`DROP SCHEMA "${schema}" CASCADE`); rmSync(root, { recursive: true, force: true }); }
 }
 
 test('N01 migration chain qualifies fresh and as 31 then 32 additive upgrade', { skip: !runDbTests }, async () => {
-  assert.deepEqual(await withMigrationSchema(false), { applied: 32, tables: 2, indexes: 2, constraints: 3 });
-  assert.deepEqual(await withMigrationSchema(true), { applied: 32, tables: 2, indexes: 2, constraints: 3 });
+  const expected = { applied: 32, tables: 2, indexes: 2, constraints: 2, uniqueReceiptIndex: true };
+  assert.deepEqual(await withMigrationSchema(false), expected);
+  assert.deepEqual(await withMigrationSchema(true), expected);
 });
 
 test('100 concurrent replays create one business effect and one receipt', { skip: !runDbTests }, async () => {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { authenticateWebsiteLead, readBoundedBody, runWebsiteLeadTransactionWithRetry, sha256, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '@/lib/website-lead-security';
+import { authenticateWebsiteLead, readBoundedBody, runWebsiteLeadTransactionWithRetry, sha256, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode, withWebsiteLeadLocalCoordination } from '@/lib/website-lead-security';
 
 const NAMESPACE = 'website-lead:legacy:v1';
 const RECENT_DUPLICATE_DAYS = 30;
@@ -71,8 +71,8 @@ async function processLegacy(data: Input, keyDigest: string, payloadHash: string
       const existing = await tx.websiteLeadReceipt.findUnique({ where: { namespace_keyDigest: { namespace: NAMESPACE, keyDigest } } });
       if (existing) { if (existing.payloadHash !== payloadHash) throw new Conflict(); deadline.assertRemaining(); return { replay: true, receipt: existing.id }; }
       const receipt = await tx.websiteLeadReceipt.create({ data: { namespace: NAMESPACE, keyDigest, payloadHash, status: 'processing' } });
-      const identities = [data.email && `email:${data.email}`, data.phone && `phone:${data.phone}`].filter(Boolean).sort() as string[];
-      for (const identity of identities) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identity}`}, 0))`;
+      const identityDigests = [data.email && sha256(`email:${data.email}`), data.phone && sha256(`phone:${data.phone}`)].filter(Boolean).sort() as string[];
+      for (const identityDigest of identityDigests) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identityDigest}`}, 0))`;
       const duplicateChecks: Prisma.LeadWhereInput[] = [];
       if (data.email) duplicateChecks.push({ email: { equals: data.email, mode: 'insensitive' } });
       if (data.phone) duplicateChecks.push({ phone: data.phone });
@@ -109,7 +109,8 @@ export async function POST(request: NextRequest) {
     if (mode === 'shadow') return unavailable();
     const key = request.headers.get('idempotency-key');
     if (!key || key.length > 200 || !/^[\x21-\x7E]+$/.test(key)) return response(400);
-    const result = await processLegacy(parsed.data, sha256(key), sha256(canonicalPayload(parsed.data)), deadline);
+    const coordinationKeys = [parsed.data.email && sha256(`email:${parsed.data.email}`), parsed.data.phone && sha256(`phone:${parsed.data.phone}`)].filter(Boolean) as string[];
+    const result = await withWebsiteLeadLocalCoordination(coordinationKeys, deadline, () => processLegacy(parsed.data, sha256(key), sha256(canonicalPayload(parsed.data)), deadline));
     deadline.assertRemaining();
     return response(result.replay ? 200 : 201, { ok:true, receipt:result.receipt });
   } catch (error) {
