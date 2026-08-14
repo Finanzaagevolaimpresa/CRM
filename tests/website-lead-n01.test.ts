@@ -32,6 +32,31 @@ test('transaction callbacks recompute the shared deadline budget after acquisiti
   now = 5_000;
   assert.throws(() => websiteLeadTransactionBudget(deadline), WebsiteLeadDeadlineError);
 });
+test('the transaction-local allowance is refreshed before every awaited database operation and commit', () => {
+  const route = readFileSync('src/app/api/integrations/website/leads/route.ts', 'utf8');
+  assert.match(route, /async function transactionOperation[\s\S]*prepareTransactionOperation\(tx, deadline\)[\s\S]*return operation\(\)/);
+  assert.equal(route.match(/await transactionOperation\(tx, deadline/g)?.length, 11);
+  assert.equal(route.match(/await prepareTransactionOperation\(tx, deadline\);\n\s+return/g)?.length, 3);
+  assert.doesNotMatch(route, /transaction_timeout/);
+  assert.doesNotMatch(route, /Promise\.race/);
+});
+test('expiry immediately before body-reader setup is a uniform no-store 503', async () => {
+  const previous = { mode: process.env.WEBSITE_LEAD_MODE, secret: process.env.WEBSITE_LEAD_WEBHOOK_SECRET };
+  const realNow = Date.now;
+  process.env.WEBSITE_LEAD_MODE = 'shadow'; process.env.WEBSITE_LEAD_WEBHOOK_SECRET = 'synthetic-unit-secret';
+  let calls = 0;
+  Date.now = () => calls++ === 0 ? 0 : 5_000;
+  const request = new NextRequest('http://local/api/integrations/website/leads', { method:'POST', headers:{ 'content-type':'application/json', 'x-fai-webhook-secret':'synthetic-unit-secret' }, body:'{}' });
+  try {
+    const result = await POST(request);
+    assert.equal(result.status, 503);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+  } finally {
+    Date.now = realNow;
+    if (previous.mode === undefined) delete process.env.WEBSITE_LEAD_MODE; else process.env.WEBSITE_LEAD_MODE = previous.mode;
+    if (previous.secret === undefined) delete process.env.WEBSITE_LEAD_WEBHOOK_SECRET; else process.env.WEBSITE_LEAD_WEBHOOK_SECRET = previous.secret;
+  }
+});
 test('bounded stream accepts exactly 16 KiB and rejects one byte over', async () => {
   const exact = new Request('http://local', { method:'POST', body:'a'.repeat(MAX_WEBSITE_LEAD_BYTES), duplex:'half' } as RequestInit);
   assert.equal((await readBoundedBody(exact, new AbortController().signal)).length, MAX_WEBSITE_LEAD_BYTES);
@@ -98,7 +123,7 @@ test('migration 32 is additive and route contains containment invariants', () =>
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');
   assert.match(route,/mode === 'disabled'/); assert.match(route,/mode === 'shadow'/); assert.match(route,/ReadCommitted/); assert.match(route,/FOR UPDATE/); assert.doesNotMatch(route,/request\.text\(/);
-  assert.equal(route.match(/const transactionTimeout = websiteLeadTransactionBudget\(deadline\)/g)?.length, 2);
+  assert.match(route, /const timeout = websiteLeadTransactionBudget\(deadline\)/);
   const helper=readFileSync('src/lib/website-lead-security.ts','utf8');
   assert.match(helper, /attempt < 3/); assert.match(helper, /candidate\.code === 'P2034'/);
   assert.match(helper, /candidate\.meta\?\.code === '40001'/); assert.match(helper, /candidate\.meta\?\.code === '40P01'/);
