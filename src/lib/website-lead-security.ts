@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 
 export const MAX_WEBSITE_LEAD_BYTES = 16 * 1024;
 export const WEBSITE_LEAD_TIMEOUT_MS = 5_000;
@@ -38,12 +38,18 @@ function retryableDatabaseError(error: unknown) {
 export async function runWebsiteLeadTransactionWithRetry<T>(
   deadline: WebsiteLeadDeadline,
   operation: (timeoutMs: number, attempt: number) => Promise<T>,
+  options: { sleep?: (milliseconds: number) => Promise<void>; jitter?: (maximum: number) => number } = {},
 ) {
+  const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const jitter = options.jitter ?? ((maximum: number) => randomInt(maximum));
   for (let attempt = 0; attempt < 3; attempt++) {
     deadline.assertRemaining();
     try { return await operation(deadline.remainingMs(), attempt); }
     catch (error) {
       if (!retryableDatabaseError(error) || attempt === 2) throw error;
+      deadline.assertRemaining();
+      const maximumDelay = Math.min(1_200, Math.max(0, deadline.remainingMs() - 50));
+      if (maximumDelay > 0) await sleep(jitter(maximumDelay));
       deadline.assertRemaining();
     }
   }

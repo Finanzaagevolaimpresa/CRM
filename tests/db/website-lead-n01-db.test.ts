@@ -69,7 +69,7 @@ async function withMigrationSchema(upgrade: boolean) {
       const applied = await client.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
       const catalog = await client.$queryRaw<Array<{ tables: bigint; indexes: bigint; constraints: bigint }>>(Prisma.sql`
         SELECT
-          (COUNT(DISTINCT table_name) FILTER (WHERE table_name IN ('WebsiteLeadReceipt','WebsiteLeadRateLimitBucket')))::bigint AS tables,
+          (COUNT(DISTINCT tablename) FILTER (WHERE tablename IN ('WebsiteLeadReceipt','WebsiteLeadRateLimitBucket')))::bigint AS tables,
           (COUNT(DISTINCT indexname) FILTER (WHERE indexname IN ('WebsiteLeadReceipt_namespace_keyDigest_key','WebsiteLeadReceipt_createdAt_idx')))::bigint AS indexes,
           (SELECT COUNT(*)::bigint FROM information_schema.table_constraints WHERE table_schema = ${schema} AND constraint_name IN ('WebsiteLeadReceipt_pkey','WebsiteLeadRateLimitBucket_pkey','WebsiteLeadReceipt_namespace_keyDigest_key')) AS constraints
         FROM pg_indexes WHERE schemaname = ${schema}`);
@@ -160,7 +160,7 @@ test('exact PR86 application starts healthy on schema 32 and leaves N01 tables i
   execFileSync('tar', ['-xf', archive, '-C', app]);
   symlinkSync(resolve('node_modules'), join(app, 'node_modules'), 'dir');
   const port = 32_191;
-  execFileSync(resolve('node_modules/.bin/next'), ['build'], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED:'1' }, stdio:'pipe', timeout:120_000, maxBuffer:20*1024*1024 });
+  execFileSync(resolve('node_modules/.bin/next'), ['build', '--webpack'], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED:'1' }, stdio:'pipe', timeout:120_000, maxBuffer:20*1024*1024 });
   const server = spawn(resolve('node_modules/.bin/next'), ['start', '-p', String(port)], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED:'1' }, stdio:'ignore' });
   try {
     let healthy = false;

@@ -61,17 +61,17 @@ test('the route interrupts a genuinely slow shadow body at the shared five-secon
 test('retry policy is dynamic, bounded to three, and shares one deadline', async () => {
   for (const error of [{ code:'P2034' }, { meta:{ code:'40001' } }, { meta:{ code:'40P01' } }]) {
     let attempts = 0; const deadline = new WebsiteLeadDeadline(0, () => 0);
-    const result = await runWebsiteLeadTransactionWithRetry(deadline, async () => { attempts++; if (attempts === 1) throw error; return 'ok'; });
+    const result = await runWebsiteLeadTransactionWithRetry(deadline, async () => { attempts++; if (attempts === 1) throw error; return 'ok'; }, { sleep: async () => {}, jitter: () => 0 });
     assert.equal(result, 'ok'); assert.equal(attempts, 2);
   }
   let semanticAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { semanticAttempts++; throw { code:'P2002' }; }));
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { semanticAttempts++; throw { code:'P2002' }; }, { sleep: async () => {}, jitter: () => 0 }));
   assert.equal(semanticAttempts, 1);
   let boundedAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { boundedAttempts++; throw { code:'P2034' }; }));
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => 0), async () => { boundedAttempts++; throw { code:'P2034' }; }, { sleep: async () => {}, jitter: () => 0 }));
   assert.equal(boundedAttempts, 3);
   let now = 0; let expiredAttempts = 0;
-  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => now), async () => { expiredAttempts++; now = 5_000; throw { code:'P2034' }; }), WebsiteLeadDeadlineError);
+  await assert.rejects(() => runWebsiteLeadTransactionWithRetry(new WebsiteLeadDeadline(0, () => now), async () => { expiredAttempts++; now = 5_000; throw { code:'P2034' }; }, { sleep: async () => {}, jitter: () => 0 }), WebsiteLeadDeadlineError);
   assert.equal(expiredAttempts, 1);
 });
 test('migration 32 is additive and route contains containment invariants', () => {
@@ -85,6 +85,6 @@ test('migration 32 is additive and route contains containment invariants', () =>
   assert.match(helper, /candidate\.meta\?\.code === '40001'/); assert.match(helper, /candidate\.meta\?\.code === '40P01'/);
   assert.doesNotMatch(helper, /P2002/);
   const dbTest=readFileSync('tests/db/website-lead-n01-db.test.ts','utf8');
-  assert.match(dbTest, /\(COUNT\(DISTINCT table_name\) FILTER \(WHERE/);
+  assert.match(dbTest, /\(COUNT\(DISTINCT tablename\) FILTER \(WHERE/);
   assert.match(dbTest, /\(COUNT\(DISTINCT indexname\) FILTER \(WHERE/);
 });

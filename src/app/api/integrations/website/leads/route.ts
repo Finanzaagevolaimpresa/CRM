@@ -59,7 +59,7 @@ async function consumeRateLimit(callerDigest: string, deadline: WebsiteLeadDeadl
     RETURNING "requestCount", GREATEST(1, CEIL(EXTRACT(EPOCH FROM ("windowStartedAt" + make_interval(secs => ${seconds}) - CURRENT_TIMESTAMP))))::int AS "retryAfter"`);
     deadline.assertRemaining();
     return result;
-  }, { timeout });
+  }, { maxWait: timeout, timeout });
   return { allowed: (rows[0]?.requestCount ?? limit + 1) <= limit, retryAfter: rows[0]?.retryAfter ?? seconds };
 }
 class Conflict extends Error {}
@@ -83,7 +83,7 @@ async function processLegacy(data: Input, keyDigest: string, payloadHash: string
       await tx.websiteLeadReceipt.update({ where: { id: receipt.id }, data: { status:'completed', completedAt:new Date() } });
       deadline.assertRemaining();
       return { replay:false, receipt:receipt.id };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout }));
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: timeout, timeout }));
 }
 
 export async function POST(request: NextRequest) {
