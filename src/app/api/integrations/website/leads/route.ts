@@ -54,6 +54,15 @@ export function websiteLeadTransactionBudget(deadline: WebsiteLeadDeadline) {
   if (timeout <= 0) throw new WebsiteLeadDeadlineError();
   return timeout;
 }
+async function prepareTransactionOperation(tx: Prisma.TransactionClient, deadline: WebsiteLeadDeadline) {
+  const timeout = websiteLeadTransactionBudget(deadline);
+  await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeout)}, true), set_config('lock_timeout', ${String(timeout)}, true)`;
+  deadline.assertRemaining();
+}
+async function transactionOperation<T>(tx: Prisma.TransactionClient, deadline: WebsiteLeadDeadline, operation: () => Promise<T>) {
+  await prepareTransactionOperation(tx, deadline);
+  return operation();
+}
 function notes(data: Input, duplicate: boolean) {
   return [duplicate ? 'Nuova richiesta sito web potenzialmente duplicata.' : 'Richiesta ricevuta dal sito web FAI.', data.message, data.serviceInterest, data.interest].filter(Boolean).join('\n');
 }
@@ -70,9 +79,7 @@ async function consumeRateLimit(callerDigest: string, deadline: WebsiteLeadDeadl
   deadline.assertRemaining();
   const timeout = websiteLeadTransactionBudget(deadline);
   const rows = await prisma.$transaction(async (tx) => {
-    const transactionTimeout = websiteLeadTransactionBudget(deadline);
-    await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(transactionTimeout)}, true), set_config('lock_timeout', ${String(transactionTimeout)}, true)`;
-    const result = await tx.$queryRaw<Array<{ requestCount: number; retryAfter: number }>>(Prisma.sql`
+    const result = await transactionOperation(tx, deadline, () => tx.$queryRaw<Array<{ requestCount: number; retryAfter: number }>>(Prisma.sql`
     INSERT INTO "WebsiteLeadRateLimitBucket" ("namespace", "callerDigest", "windowStartedAt", "requestCount", "updatedAt")
     VALUES (${NAMESPACE}, ${callerDigest}, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP)
     ON CONFLICT ("namespace") DO UPDATE SET
@@ -80,8 +87,8 @@ async function consumeRateLimit(callerDigest: string, deadline: WebsiteLeadDeadl
       "windowStartedAt" = CASE WHEN "WebsiteLeadRateLimitBucket"."windowStartedAt" + make_interval(secs => ${seconds}) <= CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP ELSE "WebsiteLeadRateLimitBucket"."windowStartedAt" END,
       "requestCount" = CASE WHEN "WebsiteLeadRateLimitBucket"."windowStartedAt" + make_interval(secs => ${seconds}) <= CURRENT_TIMESTAMP THEN 1 ELSE "WebsiteLeadRateLimitBucket"."requestCount" + 1 END,
       "updatedAt" = CURRENT_TIMESTAMP
-    RETURNING "requestCount", GREATEST(1, CEIL(EXTRACT(EPOCH FROM ("windowStartedAt" + make_interval(secs => ${seconds}) - CURRENT_TIMESTAMP))))::int AS "retryAfter"`);
-    deadline.assertRemaining();
+    RETURNING "requestCount", GREATEST(1, CEIL(EXTRACT(EPOCH FROM ("windowStartedAt" + make_interval(secs => ${seconds}) - CURRENT_TIMESTAMP))))::int AS "retryAfter"`));
+    await prepareTransactionOperation(tx, deadline);
     return result;
   }, { maxWait: timeout, timeout });
   return { allowed: (rows[0]?.requestCount ?? limit + 1) <= limit, retryAfter: rows[0]?.retryAfter ?? seconds };
@@ -90,30 +97,28 @@ class Conflict extends Error {}
 async function processLegacy(data: Input, keyDigest: string, payloadHash: string, deadline: WebsiteLeadDeadline) {
   return runWebsiteLeadTransactionWithRetry(deadline, async (timeout) =>
     prisma.$transaction(async (tx) => {
-      const transactionTimeout = websiteLeadTransactionBudget(deadline);
-      await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(transactionTimeout)}, true), set_config('lock_timeout', ${String(transactionTimeout)}, true)`;
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${keyDigest}`}, 0))`;
-      const existing = await tx.websiteLeadReceipt.findUnique({ where: { namespace_keyDigest: { namespace: NAMESPACE, keyDigest } } });
-      if (existing) { if (existing.payloadHash !== payloadHash) throw new Conflict(); deadline.assertRemaining(); return { replay: true, receipt: existing.id }; }
-      const receipt = await tx.websiteLeadReceipt.create({ data: { namespace: NAMESPACE, keyDigest, payloadHash, status: 'processing' } });
+      await transactionOperation(tx, deadline, () => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${keyDigest}`}, 0))`);
+      const existing = await transactionOperation(tx, deadline, () => tx.websiteLeadReceipt.findUnique({ where: { namespace_keyDigest: { namespace: NAMESPACE, keyDigest } } }));
+      if (existing) { if (existing.payloadHash !== payloadHash) throw new Conflict(); await prepareTransactionOperation(tx, deadline); return { replay: true, receipt: existing.id }; }
+      const receipt = await transactionOperation(tx, deadline, () => tx.websiteLeadReceipt.create({ data: { namespace: NAMESPACE, keyDigest, payloadHash, status: 'processing' } }));
       const identityDigests = [data.email && sha256(`email:${data.email}`), data.phone && sha256(`phone:${data.phone}`)].filter(Boolean).sort() as string[];
-      for (const identityDigest of identityDigests) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identityDigest}`}, 0))`;
+      for (const identityDigest of identityDigests) await transactionOperation(tx, deadline, () => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identityDigest}`}, 0))`);
       const duplicateSince = new Date(Date.now() - RECENT_DUPLICATE_DAYS * 86400000);
       const duplicateConditions: Prisma.Sql[] = [];
       if (data.email) duplicateConditions.push(Prisma.sql`LOWER("email") = ${data.email}`);
       if (data.phone) duplicateConditions.push(Prisma.sql`"phone" = ${data.phone}`);
-      const lockedCandidates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      const lockedCandidates = await transactionOperation(tx, deadline, () => tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id" FROM "Lead"
         WHERE "deletedAt" IS NULL AND "createdAt" >= ${duplicateSince}
           AND (${Prisma.join(duplicateConditions, ' OR ')})
         ORDER BY "updatedAt" DESC, "id" ASC
-        LIMIT 1 FOR UPDATE`);
-      const duplicate = lockedCandidates[0] ? await tx.lead.findUnique({ where: { id: lockedCandidates[0].id } }) : null;
+        LIMIT 1 FOR UPDATE`));
+      const duplicate = lockedCandidates[0] ? await transactionOperation(tx, deadline, () => tx.lead.findUnique({ where: { id: lockedCandidates[0].id } })) : null;
       const amount = requestedAmount(data.requestedAmount); if (amount === null) throw new Error('invalid_amount');
-      const lead = duplicate ? await tx.lead.update({ where: { id: duplicate.id }, data: { notes: [duplicate.notes, notes(data, true)].filter(Boolean).join('\n\n---\n'), nextActionNote: 'Verificare nuova richiesta sito web potenzialmente duplicata', interest: duplicate.interest ?? data.serviceInterest ?? data.interest ?? data.message } }) : await tx.lead.create({ data: { firstName:data.firstName ?? 'Contatto',lastName:data.lastName ?? 'Sito web',companyName:data.companyName,contactPerson:[data.firstName,data.lastName].filter(Boolean).join(' ') || undefined,email:data.email,phone:data.phone,city:data.city,region:data.region,source:'finanzaagevolaimpresa.it',leadSource:'sito',priority:'media',status:'nuovo',interest:data.serviceInterest ?? data.interest ?? data.message,requestedAmount:amount,notes:notes(data,false),nextActionNote:'Contattare lead ricevuto dal sito web' } });
-      await tx.auditLog.create({ data: { event: duplicate ? 'website_lead_duplicate_detected' : 'website_lead_received', entityType: 'Lead', entityId: lead.id, after: { mode:'legacy', outcome:duplicate ? 'updated' : 'created', contractVersion:'v1', receipt:receipt.id } } });
-      await tx.websiteLeadReceipt.update({ where: { id: receipt.id }, data: { status:'completed', completedAt:new Date() } });
-      deadline.assertRemaining();
+      const lead = duplicate ? await transactionOperation(tx, deadline, () => tx.lead.update({ where: { id: duplicate.id }, data: { notes: [duplicate.notes, notes(data, true)].filter(Boolean).join('\n\n---\n'), nextActionNote: 'Verificare nuova richiesta sito web potenzialmente duplicata', interest: duplicate.interest ?? data.serviceInterest ?? data.interest ?? data.message } })) : await transactionOperation(tx, deadline, () => tx.lead.create({ data: { firstName:data.firstName ?? 'Contatto',lastName:data.lastName ?? 'Sito web',companyName:data.companyName,contactPerson:[data.firstName,data.lastName].filter(Boolean).join(' ') || undefined,email:data.email,phone:data.phone,city:data.city,region:data.region,source:'finanzaagevolaimpresa.it',leadSource:'sito',priority:'media',status:'nuovo',interest:data.serviceInterest ?? data.interest ?? data.message,requestedAmount:amount,notes:notes(data,false),nextActionNote:'Contattare lead ricevuto dal sito web' } }));
+      await transactionOperation(tx, deadline, () => tx.auditLog.create({ data: { event: duplicate ? 'website_lead_duplicate_detected' : 'website_lead_received', entityType: 'Lead', entityId: lead.id, after: { mode:'legacy', outcome:duplicate ? 'updated' : 'created', contractVersion:'v1', receipt:receipt.id } } }));
+      await transactionOperation(tx, deadline, () => tx.websiteLeadReceipt.update({ where: { id: receipt.id }, data: { status:'completed', completedAt:new Date() } }));
+      await prepareTransactionOperation(tx, deadline);
       return { replay:false, receipt:receipt.id };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: timeout, timeout }));
 }
@@ -131,10 +136,12 @@ export async function POST(request: NextRequest) {
       if (!rate.allowed) return response(429, undefined, { 'Retry-After': String(rate.retryAfter) });
     } catch { return unavailable(); }
   }
-  if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get('content-type') ?? '')) return response(400);
-  deadline.assertRemaining();
-  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), deadline.remainingMs());
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get('content-type') ?? '')) return response(400);
+    deadline.assertRemaining();
+    const controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), deadline.remainingMs());
     const raw = await readBoundedBody(request, controller.signal);
     let json: unknown; try { json = JSON.parse(raw); } catch { return response(400); }
     const parsed = websiteLeadSchema.safeParse(json); if (!parsed.success || requestedAmount(parsed.data.requestedAmount) === null) return response(400);
@@ -149,5 +156,5 @@ export async function POST(request: NextRequest) {
     if (error instanceof Conflict) return response(409);
     if (error instanceof WebsiteLeadDeadlineError) return unavailable();
     return unavailable();
-  } finally { clearTimeout(timer); }
+  } finally { if (timer) clearTimeout(timer); }
 }
