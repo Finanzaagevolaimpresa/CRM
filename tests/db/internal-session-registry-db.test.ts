@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -559,7 +560,8 @@ test(
     const session = await issueSession(user.id);
     const isolatedFixture = `
       const { PrismaClient } = await import("@prisma/client");
-      const { resolveInternalSession } = await import("./src/lib/internal-session-registry.ts");
+      const registry = await import("./src/lib/internal-session-registry.ts");
+      const resolveInternalSession = registry.resolveInternalSession ?? registry.default?.resolveInternalSession;
       const db = new PrismaClient();
       try {
         const resolved = await resolveInternalSession(db, process.env.N02_SYNTHETIC_COOKIE);
@@ -776,19 +778,18 @@ test(
     ]);
     execFileSync("tar", ["-xf", archive, "-C", root]);
     rmSync(archive);
-    execFileSync("cp", [
-      "-al",
-      resolve("node_modules"),
-      join(root, "node_modules"),
-    ]);
-    execFileSync(resolve("node_modules/.bin/next"), ["build"], {
+    symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
+    execFileSync(resolve("node_modules/.bin/next"), ["build", "--webpack"], {
       cwd: root,
       env: {
         ...process.env,
         AUTH_SECRET: "synthetic-pr88-only",
+        NEXT_TELEMETRY_DISABLED: "1",
         NODE_ENV: "production",
       },
       stdio: "pipe",
+      timeout: 120_000,
+      maxBuffer: 20 * 1024 * 1024,
     });
 
     const port = String(43000 + Math.floor(Math.random() * 1000));
