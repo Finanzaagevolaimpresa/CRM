@@ -7,7 +7,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -558,6 +557,20 @@ test(
   async () => {
     const user = await createSyntheticUser();
     const session = await issueSession(user.id);
+    const isolatedFixture = `
+      const { PrismaClient } = await import("@prisma/client");
+      const { resolveInternalSession } = await import("./src/lib/internal-session-registry.ts");
+      const db = new PrismaClient();
+      try {
+        const resolved = await resolveInternalSession(db, process.env.N02_SYNTHETIC_COOKIE);
+        process.exitCode = Boolean(resolved) === (process.env.N02_EXPECT_VALID === "1") ? 0 : 3;
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 4;
+      } finally {
+        await db.$disconnect();
+      }
+    `;
     const runFixture = (expectedValid: boolean) => {
       const childEnvironment = {
         ...process.env,
@@ -570,7 +583,9 @@ test(
         [
           "--import",
           "tsx",
-          "tests/db/internal-session-registry-multiprocess-fixture.ts",
+          "--input-type=module",
+          "--eval",
+          isolatedFixture,
         ],
         {
           env: childEnvironment,
@@ -761,7 +776,11 @@ test(
     ]);
     execFileSync("tar", ["-xf", archive, "-C", root]);
     rmSync(archive);
-    symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
+    execFileSync("cp", [
+      "-al",
+      resolve("node_modules"),
+      join(root, "node_modules"),
+    ]);
     execFileSync(resolve("node_modules/.bin/next"), ["build"], {
       cwd: root,
       env: {
