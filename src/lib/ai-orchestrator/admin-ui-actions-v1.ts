@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { hasPermission, requirePermission } from '../auth';
 import { prisma } from '../prisma';
+import { requirePrivilegedMutation } from '../privileged-access';
 import { mutateAiOrchestratorAdminControlPolicy } from './admin-control-plane-v1';
 import {
   buildAiOrchestratorAdminGlobalPolicyFromForm,
@@ -96,6 +97,7 @@ export async function updateAiOrchestratorGlobalPolicyAction(formData: FormData)
     });
     redirect(resultLocation('ACTOR_NOT_AUTHORIZED'));
   }
+  await requirePrivilegedMutation(session, 'AI_ORCHESTRATOR_GLOBAL_POLICY_UPDATE');
 
   let form: ReturnType<typeof parseAiOrchestratorAdminGlobalPolicyForm>;
   let policy: ReturnType<typeof buildAiOrchestratorAdminGlobalPolicyFromForm>;
@@ -153,6 +155,7 @@ export async function updateAiOrchestratorScopePolicyAction(formData: FormData) 
     });
     redirect(resultLocation('ACTOR_NOT_AUTHORIZED', safeTarget));
   }
+  await requirePrivilegedMutation(session, 'AI_ORCHESTRATOR_SCOPE_POLICY_UPDATE');
 
   let form: ReturnType<typeof parseAiOrchestratorAdminScopePolicyForm>;
   let policy: ReturnType<typeof buildAiOrchestratorAdminScopePolicyFromForm>;

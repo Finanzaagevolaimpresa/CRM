@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
+import { isApplicationFeatureEnabled } from '@/lib/application-feature-gates';
 import { authenticateWebsiteLead, readBoundedBody, runWebsiteLeadTransactionWithRetry, sha256, WebsiteLeadBodyError, WebsiteLeadDeadline, WebsiteLeadDeadlineError, websiteLeadMode } from '@/lib/website-lead-security';
 
 const NAMESPACE = 'website-lead:legacy:v1';
@@ -129,6 +130,12 @@ export async function POST(request: NextRequest) {
   if (mode === 'disabled') return unavailable();
   const secret = request.headers.get('x-fai-webhook-secret');
   if (!authenticateWebsiteLead(process.env.WEBSITE_LEAD_WEBHOOK_SECRET, secret)) return response(401);
+  let integrationEnabled = false;
+  if (mode === 'legacy') {
+    try { integrationEnabled = await isApplicationFeatureEnabled(prisma, 'INTEGRATIONS'); }
+    catch { return unavailable(); }
+    if (!integrationEnabled) return unavailable();
+  }
   if (mode === 'legacy') {
     try {
       const rate = await consumeRateLimit(sha256(process.env.WEBSITE_LEAD_WEBHOOK_SECRET!), deadline);
@@ -145,6 +152,11 @@ export async function POST(request: NextRequest) {
     const raw = await readBoundedBody(request, controller.signal);
     let json: unknown; try { json = JSON.parse(raw); } catch { return response(400); }
     const parsed = websiteLeadSchema.safeParse(json); if (!parsed.success || requestedAmount(parsed.data.requestedAmount) === null) return response(400);
+    if (mode === 'shadow') {
+      try { integrationEnabled = await isApplicationFeatureEnabled(prisma, 'INTEGRATIONS'); }
+      catch { return unavailable(); }
+    }
+    if (!integrationEnabled) return unavailable();
     if (mode === 'shadow') return unavailable();
     const key = request.headers.get('idempotency-key');
     if (!key || key.length > 200 || !/^[\x21-\x7E]+$/.test(key)) return response(400);

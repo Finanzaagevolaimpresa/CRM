@@ -47,9 +47,17 @@ before(async () => {
   process.env.WEBSITE_LEAD_WEBHOOK_SECRET = secret;
   process.env.WEBSITE_LEAD_RATE_LIMIT_REQUESTS = '1000';
   process.env.WEBSITE_LEAD_RATE_LIMIT_WINDOW_SECONDS = '60';
+  process.env.FEATURE_INTEGRATIONS_ENABLED = 'true';
+  await db.applicationFeatureGate.update({ where: { code: 'INTEGRATIONS' }, data: { enabled: true } });
 });
 beforeEach(async () => { if (runDbTests) await clean(); });
-after(async () => { if (runDbTests) await clean(); await db.$disconnect(); });
+after(async () => {
+  if (runDbTests) {
+    await clean();
+    await db.applicationFeatureGate.update({ where: { code: 'INTEGRATIONS' }, data: { enabled: false, updatedById: null } });
+  }
+  await db.$disconnect();
+});
 
 async function withMigrationSchema(upgrade: boolean) {
   const databaseUrl = process.env.DATABASE_URL!;

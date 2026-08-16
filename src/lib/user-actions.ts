@@ -14,6 +14,7 @@ import {
   updatePermissionOverridesWithAudit,
 } from './user-privilege-service';
 import { withSerializableTransaction } from './serializable';
+import { requirePrivilegedMutation } from './privileged-access';
 
 function failIfDenied<T>(result: { ok: true; value: T } | { ok: false; message: string }) {
   if (!result.ok) throw new Error(result.message);
@@ -22,6 +23,7 @@ function failIfDenied<T>(result: { ok: true; value: T } | { ok: false; message: 
 
 export async function createInternalUser(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_CREATE');
   const data = internalUserSchema.parse({ ...Object.fromEntries(form), active: form.get('active') === 'on' });
   const passwordHash = await bcrypt.hash(data.password, 12);
   const result = await withSerializableTransaction(prisma, (tx) => createInternalUserWithAudit(tx, { userId: s.userId }, { email: data.email, name: data.name, role: data.role, active: data.active ?? true, passwordHash }));
@@ -31,6 +33,7 @@ export async function createInternalUser(form: FormData) {
 
 export async function activateInternalUser(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_ACTIVATE');
   const data = userIdSchema.parse(Object.fromEntries(form));
   const result = await withSerializableTransaction(prisma, (tx) => activateInternalUserWithAudit(tx, { userId: s.userId }, data.userId));
   failIfDenied(result);
@@ -39,6 +42,7 @@ export async function activateInternalUser(form: FormData) {
 
 export async function updateInternalUserRole(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_ROLE_UPDATE');
   const data = userRoleSchema.parse(Object.fromEntries(form));
   const result = await withSerializableTransaction(prisma, (tx) => updateInternalUserRoleWithAudit(tx, { userId: s.userId }, data.userId, data.role));
   failIfDenied(result);
@@ -47,6 +51,7 @@ export async function updateInternalUserRole(form: FormData) {
 
 export async function deactivateInternalUser(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_DEACTIVATE');
   const data = userIdSchema.parse(Object.fromEntries(form));
   const result = await withSerializableTransaction(prisma, (tx) => deactivateInternalUserWithAudit(tx, { userId: s.userId }, data.userId));
   failIfDenied(result);
@@ -55,6 +60,7 @@ export async function deactivateInternalUser(form: FormData) {
 
 export async function updateUserPermissionOverrides(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_PERMISSION_OVERRIDE_UPDATE');
   const userId = String(form.get('userId') ?? '');
   const overrides = Array.from(form.entries()).filter(([key]) => key.startsWith('permission:')).map(([key, value]) => ({ permission: key.slice('permission:'.length), value }));
   const data = userPermissionOverridesSchema.parse({ userId, overrides });
@@ -66,6 +72,7 @@ export async function updateUserPermissionOverrides(form: FormData) {
 
 export async function resetUserPermissionOverrides(form: FormData) {
   const s = await requirePermission('user.write');
+  await requirePrivilegedMutation(s, 'USER_PERMISSION_OVERRIDE_RESET');
   const data = userIdSchema.parse(Object.fromEntries(form));
   const result = await withSerializableTransaction(prisma, (tx) => resetPermissionOverridesWithAudit(tx, { userId: s.userId }, data.userId));
   failIfDenied(result);

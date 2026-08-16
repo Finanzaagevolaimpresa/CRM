@@ -2,6 +2,7 @@
 
 import type { RoleCode } from "@prisma/client";
 import type { Permission } from "@/lib/permissions";
+import { privilegedAccessPermissions } from "@/lib/privileged-access-contract";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -83,6 +84,7 @@ const sections: NavSection[] = [
     title: "Admin / Sistema",
     items: [
       { label: "Utenti", href: "/settings/users", requiredPermission: "user.read" },
+      { label: "Sicurezza privilegiata", href: "/settings/security", requiredAnyPermissions: [...privilegedAccessPermissions] },
       { label: "Ruoli", href: "/settings/roles", requiredPermission: "settings.manage" },
       { label: "Orchestrator AI", href: "/settings/ai-orchestrator", requiredPermission: "ai.orchestrator.read" },
       { label: "Diagnostica sistema", href: "/settings/system", requiredPermission: "settings.manage" },

@@ -24,6 +24,19 @@ jobs:
       AUTH_SECRET: ci-only-secret-change-me
       AUTH_COOKIE_NAME: fai_crm_session
       INTERNAL_SESSION_MODE: legacy
+      PRIVILEGED_ACCESS_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      LOGIN_THROTTLE_MAX_FAILURES: "5"
+      LOGIN_THROTTLE_WINDOW_SECONDS: "900"
+      LOGIN_THROTTLE_BLOCK_SECONDS: "900"
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://localhost:3000
+      FEATURE_INTEGRATIONS_ENABLED: "false"
+      FEATURE_CUSTOMER_PORTAL_ENABLED: "false"
+      FEATURE_PAYMENTS_ENABLED: "false"
+      FEATURE_AI_WORKER_ENABLED: "false"
+      FEATURE_AI_DISPATCH_ENABLED: "false"
+      FEATURE_AI_EGRESS_ENABLED: "false"
       NEXT_TELEMETRY_DISABLED: "1"
       AI_PROVIDER: mock
       AI_ORCHESTRATOR_WORKER_ENABLED: "0"
@@ -97,9 +110,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 33 database migrations
+      - name: Apply exactly 34 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "33"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "34"
           npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel

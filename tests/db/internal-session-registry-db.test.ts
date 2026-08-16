@@ -140,10 +140,12 @@ after(async () => {
 });
 
 async function migrationChain(upgrade: boolean) {
-  const names = readdirSync("prisma/migrations")
+  const allNames = readdirSync("prisma/migrations")
     .filter((name) => /^\d/.test(name))
     .sort();
-  assert.equal(names.length, 33, "N02 must have exactly 33 migrations");
+  assert.equal(allNames.length, 34, "N03 must extend the chain to exactly 34 migrations");
+  const names = allNames.slice(0, 33);
+  assert.match(names[32], /internal_session_registry_revocation_v1/);
 
   const root = mkdtempSync(join(tmpdir(), "n02-migrations-"));
   const prismaDir = join(root, "prisma");
@@ -899,10 +901,15 @@ test(
 );
 
 test(
-  "exact PR88 starts on schema 33 and leaves N02 inert",
+  "exact PR88 starts on additive schema 34 and leaves N02/N03 inert",
   { skip: !run },
   async () => {
     const countBefore = await db.internalSession.count();
+    const n03Before = {
+      keys: await db.applicationKeyVersion.count(),
+      throttleBuckets: await db.loginThrottleBucket.count(),
+      enabledFeatureGates: await db.applicationFeatureGate.count({ where: { enabled: true } }),
+    };
     const root = mkdtempSync(join(tmpdir(), "n02-pr88-"));
     const archive = join(root, ".pr88.tar");
     execFileSync("git", [
@@ -967,6 +974,11 @@ test(
       }
       assert.equal(payload?.ok, true);
       assert.equal(await db.internalSession.count(), countBefore);
+      assert.deepEqual({
+        keys: await db.applicationKeyVersion.count(),
+        throttleBuckets: await db.loginThrottleBucket.count(),
+        enabledFeatureGates: await db.applicationFeatureGate.count({ where: { enabled: true } }),
+      }, n03Before);
     } finally {
       app.kill("SIGTERM");
       await new Promise<void>((resolveExit) => {
