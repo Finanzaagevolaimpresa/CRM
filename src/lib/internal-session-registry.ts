@@ -131,7 +131,7 @@ export async function revokeInternalSession(
 ) {
   const exists = await tx.internalSession.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, userId: true },
   });
   if (!exists) return { count: 0 };
   const count = await tx.$executeRaw(
@@ -144,7 +144,7 @@ export async function revokeInternalSession(
         event: "session_revoked",
         entityType: "InternalSession",
         entityId: id,
-        after: { reason },
+        after: { reason, targetUserId: exists.userId },
       },
     });
   return { count };

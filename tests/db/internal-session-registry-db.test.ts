@@ -30,6 +30,10 @@ import {
   createRegistrySessionToken,
   digestRegistrySessionToken,
 } from "../../src/lib/session";
+import {
+  activateInternalUserWithAudit,
+  deactivateInternalUserWithAudit,
+} from "../../src/lib/user-privilege-service";
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from "./ai-orchestrator-db-test-guard";
 
 const run = process.env.RUN_DB_TESTS === "1";
@@ -96,12 +100,9 @@ async function revokeForDisabledUser(
   userId: string,
   actorId: string,
 ) {
-  return client.$transaction(async (tx) => {
-    const locked = await lockInternalUser(tx, userId);
-    assert.ok(locked, "the target user must exist under the disable lock");
-    await tx.user.update({ where: { id: userId }, data: { active: false } });
-    return revokeAllInternalSessions(tx, userId, "USER_DISABLED", actorId);
-  });
+  return client.$transaction((tx) =>
+    deactivateInternalUserWithAudit(tx, { userId: actorId }, userId),
+  );
 }
 
 function serializedAuditRecords(records: unknown) {
@@ -430,7 +431,18 @@ test(
     const user = await createSyntheticUser();
     const current = await issueSession(user.id);
     const single = await issueSession(user.id);
-    const global = await issueSession(user.id);
+    const globalToken = createRegistrySessionToken();
+    const globalDigest = await digestRegistrySessionToken(globalToken.bytes);
+    const globalRow = await createRegistryLoginSession(db, {
+      userId: user.id,
+      tokenDigest: globalDigest,
+    });
+    assert.ok(globalRow);
+    const global = {
+      token: globalToken.token,
+      tokenDigest: globalDigest,
+      row: globalRow,
+    };
 
     await db.$transaction((tx) => logoutInternalSession(tx, current.token));
     await db.$transaction((tx) => logoutInternalSession(tx, current.token));
@@ -446,25 +458,65 @@ test(
 
     assert.equal(firstGlobal.count, 1);
     assert.equal(secondGlobal.count, 0);
+    const loginAudit = await db.auditLog.findFirstOrThrow({
+      where: { event: "login", entityId: user.id },
+    });
+    assert.equal(loginAudit.actorId, user.id);
+    assert.equal(loginAudit.entityType, "User");
+    assert.equal(loginAudit.before, null);
+    assert.equal(loginAudit.ipAddress, null);
+    assert.deepEqual(loginAudit.after, {
+      sessionId: global.row.id,
+      expiresAt: global.row.expiresAt.toISOString(),
+    });
+
+    const logoutAudit = await db.auditLog.findFirstOrThrow({
+      where: { event: "logout", entityId: user.id },
+    });
+    assert.equal(logoutAudit.actorId, user.id);
+    assert.equal(logoutAudit.entityType, "User");
+    assert.equal(logoutAudit.before, null);
+    assert.equal(logoutAudit.ipAddress, null);
+    assert.deepEqual(logoutAudit.after, {
+      sessionId: current.row.id,
+      reason: "LOGOUT",
+    });
     assert.equal(
       await db.auditLog.count({
         where: { event: "logout", entityId: user.id },
       }),
       1,
     );
+
+    const singleAudit = await db.auditLog.findFirstOrThrow({
+      where: { event: "session_revoked", entityId: single.row.id },
+    });
+    assert.equal(singleAudit.actorId, user.id);
+    assert.equal(singleAudit.entityType, "InternalSession");
+    assert.equal(singleAudit.before, null);
+    assert.equal(singleAudit.ipAddress, null);
+    assert.deepEqual(singleAudit.after, {
+      reason: "INTERNAL_SINGLE",
+      targetUserId: user.id,
+    });
+
+    const globalAudit = await db.auditLog.findFirstOrThrow({
+      where: { event: "sessions_revoked_global", entityId: user.id },
+    });
+    assert.equal(globalAudit.actorId, user.id);
+    assert.equal(globalAudit.entityType, "User");
+    assert.equal(globalAudit.before, null);
+    assert.equal(globalAudit.ipAddress, null);
+    assert.deepEqual(globalAudit.after, {
+      reason: "INTERNAL_GLOBAL",
+      revokedCount: 1,
+    });
     assert.equal(
       await db.auditLog.count({
         where: { event: "sessions_revoked_global", entityId: user.id },
       }),
       1,
     );
-    const globalAudit = await db.auditLog.findFirstOrThrow({
-      where: { event: "sessions_revoked_global", entityId: user.id },
-    });
-    assert.deepEqual(globalAudit.after, {
-      reason: "INTERNAL_GLOBAL",
-      revokedCount: 1,
-    });
     assert.equal(await resolveInternalSession(db, global.token), null);
 
     const audits = await db.auditLog.findMany({
@@ -502,15 +554,23 @@ test(
   "N02 real login logout and disable transactions roll back on audit fault",
   { skip: !run },
   async () => {
+    const actor = await createSyntheticUser();
     const user = await createSyntheticUser();
     const initialLastLoginAt = user.lastLoginAt;
     const loginToken = createRegistrySessionToken();
     const loginDigest = await digestRegistrySessionToken(loginToken.bytes);
+    const savedMode = process.env.INTERNAL_SESSION_MODE;
+    process.env.INTERNAL_SESSION_MODE = "registry";
 
     await db.$executeRawUnsafe(`
     CREATE OR REPLACE FUNCTION n02_fault()
     RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN RAISE EXCEPTION 'synthetic audit failure'; END $$
+    BEGIN
+      IF NEW.event IN ('login', 'logout', 'sessions_revoked_global') THEN
+        RAISE EXCEPTION 'synthetic audit failure';
+      END IF;
+      RETURN NEW;
+    END $$
   `);
     await db.$executeRawUnsafe(`
     CREATE TRIGGER n02_fault BEFORE INSERT ON "AuditLog"
@@ -540,15 +600,23 @@ test(
       );
       assert.ok(await resolveInternalSession(db, logoutSession.token));
 
-      await assert.rejects(revokeForDisabledUser(db, user.id, user.id));
+      await assert.rejects(revokeForDisabledUser(db, user.id, actor.id));
       assert.equal(
         (await db.user.findUniqueOrThrow({ where: { id: user.id } })).active,
         true,
       );
       assert.ok(await resolveInternalSession(db, logoutSession.token));
+      assert.equal(
+        await db.auditLog.count({
+          where: { event: "user_deactivate", entityId: user.id },
+        }),
+        0,
+      );
     } finally {
       await db.$executeRawUnsafe(`DROP TRIGGER n02_fault ON "AuditLog"`);
       await db.$executeRawUnsafe(`DROP FUNCTION n02_fault()`);
+      if (savedMode === undefined) delete process.env.INTERNAL_SESSION_MODE;
+      else process.env.INTERNAL_SESSION_MODE = savedMode;
     }
   },
 );
@@ -611,13 +679,48 @@ test(
 );
 
 test("N02 reactivation does not revive sessions", { skip: !run }, async () => {
+  const actor = await createSyntheticUser();
   const user = await createSyntheticUser();
   const session = await issueSession(user.id);
+  const savedMode = process.env.INTERNAL_SESSION_MODE;
+  process.env.INTERNAL_SESSION_MODE = "registry";
 
-  await revokeForDisabledUser(db, user.id, user.id);
-  await db.user.update({ where: { id: user.id }, data: { active: true } });
+  try {
+    const deactivated = await revokeForDisabledUser(db, user.id, actor.id);
+    assert.equal(deactivated.ok, true);
+    const deactivateAudit = await db.auditLog.findFirstOrThrow({
+      where: { event: "user_deactivate", entityId: user.id },
+    });
+    assert.equal(deactivateAudit.actorId, actor.id);
+    assert.equal(deactivateAudit.entityType, "User");
+    assert.deepEqual(deactivateAudit.before, { active: true });
+    assert.deepEqual(deactivateAudit.after, { active: false });
+    assert.equal(deactivateAudit.ipAddress, null);
 
-  assert.equal(await resolveInternalSession(db, session.token), null);
+    const revocationAudit = await db.auditLog.findFirstOrThrow({
+      where: {
+        event: "sessions_revoked_global",
+        entityId: user.id,
+      },
+    });
+    assert.equal(revocationAudit.actorId, actor.id);
+    assert.equal(revocationAudit.entityType, "User");
+    assert.equal(revocationAudit.before, null);
+    assert.deepEqual(revocationAudit.after, {
+      reason: "USER_DISABLED",
+      revokedCount: 1,
+    });
+    assert.equal(revocationAudit.ipAddress, null);
+
+    const activated = await db.$transaction((tx) =>
+      activateInternalUserWithAudit(tx, { userId: actor.id }, user.id),
+    );
+    assert.equal(activated.ok, true);
+    assert.equal(await resolveInternalSession(db, session.token), null);
+  } finally {
+    if (savedMode === undefined) delete process.env.INTERNAL_SESSION_MODE;
+    else process.env.INTERNAL_SESSION_MODE = savedMode;
+  }
 });
 
 test(
