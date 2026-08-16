@@ -23,6 +23,7 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public
       AUTH_SECRET: ci-only-secret-change-me
       AUTH_COOKIE_NAME: fai_crm_session
+      INTERNAL_SESSION_MODE: legacy
       NEXT_TELEMETRY_DISABLED: "1"
       AI_PROVIDER: mock
       AI_ORCHESTRATOR_WORKER_ENABLED: "0"
@@ -96,8 +97,10 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply database migrations
-        run: npm run prisma:migrate:deploy
+      - name: Apply exactly 33 database migrations
+        run: |
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "33"
+          npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel
         run: |
@@ -113,7 +116,7 @@ jobs:
       - name: Verify DB tests skip without DATABASE_URL
         run: env -u DATABASE_URL npm run test:db
 
-      - name: Run PostgreSQL permission tests
+      - name: Run PostgreSQL integration tests
         run: RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 
       - name: TypeScript typecheck

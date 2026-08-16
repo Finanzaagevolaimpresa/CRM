@@ -355,6 +355,8 @@ model User {
   deletedAt                          DateTime?
   lastLoginAt                        DateTime?
   permissionOverrides                UserPermissionOverride[]
+  internalSessions                   InternalSession[]                         @relation("InternalSessionOwner")
+  sessionsRevokedByUser              InternalSession[]                         @relation("InternalSessionRevoker")
   aiOrchestratorSettingsUpdated      AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
   aiWorkerCapabilitySettingsUpdated  AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
   aiOrchestratorAdminPolicyRevisions AiOrchestratorAdminPolicyRevision[]     @relation("AiOrchestratorAdminPolicyRevisionActor")
@@ -365,6 +367,22 @@ model User {
   aiExecutionDecisions               AiExecutionDecision[]                   @relation("AiExecutionDecisionActor")
   aiExecutionGrantsApproved          AiExecutionAuthorizationGrant[]         @relation("AiExecutionGrantApprover")
   aiExecutionAdminNotifications      AiExecutionAdminNotification[]          @relation("AiExecutionNotificationRecipient")
+}
+
+model InternalSession {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String
+  tokenDigest     Bytes     @unique
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  revokedReason   String?
+  revokedByUserId String?
+  user            User      @relation("InternalSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  revokedByUser   User?     @relation("InternalSessionRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId, revokedAt, expiresAt], map: "InternalSession_user_revocation_expiry_idx")
+  @@index([expiresAt, id], map: "InternalSession_cleanup_cursor_idx")
 }
 
 model UserPermissionOverride {

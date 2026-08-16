@@ -58,7 +58,7 @@ async function withMigrationSchema(upgrade: boolean) {
   const prismaDir = join(root, 'prisma'); const migrations = join(prismaDir, 'migrations');
   mkdirSync(migrations, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
+  const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort().slice(0, 32);
   const url = new URL(databaseUrl); url.searchParams.set('schema', schema);
   await db.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
   const deploy = () => execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDir, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe' });

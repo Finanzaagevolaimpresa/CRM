@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
-import { signSessionCookie } from './session';
+import { createRegistryLoginSession, logoutInternalSession } from './internal-session-registry';
+import { createRegistrySessionToken, digestRegistrySessionToken, internalSessionMode, signSessionCookie } from './session';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
@@ -29,6 +30,18 @@ async function createLoginSession(email: string, password: string) {
   const passwordMatches = await bcrypt.compare(password, user.passwordHash);
   if (!passwordMatches) return false;
 
+  if (internalSessionMode() === 'registry') {
+    const { token, bytes } = createRegistrySessionToken();
+    const tokenDigest = await digestRegistrySessionToken(bytes);
+    const session = await createRegistryLoginSession(prisma, {
+      userId: user.id,
+      tokenDigest,
+    });
+    if (!session) return false;
+    (await cookies()).set(cookieName, token, sessionCookieOptions(Math.floor(session.expiresAt.getTime() / 1000)));
+    return true;
+  }
+
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;
   const token = await signSessionCookie({ userId: user.id, expiresAt });
   (await cookies()).set(cookieName, token, sessionCookieOptions(expiresAt));
@@ -41,7 +54,9 @@ export async function loginAction(formData: FormData) {
   const email = String(formData.get('email') ?? '');
   const password = String(formData.get('password') ?? '');
 
-  if (!email || !password || !(await createLoginSession(email, password))) {
+  let ok = false;
+  try { ok = Boolean(email && password && await createLoginSession(email, password)); } catch { ok = false; }
+  if (!ok) {
     redirect('/login?error=invalid');
   }
 
@@ -53,7 +68,9 @@ export async function demoAdminLoginAction() {
     redirect('/login');
   }
 
-  if (!(await createLoginSession(demoAdminEmail, demoAdminPassword))) {
+  let ok = false;
+  try { ok = await createLoginSession(demoAdminEmail, demoAdminPassword); } catch { ok = false; }
+  if (!ok) {
     redirect('/login?error=demo-unavailable');
   }
 
@@ -62,6 +79,14 @@ export async function demoAdminLoginAction() {
 
 export async function logoutAction() {
   const token = (await cookies()).get(cookieName)?.value;
+  let mode: 'legacy' | 'registry';
+  try { mode = internalSessionMode(); } catch { redirect('/login?error=logout-unavailable'); }
+  if (mode === 'registry') {
+    try { await prisma.$transaction((tx) => logoutInternalSession(tx, token)); }
+    catch { redirect('/login?error=logout-unavailable'); }
+    (await cookies()).delete(cookieName);
+    redirect('/login');
+  }
   const { verifySessionCookie } = await import('./session');
   const session = await verifySessionCookie(token);
   if (session) await prisma.auditLog.create({ data: { actorId: session.userId, event: 'logout', entityType: 'User', entityId: session.userId } });
