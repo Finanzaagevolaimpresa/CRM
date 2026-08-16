@@ -868,6 +868,37 @@ test(
 );
 
 test(
+  "N02 Next.js startup blocks registry activation with a live session",
+  { skip: !run },
+  async () => {
+    const savedMode = process.env.INTERNAL_SESSION_MODE;
+    const savedRuntime = process.env.NEXT_RUNTIME;
+    process.env.INTERNAL_SESSION_MODE = "registry";
+    process.env.NEXT_RUNTIME = "nodejs";
+
+    try {
+      const { register } = await import("../../src/instrumentation");
+      await assert.doesNotReject(register());
+
+      const user = await createSyntheticUser();
+      await issueSession(user.id);
+      await assert.rejects(
+        register(),
+        /INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED/,
+      );
+
+      process.env.INTERNAL_SESSION_MODE = "legacy";
+      await assert.doesNotReject(register());
+    } finally {
+      if (savedMode === undefined) delete process.env.INTERNAL_SESSION_MODE;
+      else process.env.INTERNAL_SESSION_MODE = savedMode;
+      if (savedRuntime === undefined) delete process.env.NEXT_RUNTIME;
+      else process.env.NEXT_RUNTIME = savedRuntime;
+    }
+  },
+);
+
+test(
   "exact PR88 starts on schema 33 and leaves N02 inert",
   { skip: !run },
   async () => {

@@ -10,6 +10,6 @@ Login and user disable share a `User` row lock. Login/session/audit and disable/
 
 1. Apply migration 33 only after PR88 compatibility proof.
 2. Deploy N02 with `INTERNAL_SESSION_MODE=legacy`; verify health and zero `InternalSession` rows. Deployment does not activate registry.
-3. Before every activation or reactivation, count rows with `revokedAt IS NULL AND expiresAt > CURRENT_TIMESTAMP`. A non-zero count is a hard stop until expiry is verified or a separately authorized global revocation commits.
+3. Before every activation or reactivation, count rows with `revokedAt IS NULL AND expiresAt > CURRENT_TIMESTAMP`. The Next.js Node startup hook enforces the same check before the server can accept a registry token. A non-zero count is a hard stop until expiry is verified or a separately authorized global revocation commits.
 4. Separately rotate `AUTH_SECRET` to invalidate legacy cookies. This does not revoke registry tokens; the zero-live-session gate independently prevents registry-token resurrection.
 5. On rollback retain migration 33. Rotate `AUTH_SECRET` before PR88 starts, and require the zero-live-session gate before any later registry reactivation.
