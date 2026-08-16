@@ -144,6 +144,8 @@ test('N03 key registry accepts only a strong, positive, versioned environment ke
   assert.equal(PRIVILEGED_STEP_UP_KEY_PURPOSE, 'PRIVILEGED_STEP_UP');
   const registry = readFileSync('src/lib/application-key-registry.ts', 'utf8');
   assert.match(registry, /role: 'admin', active: true, deletedAt: null/);
+  assert.match(registry, /\$executeRaw\(Prisma\.sql`SELECT pg_advisory_xact_lock/);
+  assert.doesNotMatch(registry, /\$queryRaw\(Prisma\.sql`SELECT pg_advisory_xact_lock/);
   assert.match(registry, /SELECT CURRENT_TIMESTAMP AS now/);
 });
 

@@ -44,7 +44,7 @@ export async function rotatePrivilegedStepUpKeyVersion(
   if (!Number.isSafeInteger(input.version) || input.version <= 0 || input.keyDigest.length !== 32) {
     throw new TypeError('PRIVILEGED_STEP_UP_KEY_ROTATION_INPUT_INVALID');
   }
-  await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext('FAI_PRIVILEGED_STEP_UP_KEY_ROTATION_V1'))`);
+  await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext('FAI_PRIVILEGED_STEP_UP_KEY_ROTATION_V1'))`);
   const actor = await tx.user.findFirst({
     where: { id: input.actorUserId, role: 'admin', active: true, deletedAt: null },
     select: { id: true },
