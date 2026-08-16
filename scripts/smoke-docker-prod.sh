@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=32
+EXPECTED_MIGRATION_COUNT=33
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -85,6 +85,7 @@ POSTGRES_PASSWORD=fai_crm_smoke_password
 DATABASE_URL=postgresql://fai_crm_smoke:fai_crm_smoke_password@postgres:5432/fai_crm_smoke?schema=public
 AUTH_SECRET=smoke-test-secret-not-for-production
 AUTH_COOKIE_NAME=fai_crm_smoke_session
+INTERNAL_SESSION_MODE=legacy
 AI_PROVIDER=mock
 AI_EXTERNAL_PROVIDERS_ENABLED=false
 AI_ALLOWED_MODELS=
@@ -102,6 +103,7 @@ export POSTGRES_PASSWORD=fai_crm_smoke_password
 export DATABASE_URL=postgresql://fai_crm_smoke:fai_crm_smoke_password@postgres:5432/fai_crm_smoke?schema=public
 export AUTH_SECRET=smoke-test-secret-not-for-production
 export AUTH_COOKIE_NAME=fai_crm_smoke_session
+export INTERNAL_SESSION_MODE=legacy
 export AI_PROVIDER=mock
 export AI_EXTERNAL_PROVIDERS_ENABLED=false
 export AI_ALLOWED_MODELS=
@@ -191,6 +193,8 @@ docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
 
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "InternalSession"')" == "0" ]] \
+  || fail "Dormant legacy deployment created InternalSession rows"
 
 orchestrator_snapshot() {
   compose exec -T postgres psql \
@@ -319,4 +323,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 32 migrations, production seed, app health, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 33 migrations, production seed, app health, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."

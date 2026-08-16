@@ -5,7 +5,9 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
   const isDevelopment = process.env.APP_ENV === 'development';
   const message = error === 'invalid'
     ? 'Email o password non validi.'
-    : error === 'demo-unavailable'
+    : error === 'logout-unavailable'
+      ? 'Logout temporaneamente non disponibile.'
+      : error === 'demo-unavailable'
       ? 'Utente admin demo non disponibile: eseguire il seed del database.'
       : null;
 

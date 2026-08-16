@@ -1,5 +1,7 @@
 import { Prisma, type RoleCode, type User } from '@prisma/client';
 import { serializableOptions } from './serializable';
+import { internalSessionMode } from './session';
+import { lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 
 export type PrivilegeActor = { userId: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
@@ -58,6 +60,7 @@ export async function activateInternalUserWithAudit(tx: Tx, actor: PrivilegeActo
 export async function deactivateInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, userId: string) {
   const actorUser = await requireAdminActor(tx, actor, userId, 'user_deactivate', { active: false });
   if (!actorUser) return denied('Solo un amministratore reale può disattivare utenti interni.');
+  if (internalSessionMode() === 'registry') await lockInternalUser(tx, userId);
   const before = await loadMutableUser(tx, userId);
   if (!before) return denied('Utente non modificabile.');
   if (userId === actor.userId) {
@@ -70,6 +73,7 @@ export async function deactivateInternalUserWithAudit(tx: Tx, actor: PrivilegeAc
   }
   const user = await tx.user.update({ where: { id: userId }, data: { active: false } });
   await auditTx(tx, actor.userId, 'user_deactivate', 'User', user.id, { active: false }, { active: before.active });
+  if (internalSessionMode() === 'registry') await revokeAllInternalSessions(tx, userId, 'USER_DISABLED', actor.userId);
   return { ok: true, value: user } as const;
 }
 

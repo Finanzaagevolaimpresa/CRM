@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { verifySessionCookie } from '@/lib/session';
+import { internalSessionMode, isCanonicalRegistrySessionCookie, verifySessionCookie } from '@/lib/session';
 
 const publicPaths = ['/login', '/logo-fai.png'];
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
@@ -13,8 +13,13 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const session = await verifySessionCookie(request.cookies.get(cookieName)?.value);
-  if (!session) return NextResponse.redirect(new URL('/login', request.url));
+  const token = request.cookies.get(cookieName)?.value;
+  let accepted = false;
+  try {
+    const mode = internalSessionMode();
+    accepted = mode === 'legacy' ? Boolean(await verifySessionCookie(token)) : isCanonicalRegistrySessionCookie(token);
+  } catch { accepted = false; }
+  if (!accepted) return NextResponse.redirect(new URL('/login', request.url));
 
   return NextResponse.next();
 }

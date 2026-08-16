@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation';
 import type { RoleCode } from '@prisma/client';
 import { getEffectivePermissions, hasPermission, type PermissionOverrideSnapshot } from './permission-evaluator';
 import { prisma } from './prisma';
-import { verifySessionCookie, type SessionCookie } from './session';
+import { internalSessionMode, verifySessionCookie, type SessionCookie } from './session';
+import { resolveInternalSession } from './internal-session-registry';
 import { rolePermissions, type Permission } from './permissions';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
@@ -29,6 +30,11 @@ async function auditBlockedInactiveUserAccess(userId: string) {
 
 export async function getSession() {
   const token = (await cookies()).get(cookieName)?.value;
+  if (internalSessionMode() === 'registry') {
+    const row = await resolveInternalSession(prisma, token);
+    if (!row || !row.user.active || row.user.deletedAt) return null;
+    return { userId: row.userId, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000), role: row.user.role, active: row.user.active, permissionOverrides: row.user.permissionOverrides } satisfies AuthSession;
+  }
   const cookieSession = await verifySessionCookie(token);
   if (!cookieSession) return null;
 
