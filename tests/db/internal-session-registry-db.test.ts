@@ -558,8 +558,14 @@ test(
   async () => {
     const user = await createSyntheticUser();
     const session = await issueSession(user.id);
-    const runFixture = (expectedValid: boolean) =>
-      spawnSync(
+    const runFixture = (expectedValid: boolean) => {
+      const childEnvironment = {
+        ...process.env,
+        N02_SYNTHETIC_COOKIE: session.token,
+        N02_EXPECT_VALID: expectedValid ? "1" : "0",
+      };
+      delete childEnvironment.NODE_TEST_CONTEXT;
+      const result = spawnSync(
         process.execPath,
         [
           "--import",
@@ -567,19 +573,22 @@ test(
           "tests/db/internal-session-registry-multiprocess-fixture.ts",
         ],
         {
-          env: {
-            ...process.env,
-            N02_SYNTHETIC_COOKIE: session.token,
-            N02_EXPECT_VALID: expectedValid ? "1" : "0",
-          },
+          env: childEnvironment,
+          encoding: "utf8",
         },
-      ).status;
+      );
+      assert.equal(
+        result.status,
+        0,
+        `isolated fixture failed: ${result.error?.message ?? result.stderr}`,
+      );
+    };
 
-    assert.equal(runFixture(true), 0);
+    runFixture(true);
     await db.$transaction((tx) =>
       revokeInternalSession(tx, session.row.id, "INTERNAL_SINGLE", user.id),
     );
-    assert.equal(runFixture(false), 0);
+    runFixture(false);
   },
 );
 
@@ -598,11 +607,18 @@ test(
   { skip: !run },
   async () => {
     const user = await createSyntheticUser();
-    const sessions = [];
-    for (let index = 0; index < 128; index += 1) {
-      sessions.push(await issueSession(user.id));
-    }
-    const target = sessions[64];
+    const target = await issueSession(user.id);
+    await db.$executeRaw`
+      INSERT INTO "InternalSession"
+        ("id", "userId", "tokenDigest", "createdAt", "expiresAt")
+      SELECT
+        gen_random_uuid(),
+        ${user.id},
+        decode(lpad(to_hex(value), 64, '0'), 'hex'),
+        CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP + INTERVAL '8 hours'
+      FROM generate_series(1, 10000) AS generated(value)
+    `;
 
     await db.$executeRaw`ANALYZE "InternalSession"`;
     await db.$executeRaw`ANALYZE "User"`;
@@ -736,11 +752,15 @@ test(
   async () => {
     const countBefore = await db.internalSession.count();
     const root = mkdtempSync(join(tmpdir(), "n02-pr88-"));
-    const archive = execFileSync("git", [
+    const archive = join(root, ".pr88.tar");
+    execFileSync("git", [
       "archive",
+      "--format=tar",
+      `--output=${archive}`,
       "77828266853c935cf6805cc546ceafdab43d310d",
     ]);
-    execFileSync("tar", ["-xf", "-", "-C", root], { input: archive });
+    execFileSync("tar", ["-xf", archive, "-C", root]);
+    rmSync(archive);
     symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
     execFileSync(resolve("node_modules/.bin/next"), ["build"], {
       cwd: root,
