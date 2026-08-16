@@ -8,6 +8,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -779,14 +780,30 @@ test(
     execFileSync("tar", ["-xf", archive, "-C", root]);
     rmSync(archive);
     symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
+    const runtimeEnvironment = {
+      ...process.env,
+      AUTH_SECRET: "synthetic-pr88-only",
+      NEXT_TELEMETRY_DISABLED: "1",
+      NODE_ENV: "production",
+    };
+    execFileSync(resolve("node_modules/.bin/tsc"), ["--noEmit"], {
+      cwd: root,
+      env: runtimeEnvironment,
+      stdio: "pipe",
+      timeout: 120_000,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    const configPath = join(root, "next.config.ts");
+    const originalConfig = readFileSync(configPath, "utf8");
+    const buildConfig = originalConfig.replace(
+      "const nextConfig: NextConfig = {",
+      "const nextConfig: NextConfig = {\n  typescript: { ignoreBuildErrors: true },",
+    );
+    assert.notEqual(buildConfig, originalConfig);
+    writeFileSync(configPath, buildConfig);
     execFileSync(resolve("node_modules/.bin/next"), ["build", "--webpack"], {
       cwd: root,
-      env: {
-        ...process.env,
-        AUTH_SECRET: "synthetic-pr88-only",
-        NEXT_TELEMETRY_DISABLED: "1",
-        NODE_ENV: "production",
-      },
+      env: runtimeEnvironment,
       stdio: "pipe",
       timeout: 120_000,
       maxBuffer: 20 * 1024 * 1024,
@@ -798,11 +815,7 @@ test(
       ["start", "-p", port],
       {
         cwd: root,
-        env: {
-          ...process.env,
-          AUTH_SECRET: "synthetic-pr88-only",
-          NODE_ENV: "production",
-        },
+        env: runtimeEnvironment,
         stdio: "ignore",
       },
     );
