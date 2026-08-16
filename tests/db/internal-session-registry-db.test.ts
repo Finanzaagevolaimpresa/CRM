@@ -575,7 +575,7 @@ test(
       }
     `;
     const runFixture = (expectedValid: boolean) => {
-      const childEnvironment = {
+      const childEnvironment: NodeJS.ProcessEnv = {
         ...process.env,
         N02_SYNTHETIC_COOKIE: session.token,
         N02_EXPECT_VALID: expectedValid ? "1" : "0",
@@ -780,7 +780,7 @@ test(
     execFileSync("tar", ["-xf", archive, "-C", root]);
     rmSync(archive);
     symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
-    const runtimeEnvironment = {
+    const runtimeEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       AUTH_SECRET: "synthetic-pr88-only",
       NEXT_TELEMETRY_DISABLED: "1",
