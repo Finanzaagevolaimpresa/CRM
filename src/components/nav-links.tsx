@@ -77,7 +77,7 @@ const sections: NavSection[] = [
       { label: "Legale / Compliance", href: "/legal-compliance", requiredPermission: "legal.read" },
       { label: "Contratti da revisionare", href: "/legal-compliance/contracts", requiredPermission: "legal.read" },
       { label: "PEC / Contestazioni", href: "/legal-compliance/disputes", requiredPermission: "legal.read" },
-      { label: "Privacy e consensi", href: "/legal-compliance/privacy", requiredPermission: "legal.read" },
+      { label: "Privacy e consensi", href: "/legal-compliance/privacy", requiredPermission: "privacy.evidence.read" },
     ],
   },
   {

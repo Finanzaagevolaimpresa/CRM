@@ -7,8 +7,8 @@ async function main() {
 }
 
 main()
-  .catch((error) => {
-    console.error(error instanceof Error ? error.message : 'AI run reconciliation failed.');
+  .catch(() => {
+    console.error('AI run reconciliation failed.');
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());

@@ -15,7 +15,15 @@ function input(index: number) {
   const email = scenario === 'different-identities' ? `multiprocess-${ordinal}@n01-ci.invalid` : 'multiprocess-common@n01-ci.invalid';
   return new NextRequest('http://localhost/api/integrations/website/leads', {
     method:'POST', headers:{ 'content-type':'application/json', 'x-fai-webhook-secret':'n01-ci-synthetic-secret', 'idempotency-key':key },
-    body:JSON.stringify({ firstName:'Synthetic', lastName:'Multiprocess', email, privacyAccepted:true }),
+    body:JSON.stringify({
+      firstName:'Synthetic', lastName:'Multiprocess', email,
+      sourceSystem:'N01_DB_TEST', formCode:'SYNTHETIC_LEAD', formVersion:'n04-v1',
+      privacyAccepted:true, privacyNoticeCode:'N04_TEST_PRIVACY', privacyNoticeVersion:'n04-v1',
+      privacyPurposeCode:'SERVICE_REQUEST_FOLLOW_UP', privacyLegalBasisCode:'PRE_CONTRACTUAL_MEASURES',
+      marketingAccepted:false, marketingNoticeCode:'N04_TEST_MARKETING', marketingNoticeVersion:'n04-v1',
+      marketingPurposeCode:'DIRECT_MARKETING', marketingLegalBasisCode:'CONSENT',
+      submittedAt:'2026-08-17T00:00:00.000Z',
+    }),
   });
 }
 async function main() {

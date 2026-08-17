@@ -57,9 +57,12 @@ import {
   createAiExecutionRequest,
 } from './ai-execution-authorization';
 import { requirePrivilegedMutation } from './privileged-access';
+import { redactAuditPayload } from './data-classification';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
-async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
+async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
+  await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: redactAuditPayload(after) as Prisma.InputJsonValue } });
+}
 
 class ConcurrentLeadConversionError extends Error {}
 

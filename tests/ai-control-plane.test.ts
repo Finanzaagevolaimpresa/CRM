@@ -111,29 +111,35 @@ test('policy esterna nega gate, modello, conferma e rate limit tramite il databa
   assert.equal('permit' in allowed, false, 'il gate di policy non deve emettere una capability prima della reservation');
 });
 
-test('DTO egress conserva solo campi approvati, redige PII e guida le categorie', () => {
-  const raw = {
+test('DTO egress nega campi sconosciuti, redige PII e guida le categorie', () => {
+  const clean = {
     source: 'CRM interno FAI',
     humanReviewRequired: true,
     operationalInstructions: 'Scrivi a mario.rossi@example.it IBAN IT60X0542811101000000123456',
     context: {
-      client: { type: 'societa', status: 'attivo', displayName: 'da escludere' },
-      companies: [{ annualRevenue: '100000', legalForm: 'SRL', atecoCode: '62.01', region: 'Lazio', employees: 4, durcStatus: 'regolare', name: 'da escludere' }],
-      service: { label: 'Servizio mario.rossi@example.it', practiceType: 'bando', status: 'pagato', operationalStatus: 'in_valutazione', requestedAmount: '50000', plannedInvestment: '80000', serviceCatalogId: 'segreto' },
+      client: { type: 'societa', status: 'attivo' },
+      companies: [{ annualRevenue: '100000', legalForm: 'SRL', atecoCode: '62.01', region: 'Lazio', employees: 4, durcStatus: 'regolare' }],
+      service: { label: 'Servizio mario.rossi@example.it', practiceType: 'bando', status: 'pagato', operationalStatus: 'in_valutazione', requestedAmount: '50000', plannedInvestment: '80000' },
       project: { requestedAmount: '50000', totalInvestment: '80000', status: 'idea', priority: 'alta', startTiming: 'Q4', region: 'Lazio', sector: 'software' },
-      checklist: [{ title: 'Documento RSSMRA80A01H501U', status: 'ricevuto', hasLinkedDocument: true, documentId: 'segreto' }],
-      documents: [{ documentCategory: 'Bilancio mario.rossi@example.it', status: 'ricevuto', serviceArea: 'bancabilita', storagePath: 'segreto' }],
-      tasks: [{ status: 'aperta', priority: 'alta', title: 'segreto' }],
+      checklist: [{ title: 'Documento RSSMRA80A01H501U', status: 'ricevuto', hasLinkedDocument: true }],
+      documents: [{ documentCategory: 'Bilancio mario.rossi@example.it', status: 'ricevuto', serviceArea: 'bancabilita' }],
+      tasks: [{ status: 'aperta', priority: 'alta' }],
     },
+  } satisfies ExternalAiPayload;
+  const unknown = {
+    ...clean,
+    context: { ...clean.context, client: { ...clean.context.client, displayName: 'vietato' } },
   } as unknown as ExternalAiPayload;
-  const dto = createExternalAiPayload(raw);
+  assert.throws(() => createExternalAiPayload(unknown), /Unclassified field denied/);
+
+  const dto = createExternalAiPayload(clean);
   const serialized = JSON.stringify(dto);
 
   assert.match(dto.operationalInstructions ?? '', /\[email rimossa\].*\[IBAN rimosso\]/);
   assert.equal(dto.context.checklist[0]?.hasLinkedDocument, true);
   assert.equal(dto.context.companies[0]?.legalForm, 'SRL');
   assert.equal(dto.context.project?.priority, 'alta');
-  assert.doesNotMatch(serialized, /displayName|serviceCatalogId|documentId|storagePath|"title":"segreto"|"name":/);
+  assert.doesNotMatch(serialized, /displayName|serviceCatalogId|documentId|storagePath|"name":/);
   assert.deepEqual(externalAiDataCategories(dto), [
     'agent_configuration', 'client_profile', 'company_profile', 'financial_data', 'project_data',
     'service_context', 'document_metadata', 'checklist_status', 'task_metadata', 'operator_instructions',

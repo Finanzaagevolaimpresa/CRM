@@ -54,7 +54,7 @@ test('transaction callbacks recompute the shared deadline budget after acquisiti
 test('the transaction-local allowance is refreshed before every awaited database operation and commit', () => {
   const route = readFileSync('src/app/api/integrations/website/leads/route.ts', 'utf8');
   assert.match(route, /async function transactionOperation[\s\S]*prepareTransactionOperation\(tx, deadline\)[\s\S]*return operation\(\)/);
-  assert.equal(route.match(/await transactionOperation\(tx, deadline/g)?.length, 11);
+  assert.equal(route.match(/await transactionOperation\(tx, deadline/g)?.length, 12);
   assert.equal(route.match(/await prepareTransactionOperation\(tx, deadline\);\n\s+return/g)?.length, 3);
   assert.doesNotMatch(route, /transaction_timeout/);
   assert.doesNotMatch(route, /Promise\.race/);
@@ -137,7 +137,7 @@ test('retry policy is dynamic, bounded to three, and shares one deadline', async
   assert.equal(expiredAttempts, 1);
 });
 test('migration 32 is additive and route contains containment invariants', () => {
-  assert.equal(readdirSync('prisma/migrations').length, 34);
+  assert.equal(readdirSync('prisma/migrations').length, 35);
   const sql=readFileSync('prisma/migrations/20260813120000_website_lead_containment_atomicity_v1/migration.sql','utf8');
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');

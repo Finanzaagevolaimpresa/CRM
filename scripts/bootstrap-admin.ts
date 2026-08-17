@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { PrismaClient, RoleCode } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
@@ -12,14 +11,10 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function generatePassword(): string {
-  return `${randomBytes(24).toString("base64url")}aA1!`;
-}
-
 async function main() {
   const email = requiredEnv("BOOTSTRAP_ADMIN_EMAIL").toLowerCase();
   const name = requiredEnv("BOOTSTRAP_ADMIN_NAME");
-  const providedPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+  const providedPassword = requiredEnv("BOOTSTRAP_ADMIN_PASSWORD");
   const allowAdditional = process.env.BOOTSTRAP_ADMIN_ALLOW_ADDITIONAL === "true";
 
   const existingActiveAdmin = await prisma.user.findFirst({
@@ -33,31 +28,25 @@ async function main() {
     );
   }
 
-  const password = providedPassword?.trim() || generatePassword();
+  const password = providedPassword.trim();
   if (password.length < 16) {
-    throw new Error("BOOTSTRAP_ADMIN_PASSWORD must be at least 16 characters when provided.");
+    throw new Error("BOOTSTRAP_ADMIN_PASSWORD must be at least 16 characters.");
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  const user = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email },
     update: { name, role: RoleCode.admin, active: true, passwordHash, deletedAt: null },
     create: { email, name, role: RoleCode.admin, active: true, passwordHash },
-    select: { email: true, name: true },
+    select: { id: true },
   });
 
-  console.log(`Admin ready: ${user.email} (${user.name})`);
-  if (!providedPassword) {
-    console.log("Generated admin password (shown once, store it now):");
-    console.log(password);
-  } else {
-    console.log("Admin password loaded from BOOTSTRAP_ADMIN_PASSWORD and not printed.");
-  }
+  console.log("Admin bootstrap completed; identity and credentials were not printed.");
 }
 
 main()
-  .catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
+  .catch(() => {
+    console.error("Admin bootstrap failed. Review configuration without printing credentials or personal data.");
     process.exitCode = 1;
   })
   .finally(async () => prisma.$disconnect());

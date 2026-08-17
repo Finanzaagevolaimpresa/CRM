@@ -151,6 +151,8 @@ Resta disponibile anche la guida storica [`docs/deployment-staging-production.md
 
 Il CRM resta un'applicazione interna protetta: non è prevista un'area cliente pubblica e le credenziali demo non devono essere usate in produzione.
 
+La foundation N04 per informative, evidenze separate e classificazione dati è descritta in [`docs/n04-privacy-consent-data-classification-foundation-v1.md`](docs/n04-privacy-consent-data-classification-foundation-v1.md). I registri partono vuoti e il connettore resta chiuso: codici/versioni negli esempi sono segnaposto e non sostituiscono la validazione Legale/DPO né autorizzano modifiche WordPress o attivazioni.
+
 ## Integrazione sito WordPress FAI → CRM lead intake
 
 Il CRM espone un endpoint server-side interno per ricevere lead dal sito WordPress `finanzaagevolaimpresa.it` senza creare un'area cliente pubblica e senza esporre pagine CRM non autenticate.
@@ -160,6 +162,8 @@ Il CRM espone un endpoint server-side interno per ricevere lead dal sito WordPre
 - Variabile server obbligatoria: `WEBSITE_LEAD_WEBHOOK_SECRET`, da mantenere segreta e non inserire mai in variabili `NEXT_PUBLIC_*`.
 - WordPress/WPForms deve inviare una richiesta `POST` JSON con l'header `x-fai-webhook-secret` valorizzato con lo stesso secret configurato lato CRM.
 - Il CRM salva il lead nella pipeline commerciale con fonte `Sito web`, registra audit log interni e non invia email automatiche.
+
+Il contratto N04 richiede inoltre origine/form/versione, versione delle informative, finalità e base giuridica esplicite. Un payload è rifiutato finché le corrispondenti versioni validate non sono registrate e attive nel CRM; questa repository change non modifica né attiva il mittente WordPress.
 
 Esempio `curl`:
 
@@ -180,8 +184,19 @@ curl -X POST "https://crm.example.com/api/integrations/website/leads" \
     "message": "Vorrei valutare un bando per investimenti digitali.",
     "sourcePage": "https://www.finanzaagevolaimpresa.it/contatti/",
     "serviceInterest": "Pre-Analisi AI Ammissibilità FAI",
+    "sourceSystem": "WORDPRESS_FAI",
+    "formCode": "CONTACT_FORM",
+    "formVersion": "example-v1",
     "privacyAccepted": true,
+    "privacyNoticeCode": "WEBSITE_PRIVACY_NOTICE",
+    "privacyNoticeVersion": "example-v1",
+    "privacyPurposeCode": "SERVICE_REQUEST_FOLLOW_UP",
+    "privacyLegalBasisCode": "PRE_CONTRACTUAL_MEASURES",
     "marketingAccepted": false,
+    "marketingNoticeCode": "WEBSITE_MARKETING_NOTICE",
+    "marketingNoticeVersion": "example-v1",
+    "marketingPurposeCode": "DIRECT_MARKETING",
+    "marketingLegalBasisCode": "CONSENT",
     "submittedAt": "2026-07-03T10:30:00.000Z"
   }'
 ```
@@ -206,8 +221,19 @@ $body = @{
   message = "Vorrei valutare un bando per investimenti digitali."
   sourcePage = "https://www.finanzaagevolaimpresa.it/contatti/"
   serviceInterest = "Pre-Analisi AI Ammissibilità FAI"
+  sourceSystem = "WORDPRESS_FAI"
+  formCode = "CONTACT_FORM"
+  formVersion = "example-v1"
   privacyAccepted = $true
+  privacyNoticeCode = "WEBSITE_PRIVACY_NOTICE"
+  privacyNoticeVersion = "example-v1"
+  privacyPurposeCode = "SERVICE_REQUEST_FOLLOW_UP"
+  privacyLegalBasisCode = "PRE_CONTRACTUAL_MEASURES"
   marketingAccepted = $false
+  marketingNoticeCode = "WEBSITE_MARKETING_NOTICE"
+  marketingNoticeVersion = "example-v1"
+  marketingPurposeCode = "DIRECT_MARKETING"
+  marketingLegalBasisCode = "CONSENT"
   submittedAt = "2026-07-03T10:30:00.000Z"
 } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "https://crm.example.com/api/integrations/website/leads" -Headers $headers -Body $body

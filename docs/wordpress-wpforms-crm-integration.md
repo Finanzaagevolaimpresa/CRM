@@ -1,5 +1,7 @@
 # Integrazione WordPress/WPForms con webhook CRM FAI
 
+> **Avvertenza N04:** gli esempi operativi sottostanti documentano il contratto storico pre-N04 e non devono essere distribuiti o attivati. Il ricevitore CRM ora richiede il contratto privacy v2 descritto in [`n04-privacy-consent-data-classification-foundation-v1.md`](n04-privacy-consent-data-classification-foundation-v1.md). Codici/versioni informative e basi giuridiche richiedono validazione Legale/DPO; l'adeguamento WordPress/WPForms appartiene a un mandato separato.
+
 Questa guida descrive come collegare i moduli WordPress/WPForms del sito `finanzaagevolaimpresa.it` al webhook CRM FAI già disponibile.
 
 ## Obiettivo e perimetro

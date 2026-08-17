@@ -231,7 +231,7 @@ test('N03 authentication cookies and login lookup use hardened defaults', () => 
 });
 
 test('N03 migration 34 is additive, seeds only OFF gates, and preserves dormant examples', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 34);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 35);
   const migration = readFileSync('prisma/migrations/20260816120000_privileged_access_application_security_baseline_v1/migration.sql', 'utf8');
   assert.doesNotMatch(migration, /^\s*(?:DROP|TRUNCATE|DELETE|UPDATE)\b/im);
   assert.match(migration, /CREATE TABLE "ApplicationFeatureGate"/);

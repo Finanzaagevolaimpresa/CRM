@@ -219,6 +219,10 @@ docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
 
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "35" ]] \
+  || fail "Production image did not apply exactly 35 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) || '\''|'\'' || (SELECT COUNT(*) FROM "PrivacyEvidenceReceipt") FROM "PrivacyNoticeVersion"')" == "0|0" ]] \
+  || fail "N04 dormant deployment unexpectedly created privacy notices or evidence"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "InternalSession"')" == "0" ]] \
   || fail "Dormant legacy deployment created InternalSession rows"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) || '\''|'\'' || COUNT(*) FILTER (WHERE "enabled") FROM "ApplicationFeatureGate"')" == "6|0" ]] \
@@ -369,4 +373,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 34 migrations, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 35 migrations, dormant N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
