@@ -41,7 +41,7 @@ Missing, unknown or mismatched values stop before Docker mutation. Compose paths
 - source commit/tree resolve in Git, and the selected application tag resolves to the pre-authorized image ID;
 - image commit/tree labels match the source identity for N05 images.
 
-The script never stops the application and never deletes old backups. It writes into a private `.partial-*` directory, validates the PostgreSQL custom dump with `pg_restore --list`, validates the document archive, writes `MANIFEST.txt` and `SHA256SUMS`, re-verifies the complete set and only then atomically renames the directory. A document failure invalidates the whole set; a database-only partial backup is not a release backup.
+The script never stops the application and never deletes old backups. It writes into a private `.partial-*` directory, validates the PostgreSQL custom dump with `pg_restore --list`, validates the document archive, writes `MANIFEST.txt` and `SHA256SUMS`, re-verifies the complete set and only then atomically renames the directory. The document archive is streamed by a disposable, networkless and read-only container started directly from the already verified immutable application image; the certified document volume is mounted read-only and Docker Compose is not allowed to create or reconcile production network resources during archive export. A document failure invalidates the whole set; a database-only partial backup is not a release backup.
 
 The manifest contains only technical metadata:
 

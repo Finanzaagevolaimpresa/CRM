@@ -69,9 +69,18 @@ mapfile -t services < <(compose config --services | LC_ALL=C sort)
   || n05_fail BACKUP_COMPOSE_SERVICES_INVALID
 mapfile -t compose_volumes < <(compose config --volumes | LC_ALL=C sort)
 case "$FAI_ENVIRONMENT" in
-  production) expected_volumes=$'crm_documents\npostgres_data' ;;
-  staging) expected_volumes=$'staging_documents\nstaging_postgres_data' ;;
-  restore-source) expected_volumes=$'restore_documents\nrestore_postgres_data' ;;
+  production)
+    expected_volumes=$'crm_documents\npostgres_data'
+    documents_logical_volume='crm_documents'
+    ;;
+  staging)
+    expected_volumes=$'staging_documents\nstaging_postgres_data'
+    documents_logical_volume='staging_documents'
+    ;;
+  restore-source)
+    expected_volumes=$'restore_documents\nrestore_postgres_data'
+    documents_logical_volume='restore_documents'
+    ;;
   *) n05_fail BACKUP_ENVIRONMENT_NOT_SUPPORTED ;;
 esac
 [[ "$(printf '%s\n' "${compose_volumes[@]}")" == "$expected_volumes" ]] || n05_fail BACKUP_COMPOSE_VOLUMES_INVALID
@@ -143,11 +152,26 @@ chmod 600 "$PARTIAL_DIR/$DATABASE_FILE"
 [[ -s "$PARTIAL_DIR/$DATABASE_FILE" ]] || n05_fail DATABASE_BACKUP_EMPTY
 compose exec -T postgres pg_restore --list < "$PARTIAL_DIR/$DATABASE_FILE" >/dev/null
 
-compose run --rm -T --no-deps --entrypoint sh app -c '
+mapfile -t documents_volumes < <(docker volume ls -q \
+  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --filter "label=com.docker.compose.volume=$documents_logical_volume")
+[[ "${#documents_volumes[@]}" -eq 1 && -n "${documents_volumes[0]}" ]] \
+  || n05_fail DOCUMENTS_VOLUME_IDENTITY_MISMATCH
+documents_volume="${documents_volumes[0]}"
+
+docker run --rm --pull never \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges=true \
+  --mount "type=volume,src=$documents_volume,dst=/var/lib/fai-crm/documents,readonly" \
+  --env "FAI_ENVIRONMENT_SENTINEL=$FAI_ENVIRONMENT_SENTINEL" \
+  --entrypoint sh \
+  "$APP_IMAGE" -c '
   set -eu
   test "$FAI_ENVIRONMENT_SENTINEL" = "$1"
   test -d "$2"
-  tar -czf - -C "$2" -- .
+  exec tar -czf - -C "$2" -- .
 ' sh "$FAI_ENVIRONMENT_SENTINEL" /var/lib/fai-crm/documents > "$PARTIAL_DIR/$DOCUMENTS_FILE"
 chmod 600 "$PARTIAL_DIR/$DOCUMENTS_FILE"
 n05_assert_archive_safe "$PARTIAL_DIR/$DOCUMENTS_FILE"

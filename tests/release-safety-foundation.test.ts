@@ -46,6 +46,16 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.match(backup, /APPLICATION_NOT_QUIESCED/);
   assert.match(backup, /pg_restore --list/);
   assert.match(backup, /FAI_CRM_N05_BACKUP_V1/);
+  assert.match(backup, /DOCUMENTS_VOLUME_IDENTITY_MISMATCH/);
+  assert.doesNotMatch(backup, /compose run/);
+  for (const isolatedArchiveControl of [
+    '--pull never',
+    '--network none',
+    '--read-only',
+    '--cap-drop ALL',
+    '--security-opt no-new-privileges=true',
+    'dst=/var/lib/fai-crm/documents,readonly',
+  ]) assert.match(backup, new RegExp(isolatedArchiveControl));
   assert.match(resourceBridge, /authorized-legacy-compose-identity/);
   assert.match(resourceBridge, /FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1/);
   assert.equal((releaseLib.match(/docker ps -aq --no-trunc/g) ?? []).length, 3);
