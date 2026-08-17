@@ -2,17 +2,24 @@
 # It never calls a Docker daemon and contains no production data.
 
 docker() {
-  local command="${1:-}" mode="${2:-}" arguments="$*" template resource
+  local command="${1:-}" mode="${2:-}" arguments="$*" template resource app_container_id postgres_container_id
   case "$command" in
     ps)
       if [[ "$mode" == "-q" ]]; then
         return 0
       fi
       [[ "$mode" == "-aq" ]] || return 1
+      if [[ "$arguments" == *--no-trunc* ]]; then
+        app_container_id='app-id'
+        postgres_container_id='postgres-id'
+      else
+        app_container_id='app-short'
+        postgres_container_id='postgres-short'
+      fi
       case "$arguments" in
-        *com.docker.compose.service=app*) printf 'app-id\n' ;;
-        *com.docker.compose.service=postgres*) printf 'postgres-id\n' ;;
-        *) printf 'app-id\npostgres-id\n' ;;
+        *com.docker.compose.service=app*) printf '%s\n' "$app_container_id" ;;
+        *com.docker.compose.service=postgres*) printf '%s\n' "$postgres_container_id" ;;
+        *) printf '%s\n%s\n' "$app_container_id" "$postgres_container_id" ;;
       esac
       ;;
     inspect)
