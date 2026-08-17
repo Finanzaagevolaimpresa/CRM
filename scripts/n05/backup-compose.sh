@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/lib.sh"
 : "${SOURCE_TREE:?SOURCE_TREE is required}"
 : "${EXPECTED_APP_IMAGE_ID:?EXPECTED_APP_IMAGE_ID is required}"
 : "${BACKUP_IMAGE_PROVENANCE:?BACKUP_IMAGE_PROVENANCE is required}"
+: "${BACKUP_RESOURCE_PROVENANCE:?BACKUP_RESOURCE_PROVENANCE is required}"
 : "${EXPECTED_DATABASE_NAME:?EXPECTED_DATABASE_NAME is required}"
 : "${BACKUP_CONSISTENCY:?BACKUP_CONSISTENCY is required}"
 
@@ -27,6 +28,15 @@ n05_assert_git_oid "$SOURCE_TREE" SOURCE_TREE
 [[ "$(git -C "$N05_REPO_ROOT" rev-parse "$SOURCE_COMMIT^{tree}")" == "$SOURCE_TREE" ]] || n05_fail BACKUP_SOURCE_TREE_MISMATCH
 n05_assert_safe_token "$EXPECTED_DATABASE_NAME" EXPECTED_DATABASE_NAME
 [[ "$BACKUP_CONSISTENCY" == "application-quiesced" ]] || n05_fail BACKUP_NOT_QUIESCED
+case "$BACKUP_RESOURCE_PROVENANCE" in
+  n05-labels) ;;
+  authorized-legacy-compose-identity)
+    [[ "$FAI_ENVIRONMENT" == "production" ]] || n05_fail LEGACY_RESOURCE_BRIDGE_PRODUCTION_ONLY
+    [[ "${CONFIRM_LEGACY_RESOURCE_IDENTITY:-}" == "FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1" ]] \
+      || n05_fail LEGACY_RESOURCE_BRIDGE_CONFIRMATION_MISMATCH
+    ;;
+  *) n05_fail BACKUP_RESOURCE_PROVENANCE_MODE_INVALID ;;
+esac
 
 BACKUP_ROOT="$(n05_realpath "$BACKUP_ROOT")"
 [[ -d "$BACKUP_ROOT" && ! -L "$BACKUP_ROOT" && "$BACKUP_ROOT" != "/" ]] || n05_fail BACKUP_ROOT_INVALID
@@ -88,25 +98,26 @@ esac
 mapfile -t postgres_ids < <(compose ps -q --status running postgres)
 [[ "${#postgres_ids[@]}" -eq 1 && -n "${postgres_ids[0]}" ]] || n05_fail POSTGRES_NOT_EXACTLY_ONE_RUNNING
 [[ -z "$(compose ps -q --status running app)" ]] || n05_fail APPLICATION_NOT_QUIESCED
-[[ "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.environment"}}' "${postgres_ids[0]}")" == "$FAI_ENVIRONMENT" ]] \
-  || n05_fail POSTGRES_ENVIRONMENT_LABEL_MISMATCH
-[[ "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.sentinel"}}' "${postgres_ids[0]}")" == "$FAI_ENVIRONMENT_SENTINEL" ]] \
-  || n05_fail POSTGRES_SENTINEL_LABEL_MISMATCH
-
-mapfile -t project_volumes < <(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
-[[ "${#project_volumes[@]}" -eq 2 ]] || n05_fail PROJECT_VOLUME_COUNT_MISMATCH
-for volume_id in "${project_volumes[@]}"; do
-  [[ "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "$volume_id")" == "$FAI_ENVIRONMENT" ]] \
-    || n05_fail VOLUME_ENVIRONMENT_LABEL_MISMATCH
-  [[ "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "$volume_id")" == "$FAI_ENVIRONMENT_SENTINEL" ]] \
-    || n05_fail VOLUME_SENTINEL_LABEL_MISMATCH
-done
-mapfile -t project_networks < <(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
-[[ "${#project_networks[@]}" -eq 1 ]] || n05_fail PROJECT_NETWORK_COUNT_MISMATCH
-[[ "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "${project_networks[0]}")" == "$FAI_ENVIRONMENT" ]] \
-  || n05_fail NETWORK_ENVIRONMENT_LABEL_MISMATCH
-[[ "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "${project_networks[0]}")" == "$FAI_ENVIRONMENT_SENTINEL" ]] \
-  || n05_fail NETWORK_SENTINEL_LABEL_MISMATCH
+if [[ "$BACKUP_RESOURCE_PROVENANCE" == "authorized-legacy-compose-identity" ]]; then
+  legacy_unlabeled_resources="$(n05_assert_authorized_legacy_compose_resources "${postgres_ids[0]}")"
+  [[ "$legacy_unlabeled_resources" =~ ^[1-5]$ ]] || n05_fail LEGACY_RESOURCE_COUNT_INVALID
+else
+  mapfile -t project_volumes < <(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
+  [[ "${#project_volumes[@]}" -eq 2 ]] || n05_fail PROJECT_VOLUME_COUNT_MISMATCH
+  mapfile -t project_networks < <(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")
+  [[ "${#project_networks[@]}" -eq 1 ]] || n05_fail PROJECT_NETWORK_COUNT_MISMATCH
+  n05_classify_resource_label_pair "$BACKUP_RESOURCE_PROVENANCE" \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.environment"}}' "${postgres_ids[0]}")" \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.sentinel"}}' "${postgres_ids[0]}")" >/dev/null
+  for volume_id in "${project_volumes[@]}"; do
+    n05_classify_resource_label_pair "$BACKUP_RESOURCE_PROVENANCE" \
+      "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "$volume_id")" \
+      "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "$volume_id")" >/dev/null
+  done
+  n05_classify_resource_label_pair "$BACKUP_RESOURCE_PROVENANCE" \
+    "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "${project_networks[0]}")" \
+    "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "${project_networks[0]}")" >/dev/null
+fi
 
 actual_database_name="$(compose exec -T postgres sh -c 'printf %s "$POSTGRES_DB"')"
 [[ "$actual_database_name" == "$EXPECTED_DATABASE_NAME" ]] || n05_fail DATABASE_NAME_MISMATCH
@@ -153,6 +164,7 @@ created_at="$(date -u +%Y%m%dT%H%M%SZ)"
   printf 'source_tree=%s\n' "$SOURCE_TREE"
   printf 'app_image_id=%s\n' "$app_image_id"
   printf 'image_provenance=%s\n' "$BACKUP_IMAGE_PROVENANCE"
+  printf 'resource_provenance=%s\n' "$BACKUP_RESOURCE_PROVENANCE"
   printf 'migration_count=%s\n' "$migration_count"
   printf 'database_file=%s\n' "$DATABASE_FILE"
   printf 'documents_file=%s\n' "$DOCUMENTS_FILE"
@@ -171,6 +183,7 @@ EXPECTED_SOURCE_COMMIT="$SOURCE_COMMIT" \
 EXPECTED_SOURCE_TREE="$SOURCE_TREE" \
 EXPECTED_APP_IMAGE_ID="$app_image_id" \
 EXPECTED_IMAGE_PROVENANCE="$BACKUP_IMAGE_PROVENANCE" \
+EXPECTED_RESOURCE_PROVENANCE="$BACKUP_RESOURCE_PROVENANCE" \
 EXPECTED_MIGRATION_COUNT="$migration_count" \
   "$SCRIPT_DIR/verify-backup-manifest.sh" "$PARTIAL_DIR" >/dev/null
 

@@ -12,6 +12,7 @@ EXPECTED_SOURCE_COMMIT="${EXPECTED_SOURCE_COMMIT:?EXPECTED_SOURCE_COMMIT is requ
 EXPECTED_SOURCE_TREE="${EXPECTED_SOURCE_TREE:?EXPECTED_SOURCE_TREE is required}"
 EXPECTED_APP_IMAGE_ID="${EXPECTED_APP_IMAGE_ID:?EXPECTED_APP_IMAGE_ID is required}"
 EXPECTED_IMAGE_PROVENANCE="${EXPECTED_IMAGE_PROVENANCE:?EXPECTED_IMAGE_PROVENANCE is required}"
+EXPECTED_RESOURCE_PROVENANCE="${EXPECTED_RESOURCE_PROVENANCE:?EXPECTED_RESOURCE_PROVENANCE is required}"
 EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-35}"
 
 n05_assert_safe_token "$EXPECTED_PROJECT" EXPECTED_PROJECT
@@ -20,6 +21,12 @@ n05_assert_git_oid "$EXPECTED_SOURCE_TREE" EXPECTED_SOURCE_TREE
 [[ "$EXPECTED_APP_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || n05_fail INVALID_APP_IMAGE_ID
 [[ "$EXPECTED_IMAGE_PROVENANCE" == "oci-labels" || "$EXPECTED_IMAGE_PROVENANCE" == "authorized-legacy-image-id" ]] \
   || n05_fail INVALID_IMAGE_PROVENANCE
+[[ "$EXPECTED_RESOURCE_PROVENANCE" == "n05-labels" || "$EXPECTED_RESOURCE_PROVENANCE" == "authorized-legacy-compose-identity" ]] \
+  || n05_fail INVALID_RESOURCE_PROVENANCE
+if [[ "$EXPECTED_RESOURCE_PROVENANCE" == "authorized-legacy-compose-identity" ]]; then
+  [[ "$EXPECTED_ENVIRONMENT" == "production" && "$EXPECTED_PROJECT" == "fai-crm" ]] \
+    || n05_fail LEGACY_RESOURCE_MANIFEST_PRODUCTION_ONLY
+fi
 [[ "$EXPECTED_MIGRATION_COUNT" =~ ^[0-9]{1,4}$ ]] || n05_fail INVALID_MIGRATION_COUNT
 
 BACKUP_SET_DIR="$(n05_realpath "$BACKUP_SET_DIR")"
@@ -36,7 +43,8 @@ declare -A values=()
 declare -A allowed=(
   [schema]=1 [environment]=1 [environment_sentinel]=1 [compose_project]=1
   [created_at]=1 [consistency]=1 [source_commit]=1 [source_tree]=1
-  [app_image_id]=1 [image_provenance]=1 [migration_count]=1 [database_file]=1 [documents_file]=1
+  [app_image_id]=1 [image_provenance]=1 [resource_provenance]=1
+  [migration_count]=1 [database_file]=1 [documents_file]=1
 )
 
 while IFS='=' read -r key value; do
@@ -58,6 +66,7 @@ done
 [[ "${values[source_tree]}" == "$EXPECTED_SOURCE_TREE" ]] || n05_fail MANIFEST_TREE_MISMATCH
 [[ "${values[app_image_id]}" == "$EXPECTED_APP_IMAGE_ID" ]] || n05_fail MANIFEST_APP_IMAGE_ID_MISMATCH
 [[ "${values[image_provenance]}" == "$EXPECTED_IMAGE_PROVENANCE" ]] || n05_fail MANIFEST_IMAGE_PROVENANCE_MISMATCH
+[[ "${values[resource_provenance]}" == "$EXPECTED_RESOURCE_PROVENANCE" ]] || n05_fail MANIFEST_RESOURCE_PROVENANCE_MISMATCH
 [[ "${values[migration_count]}" == "$EXPECTED_MIGRATION_COUNT" ]] || n05_fail MANIFEST_MIGRATION_MISMATCH
 [[ "${values[created_at]}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || n05_fail MANIFEST_TIMESTAMP_INVALID
 

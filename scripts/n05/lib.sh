@@ -229,6 +229,155 @@ n05_assert_environment_identity() {
   esac
 }
 
+n05_normalize_docker_label() {
+  local value="${1:-}"
+  [[ "$value" == "<no value>" ]] && value=""
+  printf '%s' "$value"
+}
+
+n05_classify_resource_label_pair() {
+  local mode="${1:?resource provenance mode is required}"
+  local environment_label sentinel_label
+  environment_label="$(n05_normalize_docker_label "${2:-}")"
+  sentinel_label="$(n05_normalize_docker_label "${3:-}")"
+  : "${FAI_ENVIRONMENT:?FAI_ENVIRONMENT is required}"
+  : "${FAI_ENVIRONMENT_SENTINEL:?FAI_ENVIRONMENT_SENTINEL is required}"
+
+  case "$mode" in
+    n05-labels)
+      [[ "$environment_label" == "$FAI_ENVIRONMENT" ]] || n05_fail RESOURCE_ENVIRONMENT_LABEL_MISMATCH
+      [[ "$sentinel_label" == "$FAI_ENVIRONMENT_SENTINEL" ]] || n05_fail RESOURCE_SENTINEL_LABEL_MISMATCH
+      printf 'n05-labeled'
+      ;;
+    authorized-legacy-compose-identity)
+      [[ "$FAI_ENVIRONMENT" == "production" ]] || n05_fail LEGACY_RESOURCE_BRIDGE_PRODUCTION_ONLY
+      if [[ -z "$environment_label" && -z "$sentinel_label" ]]; then
+        printf 'legacy-unlabeled'
+      else
+        [[ "$environment_label" == "$FAI_ENVIRONMENT" ]] || n05_fail LEGACY_RESOURCE_ENVIRONMENT_LABEL_PARTIAL_OR_MISMATCHED
+        [[ "$sentinel_label" == "$FAI_ENVIRONMENT_SENTINEL" ]] || n05_fail LEGACY_RESOURCE_SENTINEL_LABEL_PARTIAL_OR_MISMATCHED
+        printf 'n05-labeled'
+      fi
+      ;;
+    *) n05_fail BACKUP_RESOURCE_PROVENANCE_MODE_INVALID ;;
+  esac
+}
+
+n05_assert_authorized_legacy_compose_resources() {
+  local postgres_id="${1:?postgres container id is required}"
+  local state app_documents_source postgres_data_source network_name resource
+  local legacy_unlabeled_resources=0
+  local -a all_project_container_ids=() all_postgres_ids=() app_ids=() project_volumes=() project_networks=() sorted_volumes=()
+
+  [[ "${BACKUP_RESOURCE_PROVENANCE:-}" == "authorized-legacy-compose-identity" ]] \
+    || n05_fail LEGACY_RESOURCE_BRIDGE_MODE_REQUIRED
+  [[ "${CONFIRM_LEGACY_RESOURCE_IDENTITY:-}" == "FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1" ]] \
+    || n05_fail LEGACY_RESOURCE_BRIDGE_CONFIRMATION_MISMATCH
+  [[ "${FAI_ENVIRONMENT:-}" == "production" ]] || n05_fail LEGACY_RESOURCE_BRIDGE_PRODUCTION_ONLY
+  [[ "${FAI_ENVIRONMENT_SENTINEL:-}" == "FAI_CRM_PRODUCTION_V1" ]] \
+    || n05_fail LEGACY_RESOURCE_BRIDGE_SENTINEL_MISMATCH
+  [[ "${COMPOSE_PROJECT_NAME:-}" == "fai-crm" ]] || n05_fail LEGACY_RESOURCE_BRIDGE_PROJECT_MISMATCH
+  [[ "${APP_IMAGE:-}" =~ ^fai-crm:pr[0-9]+-[0-9a-f]{12}$ ]] || n05_fail LEGACY_APP_IMAGE_TAG_INVALID
+  [[ "${EXPECTED_APP_IMAGE_ID:-}" =~ ^sha256:[0-9a-f]{64}$ ]] || n05_fail LEGACY_APP_IMAGE_ID_INVALID
+
+  classify_legacy_pair() {
+    state="$(n05_classify_resource_label_pair "$BACKUP_RESOURCE_PROVENANCE" "$1" "$2")"
+    [[ "$state" != "legacy-unlabeled" ]] || legacy_unlabeled_resources=$((legacy_unlabeled_resources + 1))
+  }
+
+  mapfile -t all_project_container_ids < <(docker ps -aq --filter 'label=com.docker.compose.project=fai-crm')
+  mapfile -t all_postgres_ids < <(docker ps -aq \
+    --filter 'label=com.docker.compose.project=fai-crm' \
+    --filter 'label=com.docker.compose.service=postgres')
+  mapfile -t app_ids < <(docker ps -aq \
+    --filter 'label=com.docker.compose.project=fai-crm' \
+    --filter 'label=com.docker.compose.service=app')
+  [[ "${#all_project_container_ids[@]}" -eq 2 ]] || n05_fail LEGACY_PROJECT_CONTAINER_COUNT_MISMATCH
+  [[ "${#all_postgres_ids[@]}" -eq 1 && "${all_postgres_ids[0]}" == "$postgres_id" ]] \
+    || n05_fail LEGACY_POSTGRES_CONTAINER_IDENTITY_MISMATCH
+  [[ "${#app_ids[@]}" -eq 1 && -n "${app_ids[0]}" ]] || n05_fail LEGACY_APP_CONTAINER_NOT_EXACTLY_ONE
+  [[ -z "$(docker ps -q \
+    --filter 'label=com.docker.compose.project=fai-crm' \
+    --filter 'label=com.docker.compose.service=app')" ]] || n05_fail APPLICATION_NOT_QUIESCED
+
+  [[ "$(docker inspect -f '{{.Name}}' "${app_ids[0]}")" == "/fai-crm-app-1" ]] \
+    || n05_fail LEGACY_APP_CONTAINER_NAME_MISMATCH
+  [[ "$(docker inspect -f '{{.Name}}' "$postgres_id")" == "/fai-crm-postgres-1" ]] \
+    || n05_fail LEGACY_POSTGRES_CONTAINER_NAME_MISMATCH
+  [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "${app_ids[0]}")" == "fai-crm" ]] \
+    || n05_fail LEGACY_APP_PROJECT_LABEL_MISMATCH
+  [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "${app_ids[0]}")" == "app" ]] \
+    || n05_fail LEGACY_APP_SERVICE_LABEL_MISMATCH
+  [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$postgres_id")" == "fai-crm" ]] \
+    || n05_fail LEGACY_POSTGRES_PROJECT_LABEL_MISMATCH
+  [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$postgres_id")" == "postgres" ]] \
+    || n05_fail LEGACY_POSTGRES_SERVICE_LABEL_MISMATCH
+  [[ "$(docker inspect -f '{{.Config.Image}}' "${app_ids[0]}")" == "$APP_IMAGE" ]] \
+    || n05_fail LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH
+  [[ "$(docker inspect -f '{{.Image}}' "${app_ids[0]}")" == "$EXPECTED_APP_IMAGE_ID" ]] \
+    || n05_fail LEGACY_APP_CONTAINER_IMAGE_ID_MISMATCH
+  [[ "$(docker inspect -f '{{.Config.Image}}' "$postgres_id")" == "${POSTGRES_IMAGE:-postgres:16-alpine}" ]] \
+    || n05_fail LEGACY_POSTGRES_IMAGE_MISMATCH
+
+  app_documents_source="$(docker inspect -f '{{range .Mounts}}{{if and (eq .Type "volume") (eq .Destination "/var/lib/fai-crm/documents")}}{{.Name}}{{end}}{{end}}' "${app_ids[0]}")"
+  postgres_data_source="$(docker inspect -f '{{range .Mounts}}{{if and (eq .Type "volume") (eq .Destination "/var/lib/postgresql/data")}}{{.Name}}{{end}}{{end}}' "$postgres_id")"
+  [[ "$app_documents_source" == "fai-crm_crm_documents" ]] || n05_fail LEGACY_APP_DOCUMENTS_MOUNT_MISMATCH
+  [[ "$postgres_data_source" == "fai-crm_postgres_data" ]] || n05_fail LEGACY_POSTGRES_DATA_MOUNT_MISMATCH
+
+  classify_legacy_pair \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.environment"}}' "${app_ids[0]}")" \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.sentinel"}}' "${app_ids[0]}")"
+  classify_legacy_pair \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.environment"}}' "$postgres_id")" \
+    "$(docker inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.sentinel"}}' "$postgres_id")"
+
+  mapfile -t project_volumes < <(docker volume ls -q --filter 'label=com.docker.compose.project=fai-crm')
+  [[ "${#project_volumes[@]}" -eq 2 ]] || n05_fail LEGACY_PROJECT_VOLUME_COUNT_MISMATCH
+  mapfile -t sorted_volumes < <(printf '%s\n' "${project_volumes[@]}" | LC_ALL=C sort)
+  [[ "${sorted_volumes[*]}" == "fai-crm_crm_documents fai-crm_postgres_data" ]] \
+    || n05_fail LEGACY_VOLUME_NAMES_MISMATCH
+  for resource in "${project_volumes[@]}"; do
+    [[ "$(docker volume inspect -f '{{.Driver}}' "$resource")" == "local" ]] || n05_fail LEGACY_VOLUME_DRIVER_MISMATCH
+    [[ "$(docker volume inspect -f '{{.Scope}}' "$resource")" == "local" ]] || n05_fail LEGACY_VOLUME_SCOPE_MISMATCH
+    [[ "$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$resource")" == "fai-crm" ]] \
+      || n05_fail LEGACY_VOLUME_PROJECT_LABEL_MISMATCH
+    case "$resource" in
+      fai-crm_crm_documents)
+        [[ "$(docker volume inspect -f '{{index .Labels "com.docker.compose.volume"}}' "$resource")" == "crm_documents" ]] \
+          || n05_fail LEGACY_DOCUMENTS_LOGICAL_LABEL_MISMATCH
+        ;;
+      fai-crm_postgres_data)
+        [[ "$(docker volume inspect -f '{{index .Labels "com.docker.compose.volume"}}' "$resource")" == "postgres_data" ]] \
+          || n05_fail LEGACY_POSTGRES_LOGICAL_LABEL_MISMATCH
+        ;;
+      *) n05_fail LEGACY_VOLUME_NAME_DENIED ;;
+    esac
+    classify_legacy_pair \
+      "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "$resource")" \
+      "$(docker volume inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "$resource")"
+  done
+
+  mapfile -t project_networks < <(docker network ls -q --filter 'label=com.docker.compose.project=fai-crm')
+  [[ "${#project_networks[@]}" -eq 1 && -n "${project_networks[0]}" ]] \
+    || n05_fail LEGACY_PROJECT_NETWORK_COUNT_MISMATCH
+  network_name="$(docker network inspect -f '{{.Name}}' "${project_networks[0]}")"
+  [[ "$network_name" == "fai-crm_default" ]] || n05_fail LEGACY_NETWORK_NAME_MISMATCH
+  [[ "$(docker network inspect -f '{{.Driver}}' "${project_networks[0]}")" == "bridge" ]] \
+    || n05_fail LEGACY_NETWORK_DRIVER_MISMATCH
+  [[ "$(docker network inspect -f '{{.Scope}}' "${project_networks[0]}")" == "local" ]] \
+    || n05_fail LEGACY_NETWORK_SCOPE_MISMATCH
+  [[ "$(docker network inspect -f '{{index .Labels "com.docker.compose.project"}}' "${project_networks[0]}")" == "fai-crm" ]] \
+    || n05_fail LEGACY_NETWORK_PROJECT_LABEL_MISMATCH
+  [[ "$(docker network inspect -f '{{index .Labels "com.docker.compose.network"}}' "${project_networks[0]}")" == "default" ]] \
+    || n05_fail LEGACY_NETWORK_LOGICAL_LABEL_MISMATCH
+  classify_legacy_pair \
+    "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.environment"}}' "${project_networks[0]}")" \
+    "$(docker network inspect -f '{{index .Labels "it.finanzaagevolaimpresa.sentinel"}}' "${project_networks[0]}")"
+
+  (( legacy_unlabeled_resources > 0 )) || n05_fail LEGACY_RESOURCE_BRIDGE_NOT_REQUIRED
+  printf '%s' "$legacy_unlabeled_resources"
+}
+
 n05_project_resource_ids() {
   local project="$1" containers networks volumes
   containers="$(docker ps -aq --filter "label=com.docker.compose.project=$project")" || return 1
