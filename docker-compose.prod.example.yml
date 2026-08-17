@@ -2,6 +2,8 @@
 # Copy .env.production.example to .env.production, fill placeholders with real server-only values,
 # then run commands with: docker compose --env-file .env.production -f docker-compose.prod.example.yml ...
 
+name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME=fai-crm explicitly}
+
 services:
   app:
     build:
@@ -9,13 +11,17 @@ services:
       dockerfile: Dockerfile.prod.example
       args:
         SECURITY_HEADERS_MODE: ${SECURITY_HEADERS_MODE:-report-only}
-    image: ${APP_IMAGE:-fai-crm:prod}
+        SOURCE_COMMIT: ${SOURCE_COMMIT:?set the exact release commit}
+        SOURCE_TREE: ${SOURCE_TREE:?set the exact release tree}
+    image: ${APP_IMAGE:?set an immutable fai-crm:prN-<sha12> application tag}
     env_file:
-      - path: ${APP_ENV_FILE:-.env.production}
-        required: false
+      - path: ${APP_ENV_FILE:?set APP_ENV_FILE=.env.production explicitly}
+        required: true
     environment:
       NODE_ENV: production
       APP_ENV: production
+      FAI_ENVIRONMENT: production
+      FAI_ENVIRONMENT_SENTINEL: FAI_CRM_PRODUCTION_V1
       PORT: 3000
       HOSTNAME: 0.0.0.0
       # For this compose example, DATABASE_URL should point to the postgres service, for example:
@@ -23,6 +29,9 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       STORAGE_PROVIDER: local
       LOCAL_DOCUMENT_STORAGE_ROOT: /var/lib/fai-crm/documents
+    labels:
+      it.finanzaagevolaimpresa.environment: production
+      it.finanzaagevolaimpresa.sentinel: FAI_CRM_PRODUCTION_V1
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,18 +41,21 @@ services:
       - "127.0.0.1:3000:3000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "test \"$$FAI_ENVIRONMENT_SENTINEL\" = FAI_CRM_PRODUCTION_V1 && node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 40s
 
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-fai_crm}
-      POSTGRES_USER: ${POSTGRES_USER:-fai_crm}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB explicitly}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER explicitly}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+    labels:
+      it.finanzaagevolaimpresa.environment: production
+      it.finanzaagevolaimpresa.sentinel: FAI_CRM_PRODUCTION_V1
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -56,4 +68,16 @@ services:
 
 volumes:
   postgres_data:
+    labels:
+      it.finanzaagevolaimpresa.environment: production
+      it.finanzaagevolaimpresa.sentinel: FAI_CRM_PRODUCTION_V1
   crm_documents:
+    labels:
+      it.finanzaagevolaimpresa.environment: production
+      it.finanzaagevolaimpresa.sentinel: FAI_CRM_PRODUCTION_V1
+
+networks:
+  default:
+    labels:
+      it.finanzaagevolaimpresa.environment: production
+      it.finanzaagevolaimpresa.sentinel: FAI_CRM_PRODUCTION_V1

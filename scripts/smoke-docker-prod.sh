@@ -20,6 +20,8 @@ EXPECTED_MIGRATION_COUNT=35
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
+SOURCE_COMMIT="${SOURCE_COMMIT:-$(git rev-parse HEAD)}"
+SOURCE_TREE="${SOURCE_TREE:-$(git rev-parse HEAD^{tree})}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -109,6 +111,8 @@ NODE_ENV=production
 ENV
 
 export APP_IMAGE="$SMOKE_APP_IMAGE"
+export SOURCE_COMMIT
+export SOURCE_TREE
 export APP_ENV_FILE="$SMOKE_ENV_FILE"
 export POSTGRES_DB=fai_crm_smoke
 export POSTGRES_USER=fai_crm_smoke

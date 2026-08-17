@@ -1,0 +1,67 @@
+name: ${COMPOSE_PROJECT_NAME:?set an isolated fai-crm-restore-*-source/target project name}
+
+services:
+  app:
+    image: ${APP_IMAGE:?set the immutable restore-drill application image}
+    env_file:
+      - path: ${APP_ENV_FILE:?set the synthetic restore-drill env file}
+        required: true
+    environment:
+      NODE_ENV: production
+      APP_ENV: staging
+      FAI_ENVIRONMENT: ${FAI_ENVIRONMENT:?set restore-source or restore-target}
+      FAI_ENVIRONMENT_SENTINEL: ${FAI_ENVIRONMENT_SENTINEL:?set the matching restore sentinel}
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: ${DATABASE_URL:?set a synthetic restore database URL}
+      STORAGE_PROVIDER: local
+      LOCAL_DOCUMENT_STORAGE_ROOT: /var/lib/fai-crm/documents
+    labels:
+      it.finanzaagevolaimpresa.environment: ${FAI_ENVIRONMENT}
+      it.finanzaagevolaimpresa.sentinel: ${FAI_ENVIRONMENT_SENTINEL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - restore_documents:/var/lib/fai-crm/documents
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$FAI_ENVIRONMENT_SENTINEL\" && node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set a synthetic restore database name}
+      POSTGRES_USER: ${POSTGRES_USER:?set a synthetic restore database user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a synthetic restore database password}
+    labels:
+      it.finanzaagevolaimpresa.environment: ${FAI_ENVIRONMENT}
+      it.finanzaagevolaimpresa.sentinel: ${FAI_ENVIRONMENT_SENTINEL}
+    volumes:
+      - restore_postgres_data:/var/lib/postgresql/data
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  restore_postgres_data:
+    labels:
+      it.finanzaagevolaimpresa.environment: ${FAI_ENVIRONMENT}
+      it.finanzaagevolaimpresa.sentinel: ${FAI_ENVIRONMENT_SENTINEL}
+  restore_documents:
+    labels:
+      it.finanzaagevolaimpresa.environment: ${FAI_ENVIRONMENT}
+      it.finanzaagevolaimpresa.sentinel: ${FAI_ENVIRONMENT_SENTINEL}
+
+networks:
+  default:
+    labels:
+      it.finanzaagevolaimpresa.environment: ${FAI_ENVIRONMENT}
+      it.finanzaagevolaimpresa.sentinel: ${FAI_ENVIRONMENT_SENTINEL}
