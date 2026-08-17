@@ -48,6 +48,7 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.match(backup, /FAI_CRM_N05_BACKUP_V1/);
   assert.match(resourceBridge, /authorized-legacy-compose-identity/);
   assert.match(resourceBridge, /FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1/);
+  assert.equal((releaseLib.match(/docker ps -aq --no-trunc/g) ?? []).length, 3);
   for (const certifiedIdentity of [
     'fai-crm-app-1',
     'fai-crm-postgres-1',
