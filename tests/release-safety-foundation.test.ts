@@ -41,9 +41,22 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   for (const file of expected) assert.doesNotThrow(() => readFileSync(file), file);
 
   const backup = readFileSync('scripts/n05/backup-compose.sh', 'utf8');
+  const releaseLib = readFileSync('scripts/n05/lib.sh', 'utf8');
+  const resourceBridge = `${backup}\n${releaseLib}`;
   assert.match(backup, /APPLICATION_NOT_QUIESCED/);
   assert.match(backup, /pg_restore --list/);
   assert.match(backup, /FAI_CRM_N05_BACKUP_V1/);
+  assert.match(resourceBridge, /authorized-legacy-compose-identity/);
+  assert.match(resourceBridge, /FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1/);
+  for (const certifiedIdentity of [
+    'fai-crm-app-1',
+    'fai-crm-postgres-1',
+    'fai-crm_crm_documents',
+    'fai-crm_postgres_data',
+    'fai-crm_default',
+  ]) assert.match(resourceBridge, new RegExp(certifiedIdentity));
+  assert.match(resourceBridge, /LEGACY_RESOURCE_BRIDGE_PRODUCTION_ONLY/);
+  assert.match(resourceBridge, /LEGACY_RESOURCE_BRIDGE_NOT_REQUIRED/);
   assert.doesNotMatch(backup, /down\s+-v|system\s+prune|volume\s+prune|rm\s+-rf/);
 
   const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
@@ -59,6 +72,8 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   for (const invariant of ['REMOTE_MAIN_MISMATCH', 'CI_SHA_MISMATCH', 'RELEASE_IMAGE_ID_MISMATCH', 'INCOMPATIBLE_PR_PRESENT']) {
     assert.match(release, new RegExp(invariant));
   }
+  assert.match(release, /BACKUP_RESOURCE_PROVENANCE/);
+  assert.match(readFileSync('scripts/n05/verify-backup-manifest.sh', 'utf8'), /resource_provenance/);
 });
 
 test('restore Compose commands use the generated synthetic env over inherited CI values', () => {
@@ -114,6 +129,93 @@ test('environment identity accepts only an explicit isolated staging identity', 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('resource provenance permits only exact N05 labels or the explicit production Compose bridge', () => {
+  const command = `source "${lib}"; n05_classify_resource_label_pair "$MODE" "$OBSERVED_ENVIRONMENT" "$OBSERVED_SENTINEL"`;
+  const production = {
+    FAI_ENVIRONMENT: 'production',
+    FAI_ENVIRONMENT_SENTINEL: 'FAI_CRM_PRODUCTION_V1',
+  };
+  const labeled = shell(command, {
+    ...production,
+    MODE: 'n05-labels',
+    OBSERVED_ENVIRONMENT: 'production',
+    OBSERVED_SENTINEL: 'FAI_CRM_PRODUCTION_V1',
+  });
+  assert.equal(labeled.status, 0, labeled.stderr);
+  assert.equal(labeled.stdout, 'n05-labeled');
+
+  const legacy = shell(command, {
+    ...production,
+    MODE: 'authorized-legacy-compose-identity',
+    OBSERVED_ENVIRONMENT: '<no value>',
+    OBSERVED_SENTINEL: '<no value>',
+  });
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.equal(legacy.stdout, 'legacy-unlabeled');
+
+  assert.equal(shell(command, {
+    ...production,
+    MODE: 'n05-labels',
+    OBSERVED_ENVIRONMENT: '<no value>',
+    OBSERVED_SENTINEL: '<no value>',
+  }).status, 1);
+  assert.equal(shell(command, {
+    ...production,
+    MODE: 'authorized-legacy-compose-identity',
+    OBSERVED_ENVIRONMENT: 'production',
+    OBSERVED_SENTINEL: '<no value>',
+  }).status, 1);
+  assert.equal(shell(command, {
+    ...production,
+    MODE: 'authorized-legacy-compose-identity',
+    OBSERVED_ENVIRONMENT: 'staging',
+    OBSERVED_SENTINEL: 'FAI_CRM_STAGING_ISOLATED_V1',
+  }).status, 1);
+  assert.equal(shell(command, {
+    FAI_ENVIRONMENT: 'staging',
+    FAI_ENVIRONMENT_SENTINEL: 'FAI_CRM_STAGING_ISOLATED_V1',
+    MODE: 'authorized-legacy-compose-identity',
+    OBSERVED_ENVIRONMENT: '<no value>',
+    OBSERVED_SENTINEL: '<no value>',
+  }).status, 1);
+  assert.equal(shell(command, {
+    ...production,
+    MODE: 'untrusted',
+    OBSERVED_ENVIRONMENT: 'production',
+    OBSERVED_SENTINEL: 'FAI_CRM_PRODUCTION_V1',
+  }).status, 1);
+});
+
+test('authorized production bridge binds the complete certified Compose resource identity', () => {
+  const fixture = path.join(repoRoot, 'tests/fixtures/n05-legacy-docker-mock.sh');
+  const command = `set -Eeuo pipefail; source "${lib}"; source "${fixture}"; n05_assert_authorized_legacy_compose_resources postgres-id`;
+  const base = {
+    FAI_ENVIRONMENT: 'production',
+    FAI_ENVIRONMENT_SENTINEL: 'FAI_CRM_PRODUCTION_V1',
+    COMPOSE_PROJECT_NAME: 'fai-crm',
+    APP_IMAGE: 'fai-crm:pr91-3736f91b1787',
+    EXPECTED_APP_IMAGE_ID: appImageId,
+    POSTGRES_IMAGE: 'postgres:16-alpine',
+    BACKUP_RESOURCE_PROVENANCE: 'authorized-legacy-compose-identity',
+    CONFIRM_LEGACY_RESOURCE_IDENTITY: 'FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1',
+  };
+
+  const legacy = shell(command, base);
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.equal(legacy.stdout, '5');
+
+  const transition = shell(command, { ...base, LABEL_MODE: 'containers-labeled' });
+  assert.equal(transition.status, 0, transition.stderr);
+  assert.equal(transition.stdout, '3');
+
+  assert.equal(shell(command, { ...base, LABEL_MODE: 'partial' }).status, 1);
+  assert.equal(shell(command, { ...base, LABEL_MODE: 'all-labeled' }).status, 1);
+  assert.equal(shell(command, { ...base, TAMPER_VOLUME_LOGICAL: '1' }).status, 1);
+  assert.equal(shell(command, { ...base, CONFIRM_LEGACY_RESOURCE_IDENTITY: 'wrong' }).status, 1);
+  assert.equal(shell(command, { ...base, COMPOSE_PROJECT_NAME: 'other' }).status, 1);
+  assert.equal(shell(command, { ...base, FAI_ENVIRONMENT: 'staging' }).status, 1);
 });
 
 test('staging env contract denies production database reuse and open gates without exposing values', () => {
@@ -216,6 +318,7 @@ test('backup manifest is strict, checksum-bound and rejects corruption', () => {
       `source_tree=${sourceTree}`,
       `app_image_id=${appImageId}`,
       'image_provenance=oci-labels',
+      'resource_provenance=n05-labels',
       'migration_count=35',
       'database_file=postgres.dump',
       'documents_file=documents.tar.gz',
@@ -236,9 +339,34 @@ test('backup manifest is strict, checksum-bound and rejects corruption', () => {
       EXPECTED_SOURCE_TREE: sourceTree,
       EXPECTED_APP_IMAGE_ID: appImageId,
       EXPECTED_IMAGE_PROVENANCE: 'oci-labels',
+      EXPECTED_RESOURCE_PROVENANCE: 'n05-labels',
       EXPECTED_MIGRATION_COUNT: '35',
     };
     assert.equal(shell(`"${verifier}" "${root}"`, env).status, 0);
+    const manifest = readFileSync(path.join(root, 'MANIFEST.txt'), 'utf8');
+    writeFileSync(path.join(root, 'MANIFEST.txt'), manifest.replace('resource_provenance=n05-labels\n', ''));
+    assert.equal(shell(`"${verifier}" "${root}"`, env).status, 1);
+
+    const productionManifest = manifest
+      .replace('environment=restore-source', 'environment=production')
+      .replace('environment_sentinel=FAI_CRM_N05_RESTORE_SOURCE_V1', 'environment_sentinel=FAI_CRM_PRODUCTION_V1')
+      .replace('compose_project=fai-crm-restore-unit-test-source', 'compose_project=fai-crm')
+      .replace('resource_provenance=n05-labels', 'resource_provenance=authorized-legacy-compose-identity');
+    writeFileSync(path.join(root, 'MANIFEST.txt'), productionManifest);
+    const productionEnv = {
+      ...env,
+      EXPECTED_ENVIRONMENT: 'production',
+      EXPECTED_PROJECT: 'fai-crm',
+      EXPECTED_RESOURCE_PROVENANCE: 'authorized-legacy-compose-identity',
+    };
+    assert.equal(shell(`"${verifier}" "${root}"`, productionEnv).status, 0);
+    assert.equal(shell(`"${verifier}" "${root}"`, {
+      ...productionEnv,
+      EXPECTED_ENVIRONMENT: 'restore-source',
+      EXPECTED_PROJECT: 'fai-crm-restore-unit-test-source',
+    }).status, 1);
+
+    writeFileSync(path.join(root, 'MANIFEST.txt'), manifest);
     writeFileSync(path.join(root, 'postgres.dump'), 'corrupted');
     assert.equal(shell(`"${verifier}" "${root}"`, env).status, 1);
   } finally {

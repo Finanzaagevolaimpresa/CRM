@@ -50,6 +50,7 @@ The manifest contains only technical metadata:
 - UTC creation time;
 - `application-quiesced` consistency mode;
 - source commit/tree, application image ID and provenance mode;
+- Docker resource provenance mode;
 - applied migration count;
 - fixed database/document filenames.
 
@@ -57,12 +58,23 @@ It never contains database URLs, passwords, tokens, personal data, document name
 
 `scripts/backup-docker-prod.sh` is now an explicit production wrapper. It requires a fixed confirmation phrase, immutable image tag and pre-recorded image ID, source identity, backup root/set and expected database name. The normal provenance mode is `oci-labels`. The one-time `authorized-legacy-image-id` bridge is restricted to production images created before N05: it requires an exact authorized image ID, a commit-bound tag, a Git-resolved source tree and absent provenance labels. It cannot be used by staging or restore drill images. The wrapper refuses to treat a running application as a consistent release backup.
 
+Resource provenance is independent from image provenance. The default `n05-labels` mode requires the N05 environment/sentinel label pair on PostgreSQL, both Compose volumes and the project network. The explicit `authorized-legacy-compose-identity` bridge exists only for the production resources certified before the first N05 deployment. It requires the separate confirmation `FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1` and verifies exactly:
+
+- project `fai-crm`, containers `fai-crm-app-1` and `fai-crm-postgres-1`;
+- volumes `fai-crm_crm_documents` / `fai-crm_postgres_data` with local driver/scope and exact Compose logical labels;
+- network `fai-crm_default` with bridge driver, local scope and logical label `default`;
+- the exact application image tag/ID, PostgreSQL image and both declared volume mounts;
+- every N05 environment/sentinel label pair is either wholly absent or exactly correct; partial or mismatched pairs are denied;
+- at least one resource remains unlabeled, so the bridge cannot replace the normal mode after a complete labeled transition.
+
+The bridge is denied for staging and restore drill identities. It does not relabel, recreate, copy or migrate a volume or network. This preserves the certified persistent data resources while keeping the compatibility exception explicit, manifest-bound and fail-closed.
+
 ## Manifest and archive verification
 
 `scripts/n05/verify-backup-manifest.sh` fails on:
 
 - missing, duplicate or unknown manifest keys;
-- unexpected environment, sentinel, project, source commit/tree, application image ID/provenance or migration count;
+- unexpected environment, sentinel, project, source commit/tree, application image/resource provenance or migration count;
 - symlinked directories/files;
 - extra or missing checksum entries;
 - checksum mismatch;
@@ -103,6 +115,7 @@ The drill never uses `docker compose down -v`, global prune, unresolved globs or
 - immutable application tag contains the authorized commit prefix and resolves to the expected image ID;
 - rollback tag resolves to the first-parent N-1 commit and a different, pre-recorded image ID;
 - release and N-1 images expose the expected commit/tree labels; the explicitly declared legacy-ID bridge is accepted only when those old labels are absent;
+- the backup manifest exposes the explicitly authorized Docker resource provenance, with the legacy Compose bridge accepted only for production project `fai-crm`;
 - the quiesced production backup manifest/checksums match its deployed source commit/tree.
 
 The gate does not build, tag, start, stop, migrate, switch or roll back anything. Passing it does not authorize deploy. GitHub PR state and CI evidence must be acquired immediately before the gate; supplied evidence is fail-closed and cannot be omitted.
@@ -114,6 +127,7 @@ The gate does not build, tag, start, stop, migrate, switch or roll back anything
 | wrong/missing environment identity | before Compose/Docker mutation | correct explicit inputs; do not retry blindly |
 | project/image already exists | before creation | inspect ownership read-only; choose a new authorized run ID |
 | app not quiesced | before backup | stop and obtain an approved release window |
+| legacy resource bridge missing, partial or mismatched | before database/document backup | stop; compare exact certified Compose identities, never recreate production volumes merely to add metadata |
 | dump/archive creation fails | partial set only | diagnose; partial directory is removed, no PASS |
 | manifest/checksum/archive invalid | before restore | reject set; create a new complete backup |
 | restore fails | isolated target only | inspect target logs/resources; never touch source/production |

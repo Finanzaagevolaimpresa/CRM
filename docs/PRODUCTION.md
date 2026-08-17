@@ -243,7 +243,9 @@ Prima di qualsiasi operazione distruttiva (`down -v`, rimozione volumi, reinstal
 
 ## Backup database e documenti in Docker
 
-Usare esclusivamente il wrapper N05 `scripts/backup-docker-prod.sh` dentro una finestra autorizzata. Il wrapper richiede applicazione già quiesced, conferma esplicita, tag e image ID immutabili pre-registrati, commit/tree sorgente, modalità di provenienza, nome database atteso, directory/set di destinazione e migrazioni attese. Non applica retention e non cancella backup precedenti.
+Usare esclusivamente il wrapper N05 `scripts/backup-docker-prod.sh` dentro una finestra autorizzata. Il wrapper richiede applicazione già quiesced, conferma esplicita, tag e image ID immutabili pre-registrati, commit/tree sorgente, modalità di provenienza immagine e risorse Docker, nome database atteso, directory/set di destinazione e migrazioni attese. Non applica retention e non cancella backup precedenti.
+
+La modalità risorse ordinaria è `BACKUP_RESOURCE_PROVENANCE=n05-labels`. Solo per le risorse production pre-N05 già certificate è disponibile `BACKUP_RESOURCE_PROVENANCE=authorized-legacy-compose-identity`, insieme alla conferma separata `CONFIRM_LEGACY_RESOURCE_IDENTITY=FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1`. Il ponte controlla nomi, progetto, label Compose, driver/scope, mount e coppie environment/sentinel; è vietato in staging/restore e non modifica o ricrea volumi e reti. Non usarlo per aggirare label parziali, identità difformi o risorse nuove.
 
 Il blocco comandi esatto deve essere preparato per la singola release dopo il preflight read-only. Non inserire valori reali, secret o percorsi produttivi in documentazione o prompt. Conservare i set cifrati o in storage protetto e limitare l'accesso agli amministratori autorizzati.
 
