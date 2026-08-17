@@ -76,8 +76,9 @@ async function migrationQualification(upgrade: boolean) {
   const migrationsDir = join(prismaDir, 'migrations');
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 34);
+  const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
+  assert.equal(allNames.length, 35);
+  const names = allNames.slice(0, 34);
   const databaseUrl = new URL(process.env.DATABASE_URL!);
   databaseUrl.searchParams.set('schema', schema);
   await db.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);

@@ -3,9 +3,10 @@ import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canViewDocument, isSensitiveDocument } from '@/lib/access-control';
 import { privateDocumentExists, readPrivateDocument } from '@/lib/storage';
+import { redactAuditPayload } from '@/lib/data-classification';
 
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
-  await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as object } });
+  await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: redactAuditPayload(after) as object } });
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {

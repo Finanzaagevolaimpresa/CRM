@@ -14,26 +14,39 @@ const runDbTests = process.env.RUN_DB_TESTS === '1';
 const db = new PrismaClient();
 const syntheticDomain = 'n01-ci.invalid';
 const secret = 'n01-ci-synthetic-secret';
+const submittedAt = '2026-08-17T00:00:00.000Z';
 const execFileAsync = promisify(execFile);
 
 function request(key: string, suffix = 'same', overrides: Record<string, unknown> = {}) {
   return new NextRequest('http://localhost/api/integrations/website/leads', {
     method: 'POST',
     headers: { 'content-type': 'application/json; charset=utf-8', 'x-fai-webhook-secret': secret, 'idempotency-key': key },
-    body: JSON.stringify({ firstName: 'Synthetic', lastName: 'Qualification', email: `${suffix}@${syntheticDomain}`, privacyAccepted: true, ...overrides }),
+    body: JSON.stringify({
+      firstName: 'Synthetic', lastName: 'Qualification', email: `${suffix}@${syntheticDomain}`,
+      sourceSystem: 'N01_DB_TEST', formCode: 'SYNTHETIC_LEAD', formVersion: 'n04-v1',
+      privacyAccepted: true, privacyNoticeCode: 'N04_TEST_PRIVACY', privacyNoticeVersion: 'n04-v1',
+      privacyPurposeCode: 'SERVICE_REQUEST_FOLLOW_UP', privacyLegalBasisCode: 'PRE_CONTRACTUAL_MEASURES',
+      marketingAccepted: false, marketingNoticeCode: 'N04_TEST_MARKETING', marketingNoticeVersion: 'n04-v1',
+      marketingPurposeCode: 'DIRECT_MARKETING', marketingLegalBasisCode: 'CONSENT',
+      submittedAt, ...overrides,
+    }),
   });
 }
 async function counts() {
   const leadRows = await db.lead.findMany({ where: { email: { endsWith: `@${syntheticDomain}` } }, select: { id: true } });
-  const [audits, receipts, buckets] = await Promise.all([
+  const [audits, receipts, evidence, buckets] = await Promise.all([
     db.auditLog.count({ where: { entityId: { in: leadRows.map(({ id }) => id) }, event: { in: ['website_lead_received', 'website_lead_duplicate_detected'] } } }),
     db.websiteLeadReceipt.count({ where: { namespace: 'website-lead:legacy:v1' } }),
+    db.privacyEvidenceReceipt.count({ where: { leadId: { in: leadRows.map(({ id }) => id) } } }),
     db.websiteLeadRateLimitBucket.count({ where: { namespace: 'website-lead:legacy:v1' } }),
   ]);
-  return { leads: leadRows.length, audits, receipts, buckets };
+  return { leads: leadRows.length, audits, receipts, evidence, buckets };
 }
 async function clean() {
   const leadRows = await db.lead.findMany({ where: { email: { endsWith: `@${syntheticDomain}` } }, select: { id: true } });
+  await db.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" DISABLE TRIGGER "PrivacyEvidenceReceipt_deny_truncate_v1"');
+  try { await db.$executeRawUnsafe('TRUNCATE TABLE "PrivacyEvidenceReceipt"'); }
+  finally { await db.$executeRawUnsafe('ALTER TABLE "PrivacyEvidenceReceipt" ENABLE TRIGGER "PrivacyEvidenceReceipt_deny_truncate_v1"'); }
   await db.websiteLeadRateLimitBucket.deleteMany({ where: { namespace: 'website-lead:legacy:v1' } });
   await db.websiteLeadReceipt.deleteMany({ where: { namespace: 'website-lead:legacy:v1' } });
   await db.auditLog.deleteMany({ where: { entityId: { in: leadRows.map(({ id }) => id) }, event: { in: ['website_lead_received', 'website_lead_duplicate_detected'] } } });
@@ -49,6 +62,14 @@ before(async () => {
   process.env.WEBSITE_LEAD_RATE_LIMIT_WINDOW_SECONDS = '60';
   process.env.FEATURE_INTEGRATIONS_ENABLED = 'true';
   await db.applicationFeatureGate.update({ where: { code: 'INTEGRATIONS' }, data: { enabled: true } });
+  await db.privacyNoticeVersion.createMany({ data: [
+    { noticeCode: 'N04_TEST_PRIVACY', noticeVersion: 'n04-v1', purposeCode: 'SERVICE_REQUEST_FOLLOW_UP', legalBasisCode: 'PRE_CONTRACTUAL_MEASURES', evidenceKind: 'NOTICE_ACKNOWLEDGEMENT', contentHash: '1'.repeat(64) },
+    { noticeCode: 'N04_TEST_MARKETING', noticeVersion: 'n04-v1', purposeCode: 'DIRECT_MARKETING', legalBasisCode: 'CONSENT', evidenceKind: 'CONSENT', contentHash: '2'.repeat(64) },
+  ], skipDuplicates: true });
+  await db.privacyNoticeVersion.updateMany({
+    where: { noticeCode: { in: ['N04_TEST_PRIVACY', 'N04_TEST_MARKETING'] }, status: 'DRAFT' },
+    data: { status: 'ACTIVE', effectiveFrom: new Date('2020-01-01T00:00:00.000Z') },
+  });
 });
 beforeEach(async () => { if (runDbTests) await clean(); });
 after(async () => {
@@ -104,14 +125,14 @@ test('100 concurrent replays create one business effect and one receipt', { skip
   const responses = await Promise.all(Array.from({ length: 100 }, () => POST(request('same-key'))));
   assert.equal(responses.filter((r) => r.status === 201).length, 1);
   assert.equal(responses.filter((r) => r.status === 200).length, 99);
-  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, buckets: 1 });
+  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, evidence: 2, buckets: 1 });
   assert.equal(new Set(await Promise.all(responses.map(async (r) => (await r.json()).receipt))).size, 1);
 });
 
 test('100 keys with one normalized identity create one Lead without lost effects', { skip: !runDbTests }, async () => {
   const responses = await Promise.all(Array.from({ length: 100 }, (_, index) => POST(request(`contact-key-${index}`, 'NORMALIZED'))));
   assert.equal(responses.filter((r) => r.status === 201).length, 100);
-  assert.deepEqual(await counts(), { leads: 1, audits: 100, receipts: 100, buckets: 1 });
+  assert.deepEqual(await counts(), { leads: 1, audits: 100, receipts: 100, evidence: 200, buckets: 1 });
 });
 
 test('rate threshold is atomic and returns Retry-After', { skip: !runDbTests }, async () => {
@@ -123,7 +144,7 @@ test('rate threshold is atomic and returns Retry-After', { skip: !runDbTests }, 
       assert.equal(responses.filter((r) => r.status === 201).length, 30);
       assert.equal(responses.filter((r) => r.status === 503).length, 0);
       const limited = responses.filter((r) => r.status === 429); assert.equal(limited.length, 1); assert.ok(limited[0].headers.get('retry-after'));
-      assert.deepEqual(await counts(), { leads: 30, audits: 30, receipts: 30, buckets: 1 });
+      assert.deepEqual(await counts(), { leads: 30, audits: 30, receipts: 30, evidence: 60, buckets: 1 });
     }
   } finally { process.env.WEBSITE_LEAD_RATE_LIMIT_REQUESTS = '1000'; }
 });
@@ -137,13 +158,13 @@ async function runIsolatedProcesses(scenario: 'same-key' | 'same-identity' | 'di
 }
 test('advisory locks remain authoritative across isolated application processes', { skip: !runDbTests, timeout:60_000 }, async () => {
   assert.deepEqual(await runIsolatedProcesses('same-key'), { '200':19, '201':1 });
-  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, buckets:1 });
+  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, evidence:2, buckets:1 });
   await clean();
   assert.deepEqual(await runIsolatedProcesses('same-identity'), { '201':20 });
-  assert.deepEqual(await counts(), { leads:1, audits:20, receipts:20, buckets:1 });
+  assert.deepEqual(await counts(), { leads:1, audits:20, receipts:20, evidence:40, buckets:1 });
   await clean();
   assert.deepEqual(await runIsolatedProcesses('different-identities'), { '201':20 });
-  assert.deepEqual(await counts(), { leads:20, audits:20, receipts:20, buckets:1 });
+  assert.deepEqual(await counts(), { leads:20, audits:20, receipts:20, evidence:40, buckets:1 });
 });
 
 test('overlapping identities converge on a bridge Lead that already exists', { skip: !runDbTests }, async () => {
@@ -153,7 +174,7 @@ test('overlapping identities converge on a bridge Lead that already exists', { s
     POST(request('overlap-existing-phone', 'overlap-b', { phone:'+390001' })),
   ]);
   assert.deepEqual([bridge.status, ...directMatches.map(({ status }) => status)], [201,201,201]);
-  assert.deepEqual(await counts(), { leads:1, audits:3, receipts:3, buckets:1 });
+  assert.deepEqual(await counts(), { leads:1, audits:3, receipts:3, evidence:6, buckets:1 });
 });
 
 test('a bridge request does not automatically merge two existing Leads', { skip: !runDbTests }, async () => {
@@ -161,7 +182,7 @@ test('a bridge request does not automatically merge two existing Leads', { skip:
   const phoneLead = await POST(request('overlap-disjoint-phone', 'overlap-b', { phone:'+390001' }));
   const bridge = await POST(request('overlap-disjoint-bridge', 'overlap-a', { phone:'+390001' }));
   assert.deepEqual([emailLead.status, phoneLead.status, bridge.status], [201,201,201]);
-  assert.deepEqual(await counts(), { leads:2, audits:3, receipts:3, buckets:1 });
+  assert.deepEqual(await counts(), { leads:2, audits:3, receipts:3, evidence:6, buckets:1 });
 });
 
 test('FOR UPDATE observes a committed external writer before appending duplicate notes', { skip: !runDbTests }, async () => {
@@ -181,14 +202,14 @@ test('FOR UPDATE observes a committed external writer before appending duplicate
   assert.equal(responseResult.value.status, 201);
   const updated = await db.lead.findUniqueOrThrow({ where:{ id:lead.id }, select:{ notes:true } });
   assert.match(updated.notes ?? '', /external-writer-committed/); assert.match(updated.notes ?? '', /Nuova richiesta sito web/);
-  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, buckets:1 });
+  assert.deepEqual(await counts(), { leads:1, audits:1, receipts:1, evidence:2, buckets:1 });
 });
 
 test('replay is stable and changed payload conflicts without extra effects', { skip: !runDbTests }, async () => {
   const created = await POST(request('conflict')); const replay = await POST(request('conflict')); const conflict = await POST(request('conflict', 'different'));
   assert.deepEqual([created.status, replay.status, conflict.status], [201, 200, 409]);
   assert.equal((await created.json()).receipt, (await replay.json()).receipt);
-  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, buckets: 1 });
+  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, evidence: 2, buckets: 1 });
 });
 
 test('database statement deadline rolls back slow business writes but preserves consumed quota', { skip: !runDbTests, timeout: 8_000 }, async () => {
@@ -202,7 +223,7 @@ test('database statement deadline rolls back slow business writes but preserves 
     await db.$executeRawUnsafe('DROP FUNCTION IF EXISTS n01_slow_lead()');
   }
   assert.ok(Date.now() - started < 6_000);
-  assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, buckets: 1 });
+  assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, evidence: 0, buckets: 1 });
 });
 
 async function installFault(table: 'Lead' | 'AuditLog' | 'WebsiteLeadReceipt', operation: 'INSERT' | 'UPDATE') {
@@ -217,7 +238,7 @@ for (const [label, table, operation] of [['before Lead','Lead','INSERT'], ['befo
   test(`fault ${label} rolls back Lead, AuditLog and receipt`, { skip: !runDbTests }, async () => {
     await installFault(table, operation);
     try { assert.equal((await POST(request(`fault-${table}`))).status, 503); } finally { await removeFault(table); }
-    assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, buckets: 1 });
+    assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, evidence: 0, buckets: 1 });
   });
 }
 
@@ -226,8 +247,8 @@ test('persisted N01 audit metadata is minimized', { skip: !runDbTests }, async (
   const lead = await db.lead.findFirstOrThrow({ where: { email: { endsWith: `@${syntheticDomain}` } }, select: { id: true } });
   const rows = await db.auditLog.findMany({ where: { entityId: lead.id, event: { in: ['website_lead_received','website_lead_duplicate_detected'] } }, select: { after: true, before: true, ipAddress: true } });
   assert.equal(rows.length, 1); assert.equal(rows[0].before, null); assert.equal(rows[0].ipAddress, null);
-  assert.deepEqual(Object.keys(rows[0].after as object).sort(), ['contractVersion','mode','outcome','receipt']);
-  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, buckets: 1 });
+  assert.deepEqual(Object.keys(rows[0].after as object).sort(), ['catalogVersion','contractVersion','mode','outcome','privacyEvidenceCount','receipt']);
+  assert.deepEqual(await counts(), { leads: 1, audits: 1, receipts: 1, evidence: 2, buckets: 1 });
 });
 
 test('exact PR86 application starts healthy on schema 32 and leaves N01 tables inert', { skip: !runDbTests, timeout: 180_000 }, async () => {
@@ -246,7 +267,7 @@ test('exact PR86 application starts healthy on schema 32 and leaves N01 tables i
       try { const result = await fetch(`http://127.0.0.1:${port}/api/health`); healthy = result.status === 200 && (await result.json()).ok === true; } catch { /* startup */ }
     }
     assert.equal(healthy, true);
-    assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, buckets: 0 });
+    assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, evidence: 0, buckets: 0 });
   } finally {
     server.kill('SIGTERM'); await new Promise<void>((resolveExit) => server.once('exit', () => resolveExit())); rmSync(root, { recursive:true, force:true });
   }

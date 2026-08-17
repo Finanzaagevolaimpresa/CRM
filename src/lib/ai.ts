@@ -10,6 +10,7 @@ import {
   consumeAiExecutionRuntimePermit,
   type AiExecutionRuntimePermit,
 } from './ai-execution-authorization';
+import { assertClassifiedFields } from './data-classification';
 
 export type AiDraft = { title: string; content: string; metadata?: Record<string, unknown> };
 export type AiAgentRuntime = { code: string; role?: string | null; systemPrompt?: string | null };
@@ -218,6 +219,7 @@ function sanitizeExternalFreeText(value: string, maxLength: number) {
 
 /** Rebuilds the DTO field-by-field so extra properties never cross egress. */
 export function createExternalAiPayload(payload: ExternalAiPayload): ExternalAiPayload {
+  assertClassifiedFields('external_ai_payload_v1', payload);
   const context = payload.context;
   return {
     source: 'CRM interno FAI',

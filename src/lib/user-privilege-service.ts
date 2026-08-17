@@ -2,6 +2,7 @@ import { Prisma, type RoleCode, type User } from '@prisma/client';
 import { serializableOptions } from './serializable';
 import { internalSessionMode } from './session';
 import { lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
+import { redactAuditPayload } from './data-classification';
 
 export type PrivilegeActor = { userId: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
@@ -12,7 +13,7 @@ type ActorUser = Pick<User, 'id' | 'role' | 'active' | 'deletedAt'>;
 function denied(message: string): PrivilegeResult<never> { return { ok: false, message }; }
 
 async function auditTx(tx: Tx, actorId: string, event: string, entityType: string, entityId?: string, after?: unknown, before?: unknown) {
-  await tx.auditLog.create({ data: { actorId, event, entityType, entityId, before: before as Prisma.InputJsonValue, after: after as Prisma.InputJsonValue } });
+  await tx.auditLog.create({ data: { actorId, event, entityType, entityId, before: redactAuditPayload(before) as Prisma.InputJsonValue, after: redactAuditPayload(after) as Prisma.InputJsonValue } });
 }
 
 async function auditBlocked(tx: Tx, actor: PrivilegeActor, targetId: string, after: unknown, before?: unknown) {

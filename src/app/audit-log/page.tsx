@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { Badge, Card, EmptyState, PageHeader, Table, formatDateTime } from '@/components/ui';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { redactAuditPayload } from '@/lib/data-classification';
 
 const eventLabels: Record<string, string> = {
   login: 'Login',
@@ -23,10 +24,7 @@ const eventLabels: Record<string, string> = {
 function summarizePayload(value: unknown) {
   if (!value) return '—';
 
-  const text = JSON.stringify(value, (key, val) => {
-    if (key === 'storagePath') return '[omesso]';
-    return val;
-  });
+  const text = JSON.stringify(redactAuditPayload(value));
 
   if (!text) return '—';
   return text.length > 180 ? `${text.slice(0, 180)}…` : text;

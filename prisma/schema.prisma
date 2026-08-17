@@ -343,6 +343,23 @@ enum TaskPriority {
   urgente
 }
 
+enum PrivacyNoticeStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum PrivacyEvidenceKind {
+  NOTICE_ACKNOWLEDGEMENT
+  CONSENT
+}
+
+enum PrivacyEvidenceDecision {
+  ACKNOWLEDGED
+  GRANTED
+  DENIED
+}
+
 model User {
   id                                 String                                  @id @default(cuid())
   email                              String                                  @unique
@@ -442,7 +459,7 @@ model UserPermissionOverride {
 }
 
 model Lead {
-  id                 String       @id @default(cuid())
+  id                 String                   @id @default(cuid())
   firstName          String
   lastName           String
   companyName        String?
@@ -450,7 +467,7 @@ model Lead {
   phone              String?
   email              String?
   source             String?
-  leadSource         LeadSource   @default(manuale)
+  leadSource         LeadSource               @default(manuale)
   region             String?
   province           String?
   city               String?
@@ -458,8 +475,8 @@ model Lead {
   declaredInvestment Decimal?
   requestedAmount    Decimal?
   availableBudget    Decimal?
-  status             LeadStatus   @default(nuovo)
-  priority           LeadPriority @default(media)
+  status             LeadStatus               @default(nuovo)
+  priority           LeadPriority             @default(media)
   commercialStatus   String?
   assignedToId       String?
   nextAction         DateTime?
@@ -468,9 +485,55 @@ model Lead {
   notes              String?
   commercialProposal String?
   clientId           String?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
   deletedAt          DateTime?
+  privacyEvidence    PrivacyEvidenceReceipt[]
+}
+
+model PrivacyNoticeVersion {
+  id               String                   @id @default(uuid()) @db.Uuid
+  noticeCode       String
+  noticeVersion    String
+  purposeCode      String
+  legalBasisCode   String
+  evidenceKind     PrivacyEvidenceKind
+  contentHash      String
+  status           PrivacyNoticeStatus      @default(DRAFT)
+  effectiveFrom    DateTime?
+  retiredAt        DateTime?
+  createdAt        DateTime                 @default(now())
+  evidenceReceipts PrivacyEvidenceReceipt[]
+
+  @@unique([noticeCode, noticeVersion, purposeCode], map: "PrivacyNoticeVersion_identity_key")
+  @@index([status, purposeCode, effectiveFrom], map: "PrivacyNoticeVersion_active_lookup_idx")
+}
+
+model PrivacyEvidenceReceipt {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  leadId               String
+  websiteLeadReceiptId String                  @db.Uuid
+  noticeVersionId      String                  @db.Uuid
+  catalogVersion       String
+  purposeCode          String
+  legalBasisCode       String
+  evidenceKind         PrivacyEvidenceKind
+  decision             PrivacyEvidenceDecision
+  sourceSystem         String
+  formCode             String
+  formVersion          String
+  sourceSubmittedAt    DateTime
+  sourceEvidenceDigest String
+  evidenceHash         String                  @unique(map: "PrivacyEvidenceReceipt_evidenceHash_key")
+  createdAt            DateTime                @default(now())
+  lead                 Lead                    @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  websiteLeadReceipt   WebsiteLeadReceipt      @relation(fields: [websiteLeadReceiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  noticeVersion        PrivacyNoticeVersion    @relation(fields: [noticeVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([websiteLeadReceiptId, purposeCode], map: "PrivacyEvidenceReceipt_source_purpose_key")
+  @@index([leadId, createdAt], map: "PrivacyEvidenceReceipt_lead_created_idx")
+  @@index([purposeCode, decision, createdAt], map: "PrivacyEvidenceReceipt_purpose_decision_idx")
+  @@index([noticeVersionId, createdAt], map: "PrivacyEvidenceReceipt_notice_created_idx")
 }
 
 model CommercialOffer {
@@ -1847,22 +1910,23 @@ model AuditLog {
 }
 
 model WebsiteLeadReceipt {
-  id          String   @id @default(uuid()) @db.Uuid
-  namespace   String
-  keyDigest   String
-  payloadHash String
-  status      String
-  createdAt   DateTime @default(now())
-  completedAt DateTime?
+  id              String                   @id @default(uuid()) @db.Uuid
+  namespace       String
+  keyDigest       String
+  payloadHash     String
+  status          String
+  createdAt       DateTime                 @default(now())
+  completedAt     DateTime?
+  privacyEvidence PrivacyEvidenceReceipt[]
 
   @@unique([namespace, keyDigest])
   @@index([createdAt])
 }
 
 model WebsiteLeadRateLimitBucket {
-  namespace      String   @id
-  callerDigest   String
+  namespace       String   @id
+  callerDigest    String
   windowStartedAt DateTime
-  requestCount   Int
-  updatedAt      DateTime @updatedAt
+  requestCount    Int
+  updatedAt       DateTime @updatedAt
 }
