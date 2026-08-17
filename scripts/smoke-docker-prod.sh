@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=33
+EXPECTED_MIGRATION_COUNT=34
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -86,6 +86,19 @@ DATABASE_URL=postgresql://fai_crm_smoke:fai_crm_smoke_password@postgres:5432/fai
 AUTH_SECRET=smoke-test-secret-not-for-production
 AUTH_COOKIE_NAME=fai_crm_smoke_session
 INTERNAL_SESSION_MODE=legacy
+PRIVILEGED_ACCESS_MODE=disabled
+LOGIN_THROTTLE_MODE=disabled
+LOGIN_THROTTLE_MAX_FAILURES=5
+LOGIN_THROTTLE_WINDOW_SECONDS=900
+LOGIN_THROTTLE_BLOCK_SECONDS=900
+SECURITY_HEADERS_MODE=report-only
+APP_ORIGIN=http://localhost:3000
+FEATURE_INTEGRATIONS_ENABLED=false
+FEATURE_CUSTOMER_PORTAL_ENABLED=false
+FEATURE_PAYMENTS_ENABLED=false
+FEATURE_AI_WORKER_ENABLED=false
+FEATURE_AI_DISPATCH_ENABLED=false
+FEATURE_AI_EGRESS_ENABLED=false
 AI_PROVIDER=mock
 AI_EXTERNAL_PROVIDERS_ENABLED=false
 AI_ALLOWED_MODELS=
@@ -104,6 +117,19 @@ export DATABASE_URL=postgresql://fai_crm_smoke:fai_crm_smoke_password@postgres:5
 export AUTH_SECRET=smoke-test-secret-not-for-production
 export AUTH_COOKIE_NAME=fai_crm_smoke_session
 export INTERNAL_SESSION_MODE=legacy
+export PRIVILEGED_ACCESS_MODE=disabled
+export LOGIN_THROTTLE_MODE=disabled
+export LOGIN_THROTTLE_MAX_FAILURES=5
+export LOGIN_THROTTLE_WINDOW_SECONDS=900
+export LOGIN_THROTTLE_BLOCK_SECONDS=900
+export SECURITY_HEADERS_MODE=report-only
+export APP_ORIGIN=http://localhost:3000
+export FEATURE_INTEGRATIONS_ENABLED=false
+export FEATURE_CUSTOMER_PORTAL_ENABLED=false
+export FEATURE_PAYMENTS_ENABLED=false
+export FEATURE_AI_WORKER_ENABLED=false
+export FEATURE_AI_DISPATCH_ENABLED=false
+export FEATURE_AI_EGRESS_ENABLED=false
 export AI_PROVIDER=mock
 export AI_EXTERNAL_PROVIDERS_ENABLED=false
 export AI_ALLOWED_MODELS=
@@ -195,6 +221,12 @@ compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "InternalSession"')" == "0" ]] \
   || fail "Dormant legacy deployment created InternalSession rows"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) || '\''|'\'' || COUNT(*) FILTER (WHERE "enabled") FROM "ApplicationFeatureGate"')" == "6|0" ]] \
+  || fail "N03 application feature gates are not present and default-OFF"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "ApplicationKeyVersion"')" == "0" ]] \
+  || fail "N03 unexpectedly activated an application key"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "LoginThrottleBucket"')" == "0" ]] \
+  || fail "N03 dormant deployment unexpectedly created login throttle state"
 
 orchestrator_snapshot() {
   compose exec -T postgres psql \
@@ -315,6 +347,20 @@ IMAGE_OPTIMIZER_STATUS="$(compose exec -T "$APP_SERVICE" node -e '
 [[ "$IMAGE_OPTIMIZER_STATUS" == "404" ]] \
   || fail "Next.js image optimizer endpoint must remain closed; received HTTP $IMAGE_OPTIMIZER_STATUS"
 
+SECURITY_HEADER_STATE="$(compose exec -T "$APP_SERVICE" node -e '
+  fetch("http://127.0.0.1:3000/login")
+    .then((response) => process.stdout.write([
+      response.headers.get("content-security-policy-report-only"),
+      response.headers.get("strict-transport-security"),
+      response.headers.get("x-content-type-options"),
+      response.headers.get("x-frame-options"),
+      response.headers.get("referrer-policy"),
+    ].map((value) => value ? "1" : "0").join("|")))
+    .catch(() => process.exit(1));
+')"
+[[ "$SECURITY_HEADER_STATE" == "1|1|1|1|1" ]] \
+  || fail "N03 security header baseline is incomplete: $SECURITY_HEADER_STATE"
+
 mapfile -t RUNNING_SERVICES < <(compose ps --services --status running | LC_ALL=C sort)
 if [[ "${#RUNNING_SERVICES[@]}" -ne 2 || "${RUNNING_SERVICES[0]}" != "app" || "${RUNNING_SERVICES[1]}" != "postgres" ]]; then
   fail "Only app and postgres may be running after production Compose startup"
@@ -323,4 +369,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 33 migrations, production seed, app health, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 34 migrations, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."

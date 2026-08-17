@@ -355,8 +355,10 @@ model User {
   deletedAt                          DateTime?
   lastLoginAt                        DateTime?
   permissionOverrides                UserPermissionOverride[]
-  internalSessions                   InternalSession[]                         @relation("InternalSessionOwner")
-  sessionsRevokedByUser              InternalSession[]                         @relation("InternalSessionRevoker")
+  internalSessions                   InternalSession[]                       @relation("InternalSessionOwner")
+  sessionsRevokedByUser              InternalSession[]                       @relation("InternalSessionRevoker")
+  applicationFeatureGatesUpdated     ApplicationFeatureGate[]                @relation("ApplicationFeatureGateUpdatedBy")
+  applicationKeyVersionsCreated      ApplicationKeyVersion[]                 @relation("ApplicationKeyVersionCreatedBy")
   aiOrchestratorSettingsUpdated      AiOrchestratorSetting[]                 @relation("AiOrchestratorSettingUpdatedBy")
   aiWorkerCapabilitySettingsUpdated  AiOrchestratorWorkerCapabilitySetting[] @relation("AiOrchestratorWorkerCapabilitySettingUpdatedBy")
   aiOrchestratorAdminPolicyRevisions AiOrchestratorAdminPolicyRevision[]     @relation("AiOrchestratorAdminPolicyRevisionActor")
@@ -383,6 +385,47 @@ model InternalSession {
 
   @@index([userId, revokedAt, expiresAt], map: "InternalSession_user_revocation_expiry_idx")
   @@index([expiresAt, id], map: "InternalSession_cleanup_cursor_idx")
+}
+
+model ApplicationFeatureGate {
+  code        String   @id
+  enabled     Boolean  @default(false)
+  version     Int      @default(1)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  updatedBy   User?    @relation("ApplicationFeatureGateUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@index([enabled, code])
+  @@index([updatedById])
+}
+
+model ApplicationKeyVersion {
+  id          String    @id @default(uuid()) @db.Uuid
+  purpose     String
+  version     Int
+  keyDigest   Bytes
+  status      String    @default("RETIRED")
+  activatedAt DateTime?
+  retiredAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  createdBy   User?     @relation("ApplicationKeyVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Restrict)
+
+  @@unique([purpose, version])
+  @@index([purpose, status])
+  @@index([createdById])
+}
+
+model LoginThrottleBucket {
+  keyDigest       String    @id
+  failedCount     Int
+  windowStartedAt DateTime
+  blockedUntil    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([blockedUntil])
 }
 
 model UserPermissionOverride {

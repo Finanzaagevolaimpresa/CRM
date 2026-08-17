@@ -56,6 +56,7 @@ import {
   createAiExecutionReplacementRequest,
   createAiExecutionRequest,
 } from './ai-execution-authorization';
+import { requirePrivilegedMutation } from './privileged-access';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) { await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: after as Prisma.InputJsonValue } }); }
@@ -275,6 +276,7 @@ export async function runAiProviderDiagnosticTest(form: FormData) {
 
 export async function updateAiAgentConfig(form: FormData) {
   const s = await requirePermission('ai_agents.write');
+  await requirePrivilegedMutation(s, 'AI_AGENT_CONFIG_UPDATE');
   const raw = clean(form);
   const data = aiAgentConfigUpdateSchema.parse({ ...raw, active: form.has('active') });
   if (data.provider === 'openai' && !isExternalModelAllowed(data.futureModel)) {
@@ -364,6 +366,7 @@ export async function updateAiAgentConfig(form: FormData) {
 
 export async function updateAiControlSetting(form: FormData) {
   const s = await requirePermission('settings.manage');
+  await requirePrivilegedMutation(s, 'AI_CONTROL_SETTING_UPDATE');
   const raw = clean(form);
   const data = aiControlSettingUpdateSchema.parse({
     ...raw,

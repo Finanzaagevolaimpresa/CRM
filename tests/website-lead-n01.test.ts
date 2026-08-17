@@ -14,6 +14,25 @@ test('N01 constant-time authentication has uniform invalid inputs', () => {
   for (const pair of [[undefined,null],['correct',null],['correct','wrong'],['x'.repeat(513),'x'.repeat(513)] ] as const) assert.equal(authenticateWebsiteLead(pair[0], pair[1]), false);
   assert.match(readFileSync('src/lib/website-lead-security.ts','utf8'), /timingSafeEqual\(expected, supplied\)/);
 });
+test('N03 integration gate independently closes N01 without touching PostgreSQL when ENV is OFF', async () => {
+  const previous = {
+    mode: process.env.WEBSITE_LEAD_MODE,
+    secret: process.env.WEBSITE_LEAD_WEBHOOK_SECRET,
+    feature: process.env.FEATURE_INTEGRATIONS_ENABLED,
+  };
+  process.env.WEBSITE_LEAD_MODE = 'legacy';
+  process.env.WEBSITE_LEAD_WEBHOOK_SECRET = 'synthetic-unit-secret';
+  process.env.FEATURE_INTEGRATIONS_ENABLED = 'false';
+  const request = new NextRequest('http://local/api/integrations/website/leads', {
+    method: 'POST', headers: { 'x-fai-webhook-secret': 'synthetic-unit-secret' },
+  });
+  try { assert.equal((await POST(request)).status, 503); }
+  finally {
+    if (previous.mode === undefined) delete process.env.WEBSITE_LEAD_MODE; else process.env.WEBSITE_LEAD_MODE = previous.mode;
+    if (previous.secret === undefined) delete process.env.WEBSITE_LEAD_WEBHOOK_SECRET; else process.env.WEBSITE_LEAD_WEBHOOK_SECRET = previous.secret;
+    if (previous.feature === undefined) delete process.env.FEATURE_INTEGRATIONS_ENABLED; else process.env.FEATURE_INTEGRATIONS_ENABLED = previous.feature;
+  }
+});
 test('N01 preserves PR86 requested amount parsing', () => {
   for (const [input, expected] of [['50.000', '50000'], ['1.234,56', '1234.56'], ['1234.56', '1234.56'], [1234.56, '1234.56']] as const) {
     assert.equal(requestedAmount(input)?.toString(), expected);
@@ -118,11 +137,12 @@ test('retry policy is dynamic, bounded to three, and shares one deadline', async
   assert.equal(expiredAttempts, 1);
 });
 test('migration 32 is additive and route contains containment invariants', () => {
-  assert.equal(readdirSync('prisma/migrations').length, 33);
+  assert.equal(readdirSync('prisma/migrations').length, 34);
   const sql=readFileSync('prisma/migrations/20260813120000_website_lead_containment_atomicity_v1/migration.sql','utf8');
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');
   assert.match(route,/mode === 'disabled'/); assert.match(route,/mode === 'shadow'/); assert.match(route,/ReadCommitted/); assert.match(route,/FOR UPDATE/); assert.doesNotMatch(route,/request\.text\(/);
+  assert.match(route, /isApplicationFeatureEnabled\(prisma, 'INTEGRATIONS'\)/);
   assert.match(route, /const timeout = websiteLeadTransactionBudget\(deadline\)/);
   const helper=readFileSync('src/lib/website-lead-security.ts','utf8');
   assert.match(helper, /attempt < 3/); assert.match(helper, /candidate\.code === 'P2034'/);

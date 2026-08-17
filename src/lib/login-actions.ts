@@ -6,29 +6,51 @@ import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
 import { createRegistryLoginSession, logoutInternalSession } from './internal-session-registry';
 import { createRegistrySessionToken, digestRegistrySessionToken, internalSessionMode, signSessionCookie } from './session';
+import {
+  clearLoginThrottle,
+  loginAttemptAllowed,
+  loginThrottleRuntime,
+  recordLoginFailure,
+} from './login-throttle';
+import { clearPrivilegedStepUpCookie } from './privileged-access';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 const demoAdminEmail = 'admin@fai.local';
 const demoAdminPassword = 'ChangeMe123!';
+const dummyPasswordHash = '$2a$12$R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW';
 
 function sessionCookieOptions(expiresAt: number) {
   return {
     httpOnly: true,
-    sameSite: 'lax' as const,
+    sameSite: 'strict' as const,
     secure: process.env.NODE_ENV === 'production',
     path: '/',
     expires: new Date(expiresAt * 1000),
+    priority: 'high' as const,
   };
 }
 
 async function createLoginSession(email: string, password: string) {
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
-  if (!user || !user.active) return false;
+  if (normalizedEmail.length < 3 || normalizedEmail.length > 254 || password.length < 1 || password.length > 1024) return false;
+  const throttle = loginThrottleRuntime(normalizedEmail);
+  if (!throttle) return false;
+  if (throttle.mode === 'enforced' && !await loginAttemptAllowed(prisma, throttle.keyDigest)) return false;
 
-  const passwordMatches = await bcrypt.compare(password, user.passwordHash);
-  if (!passwordMatches) return false;
+  const user = await prisma.user.findFirst({
+    where: { email: normalizedEmail, deletedAt: null },
+    select: { id: true, active: true, passwordHash: true },
+  });
+  const passwordMatches = await bcrypt.compare(password, user?.passwordHash ?? dummyPasswordHash);
+  if (!user || !user.active || !passwordMatches) {
+    if (throttle.mode === 'enforced') {
+      await recordLoginFailure(prisma, throttle.keyDigest, throttle.configuration);
+    }
+    return false;
+  }
+
+  if (throttle.mode === 'enforced') await clearLoginThrottle(prisma, throttle.keyDigest);
 
   if (internalSessionMode() === 'registry') {
     const { token, bytes } = createRegistrySessionToken();
@@ -85,11 +107,13 @@ export async function logoutAction() {
     try { await prisma.$transaction((tx) => logoutInternalSession(tx, token)); }
     catch { redirect('/login?error=logout-unavailable'); }
     (await cookies()).delete(cookieName);
+    await clearPrivilegedStepUpCookie();
     redirect('/login');
   }
   const { verifySessionCookie } = await import('./session');
   const session = await verifySessionCookie(token);
   if (session) await prisma.auditLog.create({ data: { actorId: session.userId, event: 'logout', entityType: 'User', entityId: session.userId } });
   (await cookies()).delete(cookieName);
+  await clearPrivilegedStepUpCookie();
   redirect('/login');
 }
