@@ -285,11 +285,11 @@ n05_assert_authorized_legacy_compose_resources() {
     [[ "$state" != "legacy-unlabeled" ]] || legacy_unlabeled_resources=$((legacy_unlabeled_resources + 1))
   }
 
-  mapfile -t all_project_container_ids < <(docker ps -aq --filter 'label=com.docker.compose.project=fai-crm')
-  mapfile -t all_postgres_ids < <(docker ps -aq \
+  mapfile -t all_project_container_ids < <(docker ps -aq --no-trunc --filter 'label=com.docker.compose.project=fai-crm')
+  mapfile -t all_postgres_ids < <(docker ps -aq --no-trunc \
     --filter 'label=com.docker.compose.project=fai-crm' \
     --filter 'label=com.docker.compose.service=postgres')
-  mapfile -t app_ids < <(docker ps -aq \
+  mapfile -t app_ids < <(docker ps -aq --no-trunc \
     --filter 'label=com.docker.compose.project=fai-crm' \
     --filter 'label=com.docker.compose.service=app')
   [[ "${#all_project_container_ids[@]}" -eq 2 ]] || n05_fail LEGACY_PROJECT_CONTAINER_COUNT_MISMATCH
