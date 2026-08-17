@@ -59,6 +59,30 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   }
 });
 
+test('restore Compose commands use the generated synthetic env over inherited CI values', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'n05-restore-env-'));
+  try {
+    const envFile = path.join(root, 'restore.env');
+    writeFileSync(envFile, [
+      'DATABASE_URL=postgresql://synthetic:secret@postgres:5432/fai_crm_n05_source?schema=public',
+      'FAI_ENVIRONMENT=restore-source',
+      '',
+    ].join('\n'), { mode: 0o600 });
+    const command = `source "${lib}"; n05_run_with_env_file "${envFile}" bash -c 'printf "%s|%s" "$DATABASE_URL" "$FAI_ENVIRONMENT"'`;
+    const result = shell(command, {
+      DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public',
+      FAI_ENVIRONMENT: 'production',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'postgresql://synthetic:secret@postgres:5432/fai_crm_n05_source?schema=public|restore-source');
+
+    writeFileSync(envFile, 'DATABASE_URL=synthetic\nDATABASE_URL=forged\n');
+    assert.equal(shell(`source "${lib}"; n05_run_with_env_file "${envFile}" true`).status, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('environment identity accepts only an explicit isolated staging identity', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'n05-identity-'));
   try {

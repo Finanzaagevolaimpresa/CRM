@@ -134,13 +134,15 @@ guard_identity() (
   n05_assert_environment_identity "$1"
 )
 
-compose_source() {
-  docker compose -p "$SOURCE_PROJECT" --env-file "$SOURCE_ENV_FILE" -f "$COMPOSE_FILE" "$@"
-}
+compose_source() (
+  n05_run_with_env_file "$SOURCE_ENV_FILE" \
+    docker compose -p "$SOURCE_PROJECT" --env-file "$SOURCE_ENV_FILE" -f "$COMPOSE_FILE" "$@"
+)
 
-compose_target() {
-  docker compose -p "$TARGET_PROJECT" --env-file "$TARGET_ENV_FILE" -f "$COMPOSE_FILE" "$@"
-}
+compose_target() (
+  n05_run_with_env_file "$TARGET_ENV_FILE" \
+    docker compose -p "$TARGET_PROJECT" --env-file "$TARGET_ENV_FILE" -f "$COMPOSE_FILE" "$@"
+)
 
 wait_for_app() {
   local compose_name="$1" health_json="" container_id=""

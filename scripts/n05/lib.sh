@@ -53,6 +53,25 @@ n05_env_value() {
   printf '%s' "$value"
 }
 
+n05_run_with_env_file() {
+  local file="$1" key value
+  shift
+  local -a environment=()
+  local -A seen=()
+  [[ -f "$file" && ! -L "$file" ]] || n05_fail ENV_FILE_NOT_REGULAR
+  [[ "$#" -gt 0 ]] || n05_fail ENV_COMMAND_MISSING
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    [[ -z "$key" ]] && continue
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || n05_fail ENV_FILE_LINE_INVALID
+    [[ -z "${seen[$key]+present}" ]] || n05_fail "ENV_${key}_DUPLICATE"
+    [[ "$value" != *$'\r'* && "$value" != *$'\n'* ]] || n05_fail "ENV_${key}_VALUE_INVALID"
+    seen["$key"]=1
+    environment+=("$key=$value")
+  done < "$file"
+  [[ "${#environment[@]}" -gt 0 ]] || n05_fail ENV_FILE_EMPTY
+  env "${environment[@]}" "$@"
+}
+
 n05_assert_staging_env_file() {
   : "${ENV_FILE:?ENV_FILE is required}"
   : "${EXPECTED_DATABASE_NAME:?EXPECTED_DATABASE_NAME is required}"
