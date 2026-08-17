@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -110,7 +110,13 @@ async function migrationQualification(upgrade: boolean) {
             (SELECT COUNT(*)::bigint FROM information_schema.tables WHERE table_schema = ${qualificationSchema} AND table_name IN ('PrivacyNoticeVersion','PrivacyEvidenceReceipt')) AS tables,
             (SELECT COUNT(*)::bigint FROM ${Prisma.raw(`"${qualificationSchema}"."PrivacyNoticeVersion"`)}) AS notices,
             (SELECT COUNT(*)::bigint FROM ${Prisma.raw(`"${qualificationSchema}"."PrivacyEvidenceReceipt"`)}) AS evidence,
-            (SELECT COUNT(DISTINCT trigger_name)::bigint FROM information_schema.triggers WHERE trigger_schema = ${qualificationSchema} AND trigger_name IN ('PrivacyNoticeVersion_lifecycle_v1','PrivacyNoticeVersion_deny_truncate_v1','PrivacyEvidenceReceipt_validate_v1','PrivacyEvidenceReceipt_append_only_v1','PrivacyEvidenceReceipt_deny_truncate_v1','AuditLog_redaction_n04_v1')) AS triggers
+            (SELECT COUNT(DISTINCT trg.tgname)::bigint
+              FROM pg_catalog.pg_trigger AS trg
+              JOIN pg_catalog.pg_class AS relation ON relation.oid = trg.tgrelid
+              JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+              WHERE namespace.nspname = ${qualificationSchema}
+                AND NOT trg.tgisinternal
+                AND trg.tgname IN ('PrivacyNoticeVersion_lifecycle_v1','PrivacyNoticeVersion_deny_truncate_v1','PrivacyEvidenceReceipt_validate_v1','PrivacyEvidenceReceipt_append_only_v1','PrivacyEvidenceReceipt_deny_truncate_v1','AuditLog_redaction_n04_v1')) AS triggers
         `),
       ]);
       return {
@@ -282,7 +288,7 @@ test('evidence is append-only and notice lifecycle cannot move backwards', { ski
   await assert.rejects(client().$executeRawUnsafe('TRUNCATE TABLE "PrivacyEvidenceReceipt"'), /cannot be truncated/i);
   await assert.rejects(client().privacyNoticeVersion.update({
     where: { noticeCode_noticeVersion_purposeCode: { noticeCode: 'N04_TEST_PRIVACY', noticeVersion: 'n04-v1', purposeCode: 'SERVICE_REQUEST_FOLLOW_UP' } },
-    data: { status: 'DRAFT', effectiveFrom: null },
+    data: { status: 'DRAFT' },
   }), /monotonic/i);
   await assert.rejects(client().privacyNoticeVersion.update({
     where: { noticeCode_noticeVersion_purposeCode: { noticeCode: 'N04_TEST_PRIVACY', noticeVersion: 'n04-v1', purposeCode: 'SERVICE_REQUEST_FOLLOW_UP' } },
@@ -303,25 +309,28 @@ test('database audit trigger removes direct PII, credentials, prompts and IP', {
   const persisted = await client().auditLog.findUniqueOrThrow({ where: { id: row.id } });
   assert.equal(persisted.ipAddress, null);
   const serialized = JSON.stringify(persisted.after);
-  for (const prohibited of ['privacy.person', '+39', '333 123', 'synthetic-secret', 'private prompt', 'suffix-like']) assert.doesNotMatch(serialized, new RegExp(prohibited, 'i'));
+  for (const prohibited of ['privacy.person', '+39', '333 123', 'synthetic-secret', 'private prompt', 'suffix-like']) {
+    assert.equal(serialized.toLowerCase().includes(prohibited.toLowerCase()), false, prohibited);
+  }
   assert.match(serialized, /n04-v1/);
   assert.match(serialized, new RegExp('d'.repeat(64)));
 });
 
 test('exact PR90 application starts healthy on additive schema 35', { skip: !runDbTests, timeout: 180_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'n04-pr90-runtime-'));
+  const root = mkdtempSync(join(resolve('..'), 'n04-pr90-runtime-'));
   const archive = join(root, 'pr90.tar');
   const app = join(root, 'app');
   mkdirSync(app);
   writeFileSync(archive, execFileSync('git', ['archive', 'fc35c2c6feb0927f4170d0be3893d9c9ba6cbcd5'], { maxBuffer: 50 * 1024 * 1024 }));
   execFileSync('tar', ['-xf', archive, '-C', app]);
-  symlinkSync(resolve('node_modules'), join(app, 'node_modules'), 'dir');
+  execFileSync('cp', ['-al', resolve('node_modules'), join(app, 'node_modules')]);
+  const next = join(app, 'node_modules/.bin/next');
   const port = 32_935;
-  execFileSync(resolve('node_modules/.bin/next'), ['build', '--webpack'], {
+  execFileSync(next, ['build'], {
     cwd: app, env: { ...process.env, DATABASE_URL: schemaUrl, NEXT_TELEMETRY_DISABLED: '1' },
     stdio: 'pipe', timeout: 120_000, maxBuffer: 20 * 1024 * 1024,
   });
-  const server = spawn(resolve('node_modules/.bin/next'), ['start', '-p', String(port)], {
+  const server = spawn(next, ['start', '-p', String(port)], {
     cwd: app, env: { ...process.env, DATABASE_URL: schemaUrl, NEXT_TELEMETRY_DISABLED: '1' }, stdio: 'ignore',
   });
   try {

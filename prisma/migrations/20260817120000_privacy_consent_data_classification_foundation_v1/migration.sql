@@ -229,7 +229,7 @@ BEGIN
       WHERE entry.key !~* '(email|phone|telephone|first.?name|last.?name|display.?name|company.?name|contact.?person|tax.?code|vat.?number|address|city|province|region|description|message|content|prompt|instruction|secret|password|token|authorization|cookie|credential|api.?key|private.?key|storage.?path|file.?name|ip.?address)'
         AND entry.key !~* '(^pec$|pec.?address$|notes?$)'
         AND (
-          entry.key ~* '^(before|after|id|receipt|mode|outcome|format|type|role|priority|provider|model|purpose|origin|source|sequence|replay|replayed|reason|action|permission|requiredPermissions|permissionDecisions|dataCategories|changedPaths|contentChanged|sizeBytes|enabled|allowed|confirmed|active|code|version|hash|fingerprint|count|status|state|kind|cycle|key|started|expired|bytes|paths|changed)$'
+          entry.key ~* '^(before|after|id|receipt|mode|outcome|format|type|role|priority|provider|model|purpose|origin|source|sequence|replay|replayed|reason|action|permission|requiredPermissions|permissionDecisions|overrides|removedOverrides|dataCategories|changedPaths|contentChanged|sizeBytes|enabled|allowed|confirmed|active|code|version|hash|fingerprint|count|status|state|kind|cycle|key|started|expired|bytes|paths|changed)$'
           OR entry.key ~ '(Id|Code|Version|Hash|Fingerprint|Count|Status|At|Type|Role|Priority|Provider|Model|Purpose|State|Mode|Kind|Sequence|Cycle|Key|Enabled|Allowed|Confirmed|Active|Started|Expired|Replayed|Bytes|Paths|Changed)$'
         );
       RETURN result;
