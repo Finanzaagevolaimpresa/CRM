@@ -1,5 +1,7 @@
 # Deploy staging/produzione CRM FAI
 
+> **Documento storico, non operativo dopo N05.** Non usare i comandi o gli URL di questa guida per creare staging, eseguire backup/restore o distribuire release. Il contratto fail-closed corrente è [`n05-staging-restore-verified-backup-release-safety-v1.md`](n05-staging-restore-verified-backup-release-safety-v1.md); staging remoto, restore reale e produzione richiedono autorizzazioni separate.
+
 Questa guida prepara il CRM FAI per ambienti raggiungibili via HTTPS, ad esempio `https://crm.finanzaagevolaimpresa.it`, mantenendo invariato il comportamento locale esistente.
 
 ## Ambienti

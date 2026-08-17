@@ -1,8 +1,18 @@
 # Example production Dockerfile for CRM FAI.
-# Build with: docker build -f Dockerfile.prod.example -t fai-crm:prod .
+# Build only with exact SOURCE_COMMIT/SOURCE_TREE args and an immutable fai-crm:prN-<sha12> tag.
 # Do not put secrets in this file; inject runtime values via .env.production / Docker Compose.
 
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
 FROM node:22-bookworm-slim AS build
+
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
+RUN printf '%s\n' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+  && printf '%s\n' "$SOURCE_TREE" | grep -Eq '^[0-9a-f]{40}$' \
+  || { echo 'SOURCE_COMMIT and SOURCE_TREE must be exact 40-character Git object IDs' >&2; exit 1; }
 
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -27,12 +37,18 @@ RUN npm prune --omit=dev \
 
 FROM node:22-bookworm-slim AS runner
 
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV APP_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
+  it.finanzaagevolaimpresa.source-tree=${SOURCE_TREE}
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \

@@ -2,6 +2,11 @@
 set -euo pipefail
 umask 077
 
+if [[ "${APP_ENV:-${NODE_ENV:-development}}" != "development" || "${CONFIRM_DEVELOPMENT_BACKUP:-}" != "FAI_CRM_DEVELOPMENT_BACKUP_V1" ]]; then
+  echo "backup-local.sh is development-only; release/staging backups require the N05 manifest contract" >&2
+  exit 1
+fi
+
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 DOCUMENT_ROOT="${LOCAL_DOCUMENT_STORAGE_ROOT:-./storage/private/documents}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"

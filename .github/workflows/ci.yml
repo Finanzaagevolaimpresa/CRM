@@ -18,7 +18,7 @@ jobs:
   validate:
     name: Validate, test and package
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public
       AUTH_SECRET: ci-only-secret-change-me
@@ -85,6 +85,7 @@ jobs:
             git diff --check "$BASE_SHA"...HEAD
           fi
           bash -n scripts/smoke-docker-prod.sh
+          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh
 
       - name: Verify PR82 has no schema or migration delta
         if: github.event_name == 'pull_request' && github.head_ref == 'codex/ai-orchestrator-admission-claim-lease-wiring-v1'
@@ -159,3 +160,58 @@ jobs:
 
       - name: Docker production application and worker packaging smoke test
         run: COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh
+
+      - name: Run isolated staging read-only preflight
+        run: |
+          staging_root="$(mktemp -d /tmp/fai-crm-n05-staging.XXXXXX)"
+          cleanup_staging_env() {
+            find "$staging_root" -depth -mindepth 1 -delete
+            rmdir "$staging_root"
+          }
+          trap cleanup_staging_env EXIT
+          staging_env="$staging_root/.env.staging"
+          source_commit="$(git rev-parse HEAD)"
+          source_tree="$(git rev-parse HEAD^{tree})"
+          project="fai-crm-staging-ci-${{ github.run_id }}"
+          origin="https://staging-ci.example.test"
+          image="fai-crm:staging-$source_commit"
+          sed \
+            -e "s#fai-crm-staging-example#$project#g" \
+            -e "s#https://staging.invalid#$origin#g" \
+            -e "s#fai-crm:staging-<full-commit-sha>#$image#g" \
+            -e "s#<full-commit-sha>#$source_commit#g" \
+            -e "s#<full-tree-sha>#$source_tree#g" \
+            -e "s#APP_ENV_FILE=\".env.staging\"#APP_ENV_FILE=\"$staging_env\"#g" \
+            -e "s#<staging-only-random-password>#synthetic-staging-ci-password#g" \
+            -e "s#<staging-only-random-secret-at-least-32-bytes>#synthetic-staging-ci-auth-secret-0001#g" \
+            .env.staging.example > "$staging_env"
+          chmod 600 "$staging_env"
+          FAI_ENVIRONMENT=staging \
+          FAI_ENVIRONMENT_SENTINEL=FAI_CRM_STAGING_ISOLATED_V1 \
+          COMPOSE_PROJECT_NAME="$project" \
+          COMPOSE_FILE="$PWD/docker-compose.staging.example.yml" \
+          ENV_FILE="$staging_env" \
+          APP_ORIGIN="$origin" \
+          APP_IMAGE="$image" \
+          EXPECTED_DATABASE_NAME=fai_crm_staging \
+          EXPECTED_DATABASE_USER=fai_crm_staging \
+          EXPECTED_SOURCE_COMMIT="$source_commit" \
+          EXPECTED_SOURCE_TREE="$source_tree" \
+          STAGING_EXPECT_ABSENT=true \
+            ./scripts/n05/staging-preflight.sh
+
+      - name: N05 synthetic backup, full restore and N-1 rollback drill
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -n "$PR_BASE_SHA" ]]; then
+            rollback_commit="$PR_BASE_SHA"
+          else
+            rollback_commit="$(git rev-parse HEAD^1)"
+          fi
+          rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
+          ROLLBACK_COMMIT="$rollback_commit" \
+          ROLLBACK_TREE="$rollback_tree" \
+          EXPECTED_MIGRATION_COUNT=35 \
+          N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
+            npm run test:n05:restore

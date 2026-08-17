@@ -4,6 +4,8 @@
 
 Questa guida prepara il CRM FAI a un deploy production-ready senza introdurre servizi esterni obbligatori. Non contiene segreti reali: usare solo valori generati e custoditi nel server o nel secret manager scelto.
 
+> **Gate N05:** questa guida non autorizza operazioni esterne. Ogni release richiede il contratto fail-closed in [`n05-staging-restore-verified-backup-release-safety-v1.md`](n05-staging-restore-verified-backup-release-safety-v1.md), un mandato separato e comandi server generati per la finestra autorizzata. Non usare esempi generici come procedura di deploy/restore.
+
 ## Prerequisiti server
 
 - Linux server aggiornato con accesso SSH amministrativo.
@@ -111,32 +113,11 @@ Reindirizzare tutto il traffico HTTP verso HTTPS. In produzione i cookie di sess
 - Upload e download devono passare dalle route applicative protette da login e permessi.
 - Includere la directory documenti nei backup.
 
-## Backup e restore base
+## Backup e restore N05
 
-Script non distruttivo disponibile:
+Un backup valido per una release è un set completo creato con applicazione quiesced, `MANIFEST.txt`, `SHA256SUMS`, dump PostgreSQL verificato e archivio documenti validato. Un dump isolato o un archivio creato senza manifest non costituisce evidenza di restore.
 
-```bash
-DATABASE_URL="$DATABASE_URL" LOCAL_DOCUMENT_STORAGE_ROOT="/var/lib/fai-crm/documents" ./scripts/backup-local.sh
-```
-
-Produce un dump PostgreSQL custom e un archivio tar.gz dei documenti se la directory esiste. I backup contengono dati clienti e documenti riservati: conservarli cifrati o in storage protetto, non lasciarli in cartelle pubbliche/condivise e limitare i permessi di accesso agli amministratori autorizzati.
-
-Se `LOCAL_DOCUMENT_STORAGE_ROOT` non esiste, lo script mostra un warning pulito, non interrompe il backup database già completato e salta solo l'archivio documenti.
-
-Restore database su database vuoto/preparato:
-
-```bash
-pg_restore --clean --if-exists --no-owner --dbname "$DATABASE_URL" ./backups/postgres-YYYYMMDDTHHMMSSZ.dump
-```
-
-Restore documenti:
-
-```bash
-mkdir -p /var/lib/fai-crm/documents
-tar -xzf ./backups/documents-YYYYMMDDTHHMMSSZ.tar.gz -C /var/lib/fai-crm/documents
-```
-
-Prima di restore in produzione fermare l'applicazione, verificare di avere un backup recente e validare il piano su ambiente staging. Testare periodicamente il restore database/documenti per confermare che i backup siano realmente utilizzabili.
+Il restore non è una normale operazione di deploy e non ha più un comando generico in questa guida. Deve usare risorse nuove, identità ambiente esplicita, validazione preventiva, database vuoto, document storage vuoto e un mandato separato. Non usare `pg_restore --clean`, estrazione tar non validata o backup produttivi in locale/CI. Procedura e failure matrix: [`n05-staging-restore-verified-backup-release-safety-v1.md`](n05-staging-restore-verified-backup-release-safety-v1.md).
 
 ## Health check
 
@@ -262,31 +243,9 @@ Prima di qualsiasi operazione distruttiva (`down -v`, rimozione volumi, reinstal
 
 ## Backup database e documenti in Docker
 
-Esempio backup database dal servizio PostgreSQL:
+Usare esclusivamente il wrapper N05 `scripts/backup-docker-prod.sh` dentro una finestra autorizzata. Il wrapper richiede applicazione già quiesced, conferma esplicita, tag e image ID immutabili pre-registrati, commit/tree sorgente, modalità di provenienza, nome database atteso, directory/set di destinazione e migrazioni attese. Non applica retention e non cancella backup precedenti.
 
-```bash
-mkdir -p backups
-docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
-  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner \
-  > backups/postgres-$(date -u +%Y%m%dT%H%M%SZ).dump
-```
-
-Esempio backup volume documenti:
-
-```bash
-docker run --rm \
-  -v crm_crm_documents:/documents:ro \
-  -v "$PWD/backups:/backups" \
-  alpine tar -czf /backups/documents-$(date -u +%Y%m%dT%H%M%SZ).tar.gz -C /documents .
-```
-
-Il nome effettivo del volume può includere il prefisso del progetto Compose. Verificarlo con:
-
-```bash
-docker volume ls
-```
-
-Conservare i backup cifrati o in storage protetto, perché contengono dati clienti e documenti riservati. Testare periodicamente restore database e documenti in staging prima di affidarsi al piano di backup.
+Il blocco comandi esatto deve essere preparato per la singola release dopo il preflight read-only. Non inserire valori reali, secret o percorsi produttivi in documentazione o prompt. Conservare i set cifrati o in storage protetto e limitare l'accesso agli amministratori autorizzati.
 
 ## Checklist primo deploy Docker
 
@@ -308,23 +267,11 @@ Conservare i backup cifrati o in storage protetto, perché contengono dati clien
 - [ ] Eseguire un backup manuale di database e documenti e verificare che i file siano stati creati.
 - [ ] Verificare che repository, file example e documentazione non contengano segreti reali.
 
-## Rollback base
+## Rollback applicativo
 
-Per un rollback applicativo semplice:
+Il rollback ordinario usa esclusivamente il tag immutabile e l'image ID N-1 già registrati e qualificati. Non ricostruisce l'immagine durante l'incidente, non modifica il database e non esegue down-migration. Il release gate deve verificare in anticipo che release e rollback siano immagini distinte e disponibili.
 
-1. Identificare il tag immagine o il commit precedente funzionante.
-2. Eseguire un backup prima del rollback, anche se il problema sembra solo applicativo.
-3. Ricostruire o ripuntare l'immagine alla versione precedente.
-4. Riavviare lo stack senza rimuovere volumi persistenti:
-
-```bash
-docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml up -d --build
-```
-
-5. Non eseguire `docker compose down -v` durante un rollback ordinario: eliminerebbe i volumi di database e documenti.
-6. Verificare `/api/health`, login admin, upload/download documenti e `/settings/system` dopo il rollback.
-
-Se una migration già applicata ha modificato il database, non improvvisare downgrade manuali in produzione: ripristinare da backup validato oppure preparare una procedura di rollback dati testata in staging.
+Dopo lo switch verificare health, login, log, timer e invarianti database in sola lettura. Non usare `docker compose down -v`, `--build`, prune, reset, `DROP` o `TRUNCATE`. Un restore dati è una procedura separata e non sostituisce il rollback applicativo.
 
 
 ## Deploy permessi granulari utente
@@ -380,7 +327,7 @@ BOOTSTRAP_ADMIN_NAME="Admin CRM" \
 docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml run --rm app npm run admin:bootstrap
 ```
 
-Se `BOOTSTRAP_ADMIN_PASSWORD` non è impostata, lo script genera una password forte casuale e la mostra una sola volta nel terminale: salvarla subito in un password manager. Lo script rifiuta di creare un secondo admin attivo; usare `BOOTSTRAP_ADMIN_ALLOW_ADDITIONAL=true` solo se si intende esplicitamente aggiungere un altro amministratore.
+`BOOTSTRAP_ADMIN_PASSWORD` è obbligatoria, deve avere almeno 16 caratteri e non viene generata né stampata dallo script. Lo script rifiuta di creare un secondo admin attivo; usare `BOOTSTRAP_ADMIN_ALLOW_ADDITIONAL=true` solo se si intende esplicitamente aggiungere un altro amministratore.
 
 6. **Avvio app**
 
@@ -414,39 +361,9 @@ Caddy deve inoltrare verso `127.0.0.1:3000`; il volume documenti resta accessibi
 
 10. **Backup Docker production**
 
-```bash
-./scripts/backup-docker-prod.sh
-```
+Non esiste un comando generico riutilizzabile: la Cabina prepara per ogni finestra un file `.txt` con SHA/tree/image ID, backup root/set, nome database e marker esatti. Prima del wrapper N05 l'app deve risultare quiesced; dopo il wrapper devono risultare `MANIFEST.txt`, `SHA256SUMS` e validazione PASS.
 
-Lo script usa `umask 077`, crea la directory backup con permessi `700`, produce dump PostgreSQL custom leggendo `POSTGRES_USER` e `POSTGRES_DB` dentro il container PostgreSQL, archivia i documenti da `/var/lib/fai-crm/documents` tramite il servizio app e crea file con permessi `600`. Non stampa password o `DATABASE_URL` e applica retention configurabile con `RETENTION_DAYS` (default 14). Se la directory documenti non esiste o non è accessibile, conserva il backup database, stampa un warning ed esce con codice `2`; non usa comandi distruttivi come `docker compose down -v`.
-
-Variabili utili:
-
-```bash
-COMPOSE_PROJECT_NAME=fai-crm BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh
-```
-
-Restore database su database vuoto/preparato:
-
-```bash
-cat /secure/backups/fai-crm/postgres-YYYYMMDDTHHMMSSZ.dump | \
-  docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T postgres \
-  sh -c 'pg_restore --clean --if-exists --no-owner -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-```
-
-Restore documenti:
-
-```bash
-cat /secure/backups/fai-crm/documents-YYYYMMDDTHHMMSSZ.tar.gz | \
-  docker compose -p fai-crm --env-file .env.production -f docker-compose.prod.example.yml exec -T app \
-  sh -c 'mkdir -p /var/lib/fai-crm/documents && tar -xzf - -C /var/lib/fai-crm/documents'
-```
-
-Cron giornaliero esempio:
-
-```cron
-15 2 * * * cd /srv/fai-crm && COMPOSE_PROJECT_NAME=fai-crm BACKUP_DIR=/secure/backups/fai-crm RETENTION_DAYS=30 ./scripts/backup-docker-prod.sh >> /var/log/fai-crm-backup.log 2>&1
-```
+Restore, retention e cron non sono autorizzati da questo paragrafo. Un restore reale richiede infrastruttura privata isolata e mandato separato; la retention deve essere scoped e non appartiene allo script di creazione backup.
 
 ## Scheduler systemd per AI reconciler
 
