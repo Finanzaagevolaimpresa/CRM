@@ -51,6 +51,8 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.match(restore, /RESTORED_DOCUMENT_HASH_MISMATCH/);
   assert.match(restore, /ROLLBACK_PASS/);
   assert.match(restore, /--exit-on-error --no-owner --no-privileges/);
+  assert.match(restore, /compose_source up -d postgres\nwait_for_postgres source/);
+  assert.match(restore, /compose_target up -d postgres\nwait_for_postgres target/);
   assert.doesNotMatch(restore, /down\s+-v|system\s+prune|volume\s+prune/);
 
   const release = readFileSync('scripts/n05/release-gate.sh', 'utf8');

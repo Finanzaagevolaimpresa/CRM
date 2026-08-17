@@ -144,6 +144,20 @@ compose_target() (
     docker compose -p "$TARGET_PROJECT" --env-file "$TARGET_ENV_FILE" -f "$COMPOSE_FILE" "$@"
 )
 
+wait_for_postgres() {
+  local compose_name="$1" database_user="$2" database_name="$3"
+  [[ "$compose_name" == source || "$compose_name" == target ]] || n05_fail RESTORE_COMPOSE_NAME_INVALID
+  for _ in $(seq 1 120); do
+    if [[ "$compose_name" == source ]]; then
+      compose_source exec -T postgres pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
+    else
+      compose_target exec -T postgres pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
+    fi
+    sleep 0.5
+  done
+  n05_fail RESTORE_POSTGRES_UNHEALTHY
+}
+
 wait_for_app() {
   local compose_name="$1" health_json="" container_id=""
   for _ in $(seq 1 120); do
@@ -198,6 +212,7 @@ CURRENT_IMAGE_ID="$(docker image inspect -f '{{.Id}}' "$CURRENT_IMAGE")"
 compose_source config --quiet
 SOURCE_CREATED=true
 compose_source up -d postgres
+wait_for_postgres source fai_crm_n05_source fai_crm_n05_source
 compose_source run --rm -T app npm run prisma:migrate:deploy
 
 synthetic_payload_hash="$(printf 'FAI_CRM_N05_SYNTHETIC_RESTORE_PAYLOAD_V1' | sha256sum | cut -d ' ' -f1)"
@@ -264,6 +279,7 @@ EXPECTED_MIGRATION_COUNT="$EXPECTED_MIGRATION_COUNT" \
 compose_target config --quiet
 TARGET_CREATED=true
 compose_target up -d postgres
+wait_for_postgres target fai_crm_n05_target fai_crm_n05_target
 compose_target exec -T postgres psql -X -v ON_ERROR_STOP=1 -U fai_crm_n05_target -d fai_crm_n05_target \
   -c "COMMENT ON DATABASE fai_crm_n05_target IS 'FAI_CRM_N05_RESTORE_TARGET_V1'"
 compose_target exec -T postgres pg_restore --list < "$BACKUP_SET_DIR/postgres.dump" >/dev/null
