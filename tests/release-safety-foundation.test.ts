@@ -26,7 +26,7 @@ function sha256(file: string) {
 }
 
 test('N05 stays migration-free and introduces the complete release-safety surface', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 35);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 36);
   const expected = [
     '.env.staging.example',
     'docker-compose.prod.legacy-resources.yml',
@@ -372,7 +372,7 @@ test('backup manifest is strict, checksum-bound and rejects corruption', () => {
       `app_image_id=${appImageId}`,
       'image_provenance=oci-labels',
       'resource_provenance=n05-labels',
-      'migration_count=35',
+      'migration_count=36',
       'database_file=postgres.dump',
       'documents_file=documents.tar.gz',
       '',
@@ -393,7 +393,7 @@ test('backup manifest is strict, checksum-bound and rejects corruption', () => {
       EXPECTED_APP_IMAGE_ID: appImageId,
       EXPECTED_IMAGE_PROVENANCE: 'oci-labels',
       EXPECTED_RESOURCE_PROVENANCE: 'n05-labels',
-      EXPECTED_MIGRATION_COUNT: '35',
+      EXPECTED_MIGRATION_COUNT: '36',
     };
     assert.equal(shell(`"${verifier}" "${root}"`, env).status, 0);
     const manifest = readFileSync(path.join(root, 'MANIFEST.txt'), 'utf8');

@@ -142,7 +142,7 @@ fi
 migration_count="$(compose exec -T postgres sh -c \
   'exec psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh \
   'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')"
-[[ "$migration_count" == "${EXPECTED_MIGRATION_COUNT:-35}" ]] || n05_fail DATABASE_MIGRATION_COUNT_MISMATCH
+[[ "$migration_count" == "${EXPECTED_MIGRATION_COUNT:-36}" ]] || n05_fail DATABASE_MIGRATION_COUNT_MISMATCH
 
 DATABASE_FILE="postgres.dump"
 DOCUMENTS_FILE="documents.tar.gz"

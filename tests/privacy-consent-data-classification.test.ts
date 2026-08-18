@@ -79,8 +79,9 @@ async function withShadowRoute<T>(operation: () => Promise<T>) {
 
 test('N04 migration 35 is additive, transactional and leaves registries empty', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 35);
-  assert.equal(names.at(-1), '20260817120000_privacy_consent_data_classification_foundation_v1');
+  assert.equal(names.length, 36);
+  assert.equal(names[34], '20260817120000_privacy_consent_data_classification_foundation_v1');
+  assert.equal(names.at(-1), '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /CREATE TABLE "PrivacyNoticeVersion"/);
   assert.match(migration, /CREATE TABLE "PrivacyEvidenceReceipt"/);

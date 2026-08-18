@@ -82,8 +82,10 @@ async function migrationQualification(upgrade: boolean) {
   const migrationsDir = join(prismaDir, 'migrations');
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 35);
+  const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
+  assert.equal(allNames.length, 36);
+  const names = allNames.slice(0, 35);
+  assert.equal(names.at(-1), '20260817120000_privacy_consent_data_classification_foundation_v1');
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set('schema', qualificationSchema);
   await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);

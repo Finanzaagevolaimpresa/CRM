@@ -75,7 +75,7 @@ fi
 remote_main="$(git -C "$REPO_ROOT" ls-remote origin refs/heads/main | awk '{print $1}')"
 [[ "$remote_main" == "$EXPECTED_COMMIT" ]] || n05_fail REMOTE_MAIN_MISMATCH
 repo_migration_count="$(find "$REPO_ROOT/prisma/migrations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-[[ "$repo_migration_count" == "${EXPECTED_MIGRATION_COUNT:-35}" ]] || n05_fail REPOSITORY_MIGRATION_COUNT_MISMATCH
+[[ "$repo_migration_count" == "${EXPECTED_MIGRATION_COUNT:-36}" ]] || n05_fail REPOSITORY_MIGRATION_COUNT_MISMATCH
 
 actual_image_id="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE")"
 actual_rollback_image_id="$(docker image inspect -f '{{.Id}}' "$ROLLBACK_IMAGE")"
@@ -112,7 +112,7 @@ EXPECTED_SOURCE_TREE="$BACKUP_SOURCE_TREE" \
 EXPECTED_APP_IMAGE_ID="$BACKUP_APP_IMAGE_ID" \
 EXPECTED_IMAGE_PROVENANCE="$BACKUP_IMAGE_PROVENANCE" \
 EXPECTED_RESOURCE_PROVENANCE="$BACKUP_RESOURCE_PROVENANCE" \
-EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-35}" \
+EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-36}" \
   "$SCRIPT_DIR/verify-backup-manifest.sh" "$BACKUP_SET_DIR" >/dev/null
 
 printf 'N05_RELEASE_GATE_PASS|commit=%s|tree=%s|ci=success|image_id=%s|backup=verified|rollback_image_id=%s\n' \
