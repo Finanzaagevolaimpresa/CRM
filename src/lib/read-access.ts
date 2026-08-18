@@ -9,6 +9,7 @@ import {
 } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import type { AuthSession } from './auth';
+import { coreQueryCandidateLimit, normalizeCoreQueryLimit } from './core-query-policy';
 import { prisma } from './prisma';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
@@ -258,9 +259,12 @@ export async function listAccessibleAiOutputs(
   args: Pick<Prisma.AiOutputFindManyArgs, 'where' | 'orderBy' | 'take'> = {},
 ) {
   const { take, ...candidateArgs } = args;
+  const limit = normalizeCoreQueryLimit(take);
+  const candidateLimit = coreQueryCandidateLimit(limit);
   return prisma.$transaction(async (tx) => {
     const candidates = await tx.aiOutput.findMany({
       ...candidateArgs,
+      take: candidateLimit,
       select: {
         id: true,
         aiRunId: true,
@@ -276,7 +280,7 @@ export async function listAccessibleAiOutputs(
     });
     const visibleContexts = (await hydrateAiOutputs(candidates, tx))
       .filter((context) => canAccessHydratedAiOutput(session, context))
-      .slice(0, take);
+      .slice(0, limit);
     if (!visibleContexts.length) return [];
     const outputs = await tx.aiOutput.findMany({
       where: { id: { in: visibleContexts.map((context) => context.output.id) } },
@@ -301,9 +305,12 @@ export async function requireAiOutputReadAccess(session: AuthSession, outputId: 
 }
 
 export async function listAccessibleAiRuns(session: AuthSession, take = 100) {
+  const limit = normalizeCoreQueryLimit(take, 100);
+  const candidateLimit = coreQueryCandidateLimit(limit);
   return prisma.$transaction(async (tx) => {
     const runs = await tx.aiRun.findMany({
       orderBy: { createdAt: 'desc' },
+      take: candidateLimit,
       select: aiRunAccessSelect,
     });
     const pseudoOutputs: AiOutputAccessRecord[] = runs.map((run) => ({
@@ -321,7 +328,7 @@ export async function listAccessibleAiRuns(session: AuthSession, take = 100) {
     const contexts = await hydrateAiOutputs(pseudoOutputs, tx);
     return contexts
       .filter((context) => canAccessHydratedAiOutput(session, context))
-      .slice(0, take)
+      .slice(0, limit)
       .map((context) => context.run);
   }, { isolationLevel: 'RepeatableRead' });
 }
@@ -331,7 +338,9 @@ export async function listAccessibleTasks(
   args: Pick<Prisma.TaskFindManyArgs, 'where' | 'orderBy' | 'take'> = {},
 ): Promise<Task[]> {
   const { take, ...candidateArgs } = args;
-  const tasks = await prisma.task.findMany(candidateArgs);
+  const limit = normalizeCoreQueryLimit(take);
+  const candidateLimit = coreQueryCandidateLimit(limit);
+  const tasks = await prisma.task.findMany({ ...candidateArgs, take: candidateLimit });
   if (!tasks.length) return [];
 
   const projectIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => Boolean(id)))];
@@ -362,5 +371,5 @@ export async function listAccessibleTasks(
     client: task.clientId ? clientById.get(task.clientId) ?? null : null,
     project: task.projectId ? projectById.get(task.projectId) ?? null : null,
     clientService: task.clientServiceId ? serviceById.get(task.clientServiceId) ?? null : null,
-  })).slice(0, take);
+  })).slice(0, limit);
 }

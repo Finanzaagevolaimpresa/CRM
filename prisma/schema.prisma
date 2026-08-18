@@ -489,6 +489,9 @@ model Lead {
   updatedAt          DateTime                 @updatedAt
   deletedAt          DateTime?
   privacyEvidence    PrivacyEvidenceReceipt[]
+
+  @@index([deletedAt, nextActionDate, updatedAt(sort: Desc), id(sort: Desc)], map: "Lead_pipeline_cursor_idx")
+  @@index([assignedToId, deletedAt, nextActionDate, updatedAt(sort: Desc), id(sort: Desc)], map: "Lead_assignee_pipeline_cursor_idx")
 }
 
 model PrivacyNoticeVersion {
@@ -579,6 +582,10 @@ model Client {
   deletedAt           DateTime?
   aiWorkflowInstances AiWorkflowInstance[]
   aiExecutionRequests AiExecutionRequest[] @relation("AiExecutionRequestClient")
+
+  @@index([deletedAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Client_active_cursor_idx")
+  @@index([salesOwnerId, deletedAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Client_sales_owner_cursor_idx")
+  @@index([consultantId, deletedAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Client_consultant_cursor_idx")
 }
 
 model Company {
@@ -779,6 +786,8 @@ model Document {
   updatedAt             DateTime       @updatedAt
   validUntil            DateTime?
   deletedAt             DateTime?
+
+  @@index([clientId, deletedAt], map: "Document_client_active_idx")
 }
 
 model DocumentChecklistItem {
@@ -959,6 +968,8 @@ model Task {
   @@index([projectId])
   @@index([assignedToId])
   @@index([dueAt])
+  @@index([deletedAt, dueAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Task_active_due_cursor_idx")
+  @@index([assignedToId, deletedAt, dueAt, id(sort: Desc)], map: "Task_assignee_due_cursor_idx")
 }
 
 model Deadline {
@@ -1592,6 +1603,7 @@ model AiRun {
   @@index([clientServiceId])
   @@index([projectId])
   @@index([aiExecutionRequestId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "AiRun_created_cursor_idx")
 }
 
 model AiExecutionRequest {
@@ -1740,6 +1752,7 @@ model AiOutput {
   @@index([clientId])
   @@index([clientServiceId])
   @@index([projectId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)], map: "AiOutput_created_cursor_idx")
 }
 
 model AiAgentMessage {
@@ -1793,6 +1806,7 @@ model ClientService {
 
   @@index([operationalStatus])
   @@index([statusUpdatedAt])
+  @@index([clientId, deletedAt, operationalStatus, statusUpdatedAt(sort: Desc), id(sort: Desc)], map: "ClientService_client_status_cursor_idx")
 }
 
 model CorporateFinancingAssessment {
