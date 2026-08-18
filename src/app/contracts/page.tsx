@@ -1,5 +1,4 @@
 export const dynamic = 'force-dynamic';
-import Link from 'next/link';
 import { OpenLink, PrimaryButton } from '@/components/actions';
 import { createContractAndRefresh } from '@/lib/form-actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table } from '@/components/ui';

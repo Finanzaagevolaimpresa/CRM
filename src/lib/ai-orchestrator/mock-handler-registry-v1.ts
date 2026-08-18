@@ -339,45 +339,19 @@ type MockHandlerInputProjection = Readonly<{
 }>;
 type MockHandler = (input: MockHandlerInputProjection) => AiResultArtifactDraft;
 
-function handleDocumentIngestion(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('DOCUMENT_INGESTION');
-}
-function handleDocumentClassification(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('DOCUMENT_CLASSIFICATION');
-}
-function handleEvidenceExtraction(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('EVIDENCE_EXTRACTION');
-}
-function handleFinancialAnalysis(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('FINANCIAL_ANALYSIS');
-}
-function handleCreditAnalysis(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('CREDIT_ANALYSIS');
-}
-function handleCalculations(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('CALCULATIONS');
-}
-function handleFindingsDrafting(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('FINDINGS_DRAFTING');
-}
-function handleReportComposition(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('REPORT_COMPOSITION');
-}
-function handleSchemaReview(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('SCHEMA_REVIEW');
-}
-function handleNumericReview(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('NUMERIC_REVIEW');
-}
-function handleSourceReview(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('SOURCE_REVIEW');
-}
-function handleRedTeamReview(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('RED_TEAM_REVIEW');
-}
-function handleCorrection(_input: MockHandlerInputProjection) {
-  return createSyntheticAiResultDraft('CORRECTION');
-}
+const handleDocumentIngestion: MockHandler = () => createSyntheticAiResultDraft('DOCUMENT_INGESTION');
+const handleDocumentClassification: MockHandler = () => createSyntheticAiResultDraft('DOCUMENT_CLASSIFICATION');
+const handleEvidenceExtraction: MockHandler = () => createSyntheticAiResultDraft('EVIDENCE_EXTRACTION');
+const handleFinancialAnalysis: MockHandler = () => createSyntheticAiResultDraft('FINANCIAL_ANALYSIS');
+const handleCreditAnalysis: MockHandler = () => createSyntheticAiResultDraft('CREDIT_ANALYSIS');
+const handleCalculations: MockHandler = () => createSyntheticAiResultDraft('CALCULATIONS');
+const handleFindingsDrafting: MockHandler = () => createSyntheticAiResultDraft('FINDINGS_DRAFTING');
+const handleReportComposition: MockHandler = () => createSyntheticAiResultDraft('REPORT_COMPOSITION');
+const handleSchemaReview: MockHandler = () => createSyntheticAiResultDraft('SCHEMA_REVIEW');
+const handleNumericReview: MockHandler = () => createSyntheticAiResultDraft('NUMERIC_REVIEW');
+const handleSourceReview: MockHandler = () => createSyntheticAiResultDraft('SOURCE_REVIEW');
+const handleRedTeamReview: MockHandler = () => createSyntheticAiResultDraft('RED_TEAM_REVIEW');
+const handleCorrection: MockHandler = () => createSyntheticAiResultDraft('CORRECTION');
 
 const MOCK_HANDLERS = Object.freeze({
   DOCUMENT_INGESTION: handleDocumentIngestion,

@@ -175,7 +175,6 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
     { failedAttempt: 0 },
     { failedAttempt: 3 },
   ];
-  let runtimeCalls = 0;
   for (const invalid of invalidCases) {
     assert.throws(
       () => calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
@@ -191,7 +190,6 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
       ),
     );
   }
-  assert.equal(runtimeCalls, 0);
 });
 
 test('helper sintetico condivide limite e pattern canonici per worker ID da 128 a 201', () => {
@@ -385,10 +383,9 @@ test('disconnect durante backoff chiude senza retry o riconnessione', async () =
 });
 
 test('disconnect reentrant nel backoff non attende se stesso ma attende le altre operazioni', async () => {
-  let composition!: ReturnType<typeof compositionFor>;
   let disconnects = 0; let recoverCalls = 0; let releaseOther!: () => void;
   const other = new Promise<void>((resolve) => { releaseOther = resolve; });
-  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     { ...identity, workerInstanceId: 'worker' },
     async () => ({ allowed: true, capabilityAllowed: true }),
     {

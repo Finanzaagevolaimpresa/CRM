@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 
 export function SidebarLogo() {
   const [hasLogoError, setHasLogoError] = useState(false);
@@ -12,11 +13,13 @@ export function SidebarLogo() {
           FAI
         </span>
       ) : (
-        <img
+        <Image
           alt="Logo Finanza Agevola Impresa"
           className="h-12 max-h-full w-full max-w-full object-contain"
+          height={567}
           onError={() => setHasLogoError(true)}
           src="/logo-fai.png"
+          width={971}
         />
       )}
     </span>

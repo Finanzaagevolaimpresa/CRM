@@ -928,7 +928,6 @@ test('FAIL retains all three bounded attempts when drain is never requested', as
 
 test('each runtime operation can request reentrant disconnect without self-await', { timeout: 3_000 }, async () => {
   for (const operationName of ['readAuthority', 'admit', 'recover', 'supersede'] as const) {
-    let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
     let disconnectCalls = 0; let operationCalls = 0;
     const overrides = {
       readAuthority: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return Object.freeze({}) as Readonly<AiOrchestratorWorkerControlPlaneAuthorityV1>; },
@@ -937,7 +936,7 @@ test('each runtime operation can request reentrant disconnect without self-await
       supersede: async () => { operationCalls += 1; await composition.runtimeAdapter.disconnect(); return 0; },
       disconnect: async () => { disconnectCalls += 1; },
     };
-    composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
       async () => ({ allowed: true, capabilityAllowed: true }),
       { [operationName]: overrides[operationName], disconnect: overrides.disconnect },
@@ -950,9 +949,8 @@ test('each runtime operation can request reentrant disconnect without self-await
 
 test('reentrant disconnect excludes only its caller and awaits another runtime operation', { timeout: 2_000 }, async () => {
   const otherOperation = deferred<number>(); const reentrantStarted = deferred<void>();
-  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
   let disconnectCalls = 0;
-  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
     async () => ({ allowed: true, capabilityAllowed: true }),
     {
@@ -970,9 +968,8 @@ test('reentrant disconnect excludes only its caller and awaits another runtime o
 
 test('two reentrant runtime operations share one shutdown and exclude only themselves', { timeout: 2_000 }, async () => {
   const entered = [deferred<void>(), deferred<void>()];
-  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
   let disconnectCalls = 0;
-  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
     async () => ({ allowed: true, capabilityAllowed: true }),
     {
@@ -987,9 +984,8 @@ test('two reentrant runtime operations share one shutdown and exclude only thems
 
 test('reentrant disconnect during FAIL backoff drains once and blocks the retry', { timeout: 2_000 }, async () => {
   const { claim } = syntheticExecutionFixture(); const failedOnce = deferred<void>();
-  let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
   let failCalls = 0; let surrenderCalls = 0; let disconnectCalls = 0;
-  composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+  const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
     { workerInstanceId: 'worker', workerBuildHash: 'a'.repeat(64), workerEnabled: '1' },
     async () => ({ allowed: true, capabilityAllowed: true }),
     {

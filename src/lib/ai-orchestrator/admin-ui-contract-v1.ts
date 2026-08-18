@@ -13,7 +13,6 @@ import {
   getAiOrchestratorAdminControlTarget,
   type AiOrchestratorAdminChangeReasonCode,
   type AiOrchestratorAdminGlobalPolicy,
-  type AiOrchestratorAdminNonGlobalScopeType,
   type AiOrchestratorAdminScopePolicy,
 } from './admin-control-policy-v1';
 import type {

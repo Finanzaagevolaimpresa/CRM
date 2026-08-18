@@ -3,9 +3,6 @@ import { Prisma } from '@prisma/client';
 import { UserFacingActionError } from './action-errors';
 import {
   assertSha256,
-  canonicalJson,
-  canonicalSha256,
-  createAiRequestFingerprint,
   sha256,
 } from './canonical-json';
 import { prisma } from './prisma';

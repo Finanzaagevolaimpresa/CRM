@@ -37,7 +37,6 @@ export default async function Dashboard() {
   const canReadClients = hasPermission(session, "client.read");
   const canReadProjects = hasPermission(session, "project.read");
   const canReadDossiers = hasPermission(session, "dossier.read");
-  const canReadContracts = hasPermission(session, "contract.read");
   const canReadPayments = hasPermission(session, "payment.read");
   const canReadAiOutputs = hasPermission(session, "ai.review") || hasPermission(session, "ai.approve");
   const canReadAudit = hasPermission(session, "audit.read");
@@ -158,7 +157,6 @@ export default async function Dashboard() {
     serviziAcquistati,
     preReview,
     dossierBozza,
-    contracts,
     payments,
     tasks,
     overdueTasks,
@@ -298,7 +296,6 @@ export default async function Dashboard() {
     canReadDossiers ? prisma.dossier.count({
       where: { clientId: { in: visibleClientIds }, projectId: { in: visibleProjectIds }, status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] } },
     }) : 0,
-    canReadContracts ? prisma.contract.count({ where: { clientId: { in: visibleClientIds } } }) : 0,
     canReadPayments ? prisma.payment.count({
       where: { clientId: { in: visibleClientIds }, status: { notIn: ["incassato", "stornato", "rimborsato"] } },
     }) : 0,

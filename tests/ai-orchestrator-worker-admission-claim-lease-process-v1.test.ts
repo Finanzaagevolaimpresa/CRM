@@ -89,7 +89,6 @@ test('configurazione invalida viene respinta prima di caricare il runtime DB', (
 
 test('composizione production legge authority e non esegue alcun mutatore', async () => {
   const calls: string[] = [];
-  let worker: ReturnType<typeof createAiOrchestratorWorkerProductionProcessV1>;
   const capturedIdentities: Array<Readonly<{
     workerInstanceId: string;
     workerBuildHash: string;
@@ -133,7 +132,7 @@ test('composizione production legge authority e non esegue alcun mutatore', asyn
     });
   };
 
-  worker = createAiOrchestratorWorkerProductionProcessV1({
+  const worker = createAiOrchestratorWorkerProductionProcessV1({
     environment: {
       workerEnabled: '1',
       provider: 'mock',
