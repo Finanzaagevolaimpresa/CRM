@@ -6,6 +6,9 @@ docker() {
   case "$command" in
     ps)
       if [[ "$mode" == "-q" ]]; then
+        if [[ "${MOCK_APP_RUNNING:-0}" == "1" && "$arguments" == *com.docker.compose.service=app* ]]; then
+          printf 'app-id\n'
+        fi
         return 0
       fi
       [[ "$mode" == "-aq" ]] || return 1

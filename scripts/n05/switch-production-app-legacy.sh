@@ -98,7 +98,7 @@ postgres_id="${postgres_ids[0]}"
   export APP_IMAGE="$CURRENT_APP_IMAGE"
   export EXPECTED_APP_IMAGE_ID="$EXPECTED_CURRENT_APP_IMAGE_ID"
   export BACKUP_RESOURCE_PROVENANCE=authorized-legacy-compose-identity
-  n05_assert_authorized_legacy_compose_resources "$postgres_id" >/dev/null
+  n05_assert_authorized_legacy_compose_resources "$postgres_id" running >/dev/null
 )
 
 target_image_id="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE")"
