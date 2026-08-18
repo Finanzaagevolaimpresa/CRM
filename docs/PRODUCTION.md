@@ -247,6 +247,8 @@ Usare esclusivamente il wrapper N05 `scripts/backup-docker-prod.sh` dentro una f
 
 La modalità risorse ordinaria è `BACKUP_RESOURCE_PROVENANCE=n05-labels`. Solo per le risorse production pre-N05 già certificate è disponibile `BACKUP_RESOURCE_PROVENANCE=authorized-legacy-compose-identity`, insieme alla conferma separata `CONFIRM_LEGACY_RESOURCE_IDENTITY=FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1`. Il ponte controlla nomi, progetto, label Compose, driver/scope, mount e coppie environment/sentinel; è vietato in staging/restore e non modifica o ricrea volumi e reti. Non usarlo per aggirare label parziali, identità difformi o risorse nuove.
 
+Sullo stack produttivo pre-N05 certificato non eseguire direttamente `docker compose up` con il solo file base: le label N05 dichiarate per volumi e rete possono indurre Compose a proporre una ricreazione distruttiva delle risorse legacy. Non usare mai `-y`/`--yes`. Gli switch app-only devono passare da `scripts/n05/switch-production-app-legacy.sh`, che certifica nuovamente il bridge e applica `docker-compose.prod.legacy-resources.yml` per riusare volumi e rete come risorse esterne esatte. La modalità `preflight` è read-only; `switch-app` richiede autorizzazione produttiva, release gate, conferma `FAI_CRM_N05_PRODUCTION_APP_SWITCH_V1`, controlli di health e rollback esterno.
+
 Il blocco comandi esatto deve essere preparato per la singola release dopo il preflight read-only. Non inserire valori reali, secret o percorsi produttivi in documentazione o prompt. Conservare i set cifrati o in storage protetto e limitare l'accesso agli amministratori autorizzati.
 
 ## Checklist primo deploy Docker

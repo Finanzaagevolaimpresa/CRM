@@ -69,6 +69,8 @@ Resource provenance is independent from image provenance. The default `n05-label
 
 The bridge is denied for staging and restore drill identities. It does not relabel, recreate, copy or migrate a volume or network. This preserves the certified persistent data resources while keeping the compatibility exception explicit, manifest-bound and fail-closed.
 
+Application switches on that certified legacy stack must use `scripts/n05/switch-production-app-legacy.sh`. The wrapper re-runs the complete legacy resource certification, verifies current and target immutable image identities, requires Compose 2.24.4 or later, and combines the canonical production file with `docker-compose.prod.legacy-resources.yml`. The override uses `!override` to bind both data volumes and the project network as exact external resources. Compose therefore cannot propose recreating them merely to apply N05 metadata. The switch runs app-only with closed stdin, rejects any destructive recreation prompt found in Compose output, and never passes `--yes`. `preflight` is read-only; `switch-app` additionally requires `CONFIRM_PRODUCTION_APP_SWITCH=FAI_CRM_N05_PRODUCTION_APP_SWITCH_V1` and remains subject to the separate production authorization, release gate, health checks and rollback controller.
+
 ## Manifest and archive verification
 
 `scripts/n05/verify-backup-manifest.sh` fails on:
@@ -128,6 +130,7 @@ The gate does not build, tag, start, stop, migrate, switch or roll back anything
 | project/image already exists | before creation | inspect ownership read-only; choose a new authorized run ID |
 | app not quiesced | before backup | stop and obtain an approved release window |
 | legacy resource bridge missing, partial or mismatched | before database/document backup | stop; compare exact certified Compose identities, never recreate production volumes merely to add metadata |
+| Compose proposes recreating a certified production volume | before/at app switch | deny `--yes`; use the canonical legacy external-resource override and stop on any destructive prompt |
 | dump/archive creation fails | partial set only | diagnose; partial directory is removed, no PASS |
 | manifest/checksum/archive invalid | before restore | reject set; create a new complete backup |
 | restore fails | isolated target only | inspect target logs/resources; never touch source/production |

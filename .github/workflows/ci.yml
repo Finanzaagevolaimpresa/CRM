@@ -87,6 +87,35 @@ jobs:
           bash -n scripts/smoke-docker-prod.sh
           bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh
 
+      - name: Verify legacy production resources resolve as external
+        env:
+          COMPOSE_PROJECT_NAME: fai-crm
+          APP_ENV_FILE: .env.production.example
+          APP_IMAGE: fai-crm:pr95-af402f143d9a
+          SOURCE_COMMIT: af402f143d9ad3533c32c1ebd8a03593b412e672
+          SOURCE_TREE: 7e0543c7045a1ad7ad3670dd8d4b01983d09e7ed
+          POSTGRES_IMAGE: postgres:16-alpine
+          POSTGRES_DB: fai_crm_ci
+          POSTGRES_USER: fai_crm_ci
+          POSTGRES_PASSWORD: ci-only-postgres-password
+        run: |
+          docker compose \
+            -p fai-crm \
+            --env-file .env.production.example \
+            -f docker-compose.prod.example.yml \
+            -f docker-compose.prod.legacy-resources.yml \
+            config --quiet
+          docker compose \
+            -p fai-crm \
+            --env-file .env.production.example \
+            -f docker-compose.prod.example.yml \
+            -f docker-compose.prod.legacy-resources.yml \
+            config > /tmp/n05-legacy-compose.yml
+          test "$(grep -c 'external: true' /tmp/n05-legacy-compose.yml)" = "3"
+          grep -Fq 'name: fai-crm_postgres_data' /tmp/n05-legacy-compose.yml
+          grep -Fq 'name: fai-crm_crm_documents' /tmp/n05-legacy-compose.yml
+          grep -Fq 'name: fai-crm_default' /tmp/n05-legacy-compose.yml
+
       - name: Verify PR82 has no schema or migration delta
         if: github.event_name == 'pull_request' && github.head_ref == 'codex/ai-orchestrator-admission-claim-lease-wiring-v1'
         env:
