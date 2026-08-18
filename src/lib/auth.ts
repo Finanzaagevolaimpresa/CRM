@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { RoleCode } from '@prisma/client';
-import { getEffectivePermissions, hasPermission, type PermissionOverrideSnapshot } from './permission-evaluator';
+import { hasPermission, type PermissionOverrideSnapshot } from './permission-evaluator';
 import { prisma } from './prisma';
 import { internalSessionMode, verifySessionCookie, type SessionCookie } from './session';
 import { resolveInternalSession } from './internal-session-registry';

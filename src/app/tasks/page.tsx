@@ -1,5 +1,4 @@
 export const dynamic = "force-dynamic";
-import Link from "next/link";
 import { PrimaryButton } from "@/components/actions";
 import { completeTask } from "@/lib/form-actions";
 import {
@@ -28,7 +27,6 @@ export default async function Page() {
   const projectById = new Map(projectRows.map((project) => [project.id, { ...project, client: clientById.get(project.clientId) ?? null }]));
   const serviceById = new Map(serviceRows.map((service) => [service.id, { ...service, client: clientById.get(service.clientId) ?? null, project: service.projectId ? projectById.get(service.projectId) ?? null : null }]));
   const clients = new Map(clientRows.map((c) => [c.id, c.displayName]));
-  const projects = new Map(projectRows.map((p) => [p.id, p.title]));
   const users = new Map(userRows.map((u) => [u.id, u.name]));
   const visibleItems = items.filter((task) => canViewTask(session, {
     ...task,

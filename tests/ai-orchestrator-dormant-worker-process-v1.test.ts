@@ -188,9 +188,7 @@ test('scheduler singolo produce solo NO_WORK e heartbeat a 30 secondi senza over
   let maxActiveTimers = 0;
   let waitCalls = 0;
   const lines: string[] = [];
-  let worker: AiOrchestratorDormantWorkerProcessV1;
-
-  worker = createAiOrchestratorDormantWorkerProcessV1({
+  const worker: AiOrchestratorDormantWorkerProcessV1 = createAiOrchestratorDormantWorkerProcessV1({
     environment: { workerEnabled: '0' },
     adapters: {
       nowMs: () => nowMs,

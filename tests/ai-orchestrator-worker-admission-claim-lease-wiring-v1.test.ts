@@ -162,8 +162,7 @@ test('configurazione PR82 usa confronti letterali e non conserva valori original
 test('authority è sempre la prima operazione e il diniego impedisce ogni mutazione', async () => {
   const calls: string[] = [];
   let observedCode: string | null = null;
-  let worker!: AiOrchestratorWorkerWiringProcessV1;
-  worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => {
@@ -216,8 +215,7 @@ test('authority è sempre la prima operazione e il diniego impedisce ogni mutazi
 test('canAcceptLease false impedisce recovery, supersession, admission e claim', async () => {
   const calls: string[] = [];
   let observedCode: string | null = null;
-  let worker!: AiOrchestratorWorkerWiringProcessV1;
-  worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => {
@@ -270,8 +268,7 @@ test('authority e readiness vengono ricontrollate prima di ogni mutatore', async
     const calls: string[] = [];
     let authorityReads = 0;
     let observedCode: string | null = null;
-    let worker!: AiOrchestratorWorkerWiringProcessV1;
-    worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+    const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
       environment,
       adapters: defaultAdapters({
         readAuthority: () => {
@@ -326,8 +323,7 @@ test('authority e readiness vengono ricontrollate prima di ogni mutatore', async
   const readinessCalls: string[] = [];
   let acceptanceReads = 0;
   let readinessCode: string | null = null;
-  let readinessWorker!: AiOrchestratorWorkerWiringProcessV1;
-  readinessWorker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const readinessWorker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => {
@@ -386,8 +382,6 @@ test('ciclo positivo è strettamente sequenziale e il claim nullo produce NO_WOR
     workerBuildHash: string;
   }>> = [];
   let observedCode: string | null = null;
-  let worker!: AiOrchestratorWorkerWiringProcessV1;
-
   const operation = async <T>(name: string, value: T) => {
     calls.push(name);
     activeOperations += 1;
@@ -397,7 +391,7 @@ test('ciclo positivo è strettamente sequenziale e il claim nullo produce NO_WOR
     return value;
   };
 
-  worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => operation('authority', authorized),
@@ -665,8 +659,6 @@ test('heartbeat è sequenziale e il drain durante il battito surrendera una volt
   const delays: number[] = [];
   let activeOperations = 0;
   let maxActiveOperations = 0;
-  let worker!: AiOrchestratorWorkerWiringProcessV1;
-
   const operation = async <T>(name: string, value: T) => {
     calls.push(name);
     activeOperations += 1;
@@ -676,7 +668,7 @@ test('heartbeat è sequenziale e il drain durante il battito surrendera una volt
     return value;
   };
 
-  worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => operation('authority', authorized),
@@ -735,8 +727,7 @@ test('heartbeat è sequenziale e il drain durante il battito surrendera una volt
 
 test('heartbeat stale elimina definitivamente la lease senza surrender', async () => {
   const calls: string[] = [];
-  let worker!: AiOrchestratorWorkerWiringProcessV1;
-  worker = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
+  const worker: AiOrchestratorWorkerWiringProcessV1 = createAiOrchestratorWorkerAdmissionClaimLeaseWiringV1({
     environment,
     adapters: defaultAdapters({
       readAuthority: () => authorized,

@@ -1444,9 +1444,8 @@ test('PR83 disconnect reentrante attende altra operazione e drena la lease Postg
   const before = { runs: await db().aiRun.count(), outputs: await db().aiOutput.count() };
   await withTemporaryDispatchFixture([fixture.job.jobCode], async () => {
     const otherOperation = deferred<number>(); const reentrantStarted = deferred<void>();
-    let composition!: ReturnType<typeof createAiOrchestratorWorkerSyntheticTestingCompositionV1>;
     let disconnectCalls = 0;
-    composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
+    const composition = createAiOrchestratorWorkerSyntheticTestingCompositionV1(
       { workerInstanceId: `pr83-reentrant-${randomUUID()}`, workerBuildHash: '1'.repeat(64), workerEnabled: '1' },
       async () => ({ allowed: true, capabilityAllowed: true }),
       {

@@ -70,7 +70,7 @@ async function databaseStatus(): Promise<ReadinessCheck> {
   try {
     await prisma.$queryRaw`SELECT 1`;
     return { title: 'Database', status: 'OK', summary: 'Raggiungibile', details: ['Connessione verificata con query minimale. DATABASE_URL non viene mostrato.'] };
-  } catch (error) {
+  } catch {
     return { title: 'Database', status: 'Errore', summary: 'Non raggiungibile', details: ['Verificare DATABASE_URL, rete e migrazioni applicate.'] };
   }
 }

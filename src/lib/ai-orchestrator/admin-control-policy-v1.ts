@@ -651,7 +651,9 @@ export function createAiOrchestratorAdminRevisionHash(
 ) {
   let identity: AiOrchestratorAdminRevisionIdentity;
   if ('ledgerCode' in input) {
-    const { schemaVersion: _schemaVersion, ledgerCode: _ledgerCode, ...rest } = input;
+    const { schemaVersion, ledgerCode, ...rest } = input;
+    void schemaVersion;
+    void ledgerCode;
     identity = buildAiOrchestratorAdminRevisionIdentity(rest);
   } else {
     identity = buildAiOrchestratorAdminRevisionIdentity(input);
