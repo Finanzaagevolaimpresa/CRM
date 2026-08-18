@@ -29,6 +29,7 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 35);
   const expected = [
     '.env.staging.example',
+    'docker-compose.prod.legacy-resources.yml',
     'docker-compose.staging.example.yml',
     'docker-compose.restore-drill.yml',
     'scripts/n05/lib.sh',
@@ -37,6 +38,7 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
     'scripts/n05/restore-drill.sh',
     'scripts/n05/release-gate.sh',
     'scripts/n05/staging-preflight.sh',
+    'scripts/n05/switch-production-app-legacy.sh',
   ];
   for (const file of expected) assert.doesNotThrow(() => readFileSync(file), file);
 
@@ -69,6 +71,23 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.match(resourceBridge, /LEGACY_RESOURCE_BRIDGE_PRODUCTION_ONLY/);
   assert.match(resourceBridge, /LEGACY_RESOURCE_BRIDGE_NOT_REQUIRED/);
   assert.doesNotMatch(backup, /down\s+-v|system\s+prune|volume\s+prune|rm\s+-rf/);
+
+  const legacyOverride = readFileSync('docker-compose.prod.legacy-resources.yml', 'utf8');
+  const legacySwitch = readFileSync('scripts/n05/switch-production-app-legacy.sh', 'utf8');
+  for (const persistentResource of [
+    'fai-crm_postgres_data',
+    'fai-crm_crm_documents',
+    'fai-crm_default',
+  ]) assert.match(legacyOverride, new RegExp(persistentResource));
+  assert.equal((legacyOverride.match(/:\s*!override$/gm) ?? []).length, 3);
+  assert.equal((legacyOverride.match(/external: true/g) ?? []).length, 3);
+  assert.match(legacySwitch, /n05_assert_authorized_legacy_compose_resources/);
+  assert.match(legacySwitch, /COMPOSE_OVERRIDE_UNSUPPORTED/);
+  assert.match(legacySwitch, /<\/dev\/null/);
+  assert.match(legacySwitch, /LEGACY_SWITCH_DESTRUCTIVE_PROMPT_DETECTED/);
+  assert.match(legacySwitch, /--no-deps --no-build --force-recreate app/);
+  assert.doesNotMatch(legacySwitch, /(?:^|\s)(?:-y|--yes)(?:\s|$)/m);
+  assert.doesNotMatch(legacySwitch, /down\s+-v|volume\s+rm|system\s+prune|volume\s+prune/);
 
   const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
   assert.match(restore, /CORRUPTED_BACKUP_WAS_ACCEPTED/);

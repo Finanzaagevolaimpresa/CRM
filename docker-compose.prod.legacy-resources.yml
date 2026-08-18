@@ -1,0 +1,20 @@
+# Production-only compatibility override for the certified pre-N05 Docker
+# volumes and network. Docker Compose 2.24.4+ is required for !override.
+#
+# This file must only be used after scripts/n05/lib.sh has certified the exact
+# authorized-legacy-compose-identity resource set. Marking the resources as
+# external prevents Compose from offering to recreate data-bearing legacy
+# volumes merely because the N05 labels declared by the base file are absent.
+
+volumes:
+  postgres_data: !override
+    external: true
+    name: fai-crm_postgres_data
+  crm_documents: !override
+    external: true
+    name: fai-crm_crm_documents
+
+networks:
+  default: !override
+    external: true
+    name: fai-crm_default
