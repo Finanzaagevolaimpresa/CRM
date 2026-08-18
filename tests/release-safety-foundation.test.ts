@@ -82,6 +82,7 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   assert.equal((legacyOverride.match(/:\s*!override$/gm) ?? []).length, 3);
   assert.equal((legacyOverride.match(/external: true/g) ?? []).length, 3);
   assert.match(legacySwitch, /n05_assert_authorized_legacy_compose_resources/);
+  assert.match(legacySwitch, /n05_assert_authorized_legacy_compose_resources "\$postgres_id" running/);
   assert.match(legacySwitch, /COMPOSE_OVERRIDE_UNSUPPORTED/);
   assert.match(legacySwitch, /<\/dev\/null/);
   assert.match(legacySwitch, /LEGACY_SWITCH_DESTRUCTIVE_PROMPT_DETECTED/);
@@ -246,6 +247,28 @@ test('authorized production bridge binds the complete certified Compose resource
   assert.equal(shell(command, { ...base, CONFIRM_LEGACY_RESOURCE_IDENTITY: 'wrong' }).status, 1);
   assert.equal(shell(command, { ...base, COMPOSE_PROJECT_NAME: 'other' }).status, 1);
   assert.equal(shell(command, { ...base, FAI_ENVIRONMENT: 'staging' }).status, 1);
+});
+
+test('legacy resource bridge keeps backup quiescence and permits only an explicit running app switch contract', () => {
+  const fixture = path.join(repoRoot, 'tests/fixtures/n05-legacy-docker-mock.sh');
+  const invoke = (expectedState: string) => `set -Eeuo pipefail; source "${lib}"; source "${fixture}"; n05_assert_authorized_legacy_compose_resources postgres-id ${expectedState}`;
+  const base = {
+    FAI_ENVIRONMENT: 'production',
+    FAI_ENVIRONMENT_SENTINEL: 'FAI_CRM_PRODUCTION_V1',
+    COMPOSE_PROJECT_NAME: 'fai-crm',
+    APP_IMAGE: 'fai-crm:pr95-af402f143d9a',
+    EXPECTED_APP_IMAGE_ID: appImageId,
+    POSTGRES_IMAGE: 'postgres:16-alpine',
+    BACKUP_RESOURCE_PROVENANCE: 'authorized-legacy-compose-identity',
+    CONFIRM_LEGACY_RESOURCE_IDENTITY: 'FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1',
+  };
+
+  const running = shell(invoke('running'), { ...base, MOCK_APP_RUNNING: '1' });
+  assert.equal(running.status, 0, running.stderr);
+  assert.equal(running.stdout, '5');
+  assert.equal(shell(invoke('quiesced'), { ...base, MOCK_APP_RUNNING: '1' }).status, 1);
+  assert.equal(shell(invoke('running'), base).status, 1);
+  assert.equal(shell(invoke('unknown'), { ...base, MOCK_APP_RUNNING: '1' }).status, 1);
 });
 
 test('staging env contract denies production database reuse and open gates without exposing values', () => {

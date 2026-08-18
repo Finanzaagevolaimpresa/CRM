@@ -265,9 +265,11 @@ n05_classify_resource_label_pair() {
 
 n05_assert_authorized_legacy_compose_resources() {
   local postgres_id="${1:?postgres container id is required}"
+  local expected_app_state="${2:-quiesced}"
   local state app_documents_source postgres_data_source network_name resource
   local legacy_unlabeled_resources=0
-  local -a all_project_container_ids=() all_postgres_ids=() app_ids=() project_volumes=() project_networks=() sorted_volumes=()
+  local -a all_project_container_ids=() all_postgres_ids=() app_ids=() running_app_ids=()
+  local -a project_volumes=() project_networks=() sorted_volumes=()
 
   [[ "${BACKUP_RESOURCE_PROVENANCE:-}" == "authorized-legacy-compose-identity" ]] \
     || n05_fail LEGACY_RESOURCE_BRIDGE_MODE_REQUIRED
@@ -292,13 +294,23 @@ n05_assert_authorized_legacy_compose_resources() {
   mapfile -t app_ids < <(docker ps -aq --no-trunc \
     --filter 'label=com.docker.compose.project=fai-crm' \
     --filter 'label=com.docker.compose.service=app')
+  mapfile -t running_app_ids < <(docker ps -q --no-trunc \
+    --filter 'label=com.docker.compose.project=fai-crm' \
+    --filter 'label=com.docker.compose.service=app')
   [[ "${#all_project_container_ids[@]}" -eq 2 ]] || n05_fail LEGACY_PROJECT_CONTAINER_COUNT_MISMATCH
   [[ "${#all_postgres_ids[@]}" -eq 1 && "${all_postgres_ids[0]}" == "$postgres_id" ]] \
     || n05_fail LEGACY_POSTGRES_CONTAINER_IDENTITY_MISMATCH
   [[ "${#app_ids[@]}" -eq 1 && -n "${app_ids[0]}" ]] || n05_fail LEGACY_APP_CONTAINER_NOT_EXACTLY_ONE
-  [[ -z "$(docker ps -q \
-    --filter 'label=com.docker.compose.project=fai-crm' \
-    --filter 'label=com.docker.compose.service=app')" ]] || n05_fail APPLICATION_NOT_QUIESCED
+  case "$expected_app_state" in
+    quiesced)
+      [[ "${#running_app_ids[@]}" -eq 0 ]] || n05_fail APPLICATION_NOT_QUIESCED
+      ;;
+    running)
+      [[ "${#running_app_ids[@]}" -eq 1 && "${running_app_ids[0]}" == "${app_ids[0]}" ]] \
+        || n05_fail APPLICATION_NOT_EXACTLY_ONE_RUNNING
+      ;;
+    *) n05_fail LEGACY_APP_STATE_CONTRACT_INVALID ;;
+  esac
 
   [[ "$(docker inspect -f '{{.Name}}' "${app_ids[0]}")" == "/fai-crm-app-1" ]] \
     || n05_fail LEGACY_APP_CONTAINER_NAME_MISMATCH
