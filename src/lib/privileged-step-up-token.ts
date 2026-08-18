@@ -97,6 +97,7 @@ export function verifyPrivilegedStepUpToken(input: {
   const expectedSignature = sign(encoded, input.key.secret);
   const received = Buffer.from(receivedSignature, 'base64url');
   const expected = Buffer.from(expectedSignature, 'base64url');
+  if (base64Url(received) !== receivedSignature) return false;
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) return false;
 
   const payload = parsePayload(encoded);

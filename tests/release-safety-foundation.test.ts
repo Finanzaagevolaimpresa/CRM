@@ -103,6 +103,15 @@ test('N05 stays migration-free and introduces the complete release-safety surfac
   for (const invariant of ['REMOTE_MAIN_MISMATCH', 'CI_SHA_MISMATCH', 'RELEASE_IMAGE_ID_MISMATCH', 'INCOMPATIBLE_PR_PRESENT']) {
     assert.match(release, new RegExp(invariant));
   }
+  for (const migrationIdentity of [
+    'EXPECTED_REPOSITORY_MIGRATION_COUNT',
+    'EXPECTED_BACKUP_MIGRATION_COUNT',
+    'INVALID_REPOSITORY_MIGRATION_COUNT',
+    'INVALID_BACKUP_MIGRATION_COUNT',
+  ]) assert.match(release, new RegExp(migrationIdentity));
+  assert.match(release, /repo_migration_count" == "\$EXPECTED_REPOSITORY_MIGRATION_COUNT"/);
+  assert.match(release, /EXPECTED_MIGRATION_COUNT="\$EXPECTED_BACKUP_MIGRATION_COUNT"/);
+  assert.doesNotMatch(release, /repo_migration_count" == "\$\{EXPECTED_MIGRATION_COUNT/);
   assert.match(release, /BACKUP_RESOURCE_PROVENANCE/);
   assert.match(readFileSync('scripts/n05/verify-backup-manifest.sh', 'utf8'), /resource_provenance/);
 });

@@ -126,7 +126,17 @@ test('N03 step-up tokens are bounded, session-bound, rotation-aware, and tamper-
   assert.equal(verifyPrivilegedStepUpToken({ token, key, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-b', nowSeconds: 10_001 }), false);
   assert.equal(verifyPrivilegedStepUpToken({ token, key: { ...key, version: 8 }, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_001 }), false);
   assert.equal(verifyPrivilegedStepUpToken({ token, key: { ...key, secret: 'b'.repeat(32) }, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_001 }), false);
-  assert.equal(verifyPrivilegedStepUpToken({ token: `${token.slice(0, -1)}x`, key, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_001 }), false);
+  const signatureOffset = token.lastIndexOf('.') + 1;
+  const signature = token.slice(signatureOffset);
+  const significantMutation = `${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`;
+  assert.equal(verifyPrivilegedStepUpToken({ token: `${token.slice(0, signatureOffset)}${significantMutation}`, key, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_001 }), false);
+
+  const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const canonicalLastIndex = base64UrlAlphabet.indexOf(signature.at(-1) ?? '');
+  assert.equal(canonicalLastIndex % 4, 0);
+  const nonCanonicalSignature = `${signature.slice(0, -1)}${base64UrlAlphabet[canonicalLastIndex + 1]}`;
+  assert.deepEqual(Buffer.from(nonCanonicalSignature, 'base64url'), Buffer.from(signature, 'base64url'));
+  assert.equal(verifyPrivilegedStepUpToken({ token: `${token.slice(0, signatureOffset)}${nonCanonicalSignature}`, key, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_001 }), false);
   assert.equal(verifyPrivilegedStepUpToken({ token, key, expectedUserId: 'synthetic-user', sessionToken: 'synthetic-session-a', nowSeconds: 10_000 + PRIVILEGED_STEP_UP_TTL_SECONDS }), false);
   assert.equal(privilegedStepUpKeyDigest(key.secret).length, 32);
 });
