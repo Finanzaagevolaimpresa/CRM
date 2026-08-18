@@ -24,6 +24,8 @@ source "$SCRIPT_DIR/lib.sh"
 : "${BACKUP_IMAGE_PROVENANCE:?BACKUP_IMAGE_PROVENANCE is required}"
 : "${BACKUP_RESOURCE_PROVENANCE:?BACKUP_RESOURCE_PROVENANCE is required}"
 : "${BACKUP_SOURCE_PROJECT:?BACKUP_SOURCE_PROJECT is required}"
+: "${EXPECTED_REPOSITORY_MIGRATION_COUNT:?EXPECTED_REPOSITORY_MIGRATION_COUNT is required}"
+: "${EXPECTED_BACKUP_MIGRATION_COUNT:?EXPECTED_BACKUP_MIGRATION_COUNT is required}"
 
 n05_require_command docker
 n05_require_command git
@@ -39,6 +41,8 @@ n05_assert_git_oid "$BACKUP_SOURCE_TREE" BACKUP_SOURCE_TREE
 [[ "$EXPECTED_ROLLBACK_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || n05_fail EXPECTED_ROLLBACK_IMAGE_ID_INVALID
 n05_assert_safe_token "${ROLLBACK_IMAGE//\//-}" ROLLBACK_IMAGE
 [[ "$BACKUP_APP_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || n05_fail BACKUP_APP_IMAGE_ID_INVALID
+[[ "$EXPECTED_REPOSITORY_MIGRATION_COUNT" =~ ^[0-9]{1,4}$ ]] || n05_fail INVALID_REPOSITORY_MIGRATION_COUNT
+[[ "$EXPECTED_BACKUP_MIGRATION_COUNT" =~ ^[0-9]{1,4}$ ]] || n05_fail INVALID_BACKUP_MIGRATION_COUNT
 [[ "$BACKUP_IMAGE_PROVENANCE" == "oci-labels" || "$BACKUP_IMAGE_PROVENANCE" == "authorized-legacy-image-id" ]] \
   || n05_fail BACKUP_IMAGE_PROVENANCE_INVALID
 [[ "$BACKUP_RESOURCE_PROVENANCE" == "n05-labels" || "$BACKUP_RESOURCE_PROVENANCE" == "authorized-legacy-compose-identity" ]] \
@@ -75,7 +79,7 @@ fi
 remote_main="$(git -C "$REPO_ROOT" ls-remote origin refs/heads/main | awk '{print $1}')"
 [[ "$remote_main" == "$EXPECTED_COMMIT" ]] || n05_fail REMOTE_MAIN_MISMATCH
 repo_migration_count="$(find "$REPO_ROOT/prisma/migrations" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-[[ "$repo_migration_count" == "${EXPECTED_MIGRATION_COUNT:-36}" ]] || n05_fail REPOSITORY_MIGRATION_COUNT_MISMATCH
+[[ "$repo_migration_count" == "$EXPECTED_REPOSITORY_MIGRATION_COUNT" ]] || n05_fail REPOSITORY_MIGRATION_COUNT_MISMATCH
 
 actual_image_id="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE")"
 actual_rollback_image_id="$(docker image inspect -f '{{.Id}}' "$ROLLBACK_IMAGE")"
@@ -112,8 +116,9 @@ EXPECTED_SOURCE_TREE="$BACKUP_SOURCE_TREE" \
 EXPECTED_APP_IMAGE_ID="$BACKUP_APP_IMAGE_ID" \
 EXPECTED_IMAGE_PROVENANCE="$BACKUP_IMAGE_PROVENANCE" \
 EXPECTED_RESOURCE_PROVENANCE="$BACKUP_RESOURCE_PROVENANCE" \
-EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-36}" \
+EXPECTED_MIGRATION_COUNT="$EXPECTED_BACKUP_MIGRATION_COUNT" \
   "$SCRIPT_DIR/verify-backup-manifest.sh" "$BACKUP_SET_DIR" >/dev/null
 
-printf 'N05_RELEASE_GATE_PASS|commit=%s|tree=%s|ci=success|image_id=%s|backup=verified|rollback_image_id=%s\n' \
-  "$EXPECTED_COMMIT" "$EXPECTED_TREE" "$actual_image_id" "$actual_rollback_image_id"
+printf 'N05_RELEASE_GATE_PASS|commit=%s|tree=%s|ci=success|image_id=%s|backup=verified|rollback_image_id=%s|repository_migrations=%s|backup_migrations=%s\n' \
+  "$EXPECTED_COMMIT" "$EXPECTED_TREE" "$actual_image_id" "$actual_rollback_image_id" \
+  "$repo_migration_count" "$EXPECTED_BACKUP_MIGRATION_COUNT"

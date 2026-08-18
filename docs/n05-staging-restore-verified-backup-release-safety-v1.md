@@ -113,12 +113,14 @@ The drill never uses `docker compose down -v`, global prune, unresolved globs or
 - commit, tree and exact parent set match the release authorization;
 - CI conclusion is `success` for that same commit;
 - incompatible open-PR count is explicitly zero;
-- repository migration count is exact;
+- repository migration count is exact and supplied independently from the backup migration count;
 - immutable application tag contains the authorized commit prefix and resolves to the expected image ID;
 - rollback tag resolves to the first-parent N-1 commit and a different, pre-recorded image ID;
 - release and N-1 images expose the expected commit/tree labels; the explicitly declared legacy-ID bridge is accepted only when those old labels are absent;
 - the backup manifest exposes the explicitly authorized Docker resource provenance, with the legacy Compose bridge accepted only for production project `fai-crm`;
-- the quiesced production backup manifest/checksums match its deployed source commit/tree.
+- the quiesced production backup manifest/checksums match its deployed source commit/tree and its explicit pre-migration count.
+
+`EXPECTED_REPOSITORY_MIGRATION_COUNT` binds the migrations shipped by the release source. `EXPECTED_BACKUP_MIGRATION_COUNT` independently binds the migrations recorded in the dedicated backup. During an additive DB-first rollout these values may legitimately differ by the authorized migration delta; neither value is inferred from the other.
 
 The gate does not build, tag, start, stop, migrate, switch or roll back anything. Passing it does not authorize deploy. GitHub PR state and CI evidence must be acquired immediately before the gate; supplied evidence is fail-closed and cannot be omitted.
 
