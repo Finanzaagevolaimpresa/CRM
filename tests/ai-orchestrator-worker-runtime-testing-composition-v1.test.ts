@@ -175,7 +175,6 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
     { failedAttempt: 0 },
     { failedAttempt: 3 },
   ];
-  const runtimeCalls = 0;
   for (const invalid of invalidCases) {
     assert.throws(
       () => calculateAiOrchestratorSyntheticTestingRuntimeRetryDelayMsV1({
@@ -191,7 +190,6 @@ test('helper retry test-only chiude ogni identità e parametro runtime non type-
       ),
     );
   }
-  assert.equal(runtimeCalls, 0);
 });
 
 test('helper sintetico condivide limite e pattern canonici per worker ID da 128 a 201', () => {

@@ -46,7 +46,7 @@ export default async function Page() {
     return canViewTechnicalPractice(session, { ...practice, client });
   });
   const next7 = new Date();
-  next7.setDate(next7.getDate() + 7);
+  next7.setTime(next7.getTime() + 7 * 24 * 60 * 60 * 1000);
   const priorityRank = { urgente: 0, alta: 1, media: 2, bassa: 3 } as const;
   const urgent = visiblePractices
     .filter((practice) => practice.priority === 'urgente' || (practice.dueDate && practice.dueDate <= next7))
