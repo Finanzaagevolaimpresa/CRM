@@ -128,8 +128,8 @@ test('N07 access helpers apply candidate limits at the database boundary and saf
 
 test('N07 migration 36 is additive, transactional and index-only', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 36);
-  assert.equal(names.at(-1), '20260818120000_core_query_index_pagination_hardening_v1');
+  assert.equal(names.length, 37);
+  assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);
   assert.equal((migration.match(/CREATE INDEX/g) ?? []).length, 11);
