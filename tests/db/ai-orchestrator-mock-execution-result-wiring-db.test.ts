@@ -27,7 +27,7 @@ test.after(async () => {
   await prisma?.$disconnect();
 });
 
-test('PostgreSQL preserva i record global canonici PR85 nella catena additiva di 36 migration', { skip: !runDbTests }, async () => {
+test('PostgreSQL preserva i record global canonici PR85 nella catena additiva di 37 migration', { skip: !runDbTests }, async () => {
   const [orchestrator, control, migrations] = await Promise.all([
     db().aiOrchestratorSetting.findUnique({ where: { id: 'global' } }),
     db().aiControlSetting.findUnique({ where: { id: 'global' } }),
@@ -38,6 +38,6 @@ test('PostgreSQL preserva i record global canonici PR85 nella catena additiva di
   assert.equal(control.externalProvidersEnabled, false);
   assert.equal(orchestrator.provider, 'mock');
   assert.equal(orchestrator.syntheticDataOnly, true);
-  assert.equal(Number(migrations[0]?.count), 36);
+  assert.equal(Number(migrations[0]?.count), 37);
   assert.equal(await db().aiOrchestratorSetting.count({ where: { id: 'singleton' } }), 0);
 });

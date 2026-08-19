@@ -1,41 +1,9 @@
 import { PrismaClient } from "@prisma/client";
 import { initialAiAgentConfigs } from "./ai-agent-configs";
 import { seedAiAgentConfig } from "./seed-ai-agent";
+import { FAI_SERVICE_CATALOG } from "../src/lib/service-catalog";
 
 const prisma = new PrismaClient();
-
-const services = [
-  [
-    "verifica_ai_essenziale",
-    "Verifica AI Essenziale",
-    "Screening interno preliminare con output AI in bozza da revisionare.",
-    "ai",
-  ],
-  [
-    "audit_ai_bancabilita",
-    "Audit AI Bancabilità",
-    "Analisi tecnica interna della bancabilità e delle criticità documentali.",
-    "bancabilita",
-  ],
-  [
-    "pre_analisi_ai_ammissibilita",
-    "Pre-Analisi AI Ammissibilità",
-    "Pre-analisi interna di coerenza rispetto a misure e requisiti da verificare.",
-    "finanza_agevolata",
-  ],
-  [
-    "supporto_finanza_ordinaria",
-    "Supporto Finanza Ordinaria",
-    "Supporto tecnico interno su strumenti ordinari ipotizzabili.",
-    "finanza_ordinaria",
-  ],
-  [
-    "supporto_finanza_agevolata",
-    "Supporto Finanza Agevolata",
-    "Supporto tecnico interno su bandi e misure da verificare.",
-    "finanza_agevolata",
-  ],
-] as const;
 
 async function seedAiAgentConfigs() {
   for (const config of initialAiAgentConfigs) {
@@ -44,20 +12,37 @@ async function seedAiAgentConfigs() {
 }
 
 async function seedServiceCatalog() {
-  for (const [code, name, description, category] of services) {
+  for (const service of FAI_SERVICE_CATALOG) {
+    const basePrice = service.netPriceCents === null
+      ? null
+      : (service.netPriceCents / 100).toFixed(2);
     await prisma.serviceCatalog.upsert({
-      where: { code },
-      update: { name, description, category, active: true },
-      create: {
-        code,
-        name,
-        description,
-        category,
+      where: { code: service.code },
+      update: {
+        name: service.name,
+        description: service.description,
+        category: service.category,
+        basePrice,
         active: true,
-        displayOrder: services.findIndex((service) => service[0] === code) + 1,
+        displayOrder: service.displayOrder,
+      },
+      create: {
+        code: service.code,
+        name: service.name,
+        description: service.description,
+        category: service.category,
+        basePrice,
+        active: true,
+        displayOrder: service.displayOrder,
       },
     });
   }
+  await prisma.serviceCatalog.updateMany({
+    where: {
+      code: { in: ["supporto_finanza_ordinaria", "supporto_finanza_agevolata"] },
+    },
+    data: { active: false },
+  });
 }
 
 async function main() {

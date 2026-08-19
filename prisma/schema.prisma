@@ -360,6 +360,16 @@ enum PrivacyEvidenceDecision {
   DENIED
 }
 
+enum ServiceCatalogPriceMode {
+  FIXED
+  QUOTE_ONLY
+}
+
+enum ServiceCatalogRevisionStatus {
+  PUBLISHED
+  RETIRED
+}
+
 model User {
   id                                 String                                  @id @default(cuid())
   email                              String                                  @unique
@@ -1764,16 +1774,62 @@ model AiAgentMessage {
 }
 
 model ServiceCatalog {
-  id           String   @id @default(cuid())
-  code         String   @unique
+  id           String                   @id @default(cuid())
+  code         String                   @unique
   name         String
   description  String?
   category     String
   basePrice    Decimal?
-  active       Boolean  @default(true)
-  displayOrder Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  active       Boolean                  @default(true)
+  displayOrder Int                      @default(0)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  revisions    ServiceCatalogRevision[]
+}
+
+model ServiceCatalogRevision {
+  id                        String                       @id @default(uuid()) @db.Uuid
+  serviceCatalogId          String
+  version                   Int
+  publicName                String
+  shortDescription         String
+  priceMode                 ServiceCatalogPriceMode
+  netPrice                  Decimal?
+  currency                  String                       @default("EUR")
+  vatRateBps                Int                          @default(2200)
+  validFrom                 DateTime
+  validUntil                DateTime?
+  termsVersion              String
+  checkoutEnabled           Boolean                      @default(false)
+  autoClientDeliveryAllowed Boolean                      @default(false)
+  autoExternalActionAllowed Boolean                      @default(false)
+  operationalConditions     Json
+  checklist                 Json
+  status                    ServiceCatalogRevisionStatus @default(PUBLISHED)
+  contentHash               String                       @unique(map: "ServiceCatalogRevision_content_hash_key")
+  publishedAt               DateTime?
+  retiredAt                 DateTime?
+  createdAt                 DateTime                     @default(now())
+  serviceCatalog            ServiceCatalog               @relation(fields: [serviceCatalogId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([serviceCatalogId, version], map: "ServiceCatalogRevision_service_version_key")
+  @@index([status, validFrom, validUntil], map: "ServiceCatalogRevision_status_validity_idx")
+}
+
+model ServiceCatalogPublication {
+  id               String   @id @default(uuid()) @db.Uuid
+  catalogVersion   String   @unique(map: "ServiceCatalogPublication_catalog_version_key")
+  schemaVersion    Int      @default(1)
+  signatureVersion String
+  keyVersion       Int
+  payload          Json
+  payloadHash      String
+  signature        String
+  publishedAt      DateTime
+  createdAt        DateTime @default(now())
+
+  @@unique([payloadHash, signatureVersion, keyVersion], map: "ServiceCatalogPublication_payload_signature_key")
+  @@index([publishedAt, catalogVersion], map: "ServiceCatalogPublication_published_catalog_idx")
 }
 
 model ClientService {

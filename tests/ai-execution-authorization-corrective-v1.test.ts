@@ -15,7 +15,7 @@ const quickRunPage = readFileSync(resolve(root, 'src/app/ai/page.tsx'), 'utf8');
 const clientPage = readFileSync(resolve(root, 'src/app/clients/[id]/page.tsx'), 'utf8');
 
 test('PR86 aggiunge una sola migration 31 additiva senza riscrivere i canonicalizzatori v1', () => {
-  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 36);
+  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 37);
   assert.match(migration, /^BEGIN;/m); assert.match(migration, /^COMMIT;/m);
   assert.doesNotMatch(migration, /\b(?:DROP TABLE|TRUNCATE|DELETE FROM|UPDATE "AiExecution(?:Request|Decision|AuthorizationGrant))\b/i);
   assert.match(canonical, /export function canonicalJson[\s\S]*return canonicalize\(value, '\$'\)/);

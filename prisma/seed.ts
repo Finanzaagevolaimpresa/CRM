@@ -1,6 +1,7 @@
 import { PrismaClient, RoleCode, type User } from "@prisma/client";
 import { AI_AGENT_CODES, initialAiAgentConfigs } from "./ai-agent-configs";
 import { seedAiAgentConfig } from "./seed-ai-agent";
+import { FAI_SERVICE_CATALOG } from "../src/lib/service-catalog";
 import bcrypt from "bcryptjs";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
@@ -83,51 +84,37 @@ async function main() {
     await seedAiAgentConfig(prisma, config, admin.id, 'development_seed');
   }
 
-  const services = [
-    [
-      "verifica_ai_essenziale",
-      "Verifica AI Essenziale",
-      "Screening interno preliminare con output AI in bozza da revisionare.",
-      "ai",
-    ],
-    [
-      "audit_ai_bancabilita",
-      "Audit AI Bancabilità",
-      "Analisi tecnica interna della bancabilità e delle criticità documentali.",
-      "bancabilita",
-    ],
-    [
-      "pre_analisi_ai_ammissibilita",
-      "Pre-Analisi AI Ammissibilità",
-      "Pre-analisi interna di coerenza rispetto a misure e requisiti da verificare.",
-      "finanza_agevolata",
-    ],
-    [
-      "supporto_finanza_ordinaria",
-      "Supporto Finanza Ordinaria",
-      "Supporto tecnico interno su strumenti ordinari ipotizzabili.",
-      "finanza_ordinaria",
-    ],
-    [
-      "supporto_finanza_agevolata",
-      "Supporto Finanza Agevolata",
-      "Supporto tecnico interno su bandi e misure da verificare.",
-      "finanza_agevolata",
-    ],
-  ] as const;
-  for (const [code, name, description, category] of services) {
+  for (const serviceDefinition of FAI_SERVICE_CATALOG) {
+    const basePrice = serviceDefinition.netPriceCents === null
+      ? null
+      : (serviceDefinition.netPriceCents / 100).toFixed(2);
     await prisma.serviceCatalog.upsert({
-      where: { code },
-      update: { name, description, category, active: true },
+      where: { code: serviceDefinition.code },
+      update: {
+        name: serviceDefinition.name,
+        description: serviceDefinition.description,
+        category: serviceDefinition.category,
+        basePrice,
+        active: true,
+        displayOrder: serviceDefinition.displayOrder,
+      },
       create: {
-        code,
-        name,
-        description,
-        category,
-        displayOrder: services.findIndex((s) => s[0] === code) + 1,
+        code: serviceDefinition.code,
+        name: serviceDefinition.name,
+        description: serviceDefinition.description,
+        category: serviceDefinition.category,
+        basePrice,
+        active: true,
+        displayOrder: serviceDefinition.displayOrder,
       },
     });
   }
+  await prisma.serviceCatalog.updateMany({
+    where: {
+      code: { in: ["supporto_finanza_ordinaria", "supporto_finanza_agevolata"] },
+    },
+    data: { active: false },
+  });
 
   const lead = await prisma.lead.create({
     data: {
@@ -291,8 +278,8 @@ async function main() {
   const preCatalog = await prisma.serviceCatalog.findUniqueOrThrow({
     where: { code: "pre_analisi_ai_ammissibilita" },
   });
-  const ordinaryCatalog = await prisma.serviceCatalog.findUniqueOrThrow({
-    where: { code: "supporto_finanza_ordinaria" },
+  const businessPlanCatalog = await prisma.serviceCatalog.findUniqueOrThrow({
+    where: { code: "business_plan_presentazione_bancaria" },
   });
   const contract = await prisma.contract.create({
     data: {
@@ -358,14 +345,14 @@ async function main() {
         clientId: client.id,
         companyId: company.id,
         projectId: project.id,
-        serviceCatalogId: ordinaryCatalog.id,
+        serviceCatalogId: businessPlanCatalog.id,
         contractId: contract.id,
         paymentId: payment.id,
         status: "in_lavorazione",
         paymentStatus: "parziale",
         assignedToId: consultant.id,
         internalNotes:
-          "Supporto su scenario finanza ordinaria, senza esiti promessi.",
+          "Business plan e presentazione bancaria demo, senza esiti promessi.",
       },
     ],
   });
