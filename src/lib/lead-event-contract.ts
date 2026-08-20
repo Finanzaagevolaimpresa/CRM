@@ -162,16 +162,18 @@ function readExactRecord(
   invalidCode: LeadEventContractErrorCode,
 ) {
   const record = readPlainRecord(value, invalidCode);
-  let keys: string[];
+  let keys: PropertyKey[];
   try {
-    keys = Object.keys(record);
+    keys = Reflect.ownKeys(record);
   } catch {
     return fail(invalidCode);
   }
   const allowedKeys = new Set(allowed);
   const output: Record<string, unknown> = {};
   for (const key of keys) {
-    if (!allowedKeys.has(key)) fail('LEAD_EVENT_FIELD_UNKNOWN');
+    if (typeof key !== 'string' || !allowedKeys.has(key)) {
+      fail('LEAD_EVENT_FIELD_UNKNOWN');
+    }
     output[key] = readRequiredDataField(record, key, invalidCode);
   }
   for (const key of required) {
@@ -399,7 +401,7 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
   if (!output.email && !output.phone) fail('LEAD_EVENT_FIELD_INVALID');
   if (payload.sourcePagePath !== undefined) {
     const path = normalizedText(payload.sourcePagePath, 500);
-    if (!path.startsWith('/') || path.startsWith('//') || /[?#\\]/u.test(path)) {
+    if (!path.startsWith('/') || path.startsWith('//') || /[\u0009\u000A\u000D?#\\]/u.test(path)) {
       fail('LEAD_EVENT_FIELD_INVALID');
     }
     output.sourcePagePath = path;

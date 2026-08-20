@@ -134,6 +134,18 @@ test('N10 rejects unknown fields, accessors and non-plain structures without ech
   try { createLeadSubmittedEventV1(accessor); } catch (error) { caught = error; }
   assert.ok(caught instanceof LeadEventContractError);
   assert.equal(JSON.stringify(caught).includes('synthetic-private-value'), false);
+
+  const nonEnumerable = { ...SYNTHETIC_LEAD_EVENT_V1 };
+  Object.defineProperty(nonEnumerable, 'syntheticHiddenField', {
+    configurable: true,
+    enumerable: false,
+    value: 'synthetic-private-value',
+  });
+  expectContractError('LEAD_EVENT_FIELD_UNKNOWN', () => parseLeadSubmittedEventV1(nonEnumerable));
+
+  const symbolKey = Symbol('synthetic-private-field');
+  const symbolBearing = { ...SYNTHETIC_LEAD_EVENT_V1, [symbolKey]: 'synthetic-private-value' };
+  expectContractError('LEAD_EVENT_FIELD_UNKNOWN', () => parseLeadSubmittedEventV1(symbolBearing));
 });
 
 test('N10 rejects unsupported schema, event type and event version before partial interpretation', () => {
@@ -204,6 +216,12 @@ test('N10 rejects invalid contact, money, source path, control text and oversize
   expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
     ...input, payload: { ...input.payload, sourcePagePath: '/contact/?token=synthetic' },
   }));
+  for (const controlWhitespace of ['\t', '\n', '\r']) {
+    expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
+      ...input,
+      payload: { ...input.payload, sourcePagePath: `/synthetic${controlWhitespace}path` },
+    }));
+  }
   expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
     ...input, payload: { ...input.payload, message: 'synthetic\u202Evalue' },
   }));
