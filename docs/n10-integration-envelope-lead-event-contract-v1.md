@@ -69,7 +69,7 @@ La classificazione usa il catalogo N04 `n04-v1`. Il gruppo indica la stessa rego
 | --- | --- | --- |
 | `schemaVersion`, `eventType`, `eventVersion` | `OPERATIONAL` | costanti v1 |
 | `eventId`, `businessCorrelationId` | `PERSONAL/CONTACT` | UUID v4, 36 caratteri, normalizzato lowercase |
-| `occurredAt` | `PERSONAL/CONTACT` | RFC 3339 valido, massimo 35 caratteri, normalizzato UTC ISO |
+| `occurredAt` | `PERSONAL/CONTACT` | profilo N10 v1 RFC 3339: frazione opzionale di 1–3 cifre, massimo 29 caratteri, normalizzato UTC ISO millisecondi |
 | `source.systemCode`, `source.formCode` | `OPERATIONAL` | 1–120, codice maiuscolo `[A-Z0-9_.:-]` |
 | `source.formVersion` | `OPERATIONAL` | 1–80, `[A-Za-z0-9_.:-]` |
 | `source.submissionId` | `PERSONAL/CONTACT` | 1–128, `[A-Za-z0-9_.:-]` |
@@ -80,10 +80,10 @@ La classificazione usa il catalogo N04 `n04-v1`. Il gruppo indica la stessa rego
 | `catalogReference.catalogVersion`, `serviceCode`, `serviceVersion` | `BUSINESS` | riferimento opzionale/null; catalogo `2026-07-12-v1`, codice N09 esistente, versione servizio `1` |
 | `payload.firstName`, `lastName`, `city`, `region` | `PERSONAL/CONTACT` | opzionale, massimo 1.000 caratteri |
 | `payload.companyName`, `interestText`, `serviceInterestText` | `BUSINESS` | opzionale, massimo 1.000 caratteri |
-| `payload.email` | `PERSONAL/CONTACT` | opzionale, massimo 254, trim e lowercase, forma email minima |
+| `payload.email` | `PERSONAL/CONTACT` | opzionale, massimo 254 prima e dopo lowercase, trim e forma email minima |
 | `payload.phone` | `PERSONAL/CONTACT` | opzionale, input massimo 100; spazi rimossi; risultato 1–50 |
 | `payload.message` | `PERSONAL/CONTACT` | opzionale, massimo 4.000 caratteri |
-| `payload.sourcePagePath` | `OPERATIONAL` | opzionale, massimo 500; path relativo all'origin con un solo slash iniziale, senza query, fragment o backslash |
+| `payload.sourcePagePath` | `OPERATIONAL` | opzionale, massimo 500; path relativo all'origin con un solo slash iniziale, senza query, fragment, backslash, tab/CR/LF o dot-segment letterali/percent-encoded |
 | `payload.requestedAmount.currency` | `FINANCIAL` | solo `EUR` |
 | `payload.requestedAmount.minorUnits` | `FINANCIAL` | intero safe JavaScript, maggiore o uguale a zero |
 | `idempotency.canonicalizationVersion` | `OPERATIONAL` | costante `1` |
@@ -162,13 +162,13 @@ La fixture N10 usa esclusivamente identità sintetiche e il dominio riservato `.
 
 - happy path, congelamento, dimensione e round-trip create/parse;
 - marketing esplicito e catalogo assente senza inferenze;
-- NFC, trim, lowercase email, spazi telefono, offset temporali e timestamp impossibili;
+- NFC, trim, lowercase email con bound post-folding, spazi telefono, offset temporali, profilo millisecondi e timestamp impossibili;
 - stabilità e separazione dei digest; `NEW`, `REPLAY` e `CONFLICT`;
 - esclusione di email e telefono dalla dedupe tecnica;
-- campi sconosciuti, accessor, oggetti non plain e assenza di echo dei valori;
+- campi sconosciuti, own-key non enumerabili o simboliche, accessor, oggetti non plain e assenza di echo dei valori;
 - schema, tipo e versione non supportati;
 - semantica privacy e validità del riferimento catalogo N09;
-- contatto minimo, importo, path, controlli Unicode e limite 16 KiB;
+- contatto minimo, importo, path con controllo whitespace/dot-segment, controlli Unicode e limite 16 KiB;
 - tampering dei digest e stato persistito invalido;
 - copertura esatta di tutti i 42 percorsi nel catalogo di classificazione;
 - assenza di dipendenze runtime, trasporto, telemetria N06 e migration.
@@ -177,6 +177,6 @@ La fixture N10 usa esclusivamente identità sintetiche e il dominio riservato `.
 
 N10 non richiede migration: il contratto è puro, non introduce modelli Prisma e lascia invariate le 37 migration esistenti. Inbox/outbox e relativi vincoli devono essere progettati e autorizzati separatamente in N11.
 
-Il rollback applicativo locale consiste nel revert dei due commit N10 o nella rimozione dei quattro file nuovi e delle sole aggiunte N10 ai due file modificati. Poiché nessun call site importa il modulo, il rollback non richiede data repair, rollback DB, cambio di configurazione, rotazione chiavi o intervento su produzione.
+Il rollback applicativo locale consiste nel revert dei commit N10 o nella rimozione dei quattro file nuovi e delle sole aggiunte N10 ai due file modificati. Poiché nessun call site importa il modulo, il rollback non richiede data repair, rollback DB, cambio di configurazione, rotazione chiavi o intervento su produzione.
 
 N10 non autorizza né realizza push, PR, merge, migration, deploy, activation, pubblicazioni di catalogo, chiavi, Stripe, WordPress o integrazioni esterne.

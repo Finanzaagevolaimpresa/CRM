@@ -117,7 +117,7 @@ const CONTRACT_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_.:-]*$/;
 const CONTRACT_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const SERVICE_CODE_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const RFC3339_MILLISECOND_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SOURCE_PAGE_DOT_SEGMENT_PATTERN = /^(?:\.|%2e){1,2}$/iu;
 const FORBIDDEN_TEXT_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
@@ -247,8 +247,8 @@ function normalizedUuid(value: unknown) {
 }
 
 function normalizedTimestamp(value: unknown) {
-  const normalized = normalizedText(value, 35);
-  const parts = RFC3339_PATTERN.exec(normalized);
+  const normalized = normalizedText(value, 29);
+  const parts = RFC3339_MILLISECOND_PATTERN.exec(normalized);
   if (!parts) fail('LEAD_EVENT_FIELD_INVALID');
   const calendar = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(normalized);
   if (!calendar) fail('LEAD_EVENT_FIELD_INVALID');

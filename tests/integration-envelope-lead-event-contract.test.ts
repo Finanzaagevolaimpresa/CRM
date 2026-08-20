@@ -86,6 +86,24 @@ test('N10 canonicalization is deterministic across UTC offsets, Unicode and norm
   assert.deepEqual(first, second);
 });
 
+test('N10 timestamp profile preserves milliseconds and rejects finer precision', () => {
+  const input = syntheticLeadEventInputV1();
+  const event = createLeadSubmittedEventV1({
+    ...input,
+    occurredAt: '2026-08-19T14:00:00.123+02:00',
+  });
+  assert.equal(event.occurredAt, '2026-08-19T12:00:00.123Z');
+  for (const unsupportedTimestamp of [
+    '2026-08-19T12:00:00.1234Z',
+    '2026-08-19T12:00:00.123456789Z',
+  ]) {
+    expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
+      ...input,
+      occurredAt: unsupportedTimestamp,
+    }));
+  }
+});
+
 test('N10 hashes use separated identity and payload semantics', () => {
   const input = syntheticLeadEventInputV1();
   const original = createLeadSubmittedEventV1(input);
