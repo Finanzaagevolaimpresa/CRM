@@ -118,6 +118,28 @@ test('N10 timestamp profile preserves milliseconds and rejects finer precision',
   }
 });
 
+test('N10 normalizes blank optional contact and source path fields as absent', () => {
+  const input = syntheticLeadEventInputV1();
+  const phoneOnly = createLeadSubmittedEventV1({
+    ...input,
+    payload: {
+      ...input.payload,
+      email: '   ',
+      sourcePagePath: '   ',
+    },
+  });
+  assert.equal(Object.hasOwn(phoneOnly.payload, 'email'), false);
+  assert.equal(Object.hasOwn(phoneOnly.payload, 'sourcePagePath'), false);
+  assert.equal(phoneOnly.payload.phone, '+393330000010');
+
+  const emailOnly = createLeadSubmittedEventV1({
+    ...input,
+    payload: { ...input.payload, phone: '   ' },
+  });
+  assert.equal(Object.hasOwn(emailOnly.payload, 'phone'), false);
+  assert.equal(emailOnly.payload.email, 'synthetic.lead@n10.invalid');
+});
+
 test('N10 hashes use separated identity and payload semantics', () => {
   const input = syntheticLeadEventInputV1();
   const original = createLeadSubmittedEventV1(input);

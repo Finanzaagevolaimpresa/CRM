@@ -392,19 +392,21 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
     const normalized = optionalText(payload[key], maximum);
     if (normalized !== undefined) output[key] = normalized;
   }
-  if (payload.email !== undefined) {
-    const email = normalizedText(payload.email, 254).toLowerCase();
+  const emailInput = optionalText(payload.email, 254);
+  if (emailInput !== undefined) {
+    const email = emailInput.toLowerCase();
     if (email.length > 254 || !EMAIL_PATTERN.test(email)) fail('LEAD_EVENT_FIELD_INVALID');
     output.email = email;
   }
-  if (payload.phone !== undefined) {
-    const phone = normalizedText(payload.phone, 100).replace(/\s+/gu, '');
-    if (phone.length === 0 || phone.length > 50) fail('LEAD_EVENT_FIELD_INVALID');
+  const phoneInput = optionalText(payload.phone, 100);
+  if (phoneInput !== undefined) {
+    const phone = phoneInput.replace(/\s+/gu, '');
+    if (phone.length > 50) fail('LEAD_EVENT_FIELD_INVALID');
     output.phone = phone;
   }
   if (!output.email && !output.phone) fail('LEAD_EVENT_FIELD_INVALID');
-  if (payload.sourcePagePath !== undefined) {
-    const path = normalizedText(payload.sourcePagePath, 500);
+  const path = optionalText(payload.sourcePagePath, 500);
+  if (path !== undefined) {
     if (!path.startsWith('/') || path.startsWith('//') || /[\u0009\u000A\u000D?#\\]/u.test(path)) {
       fail('LEAD_EVENT_FIELD_INVALID');
     }
