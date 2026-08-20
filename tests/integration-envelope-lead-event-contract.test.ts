@@ -207,6 +207,10 @@ test('N10 rejects invalid contact, money, source path, control text and oversize
   expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
     ...input, payload: { firstName: 'No contact' },
   }));
+  expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
+    ...input,
+    payload: { ...input.payload, email: `${'İ'.repeat(248)}@a.co` },
+  }));
   for (const minorUnits of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
       ...input,
@@ -220,6 +224,19 @@ test('N10 rejects invalid contact, money, source path, control text and oversize
     expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
       ...input,
       payload: { ...input.payload, sourcePagePath: `/synthetic${controlWhitespace}path` },
+    }));
+  }
+  for (const dotSegmentPath of [
+    '/contact/../apply',
+    '/./apply',
+    '/contact/%2e/apply',
+    '/contact/%2e%2e/apply',
+    '/contact/.%2E/apply',
+    '/contact/%2e./apply',
+  ]) {
+    expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
+      ...input,
+      payload: { ...input.payload, sourcePagePath: dotSegmentPath },
     }));
   }
   expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
