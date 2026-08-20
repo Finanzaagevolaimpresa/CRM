@@ -256,8 +256,9 @@ function normalizedTimestamp(value: unknown) {
   const year = Number(rawYear);
   const month = Number(rawMonth);
   const day = Number(rawDay);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const validDay = month >= 1 && month <= 12
-    ? new Date(Date.UTC(year, month, 0)).getUTCDate()
+    ? [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
     : 0;
   if (day < 1 || day > validDay
     || Number(rawHour) > 23
@@ -268,7 +269,9 @@ function normalizedTimestamp(value: unknown) {
   const timestamp = Date.parse(normalized);
   if (!Number.isFinite(timestamp)) fail('LEAD_EVENT_FIELD_INVALID');
   try {
-    return new Date(timestamp).toISOString();
+    const canonical = new Date(timestamp).toISOString();
+    if (!RFC3339_MILLISECOND_PATTERN.test(canonical)) fail('LEAD_EVENT_FIELD_INVALID');
+    return canonical;
   } catch {
     return fail('LEAD_EVENT_FIELD_INVALID');
   }

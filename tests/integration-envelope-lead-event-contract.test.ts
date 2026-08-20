@@ -93,9 +93,23 @@ test('N10 timestamp profile preserves milliseconds and rejects finer precision',
     occurredAt: '2026-08-19T14:00:00.123+02:00',
   });
   assert.equal(event.occurredAt, '2026-08-19T12:00:00.123Z');
+  const lowerBoundary = createLeadSubmittedEventV1({
+    ...input,
+    occurredAt: '0000-02-29T12:00:00Z',
+  });
+  const upperBoundary = createLeadSubmittedEventV1({
+    ...input,
+    occurredAt: '9999-12-31T23:59:59Z',
+  });
+  assert.equal(lowerBoundary.occurredAt, '0000-02-29T12:00:00.000Z');
+  assert.equal(upperBoundary.occurredAt, '9999-12-31T23:59:59.000Z');
+  assert.deepEqual(parseLeadSubmittedEventV1(lowerBoundary), lowerBoundary);
+  assert.deepEqual(parseLeadSubmittedEventV1(upperBoundary), upperBoundary);
   for (const unsupportedTimestamp of [
     '2026-08-19T12:00:00.1234Z',
     '2026-08-19T12:00:00.123456789Z',
+    '9999-12-31T23:59:59-01:00',
+    '0000-01-01T00:00:00+01:00',
   ]) {
     expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
       ...input,

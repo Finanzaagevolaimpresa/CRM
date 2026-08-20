@@ -69,7 +69,7 @@ La classificazione usa il catalogo N04 `n04-v1`. Il gruppo indica la stessa rego
 | --- | --- | --- |
 | `schemaVersion`, `eventType`, `eventVersion` | `OPERATIONAL` | costanti v1 |
 | `eventId`, `businessCorrelationId` | `PERSONAL/CONTACT` | UUID v4, 36 caratteri, normalizzato lowercase |
-| `occurredAt` | `PERSONAL/CONTACT` | profilo N10 v1 RFC 3339: frazione opzionale di 1–3 cifre, massimo 29 caratteri, normalizzato UTC ISO millisecondi |
+| `occurredAt` | `PERSONAL/CONTACT` | profilo N10 v1 RFC 3339: frazione opzionale di 1–3 cifre, massimo 29 caratteri, input e risultato UTC negli anni `0000`–`9999`, normalizzato ISO millisecondi |
 | `source.systemCode`, `source.formCode` | `OPERATIONAL` | 1–120, codice maiuscolo `[A-Z0-9_.:-]` |
 | `source.formVersion` | `OPERATIONAL` | 1–80, `[A-Za-z0-9_.:-]` |
 | `source.submissionId` | `PERSONAL/CONTACT` | 1–128, `[A-Za-z0-9_.:-]` |
@@ -162,7 +162,7 @@ La fixture N10 usa esclusivamente identità sintetiche e il dominio riservato `.
 
 - happy path, congelamento, dimensione e round-trip create/parse;
 - marketing esplicito e catalogo assente senza inferenze;
-- NFC, trim, lowercase email con bound post-folding, spazi telefono, offset temporali, profilo millisecondi e timestamp impossibili;
+- NFC, trim, lowercase email con bound post-folding, spazi telefono, offset temporali, profilo millisecondi, confini anno UTC e timestamp impossibili;
 - stabilità e separazione dei digest; `NEW`, `REPLAY` e `CONFLICT`;
 - esclusione di email e telefono dalla dedupe tecnica;
 - campi sconosciuti, own-key non enumerabili o simboliche, accessor, oggetti non plain e assenza di echo dei valori;
