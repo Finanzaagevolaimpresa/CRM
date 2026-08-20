@@ -86,7 +86,7 @@ test('N10 canonicalization is deterministic across UTC offsets, Unicode and norm
   assert.deepEqual(first, second);
 });
 
-test('N10 timestamp profile preserves milliseconds and rejects finer precision', () => {
+test('N10 timestamp profile preserves milliseconds and rejects unsupported boundaries', () => {
   const input = syntheticLeadEventInputV1();
   const event = createLeadSubmittedEventV1({
     ...input,
@@ -108,6 +108,7 @@ test('N10 timestamp profile preserves milliseconds and rejects finer precision',
   for (const unsupportedTimestamp of [
     '2026-08-19T12:00:00.1234Z',
     '2026-08-19T12:00:00.123456789Z',
+    '2016-12-31T23:59:60Z',
     '9999-12-31T23:59:59-01:00',
     '0000-01-01T00:00:00+01:00',
   ]) {
