@@ -126,39 +126,81 @@ function fail(code: LeadEventContractErrorCode): never {
   throw new LeadEventContractError(code);
 }
 
+function readPlainRecord(value: unknown, invalidCode: LeadEventContractErrorCode) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(invalidCode);
+  let prototype: object | null;
+  try {
+    prototype = Object.getPrototypeOf(value);
+  } catch {
+    return fail(invalidCode);
+  }
+  if (prototype !== Object.prototype && prototype !== null) fail(invalidCode);
+  return value as Record<string, unknown>;
+}
+
+function readRequiredDataField(
+  value: Record<string, unknown>,
+  key: string,
+  invalidCode: LeadEventContractErrorCode,
+) {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, key);
+  } catch {
+    return fail(invalidCode);
+  }
+  if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+    fail(invalidCode);
+  }
+  return descriptor.value;
+}
+
 function readExactRecord(
   value: unknown,
   allowed: readonly string[],
   required: readonly string[],
   invalidCode: LeadEventContractErrorCode,
 ) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(invalidCode);
-  let prototype: object | null;
+  const record = readPlainRecord(value, invalidCode);
   let keys: string[];
   try {
-    prototype = Object.getPrototypeOf(value);
-    keys = Object.keys(value);
+    keys = Object.keys(record);
   } catch {
     return fail(invalidCode);
   }
-  if (prototype !== Object.prototype && prototype !== null) fail(invalidCode);
   const allowedKeys = new Set(allowed);
   const output: Record<string, unknown> = {};
   for (const key of keys) {
     if (!allowedKeys.has(key)) fail('LEAD_EVENT_FIELD_UNKNOWN');
-    let descriptor: PropertyDescriptor | undefined;
-    try {
-      descriptor = Object.getOwnPropertyDescriptor(value, key);
-    } catch {
-      return fail(invalidCode);
-    }
-    if (!descriptor || !Object.hasOwn(descriptor, 'value')) fail(invalidCode);
-    output[key] = descriptor.value;
+    output[key] = readRequiredDataField(record, key, invalidCode);
   }
   for (const key of required) {
     if (!Object.hasOwn(output, key)) fail(invalidCode);
   }
   return output;
+}
+
+function assertLeadEventDiscriminators(value: Record<string, unknown>) {
+  const schemaVersion = readRequiredDataField(
+    value,
+    'schemaVersion',
+    'LEAD_EVENT_ENVELOPE_INVALID',
+  );
+  if (schemaVersion !== LEAD_EVENT_SCHEMA_VERSION) {
+    fail('LEAD_EVENT_SCHEMA_UNSUPPORTED');
+  }
+  const eventType = readRequiredDataField(
+    value,
+    'eventType',
+    'LEAD_EVENT_ENVELOPE_INVALID',
+  );
+  if (eventType !== LEAD_EVENT_TYPE) fail('LEAD_EVENT_TYPE_UNSUPPORTED');
+  const eventVersion = readRequiredDataField(
+    value,
+    'eventVersion',
+    'LEAD_EVENT_ENVELOPE_INVALID',
+  );
+  if (eventVersion !== LEAD_EVENT_VERSION) fail('LEAD_EVENT_VERSION_UNSUPPORTED');
 }
 
 function normalizedText(value: unknown, maximum: number, allowEmpty = false) {
@@ -432,8 +474,10 @@ export function createLeadSubmittedEventV1(input: unknown): LeadSubmittedEventV1
 }
 
 export function parseLeadSubmittedEventV1(value: unknown): LeadSubmittedEventV1 {
+  const candidate = readPlainRecord(value, 'LEAD_EVENT_ENVELOPE_INVALID');
+  assertLeadEventDiscriminators(candidate);
   const envelope = readExactRecord(
-    value,
+    candidate,
     [
       'schemaVersion', 'eventType', 'eventVersion', 'eventId', 'businessCorrelationId',
       'occurredAt', 'source', 'privacy', 'catalogReference', 'payload', 'idempotency',
@@ -444,11 +488,7 @@ export function parseLeadSubmittedEventV1(value: unknown): LeadSubmittedEventV1 
     ],
     'LEAD_EVENT_ENVELOPE_INVALID',
   );
-  if (envelope.schemaVersion !== LEAD_EVENT_SCHEMA_VERSION) {
-    fail('LEAD_EVENT_SCHEMA_UNSUPPORTED');
-  }
-  if (envelope.eventType !== LEAD_EVENT_TYPE) fail('LEAD_EVENT_TYPE_UNSUPPORTED');
-  if (envelope.eventVersion !== LEAD_EVENT_VERSION) fail('LEAD_EVENT_VERSION_UNSUPPORTED');
+  assertLeadEventDiscriminators(envelope);
   const supplied = readExactRecord(
     envelope.idempotency,
     ['canonicalizationVersion', 'keyDigest', 'payloadHash'],

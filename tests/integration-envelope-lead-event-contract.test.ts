@@ -140,11 +140,28 @@ test('N10 rejects unsupported schema, event type and event version before partia
   expectContractError('LEAD_EVENT_SCHEMA_UNSUPPORTED', () => parseLeadSubmittedEventV1({
     ...SYNTHETIC_LEAD_EVENT_V1, schemaVersion: 'fai.lead-event.v2',
   }));
+  expectContractError('LEAD_EVENT_SCHEMA_UNSUPPORTED', () => parseLeadSubmittedEventV1({
+    schemaVersion: 'fai.lead-event.v2', futureEnvelopeField: true,
+  }));
   expectContractError('LEAD_EVENT_TYPE_UNSUPPORTED', () => parseLeadSubmittedEventV1({
     ...SYNTHETIC_LEAD_EVENT_V1, eventType: 'LEAD_PROJECTED',
   }));
+  expectContractError('LEAD_EVENT_TYPE_UNSUPPORTED', () => parseLeadSubmittedEventV1({
+    schemaVersion: LEAD_EVENT_SCHEMA_VERSION,
+    eventType: 'LEAD_PROJECTED',
+    futureEventField: true,
+  }));
   expectContractError('LEAD_EVENT_VERSION_UNSUPPORTED', () => parseLeadSubmittedEventV1({
     ...SYNTHETIC_LEAD_EVENT_V1, eventVersion: 2,
+  }));
+  expectContractError('LEAD_EVENT_VERSION_UNSUPPORTED', () => parseLeadSubmittedEventV1({
+    schemaVersion: LEAD_EVENT_SCHEMA_VERSION,
+    eventType: LEAD_EVENT_TYPE,
+    eventVersion: 2,
+    futureVersionField: true,
+  }));
+  expectContractError('LEAD_EVENT_FIELD_UNKNOWN', () => parseLeadSubmittedEventV1({
+    ...SYNTHETIC_LEAD_EVENT_V1, unexpectedV1Field: true,
   }));
 });
 
