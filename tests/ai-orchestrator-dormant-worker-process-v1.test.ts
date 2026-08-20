@@ -478,5 +478,5 @@ test('confini statici vietano DB, job, handler, rete, provider e avvio productio
     readdirSync(resolve(root, 'deploy/systemd')).sort(),
     ['fai-crm-ai-reconcile.service.example', 'fai-crm-ai-reconcile.timer.example'],
   );
-  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 37);
+  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 38);
 });

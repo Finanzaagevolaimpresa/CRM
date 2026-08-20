@@ -2000,3 +2000,119 @@ model WebsiteLeadRateLimitBucket {
   requestCount    Int
   updatedAt       DateTime @updatedAt
 }
+
+model BusinessInboxEvent {
+  id                         String                    @id @default(uuid()) @db.Uuid
+  schemaVersion              String                    @db.VarChar(80)
+  eventType                  String                    @db.VarChar(80)
+  eventVersion               Int
+  canonicalizationVersion    Int
+  eventId                    String                    @unique(map: "BusinessInboxEvent_eventId_key") @db.Uuid
+  businessCorrelationId      String                    @db.Uuid
+  occurredAt                 String                    @db.Char(24)
+  keyDigest                  String                    @unique(map: "BusinessInboxEvent_keyDigest_key") @db.Char(64)
+  payloadHash                String                    @db.Char(64)
+  envelopeJson               String                    @db.Text
+  recordHash                 String                    @db.Char(64)
+  classificationCatalogVersion String                  @db.VarChar(32)
+  classificationContractCode String                    @db.VarChar(80)
+  state                      String                    @default("AVAILABLE") @db.VarChar(24)
+  availableAt                DateTime                  @default(now()) @db.Timestamptz(3)
+  attemptCount               Int                       @default(0)
+  maxAttempts                Int                       @default(5)
+  fencingToken               BigInt                    @default(0)
+  leaseOwnerId               String?                   @db.Uuid
+  leaseTokenHash             String?                   @db.Char(64)
+  leaseClaimedAt             DateTime?                 @db.Timestamptz(3)
+  leaseExpiresAt             DateTime?                 @db.Timestamptz(3)
+  leaseMaxExpiresAt          DateTime?                 @db.Timestamptz(3)
+  terminalAt                 DateTime?                 @db.Timestamptz(3)
+  terminalReasonCode         String?                   @db.VarChar(64)
+  lastFailureCode            String?                   @db.VarChar(64)
+  retentionClass             String                    @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
+  retentionPolicyVersion     String                    @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt        DateTime?                 @db.Timestamptz(3)
+  createdAt                  DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime                  @default(now()) @db.Timestamptz(3)
+  outboxEvents               BusinessOutboxEvent[]
+  attempts                   BusinessQueueAttempt[]
+
+  @@index([state, availableAt, id], map: "BusinessInboxEvent_claim_idx")
+  @@index([state, leaseExpiresAt, id], map: "BusinessInboxEvent_recovery_idx")
+  @@index([businessCorrelationId, createdAt, id], map: "BusinessInboxEvent_correlation_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "BusinessInboxEvent_retention_idx")
+}
+
+model BusinessOutboxEvent {
+  id                         String                    @id @default(uuid()) @db.Uuid
+  sourceInboxEventId         String                    @db.Uuid
+  producerCode               String                    @db.VarChar(80)
+  destinationCode            String                    @db.VarChar(80)
+  schemaVersion              String                    @db.VarChar(80)
+  eventType                  String                    @db.VarChar(80)
+  eventVersion               Int
+  canonicalizationVersion    Int
+  eventId                    String                    @db.Uuid
+  businessCorrelationId      String                    @db.Uuid
+  occurredAt                 String                    @db.Char(24)
+  keyDigest                  String                    @db.Char(64)
+  payloadHash                String                    @db.Char(64)
+  envelopeJson               String                    @db.Text
+  recordHash                 String                    @db.Char(64)
+  classificationCatalogVersion String                  @db.VarChar(32)
+  classificationContractCode String                    @db.VarChar(80)
+  state                      String                    @default("AVAILABLE") @db.VarChar(24)
+  availableAt                DateTime                  @default(now()) @db.Timestamptz(3)
+  attemptCount               Int                       @default(0)
+  maxAttempts                Int                       @default(5)
+  fencingToken               BigInt                    @default(0)
+  leaseOwnerId               String?                   @db.Uuid
+  leaseTokenHash             String?                   @db.Char(64)
+  leaseClaimedAt             DateTime?                 @db.Timestamptz(3)
+  leaseExpiresAt             DateTime?                 @db.Timestamptz(3)
+  leaseMaxExpiresAt          DateTime?                 @db.Timestamptz(3)
+  terminalAt                 DateTime?                 @db.Timestamptz(3)
+  terminalReasonCode         String?                   @db.VarChar(64)
+  lastFailureCode            String?                   @db.VarChar(64)
+  retentionClass             String                    @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
+  retentionPolicyVersion     String                    @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt        DateTime?                 @db.Timestamptz(3)
+  createdAt                  DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime                  @default(now()) @db.Timestamptz(3)
+  sourceInboxEvent           BusinessInboxEvent        @relation(fields: [sourceInboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempts                   BusinessQueueAttempt[]
+
+  @@unique([producerCode, destinationCode, keyDigest], map: "BusinessOutboxEvent_dedupe_key")
+  @@index([eventId], map: "BusinessOutboxEvent_eventId_idx")
+  @@index([state, availableAt, id], map: "BusinessOutboxEvent_claim_idx")
+  @@index([state, leaseExpiresAt, id], map: "BusinessOutboxEvent_recovery_idx")
+  @@index([businessCorrelationId, createdAt, id], map: "BusinessOutboxEvent_correlation_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "BusinessOutboxEvent_retention_idx")
+  @@index([sourceInboxEventId, createdAt, id], map: "BusinessOutboxEvent_source_idx")
+}
+
+model BusinessQueueAttempt {
+  id                String               @id @default(uuid()) @db.Uuid
+  queueKind         String               @db.VarChar(16)
+  inboxEventId      String?              @db.Uuid
+  outboxEventId     String?              @db.Uuid
+  attemptSequence   Int
+  fencingToken      BigInt
+  leaseOwnerId      String               @db.Uuid
+  leaseTokenHash    String               @db.Char(64)
+  claimedAt         DateTime             @db.Timestamptz(3)
+  leaseExpiresAt    DateTime             @db.Timestamptz(3)
+  leaseMaxExpiresAt DateTime             @db.Timestamptz(3)
+  attemptHash       String               @db.Char(64)
+  finishedAt        DateTime?            @db.Timestamptz(3)
+  outcome           String?              @db.VarChar(32)
+  failureCode       String?              @db.VarChar(64)
+  retryable         Boolean?
+  nextAvailableAt   DateTime?            @db.Timestamptz(3)
+  completionHash    String?              @db.Char(64)
+  createdAt         DateTime             @default(now()) @db.Timestamptz(3)
+  inboxEvent        BusinessInboxEvent?  @relation(fields: [inboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  outboxEvent       BusinessOutboxEvent? @relation(fields: [outboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([queueKind, finishedAt, createdAt, id], map: "BusinessQueueAttempt_open_idx")
+}
