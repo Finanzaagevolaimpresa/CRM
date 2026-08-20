@@ -99,8 +99,8 @@ test('N09 signed snapshot is minimized, deterministic and tamper evident', () =>
 
 test('N09 migration 37 is transactional, additive and dormant by construction', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 37);
-  assert.equal(names.at(-1), '20260819120000_service_catalog_signed_publication_v1');
+  assert.equal(names.length, 38);
+  assert.equal(names[36], '20260819120000_service_catalog_signed_publication_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);
   assert.match(migration, /CREATE TABLE "ServiceCatalogRevision"/);
