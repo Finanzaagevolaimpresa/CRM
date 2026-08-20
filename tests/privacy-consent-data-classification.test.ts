@@ -12,6 +12,7 @@ import {
   UnclassifiedDataFieldError,
 } from '../src/lib/data-classification';
 import { roleHasPermission } from '../src/lib/permissions';
+import { SYNTHETIC_LEAD_EVENT_V1 } from './fixtures/n10-lead-event-v1';
 
 const migrationPath = 'prisma/migrations/20260817120000_privacy_consent_data_classification_foundation_v1/migration.sql';
 const migration = readFileSync(migrationPath, 'utf8');
@@ -30,6 +31,23 @@ const evidenceFields = [
   'id', 'leadId', 'websiteLeadReceiptId', 'noticeVersionId', 'catalogVersion', 'purposeCode',
   'legalBasisCode', 'evidenceKind', 'decision', 'sourceSystem', 'formCode', 'formVersion',
   'sourceSubmittedAt', 'sourceEvidenceDigest', 'evidenceHash', 'createdAt',
+] as const;
+const leadBusinessEventFields = [
+  'schemaVersion', 'eventType', 'eventVersion', 'eventId', 'businessCorrelationId',
+  'occurredAt', 'source.systemCode', 'source.formCode', 'source.formVersion',
+  'source.submissionId', 'privacy.service.noticeCode', 'privacy.service.noticeVersion',
+  'privacy.service.purposeCode', 'privacy.service.legalBasisCode',
+  'privacy.service.evidenceKind', 'privacy.service.decision',
+  'privacy.marketing.noticeCode', 'privacy.marketing.noticeVersion',
+  'privacy.marketing.purposeCode', 'privacy.marketing.legalBasisCode',
+  'privacy.marketing.evidenceKind', 'privacy.marketing.decision',
+  'catalogReference.catalogVersion', 'catalogReference.serviceCode',
+  'catalogReference.serviceVersion', 'payload.firstName', 'payload.lastName',
+  'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.region',
+  'payload.interestText', 'payload.serviceInterestText', 'payload.message',
+  'payload.sourcePagePath', 'payload.requestedAmount.currency',
+  'payload.requestedAmount.minorUnits', 'idempotency.canonicalizationVersion',
+  'idempotency.keyDigest', 'idempotency.payloadHash',
 ] as const;
 
 const leadContract = {
@@ -96,6 +114,10 @@ test('classification catalog v1 covers the complete lead contract and denies unk
   assert.deepEqual(Object.keys(dataClassificationCatalog.website_lead_intake_v2).sort(), [...contractFields].sort());
   assert.deepEqual(Object.keys(dataClassificationCatalog.privacy_notice_version_v1).sort(), [...noticeFields].sort());
   assert.deepEqual(Object.keys(dataClassificationCatalog.privacy_evidence_receipt_v1).sort(), [...evidenceFields].sort());
+  assert.deepEqual(
+    Object.keys(dataClassificationCatalog.lead_business_event_v1).sort(),
+    [...leadBusinessEventFields].sort(),
+  );
   assert.equal(dataClassificationCatalog.external_ai_payload_v1.context.classification, 'CONFIDENTIAL');
   assert.deepEqual(dataClassificationCatalog.website_lead_intake_v2.marketingAccepted, {
     classification: 'PERSONAL', purposeCode: 'DIRECT_MARKETING', legalBasisCode: 'CONSENT',
@@ -104,6 +126,18 @@ test('classification catalog v1 covers the complete lead contract and denies unk
   assert.throws(
     () => assertClassifiedFields('website_lead_intake_v2', { ...leadContract, inferredConsent: true }),
     (error: unknown) => error instanceof UnclassifiedDataFieldError && error.fieldPath === 'inferredConsent',
+  );
+  assert.doesNotThrow(() => assertClassifiedFields(
+    'lead_business_event_v1',
+    SYNTHETIC_LEAD_EVENT_V1,
+  ));
+  assert.throws(
+    () => assertClassifiedFields('lead_business_event_v1', {
+      ...SYNTHETIC_LEAD_EVENT_V1,
+      payload: { ...SYNTHETIC_LEAD_EVENT_V1.payload, inferredConsent: true },
+    }),
+    (error: unknown) => error instanceof UnclassifiedDataFieldError
+      && error.fieldPath === 'payload.inferredConsent',
   );
 });
 
