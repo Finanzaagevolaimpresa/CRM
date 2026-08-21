@@ -29,6 +29,7 @@ const privacyEvidence = rule('PERSONAL', 'PRIVACY_ACCOUNTABILITY', 'DPO_VALIDATI
 const business = rule('CONFIDENTIAL', 'SERVICE_REQUEST_QUALIFICATION', 'PRE_CONTRACTUAL_MEASURES');
 const operational = rule('INTERNAL', 'CRM_OPERATIONS', 'LEGITIMATE_INTEREST');
 const security = rule('AUTHENTICATION_SECRET', 'SECURITY_CONTROL', 'LEGITIMATE_INTEREST');
+const gatewayReceipt = rule('PERSONAL', 'SECURITY_CONTROL', 'LEGITIMATE_INTEREST');
 const aiProfile = rule('CONFIDENTIAL', 'CLIENT_ADVISORY_DRAFT', 'CONTRACT_PERFORMANCE');
 const aiFinancial = rule('FINANCIAL', 'CLIENT_ADVISORY_DRAFT', 'CONTRACT_PERFORMANCE');
 
@@ -111,6 +112,23 @@ export const dataClassificationCatalog = Object.freeze({
     'idempotency.canonicalizationVersion': operational,
     'idempotency.keyDigest': privacyEvidence,
     'idempotency.payloadHash': privacyEvidence,
+  }),
+  secure_lead_gateway_security_state_v2: Object.freeze({
+    producerCode: operational,
+    keyVersionId: security,
+    keyId: security,
+    keyVersion: operational,
+    secretDigest: security,
+    nonceDigest: security,
+    requestFingerprint: security,
+    receiptId: gatewayReceipt,
+    inboxEventId: gatewayReceipt,
+    theoreticalArrivalAt: operational,
+    receiptVersion: operational,
+    retentionClass: operational,
+    retentionPolicyVersion: operational,
+    retentionEligibleAt: privacyEvidence,
+    createdAt: privacyEvidence,
   }),
   crm_lead_v1: Object.freeze({
     id: personalIdentifier,

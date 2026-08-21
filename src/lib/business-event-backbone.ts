@@ -77,7 +77,8 @@ export type BusinessQueueOutcome =
   | 'LEASE_EXPIRED';
 export type BusinessIdempotencyOutcome = 'NEW' | 'REPLAY' | 'CONFLICT';
 
-type Tx = Prisma.TransactionClient;
+export type BusinessEventTransactionClient = Prisma.TransactionClient;
+type Tx = BusinessEventTransactionClient;
 
 interface ContractRow {
   readonly id: string;
@@ -532,12 +533,10 @@ async function databaseNow(tx: Tx) {
   return now;
 }
 
-export async function admitBusinessInboxEvent(
-  prisma: PrismaClient,
-  input: unknown,
+async function admitVerifiedBusinessInboxEvent(
+  tx: Tx,
+  verified: VerifiedEnvelope,
 ): Promise<BusinessInboxAdmissionResult> {
-  const verified = parseEnvelope(input);
-  return withBusinessTransaction(prisma, async (tx) => {
     const id = randomUUID();
     const createdAt = await databaseNow(tx);
     const recordHash = calculateInboxHashFromVerified(id, verified, createdAt);
@@ -579,8 +578,25 @@ export async function admitBusinessInboxEvent(
       existing.length === 1
       && compareBusinessInboxIdentity({ stored: existing[0], candidate: event }) === 'REPLAY'
     ) return { outcome: 'REPLAY', inboxEventId: existing[0].id };
-    fail('BUSINESS_INBOX_IDEMPOTENCY_CONFLICT');
-  });
+    return fail('BUSINESS_INBOX_IDEMPOTENCY_CONFLICT');
+}
+
+export async function admitBusinessInboxEventInTransaction(
+  tx: BusinessEventTransactionClient,
+  input: unknown,
+): Promise<BusinessInboxAdmissionResult> {
+  return admitVerifiedBusinessInboxEvent(tx, parseEnvelope(input));
+}
+
+export async function admitBusinessInboxEvent(
+  prisma: PrismaClient,
+  input: unknown,
+): Promise<BusinessInboxAdmissionResult> {
+  const verified = parseEnvelope(input);
+  return withBusinessTransaction(
+    prisma,
+    (tx) => admitVerifiedBusinessInboxEvent(tx, verified),
+  );
 }
 
 export async function enqueueBusinessOutboxEvent(

@@ -73,15 +73,24 @@ async function assertBound() {
 
 async function cleanN11Tables() {
   await assertBound();
-  for (const table of ['BusinessQueueAttempt', 'BusinessOutboxEvent', 'BusinessInboxEvent']) {
+  const tables = [
+    'SecureLeadGatewayRequest',
+    'SecureLeadGatewayReceipt',
+    'SecureLeadGatewayRateLimitBucket',
+    'SecureLeadGatewayKeyVersion',
+    'BusinessQueueAttempt',
+    'BusinessOutboxEvent',
+    'BusinessInboxEvent',
+  ];
+  for (const table of tables) {
     await db.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
   }
   try {
     await db.$executeRawUnsafe(
-      'TRUNCATE TABLE "BusinessQueueAttempt", "BusinessOutboxEvent", "BusinessInboxEvent"',
+      `TRUNCATE TABLE ${tables.map((table) => `"${table}"`).join(', ')}`,
     );
   } finally {
-    for (const table of ['BusinessInboxEvent', 'BusinessOutboxEvent', 'BusinessQueueAttempt']) {
+    for (const table of [...tables].reverse()) {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);
     }
   }
@@ -285,7 +294,7 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
   ]) assert.equal(indexNames.has(expected), true, expected);
   assert.equal(triggers.length, 6);
   assert.equal(functions.length, 3);
-  assert.equal(Number(migrations[0]?.count), 38);
+  assert.equal(Number(migrations[0]?.count), 39);
   assert.deepEqual(await counts(), { inbox: 0, outbox: 0, attempts: 0 });
 });
 
@@ -768,8 +777,9 @@ async function qualifyMigrationChain(upgrade: boolean) {
   const migrationsDir = join(prismaDir, 'migrations');
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 38);
+  const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  assert.equal(allNames.length, 39);
+  const names = allNames.slice(0, 38);
   const url = new URL(sourceUrl);
   url.searchParams.set('schema', schema);
   await db.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
