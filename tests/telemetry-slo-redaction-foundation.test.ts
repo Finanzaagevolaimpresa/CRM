@@ -373,7 +373,7 @@ test('N06 catalogs and invariants are complete and internally consistent', () =>
 });
 
 test('N06 adds no migration, vendor dependency, exporter or production activation', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 39);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 40);
   const packageJson = readFileSync('package.json', 'utf8');
   for (const prohibited of [
     '@opentelemetry', 'prom-client', '@sentry', 'datadog', 'newrelic', 'splunk', 'elastic-apm',

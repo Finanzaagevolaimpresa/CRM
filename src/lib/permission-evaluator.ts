@@ -3,6 +3,7 @@ import {
   adminOnlyAiExecutionPermissions,
   isPermission,
   permissionCodes,
+  protectedLeadDuplicatePermissions,
   roleHasPermission,
   type Permission,
 } from './permissions';
@@ -28,6 +29,9 @@ export function evaluatePermission(session: PermissionSession, permission: Permi
     return { allowed: false, source: session.role === 'admin' ? 'ADMIN' : 'ROLE' };
   }
   if (session.role === 'admin') return { allowed: true, source: 'ADMIN' };
+  if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
+    return { allowed: session.role === 'direzione', source: 'ROLE' };
+  }
   if ((adminOnlyAiExecutionPermissions as readonly Permission[]).includes(permission)) {
     return { allowed: false, source: 'ROLE' };
   }

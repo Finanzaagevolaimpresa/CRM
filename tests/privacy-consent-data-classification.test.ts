@@ -28,7 +28,7 @@ const noticeFields = [
   'contentHash', 'status', 'effectiveFrom', 'retiredAt', 'createdAt',
 ] as const;
 const evidenceFields = [
-  'id', 'leadId', 'websiteLeadReceiptId', 'noticeVersionId', 'catalogVersion', 'purposeCode',
+  'id', 'leadId', 'websiteLeadReceiptId', 'businessInboxEventId', 'noticeVersionId', 'catalogVersion', 'purposeCode',
   'legalBasisCode', 'evidenceKind', 'decision', 'sourceSystem', 'formCode', 'formVersion',
   'sourceSubmittedAt', 'sourceEvidenceDigest', 'evidenceHash', 'createdAt',
 ] as const;
@@ -97,7 +97,7 @@ async function withShadowRoute<T>(operation: () => Promise<T>) {
 
 test('N04 migration 35 is additive, transactional and leaves registries empty', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 39);
+  assert.equal(names.length, 40);
   assert.equal(names[34], '20260817120000_privacy_consent_data_classification_foundation_v1');
   assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);

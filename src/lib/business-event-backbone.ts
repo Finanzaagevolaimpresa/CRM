@@ -182,6 +182,14 @@ export interface BusinessQueueLeaseIdentity {
   readonly leaseToken: string;
 }
 
+export interface ClaimedBusinessInboxTransactionContext {
+  readonly tx: BusinessEventTransactionClient;
+  readonly inboxEventId: string;
+  readonly envelope: LeadSubmittedEventV1;
+  readonly recordHash: string;
+  readonly databaseNow: Date;
+}
+
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const BUSINESS_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_.:-]{0,79}$/;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,63}$/;
@@ -189,6 +197,13 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const RAW_LEASE_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const RETRYABLE_SQL_STATES = new Set(['40001', '40P01', '55P03']);
 const RETRY_DELAYS_MS = [10, 25] as const;
+
+class BusinessInboxCallbackRollbackSignal extends Error {
+  constructor(readonly callbackError: unknown) {
+    super('BUSINESS_INBOX_CALLBACK_ROLLBACK');
+    this.name = 'BusinessInboxCallbackRollbackSignal';
+  }
+}
 
 function fail(code: BusinessEventBackboneErrorCode): never {
   throw new BusinessEventBackboneError(code);
@@ -513,6 +528,7 @@ async function withBusinessTransaction<T>(
         timeout: BUSINESS_EVENT_BACKBONE_MANIFEST.transactionTimeoutMs,
       });
     } catch (error) {
+      if (error instanceof BusinessInboxCallbackRollbackSignal) throw error;
       if (error instanceof BusinessEventBackboneError) throw error;
       if (!retryableDatabaseCode(error)) fail('BUSINESS_QUEUE_INTERNAL_FAILURE');
       if (attempt >= BUSINESS_EVENT_BACKBONE_MANIFEST.transactionAttempts - 1) {
@@ -992,34 +1008,76 @@ async function closeAttempt(
   return completionHash;
 }
 
+async function completeCurrentBusinessQueueEvent(
+  tx: Tx,
+  current: Awaited<ReturnType<typeof assertCurrentLease>>,
+) {
+  const {
+    identity, row, attempt, now,
+  } = current;
+  const terminalState = identity.queueKind === 'INBOX' ? 'PROCESSED' : 'PUBLISHED';
+  const query = identity.queueKind === 'INBOX'
+    ? Prisma.sql`UPDATE "BusinessInboxEvent" SET "state" = 'PROCESSED', "terminalAt" = ${now},
+        "leaseOwnerId" = NULL, "leaseTokenHash" = NULL, "leaseClaimedAt" = NULL,
+        "leaseExpiresAt" = NULL, "leaseMaxExpiresAt" = NULL
+        WHERE "id" = ${row.id}::UUID AND "state" = 'LEASED'`
+    : Prisma.sql`UPDATE "BusinessOutboxEvent" SET "state" = 'PUBLISHED', "terminalAt" = ${now},
+        "leaseOwnerId" = NULL, "leaseTokenHash" = NULL, "leaseClaimedAt" = NULL,
+        "leaseExpiresAt" = NULL, "leaseMaxExpiresAt" = NULL
+        WHERE "id" = ${row.id}::UUID AND "state" = 'LEASED'`;
+  if (await tx.$executeRaw(query) !== 1) fail('BUSINESS_QUEUE_LEASE_STALE');
+  const completionHash = await closeAttempt(
+    tx,
+    attempt,
+    now,
+    terminalState,
+    null,
+    null,
+    null,
+  );
+  return Object.freeze({ state: terminalState, completionHash });
+}
+
 export async function completeBusinessQueueEvent(
   prisma: PrismaClient,
   input: BusinessQueueLeaseIdentity,
 ) {
   return withBusinessTransaction(prisma, async (tx) => {
-    const { identity, row, attempt, now } = await assertCurrentLease(tx, input);
-    const terminalState = identity.queueKind === 'INBOX' ? 'PROCESSED' : 'PUBLISHED';
-    const query = identity.queueKind === 'INBOX'
-      ? Prisma.sql`UPDATE "BusinessInboxEvent" SET "state" = 'PROCESSED', "terminalAt" = ${now},
-          "leaseOwnerId" = NULL, "leaseTokenHash" = NULL, "leaseClaimedAt" = NULL,
-          "leaseExpiresAt" = NULL, "leaseMaxExpiresAt" = NULL
-          WHERE "id" = ${row.id}::UUID AND "state" = 'LEASED'`
-      : Prisma.sql`UPDATE "BusinessOutboxEvent" SET "state" = 'PUBLISHED', "terminalAt" = ${now},
-          "leaseOwnerId" = NULL, "leaseTokenHash" = NULL, "leaseClaimedAt" = NULL,
-          "leaseExpiresAt" = NULL, "leaseMaxExpiresAt" = NULL
-          WHERE "id" = ${row.id}::UUID AND "state" = 'LEASED'`;
-    if (await tx.$executeRaw(query) !== 1) fail('BUSINESS_QUEUE_LEASE_STALE');
-    const completionHash = await closeAttempt(
-      tx,
-      attempt,
-      now,
-      terminalState,
-      null,
-      null,
-      null,
-    );
-    return Object.freeze({ state: terminalState, completionHash });
+    const current = await assertCurrentLease(tx, input);
+    return completeCurrentBusinessQueueEvent(tx, current);
   });
+}
+
+export async function processClaimedBusinessInboxEventInTransaction<T>(
+  prisma: PrismaClient,
+  input: BusinessQueueLeaseIdentity,
+  callback: (context: ClaimedBusinessInboxTransactionContext) => Promise<T>,
+) {
+  if (input.queueKind !== 'INBOX') fail('BUSINESS_QUEUE_LEASE_STALE');
+  try {
+    return await withBusinessTransaction(prisma, async (tx) => {
+      const current = await assertCurrentLease(tx, input);
+      const verified = verifyInboxRow(current.row as InboxRow);
+      let result: T;
+      try {
+        result = await callback(Object.freeze({
+          tx,
+          inboxEventId: current.row.id,
+          envelope: verified.event,
+          recordHash: current.row.recordHash,
+          databaseNow: new Date(current.now.getTime()),
+        }));
+      } catch (error) {
+        if (error instanceof BusinessEventBackboneError || retryableDatabaseCode(error)) throw error;
+        throw new BusinessInboxCallbackRollbackSignal(error);
+      }
+      const completion = await completeCurrentBusinessQueueEvent(tx, current);
+      return Object.freeze({ result, ...completion });
+    });
+  } catch (error) {
+    if (error instanceof BusinessInboxCallbackRollbackSignal) throw error.callbackError;
+    throw error;
+  }
 }
 
 export async function failBusinessQueueEvent(

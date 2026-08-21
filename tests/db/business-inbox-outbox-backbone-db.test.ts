@@ -74,6 +74,13 @@ async function assertBound() {
 async function cleanN11Tables() {
   await assertBound();
   const tables = [
+    'LeadIdentityKey',
+    'LeadDuplicateDecision',
+    'LeadDuplicateCandidate',
+    'LeadDuplicateCase',
+    'LeadProjectionLedger',
+    'LeadIdentityKeyVersion',
+    'PrivacyEvidenceReceipt',
     'SecureLeadGatewayRequest',
     'SecureLeadGatewayReceipt',
     'SecureLeadGatewayRateLimitBucket',
@@ -294,7 +301,7 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
   ]) assert.equal(indexNames.has(expected), true, expected);
   assert.equal(triggers.length, 6);
   assert.equal(functions.length, 3);
-  assert.equal(Number(migrations[0]?.count), 39);
+  assert.equal(Number(migrations[0]?.count), 40);
   assert.deepEqual(await counts(), { inbox: 0, outbox: 0, attempts: 0 });
 });
 
@@ -778,7 +785,7 @@ async function qualifyMigrationChain(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 39);
+  assert.equal(allNames.length, 40);
   const names = allNames.slice(0, 38);
   const url = new URL(sourceUrl);
   url.searchParams.set('schema', schema);

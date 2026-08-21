@@ -134,6 +134,13 @@ async function provisionKey(input: {
 
 async function cleanGatewayAndN11() {
   const tables = [
+    'LeadIdentityKey',
+    'LeadDuplicateDecision',
+    'LeadDuplicateCandidate',
+    'LeadDuplicateCase',
+    'LeadProjectionLedger',
+    'LeadIdentityKeyVersion',
+    'PrivacyEvidenceReceipt',
     'SecureLeadGatewayRequest',
     'SecureLeadGatewayReceipt',
     'SecureLeadGatewayRateLimitBucket',
@@ -258,7 +265,7 @@ after(async () => {
 
 test('N12 migration 39 is atomic, additive, empty and dedicated', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 39);
+  assert.equal(names.length, 40);
   assert.equal(names[38], migrationName);
   const migration = readFileSync(migrationPath, 'utf8');
   const executable = migration.replace(/^--.*$/gmu, '');
@@ -284,7 +291,7 @@ async function qualifyMigration(upgrade: boolean) {
   const migrationsDir = join(prismaDir, 'migrations');
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort().slice(0, 39);
   const url = new URL(sourceUrl);
   url.searchParams.set('schema', schema);
   await db.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);

@@ -44,7 +44,7 @@ test('PostgreSQL applies migration 36 and all N07 query indexes', { skip: !runDb
       ORDER BY indexname
     `,
   ]);
-  assert.equal(Number(migrations[0]?.count), 39);
+  assert.equal(Number(migrations[0]?.count), 40);
   assert.deepEqual(indexes.map((row) => row.indexname), [
     'AiOutput_created_cursor_idx',
     'AiRun_created_cursor_idx',

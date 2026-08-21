@@ -462,21 +462,21 @@ test('N12 classifies security state and forbids telemetry, egress and legacy reu
   assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
 });
 
-test('N12 release surfaces pin migration 39 and keep every gateway mode disabled', () => {
+test('N13 release surfaces pin migration 40 and keep every N12 gateway mode disabled', () => {
   for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
     const source = readFileSync(path, 'utf8');
     assert.match(source, /SECURE_LEAD_GATEWAY_MODE="disabled"/);
     assert.match(source, /SECURE_LEAD_GATEWAY_KEYRING_FILE=""/);
   }
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  assert.match(ci, /Apply exactly 39 database migrations/);
+  assert.match(ci, /Apply exactly 40 database migrations/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_MODE: disabled/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_KEYRING_FILE: ""/);
   const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
-  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=39/);
+  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=40/);
   assert.match(smoke, /SECURE_LEAD_GATEWAY_MODE=disabled/);
   assert.match(smoke, /0\|0\|0\|0/);
   const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
-  assert.match(restore, /EXPECTED_MIGRATION_COUNT:-39/);
+  assert.match(restore, /EXPECTED_MIGRATION_COUNT:-40/);
   assert.match(restore, /SECURE_LEAD_GATEWAY_MODE=disabled/);
 });

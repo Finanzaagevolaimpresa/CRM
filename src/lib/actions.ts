@@ -5,7 +5,7 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
   createExternalAiPayload,
   externalAiDataCategories,
@@ -56,8 +56,17 @@ import {
   createAiExecutionReplacementRequest,
   createAiExecutionRequest,
 } from './ai-execution-authorization';
-import { requirePrivilegedMutation } from './privileged-access';
+import { requireEnforcedPrivilegedMutation, requirePrivilegedMutation } from './privileged-access';
 import { redactAuditPayload } from './data-classification';
+import {
+  acquireLeadIdentityWriteLock,
+  hasStrongRawLeadIdentityDuplicate,
+} from './lead-identity';
+import {
+  LeadDuplicateResolutionError,
+  resolveLeadDuplicateCase,
+} from './lead-duplicate-resolution';
+import { internalSessionMode } from './session';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
@@ -432,9 +441,66 @@ export async function createLead(form: FormData) {
   if (data.clientId) denyWriteAccess();
   await requireActiveUser(data.assignedToId);
   if (!hasGlobalAccess(s) && data.assignedToId && data.assignedToId !== s.userId) denyWriteAccess();
-  const lead = await prisma.lead.create({ data: { ...data, clientId: null, nextAction: data.nextActionDate } });
-  await audit(s.userId, 'lead_create', 'Lead', lead.id, lead);
-  return lead;
+  return prisma.$transaction(async (tx) => {
+    await acquireLeadIdentityWriteLock(tx);
+    if (await hasStrongRawLeadIdentityDuplicate(tx, data)) {
+      throw new UserFacingActionError(
+        'Esiste già un Lead attivo con la stessa email o lo stesso telefono internazionale.',
+      );
+    }
+    const lead = await tx.lead.create({
+      data: { ...data, clientId: null, nextAction: data.nextActionDate },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: s.userId,
+        event: 'lead_create',
+        entityType: 'Lead',
+        entityId: lead.id,
+        after: redactAuditPayload(lead) as Prisma.InputJsonValue,
+      },
+    });
+    return lead;
+  });
+}
+
+export async function resolveLeadDuplicateCaseAction(form: FormData) {
+  const session = await requirePermission('lead.duplicate.resolve');
+  await requireEnforcedPrivilegedMutation(session, 'LEAD_DUPLICATE_RESOLVE');
+  let registrySession = false;
+  try {
+    registrySession = internalSessionMode() === 'registry' && Boolean(session.sessionId);
+  } catch {
+    // The action remains fail-closed for non-canonical session configuration.
+  }
+  if (!registrySession || !session.sessionId) {
+    throw new UserFacingActionError('Sessione registry obbligatoria per la decisione manuale.');
+  }
+  const data = leadDuplicateResolutionSchema.parse(clean(form));
+  try {
+    return await resolveLeadDuplicateCase(prisma, {
+      ...data,
+      actorUserId: session.userId,
+      actorSessionId: session.sessionId,
+    });
+  } catch (error) {
+    if (!(error instanceof LeadDuplicateResolutionError)) throw error;
+    if (error.code === 'N13_DUPLICATE_CASE_VERSION_CONFLICT'
+      || error.code === 'N13_DUPLICATE_TRANSACTION_CONFLICT') {
+      throw new UserFacingActionError('Il caso è stato modificato da un altro operatore. Ricarica.');
+    }
+    if (error.code === 'N13_DUPLICATE_CANDIDATE_INVALID') {
+      throw new UserFacingActionError('Il Lead selezionato non è un candidato attivo del caso.');
+    }
+    if (error.code === 'N13_DUPLICATE_SESSION_DENIED') {
+      throw new UserFacingActionError('Sessione o autorizzazione non più valida.');
+    }
+    if (error.code === 'N13_IDENTITY_KEY_UNAVAILABLE'
+      || error.code === 'N13_IDENTITY_KEY_CONSENSUS_FAILURE') {
+      throw new UserFacingActionError('Servizio di identità temporaneamente non disponibile.');
+    }
+    throw new UserFacingActionError('Decisione manuale non completata. Ricarica il caso.');
+  }
 }
 
 export async function updateLeadCommercial(form: FormData) {

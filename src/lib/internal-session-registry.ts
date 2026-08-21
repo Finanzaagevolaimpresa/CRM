@@ -123,6 +123,45 @@ export async function resolveInternalSession(
     },
   };
 }
+export async function lockAuthoritativeInternalSession(
+  tx: Prisma.TransactionClient,
+  input: { sessionId: string; userId: string },
+) {
+  const rows = await tx.$queryRaw<Array<{
+    id: string;
+    userId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+    live: boolean;
+    role: RoleCode;
+    active: boolean;
+    deletedAt: Date | null;
+  }>>(Prisma.sql`
+    SELECT session_row."id", session_row."userId", session_row."expiresAt",
+      session_row."revokedAt", session_row."expiresAt" > CURRENT_TIMESTAMP AS "live",
+      user_row."role", user_row."active", user_row."deletedAt"
+    FROM "InternalSession" session_row
+    JOIN "User" user_row ON user_row."id" = session_row."userId"
+    WHERE session_row."id" = ${input.sessionId}::UUID
+      AND session_row."userId" = ${input.userId}
+    FOR UPDATE OF session_row, user_row
+  `);
+  const session = rows[0];
+  if (!session) return null;
+  const permissionOverrides = await tx.$queryRaw<
+    Array<{ permission: string; allowed: boolean }>
+  >(Prisma.sql`
+    SELECT "permission", "allowed"
+    FROM "UserPermissionOverride"
+    WHERE "userId" = ${session.userId}
+    ORDER BY "permission"
+    FOR SHARE
+  `);
+  return Object.freeze({
+    ...session,
+    permissionOverrides: Object.freeze(permissionOverrides),
+  });
+}
 export async function revokeInternalSession(
   tx: Prisma.TransactionClient,
   id: string,

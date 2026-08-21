@@ -87,6 +87,58 @@ test('catalogo espone il gate AI e rimuove i permessi di esecuzione diretta dai 
   assert.ok(!getEffectivePermissions(session('revisore')).includes('ai.approve'));
 });
 
+test('lead.duplicate.resolve è protetto e non delegabile fuori da Admin e Direzione', () => {
+  assert.ok(permissionCatalog.some((permission) => permission.code === 'lead.duplicate.resolve'));
+  for (const role of ['admin', 'direzione'] as const) {
+    assert.equal(
+      hasPermission(
+        session(role, [{ permission: 'lead.duplicate.resolve', allowed: false }]),
+        'lead.duplicate.resolve',
+      ),
+      true,
+      `${role} deve conservare il permesso protetto anche con override deny`,
+    );
+  }
+  for (const role of [
+    'commerciale',
+    'consulente',
+    'revisore',
+    'backoffice',
+    'amministrazione',
+    'collaboratore_limitato',
+  ] as const) {
+    assert.equal(
+      hasPermission(
+        session(role, [{ permission: 'lead.duplicate.resolve', allowed: true }]),
+        'lead.duplicate.resolve',
+      ),
+      false,
+      `${role} non deve ottenere il permesso protetto tramite override`,
+    );
+  }
+});
+
+test('la risoluzione duplicati impone precheck, step-up enforced e revalidation registry atomica', () => {
+  const actions = readFileSync(resolve(root, 'src/lib/actions.ts'), 'utf8');
+  const privileged = readFileSync(resolve(root, 'src/lib/privileged-access.ts'), 'utf8');
+  const resolution = readFileSync(resolve(root, 'src/lib/lead-duplicate-resolution.ts'), 'utf8');
+  const registry = readFileSync(resolve(root, 'src/lib/internal-session-registry.ts'), 'utf8');
+  assert.match(
+    actions,
+    /requirePermission\('lead\.duplicate\.resolve'\)[\s\S]*requireEnforcedPrivilegedMutation\(session, 'LEAD_DUPLICATE_RESOLVE'\)/u,
+  );
+  assert.match(actions, /internalSessionMode\(\) === 'registry' && Boolean\(session\.sessionId\)/u);
+  assert.match(privileged, /mode !== 'enforced'[\s\S]*ENFORCEMENT_REQUIRED/u);
+  assert.match(privileged, /KEY_UNAVAILABLE[\s\S]*verifyPrivilegedStepUpToken/u);
+  assert.match(resolution, /TransactionIsolationLevel\.Serializable/u);
+  assert.match(
+    resolution,
+    /lockAuthoritativeInternalSession\([\s\S]*acquireLeadIdentityWriteLock\([\s\S]*lockDuplicateCase\(/u,
+  );
+  assert.match(registry, /FOR UPDATE OF session_row, user_row/u);
+  assert.match(registry, /FROM "UserPermissionOverride"[\s\S]*FOR SHARE/u);
+});
+
 test('override immediato senza nuovo login e reset', () => {
   const s = session('collaboratore_limitato');
   assert.equal(hasPermission(s, 'audit.read'), false);

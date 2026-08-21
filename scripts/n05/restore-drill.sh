@@ -16,14 +16,14 @@ SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 SOURCE_TREE="${SOURCE_TREE:-$(git -C "$REPO_ROOT" rev-parse HEAD^{tree})}"
 ROLLBACK_COMMIT="${ROLLBACK_COMMIT:?ROLLBACK_COMMIT is required and must be the authorized N-1 commit}"
 ROLLBACK_TREE="${ROLLBACK_TREE:?ROLLBACK_TREE is required}"
-EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-39}"
+EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-40}"
 n05_assert_git_oid "$SOURCE_COMMIT" SOURCE_COMMIT
 n05_assert_git_oid "$SOURCE_TREE" SOURCE_TREE
 n05_assert_git_oid "$ROLLBACK_COMMIT" ROLLBACK_COMMIT
 n05_assert_git_oid "$ROLLBACK_TREE" ROLLBACK_TREE
 [[ "$(git -C "$REPO_ROOT" rev-parse "$SOURCE_COMMIT^{tree}")" == "$SOURCE_TREE" ]] || n05_fail SOURCE_TREE_MISMATCH
 [[ "$(git -C "$REPO_ROOT" rev-parse "$ROLLBACK_COMMIT^{tree}")" == "$ROLLBACK_TREE" ]] || n05_fail ROLLBACK_TREE_MISMATCH
-[[ "$EXPECTED_MIGRATION_COUNT" == "39" ]] || n05_fail RESTORE_DRILL_MIGRATION_COUNT_MUST_BE_39
+[[ "$EXPECTED_MIGRATION_COUNT" == "40" ]] || n05_fail RESTORE_DRILL_MIGRATION_COUNT_MUST_BE_40
 
 raw_run_id="${N05_RUN_ID:-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${BASHPID}}"
 RUN_ID="$(printf '%s' "$raw_run_id" | tr '[:upper:]_.' '[:lower:]--' | tr -cd 'a-z0-9-' | cut -c1-64)"
