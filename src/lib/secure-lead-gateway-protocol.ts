@@ -91,6 +91,7 @@ export interface SecureLeadGatewayHeaders {
   readonly nonce: string;
   readonly signature: string;
   readonly contentLength: number | null;
+  readonly authenticationHeadersValid: boolean;
 }
 
 const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,79}$/;
@@ -99,10 +100,11 @@ const NONCE_PATTERN = /^[0-9a-f]{32}$/;
 const SIGNATURE_PATTERN = /^v1=[0-9a-f]{64}$/;
 const CONTENT_LENGTH_PATTERN = /^(?:0|[1-9]\d*)$/;
 
-function requiredSingleHeader(headers: Headers, name: string) {
+function boundedAuthenticationHeader(headers: Headers, name: string, maximumBytes: number) {
   const value = headers.get(name);
-  if (value === null || value.includes(',')) unauthorized();
-  return value;
+  if (value === null) return { value: '', valid: false };
+  if (Buffer.byteLength(value, 'utf8') > maximumBytes) unauthorized();
+  return { value, valid: !value.includes(',') };
 }
 
 export function readSecureLeadGatewayHeaders(request: Request): SecureLeadGatewayHeaders {
@@ -120,14 +122,22 @@ export function readSecureLeadGatewayHeaders(request: Request): SecureLeadGatewa
     || request.headers.has('content-encoding')
   ) invalid();
 
-  const keyId = requiredSingleHeader(request.headers, 'x-fai-key-id');
-  const timestamp = requiredSingleHeader(request.headers, 'x-fai-timestamp');
-  const nonce = requiredSingleHeader(request.headers, 'x-fai-nonce');
-  const signature = requiredSingleHeader(request.headers, 'x-fai-signature');
-  if (!KEY_ID_PATTERN.test(keyId)
-    || !TIMESTAMP_PATTERN.test(timestamp)
-    || !NONCE_PATTERN.test(nonce)
-    || !SIGNATURE_PATTERN.test(signature)) unauthorized();
+  const rawKeyId = boundedAuthenticationHeader(request.headers, 'x-fai-key-id', 80);
+  const rawTimestamp = boundedAuthenticationHeader(request.headers, 'x-fai-timestamp', 32);
+  const rawNonce = boundedAuthenticationHeader(request.headers, 'x-fai-nonce', 64);
+  const rawSignature = boundedAuthenticationHeader(request.headers, 'x-fai-signature', 128);
+  const keyId = rawKeyId.value;
+  const timestamp = rawTimestamp.value;
+  const nonce = rawNonce.value;
+  const signature = rawSignature.value;
+  const authenticationHeadersValid = rawKeyId.valid
+    && rawTimestamp.valid
+    && rawNonce.valid
+    && rawSignature.valid
+    && KEY_ID_PATTERN.test(keyId)
+    && TIMESTAMP_PATTERN.test(timestamp)
+    && NONCE_PATTERN.test(nonce)
+    && SIGNATURE_PATTERN.test(signature);
 
   const rawContentLength = request.headers.get('content-length');
   let contentLength: number | null = null;
@@ -144,6 +154,7 @@ export function readSecureLeadGatewayHeaders(request: Request): SecureLeadGatewa
     nonce,
     signature,
     contentLength,
+    authenticationHeadersValid,
   });
 }
 

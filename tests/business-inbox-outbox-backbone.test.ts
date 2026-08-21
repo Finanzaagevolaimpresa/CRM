@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { canonicalJson } from '../src/lib/canonical-json';
 import {
   BUSINESS_EVENT_BACKBONE_ERROR_CODES,
   BUSINESS_EVENT_BACKBONE_MANIFEST,
   BusinessEventBackboneError,
+  admitBusinessInboxEventInTransaction,
   calculateBusinessInboxRecordHash,
   calculateBusinessOutboxRecordHash,
   calculateBusinessQueueAttemptHash,
@@ -229,6 +231,13 @@ test('N11 has no route, worker, script, telemetry, network or provider call site
     assert.equal(status, 1);
   }
   assert.equal(output, '');
+});
+
+test('N11 exposes one transaction-scoped admission seam only to the dormant N12 gateway', () => {
+  assert.equal(typeof admitBusinessInboxEventInTransaction, 'function');
+  const gateway = readFileSync('src/lib/secure-lead-gateway.ts', 'utf8');
+  assert.match(gateway, /admitBusinessInboxEventInTransaction\(tx, input\.event\)/);
+  assert.doesNotMatch(gateway, /operational-telemetry|AuditLog|fetch\(|enqueueBusinessOutboxEvent/);
 });
 
 test('N11 test data remains explicitly synthetic and uses reserved domains', () => {

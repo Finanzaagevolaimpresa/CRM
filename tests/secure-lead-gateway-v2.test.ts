@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { POST } from '../src/app/api/integrations/website/leads/v2/route';
 import { canonicalJson } from '../src/lib/canonical-json';
+import { classifyDataField } from '../src/lib/data-classification';
+import {
+  readSecureLeadGatewayKeyring,
+  SECURE_LEAD_GATEWAY_RUNTIME,
+  SecureLeadGatewayError,
+} from '../src/lib/secure-lead-gateway';
 import {
   assertSecureLeadGatewayTimestamp,
   createSecureLeadGatewaySignature,
@@ -69,6 +85,7 @@ test('N12 accepts only the approved path, media type, absent encoding and bounde
   assert.equal(headers.timestamp, N12_SYNTHETIC_TIMESTAMP);
   assert.equal(headers.nonce, N12_SYNTHETIC_NONCE);
   assert.equal(headers.contentLength, N12_SYNTHETIC_BODY.byteLength);
+  assert.equal(headers.authenticationHeadersValid, true);
 
   for (const request of [
     syntheticSecureLeadGatewayRequest({ path: `${SECURE_LEAD_GATEWAY_PROTOCOL.path}?x=1` }),
@@ -82,30 +99,45 @@ test('N12 accepts only the approved path, media type, absent encoding and bounde
 });
 
 test('N12 rejects missing, malformed, duplicate-like and noncanonical required headers', () => {
-  for (const [name, value, code] of [
-    ['x-fai-key-id', 'ab', 'UNAUTHORIZED'],
-    ['x-fai-key-id', `a${'b'.repeat(80)}`, 'UNAUTHORIZED'],
-    ['x-fai-key-id', 'synthetic key', 'UNAUTHORIZED'],
-    ['x-fai-timestamp', '17873136000', 'UNAUTHORIZED'],
-    ['x-fai-nonce', 'ABCDEF0123456789ABCDEF0123456789', 'UNAUTHORIZED'],
-    ['x-fai-nonce', '0'.repeat(31), 'UNAUTHORIZED'],
-    ['x-fai-signature', `V1=${'0'.repeat(64)}`, 'UNAUTHORIZED'],
-    ['x-fai-signature', `v1=${'0'.repeat(63)}`, 'UNAUTHORIZED'],
-    ['content-length', '01', 'INVALID_REQUEST'],
-    ['content-length', '1, 1', 'INVALID_REQUEST'],
+  for (const [name, value] of [
+    ['x-fai-key-id', 'ab'],
+    ['x-fai-key-id', 'synthetic key'],
+    ['x-fai-timestamp', '17873136000'],
+    ['x-fai-nonce', 'ABCDEF0123456789ABCDEF0123456789'],
+    ['x-fai-nonce', '0'.repeat(31)],
+    ['x-fai-signature', `V1=${'0'.repeat(64)}`],
+    ['x-fai-signature', `v1=${'0'.repeat(63)}`],
   ] as const) {
     const request = syntheticSecureLeadGatewayRequest();
     request.headers.set(name, value);
-    expectProtocolError(code, code === 'UNAUTHORIZED' ? 401 : 400, () => (
-      readSecureLeadGatewayHeaders(request)
-    ));
+    assert.equal(readSecureLeadGatewayHeaders(request).authenticationHeadersValid, false);
+  }
+  const oversizedKey = syntheticSecureLeadGatewayRequest();
+  oversizedKey.headers.set('x-fai-key-id', `a${'b'.repeat(80)}`);
+  expectProtocolError(
+    'UNAUTHORIZED',
+    401,
+    () => readSecureLeadGatewayHeaders(oversizedKey),
+  );
+  for (const contentLength of ['01', '1, 1']) {
+    const request = syntheticSecureLeadGatewayRequest();
+    request.headers.set('content-length', contentLength);
+    expectProtocolError(
+      'INVALID_REQUEST',
+      400,
+      () => readSecureLeadGatewayHeaders(request),
+    );
   }
   const missing = syntheticSecureLeadGatewayRequest();
   missing.headers.delete('x-fai-key-id');
-  expectProtocolError('UNAUTHORIZED', 401, () => readSecureLeadGatewayHeaders(missing));
+  assert.equal(readSecureLeadGatewayHeaders(missing).authenticationHeadersValid, false);
   const comma = syntheticSecureLeadGatewayRequest();
   comma.headers.set('x-fai-nonce', `${N12_SYNTHETIC_NONCE},${N12_SYNTHETIC_NONCE}`);
-  expectProtocolError('UNAUTHORIZED', 401, () => readSecureLeadGatewayHeaders(comma));
+  expectProtocolError(
+    'UNAUTHORIZED',
+    401,
+    () => readSecureLeadGatewayHeaders(comma),
+  );
   const over = syntheticSecureLeadGatewayRequest({ contentLength: '16385' });
   expectProtocolError('INVALID_REQUEST', 413, () => readSecureLeadGatewayHeaders(over));
 });
@@ -295,4 +327,100 @@ test('N12 deadline shares one exact five-second budget', () => {
   now = 15_000;
   assert.equal(deadline.remainingMs(), 0);
   assert.throws(() => deadline.assertRemaining(), SecureLeadGatewayDeadlineError);
+});
+
+test('N12 reads only a protected, bounded and exact synthetic keyring file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'n12-keyring-'));
+  const path = join(root, 'synthetic-keyring.json');
+  const secretBase64 = N12_SYNTHETIC_SECRET.toString('base64');
+  try {
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      keys: [{ keyId: N12_SYNTHETIC_KEY_ID, secretBase64 }],
+    }), { mode: 0o600 });
+    const keyring = await readSecureLeadGatewayKeyring(path, { allowedRoot: root });
+    assert.equal(keyring.size, 1);
+    assert.deepEqual(keyring.get(N12_SYNTHETIC_KEY_ID), N12_SYNTHETIC_SECRET);
+    const copy = keyring.get(N12_SYNTHETIC_KEY_ID);
+    copy?.fill(0);
+    assert.deepEqual(keyring.get(N12_SYNTHETIC_KEY_ID), N12_SYNTHETIC_SECRET);
+
+    chmodSync(path, 0o644);
+    await assert.rejects(
+      () => readSecureLeadGatewayKeyring(path, { allowedRoot: root }),
+      (error: unknown) => error instanceof SecureLeadGatewayError
+        && error.code === 'TEMPORARILY_UNAVAILABLE',
+    );
+    chmodSync(path, 0o600);
+    const link = join(root, 'synthetic-link.json');
+    symlinkSync(path, link);
+    await assert.rejects(
+      () => readSecureLeadGatewayKeyring(link, { allowedRoot: root }),
+      (error: unknown) => error instanceof SecureLeadGatewayError
+        && error.code === 'TEMPORARILY_UNAVAILABLE',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('N12 disabled and gate-OFF modes return uniform 503 before reading body or keyring', async () => {
+  const previous = {
+    mode: process.env.SECURE_LEAD_GATEWAY_MODE,
+    feature: process.env.FEATURE_INTEGRATIONS_ENABLED,
+    keyring: process.env.SECURE_LEAD_GATEWAY_KEYRING_FILE,
+  };
+  const request = () => ({
+    method: 'POST',
+    url: `http://local${SECURE_LEAD_GATEWAY_PROTOCOL.path}`,
+    headers: new Headers(),
+    get body(): never {
+      throw new Error('N12_DISABLED_BODY_MUST_NOT_BE_READ');
+    },
+  }) as never;
+  try {
+    process.env.SECURE_LEAD_GATEWAY_MODE = 'disabled';
+    process.env.FEATURE_INTEGRATIONS_ENABLED = 'true';
+    process.env.SECURE_LEAD_GATEWAY_KEYRING_FILE = '/run/secrets/missing';
+    const disabled = await POST(request());
+    assert.equal(disabled.status, 503);
+    assert.equal(disabled.headers.get('cache-control'), 'no-store');
+    assert.equal(disabled.headers.get('pragma'), 'no-cache');
+    assert.deepEqual(await disabled.json(), {
+      ok: false,
+      error: 'TEMPORARILY_UNAVAILABLE',
+    });
+
+    process.env.SECURE_LEAD_GATEWAY_MODE = 'shadow';
+    process.env.FEATURE_INTEGRATIONS_ENABLED = 'false';
+    const gateOff = await POST(request());
+    assert.equal(gateOff.status, 503);
+  } finally {
+    if (previous.mode === undefined) delete process.env.SECURE_LEAD_GATEWAY_MODE;
+    else process.env.SECURE_LEAD_GATEWAY_MODE = previous.mode;
+    if (previous.feature === undefined) delete process.env.FEATURE_INTEGRATIONS_ENABLED;
+    else process.env.FEATURE_INTEGRATIONS_ENABLED = previous.feature;
+    if (previous.keyring === undefined) delete process.env.SECURE_LEAD_GATEWAY_KEYRING_FILE;
+    else process.env.SECURE_LEAD_GATEWAY_KEYRING_FILE = previous.keyring;
+  }
+});
+
+test('N12 classifies security state and forbids telemetry, egress and legacy reuse', () => {
+  assert.equal(
+    classifyDataField('secure_lead_gateway_security_state_v2', 'secretDigest').classification,
+    'AUTHENTICATION_SECRET',
+  );
+  assert.equal(
+    classifyDataField('secure_lead_gateway_security_state_v2', 'receiptId').classification,
+    'PERSONAL',
+  );
+  assert.equal(SECURE_LEAD_GATEWAY_RUNTIME.dormant, true);
+  assert.equal(SECURE_LEAD_GATEWAY_RUNTIME.activation, 'NONE');
+  const implementation = [
+    readFileSync('src/lib/secure-lead-gateway.ts', 'utf8'),
+    readFileSync('src/app/api/integrations/website/leads/v2/route.ts', 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(implementation, /operational-telemetry|AuditLog|console\.|fetch\(/);
+  assert.doesNotMatch(implementation, /WebsiteLeadReceipt|WebsiteLeadRateLimitBucket|ApplicationKeyVersion/);
+  assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
 });
