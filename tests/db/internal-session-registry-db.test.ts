@@ -143,7 +143,7 @@ async function migrationChain(upgrade: boolean) {
   const allNames = readdirSync("prisma/migrations")
     .filter((name) => /^\d/.test(name))
     .sort();
-  assert.equal(allNames.length, 39, "N12 must extend the chain to exactly 39 migrations");
+  assert.equal(allNames.length, 40, "N13 must extend the chain to exactly 40 migrations");
   const names = allNames.slice(0, 33);
   assert.match(names[32], /internal_session_registry_revocation_v1/);
 

@@ -26,7 +26,7 @@ function sha256(file: string) {
 }
 
 test('N05 stays migration-free and introduces the complete release-safety surface', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 39);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 40);
   const expected = [
     '.env.staging.example',
     'docker-compose.prod.legacy-resources.yml',

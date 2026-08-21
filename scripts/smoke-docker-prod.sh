@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=39
+EXPECTED_MIGRATION_COUNT=40
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -227,10 +227,12 @@ docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
 
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
-[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "39" ]] \
-  || fail "Production image did not apply exactly 39 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "40" ]] \
+  || fail "Production image did not apply exactly 40 migrations"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT (SELECT COUNT(*) FROM "SecureLeadGatewayKeyVersion") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayRateLimitBucket") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayReceipt") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayRequest")')" == "0|0|0|0" ]] \
   || fail "N12 dormant deployment unexpectedly created gateway security state"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT (SELECT COUNT(*) FROM "LeadIdentityKeyVersion") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadIdentityKey") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadProjectionLedger") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateCase") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateCandidate") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateDecision")')" == "0|0|0|0|0|0" ]] \
+  || fail "N13 dormant deployment unexpectedly created projection or duplicate-resolution state"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) || '\''|'\'' || (SELECT COUNT(*) FROM "PrivacyEvidenceReceipt") FROM "PrivacyNoticeVersion"')" == "0|0" ]] \
   || fail "N04 dormant deployment unexpectedly created privacy notices or evidence"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "InternalSession"')" == "0" ]] \
@@ -383,4 +385,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 39 migrations, dormant N12 gateway and N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 40 migrations, dormant N12 gateway and N13 projection registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
