@@ -2202,7 +2202,7 @@ model LeadIdentityKey {
   sourceDecision         LeadDuplicateDecision? @relation("LeadIdentityKeySourceDecision", fields: [sourceDecisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   retiredByDecision      LeadDuplicateDecision? @relation("LeadIdentityKeyRetiredByDecision", fields: [retiredByDecisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([sourceProjectionId, leadId, signalKind, identityDigest], map: "LeadIdentityKey_source_lead_signal_key")
+  @@unique([sourceProjectionId, sourceDecisionId, leadId, signalKind, identityDigest], map: "LeadIdentityKey_source_decision_lead_signal_key")
   @@index([normalizationVersion, identityKeyVersionId, signalKind, identityDigest, retiredAt], map: "LeadIdentityKey_lookup_idx")
   @@index([leadId, retiredAt, createdAt, id], map: "LeadIdentityKey_lead_idx")
   @@index([sourceDecisionId, createdAt, id], map: "LeadIdentityKey_sourceDecision_idx")

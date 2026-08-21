@@ -43,6 +43,7 @@ jobs:
       AI_ALLOWED_MODELS: ""
       SECURE_LEAD_GATEWAY_MODE: disabled
       SECURE_LEAD_GATEWAY_KEYRING_FILE: ""
+      LEAD_IDENTITY_KEY_FILE: ""
     services:
       postgres:
         image: postgres:16

@@ -292,8 +292,9 @@ CREATE TABLE "LeadIdentityKey" (
     REFERENCES "LeadDuplicateDecision"("id") ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
-CREATE UNIQUE INDEX "LeadIdentityKey_source_lead_signal_key"
-  ON "LeadIdentityKey"("sourceProjectionId", "leadId", "signalKind", "identityDigest");
+CREATE UNIQUE INDEX "LeadIdentityKey_source_decision_lead_signal_key"
+  ON "LeadIdentityKey"("sourceProjectionId", "sourceDecisionId", "leadId", "signalKind", "identityDigest")
+  NULLS NOT DISTINCT;
 CREATE INDEX "LeadIdentityKey_lookup_idx"
   ON "LeadIdentityKey"("normalizationVersion", "identityKeyVersionId", "signalKind", "identityDigest", "retiredAt");
 CREATE INDEX "LeadIdentityKey_active_lookup_idx"
