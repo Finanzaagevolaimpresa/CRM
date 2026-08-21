@@ -2002,40 +2002,41 @@ model WebsiteLeadRateLimitBucket {
 }
 
 model BusinessInboxEvent {
-  id                         String                    @id @default(uuid()) @db.Uuid
-  schemaVersion              String                    @db.VarChar(80)
-  eventType                  String                    @db.VarChar(80)
-  eventVersion               Int
-  canonicalizationVersion    Int
-  eventId                    String                    @unique(map: "BusinessInboxEvent_eventId_key") @db.Uuid
-  businessCorrelationId      String                    @db.Uuid
-  occurredAt                 String                    @db.Char(24)
-  keyDigest                  String                    @unique(map: "BusinessInboxEvent_keyDigest_key") @db.Char(64)
-  payloadHash                String                    @db.Char(64)
-  envelopeJson               String                    @db.Text
-  recordHash                 String                    @db.Char(64)
-  classificationCatalogVersion String                  @db.VarChar(32)
-  classificationContractCode String                    @db.VarChar(80)
-  state                      String                    @default("AVAILABLE") @db.VarChar(24)
-  availableAt                DateTime                  @default(now()) @db.Timestamptz(3)
-  attemptCount               Int                       @default(0)
-  maxAttempts                Int                       @default(5)
-  fencingToken               BigInt                    @default(0)
-  leaseOwnerId               String?                   @db.Uuid
-  leaseTokenHash             String?                   @db.Char(64)
-  leaseClaimedAt             DateTime?                 @db.Timestamptz(3)
-  leaseExpiresAt             DateTime?                 @db.Timestamptz(3)
-  leaseMaxExpiresAt          DateTime?                 @db.Timestamptz(3)
-  terminalAt                 DateTime?                 @db.Timestamptz(3)
-  terminalReasonCode         String?                   @db.VarChar(64)
-  lastFailureCode            String?                   @db.VarChar(64)
-  retentionClass             String                    @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
-  retentionPolicyVersion     String                    @default("N21_UNASSIGNED") @db.VarChar(64)
-  retentionEligibleAt        DateTime?                 @db.Timestamptz(3)
-  createdAt                  DateTime                  @default(now()) @db.Timestamptz(3)
-  updatedAt                  DateTime                  @default(now()) @db.Timestamptz(3)
-  outboxEvents               BusinessOutboxEvent[]
-  attempts                   BusinessQueueAttempt[]
+  id                           String                    @id @default(uuid()) @db.Uuid
+  schemaVersion                String                    @db.VarChar(80)
+  eventType                    String                    @db.VarChar(80)
+  eventVersion                 Int
+  canonicalizationVersion      Int
+  eventId                      String                    @unique(map: "BusinessInboxEvent_eventId_key") @db.Uuid
+  businessCorrelationId        String                    @db.Uuid
+  occurredAt                   String                    @db.Char(24)
+  keyDigest                    String                    @unique(map: "BusinessInboxEvent_keyDigest_key") @db.Char(64)
+  payloadHash                  String                    @db.Char(64)
+  envelopeJson                 String                    @db.Text
+  recordHash                   String                    @db.Char(64)
+  classificationCatalogVersion String                    @db.VarChar(32)
+  classificationContractCode   String                    @db.VarChar(80)
+  state                        String                    @default("AVAILABLE") @db.VarChar(24)
+  availableAt                  DateTime                  @default(now()) @db.Timestamptz(3)
+  attemptCount                 Int                       @default(0)
+  maxAttempts                  Int                       @default(5)
+  fencingToken                 BigInt                    @default(0)
+  leaseOwnerId                 String?                   @db.Uuid
+  leaseTokenHash               String?                   @db.Char(64)
+  leaseClaimedAt               DateTime?                 @db.Timestamptz(3)
+  leaseExpiresAt               DateTime?                 @db.Timestamptz(3)
+  leaseMaxExpiresAt            DateTime?                 @db.Timestamptz(3)
+  terminalAt                   DateTime?                 @db.Timestamptz(3)
+  terminalReasonCode           String?                   @db.VarChar(64)
+  lastFailureCode              String?                   @db.VarChar(64)
+  retentionClass               String                    @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
+  retentionPolicyVersion       String                    @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt          DateTime?                 @db.Timestamptz(3)
+  createdAt                    DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt                    DateTime                  @default(now()) @db.Timestamptz(3)
+  outboxEvents                 BusinessOutboxEvent[]
+  attempts                     BusinessQueueAttempt[]
+  secureLeadGatewayReceipt     SecureLeadGatewayReceipt?
 
   @@index([state, availableAt, id], map: "BusinessInboxEvent_claim_idx")
   @@index([state, leaseExpiresAt, id], map: "BusinessInboxEvent_recovery_idx")
@@ -2044,43 +2045,43 @@ model BusinessInboxEvent {
 }
 
 model BusinessOutboxEvent {
-  id                         String                    @id @default(uuid()) @db.Uuid
-  sourceInboxEventId         String                    @db.Uuid
-  producerCode               String                    @db.VarChar(80)
-  destinationCode            String                    @db.VarChar(80)
-  schemaVersion              String                    @db.VarChar(80)
-  eventType                  String                    @db.VarChar(80)
-  eventVersion               Int
-  canonicalizationVersion    Int
-  eventId                    String                    @db.Uuid
-  businessCorrelationId      String                    @db.Uuid
-  occurredAt                 String                    @db.Char(24)
-  keyDigest                  String                    @db.Char(64)
-  payloadHash                String                    @db.Char(64)
-  envelopeJson               String                    @db.Text
-  recordHash                 String                    @db.Char(64)
-  classificationCatalogVersion String                  @db.VarChar(32)
-  classificationContractCode String                    @db.VarChar(80)
-  state                      String                    @default("AVAILABLE") @db.VarChar(24)
-  availableAt                DateTime                  @default(now()) @db.Timestamptz(3)
-  attemptCount               Int                       @default(0)
-  maxAttempts                Int                       @default(5)
-  fencingToken               BigInt                    @default(0)
-  leaseOwnerId               String?                   @db.Uuid
-  leaseTokenHash             String?                   @db.Char(64)
-  leaseClaimedAt             DateTime?                 @db.Timestamptz(3)
-  leaseExpiresAt             DateTime?                 @db.Timestamptz(3)
-  leaseMaxExpiresAt          DateTime?                 @db.Timestamptz(3)
-  terminalAt                 DateTime?                 @db.Timestamptz(3)
-  terminalReasonCode         String?                   @db.VarChar(64)
-  lastFailureCode            String?                   @db.VarChar(64)
-  retentionClass             String                    @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
-  retentionPolicyVersion     String                    @default("N21_UNASSIGNED") @db.VarChar(64)
-  retentionEligibleAt        DateTime?                 @db.Timestamptz(3)
-  createdAt                  DateTime                  @default(now()) @db.Timestamptz(3)
-  updatedAt                  DateTime                  @default(now()) @db.Timestamptz(3)
-  sourceInboxEvent           BusinessInboxEvent        @relation(fields: [sourceInboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  attempts                   BusinessQueueAttempt[]
+  id                           String                 @id @default(uuid()) @db.Uuid
+  sourceInboxEventId           String                 @db.Uuid
+  producerCode                 String                 @db.VarChar(80)
+  destinationCode              String                 @db.VarChar(80)
+  schemaVersion                String                 @db.VarChar(80)
+  eventType                    String                 @db.VarChar(80)
+  eventVersion                 Int
+  canonicalizationVersion      Int
+  eventId                      String                 @db.Uuid
+  businessCorrelationId        String                 @db.Uuid
+  occurredAt                   String                 @db.Char(24)
+  keyDigest                    String                 @db.Char(64)
+  payloadHash                  String                 @db.Char(64)
+  envelopeJson                 String                 @db.Text
+  recordHash                   String                 @db.Char(64)
+  classificationCatalogVersion String                 @db.VarChar(32)
+  classificationContractCode   String                 @db.VarChar(80)
+  state                        String                 @default("AVAILABLE") @db.VarChar(24)
+  availableAt                  DateTime               @default(now()) @db.Timestamptz(3)
+  attemptCount                 Int                    @default(0)
+  maxAttempts                  Int                    @default(5)
+  fencingToken                 BigInt                 @default(0)
+  leaseOwnerId                 String?                @db.Uuid
+  leaseTokenHash               String?                @db.Char(64)
+  leaseClaimedAt               DateTime?              @db.Timestamptz(3)
+  leaseExpiresAt               DateTime?              @db.Timestamptz(3)
+  leaseMaxExpiresAt            DateTime?              @db.Timestamptz(3)
+  terminalAt                   DateTime?              @db.Timestamptz(3)
+  terminalReasonCode           String?                @db.VarChar(64)
+  lastFailureCode              String?                @db.VarChar(64)
+  retentionClass               String                 @default("LEAD_BUSINESS_EVENT") @db.VarChar(64)
+  retentionPolicyVersion       String                 @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt          DateTime?              @db.Timestamptz(3)
+  createdAt                    DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt                    DateTime               @default(now()) @db.Timestamptz(3)
+  sourceInboxEvent             BusinessInboxEvent     @relation(fields: [sourceInboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  attempts                     BusinessQueueAttempt[]
 
   @@unique([producerCode, destinationCode, keyDigest], map: "BusinessOutboxEvent_dedupe_key")
   @@index([eventId], map: "BusinessOutboxEvent_eventId_idx")
@@ -2115,4 +2116,64 @@ model BusinessQueueAttempt {
   outboxEvent       BusinessOutboxEvent? @relation(fields: [outboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([queueKind, finishedAt, createdAt, id], map: "BusinessQueueAttempt_open_idx")
+}
+
+model SecureLeadGatewayKeyVersion {
+  id           String                     @id @default(uuid()) @db.Uuid
+  producerCode String                     @db.VarChar(80)
+  keyId        String                     @unique(map: "SecureLeadGatewayKeyVersion_keyId_key") @db.VarChar(80)
+  version      Int
+  secretDigest String                     @db.Char(64)
+  status       String                     @default("STAGED") @db.VarChar(16)
+  acceptFrom   DateTime                   @db.Timestamptz(3)
+  acceptUntil  DateTime?                  @db.Timestamptz(3)
+  revokedAt    DateTime?                  @db.Timestamptz(3)
+  retiredAt    DateTime?                  @db.Timestamptz(3)
+  createdAt    DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime                   @default(now()) @db.Timestamptz(3)
+  requests     SecureLeadGatewayRequest[]
+
+  @@unique([producerCode, version], map: "SecureLeadGatewayKeyVersion_producer_version_key")
+  @@index([producerCode, status, acceptFrom], map: "SecureLeadGatewayKeyVersion_lookup_idx")
+}
+
+model SecureLeadGatewayRateLimitBucket {
+  producerCode         String   @id @db.VarChar(80)
+  theoreticalArrivalAt DateTime @db.Timestamptz(3)
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model SecureLeadGatewayReceipt {
+  id                     String                     @id @default(uuid()) @db.Uuid
+  inboxEventId           String                     @unique(map: "SecureLeadGatewayReceipt_inboxEventId_key") @db.Uuid
+  receiptVersion         Int                        @default(1)
+  retentionClass         String                     @default("SECURE_LEAD_GATEWAY_RECEIPT") @db.VarChar(64)
+  retentionPolicyVersion String                     @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt    DateTime                   @db.Timestamptz(3)
+  createdAt              DateTime                   @default(now()) @db.Timestamptz(3)
+  inboxEvent             BusinessInboxEvent         @relation(fields: [inboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  requests               SecureLeadGatewayRequest[]
+
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "SecureLeadGatewayReceipt_retention_idx")
+}
+
+model SecureLeadGatewayRequest {
+  id                     String                      @id @default(uuid()) @db.Uuid
+  producerCode           String                      @db.VarChar(80)
+  keyVersionId           String                      @db.Uuid
+  nonceDigest            String                      @db.Char(64)
+  requestFingerprint     String                      @db.Char(64)
+  receiptId              String                      @db.Uuid
+  retentionClass         String                      @default("SECURE_LEAD_GATEWAY_REQUEST") @db.VarChar(64)
+  retentionPolicyVersion String                      @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt    DateTime                    @db.Timestamptz(3)
+  createdAt              DateTime                    @default(now()) @db.Timestamptz(3)
+  keyVersion             SecureLeadGatewayKeyVersion @relation(fields: [keyVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  receipt                SecureLeadGatewayReceipt    @relation(fields: [receiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([producerCode, nonceDigest], map: "SecureLeadGatewayRequest_producer_nonce_key")
+  @@index([keyVersionId, createdAt, id], map: "SecureLeadGatewayRequest_keyVersion_idx")
+  @@index([receiptId, createdAt, id], map: "SecureLeadGatewayRequest_receipt_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "SecureLeadGatewayRequest_retention_idx")
 }
