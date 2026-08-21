@@ -17,6 +17,7 @@ import {
   digestLeadIdentitySignal,
   digestLeadIdentitySignals,
   discoverLeadIdentityCandidates,
+  hasStrongRawLeadIdentityDuplicate,
   LeadIdentityError,
   normalizeLeadIdentityEmail,
   normalizeLeadIdentityPhone,
@@ -25,12 +26,16 @@ import {
   type LeadIdentityKeyFile,
 } from '../src/lib/lead-identity';
 import {
+  LEAD_DUPLICATE_RESOLUTION_MANIFEST,
+} from '../src/lib/lead-duplicate-resolution';
+import {
   LEAD_PROJECTION_MANIFEST,
   mapLeadSubmittedEventToLead,
   projectClaimedLeadInboxEvent,
 } from '../src/lib/lead-projection';
 import { createLeadSubmittedEventV1 } from '../src/lib/lead-event-contract';
 import { createBusinessLeadPrivacyEvidence } from '../src/lib/privacy-evidence';
+import { leadDuplicateResolutionSchema } from '../src/lib/validation';
 import {
   N13_SYNTHETIC_KEY_SECRET,
   N13_SYNTHETIC_KEY_VERSION,
@@ -359,4 +364,102 @@ test('business privacy evidence creates exactly two inbox-bound receipts without
       decision: 'DENIED',
     },
   ]);
+});
+
+test('manual duplicate resolution schema accepts only coherent outcomes, versions and reasons', () => {
+  const caseId = '00000000-0000-4000-8000-000000000024';
+  const selectedLeadId = 'lead-synthetic-existing';
+  assert.deepEqual(leadDuplicateResolutionSchema.parse({
+    caseId,
+    expectedCaseVersion: '1',
+    outcome: 'LINK_EXISTING_NO_OVERWRITE',
+    selectedLeadId,
+    reasonCode: 'SAME_CUSTOMER_CONFIRMED',
+    reasonNote: 'Sintetico e privo di contatti reali.',
+  }), {
+    caseId,
+    expectedCaseVersion: 1,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE',
+    selectedLeadId,
+    reasonCode: 'SAME_CUSTOMER_CONFIRMED',
+    reasonNote: 'Sintetico e privo di contatti reali.',
+  });
+  assert.equal(leadDuplicateResolutionSchema.safeParse({
+    caseId,
+    expectedCaseVersion: 0,
+    outcome: 'CREATE_NEW',
+    reasonCode: 'DISTINCT_REQUEST',
+  }).success, false);
+  assert.equal(leadDuplicateResolutionSchema.safeParse({
+    caseId,
+    expectedCaseVersion: 1,
+    outcome: 'CREATE_NEW',
+    selectedLeadId,
+    reasonCode: 'DISTINCT_REQUEST',
+  }).success, false);
+  assert.equal(leadDuplicateResolutionSchema.safeParse({
+    caseId,
+    expectedCaseVersion: 1,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE',
+    reasonCode: 'MISSING_CANDIDATE',
+  }).success, false);
+  for (const outcome of ['MERGE', 'DELETE', 'OVERWRITE', 'AUTO_LINK']) {
+    assert.equal(leadDuplicateResolutionSchema.safeParse({
+      caseId,
+      expectedCaseVersion: 1,
+      outcome,
+      reasonCode: 'FORBIDDEN',
+    }).success, false);
+  }
+  assert.equal(leadDuplicateResolutionSchema.safeParse({
+    caseId,
+    expectedCaseVersion: 1,
+    outcome: 'REOPEN',
+    reasonCode: 'lowercase-denied',
+  }).success, false);
+});
+
+test('manual create precheck considers only exact active email and E.164 strong signals', async () => {
+  const seenQueries: string[] = [];
+  const tx = {
+    $queryRaw: async (query: { strings?: readonly string[] }) => {
+      seenQueries.push(query.strings?.join('?') ?? String(query));
+      return [{ duplicate: true }];
+    },
+  } as unknown as Prisma.TransactionClient;
+  assert.equal(await hasStrongRawLeadIdentityDuplicate(tx, {
+    email: ' Synthetic.Existing@N13.Invalid ',
+    phone: '333 000 0010',
+  }), true);
+  assert.equal(seenQueries.length, 1);
+  assert.match(seenQueries[0] ?? '', /LOWER\(BTRIM\("email"\)\)/u);
+  assert.doesNotMatch(seenQueries[0] ?? '', /PERSON_NAME|companyName/u);
+  assert.equal(await hasStrongRawLeadIdentityDuplicate(tx, {
+    phone: '333 000 0010',
+  }), false);
+  assert.equal(seenQueries.length, 1);
+});
+
+test('manual resolution stays dormant, non-destructive and audit-minimized', () => {
+  assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.dormant, true);
+  assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.activation, 'NONE');
+  const resolution = readFileSync('src/lib/lead-duplicate-resolution.ts', 'utf8');
+  assert.doesNotMatch(
+    resolution,
+    /operational-telemetry|\bfetch\s*\(|\bconsole\.|setInterval|setTimeout/u,
+  );
+  assert.doesNotMatch(resolution, /outcome:\s*'(?:MERGE|DELETE|OVERWRITE|AUTO_LINK)'/u);
+  assert.match(resolution, /entityType: 'LeadDuplicateDecision'[\s\S]*entityId: null/u);
+  const auditStart = resolution.indexOf('async function auditDecision');
+  const auditEnd = resolution.indexOf('async function resolveOpenCase', auditStart);
+  const auditBody = resolution.slice(auditStart, auditEnd);
+  assert.doesNotMatch(
+    auditBody,
+    /reasonNote|selectedLeadId|resultingLeadId|caseId|ledgerId|identityDigest|decisionHash|snapshotHash/u,
+  );
+  assert.match(resolution, /LINK_EXISTING_NO_OVERWRITE[\s\S]*selected\.deletedAt !== null/u);
+  assert.doesNotMatch(
+    /if \(input\.outcome === 'LINK_EXISTING_NO_OVERWRITE'\)[\s\S]*?else if/u.exec(resolution)?.[0] ?? '',
+    /tx\.lead\.(?:update|delete|upsert)/u,
+  );
 });

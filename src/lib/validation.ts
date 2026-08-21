@@ -3,6 +3,9 @@ import { permissionCodes } from './permissions';
 
 const optionalText = z.string().trim().max(5000).optional().or(z.literal('').transform(() => undefined));
 const id = z.string().trim().min(1).max(128);
+const uuidV4 = z.string().trim().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+);
 const money = z.coerce.number().finite().nonnegative();
 const optionalMoney = z.preprocess((value) => value === '' || value === null ? undefined : value, money.optional());
 const date = z.coerce.date();
@@ -24,6 +27,31 @@ export const leadSchema = z.object({
 export const leadUpdateSchema = leadSchema.extend({ id });
 export const leadCommercialUpdateSchema = z.object({ id, status: leadStatusSchema, priority: leadPrioritySchema, assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText });
 export const leadConvertSchema = z.object({ id, type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']).default('societa') });
+export const leadDuplicateResolutionOutcomeSchema = z.enum([
+  'LINK_EXISTING_NO_OVERWRITE',
+  'CREATE_NEW',
+  'REOPEN',
+]);
+export const leadDuplicateResolutionSchema = z.object({
+  caseId: uuidV4,
+  expectedCaseVersion: z.coerce.number().int().positive(),
+  outcome: leadDuplicateResolutionOutcomeSchema,
+  selectedLeadId: id.optional(),
+  reasonCode: z.string().trim().regex(/^[A-Z0-9][A-Z0-9_]{0,63}$/),
+  reasonNote: z.string().trim().min(1).max(500).optional()
+    .or(z.literal('').transform(() => undefined)),
+}).superRefine((value, context) => {
+  const selectedRequired = value.outcome === 'LINK_EXISTING_NO_OVERWRITE';
+  if (selectedRequired !== Boolean(value.selectedLeadId)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['selectedLeadId'],
+      message: selectedRequired
+        ? 'Il Lead candidato è obbligatorio.'
+        : 'Il Lead candidato non è ammesso per questo outcome.',
+    });
+  }
+});
 export const commercialOfferSchema = z.object({ leadId: id.optional(), clientId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, services: optionalText, includedActivities: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, validUntil: date.optional(), operationalConditions: optionalText, commercialProposal: optionalText, status: z.enum(['bozza','inviata','accettata','rifiutata','scaduta']).default('bozza'), notes: optionalText, sentAt: date.optional(), followUpAt: date.optional(), followUpNote: optionalText, outcomeNote: optionalText, acceptedAt: date.optional(), rejectedAt: date.optional(), rejectionReason: optionalText, commercialAction: z.enum(['mark_sent','mark_accepted','mark_rejected','update_followup']).optional() });
 export const commercialOfferUpdateSchema = commercialOfferSchema.extend({ id });
 export const clientSchema = z.object({ type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']), displayName: z.string().trim().min(1).max(200), leadId: id.optional(), notes: optionalText });

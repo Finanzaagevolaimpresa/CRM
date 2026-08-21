@@ -393,3 +393,35 @@ export async function discoverLeadIdentityCandidates(
   });
   return Object.freeze(candidates);
 }
+
+export async function hasStrongRawLeadIdentityDuplicate(
+  tx: Prisma.TransactionClient,
+  input: Readonly<{
+    email?: string | null;
+    phone?: string | null;
+    excludeLeadId?: string;
+  }>,
+) {
+  const predicates: Prisma.Sql[] = [];
+  const email = normalizeLeadIdentityEmail(input.email);
+  if (email) predicates.push(Prisma.sql`LOWER(BTRIM("email")) = ${email}`);
+  const phone = normalizeLeadIdentityPhone(input.phone);
+  if (phone?.kind === 'PHONE_E164_EXACT_V1') {
+    predicates.push(Prisma.sql`
+      REGEXP_REPLACE("phone", '[[:space:]().-]', '', 'g') = ${phone.canonicalValue}
+    `);
+  }
+  if (predicates.length === 0) return false;
+  const excluded = input.excludeLeadId
+    ? Prisma.sql`AND "id" <> ${input.excludeLeadId}`
+    : Prisma.empty;
+  const rows = await tx.$queryRaw<Array<{ duplicate: boolean }>>(Prisma.sql`
+    SELECT EXISTS (
+      SELECT 1 FROM "Lead"
+      WHERE "deletedAt" IS NULL
+        AND (${Prisma.join(predicates, ' OR ')})
+        ${excluded}
+    ) AS "duplicate"
+  `);
+  return rows[0]?.duplicate === true;
+}

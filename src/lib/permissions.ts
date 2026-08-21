@@ -6,6 +6,7 @@ export const permissionCatalog = [
   { code: 'settings.manage', label: 'Gestire impostazioni', description: 'Accede alle impostazioni operative e diagnostiche.', group: 'utenti e impostazioni' },
   { code: 'lead.read', label: 'Leggere lead', description: 'Visualizza lead e offerte commerciali.', group: 'commerciale e lead' },
   { code: 'lead.write', label: 'Modificare lead', description: 'Crea e aggiorna lead e offerte.', group: 'commerciale e lead' },
+  { code: 'lead.duplicate.resolve', label: 'Risolvere duplicati lead', description: 'Esegue decisioni manuali non distruttive sui casi di possibile duplicato.', group: 'commerciale e lead' },
   { code: 'client.read', label: 'Leggere clienti', description: 'Visualizza anagrafiche cliente consentite.', group: 'clienti e aziende' },
   { code: 'client.write', label: 'Modificare clienti', description: 'Crea e aggiorna clienti consentiti.', group: 'clienti e aziende' },
   { code: 'company.read', label: 'Leggere aziende', description: 'Visualizza società e assetti collegati.', group: 'clienti e aziende' },
@@ -71,11 +72,14 @@ export const adminOnlyAiExecutionPermissions = [
   'ai.execution.revoke',
   'ai.execution.audit',
 ] as const satisfies readonly Permission[];
+export const protectedLeadDuplicatePermissions = [
+  'lead.duplicate.resolve',
+] as const satisfies readonly Permission[];
 export function isPermission(value: unknown): value is Permission { return typeof value === 'string' && permissionCodeSet.has(value); }
 
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*'],
-  direzione: ['technical.read','technical.write','technical.assign','technical.status','technical.admin','practice_communications.read','practice_communications.write','practice_communications.review','practice_communications.mark_used','user.read','settings.manage','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.execution.request','ai.review','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','legal.read','privacy.evidence.read','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
+  direzione: ['technical.read','technical.write','technical.assign','technical.status','technical.admin','practice_communications.read','practice_communications.write','practice_communications.review','practice_communications.mark_used','user.read','settings.manage','lead.read','lead.duplicate.resolve','client.read','company.read','project.read','document.download','document.sensitive.read','ai.execution.request','ai.review','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','legal.read','privacy.evidence.read','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
   commerciale: ['technical.read','practice_communications.read','lead.read','lead.write','client.read','client.write','company.read','project.read','service.read','service.assign','ai.execution.request'],
   consulente: ['technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.execution.request','ai.review','dossier.read','dossier.write'],
   revisore: ['technical.read','practice_communications.read','practice_communications.review','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.execution.request','ai.review','dossier.read','dossier.approve','legal.read','service.read'],
@@ -86,6 +90,9 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
 
 export function roleHasPermission(role: RoleCode, permission: Permission) {
   if (permission === 'ai.execution.consume') return false;
+  if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
+    return role === 'admin' || role === 'direzione';
+  }
   const granted = rolePermissions[role] ?? [];
   return granted.includes('*') || granted.includes(permission);
 }

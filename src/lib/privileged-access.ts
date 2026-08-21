@@ -32,6 +32,7 @@ export const privilegedMutationCodes = [
   'AI_EXECUTION_REVOKE',
   'AI_ORCHESTRATOR_GLOBAL_POLICY_UPDATE',
   'AI_ORCHESTRATOR_SCOPE_POLICY_UPDATE',
+  'LEAD_DUPLICATE_RESOLVE',
 ] as const;
 
 export type PrivilegedMutationCode = (typeof privilegedMutationCodes)[number];
@@ -97,6 +98,60 @@ export async function requirePrivilegedMutation(
   }
   if (!await activeStepUpForSession(session)) {
     await auditStepUp(session.userId, 'blocked_privileged_step_up', { code: 'STEP_UP_REQUIRED', action });
+    redirect('/settings/security?status=required');
+  }
+  return session;
+}
+
+export async function requireEnforcedPrivilegedMutation(
+  session: AuthSession,
+  action: PrivilegedMutationCode,
+) {
+  let mode: 'disabled' | 'enforced';
+  try {
+    mode = privilegedAccessMode();
+  } catch {
+    await auditStepUp(session.userId, 'blocked_privileged_step_up', {
+      code: 'CONFIGURATION_INVALID',
+      action,
+    });
+    redirect('/settings/security?status=unavailable');
+  }
+  if (mode !== 'enforced') {
+    await auditStepUp(session.userId, 'blocked_privileged_step_up', {
+      code: 'ENFORCEMENT_REQUIRED',
+      action,
+    });
+    redirect('/settings/security?status=unavailable');
+  }
+  if (!await mutationOriginAllowed()) {
+    await auditStepUp(session.userId, 'blocked_privileged_step_up', {
+      code: 'ORIGIN_DENIED',
+      action,
+    });
+    redirect('/settings/security?status=required');
+  }
+  const store = await cookies();
+  const sessionToken = store.get(sessionCookieName)?.value;
+  const stepUpToken = store.get(privilegedStepUpCookieName)?.value;
+  const key = await loadActivePrivilegedStepUpKey(prisma);
+  if (!key) {
+    await auditStepUp(session.userId, 'blocked_privileged_step_up', {
+      code: 'KEY_UNAVAILABLE',
+      action,
+    });
+    redirect('/settings/security?status=unavailable');
+  }
+  if (!sessionToken || !stepUpToken || !verifyPrivilegedStepUpToken({
+    token: stepUpToken,
+    key,
+    expectedUserId: session.userId,
+    sessionToken,
+  })) {
+    await auditStepUp(session.userId, 'blocked_privileged_step_up', {
+      code: 'STEP_UP_REQUIRED',
+      action,
+    });
     redirect('/settings/security?status=required');
   }
   return session;
