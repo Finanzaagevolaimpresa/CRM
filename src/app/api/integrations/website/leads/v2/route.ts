@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
   admitSecureLeadGatewayEvent,
@@ -40,14 +41,28 @@ function unavailable() {
   return errorResponse(503, 'TEMPORARILY_UNAVAILABLE');
 }
 
-export async function POST(request: NextRequest) {
+export async function handleSecureLeadGatewayRequest(
+  request: NextRequest,
+  options: {
+    readonly db?: PrismaClient;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+    readonly keyringPath?: string;
+    readonly allowedKeyringRoot?: string;
+  } = {},
+) {
+  const db = options.db ?? prisma;
+  const environment = options.environment ?? process.env;
   const deadline = new SecureLeadGatewayDeadline();
-  const mode = secureLeadGatewayMode();
+  const mode = secureLeadGatewayMode(environment.SECURE_LEAD_GATEWAY_MODE);
   if (mode === 'disabled') return unavailable();
 
   let integrationsEnabled = false;
   try {
-    integrationsEnabled = await isSecureLeadGatewayIntegrationEnabled(prisma, deadline);
+    integrationsEnabled = await isSecureLeadGatewayIntegrationEnabled(
+      db,
+      deadline,
+      environment,
+    );
   } catch {
     return unavailable();
   }
@@ -67,10 +82,14 @@ export async function POST(request: NextRequest) {
     deadline.assertRemaining();
     const signedBytes = createSecureLeadGatewaySignedBytes(headers, rawBody);
     const key = await authenticateSecureLeadGatewayRequest(
-      prisma,
+      db,
       headers,
       signedBytes,
       deadline,
+      {
+        keyringPath: options.keyringPath,
+        allowedKeyringRoot: options.allowedKeyringRoot,
+      },
     );
     deadline.assertRemaining();
 
@@ -81,14 +100,14 @@ export async function POST(request: NextRequest) {
     }
 
     const rate = await consumeSecureLeadGatewayRateLimit(
-      prisma,
+      db,
       key.producerCode,
       deadline,
     );
     if (!rate.allowed) return errorResponse(429, 'RATE_LIMITED', rate.retryAfter);
     deadline.assertRemaining();
     const event = parseCanonicalSecureLeadGatewayEnvelope(rawBody);
-    const result = await admitSecureLeadGatewayEvent(prisma, {
+    const result = await admitSecureLeadGatewayEvent(db, {
       key,
       headers,
       signedBytes,
@@ -111,4 +130,8 @@ export async function POST(request: NextRequest) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+export async function POST(request: NextRequest) {
+  return handleSecureLeadGatewayRequest(request);
 }

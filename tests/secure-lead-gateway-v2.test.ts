@@ -14,6 +14,7 @@ import { POST } from '../src/app/api/integrations/website/leads/v2/route';
 import { canonicalJson } from '../src/lib/canonical-json';
 import { classifyDataField } from '../src/lib/data-classification';
 import {
+  deriveSecureLeadGatewayTransactionBudget,
   readSecureLeadGatewayKeyring,
   SECURE_LEAD_GATEWAY_RUNTIME,
   SecureLeadGatewayError,
@@ -329,15 +330,37 @@ test('N12 deadline shares one exact five-second budget', () => {
   assert.throws(() => deadline.assertRemaining(), SecureLeadGatewayDeadlineError);
 });
 
+test('N12 transaction acquisition and execution reserve one shared remaining budget', () => {
+  assert.deepEqual(deriveSecureLeadGatewayTransactionBudget(5_000), {
+    maxWait: 2_000,
+    timeout: 3_000,
+  });
+  assert.deepEqual(deriveSecureLeadGatewayTransactionBudget(3), {
+    maxWait: 1,
+    timeout: 2,
+  });
+  for (const remaining of [2, 3, 999, 5_000]) {
+    const budget = deriveSecureLeadGatewayTransactionBudget(remaining);
+    assert.equal(budget.maxWait + budget.timeout, remaining);
+    assert.ok(budget.maxWait >= 1 && budget.timeout >= 1);
+  }
+  assert.throws(
+    () => deriveSecureLeadGatewayTransactionBudget(1),
+    (error: unknown) => error instanceof SecureLeadGatewayError
+      && error.code === 'TEMPORARILY_UNAVAILABLE',
+  );
+});
+
 test('N12 reads only a protected, bounded and exact synthetic keyring file', async () => {
   const root = mkdtempSync(join(tmpdir(), 'n12-keyring-'));
   const path = join(root, 'synthetic-keyring.json');
   const secretBase64 = N12_SYNTHETIC_SECRET.toString('base64');
+  const validKeyring = JSON.stringify({
+    version: 1,
+    keys: [{ keyId: N12_SYNTHETIC_KEY_ID, secretBase64 }],
+  });
   try {
-    writeFileSync(path, JSON.stringify({
-      version: 1,
-      keys: [{ keyId: N12_SYNTHETIC_KEY_ID, secretBase64 }],
-    }), { mode: 0o600 });
+    writeFileSync(path, validKeyring, { mode: 0o600 });
     const keyring = await readSecureLeadGatewayKeyring(path, { allowedRoot: root });
     assert.equal(keyring.size, 1);
     assert.deepEqual(keyring.get(N12_SYNTHETIC_KEY_ID), N12_SYNTHETIC_SECRET);
@@ -345,6 +368,20 @@ test('N12 reads only a protected, bounded and exact synthetic keyring file', asy
     copy?.fill(0);
     assert.deepEqual(keyring.get(N12_SYNTHETIC_KEY_ID), N12_SYNTHETIC_SECRET);
 
+    for (const duplicate of [
+      `{"version":1,"version":1,"keys":[{"keyId":"${N12_SYNTHETIC_KEY_ID}","secretBase64":"${secretBase64}"}]}`,
+      `{"version":1,"keys":[{"keyId":"${N12_SYNTHETIC_KEY_ID}","key\\u0049d":"${N12_SYNTHETIC_KEY_ID}","secretBase64":"${secretBase64}"}]}`,
+      `{"version":1,"keys":[{"keyId":"${N12_SYNTHETIC_KEY_ID}","secretBase64":"${secretBase64}","secretBase64":"${secretBase64}"}]}`,
+    ]) {
+      writeFileSync(path, duplicate, { mode: 0o600 });
+      await assert.rejects(
+        () => readSecureLeadGatewayKeyring(path, { allowedRoot: root }),
+        (error: unknown) => error instanceof SecureLeadGatewayError
+          && error.code === 'TEMPORARILY_UNAVAILABLE',
+      );
+    }
+
+    writeFileSync(path, validKeyring, { mode: 0o600 });
     chmodSync(path, 0o644);
     await assert.rejects(
       () => readSecureLeadGatewayKeyring(path, { allowedRoot: root }),
@@ -423,4 +460,23 @@ test('N12 classifies security state and forbids telemetry, egress and legacy reu
   assert.doesNotMatch(implementation, /operational-telemetry|AuditLog|console\.|fetch\(/);
   assert.doesNotMatch(implementation, /WebsiteLeadReceipt|WebsiteLeadRateLimitBucket|ApplicationKeyVersion/);
   assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
+});
+
+test('N12 release surfaces pin migration 39 and keep every gateway mode disabled', () => {
+  for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
+    const source = readFileSync(path, 'utf8');
+    assert.match(source, /SECURE_LEAD_GATEWAY_MODE="disabled"/);
+    assert.match(source, /SECURE_LEAD_GATEWAY_KEYRING_FILE=""/);
+  }
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  assert.match(ci, /Apply exactly 39 database migrations/);
+  assert.match(ci, /SECURE_LEAD_GATEWAY_MODE: disabled/);
+  assert.match(ci, /SECURE_LEAD_GATEWAY_KEYRING_FILE: ""/);
+  const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
+  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=39/);
+  assert.match(smoke, /SECURE_LEAD_GATEWAY_MODE=disabled/);
+  assert.match(smoke, /0\|0\|0\|0/);
+  const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
+  assert.match(restore, /EXPECTED_MIGRATION_COUNT:-39/);
+  assert.match(restore, /SECURE_LEAD_GATEWAY_MODE=disabled/);
 });

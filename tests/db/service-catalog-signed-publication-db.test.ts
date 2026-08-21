@@ -71,7 +71,7 @@ test('PostgreSQL applies migration 37 and bootstraps the 11 immutable N09 revisi
         WHERE "purpose" = 'SERVICE_CATALOG_PUBLICATION'
       `,
     ]);
-    assert.equal(Number(migrations[0]?.count), 38);
+    assert.equal(Number(migrations[0]?.count), 39);
     assert.equal(rows.length, 11);
     assert.deepEqual(rows.map(({ code }) => code), FAI_SERVICE_CATALOG.map(({ code }) => code));
     assert.equal(rows.filter(({ priceMode }) => priceMode === 'FIXED').length, 8);
