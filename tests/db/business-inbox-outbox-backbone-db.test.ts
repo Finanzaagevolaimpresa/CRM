@@ -16,6 +16,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import {
   BusinessEventBackboneError,
   admitBusinessInboxEvent,
+  calculateBusinessQueueAttemptHash,
   claimBusinessQueueEvent,
   completeBusinessQueueEvent,
   enqueueBusinessOutboxEvent,
@@ -127,13 +128,67 @@ async function forceExpiredLease(queueKind: BusinessQueueKind, eventRowId: strin
   await assertBound();
   const table = queueKind === 'INBOX' ? 'BusinessInboxEvent' : 'BusinessOutboxEvent';
   const trigger = `${table}_guard_v1`;
+  const [timestamps] = await db.$queryRaw<Array<{
+    claimedAt: Date;
+    leaseExpiresAt: Date;
+    leaseMaxExpiresAt: Date;
+  }>>(Prisma.sql`
+    SELECT
+      DATE_TRUNC('milliseconds', clock_timestamp() - interval '120 seconds') AS "claimedAt",
+      DATE_TRUNC('milliseconds', clock_timestamp() - interval '60 seconds') AS "leaseExpiresAt",
+      DATE_TRUNC('milliseconds', clock_timestamp() - interval '10 seconds') AS "leaseMaxExpiresAt"
+  `);
+  assert.ok(timestamps);
+  const attempt = await db.businessQueueAttempt.findFirstOrThrow({
+    where: {
+      queueKind,
+      finishedAt: null,
+      ...(queueKind === 'INBOX'
+        ? { inboxEventId: eventRowId }
+        : { outboxEventId: eventRowId }),
+    },
+  });
+  const attemptHash = calculateBusinessQueueAttemptHash({
+    attemptId: attempt.id,
+    queueKind,
+    eventRowId,
+    attemptSequence: attempt.attemptSequence,
+    fencingToken: attempt.fencingToken,
+    leaseOwnerId: attempt.leaseOwnerId,
+    leaseTokenHash: attempt.leaseTokenHash,
+    claimedAt: timestamps.claimedAt,
+    leaseExpiresAt: timestamps.leaseExpiresAt,
+    leaseMaxExpiresAt: timestamps.leaseMaxExpiresAt,
+  });
   await db.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER "${trigger}"`);
+  await db.$executeRawUnsafe(
+    'ALTER TABLE "BusinessQueueAttempt" DISABLE TRIGGER "BusinessQueueAttempt_guard_v1"',
+  );
   try {
-    await db.$executeRawUnsafe(
-      `UPDATE "${table}" SET "leaseClaimedAt" = clock_timestamp() - interval '120 seconds', "leaseExpiresAt" = clock_timestamp() - interval '60 seconds', "leaseMaxExpiresAt" = clock_timestamp() - interval '10 seconds' WHERE "id" = '${eventRowId}'::uuid`,
-    );
+    await db.$executeRaw(Prisma.sql`
+      UPDATE ${Prisma.raw(`"${table}"`)}
+      SET "leaseClaimedAt" = ${timestamps.claimedAt},
+        "leaseExpiresAt" = ${timestamps.leaseExpiresAt},
+        "leaseMaxExpiresAt" = ${timestamps.leaseMaxExpiresAt}
+      WHERE "id" = ${eventRowId}::UUID
+    `);
+    await db.$executeRaw(Prisma.sql`
+      UPDATE "BusinessQueueAttempt"
+      SET "claimedAt" = ${timestamps.claimedAt},
+        "leaseExpiresAt" = ${timestamps.leaseExpiresAt},
+        "leaseMaxExpiresAt" = ${timestamps.leaseMaxExpiresAt},
+        "attemptHash" = ${attemptHash},
+        "createdAt" = ${timestamps.claimedAt}
+      WHERE "id" = ${attempt.id}::UUID
+    `);
   } finally {
-    await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER "${trigger}"`);
+    try {
+      await db.$executeRawUnsafe(
+        'ALTER TABLE "BusinessQueueAttempt" ENABLE TRIGGER "BusinessQueueAttempt_guard_v1"',
+      );
+    } finally {
+      await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER "${trigger}"`);
+    }
   }
 }
 
@@ -237,6 +292,8 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
 test('N11 migration is additive and contains no business DML, seed, backfill or gate update', () => {
   const migration = readFileSync(migrationPath, 'utf8');
   const executableSql = migration.replace(/^--.*$/gmu, '');
+  assert.match(executableSql, /^\s*BEGIN;\s/u);
+  assert.match(executableSql, /COMMIT;\s*$/u);
   assert.match(migration, /CREATE TABLE "BusinessInboxEvent"/);
   assert.match(migration, /CREATE TABLE "BusinessOutboxEvent"/);
   assert.match(migration, /CREATE TABLE "BusinessQueueAttempt"/);
@@ -512,6 +569,97 @@ test('N11 recovery uses DB expiry, closes attempt and is bounded to 100 rows', {
   assert.deepEqual(second, { recovered: 1, retried: 1, deadLettered: 0 });
   assert.equal(await db.businessQueueAttempt.count({ where: { outcome: 'LEASE_EXPIRED' } }), 101);
   assert.equal(eventIds.length, 101);
+});
+
+test('N11 recovery rejects multiple open attempts before mutating the queue', {
+  skip: !runDbTests,
+}, async () => {
+  const admitted = await createInbox(250);
+  const lease = await claimBusinessQueueEvent(db, {
+    queueKind: 'INBOX',
+    leaseOwnerId: uuid(65_000),
+  });
+  assert.ok(lease);
+  await forceExpiredLease('INBOX', lease.eventRowId);
+  const attempt = await db.businessQueueAttempt.findUniqueOrThrow({
+    where: { id: lease.attemptId },
+  });
+  const extraAttemptId = uuid(65_001);
+  const extraAttemptSequence = attempt.attemptSequence + 1;
+  const extraFencingToken = attempt.fencingToken + 1n;
+  const extraAttemptHash = calculateBusinessQueueAttemptHash({
+    attemptId: extraAttemptId,
+    queueKind: 'INBOX',
+    eventRowId: admitted.inboxEventId,
+    attemptSequence: extraAttemptSequence,
+    fencingToken: extraFencingToken,
+    leaseOwnerId: attempt.leaseOwnerId,
+    leaseTokenHash: attempt.leaseTokenHash,
+    claimedAt: attempt.claimedAt,
+    leaseExpiresAt: attempt.leaseExpiresAt,
+    leaseMaxExpiresAt: attempt.leaseMaxExpiresAt,
+  });
+  await db.businessQueueAttempt.create({
+    data: {
+      id: extraAttemptId,
+      queueKind: 'INBOX',
+      inboxEventId: admitted.inboxEventId,
+      attemptSequence: extraAttemptSequence,
+      fencingToken: extraFencingToken,
+      leaseOwnerId: attempt.leaseOwnerId,
+      leaseTokenHash: attempt.leaseTokenHash,
+      claimedAt: attempt.claimedAt,
+      leaseExpiresAt: attempt.leaseExpiresAt,
+      leaseMaxExpiresAt: attempt.leaseMaxExpiresAt,
+      attemptHash: extraAttemptHash,
+      createdAt: attempt.claimedAt,
+    },
+  });
+
+  await expectBackboneRejection('BUSINESS_QUEUE_INTEGRITY_FAILURE', () => (
+    recoverExpiredBusinessQueueLeases(db, { queueKind: 'INBOX' })
+  ));
+  assert.equal((await db.businessInboxEvent.findUniqueOrThrow({
+    where: { id: admitted.inboxEventId },
+  })).state, 'LEASED');
+  assert.equal(await db.businessQueueAttempt.count({
+    where: { inboxEventId: admitted.inboxEventId, finishedAt: null },
+  }), 2);
+});
+
+test('N11 recovery verifies the open attempt hash before mutating the queue', {
+  skip: !runDbTests,
+}, async () => {
+  const admitted = await createInbox(251);
+  const lease = await claimBusinessQueueEvent(db, {
+    queueKind: 'INBOX',
+    leaseOwnerId: uuid(65_100),
+  });
+  assert.ok(lease);
+  await forceExpiredLease('INBOX', lease.eventRowId);
+  await db.$executeRawUnsafe(
+    'ALTER TABLE "BusinessQueueAttempt" DISABLE TRIGGER "BusinessQueueAttempt_guard_v1"',
+  );
+  try {
+    await db.businessQueueAttempt.update({
+      where: { id: lease.attemptId },
+      data: { attemptHash: '0'.repeat(64) },
+    });
+  } finally {
+    await db.$executeRawUnsafe(
+      'ALTER TABLE "BusinessQueueAttempt" ENABLE TRIGGER "BusinessQueueAttempt_guard_v1"',
+    );
+  }
+
+  await expectBackboneRejection('BUSINESS_QUEUE_INTEGRITY_FAILURE', () => (
+    recoverExpiredBusinessQueueLeases(db, { queueKind: 'INBOX' })
+  ));
+  assert.equal((await db.businessInboxEvent.findUniqueOrThrow({
+    where: { id: admitted.inboxEventId },
+  })).state, 'LEASED');
+  assert.equal((await db.businessQueueAttempt.findUniqueOrThrow({
+    where: { id: lease.attemptId },
+  })).finishedAt, null);
 });
 
 test('N11 DB guards reject immutable mutation, illegal transition, delete, truncate and attempt reopen', {
