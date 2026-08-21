@@ -825,6 +825,59 @@ function normalizeLeaseIdentity(input: BusinessQueueLeaseIdentity) {
   };
 }
 
+function verifyOpenAttemptForQueueRow(
+  queueKind: BusinessQueueKind,
+  row: ContractRow,
+  attempt: AttemptRow,
+) {
+  const targetsMatch = queueKind === 'INBOX'
+    ? attempt.inboxEventId === row.id && attempt.outboxEventId === null
+    : attempt.outboxEventId === row.id && attempt.inboxEventId === null;
+  if (
+    row.state !== 'LEASED'
+    || attempt.queueKind !== queueKind
+    || !targetsMatch
+    || attempt.attemptSequence !== row.attemptCount
+    || attempt.fencingToken !== row.fencingToken
+    || attempt.leaseOwnerId !== row.leaseOwnerId
+    || attempt.leaseTokenHash !== row.leaseTokenHash
+    || row.leaseClaimedAt === null
+    || row.leaseExpiresAt === null
+    || row.leaseMaxExpiresAt === null
+    || attempt.claimedAt.getTime() !== row.leaseClaimedAt.getTime()
+    || attempt.leaseExpiresAt.getTime() > row.leaseExpiresAt.getTime()
+    || attempt.leaseMaxExpiresAt.getTime() !== row.leaseMaxExpiresAt.getTime()
+    || row.leaseExpiresAt.getTime() > row.leaseMaxExpiresAt.getTime()
+    || attempt.createdAt.getTime() !== attempt.claimedAt.getTime()
+    || attempt.finishedAt !== null
+    || attempt.outcome !== null
+    || attempt.failureCode !== null
+    || attempt.retryable !== null
+    || attempt.nextAvailableAt !== null
+    || attempt.completionHash !== null
+  ) fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+  let expectedAttemptHash: string;
+  try {
+    expectedAttemptHash = calculateBusinessQueueAttemptHash({
+      attemptId: attempt.id,
+      queueKind,
+      eventRowId: row.id,
+      attemptSequence: attempt.attemptSequence,
+      fencingToken: attempt.fencingToken,
+      leaseOwnerId: attempt.leaseOwnerId,
+      leaseTokenHash: attempt.leaseTokenHash,
+      claimedAt: attempt.claimedAt,
+      leaseExpiresAt: attempt.leaseExpiresAt,
+      leaseMaxExpiresAt: attempt.leaseMaxExpiresAt,
+    });
+  } catch {
+    fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+  }
+  if (attempt.attemptHash !== expectedAttemptHash) {
+    fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+  }
+}
+
 async function assertCurrentLease(
   tx: Tx,
   input: BusinessQueueLeaseIdentity,
@@ -859,19 +912,7 @@ async function assertCurrentLease(
     || attempt.leaseOwnerId !== identity.leaseOwnerId
     || attempt.leaseTokenHash !== identity.leaseTokenHash
   ) fail('BUSINESS_QUEUE_LEASE_STALE');
-  const expectedAttemptHash = calculateBusinessQueueAttemptHash({
-    attemptId: attempt.id,
-    queueKind: identity.queueKind,
-    eventRowId: row.id,
-    attemptSequence: attempt.attemptSequence,
-    fencingToken: attempt.fencingToken,
-    leaseOwnerId: attempt.leaseOwnerId,
-    leaseTokenHash: attempt.leaseTokenHash,
-    claimedAt: attempt.claimedAt,
-    leaseExpiresAt: attempt.leaseExpiresAt,
-    leaseMaxExpiresAt: attempt.leaseMaxExpiresAt,
-  });
-  if (attempt.attemptHash !== expectedAttemptHash) fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+  verifyOpenAttemptForQueueRow(identity.queueKind, row, attempt);
   return { identity, row, attempt, now };
 }
 
@@ -1059,7 +1100,8 @@ export async function recoverExpiredBusinessQueueLeases(
         FOR UPDATE
       `);
       const attempt = attempts[0];
-      if (!attempt) fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+      if (!attempt || attempts.length !== 1) fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
+      verifyOpenAttemptForQueueRow(input.queueKind, row, attempt);
       const now = await databaseNow(tx);
       const retry = row.attemptCount < row.maxAttempts;
       const nextAvailableAt = retry

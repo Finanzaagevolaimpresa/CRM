@@ -1,6 +1,8 @@
 -- N11 durable business inbox/outbox backbone v1.
 -- Additive and deliberately empty: no backfill, seed, producer, consumer or activation.
 
+BEGIN;
+
 CREATE TABLE "BusinessInboxEvent" (
     "id" UUID NOT NULL,
     "schemaVersion" VARCHAR(80) NOT NULL,
@@ -393,3 +395,5 @@ FOR EACH ROW EXECUTE FUNCTION fai_business_queue_attempt_guard_v1();
 CREATE TRIGGER "BusinessQueueAttempt_deny_truncate_v1"
 BEFORE TRUNCATE ON "BusinessQueueAttempt"
 FOR EACH STATEMENT EXECUTE FUNCTION fai_business_queue_attempt_guard_v1();
+
+COMMIT;
