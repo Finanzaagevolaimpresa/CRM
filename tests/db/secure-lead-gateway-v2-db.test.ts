@@ -134,6 +134,13 @@ async function provisionKey(input: {
 
 async function cleanGatewayAndN11() {
   const tables = [
+    'LeadIdentityKey',
+    'LeadDuplicateDecision',
+    'LeadDuplicateCandidate',
+    'LeadDuplicateCase',
+    'LeadProjectionLedger',
+    'LeadIdentityKeyVersion',
+    'PrivacyEvidenceReceipt',
     'SecureLeadGatewayRequest',
     'SecureLeadGatewayReceipt',
     'SecureLeadGatewayRateLimitBucket',

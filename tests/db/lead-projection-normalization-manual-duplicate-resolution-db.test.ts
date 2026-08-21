@@ -601,7 +601,8 @@ test('projection rejects stale token, expired lease and replay without a second 
   try {
     await client().$executeRaw(Prisma.sql`
       UPDATE "BusinessInboxEvent"
-      SET "leaseExpiresAt" = clock_timestamp() - interval '1 second'
+      SET "leaseClaimedAt" = clock_timestamp() - interval '2 seconds',
+          "leaseExpiresAt" = clock_timestamp() - interval '1 second'
       WHERE "id" = ${expired.lease.eventRowId}::UUID
     `);
   } finally {

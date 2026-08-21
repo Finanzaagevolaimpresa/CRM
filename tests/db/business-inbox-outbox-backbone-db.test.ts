@@ -74,6 +74,13 @@ async function assertBound() {
 async function cleanN11Tables() {
   await assertBound();
   const tables = [
+    'LeadIdentityKey',
+    'LeadDuplicateDecision',
+    'LeadDuplicateCandidate',
+    'LeadDuplicateCase',
+    'LeadProjectionLedger',
+    'LeadIdentityKeyVersion',
+    'PrivacyEvidenceReceipt',
     'SecureLeadGatewayRequest',
     'SecureLeadGatewayReceipt',
     'SecureLeadGatewayRateLimitBucket',
