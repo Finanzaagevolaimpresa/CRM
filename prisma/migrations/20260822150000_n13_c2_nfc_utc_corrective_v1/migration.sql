@@ -1,7 +1,62 @@
 -- N13-C2 NFC identity and UTC privacy-evidence corrective v1.
--- Additive and business-empty: preserves migration 40 and all existing indexes and triggers.
+-- Fail-closed and business-empty: preserves migration 40 and refuses timestamp conversion
+-- whenever existing privacy-evidence receipts or catalog drift are present.
 
 BEGIN;
+
+DO $$
+DECLARE
+  source_type TEXT;
+  source_not_null BOOLEAN;
+BEGIN
+  SELECT FORMAT_TYPE(attribute_row.atttypid, attribute_row.atttypmod),
+         attribute_row.attnotnull
+  INTO source_type, source_not_null
+  FROM pg_attribute attribute_row
+  JOIN pg_class table_row ON table_row.oid = attribute_row.attrelid
+  JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+  WHERE namespace_row.nspname = CURRENT_SCHEMA()
+    AND table_row.relname = 'PrivacyEvidenceReceipt'
+    AND attribute_row.attname = 'sourceSubmittedAt'
+    AND attribute_row.attnum > 0
+    AND NOT attribute_row.attisdropped;
+
+  IF source_type IS DISTINCT FROM 'timestamp(3) without time zone'
+    OR source_not_null IS DISTINCT FROM TRUE THEN
+    RAISE EXCEPTION 'N13_C2_SOURCE_TIMESTAMP_TYPE_DRIFT';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM "PrivacyEvidenceReceipt") THEN
+    RAISE EXCEPTION 'N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT';
+  END IF;
+END $$;
+
+ALTER TABLE "PrivacyEvidenceReceipt"
+  ALTER COLUMN "sourceSubmittedAt" TYPE TIMESTAMPTZ(3)
+  USING "sourceSubmittedAt" AT TIME ZONE 'UTC';
+
+DO $$
+DECLARE
+  source_type TEXT;
+  source_not_null BOOLEAN;
+BEGIN
+  SELECT FORMAT_TYPE(attribute_row.atttypid, attribute_row.atttypmod),
+         attribute_row.attnotnull
+  INTO source_type, source_not_null
+  FROM pg_attribute attribute_row
+  JOIN pg_class table_row ON table_row.oid = attribute_row.attrelid
+  JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+  WHERE namespace_row.nspname = CURRENT_SCHEMA()
+    AND table_row.relname = 'PrivacyEvidenceReceipt'
+    AND attribute_row.attname = 'sourceSubmittedAt'
+    AND attribute_row.attnum > 0
+    AND NOT attribute_row.attisdropped;
+
+  IF source_type IS DISTINCT FROM 'timestamp(3) with time zone'
+    OR source_not_null IS DISTINCT FROM TRUE THEN
+    RAISE EXCEPTION 'N13_C2_SOURCE_TIMESTAMP_POSTCONDITION_FAILED';
+  END IF;
+END $$;
 
 CREATE INDEX "Lead_active_email_n13_nfc_idx"
   ON "Lead"(LOWER(NORMALIZE(BTRIM("email"), NFC)))
@@ -31,7 +86,10 @@ DECLARE
   inbox_row "BusinessInboxEvent"%ROWTYPE;
   event_privacy_reference JSONB;
   expected_evidence_hash TEXT;
+  source_submitted_at_utc TIMESTAMP(3);
 BEGIN
+  source_submitted_at_utc := NEW."sourceSubmittedAt" AT TIME ZONE 'UTC';
+
   IF NEW."websiteLeadReceiptId" IS NOT NULL THEN
     SELECT "payloadHash" INTO website_payload_hash
     FROM "WebsiteLeadReceipt" WHERE "id" = NEW."websiteLeadReceiptId" FOR SHARE;
@@ -55,8 +113,7 @@ BEGIN
       OR inbox_row."envelopeJson"::JSONB #>> '{source,formCode}' IS DISTINCT FROM NEW."formCode"
       OR inbox_row."envelopeJson"::JSONB #>> '{source,formVersion}' IS DISTINCT FROM NEW."formVersion"
       OR inbox_row."occurredAt" IS DISTINCT FROM TO_CHAR(
-        NEW."sourceSubmittedAt" AT TIME ZONE 'UTC',
-        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+        source_submitted_at_utc, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
       ) THEN
       RAISE EXCEPTION 'Privacy evidence business inbox binding denied';
     END IF;
@@ -77,8 +134,9 @@ BEGIN
     OR notice_row."evidenceKind" IS DISTINCT FROM NEW."evidenceKind"
     OR notice_row."status" <> 'ACTIVE'
     OR notice_row."effectiveFrom" IS NULL
-    OR notice_row."effectiveFrom" > NEW."sourceSubmittedAt"
-    OR (notice_row."retiredAt" IS NOT NULL AND notice_row."retiredAt" <= NEW."sourceSubmittedAt") THEN
+    OR notice_row."effectiveFrom" > source_submitted_at_utc
+    OR (notice_row."retiredAt" IS NOT NULL
+      AND notice_row."retiredAt" <= source_submitted_at_utc) THEN
     RAISE EXCEPTION 'Privacy evidence notice binding denied';
   END IF;
   IF NEW."businessInboxEventId" IS NOT NULL AND (
@@ -101,8 +159,7 @@ BEGIN
         'legalBasisCode', NEW."legalBasisCode", 'noticeVersionId', NEW."noticeVersionId"::TEXT,
         'purposeCode', NEW."purposeCode", 'sourceEvidenceDigest', NEW."sourceEvidenceDigest",
         'sourceSubmittedAt', TO_CHAR(
-          NEW."sourceSubmittedAt" AT TIME ZONE 'UTC',
-          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          source_submitted_at_utc, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
         ),
         'sourceSystem', NEW."sourceSystem", 'websiteLeadReceiptId', NEW."websiteLeadReceiptId"::TEXT
       )
@@ -118,8 +175,7 @@ BEGIN
         'noticeVersionId', NEW."noticeVersionId"::TEXT, 'purposeCode', NEW."purposeCode",
         'sourceEvidenceDigest', NEW."sourceEvidenceDigest",
         'sourceSubmittedAt', TO_CHAR(
-          NEW."sourceSubmittedAt" AT TIME ZONE 'UTC',
-          'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+          source_submitted_at_utc, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
         ),
         'sourceSystem', NEW."sourceSystem"
       )

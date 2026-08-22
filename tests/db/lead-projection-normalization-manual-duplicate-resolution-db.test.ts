@@ -134,6 +134,36 @@ function syntheticEvent(
   });
 }
 
+async function seedSyntheticPrivacyNotices(database: PrismaClient) {
+  await database.privacyNoticeVersion.createMany({
+    data: [
+      {
+        noticeCode: 'SYNTHETIC_PRIVACY_NOTICE',
+        noticeVersion: 'v1',
+        purposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
+        legalBasisCode: 'PRE_CONTRACTUAL_MEASURES',
+        evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
+        contentHash: '1'.repeat(64),
+      },
+      {
+        noticeCode: 'SYNTHETIC_MARKETING_NOTICE',
+        noticeVersion: 'v1',
+        purposeCode: 'DIRECT_MARKETING',
+        legalBasisCode: 'CONSENT',
+        evidenceKind: 'CONSENT',
+        contentHash: '2'.repeat(64),
+      },
+    ],
+  });
+  await database.privacyNoticeVersion.updateMany({
+    where: { status: 'DRAFT' },
+    data: {
+      status: 'ACTIVE',
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+    },
+  });
+}
+
 async function createSession(role: RoleCode, ordinal: number) {
   const user = await client().user.create({
     data: {
@@ -281,33 +311,7 @@ test.before(async () => {
     secretBase64: N13_SYNTHETIC_KEY_SECRET.toString('base64'),
   }), { mode: 0o600 });
 
-  await client().privacyNoticeVersion.createMany({
-    data: [
-      {
-        noticeCode: 'SYNTHETIC_PRIVACY_NOTICE',
-        noticeVersion: 'v1',
-        purposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
-        legalBasisCode: 'PRE_CONTRACTUAL_MEASURES',
-        evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
-        contentHash: '1'.repeat(64),
-      },
-      {
-        noticeCode: 'SYNTHETIC_MARKETING_NOTICE',
-        noticeVersion: 'v1',
-        purposeCode: 'DIRECT_MARKETING',
-        legalBasisCode: 'CONSENT',
-        evidenceKind: 'CONSENT',
-        contentHash: '2'.repeat(64),
-      },
-    ],
-  });
-  await client().privacyNoticeVersion.updateMany({
-    where: { status: 'DRAFT' },
-    data: {
-      status: 'ACTIVE',
-      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-    },
-  });
+  await seedSyntheticPrivacyNotices(client());
   const actor = await createSession('admin', 1);
   primaryUserId = actor.userId;
   primarySessionId = actor.sessionId;
@@ -350,12 +354,20 @@ test('N13 migration 40 source is one additive, empty and activation-free transac
   assert.equal(createHash('sha256').update(sql).digest('hex'), migration40Sha256);
 });
 
-test('N13-C2 migration 41 is additive, business-empty and bounded to NFC indexes and UTC rendering', () => {
+test('N13-C2 migration 41 aligns timestamptz fail-closed and uses one UTC canonicalization', () => {
   const sql = readFileSync(correctiveMigrationPath, 'utf8');
   const executableSql = sql.replace(/^--.*$/gmu, '');
   assert.equal((sql.match(/^BEGIN;$/gmu) ?? []).length, 1);
   assert.equal((sql.match(/^COMMIT;$/gmu) ?? []).length, 1);
-  assert.equal((sql.match(/AT TIME ZONE 'UTC'/gu) ?? []).length, 3);
+  assert.equal((sql.match(/AT TIME ZONE 'UTC'/gu) ?? []).length, 2);
+  assert.equal((sql.match(/ALTER COLUMN "sourceSubmittedAt" TYPE TIMESTAMPTZ\(3\)/gu) ?? []).length, 1);
+  assert.equal((sql.match(/source_submitted_at_utc := NEW\."sourceSubmittedAt" AT TIME ZONE 'UTC'/gu) ?? []).length, 1);
+  assert.equal((sql.match(/TO_CHAR\(\s*source_submitted_at_utc/gu) ?? []).length, 3);
+  assert.doesNotMatch(sql, /TO_CHAR\(\s*NEW\."sourceSubmittedAt"/u);
+  assert.doesNotMatch(sql, /notice_row\."(?:effectiveFrom|retiredAt)"[^\n]*NEW\."sourceSubmittedAt"/u);
+  assert.match(sql, /N13_C2_SOURCE_TIMESTAMP_TYPE_DRIFT/u);
+  assert.match(sql, /N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT/u);
+  assert.match(sql, /N13_C2_SOURCE_TIMESTAMP_POSTCONDITION_FAILED/u);
   assert.equal((sql.match(/^CREATE INDEX "Lead_active_.*_n13_nfc_idx"/gmu) ?? []).length, 3);
   assert.match(sql, /CREATE OR REPLACE FUNCTION "privacy_evidence_receipt_validate_v1"/u);
   assert.doesNotMatch(executableSql, /\b(?:DROP|TRUNCATE|INSERT|UPDATE|DELETE)\b/iu);
@@ -532,7 +544,16 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
     }
     const qualification = new PrismaClient({ datasources: { db: { url: url.toString() } } });
     try {
-      const [migrations, migrationRow, indexes, functionRows, triggerRows, encodingRows, historical] = await Promise.all([
+      const [
+        migrations,
+        migrationRow,
+        indexes,
+        functionRows,
+        triggerRows,
+        encodingRows,
+        sourceColumnRows,
+        historical,
+      ] = await Promise.all([
         qualification.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS "count" FROM "_prisma_migrations"
           WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
@@ -566,6 +587,17 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
             AND function_row.proname = 'privacy_evidence_receipt_validate_v1'
         `),
         qualification.$queryRawUnsafe<Array<{ server_encoding: string }>>('SHOW server_encoding'),
+        qualification.$queryRaw<Array<{
+          data_type: string;
+          datetime_precision: number;
+          is_nullable: string;
+        }>>(Prisma.sql`
+          SELECT data_type, datetime_precision, is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = ${qualificationSchema}
+            AND table_name = 'PrivacyEvidenceReceipt'
+            AND column_name = 'sourceSubmittedAt'
+        `),
         qualification.$queryRaw<Array<{ leads: bigint }>>(Prisma.sql`
           SELECT COUNT(*)::BIGINT AS "leads" FROM "Lead" WHERE "id" = ${historicalLeadId}
         `),
@@ -577,8 +609,11 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
         indexes: indexes.map(({ name }) => name),
         allIndexesUseNfc: indexes.every(({ definition }) => /normalize\(/iu.test(definition)),
         utcConversions: (functionDefinition.match(/AT TIME ZONE 'UTC'/gu) ?? []).length,
+        utcRenderings: (functionDefinition.match(/TO_CHAR\(\s*source_submitted_at_utc/giu) ?? []).length,
+        directSourceReferences: (functionDefinition.match(/NEW\."sourceSubmittedAt"/gu) ?? []).length,
         triggerBindings: Number(triggerRows[0]?.count),
         serverEncoding: encodingRows[0]?.server_encoding,
+        sourceColumn: sourceColumnRows[0],
         historicalLeads: Number(historical[0]?.leads),
       };
     } finally {
@@ -604,9 +639,16 @@ test('N13-C2 qualifies fresh 41 and exact business-preserving 40 to 41 upgrade',
       'Lead_active_person_name_n13_nfc_idx',
     ],
     allIndexesUseNfc: true,
-    utcConversions: 3,
+    utcConversions: 1,
+    utcRenderings: 3,
+    directSourceReferences: 1,
     triggerBindings: 1,
     serverEncoding: 'UTF8',
+    sourceColumn: {
+      data_type: 'timestamp with time zone',
+      datetime_precision: 3,
+      is_nullable: 'NO',
+    },
   };
   assert.deepEqual(await qualifyCorrectiveMigration(false), {
     ...expectedCatalog,
@@ -615,6 +657,133 @@ test('N13-C2 qualifies fresh 41 and exact business-preserving 40 to 41 upgrade',
   assert.deepEqual(await qualifyCorrectiveMigration(true), {
     ...expectedCatalog,
     historicalLeads: 1,
+  });
+});
+
+async function qualifyCorrectiveExistingRowsFailClosed() {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(rootClient());
+  const qualificationSchema = `n13_c2_rows_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const root = mkdtempSync(join(tmpdir(), 'n13-c2-existing-rows-'));
+  const prismaDir = join(root, 'prisma');
+  const migrationsDir = join(prismaDir, 'migrations');
+  mkdirSync(migrationsDir, { recursive: true });
+  cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
+  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  assert.equal(names.length, 41);
+  assert.equal(names[40], correctiveMigrationName);
+  for (const name of names.slice(0, 40)) {
+    cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });
+  }
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('schema', qualificationSchema);
+  await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);
+  try {
+    deploy(url.toString(), join(prismaDir, 'schema.prisma'));
+    const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    try {
+      await seedSyntheticPrivacyNotices(before);
+      const event = syntheticEvent(390, {}, '2026-03-29T00:59:59.999Z');
+      const admitted = await admitBusinessInboxEvent(before, event);
+      await before.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', 'UTC', true)`);
+        const created = await createBusinessLeadPrivacyEvidence(tx, {
+          businessInboxEventId: admitted.inboxEventId,
+          event,
+        });
+        assert.equal(created.count, 2);
+      });
+    } finally {
+      await before.$disconnect();
+    }
+
+    cpSync(
+      join('prisma/migrations', correctiveMigrationName),
+      join(migrationsDir, correctiveMigrationName),
+      { recursive: true },
+    );
+    let failureText = '';
+    try {
+      deploy(url.toString(), join(prismaDir, 'schema.prisma'));
+    } catch (error: unknown) {
+      const failure = error as { message?: unknown; stdout?: unknown; stderr?: unknown };
+      failureText = [failure.message, failure.stdout, failure.stderr]
+        .map((value) => value instanceof Uint8Array ? Buffer.from(value).toString('utf8') : String(value ?? ''))
+        .join('\n');
+    }
+    assert.match(failureText, /N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT/u);
+
+    const qualification = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    try {
+      const [migrationRows, sourceColumnRows, receipts, indexes, functionRows] = await Promise.all([
+        qualification.$queryRaw<Array<{ finished: bigint; unfinished: bigint }>>(Prisma.sql`
+          SELECT
+            COUNT(*) FILTER (
+              WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+            )::BIGINT AS "finished",
+            COUNT(*) FILTER (
+              WHERE finished_at IS NULL AND rolled_back_at IS NULL
+            )::BIGINT AS "unfinished"
+          FROM "_prisma_migrations"
+          WHERE migration_name = ${correctiveMigrationName}
+        `),
+        qualification.$queryRaw<Array<{ source_type: string; source_not_null: boolean }>>(Prisma.sql`
+          SELECT FORMAT_TYPE(attribute_row.atttypid, attribute_row.atttypmod) AS "source_type",
+                 attribute_row.attnotnull AS "source_not_null"
+          FROM pg_attribute attribute_row
+          JOIN pg_class table_row ON table_row.oid = attribute_row.attrelid
+          WHERE table_row.relnamespace = ${qualificationSchema}::regnamespace
+            AND table_row.relname = 'PrivacyEvidenceReceipt'
+            AND attribute_row.attname = 'sourceSubmittedAt'
+            AND attribute_row.attnum > 0
+            AND NOT attribute_row.attisdropped
+        `),
+        qualification.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS "count" FROM "PrivacyEvidenceReceipt"
+        `),
+        qualification.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS "count" FROM pg_indexes
+          WHERE schemaname = ${qualificationSchema}
+            AND indexname LIKE 'Lead_active_%_n13_nfc_idx'
+        `),
+        qualification.$queryRaw<Array<{ definition: string }>>(Prisma.sql`
+          SELECT PG_GET_FUNCTIONDEF(function_row.oid) AS "definition"
+          FROM pg_proc function_row
+          WHERE function_row.pronamespace = ${qualificationSchema}::regnamespace
+            AND function_row.proname = 'privacy_evidence_receipt_validate_v1'
+        `),
+      ]);
+      return {
+        finished: Number(migrationRows[0]?.finished),
+        unfinished: Number(migrationRows[0]?.unfinished),
+        sourceType: sourceColumnRows[0]?.source_type,
+        sourceNotNull: sourceColumnRows[0]?.source_not_null,
+        receipts: Number(receipts[0]?.count),
+        nfcIndexes: Number(indexes[0]?.count),
+        utcConversions: (
+          functionRows[0]?.definition.match(/AT TIME ZONE 'UTC'/gu) ?? []
+        ).length,
+      };
+    } finally {
+      await qualification.$disconnect();
+    }
+  } finally {
+    await rootClient().$executeRawUnsafe(`DROP SCHEMA "${qualificationSchema}" CASCADE`);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('N13-C2 migration 41 fails atomically when an evidence receipt exists', {
+  skip: !runDbTests,
+  timeout: 360_000,
+}, async () => {
+  assert.deepEqual(await qualifyCorrectiveExistingRowsFailClosed(), {
+    finished: 0,
+    unfinished: 1,
+    sourceType: 'timestamp(3) without time zone',
+    sourceNotNull: true,
+    receipts: 2,
+    nfcIndexes: 0,
+    utcConversions: 0,
   });
 });
 
@@ -759,80 +928,112 @@ test('N13-C2 raw candidate and manual-create prefilters are NFC-equivalent in bo
 
 test('N13-C2 privacy evidence is invariant across session timezones and DST boundaries', {
   skip: !runDbTests,
+  timeout: 360_000,
 }, async () => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(rootClient());
+  const qualificationSchema = `n13_c2_timezone_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('schema', qualificationSchema);
+  await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);
+  deploy(url.toString());
+  const qualification = new PrismaClient({ datasources: { db: { url: url.toString() } } });
   const zones = ['UTC', 'Europe/Rome', 'America/New_York'] as const;
   const instants = [
+    '2026-03-08T06:59:59.999Z',
+    '2026-03-08T07:00:00.000Z',
     '2026-03-29T00:59:59.999Z',
     '2026-03-29T01:00:00.000Z',
+    '2026-10-25T00:59:59.999Z',
+    '2026-10-25T01:00:00.000Z',
+    '2026-11-01T05:59:59.999Z',
+    '2026-11-01T06:00:00.000Z',
   ] as const;
-  for (const [index, occurredAt] of instants.entries()) {
-    const event = syntheticEvent(220 + index, {}, occurredAt);
-    const admitted = await admitBusinessInboxEvent(client(), event);
-    const hashesByZone: string[][] = [];
-    for (const zone of zones) {
-      let evidenceHashes: readonly string[] | undefined;
-      const rollback = new Error(`N13_C2_TIMEZONE_ROLLBACK_${zone}`);
-      await assert.rejects(client().$transaction(async (tx) => {
-        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zone}, true)`);
-        evidenceHashes = (await createBusinessLeadPrivacyEvidence(tx, {
-          businessInboxEventId: admitted.inboxEventId,
-          event,
-        })).evidenceHashes;
-        throw rollback;
-      }), (error: unknown) => error === rollback);
-      assert.ok(evidenceHashes);
-      hashesByZone.push([...evidenceHashes]);
-    }
-    assert.deepEqual(hashesByZone[1], hashesByZone[0]);
-    assert.deepEqual(hashesByZone[2], hashesByZone[0]);
-    assert.equal(await client().privacyEvidenceReceipt.count({
-      where: { businessInboxEventId: admitted.inboxEventId },
-    }), 0);
+  try {
+    await seedSyntheticPrivacyNotices(qualification);
+    for (const [index, occurredAt] of instants.entries()) {
+      const event = syntheticEvent(420 + index, {}, occurredAt);
+      const admitted = await admitBusinessInboxEvent(qualification, event);
+      const hashesByZone: string[][] = [];
+      const instantsByZone: string[][] = [];
+      for (const zone of zones) {
+        let evidenceHashes: readonly string[] | undefined;
+        let storedInstants: readonly string[] | undefined;
+        const rollback = new Error(`N13_C2_TIMEZONE_ROLLBACK_${index}_${zone}`);
+        await assert.rejects(qualification.$transaction(async (tx) => {
+          await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zone}, true)`);
+          evidenceHashes = (await createBusinessLeadPrivacyEvidence(tx, {
+            businessInboxEventId: admitted.inboxEventId,
+            event,
+          })).evidenceHashes;
+          storedInstants = (await tx.privacyEvidenceReceipt.findMany({
+            where: { businessInboxEventId: admitted.inboxEventId },
+            orderBy: { purposeCode: 'asc' },
+            select: { sourceSubmittedAt: true },
+          })).map(({ sourceSubmittedAt }) => sourceSubmittedAt.toISOString());
+          throw rollback;
+        }), (error: unknown) => error === rollback);
+        assert.ok(evidenceHashes);
+        assert.ok(storedInstants);
+        hashesByZone.push([...evidenceHashes]);
+        instantsByZone.push([...storedInstants]);
+      }
+      assert.deepEqual(hashesByZone[1], hashesByZone[0]);
+      assert.deepEqual(hashesByZone[2], hashesByZone[0]);
+      assert.deepEqual(instantsByZone[1], instantsByZone[0]);
+      assert.deepEqual(instantsByZone[2], instantsByZone[0]);
+      assert.deepEqual(instantsByZone[0], [occurredAt, occurredAt]);
+      assert.equal(await qualification.privacyEvidenceReceipt.count({
+        where: { businessInboxEventId: admitted.inboxEventId },
+      }), 0);
 
-    const alteredEvent = {
-      ...event,
-      occurredAt: new Date(new Date(event.occurredAt).getTime() + 1).toISOString(),
-    };
-    await assert.rejects(client().$transaction(async (tx) => {
-      await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[1]}, true)`);
-      await createBusinessLeadPrivacyEvidence(tx, {
-        businessInboxEventId: admitted.inboxEventId,
-        event: alteredEvent,
-      });
-    }));
-
-    const serviceNotice = await client().privacyNoticeVersion.findFirstOrThrow({
-      where: {
-        noticeCode: event.privacy.service.noticeCode,
-        noticeVersion: event.privacy.service.noticeVersion,
-      },
-      select: { id: true },
-    });
-    await assert.rejects(client().$transaction(async (tx) => {
-      await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[0]}, true)`);
-      await tx.privacyEvidenceReceipt.create({
-        data: {
-          leadId: null,
-          websiteLeadReceiptId: null,
+      const alteredEvent = {
+        ...event,
+        occurredAt: new Date(new Date(event.occurredAt).getTime() + 1).toISOString(),
+      };
+      await assert.rejects(qualification.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[1]}, true)`);
+        await createBusinessLeadPrivacyEvidence(tx, {
           businessInboxEventId: admitted.inboxEventId,
-          noticeVersionId: serviceNotice.id,
-          catalogVersion: 'n04-v1',
-          purposeCode: event.privacy.service.purposeCode,
-          legalBasisCode: event.privacy.service.legalBasisCode,
-          evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
-          decision: 'ACKNOWLEDGED',
-          sourceSystem: event.source.systemCode,
-          formCode: event.source.formCode,
-          formVersion: event.source.formVersion,
-          sourceSubmittedAt: new Date(event.occurredAt),
-          sourceEvidenceDigest: event.idempotency.payloadHash,
-          evidenceHash: '0'.repeat(64),
+          event: alteredEvent,
+        });
+      }));
+
+      const serviceNotice = await qualification.privacyNoticeVersion.findFirstOrThrow({
+        where: {
+          noticeCode: event.privacy.service.noticeCode,
+          noticeVersion: event.privacy.service.noticeVersion,
         },
+        select: { id: true },
       });
-    }));
-    assert.equal(await client().privacyEvidenceReceipt.count({
-      where: { businessInboxEventId: admitted.inboxEventId },
-    }), 0);
+      await assert.rejects(qualification.$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[0]}, true)`);
+        await tx.privacyEvidenceReceipt.create({
+          data: {
+            leadId: null,
+            websiteLeadReceiptId: null,
+            businessInboxEventId: admitted.inboxEventId,
+            noticeVersionId: serviceNotice.id,
+            catalogVersion: 'n04-v1',
+            purposeCode: event.privacy.service.purposeCode,
+            legalBasisCode: event.privacy.service.legalBasisCode,
+            evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
+            decision: 'ACKNOWLEDGED',
+            sourceSystem: event.source.systemCode,
+            formCode: event.source.formCode,
+            formVersion: event.source.formVersion,
+            sourceSubmittedAt: new Date(event.occurredAt),
+            sourceEvidenceDigest: event.idempotency.payloadHash,
+            evidenceHash: '0'.repeat(64),
+          },
+        });
+      }));
+      assert.equal(await qualification.privacyEvidenceReceipt.count({
+        where: { businessInboxEventId: admitted.inboxEventId },
+      }), 0);
+    }
+  } finally {
+    await qualification.$disconnect();
+    await rootClient().$executeRawUnsafe(`DROP SCHEMA "${qualificationSchema}" CASCADE`);
   }
 });
 

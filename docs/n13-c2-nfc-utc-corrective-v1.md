@@ -6,26 +6,32 @@ N13-C2 corrects two dormant N13 defects without enabling projection, duplicate r
 business traffic:
 
 1. raw `Lead` prefilters now apply the same NFC normalization already declared by `n13-v1`;
-2. privacy-evidence trigger timestamps are rendered in UTC independently of the PostgreSQL
-   session `TimeZone`.
+2. `PrivacyEvidenceReceipt.sourceSubmittedAt` is explicitly stored as `TIMESTAMPTZ(3)` and the
+   privacy-evidence trigger derives one UTC wall timestamp independently of the PostgreSQL session
+   `TimeZone`.
 
 Migration 40 remains byte-identical with SHA-256
 `234f574703ec81f7ab0b43c0854a1dab3264c8462e6ccb1f0d0b92f288415c78`.
 
 ## Migration 41
 
-`20260822150000_n13_c2_nfc_utc_corrective_v1` is one additive, business-empty transaction. It:
+`20260822150000_n13_c2_nfc_utc_corrective_v1` is one fail-closed, business-empty transaction. It:
 
+- verifies that `sourceSubmittedAt` is exactly `timestamp(3) without time zone`, `NOT NULL`;
+- aborts with `N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT` if any evidence receipt exists;
+- changes the empty column to `TIMESTAMPTZ(3)` and verifies the catalog postcondition;
 - adds `Lead_active_email_n13_nfc_idx`;
 - adds `Lead_active_person_name_n13_nfc_idx`;
 - adds `Lead_active_company_name_n13_nfc_idx`;
-- replaces `privacy_evidence_receipt_validate_v1()` with the same contract and three explicit
-  `AT TIME ZONE 'UTC'` conversions.
+- replaces `privacy_evidence_receipt_validate_v1()` with the same contract and one canonical
+  `AT TIME ZONE 'UTC'` conversion.
 
-The migration does not insert, update, delete or backfill business data. It creates no key, gate,
-worker, consumer, schedule or activation. The three legacy expression indexes remain present for
-PR107 N-1 compatibility. `NORMALIZE(..., NFC)` requires PostgreSQL server encoding `UTF8`, which
-is asserted by database qualification.
+The `USING` clause is reached only when the table is empty; existing rows are never reinterpreted
+or backfilled. Type drift, nullability drift or any receipt stops the whole transaction before
+index/function changes can persist. The migration does not insert, update or delete business data.
+It creates no key, gate, worker, consumer, schedule or activation. The three legacy expression
+indexes remain present for PR107 N-1 compatibility. `NORMALIZE(..., NFC)` requires PostgreSQL
+server encoding `UTF8`, which is asserted by database qualification.
 
 Expected catalog after migration 41:
 
@@ -53,24 +59,31 @@ candidate set. Distinct strings must remain distinct.
 
 ## UTC contract
 
-All three trigger renderings use:
+Prisma declares the native type explicitly:
 
-```sql
-TO_CHAR(
-  NEW."sourceSubmittedAt" AT TIME ZONE 'UTC',
-  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
-)
+```prisma
+sourceSubmittedAt DateTime @db.Timestamptz(3)
 ```
 
+The trigger derives the UTC wall timestamp once:
+
+```sql
+source_submitted_at_utc := NEW."sourceSubmittedAt" AT TIME ZONE 'UTC';
+```
+
+All three renderings and both active-notice comparisons use the resulting `TIMESTAMP(3)` value.
+There is no mixed comparison between notice timestamps without timezone and the source instant.
 The same valid evidence must be accepted under `UTC`, `Europe/Rome` and `America/New_York`,
-including DST boundaries. A genuinely altered `occurredAt` or `evidenceHash` remains rejected.
-The existing trigger stays bound to the replaced function.
+across spring-forward and fall-back DST boundaries. A genuinely altered `occurredAt` by one
+millisecond or an invalid `evidenceHash` remains rejected. The existing trigger stays bound to the
+replaced function.
 
 ## Qualification and rollback
 
-Required qualification includes fresh 41, exact 40→41 upgrade, migration-40 checksum pin,
-catalog expressions, Unicode candidate/manual-create races, session-timezone invariance, full unit
-and PostgreSQL suites, typecheck, lint, build, Docker smoke, restore drill and PR107-on-DB41 N-1.
+Required qualification includes fresh 41, exact empty 40→41 upgrade, existing-receipt atomic
+failure, migration-40 checksum pin, catalog type/expressions, Unicode candidate/manual-create
+races, isolated session-timezone/DST invariance, full unit and PostgreSQL suites, typecheck, lint,
+build, Docker smoke, restore drill and PR107-on-DB41 N-1.
 
 The application rollback target is PR107 on DB41 in dormant/health-only mode. It must not receive
 N13 business traffic because PR107 does not contain the NFC application correction. There is no
