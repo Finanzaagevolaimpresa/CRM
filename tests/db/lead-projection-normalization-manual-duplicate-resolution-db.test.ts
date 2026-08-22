@@ -23,7 +23,11 @@ import {
 } from '../../src/lib/business-event-backbone';
 import {
   calculateLeadIdentityKeyDigest,
+  digestLeadIdentitySignals,
+  discoverLeadIdentityCandidates,
+  hasStrongRawLeadIdentityDuplicate,
   LEAD_NORMALIZATION_VERSION,
+  normalizeLeadIdentitySignals,
 } from '../../src/lib/lead-identity';
 import {
   LeadDuplicateResolutionError,
@@ -38,6 +42,7 @@ import {
   createLeadSubmittedEventV1,
   type LeadEventPayloadV1,
 } from '../../src/lib/lead-event-contract';
+import { createBusinessLeadPrivacyEvidence } from '../../src/lib/privacy-evidence';
 import {
   N13_SYNTHETIC_KEY_SECRET,
   N13_SYNTHETIC_KEY_VERSION,
@@ -60,6 +65,9 @@ const rootDb = runDbTests ? new PrismaClient() : null;
 const execFileAsync = promisify(execFile);
 const migrationName = '20260821160000_lead_projection_normalization_manual_duplicate_resolution_v1';
 const migrationPath = `prisma/migrations/${migrationName}/migration.sql`;
+const correctiveMigrationName = '20260822150000_n13_c2_nfc_utc_corrective_v1';
+const correctiveMigrationPath = `prisma/migrations/${correctiveMigrationName}/migration.sql`;
+const migration40Sha256 = '234f574703ec81f7ab0b43c0854a1dab3264c8462e6ccb1f0d0b92f288415c78';
 const suiteSchema = `n13_contract_${process.pid}`;
 const originalSessionMode = process.env.INTERNAL_SESSION_MODE;
 
@@ -99,6 +107,7 @@ function deploy(databaseUrl: string, schemaPath = 'prisma/schema.prisma') {
 function syntheticEvent(
   ordinal: number,
   payload: Partial<LeadEventPayloadV1> = {},
+  occurredAt?: string,
 ) {
   const base = syntheticLeadEventInputV1();
   const ordinalText = ordinal.toString().padStart(6, '0');
@@ -106,6 +115,7 @@ function syntheticEvent(
     ...base,
     eventId: uuid(130_000 + ordinal * 2),
     businessCorrelationId: uuid(130_001 + ordinal * 2),
+    occurredAt: occurredAt ?? base.occurredAt,
     source: {
       ...base.source,
       formCode: 'N13_DB_SYNTHETIC_FORM',
@@ -337,6 +347,19 @@ test('N13 migration 40 source is one additive, empty and activation-free transac
   assert.match(sql, /CREATE TABLE "LeadIdentityKeyVersion"/u);
   assert.match(sql, /ALTER TABLE "PrivacyEvidenceReceipt"/u);
   assert.match(sql, /NULLS NOT DISTINCT/u);
+  assert.equal(createHash('sha256').update(sql).digest('hex'), migration40Sha256);
+});
+
+test('N13-C2 migration 41 is additive, business-empty and bounded to NFC indexes and UTC rendering', () => {
+  const sql = readFileSync(correctiveMigrationPath, 'utf8');
+  const executableSql = sql.replace(/^--.*$/gmu, '');
+  assert.equal((sql.match(/^BEGIN;$/gmu) ?? []).length, 1);
+  assert.equal((sql.match(/^COMMIT;$/gmu) ?? []).length, 1);
+  assert.equal((sql.match(/AT TIME ZONE 'UTC'/gu) ?? []).length, 3);
+  assert.equal((sql.match(/^CREATE INDEX "Lead_active_.*_n13_nfc_idx"/gmu) ?? []).length, 3);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION "privacy_evidence_receipt_validate_v1"/u);
+  assert.doesNotMatch(executableSql, /\b(?:DROP|TRUNCATE|INSERT|UPDATE|DELETE)\b/iu);
+  assert.doesNotMatch(executableSql, /\b(?:seed|backfill|activation|consumer|worker)\b/iu);
 });
 
 async function qualifyMigration(upgrade: boolean) {
@@ -347,8 +370,9 @@ async function qualifyMigration(upgrade: boolean) {
   const migrationsDir = join(prismaDir, 'migrations');
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 40);
+  const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  assert.equal(allNames.length, 41);
+  const names = allNames.slice(0, 40);
   assert.equal(names[39], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set('schema', qualificationSchema);
@@ -463,6 +487,137 @@ test('N13 migration qualifies fresh 40 and exact additive 39 to 40 upgrade', {
   });
 });
 
+async function qualifyCorrectiveMigration(upgrade: boolean) {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(rootClient());
+  const qualificationSchema = `n13_c2_${upgrade ? 'upgrade' : 'fresh'}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const root = mkdtempSync(join(tmpdir(), 'n13-c2-migrations-'));
+  const prismaDir = join(root, 'prisma');
+  const migrationsDir = join(prismaDir, 'migrations');
+  mkdirSync(migrationsDir, { recursive: true });
+  cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
+  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  assert.equal(names.length, 41);
+  assert.equal(names[39], migrationName);
+  assert.equal(names[40], correctiveMigrationName);
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('schema', qualificationSchema);
+  await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);
+  let historicalLeadId: string | null = null;
+  try {
+    for (const name of upgrade ? names.slice(0, 40) : names) {
+      cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });
+    }
+    deploy(url.toString(), join(prismaDir, 'schema.prisma'));
+    if (upgrade) {
+      const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+      try {
+        historicalLeadId = (await before.lead.create({
+          data: {
+            firstName: 'Jose\u0301',
+            lastName: 'N13-C2',
+            companyName: 'Cafe\u0301 Synthetic',
+            email: 'u\u0308pgrade@n13-c2.invalid',
+            source: 'N13_C2_UPGRADE_SENTINEL',
+          },
+        })).id;
+      } finally {
+        await before.$disconnect();
+      }
+      cpSync(
+        join('prisma/migrations', correctiveMigrationName),
+        join(migrationsDir, correctiveMigrationName),
+        { recursive: true },
+      );
+      deploy(url.toString(), join(prismaDir, 'schema.prisma'));
+    }
+    const qualification = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    try {
+      const [migrations, migrationRow, indexes, functionRows, triggerRows, encodingRows, historical] = await Promise.all([
+        qualification.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS "count" FROM "_prisma_migrations"
+          WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+        `),
+        qualification.$queryRaw<Array<{ checksum: string }>>(Prisma.sql`
+          SELECT checksum FROM "_prisma_migrations" WHERE migration_name = ${correctiveMigrationName}
+        `),
+        qualification.$queryRaw<Array<{ name: string; definition: string }>>(Prisma.sql`
+          SELECT indexname AS "name", indexdef AS "definition" FROM pg_indexes
+          WHERE schemaname = ${qualificationSchema}
+            AND indexname IN (
+              'Lead_active_email_n13_nfc_idx',
+              'Lead_active_person_name_n13_nfc_idx',
+              'Lead_active_company_name_n13_nfc_idx'
+            ) ORDER BY indexname
+        `),
+        qualification.$queryRaw<Array<{ definition: string }>>(Prisma.sql`
+          SELECT pg_get_functiondef(function_row.oid) AS "definition"
+          FROM pg_proc function_row
+          JOIN pg_namespace namespace_row ON namespace_row.oid = function_row.pronamespace
+          WHERE namespace_row.nspname = ${qualificationSchema}
+            AND function_row.proname = 'privacy_evidence_receipt_validate_v1'
+        `),
+        qualification.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS "count"
+          FROM pg_trigger trigger_row
+          JOIN pg_class table_row ON table_row.oid = trigger_row.tgrelid
+          JOIN pg_proc function_row ON function_row.oid = trigger_row.tgfoid
+          WHERE table_row.relnamespace = ${qualificationSchema}::regnamespace
+            AND trigger_row.tgname = 'PrivacyEvidenceReceipt_validate_v1'
+            AND function_row.proname = 'privacy_evidence_receipt_validate_v1'
+        `),
+        qualification.$queryRawUnsafe<Array<{ server_encoding: string }>>('SHOW server_encoding'),
+        qualification.$queryRaw<Array<{ leads: bigint }>>(Prisma.sql`
+          SELECT COUNT(*)::BIGINT AS "leads" FROM "Lead" WHERE "id" = ${historicalLeadId}
+        `),
+      ]);
+      const functionDefinition = functionRows[0]?.definition ?? '';
+      return {
+        migrations: Number(migrations[0]?.count),
+        checksum: migrationRow[0]?.checksum,
+        indexes: indexes.map(({ name }) => name),
+        allIndexesUseNfc: indexes.every(({ definition }) => /normalize\(/iu.test(definition)),
+        utcConversions: (functionDefinition.match(/AT TIME ZONE 'UTC'/gu) ?? []).length,
+        triggerBindings: Number(triggerRows[0]?.count),
+        serverEncoding: encodingRows[0]?.server_encoding,
+        historicalLeads: Number(historical[0]?.leads),
+      };
+    } finally {
+      await qualification.$disconnect();
+    }
+  } finally {
+    await rootClient().$executeRawUnsafe(`DROP SCHEMA "${qualificationSchema}" CASCADE`);
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('N13-C2 qualifies fresh 41 and exact business-preserving 40 to 41 upgrade', {
+  skip: !runDbTests,
+  timeout: 360_000,
+}, async () => {
+  const checksum = createHash('sha256').update(readFileSync(correctiveMigrationPath)).digest('hex');
+  const expectedCatalog = {
+    migrations: 41,
+    checksum,
+    indexes: [
+      'Lead_active_company_name_n13_nfc_idx',
+      'Lead_active_email_n13_nfc_idx',
+      'Lead_active_person_name_n13_nfc_idx',
+    ],
+    allIndexesUseNfc: true,
+    utcConversions: 3,
+    triggerBindings: 1,
+    serverEncoding: 'UTF8',
+  };
+  assert.deepEqual(await qualifyCorrectiveMigration(false), {
+    ...expectedCatalog,
+    historicalLeads: 0,
+  });
+  assert.deepEqual(await qualifyCorrectiveMigration(true), {
+    ...expectedCatalog,
+    historicalLeads: 1,
+  });
+});
+
 test('N13 catalog exposes six tables, expected indexes and fail-closed guards', {
   skip: !runDbTests,
 }, async () => {
@@ -499,7 +654,15 @@ test('N13 catalog exposes six tables, expected indexes and fail-closed guards', 
     `),
   ]);
   assert.equal(tables.length, 6);
-  assert.equal(indexes.length, 36);
+  assert.equal(indexes.length, 39);
+  for (const name of [
+    'Lead_active_email_normalized_idx',
+    'Lead_active_person_name_normalized_idx',
+    'Lead_active_company_name_normalized_idx',
+    'Lead_active_email_n13_nfc_idx',
+    'Lead_active_person_name_n13_nfc_idx',
+    'Lead_active_company_name_n13_nfc_idx',
+  ]) assert.equal(indexes.some((index) => index.name === name), true, name);
   assert.equal(triggers.length, 12);
   assert.deepEqual(functions.map(({ name }) => name), [
     'fai_lead_append_only_guard_n13_v1',
@@ -530,6 +693,147 @@ test('N13 catalog exposes six tables, expected indexes and fail-closed guards', 
       activatedAt: new Date(),
     },
   }));
+});
+
+test('N13-C2 raw candidate and manual-create prefilters are NFC-equivalent in both directions', {
+  skip: !runDbTests,
+}, async () => {
+  const activeKey = await client().leadIdentityKeyVersion.findFirstOrThrow({
+    where: { status: 'ACTIVE' },
+    select: { id: true, version: true },
+  });
+  const key = { version: activeKey.version, secret: N13_SYNTHETIC_KEY_SECRET } as const;
+  const cases = [
+    {
+      stored: { email: 'u\u0308ser-one@n13-c2.invalid' },
+      incoming: { email: 'üser-one@n13-c2.invalid' },
+    },
+    {
+      stored: { email: 'üser-two@n13-c2.invalid' },
+      incoming: { email: 'u\u0308ser-two@n13-c2.invalid' },
+    },
+    {
+      stored: { firstName: 'Jose\u0301', lastName: 'Garci\u0301a' },
+      incoming: { firstName: 'José', lastName: 'García' },
+    },
+    {
+      stored: { firstName: 'André', lastName: 'Müller' },
+      incoming: { firstName: 'Andre\u0301', lastName: 'Mu\u0308ller' },
+    },
+    {
+      stored: { companyName: 'Cafe\u0301 Synthetic One' },
+      incoming: { companyName: 'Café Synthetic One' },
+    },
+    {
+      stored: { companyName: 'Société Synthetic Two' },
+      incoming: { companyName: 'Socie\u0301te\u0301 Synthetic Two' },
+    },
+  ] as const;
+  for (const [index, current] of cases.entries()) {
+    const lead = await client().lead.create({
+      data: {
+        firstName: 'N13-C2',
+        lastName: `Candidate${index}`,
+        source: 'N13_C2_NFC_SYNTHETIC',
+        ...current.stored,
+      },
+    });
+    const signals = digestLeadIdentitySignals(
+      key,
+      normalizeLeadIdentitySignals(current.incoming),
+    );
+    const candidates = await client().$transaction((tx) => discoverLeadIdentityCandidates(tx, {
+      identityKeyVersionId: activeKey.id,
+      signals,
+    }));
+    assert.equal(candidates.some((candidate) => candidate.leadId === lead.id), true, String(index));
+  }
+
+  assert.equal(await client().$transaction((tx) => hasStrongRawLeadIdentityDuplicate(tx, {
+    email: 'üser-one@n13-c2.invalid',
+  })), true);
+  assert.equal(await client().$transaction((tx) => hasStrongRawLeadIdentityDuplicate(tx, {
+    email: 'u\u0308ser-two@n13-c2.invalid',
+  })), true);
+});
+
+test('N13-C2 privacy evidence is invariant across session timezones and DST boundaries', {
+  skip: !runDbTests,
+}, async () => {
+  const zones = ['UTC', 'Europe/Rome', 'America/New_York'] as const;
+  const instants = [
+    '2026-03-29T00:59:59.999Z',
+    '2026-03-29T01:00:00.000Z',
+  ] as const;
+  for (const [index, occurredAt] of instants.entries()) {
+    const event = syntheticEvent(220 + index, {}, occurredAt);
+    const admitted = await admitBusinessInboxEvent(client(), event);
+    const hashesByZone: string[][] = [];
+    for (const zone of zones) {
+      let evidenceHashes: readonly string[] | undefined;
+      const rollback = new Error(`N13_C2_TIMEZONE_ROLLBACK_${zone}`);
+      await assert.rejects(client().$transaction(async (tx) => {
+        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zone}, true)`);
+        evidenceHashes = (await createBusinessLeadPrivacyEvidence(tx, {
+          businessInboxEventId: admitted.inboxEventId,
+          event,
+        })).evidenceHashes;
+        throw rollback;
+      }), (error: unknown) => error === rollback);
+      assert.ok(evidenceHashes);
+      hashesByZone.push([...evidenceHashes]);
+    }
+    assert.deepEqual(hashesByZone[1], hashesByZone[0]);
+    assert.deepEqual(hashesByZone[2], hashesByZone[0]);
+    assert.equal(await client().privacyEvidenceReceipt.count({
+      where: { businessInboxEventId: admitted.inboxEventId },
+    }), 0);
+
+    const alteredEvent = {
+      ...event,
+      occurredAt: new Date(new Date(event.occurredAt).getTime() + 1).toISOString(),
+    };
+    await assert.rejects(client().$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[1]}, true)`);
+      await createBusinessLeadPrivacyEvidence(tx, {
+        businessInboxEventId: admitted.inboxEventId,
+        event: alteredEvent,
+      });
+    }));
+
+    const serviceNotice = await client().privacyNoticeVersion.findFirstOrThrow({
+      where: {
+        noticeCode: event.privacy.service.noticeCode,
+        noticeVersion: event.privacy.service.noticeVersion,
+      },
+      select: { id: true },
+    });
+    await assert.rejects(client().$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', ${zones[0]}, true)`);
+      await tx.privacyEvidenceReceipt.create({
+        data: {
+          leadId: null,
+          websiteLeadReceiptId: null,
+          businessInboxEventId: admitted.inboxEventId,
+          noticeVersionId: serviceNotice.id,
+          catalogVersion: 'n04-v1',
+          purposeCode: event.privacy.service.purposeCode,
+          legalBasisCode: event.privacy.service.legalBasisCode,
+          evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
+          decision: 'ACKNOWLEDGED',
+          sourceSystem: event.source.systemCode,
+          formCode: event.source.formCode,
+          formVersion: event.source.formVersion,
+          sourceSubmittedAt: new Date(event.occurredAt),
+          sourceEvidenceDigest: event.idempotency.payloadHash,
+          evidenceHash: '0'.repeat(64),
+        },
+      });
+    }));
+    assert.equal(await client().privacyEvidenceReceipt.count({
+      where: { businessInboxEventId: admitted.inboxEventId },
+    }), 0);
+  }
 });
 
 test('projection matrix 0/1/N is atomic and binds exactly two privacy receipts', {
@@ -929,6 +1233,28 @@ test('multiprocess manual-create/projection and duplicate decisions serialize on
       || JSON.stringify(outcomes) === JSON.stringify({ REVIEW_REQUIRED: 1, CREATED: 1 }),
     true,
     JSON.stringify(outcomes),
+  );
+
+  const precomposedEmail = 'râce@n13-c2-race.invalid';
+  const decomposedEmail = 'ra\u0302ce@n13-c2-race.invalid';
+  const unicodePrepared = await admitAndClaim(82, { email: precomposedEmail });
+  const [unicodeProjection, unicodeManual] = await Promise.all([
+    runFixture('project', {
+      lease: serializableLease(unicodePrepared.lease),
+      keyFilePath: secretPath,
+      allowedSecretRoot: secretRoot,
+    }),
+    runFixture('manual-create', { email: decomposedEmail, phone: null }),
+  ]);
+  assert.equal(await client().lead.count({
+    where: { email: { in: [precomposedEmail, decomposedEmail] } },
+  }), 1);
+  const unicodeOutcomes = aggregateOutcomes([unicodeProjection, unicodeManual]);
+  assert.equal(
+    JSON.stringify(unicodeOutcomes) === JSON.stringify({ PROJECTED_NEW: 1, DUPLICATE: 1 })
+      || JSON.stringify(unicodeOutcomes) === JSON.stringify({ REVIEW_REQUIRED: 1, CREATED: 1 }),
+    true,
+    JSON.stringify(unicodeOutcomes),
   );
 
   const review = await createReviewCase(81, 1);
