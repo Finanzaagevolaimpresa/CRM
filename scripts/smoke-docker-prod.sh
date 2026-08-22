@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=40
+EXPECTED_MIGRATION_COUNT=41
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -229,8 +229,14 @@ docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
 
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
-[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "40" ]] \
-  || fail "Production image did not apply exactly 40 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "41" ]] \
+  || fail "Production image did not apply exactly 41 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SHOW server_encoding')" == "UTF8" ]] \
+  || fail "N13-C2 NFC normalization requires UTF8 server encoding"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('Lead_active_email_normalized_idx', 'Lead_active_person_name_normalized_idx', 'Lead_active_company_name_normalized_idx', 'Lead_active_email_n13_nfc_idx', 'Lead_active_person_name_n13_nfc_idx', 'Lead_active_company_name_n13_nfc_idx')")" == "6" ]] \
+  || fail "N13-C2 NFC and legacy Lead expression indexes are incomplete"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT REGEXP_COUNT(PG_GET_FUNCTIONDEF(function_row.oid), 'AT TIME ZONE ''UTC''') FROM pg_proc function_row JOIN pg_namespace namespace_row ON namespace_row.oid = function_row.pronamespace WHERE namespace_row.nspname = 'public' AND function_row.proname = 'privacy_evidence_receipt_validate_v1'")" == "3" ]] \
+  || fail "N13-C2 privacy evidence trigger function is not UTC-invariant"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT (SELECT COUNT(*) FROM "SecureLeadGatewayKeyVersion") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayRateLimitBucket") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayReceipt") || '\''|'\'' || (SELECT COUNT(*) FROM "SecureLeadGatewayRequest")')" == "0|0|0|0" ]] \
   || fail "N12 dormant deployment unexpectedly created gateway security state"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT (SELECT COUNT(*) FROM "LeadIdentityKeyVersion") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadIdentityKey") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadProjectionLedger") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateCase") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateCandidate") || '\''|'\'' || (SELECT COUNT(*) FROM "LeadDuplicateDecision")')" == "0|0|0|0|0|0" ]] \
@@ -387,4 +393,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 40 migrations, dormant N12 gateway and N13 projection registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 41 migrations, dormant N12 gateway and N13 projection registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
