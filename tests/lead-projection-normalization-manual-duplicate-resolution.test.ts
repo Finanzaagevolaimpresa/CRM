@@ -149,6 +149,10 @@ test('normalization v1 is exact, Unicode-aware and never guesses provider or cou
     normalizeLeadIdentityEmail(' Synthetic.User+tag@N13.Invalid '),
     'synthetic.user+tag@n13.invalid',
   );
+  assert.equal(
+    normalizeLeadIdentityEmail('u\u0308ser@n13.invalid'),
+    normalizeLeadIdentityEmail('üser@n13.invalid'),
+  );
   assert.deepEqual(normalizeLeadIdentityPhone('+39 (333)-000.0010'), {
     kind: 'PHONE_E164_EXACT_V1',
     strength: 'STRONG',
@@ -303,8 +307,12 @@ test('candidate discovery unifies digests and conservative raw fallback with det
       },
     ],
   ];
+  const seenQueries: string[] = [];
   const tx = {
-    $queryRaw: async () => responses.shift() ?? [],
+    $queryRaw: async (query: { strings?: readonly string[] }) => {
+      seenQueries.push(query.strings?.join('?') ?? String(query));
+      return responses.shift() ?? [];
+    },
   } as unknown as Prisma.TransactionClient;
   const candidates = await discoverLeadIdentityCandidates(tx, {
     identityKeyVersionId: '00000000-0000-4000-8000-000000000017',
@@ -320,6 +328,11 @@ test('candidate discovery unifies digests and conservative raw fallback with det
     candidate.strongSignalCount,
     candidate.weakSignalCount,
   ]), [[1, 1], [1, 0], [0, 2], [0, 1]]);
+  assert.equal(seenQueries.length, 2);
+  assert.match(seenQueries[1] ?? '', /LOWER\(NORMALIZE\(BTRIM\("email"\), NFC\)\)/u);
+  assert.match(seenQueries[1] ?? '', /LOWER\(NORMALIZE\([\s\S]*BTRIM\("firstName"\)[\s\S]*NFC/u);
+  assert.match(seenQueries[1] ?? '', /LOWER\(NORMALIZE\([\s\S]*BTRIM\("lastName"\)[\s\S]*NFC/u);
+  assert.match(seenQueries[1] ?? '', /LOWER\(NORMALIZE\([\s\S]*BTRIM\("companyName"\)[\s\S]*NFC/u);
 });
 
 test('business privacy evidence creates exactly two inbox-bound receipts without Lead binding', async () => {
@@ -432,7 +445,10 @@ test('manual create precheck considers only exact active email and E.164 strong 
     phone: '333 000 0010',
   }), true);
   assert.equal(seenQueries.length, 1);
-  assert.match(seenQueries[0] ?? '', /LOWER\(BTRIM\("email"\)\)/u);
+  assert.match(
+    seenQueries[0] ?? '',
+    /LOWER\(NORMALIZE\(BTRIM\("email"\), NFC\)\)/u,
+  );
   assert.doesNotMatch(seenQueries[0] ?? '', /PERSON_NAME|companyName/u);
   assert.equal(await hasStrongRawLeadIdentityDuplicate(tx, {
     phone: '333 000 0010',
