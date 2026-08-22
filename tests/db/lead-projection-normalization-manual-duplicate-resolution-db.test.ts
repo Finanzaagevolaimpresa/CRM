@@ -692,6 +692,19 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
         });
         assert.equal(created.count, 2);
       });
+
+      const migrationSql = readFileSync(correctiveMigrationPath, 'utf8');
+      const failClosedGuard = migrationSql.match(
+        /DO \$\$\nDECLARE[\s\S]*?N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT[\s\S]*?\nEND \$\$;/u,
+      )?.[0];
+      assert.ok(failClosedGuard);
+      await assert.rejects(before.$executeRawUnsafe(failClosedGuard), (error: unknown) => {
+        const directFailure = error as { message?: unknown; meta?: { message?: unknown } };
+        return [directFailure.message, directFailure.meta?.message].some(
+          (value) => typeof value === 'string'
+            && /N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT/u.test(value),
+        );
+      });
     } finally {
       await before.$disconnect();
     }
@@ -701,16 +714,9 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
       join(migrationsDir, correctiveMigrationName),
       { recursive: true },
     );
-    let failureText = '';
-    try {
+    assert.throws(() => {
       deploy(url.toString(), join(prismaDir, 'schema.prisma'));
-    } catch (error: unknown) {
-      const failure = error as { message?: unknown; stdout?: unknown; stderr?: unknown };
-      failureText = [failure.message, failure.stdout, failure.stderr]
-        .map((value) => value instanceof Uint8Array ? Buffer.from(value).toString('utf8') : String(value ?? ''))
-        .join('\n');
-    }
-    assert.match(failureText, /N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT/u);
+    });
 
     const qualification = new PrismaClient({ datasources: { db: { url: url.toString() } } });
     try {
