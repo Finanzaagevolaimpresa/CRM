@@ -397,19 +397,24 @@ model User {
   aiExecutionDecisions               AiExecutionDecision[]                   @relation("AiExecutionDecisionActor")
   aiExecutionGrantsApproved          AiExecutionAuthorizationGrant[]         @relation("AiExecutionGrantApprover")
   aiExecutionAdminNotifications      AiExecutionAdminNotification[]          @relation("AiExecutionNotificationRecipient")
+  commercialLeadPoliciesCreated      CommercialLeadSlaPolicyVersion[]        @relation("CommercialLeadPolicyCreatedBy")
+  commercialLeadActivities           CommercialLeadActivity[]                @relation("CommercialLeadActivityActor")
+  commercialLeadAssignmentsBefore    CommercialLeadActivity[]                @relation("CommercialLeadActivityAssigneeBefore")
+  commercialLeadAssignmentsAfter     CommercialLeadActivity[]                @relation("CommercialLeadActivityAssigneeAfter")
 }
 
 model InternalSession {
-  id              String    @id @default(uuid()) @db.Uuid
-  userId          String
-  tokenDigest     Bytes     @unique
-  createdAt       DateTime  @default(now())
-  expiresAt       DateTime
-  revokedAt       DateTime?
-  revokedReason   String?
-  revokedByUserId String?
-  user            User      @relation("InternalSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
-  revokedByUser   User?     @relation("InternalSessionRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+  id                       String                   @id @default(uuid()) @db.Uuid
+  userId                   String
+  tokenDigest              Bytes                    @unique
+  createdAt                DateTime                 @default(now())
+  expiresAt                DateTime
+  revokedAt                DateTime?
+  revokedReason            String?
+  revokedByUserId          String?
+  user                     User                     @relation("InternalSessionOwner", fields: [userId], references: [id], onDelete: Cascade)
+  revokedByUser            User?                    @relation("InternalSessionRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+  commercialLeadActivities CommercialLeadActivity[]
 
   @@index([userId, revokedAt, expiresAt], map: "InternalSession_user_revocation_expiry_idx")
   @@index([expiresAt, id], map: "InternalSession_cleanup_cursor_idx")
@@ -505,6 +510,7 @@ model Lead {
   duplicateCandidates         LeadDuplicateCandidate[]
   duplicateDecisionsSelected  LeadDuplicateDecision[]  @relation("LeadDuplicateDecisionSelectedLead")
   duplicateDecisionsResulting LeadDuplicateDecision[]  @relation("LeadDuplicateDecisionResultingLead")
+  commercialInboxItem         CommercialLeadInboxItem?
 
   @@index([deletedAt, nextActionDate, updatedAt(sort: Desc), id(sort: Desc)], map: "Lead_pipeline_cursor_idx")
   @@index([assignedToId, deletedAt, nextActionDate, updatedAt(sort: Desc), id(sort: Desc)], map: "Lead_assignee_pipeline_cursor_idx")
@@ -529,11 +535,11 @@ model PrivacyNoticeVersion {
 }
 
 model PrivacyEvidenceReceipt {
-  id                   String                  @id @default(uuid()) @db.Uuid
+  id                   String                   @id @default(uuid()) @db.Uuid
   leadId               String?
-  websiteLeadReceiptId String?                 @db.Uuid
-  businessInboxEventId String?                 @db.Uuid
-  noticeVersionId      String                  @db.Uuid
+  websiteLeadReceiptId String?                  @db.Uuid
+  businessInboxEventId String?                  @db.Uuid
+  noticeVersionId      String                   @db.Uuid
   catalogVersion       String
   purposeCode          String
   legalBasisCode       String
@@ -542,14 +548,15 @@ model PrivacyEvidenceReceipt {
   sourceSystem         String
   formCode             String
   formVersion          String
-  sourceSubmittedAt    DateTime                @db.Timestamptz(3)
+  sourceSubmittedAt    DateTime                 @db.Timestamptz(3)
   sourceEvidenceDigest String
-  evidenceHash         String                  @unique(map: "PrivacyEvidenceReceipt_evidenceHash_key")
-  createdAt            DateTime                @default(now())
-  lead                 Lead?                   @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  websiteLeadReceipt   WebsiteLeadReceipt?     @relation(fields: [websiteLeadReceiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  businessInboxEvent   BusinessInboxEvent?     @relation(fields: [businessInboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  noticeVersion        PrivacyNoticeVersion    @relation(fields: [noticeVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  evidenceHash         String                   @unique(map: "PrivacyEvidenceReceipt_evidenceHash_key")
+  createdAt            DateTime                 @default(now())
+  lead                 Lead?                    @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  websiteLeadReceipt   WebsiteLeadReceipt?      @relation(fields: [websiteLeadReceiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessInboxEvent   BusinessInboxEvent?      @relation(fields: [businessInboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  noticeVersion        PrivacyNoticeVersion     @relation(fields: [noticeVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  commercialInboxItem  CommercialLeadInboxItem?
 
   @@unique([websiteLeadReceiptId, purposeCode], map: "PrivacyEvidenceReceipt_source_purpose_key")
   @@unique([businessInboxEventId, purposeCode], map: "PrivacyEvidenceReceipt_business_source_purpose_key")
@@ -1802,7 +1809,7 @@ model ServiceCatalogRevision {
   serviceCatalogId          String
   version                   Int
   publicName                String
-  shortDescription         String
+  shortDescription          String
   priceMode                 ServiceCatalogPriceMode
   netPrice                  Decimal?
   currency                  String                       @default("EUR")
@@ -2078,32 +2085,139 @@ model LeadIdentityKeyVersion {
 }
 
 model LeadProjectionLedger {
-  id                     String                 @id @default(uuid()) @db.Uuid
-  inboxEventId           String                 @unique(map: "LeadProjectionLedger_inboxEventId_key") @db.Uuid
-  sourceRecordHash       String                 @db.Char(64)
-  state                  String                 @db.VarChar(32)
+  id                     String                   @id @default(uuid()) @db.Uuid
+  inboxEventId           String                   @unique(map: "LeadProjectionLedger_inboxEventId_key") @db.Uuid
+  sourceRecordHash       String                   @db.Char(64)
+  state                  String                   @db.VarChar(32)
   leadId                 String?
   candidateCount         Int
-  normalizationVersion   String                 @db.VarChar(32)
-  identityKeyVersionId   String                 @db.Uuid
-  version                Int                    @default(1)
-  privacyEvidenceCount   Int                    @default(2)
-  resultHash             String                 @db.Char(64)
-  retentionClass         String                 @default("LEAD_PROJECTION") @db.VarChar(64)
-  retentionPolicyVersion String                 @default("N21_UNASSIGNED") @db.VarChar(64)
-  retentionEligibleAt    DateTime?              @db.Timestamptz(3)
-  completedAt            DateTime?              @db.Timestamptz(3)
-  createdAt              DateTime               @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime               @default(now()) @db.Timestamptz(3)
-  inboxEvent             BusinessInboxEvent     @relation(fields: [inboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  lead                   Lead?                  @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  identityKeyVersion     LeadIdentityKeyVersion @relation(fields: [identityKeyVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  normalizationVersion   String                   @db.VarChar(32)
+  identityKeyVersionId   String                   @db.Uuid
+  version                Int                      @default(1)
+  privacyEvidenceCount   Int                      @default(2)
+  resultHash             String                   @db.Char(64)
+  retentionClass         String                   @default("LEAD_PROJECTION") @db.VarChar(64)
+  retentionPolicyVersion String                   @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt    DateTime?                @db.Timestamptz(3)
+  completedAt            DateTime?                @db.Timestamptz(3)
+  createdAt              DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime                 @default(now()) @db.Timestamptz(3)
+  inboxEvent             BusinessInboxEvent       @relation(fields: [inboxEventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead                   Lead?                    @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  identityKeyVersion     LeadIdentityKeyVersion   @relation(fields: [identityKeyVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   identityKeys           LeadIdentityKey[]
   duplicateCase          LeadDuplicateCase?
+  commercialInboxItem    CommercialLeadInboxItem?
 
   @@index([state, updatedAt, id], map: "LeadProjectionLedger_state_idx")
   @@index([leadId, createdAt, id], map: "LeadProjectionLedger_lead_idx")
   @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "LeadProjectionLedger_retention_idx")
+}
+
+model CommercialLeadInboxItem {
+  id                       String                   @id @default(uuid()) @db.Uuid
+  leadId                   String                   @unique(map: "CommercialLeadInboxItem_leadId_key")
+  originKind               String                   @db.VarChar(32)
+  attributionVersion       String                   @default("n14-v1") @db.VarChar(16)
+  sourceSystem             String                   @db.VarChar(80)
+  formCode                 String                   @db.VarChar(80)
+  formVersion              String                   @db.VarChar(40)
+  sourceOccurredAt         DateTime                 @db.Timestamptz(3)
+  projectionLedgerId       String?                  @unique(map: "CommercialLeadInboxItem_projectionLedgerId_key") @db.Uuid
+  privacyEvidenceReceiptId String?                  @unique(map: "CommercialLeadInboxItem_privacyEvidenceReceiptId_key") @db.Uuid
+  state                    String                   @default("OPEN") @db.VarChar(16)
+  version                  Int                      @default(1)
+  initializedAt            DateTime                 @db.Timestamptz(3)
+  closedAt                 DateTime?                @db.Timestamptz(3)
+  retentionClass           String                   @default("COMMERCIAL_LEAD_INBOX") @db.VarChar(64)
+  retentionPolicyVersion   String                   @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt      DateTime?                @db.Timestamptz(3)
+  createdAt                DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime                 @default(now()) @db.Timestamptz(3)
+  lead                     Lead                     @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  projectionLedger         LeadProjectionLedger?    @relation(fields: [projectionLedgerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  privacyEvidenceReceipt   PrivacyEvidenceReceipt?  @relation(fields: [privacyEvidenceReceiptId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  slaCycles                CommercialLeadSlaCycle[]
+  activities               CommercialLeadActivity[]
+
+  @@index([state, initializedAt, id], map: "CommercialLeadInboxItem_state_cursor_idx")
+  @@index([state, leadId], map: "CommercialLeadInboxItem_state_lead_idx")
+  @@index([originKind, sourceOccurredAt, id], map: "CommercialLeadInboxItem_origin_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "CommercialLeadInboxItem_retention_idx")
+}
+
+model CommercialLeadSlaPolicyVersion {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  policyCode            String                   @default("COMMERCIAL_FIRST_RESPONSE") @db.VarChar(64)
+  version               Int
+  status                String                   @default("STAGED") @db.VarChar(16)
+  calendarCode          String                   @default("CONTINUOUS_24X7") @db.VarChar(32)
+  timezoneCode          String                   @default("UTC") @db.VarChar(32)
+  responseTargetSeconds Int
+  createdById           String?
+  createdAt             DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                 @default(now()) @db.Timestamptz(3)
+  createdBy             User?                    @relation("CommercialLeadPolicyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  slaCycles             CommercialLeadSlaCycle[]
+
+  @@unique([policyCode, version], map: "CommercialLeadSlaPolicyVersion_identity_key")
+  @@index([policyCode, status, version], map: "CommercialLeadSlaPolicyVersion_lookup_idx")
+  @@index([createdById, createdAt, id], map: "CommercialLeadSlaPolicyVersion_actor_idx")
+}
+
+model CommercialLeadSlaCycle {
+  id                     String                         @id @default(uuid()) @db.Uuid
+  inboxItemId            String                         @db.Uuid
+  sequence               Int
+  policyVersionId        String                         @db.Uuid
+  availableAt            DateTime                       @db.Timestamptz(3)
+  dueAt                  DateTime                       @db.Timestamptz(3)
+  firstResponseAt        DateTime?                      @db.Timestamptz(3)
+  closedAt               DateTime?                      @db.Timestamptz(3)
+  outcome                String?                        @db.VarChar(32)
+  version                Int                            @default(1)
+  retentionClass         String                         @default("COMMERCIAL_LEAD_SLA") @db.VarChar(64)
+  retentionPolicyVersion String                         @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt    DateTime?                      @db.Timestamptz(3)
+  createdAt              DateTime                       @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime                       @default(now()) @db.Timestamptz(3)
+  inboxItem              CommercialLeadInboxItem        @relation(fields: [inboxItemId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  policyVersion          CommercialLeadSlaPolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([inboxItemId, sequence], map: "CommercialLeadSlaCycle_item_sequence_key")
+  @@index([dueAt, inboxItemId, id], map: "CommercialLeadSlaCycle_due_cursor_idx")
+  @@index([outcome, dueAt, id], map: "CommercialLeadSlaCycle_outcome_due_idx")
+  @@index([policyVersionId, createdAt, id], map: "CommercialLeadSlaCycle_policy_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "CommercialLeadSlaCycle_retention_idx")
+}
+
+model CommercialLeadActivity {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  inboxItemId            String                  @db.Uuid
+  sequence               Int
+  activityType           String                  @db.VarChar(40)
+  actorKind              String                  @db.VarChar(16)
+  actorUserId            String?
+  actorSessionId         String?                 @db.Uuid
+  assigneeBeforeId       String?
+  assigneeAfterId        String?
+  reasonCode             String                  @db.VarChar(64)
+  inboxVersionBefore     Int
+  inboxVersionAfter      Int
+  retentionClass         String                  @default("COMMERCIAL_LEAD_ACTIVITY") @db.VarChar(64)
+  retentionPolicyVersion String                  @default("N21_UNASSIGNED") @db.VarChar(64)
+  retentionEligibleAt    DateTime?               @db.Timestamptz(3)
+  createdAt              DateTime                @default(now()) @db.Timestamptz(3)
+  inboxItem              CommercialLeadInboxItem @relation(fields: [inboxItemId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorUser              User?                   @relation("CommercialLeadActivityActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actorSession           InternalSession?        @relation(fields: [actorSessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeBefore         User?                   @relation("CommercialLeadActivityAssigneeBefore", fields: [assigneeBeforeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assigneeAfter          User?                   @relation("CommercialLeadActivityAssigneeAfter", fields: [assigneeAfterId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([inboxItemId, sequence], map: "CommercialLeadActivity_item_sequence_key")
+  @@index([activityType, createdAt, id], map: "CommercialLeadActivity_type_idx")
+  @@index([actorUserId, createdAt, id], map: "CommercialLeadActivity_actor_idx")
+  @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "CommercialLeadActivity_retention_idx")
 }
 
 model LeadDuplicateCase {

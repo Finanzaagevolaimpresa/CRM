@@ -11,6 +11,7 @@ import {
   isCommercialLeadReasonCode,
   isCommercialLeadResponseTargetSeconds,
 } from '../src/lib/commercial-lead-inbox-contract';
+import { classifyDataField } from '../src/lib/data-classification';
 
 test('N14 remains dormant and fail-closed for missing, empty and unknown modes', () => {
   assert.equal(COMMERCIAL_LEAD_INBOX_MANIFEST.dormant, true);
@@ -52,4 +53,11 @@ test('N14 documentation fixes the database-clock and application rollback bounda
   assert.match(document, /fresh42/u);
   assert.match(document, /PR108 N−1 su DB42/u);
   assert.match(document, /nessuna down-migration/u);
+});
+
+test('N14 classifies identifiers, session bindings, provenance and SLA timestamps', () => {
+  assert.equal(classifyDataField('commercial_lead_inbox_item_v1', 'leadId').classification, 'PERSONAL');
+  assert.equal(classifyDataField('commercial_lead_inbox_item_v1', 'originKind').classification, 'INTERNAL');
+  assert.equal(classifyDataField('commercial_lead_sla_cycle_v1', 'dueAt').classification, 'PERSONAL');
+  assert.equal(classifyDataField('commercial_lead_activity_v1', 'actorSessionId').classification, 'AUTHENTICATION_SECRET');
 });
