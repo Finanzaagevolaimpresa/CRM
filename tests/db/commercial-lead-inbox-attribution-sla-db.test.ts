@@ -427,6 +427,26 @@ test('N14 conversion is first-response gated, fault-atomic and single-winner', {
   assert.equal(item.state, 'CLOSED');
   assert.ok(cycle.closedAt);
   assert.equal(activity.reasonCode, 'CONVERTED');
+  const [cycleCountBefore, activityCountBefore] = await Promise.all([
+    client().commercialLeadSlaCycle.count({ where: { inboxItemId: item.id } }),
+    client().commercialLeadActivity.count({ where: { inboxItemId: item.id } }),
+  ]);
+  await assert.rejects(reopenCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor: manager, expectedInboxVersion: item.version,
+  }), (error: unknown) => error instanceof Error
+    && (error as Error & { code?: unknown }).code === 'N14_LEAD_ALREADY_CONVERTED');
+  const [rejectedLead, rejectedItem, cycleCountAfter, activityCountAfter] = await Promise.all([
+    client().lead.findUniqueOrThrow({ where: { id: lead.id } }),
+    client().commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: lead.id } }),
+    client().commercialLeadSlaCycle.count({ where: { inboxItemId: item.id } }),
+    client().commercialLeadActivity.count({ where: { inboxItemId: item.id } }),
+  ]);
+  assert.equal(rejectedLead.clientId, convertedLead.clientId);
+  assert.equal(rejectedLead.status, 'vinto');
+  assert.equal(rejectedItem.state, 'CLOSED');
+  assert.equal(rejectedItem.version, item.version);
+  assert.equal(cycleCountAfter, cycleCountBefore);
+  assert.equal(activityCountAfter, activityCountBefore);
 });
 
 test('N14 SLA arithmetic remains absolute across Europe/Rome DST transitions', {

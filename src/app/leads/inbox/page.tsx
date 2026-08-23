@@ -60,7 +60,7 @@ export default async function Page({
   if (selectedQueue === 'closed') where.state = 'CLOSED';
   else where.state = 'OPEN';
   if (selectedQueue === 'due') {
-    where.slaCycles = { some: { closedAt: null, dueAt: { lte: dueThreshold } } };
+    where.slaCycles = { some: { closedAt: null, firstResponseAt: null, dueAt: { lte: dueThreshold } } };
   }
 
   const [rows, userRows, readiness] = await Promise.all([

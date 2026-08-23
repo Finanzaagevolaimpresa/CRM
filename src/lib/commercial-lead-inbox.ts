@@ -701,6 +701,7 @@ export async function reopenCommercialLeadInboxItem(
     if (!item) fail('N14_ITEM_NOT_FOUND');
     if (item.state !== 'CLOSED') fail('N14_ITEM_NOT_CLOSED');
     if (item.version !== input.expectedInboxVersion) fail('N14_VERSION_CONFLICT');
+    if (lead.clientId) fail('N14_LEAD_ALREADY_CONVERTED');
     const policy = await activePolicyAndClock(tx, commandNow);
     const sequenceRows = await tx.$queryRaw<Array<{ sequence: number }>>(Prisma.sql`
       SELECT COALESCE(MAX("sequence"), 0)::integer + 1 AS sequence

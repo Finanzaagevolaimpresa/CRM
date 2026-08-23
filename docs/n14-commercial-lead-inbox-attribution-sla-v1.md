@@ -28,7 +28,8 @@ Initialize crea atomicamente item OPEN, ciclo 1 e activity. Claim/assign/unassig
 `Lead.assignedToId`. First response chiude l'obiettivo del ciclo con `MET` o `BREACHED`. Close
 chiude item e ciclo; reopen è privilegiato e apre un nuovo ciclo sulla policy ACTIVE corrente.
 La conversione richiede owner corrente e prima risposta già registrata, quindi crea il Client e
-chiude Lead, item e ciclo come `CONVERTED` nella stessa transazione. I binding N01/N13 sono protetti
+chiude Lead, item e ciclo come `CONVERTED` nella stessa transazione; un Lead convertito non è
+riapribile. I binding N01/N13 sono protetti
 dal guard INSERT N14 contro receipt/ledger, stesso Lead, purpose, stato e schema; non usano FK
 dirette che bloccherebbero i `TRUNCATE` test-only già protetti dalle policy append-only.
 
@@ -40,7 +41,8 @@ terminali quando esiste un item N14.
 
 `availableAt` è il clock database dell'enrollment, non il timestamp storico dell'origine.
 `dueAt = availableAt + responseTargetSeconds`. `OVERDUE` è derivato in lettura e non produce
-scritture. V1 non applica business hours, pause o festività.
+scritture. La coda `due` include soltanto cicli aperti senza prima risposta. V1 non applica
+business hours, pause o festività.
 
 ## Sicurezza e privacy
 

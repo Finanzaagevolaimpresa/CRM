@@ -130,6 +130,7 @@ test('N14 conversion requires first response and closes Client, Lead, cycle and 
   const validation = readFileSync('src/lib/validation.ts', 'utf8');
   assert.match(actions, /convertCommercialLeadInboxItem\(prisma/u);
   assert.match(service, /convertCommercialLeadInboxItem[\s\S]*N14_FIRST_RESPONSE_REQUIRED[\s\S]*tx\.client\.create[\s\S]*status: 'vinto'[\s\S]*reasonCode: 'CONVERTED'/u);
+  assert.match(service, /reopenCommercialLeadInboxItem[\s\S]*lead\.clientId[\s\S]*N14_LEAD_ALREADY_CONVERTED/u);
   assert.doesNotMatch(validation, /commercialLeadInboxCloseSchema[\s\S]{0,180}'CONVERTED'/u);
 });
 
@@ -148,6 +149,7 @@ test('N14 UI is mode-gated, permission-scoped and query-bounded', () => {
   assert.match(inboxPage, /leadVisibilityWhere\(session\)/u);
   assert.match(inboxPage, /take: coreQueryFetchSize\(\)/u);
   assert.match(inboxPage, /clock_timestamp\(\)::timestamptz\(3\)/u);
+  assert.match(inboxPage, /slaCycles = \{ some: \{ closedAt: null, firstResponseAt: null, dueAt:/u);
   assert.match(leadsPage, /commercialLeadInboxMode\(\) === "enforced"[\s\S]*\/leads\/inbox/u);
   assert.doesNotMatch(inboxPage, /submissionId|envelopeJson|payloadHash|keyDigest/u);
 });

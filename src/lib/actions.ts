@@ -543,6 +543,9 @@ function mapCommercialLeadInboxError(error: unknown): never {
   if (error.code === 'N14_FIRST_RESPONSE_REQUIRED') {
     throw new UserFacingActionError('Registra la prima risposta prima di convertire il lead.');
   }
+  if (error.code === 'N14_LEAD_ALREADY_CONVERTED') {
+    throw new UserFacingActionError('Un lead già convertito in cliente non può essere riaperto.');
+  }
   throw new UserFacingActionError('Operazione Commercial Lead Inbox non completata. Ricarica.');
 }
 
