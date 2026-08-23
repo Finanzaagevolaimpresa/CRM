@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Prisma, type PrismaClient, type RoleCode } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import {
   CommercialLeadInboxError,
   commercialLeadInboxMode,
@@ -9,6 +9,7 @@ import {
   type CommercialLeadReasonCode,
 } from './commercial-lead-inbox-contract';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
 
 export const COMMERCIAL_LEAD_INBOX_TRANSACTION = Object.freeze({
@@ -107,15 +108,10 @@ function requireEnforcedMode() {
   if (commercialLeadInboxMode() !== 'enforced') fail('N14_DISABLED');
 }
 
-function actorAllowed(role: RoleCode, requirement: 'WORK' | 'MANAGE') {
-  if (role === 'admin') return true;
-  return requirement === 'MANAGE' ? role === 'direzione' : role === 'commerciale';
-}
-
 async function authorizeActor(
   tx: Prisma.TransactionClient,
   actor: CommercialLeadActor,
-  requirement: 'WORK' | 'MANAGE',
+  requirement: 'CLAIM' | 'WORK' | 'MANAGE',
 ) {
   let registry = false;
   try { registry = internalSessionMode() === 'registry'; } catch { /* fail closed */ }
@@ -124,8 +120,15 @@ async function authorizeActor(
     sessionId: actor.sessionId,
     userId: actor.userId,
   });
+  const permission = requirement === 'MANAGE'
+    ? 'lead.inbox.assign'
+    : requirement === 'CLAIM' ? 'lead.inbox.claim' : 'lead.write';
   if (!session || session.revokedAt || !session.live || !session.active || session.deletedAt
-    || !actorAllowed(session.role, requirement)) {
+    || !hasPermission({
+      role: session.role,
+      active: session.active,
+      permissionOverrides: session.permissionOverrides,
+    }, permission)) {
     fail('N14_PERMISSION_DENIED');
   }
   return session;
@@ -160,7 +163,7 @@ async function lockOpenCycle(tx: Prisma.TransactionClient, itemId: string) {
   return rows[0] ?? null;
 }
 
-async function activePolicyAndClock(tx: Prisma.TransactionClient) {
+async function optionalActivePolicyAndClock(tx: Prisma.TransactionClient) {
   const rows = await tx.$queryRaw<Array<{
     id: string;
     now: Date;
@@ -178,7 +181,11 @@ async function activePolicyAndClock(tx: Prisma.TransactionClient) {
       (database_clock.now + make_interval(secs => active_policy."responseTargetSeconds"))::timestamptz(3) AS "dueAt"
     FROM active_policy CROSS JOIN database_clock
   `);
-  return rows[0] ?? fail('N14_ACTIVE_POLICY_UNAVAILABLE');
+  return rows[0] ?? null;
+}
+
+async function activePolicyAndClock(tx: Prisma.TransactionClient) {
+  return await optionalActivePolicyAndClock(tx) ?? fail('N14_ACTIVE_POLICY_UNAVAILABLE');
 }
 
 async function databaseClock(tx: Prisma.TransactionClient) {
@@ -220,7 +227,7 @@ async function verifiedAttribution(
       FROM "LeadProjectionLedger" ledger
       JOIN "BusinessInboxEvent" inbox ON inbox."id" = ledger."inboxEventId"
       WHERE ledger."id" = ${attribution.projectionLedgerId}::uuid
-        AND ledger."leadId" = ${lead.id} AND ledger."state" = 'PROJECTED_NEW'
+        AND ledger."leadId" = ${lead.id} AND ledger."state" IN ('PROJECTED_NEW', 'RESOLVED_NEW')
         AND inbox."schemaVersion" = 'fai.lead-submitted.v1'
       FOR SHARE OF ledger, inbox
     `);
@@ -346,6 +353,44 @@ export async function initializeCommercialLeadInboxItem(
   });
 }
 
+export async function maybeEnrollProjectedCommercialLead(
+  tx: Prisma.TransactionClient,
+  input: Readonly<{ leadId: string; projectionLedgerId: string }>,
+) {
+  if (commercialLeadInboxMode() !== 'enforced') return null;
+  const lead = await lockLead(tx, input.leadId);
+  if (await lockItem(tx, input.leadId)) return null;
+  const policy = await optionalActivePolicyAndClock(tx);
+  if (!policy) return null;
+  const attribution = await verifiedAttribution(tx, lead, {
+    originKind: 'BUSINESS_PROJECTION_N13',
+    projectionLedgerId: input.projectionLedgerId,
+  });
+  const item = await tx.commercialLeadInboxItem.create({ data: {
+    id: randomUUID(), leadId: lead.id, originKind: 'BUSINESS_PROJECTION_N13',
+    attributionVersion: 'n14-v1', sourceSystem: attribution.sourceSystem,
+    formCode: attribution.formCode, formVersion: attribution.formVersion,
+    sourceOccurredAt: attribution.sourceOccurredAt, projectionLedgerId: attribution.projectionLedgerId,
+    privacyEvidenceReceiptId: null, state: 'OPEN', version: 1, initializedAt: policy.now,
+  } });
+  await tx.commercialLeadSlaCycle.create({ data: {
+    id: randomUUID(), inboxItemId: item.id, sequence: 1, policyVersionId: policy.id,
+    availableAt: policy.now, dueAt: policy.dueAt, version: 1,
+  } });
+  await tx.commercialLeadActivity.create({ data: {
+    id: randomUUID(), inboxItemId: item.id, sequence: 1, activityType: 'INITIALIZED',
+    actorKind: 'SYSTEM', actorUserId: null, actorSessionId: null,
+    assigneeBeforeId: lead.assignedToId, assigneeAfterId: lead.assignedToId,
+    reasonCode: 'PROJECTED_NEW', inboxVersionBefore: 0, inboxVersionAfter: 1,
+  } });
+  await tx.auditLog.create({ data: {
+    actorId: null, event: 'commercial_lead_inbox_initialized',
+    entityType: 'CommercialLeadInboxItem', entityId: item.id,
+    after: { originKind: 'BUSINESS_PROJECTION_N13', state: 'OPEN', version: 1, reasonCode: 'PROJECTED_NEW' },
+  } });
+  return item;
+}
+
 async function mutateOwner(
   db: PrismaClient,
   input: Readonly<{
@@ -355,7 +400,7 @@ async function mutateOwner(
     expectedInboxVersion: number;
     activityType: 'CLAIMED' | 'ASSIGNED' | 'UNASSIGNED';
     reasonCode: 'SELF_CLAIM' | 'MANAGER_ASSIGNMENT' | 'MANAGER_UNASSIGNMENT';
-    requirement: 'WORK' | 'MANAGE';
+    requirement: 'CLAIM' | 'WORK' | 'MANAGE';
     faultAt?: CommercialLeadFaultPoint;
   }>,
 ) {
@@ -371,7 +416,7 @@ async function mutateOwner(
       fail('N14_VERSION_CONFLICT');
     }
     if (input.targetUserId) {
-      const target = await tx.$queryRaw<Array<{ id: string; role: RoleCode }>>(Prisma.sql`
+      const target = await tx.$queryRaw<Array<{ id: string; role: string }>>(Prisma.sql`
         SELECT "id", "role" FROM "User" WHERE "id" = ${input.targetUserId}
           AND "active" = TRUE AND "deletedAt" IS NULL FOR SHARE
       `);
@@ -404,7 +449,7 @@ async function mutateOwner(
 export function claimCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{
   leadId: string; actor: CommercialLeadActor; expectedInboxVersion: number; faultAt?: CommercialLeadFaultPoint;
 }>) {
-  return mutateOwner(db, { ...input, targetUserId: input.actor.userId, activityType: 'CLAIMED', reasonCode: 'SELF_CLAIM', requirement: 'WORK' });
+  return mutateOwner(db, { ...input, targetUserId: input.actor.userId, activityType: 'CLAIMED', reasonCode: 'SELF_CLAIM', requirement: 'CLAIM' });
 }
 
 export function assignCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{

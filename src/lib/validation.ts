@@ -52,6 +52,28 @@ export const leadDuplicateResolutionSchema = z.object({
     });
   }
 });
+export const commercialLeadInboxInitializeSchema = z.object({
+  id,
+  originKind: z.enum(['MANUAL_CRM', 'WEBSITE_LEGACY_N01', 'BUSINESS_PROJECTION_N13', 'LEGACY_UNVERIFIED']),
+  projectionLedgerId: uuidV4.optional(),
+  privacyEvidenceReceiptId: uuidV4.optional(),
+}).superRefine((value, context) => {
+  const projection = value.originKind === 'BUSINESS_PROJECTION_N13';
+  const evidence = value.originKind === 'WEBSITE_LEGACY_N01';
+  if (projection !== Boolean(value.projectionLedgerId) || evidence !== Boolean(value.privacyEvidenceReceiptId)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Attribution binding non valido.' });
+  }
+});
+export const commercialLeadInboxCommandSchema = z.object({
+  id,
+  expectedInboxVersion: z.coerce.number().int().positive(),
+});
+export const commercialLeadInboxAssignSchema = commercialLeadInboxCommandSchema.extend({
+  targetUserId: id,
+});
+export const commercialLeadInboxCloseSchema = commercialLeadInboxCommandSchema.extend({
+  reasonCode: z.enum(['QUALIFIED_OUT', 'CONVERTED', 'LOST', 'ARCHIVED']),
+});
 export const commercialOfferSchema = z.object({ leadId: id.optional(), clientId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, services: optionalText, includedActivities: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, validUntil: date.optional(), operationalConditions: optionalText, commercialProposal: optionalText, status: z.enum(['bozza','inviata','accettata','rifiutata','scaduta']).default('bozza'), notes: optionalText, sentAt: date.optional(), followUpAt: date.optional(), followUpNote: optionalText, outcomeNote: optionalText, acceptedAt: date.optional(), rejectedAt: date.optional(), rejectionReason: optionalText, commercialAction: z.enum(['mark_sent','mark_accepted','mark_rejected','update_followup']).optional() });
 export const commercialOfferUpdateSchema = commercialOfferSchema.extend({ id });
 export const clientSchema = z.object({ type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']), displayName: z.string().trim().min(1).max(200), leadId: id.optional(), notes: optionalText });

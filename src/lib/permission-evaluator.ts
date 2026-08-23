@@ -4,6 +4,7 @@ import {
   isPermission,
   permissionCodes,
   protectedLeadDuplicatePermissions,
+  protectedCommercialLeadPermissions,
   roleHasPermission,
   type Permission,
 } from './permissions';
@@ -30,6 +31,9 @@ export function evaluatePermission(session: PermissionSession, permission: Permi
   }
   if (session.role === 'admin') return { allowed: true, source: 'ADMIN' };
   if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
+    return { allowed: session.role === 'direzione', source: 'ROLE' };
+  }
+  if ((protectedCommercialLeadPermissions as readonly Permission[]).includes(permission)) {
     return { allowed: session.role === 'direzione', source: 'ROLE' };
   }
   if ((adminOnlyAiExecutionPermissions as readonly Permission[]).includes(permission)) {

@@ -23,6 +23,7 @@ import {
   createBusinessLeadPrivacyEvidence,
   PrivacyContractUnavailableError,
 } from './privacy-evidence';
+import { maybeEnrollProjectedCommercialLead } from './commercial-lead-inbox';
 
 export const LEAD_PROJECTION_MANIFEST = Object.freeze({
   version: 1,
@@ -342,6 +343,12 @@ async function projectInTransaction(
       snapshots,
       options,
     });
+  if (result.state === 'PROJECTED_NEW' && result.leadId) {
+    await maybeEnrollProjectedCommercialLead(context.tx, {
+      leadId: result.leadId,
+      projectionLedgerId: result.ledgerId,
+    });
+  }
   await context.tx.auditLog.create({
     data: {
       actorId: null,

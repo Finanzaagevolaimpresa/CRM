@@ -12,7 +12,8 @@ import {
   isCommercialLeadResponseTargetSeconds,
 } from '../src/lib/commercial-lead-inbox-contract';
 import { classifyDataField } from '../src/lib/data-classification';
-import { createOperationalEventV1 } from '../src/lib/operational-telemetry';
+import { createOperationalCorrelationId, createOperationalEventV1 } from '../src/lib/operational-telemetry';
+import { hasPermission } from '../src/lib/permission-evaluator';
 
 test('N14 remains dormant and fail-closed for missing, empty and unknown modes', () => {
   assert.equal(COMMERCIAL_LEAD_INBOX_MANIFEST.dormant, true);
@@ -67,7 +68,7 @@ test('N14 telemetry is aggregate-only and rejects identifiers or free metadata',
   const event = createOperationalEventV1({
     eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
     outcome: 'SUCCESS',
-    correlationId: '00000000-0000-4000-8000-000000000014',
+    correlationId: createOperationalCorrelationId(() => '00000000-0000-4000-8000-000000000014'),
     metadata: { operationCode: 'CLAIM' },
     nowMs: Date.parse('2026-08-23T00:00:00.000Z'),
   });
@@ -75,7 +76,7 @@ test('N14 telemetry is aggregate-only and rejects identifiers or free metadata',
   assert.throws(() => createOperationalEventV1({
     eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
     outcome: 'SUCCESS',
-    correlationId: '00000000-0000-4000-8000-000000000014',
+    correlationId: createOperationalCorrelationId(() => '00000000-0000-4000-8000-000000000014'),
     metadata: { operationCode: 'CLAIM', leadId: 'forbidden' },
   }), /TELEMETRY_METADATA_INVALID/u);
 });
@@ -86,4 +87,31 @@ test('N14 service fixes lock order, database clock and transaction-local Lead gu
   assert.match(source, /clock_timestamp\(\)::timestamptz\(3\)/u);
   assert.match(source, /set_config\('fai\.n14_write_context', 'authorized', true\)/u);
   assert.doesNotMatch(source, /setInterval|setTimeout|\bfetch\s*\(|\bconsole\./u);
+});
+
+test('N14 separates self-claim from protected assignment permissions', () => {
+  const commerciale = { role: 'commerciale' as const, active: true, permissionOverrides: [] };
+  const direzione = { role: 'direzione' as const, active: true, permissionOverrides: [] };
+  assert.equal(hasPermission(commerciale, 'lead.inbox.claim'), true);
+  assert.equal(hasPermission(commerciale, 'lead.inbox.assign'), false);
+  assert.equal(hasPermission({ ...commerciale, permissionOverrides: [{ permission: 'lead.inbox.assign', allowed: true }] }, 'lead.inbox.assign'), false);
+  assert.equal(hasPermission(direzione, 'lead.inbox.assign'), true);
+  assert.equal(hasPermission(direzione, 'lead.inbox.claim'), false);
+});
+
+test('N14 protected actions require step-up before transactional registry revalidation', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  for (const code of ['N14_LEAD_INBOX_ASSIGN', 'N14_LEAD_INBOX_UNASSIGN', 'N14_LEAD_INBOX_REOPEN', 'N14_LEAD_INBOX_LEGACY_ENROLL']) {
+    assert.match(actions, new RegExp(`requireEnforcedPrivilegedMutation\\(session, '${code}'\\)`));
+  }
+  assert.match(actions, /commercialLeadActor\(session\)/u);
+});
+
+test('N13 projected-new paths enter N14 only through mode plus active-policy enrollment', () => {
+  const projection = readFileSync('src/lib/lead-projection.ts', 'utf8');
+  const duplicate = readFileSync('src/lib/lead-duplicate-resolution.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(projection, /result\.state === 'PROJECTED_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
+  assert.match(duplicate, /input\.outcome === 'CREATE_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
+  assert.match(service, /maybeEnrollProjectedCommercialLead[\s\S]*commercialLeadInboxMode\(\) !== 'enforced'[\s\S]*optionalActivePolicyAndClock/u);
 });

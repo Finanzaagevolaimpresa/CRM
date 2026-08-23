@@ -33,6 +33,10 @@ export const privilegedMutationCodes = [
   'AI_ORCHESTRATOR_GLOBAL_POLICY_UPDATE',
   'AI_ORCHESTRATOR_SCOPE_POLICY_UPDATE',
   'LEAD_DUPLICATE_RESOLVE',
+  'N14_LEAD_INBOX_ASSIGN',
+  'N14_LEAD_INBOX_UNASSIGN',
+  'N14_LEAD_INBOX_REOPEN',
+  'N14_LEAD_INBOX_LEGACY_ENROLL',
 ] as const;
 
 export type PrivilegedMutationCode = (typeof privilegedMutationCodes)[number];
