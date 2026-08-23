@@ -163,9 +163,14 @@ test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or acti
       ORDER BY indexname
     `),
     client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
-      SELECT trigger_name AS name FROM information_schema.triggers
-      WHERE trigger_schema = ${schema} AND (event_object_table LIKE 'CommercialLead%' OR event_object_table = 'Lead')
-      GROUP BY trigger_name ORDER BY trigger_name
+      SELECT trigger_row.tgname AS name
+      FROM pg_trigger trigger_row
+      JOIN pg_class table_row ON table_row.oid = trigger_row.tgrelid
+      JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+      WHERE namespace_row.nspname = ${schema}
+        AND (table_row.relname LIKE 'CommercialLead%' OR table_row.relname = 'Lead')
+        AND NOT trigger_row.tgisinternal
+      ORDER BY trigger_row.tgname
     `),
     client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
       SELECT routine_name AS name FROM information_schema.routines
@@ -274,7 +279,10 @@ function claimInIndependentProcess(input: Readonly<{
   const script = `
     import { writeFileSync, existsSync } from 'node:fs';
     import { PrismaClient } from '@prisma/client';
-    import { claimCommercialLeadInboxItem } from './src/lib/commercial-lead-inbox.ts';
+    const commercialModule = await import('./src/lib/commercial-lead-inbox.ts');
+    const claimCommercialLeadInboxItem = commercialModule.claimCommercialLeadInboxItem
+      ?? commercialModule.default?.claimCommercialLeadInboxItem;
+    if (typeof claimCommercialLeadInboxItem !== 'function') throw new Error('N14_CLAIM_EXPORT_UNAVAILABLE');
     writeFileSync(process.env.N14_READY_FILE, 'ready');
     while (!existsSync(process.env.N14_RELEASE_FILE)) await new Promise((resolve) => setTimeout(resolve, 5));
     const db = new PrismaClient();

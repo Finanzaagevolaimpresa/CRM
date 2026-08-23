@@ -521,7 +521,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);
   let historicalLeadId: string | null = null;
   try {
-    for (const name of upgrade ? names.slice(0, 40) : names) {
+    for (const name of upgrade ? names.slice(0, 40) : names.slice(0, 41)) {
       cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });
     }
     deploy(url.toString(), join(prismaDir, 'schema.prisma'));
