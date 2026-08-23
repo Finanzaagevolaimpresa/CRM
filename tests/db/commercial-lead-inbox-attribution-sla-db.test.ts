@@ -143,6 +143,7 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.match(sql, /N14_LEAD_WRITER_BYPASS/u);
   assert.match(sql, /N14_WEBSITE_ATTRIBUTION_INVALID/u);
   assert.doesNotMatch(sql, /CommercialLeadInboxItem_privacyEvidenceReceiptId_fkey/u);
+  assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
 });
 
 test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or activity rows', {
@@ -482,6 +483,20 @@ test('N14 database guards reject source overwrite, raw owner bypass and activity
     version: 1,
     initializedAt: new Date('2026-08-23T00:00:00.000Z'),
   } }), /N14_WEBSITE_ATTRIBUTION_INVALID/u);
+  await assert.rejects(client().commercialLeadInboxItem.create({ data: {
+    id: '00000000-0000-4000-8000-00000014fffd',
+    leadId: lead.id,
+    originKind: 'BUSINESS_PROJECTION_N13',
+    attributionVersion: 'n14-v1',
+    sourceSystem: 'N13_DB_TEST',
+    formCode: 'SYNTHETIC_LEAD',
+    formVersion: 'n14-v1',
+    sourceOccurredAt: new Date('2026-08-23T00:00:00.000Z'),
+    projectionLedgerId: '00000000-0000-4000-8000-00000014fffc',
+    state: 'OPEN',
+    version: 1,
+    initializedAt: new Date('2026-08-23T00:00:00.000Z'),
+  } }), /N14_PROJECTION_ATTRIBUTION_INVALID/u);
   const activity = await client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } });
   await assert.rejects(client().commercialLeadActivity.update({ where: { id: activity.id }, data: { reasonCode: 'PROJECTED_NEW' } }), /N14_ACTIVITY_APPEND_ONLY/u);
 });

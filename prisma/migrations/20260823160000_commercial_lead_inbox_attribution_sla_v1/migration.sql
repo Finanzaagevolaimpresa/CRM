@@ -72,9 +72,7 @@ CREATE TABLE "CommercialLeadInboxItem" (
     )
   ),
   CONSTRAINT "CommercialLeadInboxItem_leadId_fkey" FOREIGN KEY ("leadId")
-    REFERENCES "Lead"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT "CommercialLeadInboxItem_projectionLedgerId_fkey" FOREIGN KEY ("projectionLedgerId")
-    REFERENCES "LeadProjectionLedger"("id") ON DELETE RESTRICT ON UPDATE RESTRICT
+    REFERENCES "Lead"("id") ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
 CREATE UNIQUE INDEX "CommercialLeadInboxItem_leadId_key" ON "CommercialLeadInboxItem"("leadId");
