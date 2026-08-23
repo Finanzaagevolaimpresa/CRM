@@ -74,9 +74,7 @@ CREATE TABLE "CommercialLeadInboxItem" (
   CONSTRAINT "CommercialLeadInboxItem_leadId_fkey" FOREIGN KEY ("leadId")
     REFERENCES "Lead"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT "CommercialLeadInboxItem_projectionLedgerId_fkey" FOREIGN KEY ("projectionLedgerId")
-    REFERENCES "LeadProjectionLedger"("id") ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT "CommercialLeadInboxItem_privacyEvidenceReceiptId_fkey" FOREIGN KEY ("privacyEvidenceReceiptId")
-    REFERENCES "PrivacyEvidenceReceipt"("id") ON DELETE RESTRICT ON UPDATE RESTRICT
+    REFERENCES "LeadProjectionLedger"("id") ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
 CREATE UNIQUE INDEX "CommercialLeadInboxItem_leadId_key" ON "CommercialLeadInboxItem"("leadId");
@@ -197,6 +195,24 @@ END $$;
 
 CREATE FUNCTION "n14_guard_item"() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."originKind" = 'WEBSITE_LEGACY_N01' AND NOT EXISTS (
+      SELECT 1 FROM "PrivacyEvidenceReceipt" receipt
+      WHERE receipt."id" = NEW."privacyEvidenceReceiptId"
+        AND receipt."leadId" = NEW."leadId"
+        AND receipt."websiteLeadReceiptId" IS NOT NULL
+        AND receipt."purposeCode" = 'SERVICE_REQUEST_FOLLOW_UP'
+    ) THEN RAISE EXCEPTION 'N14_WEBSITE_ATTRIBUTION_INVALID'; END IF;
+    IF NEW."originKind" = 'BUSINESS_PROJECTION_N13' AND NOT EXISTS (
+      SELECT 1 FROM "LeadProjectionLedger" ledger
+      JOIN "BusinessInboxEvent" inbox ON inbox."id" = ledger."inboxEventId"
+      WHERE ledger."id" = NEW."projectionLedgerId"
+        AND ledger."leadId" = NEW."leadId"
+        AND ledger."state" IN ('PROJECTED_NEW', 'RESOLVED_NEW')
+        AND inbox."schemaVersion" = 'fai.lead-submitted.v1'
+    ) THEN RAISE EXCEPTION 'N14_PROJECTION_ATTRIBUTION_INVALID'; END IF;
+    RETURN NEW;
+  END IF;
   IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'N14_ITEM_DELETE_DENIED'; END IF;
   IF NEW."id" IS DISTINCT FROM OLD."id" OR NEW."leadId" IS DISTINCT FROM OLD."leadId"
     OR NEW."originKind" IS DISTINCT FROM OLD."originKind"
@@ -258,7 +274,7 @@ END $$;
 
 CREATE TRIGGER "CommercialLeadSlaPolicyVersion_guard_row" BEFORE UPDATE OR DELETE ON "CommercialLeadSlaPolicyVersion" FOR EACH ROW EXECUTE FUNCTION "n14_guard_policy"();
 CREATE TRIGGER "CommercialLeadSlaPolicyVersion_deny_truncate" BEFORE TRUNCATE ON "CommercialLeadSlaPolicyVersion" FOR EACH STATEMENT EXECUTE FUNCTION "n14_guard_activity_and_truncate"();
-CREATE TRIGGER "CommercialLeadInboxItem_guard_row" BEFORE UPDATE OR DELETE ON "CommercialLeadInboxItem" FOR EACH ROW EXECUTE FUNCTION "n14_guard_item"();
+CREATE TRIGGER "CommercialLeadInboxItem_guard_row" BEFORE INSERT OR UPDATE OR DELETE ON "CommercialLeadInboxItem" FOR EACH ROW EXECUTE FUNCTION "n14_guard_item"();
 CREATE TRIGGER "CommercialLeadInboxItem_deny_truncate" BEFORE TRUNCATE ON "CommercialLeadInboxItem" FOR EACH STATEMENT EXECUTE FUNCTION "n14_guard_activity_and_truncate"();
 CREATE TRIGGER "CommercialLeadSlaCycle_guard_row" BEFORE UPDATE OR DELETE ON "CommercialLeadSlaCycle" FOR EACH ROW EXECUTE FUNCTION "n14_guard_cycle"();
 CREATE TRIGGER "CommercialLeadSlaCycle_deny_truncate" BEFORE TRUNCATE ON "CommercialLeadSlaCycle" FOR EACH STATEMENT EXECUTE FUNCTION "n14_guard_activity_and_truncate"();

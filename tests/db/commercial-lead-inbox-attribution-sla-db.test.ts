@@ -141,6 +141,8 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.doesNotMatch(sql, /CREATE\s+(?:EXTENSION|EVENT)|\b(?:cron|scheduler|dblink|http)\b/iu);
   assert.match(sql, /N21_UNASSIGNED/u);
   assert.match(sql, /N14_LEAD_WRITER_BYPASS/u);
+  assert.match(sql, /N14_WEBSITE_ATTRIBUTION_INVALID/u);
+  assert.doesNotMatch(sql, /CommercialLeadInboxItem_privacyEvidenceReceiptId_fkey/u);
 });
 
 test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or activity rows', {
@@ -466,6 +468,20 @@ test('N14 database guards reject source overwrite, raw owner bypass and activity
   });
   await assert.rejects(client().lead.update({ where: { id: lead.id }, data: { source: 'FORGED' } }), /N14_LEAD_SOURCE_IMMUTABLE/u);
   await assert.rejects(client().lead.update({ where: { id: lead.id }, data: { assignedToId: actorUserId } }), /N14_LEAD_WRITER_BYPASS/u);
+  await assert.rejects(client().commercialLeadInboxItem.create({ data: {
+    id: '00000000-0000-4000-8000-00000014ffff',
+    leadId: lead.id,
+    originKind: 'WEBSITE_LEGACY_N01',
+    attributionVersion: 'n14-v1',
+    sourceSystem: 'N01_DB_TEST',
+    formCode: 'SYNTHETIC_LEAD',
+    formVersion: 'n14-v1',
+    sourceOccurredAt: new Date('2026-08-23T00:00:00.000Z'),
+    privacyEvidenceReceiptId: '00000000-0000-4000-8000-00000014fffe',
+    state: 'OPEN',
+    version: 1,
+    initializedAt: new Date('2026-08-23T00:00:00.000Z'),
+  } }), /N14_WEBSITE_ATTRIBUTION_INVALID/u);
   const activity = await client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } });
   await assert.rejects(client().commercialLeadActivity.update({ where: { id: activity.id }, data: { reasonCode: 'PROJECTED_NEW' } }), /N14_ACTIVITY_APPEND_ONLY/u);
 });

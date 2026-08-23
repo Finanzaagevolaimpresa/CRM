@@ -28,7 +28,9 @@ Initialize crea atomicamente item OPEN, ciclo 1 e activity. Claim/assign/unassig
 `Lead.assignedToId`. First response chiude l'obiettivo del ciclo con `MET` o `BREACHED`. Close
 chiude item e ciclo; reopen è privilegiato e apre un nuovo ciclo sulla policy ACTIVE corrente.
 La conversione richiede owner corrente e prima risposta già registrata, quindi crea il Client e
-chiude Lead, item e ciclo come `CONVERTED` nella stessa transazione.
+chiude Lead, item e ciclo come `CONVERTED` nella stessa transazione. Il binding N01 è protetto dal
+guard INSERT N14 contro receipt, Lead e purpose; non usa una FK diretta che bloccherebbe il
+`TRUNCATE` test-only già protetto dalla policy append-only N04.
 
 Il servizio acquisisce nell'ordine clock database, sessione/actor, Lead, item e ciclo/policy, poi
 rivalida permessi e versioni dentro la transazione. Il guard PostgreSQL impedisce modifiche dirette a source, owner o stati
@@ -56,6 +58,6 @@ applicativo a PR108 su DB42; nessuna down-migration o restore reale è implicita
 Identità qualificata:
 
 - migration `20260823160000_commercial_lead_inbox_attribution_sla_v1`;
-- SHA256 `b592c9a0f9b98e95924f35a863b59d6bcf8f36cecc75c8c7daa35fff7aa0b666`;
+- SHA256 `687e33e6f27834c1da6e9fba2aa7034ffb77c3be510392ab4df8102d10a8ced7`;
 - catalogo esatto: 4 tabelle, 25 indici, 9 trigger e 5 funzioni N14;
 - stato di rilascio: 42 migration concluse, 0 incomplete e 0 righe N14.
