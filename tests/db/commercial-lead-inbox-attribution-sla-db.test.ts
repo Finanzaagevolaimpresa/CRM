@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
   claimCommercialLeadInboxItem,
+  closeCommercialLeadInboxItem,
+  convertCommercialLeadInboxItem,
   initializeCommercialLeadInboxItem,
+  recordCommercialLeadFirstResponse,
+  reopenCommercialLeadInboxItem,
 } from '../../src/lib/commercial-lead-inbox';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -31,6 +35,8 @@ const originalInboxMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
 const originalSessionMode = process.env.INTERNAL_SESSION_MODE;
 const actorUserId = 'n14-synthetic-commercial-user';
 const actorSessionId = '00000000-0000-4000-8000-000000140001';
+const managerUserId = 'n14-synthetic-manager-user';
+const managerSessionId = '00000000-0000-4000-8000-000000140003';
 
 function rootClient() {
   if (!rootDb) throw new Error('N14_ROOT_DB_UNAVAILABLE');
@@ -74,6 +80,20 @@ async function ensureActorAndPolicy() {
     tokenDigest: Buffer.alloc(32, 14),
     expiresAt: new Date('2099-01-01T00:00:00.000Z'),
   } });
+  await client().user.create({ data: {
+    id: managerUserId,
+    email: 'manager@n14-db.invalid',
+    name: 'N14 Synthetic Manager',
+    passwordHash: 'synthetic-not-a-real-password-hash',
+    role: 'direzione',
+    active: true,
+  } });
+  await client().internalSession.create({ data: {
+    id: managerSessionId,
+    userId: managerUserId,
+    tokenDigest: Buffer.alloc(32, 15),
+    expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+  } });
   await client().commercialLeadSlaPolicyVersion.create({ data: {
     id: '00000000-0000-4000-8000-000000140002',
     policyCode: 'COMMERCIAL_FIRST_RESPONSE',
@@ -108,6 +128,7 @@ async function syntheticLead(ordinal: number) {
 }
 
 const actor = Object.freeze({ userId: actorUserId, sessionId: actorSessionId });
+const manager = Object.freeze({ userId: managerUserId, sessionId: managerSessionId });
 
 test('N14 migration 42 is transactional, additive and business-empty by construction', () => {
   const sql = readFileSync(migrationPath, 'utf8');
@@ -240,22 +261,180 @@ test('N14 initialize binds database-clock SLA and writes item, cycle, activity a
   assert.equal(item.formCode, 'LEAD_CREATE_UI');
 });
 
-test('N14 two concurrent self-claims produce exactly one winner', {
+function claimInIndependentProcess(input: Readonly<{
+  ordinal: number;
+  databaseUrl: string;
+  leadId: string;
+  readyDirectory: string;
+  releaseFile: string;
+}>) {
+  const script = `
+    import { writeFileSync, existsSync } from 'node:fs';
+    import { PrismaClient } from '@prisma/client';
+    import { claimCommercialLeadInboxItem } from './src/lib/commercial-lead-inbox.ts';
+    writeFileSync(process.env.N14_READY_FILE, 'ready');
+    while (!existsSync(process.env.N14_RELEASE_FILE)) await new Promise((resolve) => setTimeout(resolve, 5));
+    const db = new PrismaClient();
+    try {
+      await claimCommercialLeadInboxItem(db, {
+        leadId: process.env.N14_LEAD_ID,
+        actor: { userId: process.env.N14_ACTOR_USER_ID, sessionId: process.env.N14_ACTOR_SESSION_ID },
+        expectedInboxVersion: 1,
+      });
+      process.stdout.write('FULFILLED');
+    } catch (error) {
+      process.stdout.write('REJECTED:' + (error && typeof error === 'object' && 'code' in error ? error.code : 'CLOSED'));
+    } finally { await db.$disconnect(); }
+  `;
+  return new Promise<string>((resolveResult, rejectResult) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DATABASE_URL: input.databaseUrl,
+        COMMERCIAL_LEAD_INBOX_MODE: 'enforced',
+        INTERNAL_SESSION_MODE: 'registry',
+        N14_READY_FILE: join(input.readyDirectory, String(input.ordinal)),
+        N14_RELEASE_FILE: input.releaseFile,
+        N14_LEAD_ID: input.leadId,
+        N14_ACTOR_USER_ID: actor.userId,
+        N14_ACTOR_SESSION_ID: actor.sessionId,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
+    child.once('error', rejectResult);
+    child.once('exit', (code) => code === 0
+      ? resolveResult(stdout)
+      : rejectResult(new Error(`N14_CLAIM_CHILD_${code}:${stderr.slice(0, 200)}`)));
+  });
+}
+
+test('N14 eight concurrent processes produce exactly one self-claim winner', {
   skip: !runDbTests,
+  timeout: 120_000,
 }, async () => {
   await ensureActorAndPolicy();
   const lead = await syntheticLead(2);
   await initializeCommercialLeadInboxItem(client(), {
     leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
   });
-  const attempts = await Promise.allSettled([
-    claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 }),
-    claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 }),
-  ]);
-  assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 1);
-  assert.equal(attempts.filter(({ status }) => status === 'rejected').length, 1);
+  const processDirectory = mkdtempSync(join(tmpdir(), 'n14-process-claim-'));
+  const readyDirectory = join(processDirectory, 'ready');
+  const releaseFile = join(processDirectory, 'release');
+  mkdirSync(readyDirectory);
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('schema', schema);
+  try {
+    const attempts = Array.from({ length: 8 }, (_, ordinal) => claimInIndependentProcess({
+      ordinal, databaseUrl: url.toString(), leadId: lead.id, readyDirectory, releaseFile,
+    }));
+    for (let wait = 0; wait < 800 && readdirSync(readyDirectory).length !== 8; wait += 1) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    assert.equal(readdirSync(readyDirectory).length, 8);
+    writeFileSync(releaseFile, 'go');
+    const results = await Promise.all(attempts);
+    assert.equal(results.filter((result) => result === 'FULFILLED').length, 1);
+    assert.equal(results.filter((result) => result === 'REJECTED:N14_VERSION_CONFLICT').length, 7);
+  } finally {
+    rmSync(processDirectory, { recursive: true, force: true });
+  }
   assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId, actorUserId);
   assert.equal(await client().commercialLeadActivity.count({ where: { inboxItem: { leadId: lead.id }, activityType: 'CLAIMED' } }), 1);
+});
+
+test('N14 response, close and reopen races each produce one winner and one ledger row', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(5);
+  await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  await claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 });
+  const responses = await Promise.allSettled(Array.from({ length: 2 }, () =>
+    recordCommercialLeadFirstResponse(client(), { leadId: lead.id, actor, expectedInboxVersion: 2 })));
+  assert.equal(responses.filter(({ status }) => status === 'fulfilled').length, 1);
+  const closes = await Promise.allSettled(Array.from({ length: 2 }, () =>
+    closeCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 3, reasonCode: 'LOST',
+    })));
+  assert.equal(closes.filter(({ status }) => status === 'fulfilled').length, 1);
+  const reopens = await Promise.allSettled(Array.from({ length: 2 }, () =>
+    reopenCommercialLeadInboxItem(client(), { leadId: lead.id, actor: manager, expectedInboxVersion: 4 })));
+  assert.equal(reopens.filter(({ status }) => status === 'fulfilled').length, 1);
+  const activities = await client().commercialLeadActivity.groupBy({
+    by: ['activityType'], where: { inboxItem: { leadId: lead.id } }, _count: { _all: true },
+  });
+  const counts = new Map(activities.map((row) => [row.activityType, row._count._all]));
+  assert.equal(counts.get('FIRST_RESPONSE_RECORDED'), 1);
+  assert.equal(counts.get('CLOSED'), 1);
+  assert.equal(counts.get('REOPENED'), 1);
+  assert.equal((await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: lead.id } })).version, 5);
+});
+
+test('N14 conversion is first-response gated, fault-atomic and single-winner', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(6);
+  await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  await claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 });
+  await assert.rejects(convertCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, expectedInboxVersion: 2, clientType: 'societa',
+  }), (error: unknown) => error instanceof Error
+    && (error as Error & { code?: unknown }).code === 'N14_FIRST_RESPONSE_REQUIRED');
+  await recordCommercialLeadFirstResponse(client(), { leadId: lead.id, actor, expectedInboxVersion: 2 });
+  await assert.rejects(convertCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, expectedInboxVersion: 3, clientType: 'societa', faultAt: 'AFTER_CLIENT',
+  }), /N14_SYNTHETIC_FAULT_AFTER_CLIENT/u);
+  assert.equal(await client().client.count({ where: { leadId: lead.id } }), 0);
+  assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).clientId, null);
+  assert.equal((await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: lead.id } })).state, 'OPEN');
+  const attempts = await Promise.allSettled(Array.from({ length: 2 }, () =>
+    convertCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 3, clientType: 'societa',
+    })));
+  assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 1);
+  assert.equal(await client().client.count({ where: { leadId: lead.id } }), 1);
+  const [convertedLead, item, cycle, activity] = await Promise.all([
+    client().lead.findUniqueOrThrow({ where: { id: lead.id } }),
+    client().commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: lead.id } }),
+    client().commercialLeadSlaCycle.findFirstOrThrow({ where: { inboxItem: { leadId: lead.id } } }),
+    client().commercialLeadActivity.findFirstOrThrow({
+      where: { inboxItem: { leadId: lead.id }, activityType: 'CLOSED' },
+    }),
+  ]);
+  assert.ok(convertedLead.clientId);
+  assert.equal(convertedLead.status, 'vinto');
+  assert.equal(item.state, 'CLOSED');
+  assert.ok(cycle.closedAt);
+  assert.equal(activity.reasonCode, 'CONVERTED');
+});
+
+test('N14 SLA arithmetic remains absolute across Europe/Rome DST transitions', {
+  skip: !runDbTests,
+}, async () => {
+  const rows = await client().$queryRaw<Array<{
+    springAvailable: Date; springDue: Date; autumnAvailable: Date; autumnDue: Date;
+  }>>`
+    SELECT
+      TIMESTAMPTZ '2026-03-29 00:30:00+00' AS "springAvailable",
+      TIMESTAMPTZ '2026-03-29 00:30:00+00' + make_interval(secs => 7200) AS "springDue",
+      TIMESTAMPTZ '2026-10-25 00:30:00+00' AS "autumnAvailable",
+      TIMESTAMPTZ '2026-10-25 00:30:00+00' + make_interval(secs => 7200) AS "autumnDue"
+  `;
+  const row = rows[0]!;
+  assert.equal(row.springDue.getTime() - row.springAvailable.getTime(), 7_200_000);
+  assert.equal(row.autumnDue.getTime() - row.autumnAvailable.getTime(), 7_200_000);
+  assert.equal(row.springDue.toISOString(), '2026-03-29T02:30:00.000Z');
+  assert.equal(row.autumnDue.toISOString(), '2026-10-25T02:30:00.000Z');
 });
 
 test('N14 fault injection rolls back item, cycle, activity and audit together', {

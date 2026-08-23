@@ -26,7 +26,11 @@ export const leadSchema = z.object({
 });
 export const leadUpdateSchema = leadSchema.extend({ id });
 export const leadCommercialUpdateSchema = z.object({ id, status: leadStatusSchema, priority: leadPrioritySchema, assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText });
-export const leadConvertSchema = z.object({ id, type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']).default('societa') });
+export const leadConvertSchema = z.object({
+  id,
+  type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']).default('societa'),
+  expectedInboxVersion: z.coerce.number().int().positive().optional(),
+});
 export const leadDuplicateResolutionOutcomeSchema = z.enum([
   'LINK_EXISTING_NO_OVERWRITE',
   'CREATE_NEW',
@@ -72,7 +76,7 @@ export const commercialLeadInboxAssignSchema = commercialLeadInboxCommandSchema.
   targetUserId: id,
 });
 export const commercialLeadInboxCloseSchema = commercialLeadInboxCommandSchema.extend({
-  reasonCode: z.enum(['QUALIFIED_OUT', 'CONVERTED', 'LOST', 'ARCHIVED']),
+  reasonCode: z.enum(['QUALIFIED_OUT', 'LOST', 'ARCHIVED']),
 });
 export const commercialOfferSchema = z.object({ leadId: id.optional(), clientId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, services: optionalText, includedActivities: optionalText, taxableAmount: money, vatAmount: money, totalAmount: money, validUntil: date.optional(), operationalConditions: optionalText, commercialProposal: optionalText, status: z.enum(['bozza','inviata','accettata','rifiutata','scaduta']).default('bozza'), notes: optionalText, sentAt: date.optional(), followUpAt: date.optional(), followUpNote: optionalText, outcomeNote: optionalText, acceptedAt: date.optional(), rejectedAt: date.optional(), rejectionReason: optionalText, commercialAction: z.enum(['mark_sent','mark_accepted','mark_rejected','update_followup']).optional() });
 export const commercialOfferUpdateSchema = commercialOfferSchema.extend({ id });

@@ -71,6 +71,7 @@ import {
   assignCommercialLeadInboxItem,
   claimCommercialLeadInboxItem,
   closeCommercialLeadInboxItem,
+  convertCommercialLeadInboxItem,
   initializeCommercialLeadInboxItem,
   maybeEnrollManualCommercialLead,
   recordCommercialLeadFirstResponse,
@@ -539,6 +540,9 @@ function mapCommercialLeadInboxError(error: unknown): never {
   if (error.code === 'N14_ATTRIBUTION_INVALID') {
     throw new UserFacingActionError('Provenienza del lead non verificabile.');
   }
+  if (error.code === 'N14_FIRST_RESPONSE_REQUIRED') {
+    throw new UserFacingActionError('Registra la prima risposta prima di convertire il lead.');
+  }
   throw new UserFacingActionError('Operazione Commercial Lead Inbox non completata. Ricarica.');
 }
 
@@ -662,14 +666,27 @@ export async function convertLeadToClient(form: FormData) {
   if (!hasPermission(s, 'lead.write')) denyWriteAccess();
   const data = leadConvertSchema.parse(clean(form));
   const lead = await requireLeadEditAccess(s, data.id);
-  if (await prisma.commercialLeadInboxItem.findUnique({ where: { leadId: data.id }, select: { id: true } })) {
-    throw new UserFacingActionError('La conversione di un item N14 richiede il flusso atomico della Commercial Lead Inbox.');
-  }
   if (lead.clientId) {
     await requireCommercialOfferTargetAccess(s, { clientId: lead.clientId });
     const existingClient = await prisma.client.findFirst({ where: { id: lead.clientId, deletedAt: null } });
     if (!existingClient) denyWriteAccess();
     return existingClient;
+  }
+  const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
+    where: { leadId: data.id }, select: { id: true },
+  });
+  if (inboxItem) {
+    if (!data.expectedInboxVersion) {
+      throw new UserFacingActionError('Versione Commercial Lead Inbox obbligatoria per la conversione.');
+    }
+    try {
+      return await convertCommercialLeadInboxItem(prisma, {
+        leadId: data.id,
+        actor: commercialLeadActor(s),
+        expectedInboxVersion: data.expectedInboxVersion,
+        clientType: data.type,
+      });
+    } catch (error) { return mapCommercialLeadInboxError(error); }
   }
   const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
   try {

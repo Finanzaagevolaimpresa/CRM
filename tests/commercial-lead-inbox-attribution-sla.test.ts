@@ -124,6 +124,22 @@ test('N14 manual attribution is created only inside the createLead transaction',
   assert.match(service, /maybeEnrollManualCommercialLead[\s\S]*sourceSystem: 'CRM'[\s\S]*formCode: 'LEAD_CREATE_UI'/u);
 });
 
+test('N14 conversion requires first response and closes Client, Lead, cycle and item atomically', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  const validation = readFileSync('src/lib/validation.ts', 'utf8');
+  assert.match(actions, /convertCommercialLeadInboxItem\(prisma/u);
+  assert.match(service, /convertCommercialLeadInboxItem[\s\S]*N14_FIRST_RESPONSE_REQUIRED[\s\S]*tx\.client\.create[\s\S]*status: 'vinto'[\s\S]*reasonCode: 'CONVERTED'/u);
+  assert.doesNotMatch(validation, /commercialLeadInboxCloseSchema[\s\S]{0,180}'CONVERTED'/u);
+});
+
+test('N14 manager assignment accepts only active commercial users', () => {
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  const page = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
+  assert.match(service, /target\[0\]\.role !== 'commerciale'/u);
+  assert.match(page, /role: 'commerciale'/u);
+});
+
 test('N14 UI is mode-gated, permission-scoped and query-bounded', () => {
   const inboxPage = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
   const leadsPage = readFileSync('src/app/leads/page.tsx', 'utf8');

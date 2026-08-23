@@ -8,6 +8,7 @@ import {
   assignCommercialLeadInbox,
   claimCommercialLeadInbox,
   closeCommercialLeadInbox,
+  convertLeadToClientAndRedirect,
   recordCommercialLeadFirstResponse,
   reopenCommercialLeadInbox,
   unassignCommercialLeadInbox,
@@ -74,7 +75,7 @@ export default async function Page({
       },
     }),
     prisma.user.findMany({
-      where: { active: true, deletedAt: null, role: { in: ['commerciale', 'direzione', 'admin'] } },
+      where: { active: true, deletedAt: null, role: 'commerciale' },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       take: 250,
       select: { id: true, name: true },
@@ -111,6 +112,7 @@ export default async function Page({
             <div className="mt-4 flex flex-wrap gap-2">
               {item.state === 'OPEN' && !item.lead.assignedToId && canClaim && <form action={claimCommercialLeadInbox}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Prendi in carico</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && !cycle?.firstResponseAt && <form action={recordCommercialLeadFirstResponse}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Registra prima risposta</PrimaryButton></form>}
+              {item.state === 'OPEN' && owned && canWork && cycle?.firstResponseAt && <form action={convertLeadToClientAndRedirect} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="type" defaultValue="societa" className="rounded-xl border p-2"><option value="societa">Società</option><option value="ditta_individuale">Ditta individuale</option><option value="persona_fisica">Persona fisica</option><option value="professionista">Professionista</option><option value="soggetto_da_costituire">Soggetto da costituire</option><option value="associazione">Associazione</option><option value="altro">Altro</option></select><PrimaryButton type="submit">Converti</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && <form action={closeCommercialLeadInbox} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="reasonCode" className="rounded-xl border p-2" defaultValue="QUALIFIED_OUT"><option value="QUALIFIED_OUT">Non qualificato</option><option value="LOST">Perso</option><option value="ARCHIVED">Archiviato</option></select><PrimaryButton type="submit">Chiudi</PrimaryButton></form>}
               {item.state === 'OPEN' && canManage && <form action={assignCommercialLeadInbox} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="targetUserId" className="rounded-xl border p-2" required>{userRows.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select><PrimaryButton type="submit">Assegna</PrimaryButton></form>}
               {item.state === 'OPEN' && item.lead.assignedToId && canManage && <form action={unassignCommercialLeadInbox}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Rilascia</PrimaryButton></form>}

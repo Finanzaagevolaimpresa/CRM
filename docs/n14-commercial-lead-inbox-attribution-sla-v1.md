@@ -27,9 +27,11 @@ da email, URL, testo libero o campi legacy.
 Initialize crea atomicamente item OPEN, ciclo 1 e activity. Claim/assign/unassign cambiano soltanto
 `Lead.assignedToId`. First response chiude l'obiettivo del ciclo con `MET` o `BREACHED`. Close
 chiude item e ciclo; reopen è privilegiato e apre un nuovo ciclo sulla policy ACTIVE corrente.
+La conversione richiede owner corrente e prima risposta già registrata, quindi crea il Client e
+chiude Lead, item e ciclo come `CONVERTED` nella stessa transazione.
 
-Il servizio blocca nell'ordine Lead, item, ciclo/policy e rivalida sessione, permessi e versioni
-dentro la transazione. Il guard PostgreSQL impedisce modifiche dirette a source, owner o stati
+Il servizio acquisisce nell'ordine clock database, sessione/actor, Lead, item e ciclo/policy, poi
+rivalida permessi e versioni dentro la transazione. Il guard PostgreSQL impedisce modifiche dirette a source, owner o stati
 terminali quando esiste un item N14.
 
 ## SLA
