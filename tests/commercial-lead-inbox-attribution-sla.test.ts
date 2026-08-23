@@ -134,6 +134,13 @@ test('N14 conversion requires first response and closes Client, Lead, cycle and 
   assert.doesNotMatch(validation, /commercialLeadInboxCloseSchema[\s\S]{0,180}'CONVERTED'/u);
 });
 
+test('N14 qualified-out is terminal across the legacy writer and database guard', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const migration = readFileSync('prisma/migrations/20260823160000_commercial_lead_inbox_attribution_sla_v1/migration.sql', 'utf8');
+  assert.match(actions, /protectedTerminalStatus = \[[^\]]*'non_qualificato'/u);
+  assert.match(migration, /NEW\."status"::text IN \([^)]*'non_qualificato'[\s\S]*OLD\."status"::text IN \([^)]*'non_qualificato'/u);
+});
+
 test('N14 manager assignment accepts only active commercial users', () => {
   const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
   const page = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');

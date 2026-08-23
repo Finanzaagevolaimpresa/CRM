@@ -527,4 +527,12 @@ test('N14 database guards reject source overwrite, raw owner bypass and activity
   } }), /N14_PROJECTION_ATTRIBUTION_INVALID/u);
   const activity = await client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } });
   await assert.rejects(client().commercialLeadActivity.update({ where: { id: activity.id }, data: { reasonCode: 'PROJECTED_NEW' } }), /N14_ACTIVITY_APPEND_ONLY/u);
+  await claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 });
+  await closeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, expectedInboxVersion: 2, reasonCode: 'QUALIFIED_OUT',
+  });
+  assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).status, 'non_qualificato');
+  await assert.rejects(client().lead.update({
+    where: { id: lead.id }, data: { status: 'da_contattare' },
+  }), /N14_LEAD_WRITER_BYPASS/u);
 });

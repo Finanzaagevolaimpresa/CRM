@@ -648,7 +648,7 @@ export async function updateLeadCommercial(form: FormData) {
     where: { leadId: data.id }, select: { id: true },
   });
   const nextAssignedToId = data.assignedToId ?? null;
-  const protectedTerminalStatus = ['cliente_acquisito', 'vinto', 'perso', 'archiviato'];
+  const protectedTerminalStatus = ['cliente_acquisito', 'vinto', 'perso', 'non_qualificato', 'archiviato'];
   if (inboxItem && (before.assignedToId !== nextAssignedToId
     || (before.status !== data.status && (protectedTerminalStatus.includes(before.status)
       || protectedTerminalStatus.includes(data.status))))) {

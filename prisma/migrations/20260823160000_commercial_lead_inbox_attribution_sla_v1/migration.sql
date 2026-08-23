@@ -262,7 +262,7 @@ BEGIN
   IF NEW."source" IS DISTINCT FROM OLD."source" OR NEW."leadSource" IS DISTINCT FROM OLD."leadSource"
     THEN RAISE EXCEPTION 'N14_LEAD_SOURCE_IMMUTABLE'; END IF;
   IF NEW."assignedToId" IS DISTINCT FROM OLD."assignedToId"
-    OR (NEW."status" IS DISTINCT FROM OLD."status" AND (NEW."status"::text IN ('cliente_acquisito','vinto','perso','archiviato') OR OLD."status"::text IN ('cliente_acquisito','vinto','perso','archiviato')))
+    OR (NEW."status" IS DISTINCT FROM OLD."status" AND (NEW."status"::text IN ('cliente_acquisito','vinto','perso','non_qualificato','archiviato') OR OLD."status"::text IN ('cliente_acquisito','vinto','perso','non_qualificato','archiviato')))
   THEN
     n14_context := current_setting('fai.n14_write_context', true);
     IF n14_context IS DISTINCT FROM 'authorized' THEN RAISE EXCEPTION 'N14_LEAD_WRITER_BYPASS'; END IF;
