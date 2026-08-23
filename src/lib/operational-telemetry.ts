@@ -77,6 +77,22 @@ export const OPERATIONAL_EVENT_CATALOG = Object.freeze({
       durationBucket: DURATION_BUCKETS,
     }),
   }),
+  COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED: Object.freeze({
+    componentCode: 'COMMERCIAL_LEAD_INBOX',
+    severity: 'INFO',
+    outcomes: Object.freeze(['SUCCESS', 'FAILURE', 'REJECTED'] as const),
+    metadata: Object.freeze({
+      operationCode: Object.freeze([
+        'INITIALIZE',
+        'CLAIM',
+        'ASSIGN',
+        'UNASSIGN',
+        'FIRST_RESPONSE',
+        'CLOSE',
+        'REOPEN',
+      ] as const),
+    }),
+  }),
   FAIL_CLOSED_GATE_EVALUATED: Object.freeze({
     componentCode: 'SECURITY',
     severity: 'INFO',

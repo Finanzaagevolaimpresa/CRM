@@ -12,6 +12,7 @@ import {
   isCommercialLeadResponseTargetSeconds,
 } from '../src/lib/commercial-lead-inbox-contract';
 import { classifyDataField } from '../src/lib/data-classification';
+import { createOperationalEventV1 } from '../src/lib/operational-telemetry';
 
 test('N14 remains dormant and fail-closed for missing, empty and unknown modes', () => {
   assert.equal(COMMERCIAL_LEAD_INBOX_MANIFEST.dormant, true);
@@ -60,4 +61,29 @@ test('N14 classifies identifiers, session bindings, provenance and SLA timestamp
   assert.equal(classifyDataField('commercial_lead_inbox_item_v1', 'originKind').classification, 'INTERNAL');
   assert.equal(classifyDataField('commercial_lead_sla_cycle_v1', 'dueAt').classification, 'PERSONAL');
   assert.equal(classifyDataField('commercial_lead_activity_v1', 'actorSessionId').classification, 'AUTHENTICATION_SECRET');
+});
+
+test('N14 telemetry is aggregate-only and rejects identifiers or free metadata', () => {
+  const event = createOperationalEventV1({
+    eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
+    outcome: 'SUCCESS',
+    correlationId: '00000000-0000-4000-8000-000000000014',
+    metadata: { operationCode: 'CLAIM' },
+    nowMs: Date.parse('2026-08-23T00:00:00.000Z'),
+  });
+  assert.deepEqual(event.metadata, { operationCode: 'CLAIM' });
+  assert.throws(() => createOperationalEventV1({
+    eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
+    outcome: 'SUCCESS',
+    correlationId: '00000000-0000-4000-8000-000000000014',
+    metadata: { operationCode: 'CLAIM', leadId: 'forbidden' },
+  }), /TELEMETRY_METADATA_INVALID/u);
+});
+
+test('N14 service fixes lock order, database clock and transaction-local Lead guard context', () => {
+  const source = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(source, /lockAuthoritativeInternalSession[\s\S]*lockLead[\s\S]*lockItem[\s\S]*lockOpenCycle/u);
+  assert.match(source, /clock_timestamp\(\)::timestamptz\(3\)/u);
+  assert.match(source, /set_config\('fai\.n14_write_context', 'authorized', true\)/u);
+  assert.doesNotMatch(source, /setInterval|setTimeout|\bfetch\s*\(|\bconsole\./u);
 });

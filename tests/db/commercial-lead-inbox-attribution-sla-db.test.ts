@@ -5,6 +5,10 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
+  claimCommercialLeadInboxItem,
+  initializeCommercialLeadInboxItem,
+} from '../../src/lib/commercial-lead-inbox';
+import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
 } from './ai-orchestrator-db-test-guard';
@@ -22,6 +26,10 @@ const migrationPath = `prisma/migrations/${migrationName}/migration.sql`;
 const schema = `n14_contract_${process.pid}`;
 const rootDb = runDbTests ? new PrismaClient() : null;
 let db: PrismaClient | null = null;
+const originalInboxMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
+const originalSessionMode = process.env.INTERNAL_SESSION_MODE;
+const actorUserId = 'n14-synthetic-commercial-user';
+const actorSessionId = '00000000-0000-4000-8000-000000140001';
 
 function rootClient() {
   if (!rootDb) throw new Error('N14_ROOT_DB_UNAVAILABLE');
@@ -45,13 +53,60 @@ test.before(async () => {
     timeout: 180_000,
   });
   db = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+  process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+  process.env.INTERNAL_SESSION_MODE = 'registry';
 });
+
+async function ensureActorAndPolicy() {
+  if (await client().user.count({ where: { id: actorUserId } })) return;
+  await client().user.create({ data: {
+    id: actorUserId,
+    email: 'commercial@n14-db.invalid',
+    name: 'N14 Synthetic Commercial',
+    passwordHash: 'synthetic-not-a-real-password-hash',
+    role: 'commerciale',
+    active: true,
+  } });
+  await client().internalSession.create({ data: {
+    id: actorSessionId,
+    userId: actorUserId,
+    tokenDigest: Buffer.alloc(32, 14),
+    expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+  } });
+  await client().commercialLeadSlaPolicyVersion.create({ data: {
+    id: '00000000-0000-4000-8000-000000140002',
+    policyCode: 'COMMERCIAL_FIRST_RESPONSE',
+    version: 1,
+    status: 'ACTIVE',
+    calendarCode: 'CONTINUOUS_24X7',
+    timezoneCode: 'UTC',
+    responseTargetSeconds: 3_600,
+    createdById: actorUserId,
+  } });
+}
 
 test.after(async () => {
   await db?.$disconnect();
+  if (originalInboxMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  else process.env.COMMERCIAL_LEAD_INBOX_MODE = originalInboxMode;
+  if (originalSessionMode === undefined) delete process.env.INTERNAL_SESSION_MODE;
+  else process.env.INTERNAL_SESSION_MODE = originalSessionMode;
   if (runDbTests) await rootClient().$executeRawUnsafe(`DROP SCHEMA "${schema}" CASCADE`);
   await rootDb?.$disconnect();
 });
+
+async function syntheticLead(ordinal: number) {
+  return client().lead.create({ data: {
+    id: `n14-synthetic-lead-${ordinal}`,
+    firstName: 'Synthetic',
+    lastName: `Lead ${ordinal}`,
+    email: `lead-${ordinal}@n14-db.invalid`,
+    source: 'CRM',
+    leadSource: 'manuale',
+  } });
+}
+
+const actor = Object.freeze({ userId: actorUserId, sessionId: actorSessionId });
 
 test('N14 migration 42 is transactional, additive and business-empty by construction', () => {
   const sql = readFileSync(migrationPath, 'utf8');
@@ -111,4 +166,78 @@ test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or acti
   assert.equal(triggerRows.length, 9);
   assert.equal(functionRows.length, 5);
   assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
+});
+
+test('N14 initialize binds database-clock SLA and writes item, cycle, activity and audit atomically', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(1);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id,
+    actor,
+    attribution: { originKind: 'MANUAL_CRM' },
+    reasonCode: 'MANUAL_INTAKE',
+  });
+  const [cycle, activity, audit] = await Promise.all([
+    client().commercialLeadSlaCycle.findFirstOrThrow({ where: { inboxItemId: item.id } }),
+    client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } }),
+    client().auditLog.findFirstOrThrow({ where: { entityType: 'CommercialLeadInboxItem', entityId: item.id } }),
+  ]);
+  assert.equal(cycle.dueAt.getTime() - cycle.availableAt.getTime(), 3_600_000);
+  assert.equal(activity.activityType, 'INITIALIZED');
+  assert.equal(audit.event, 'commercial_lead_inbox_initialized');
+  assert.equal(item.sourceSystem, 'CRM');
+  assert.equal(item.formCode, 'LEAD_CREATE_UI');
+});
+
+test('N14 two concurrent self-claims produce exactly one winner', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(2);
+  await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const attempts = await Promise.allSettled([
+    claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 }),
+    claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 }),
+  ]);
+  assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 1);
+  assert.equal(attempts.filter(({ status }) => status === 'rejected').length, 1);
+  assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId, actorUserId);
+  assert.equal(await client().commercialLeadActivity.count({ where: { inboxItem: { leadId: lead.id }, activityType: 'CLAIMED' } }), 1);
+});
+
+test('N14 fault injection rolls back item, cycle, activity and audit together', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(3);
+  const auditBefore = await client().auditLog.count({ where: { entityType: 'CommercialLeadInboxItem' } });
+  await assert.rejects(initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id,
+    actor,
+    attribution: { originKind: 'MANUAL_CRM' },
+    reasonCode: 'MANUAL_INTAKE',
+    faultAt: 'AFTER_ACTIVITY',
+  }), /N14_SYNTHETIC_FAULT_AFTER_ACTIVITY/u);
+  assert.equal(await client().commercialLeadInboxItem.count({ where: { leadId: lead.id } }), 0);
+  assert.equal(await client().commercialLeadSlaCycle.count({ where: { inboxItem: { leadId: lead.id } } }), 0);
+  assert.equal(await client().commercialLeadActivity.count({ where: { inboxItem: { leadId: lead.id } } }), 0);
+  assert.equal(await client().auditLog.count({ where: { entityType: 'CommercialLeadInboxItem' } }), auditBefore);
+});
+
+test('N14 database guards reject source overwrite, raw owner bypass and activity mutation', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(4);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  await assert.rejects(client().lead.update({ where: { id: lead.id }, data: { source: 'FORGED' } }), /N14_LEAD_SOURCE_IMMUTABLE/u);
+  await assert.rejects(client().lead.update({ where: { id: lead.id }, data: { assignedToId: actorUserId } }), /N14_LEAD_WRITER_BYPASS/u);
+  const activity = await client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } });
+  await assert.rejects(client().commercialLeadActivity.update({ where: { id: activity.id }, data: { reasonCode: 'PROJECTED_NEW' } }), /N14_ACTIVITY_APPEND_ONLY/u);
 });
