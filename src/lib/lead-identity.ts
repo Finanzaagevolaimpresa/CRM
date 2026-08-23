@@ -322,7 +322,9 @@ export async function discoverLeadIdentityCandidates(
   const rawPredicates: Prisma.Sql[] = [];
   for (const signal of input.signals) {
     if (signal.kind === 'EMAIL_EXACT_V1') {
-      rawPredicates.push(Prisma.sql`LOWER(BTRIM("email")) = ${signal.canonicalValue}`);
+      rawPredicates.push(Prisma.sql`
+        LOWER(NORMALIZE(BTRIM("email"), NFC)) = ${signal.canonicalValue}
+      `);
     } else if (signal.kind === 'PHONE_E164_EXACT_V1'
       || signal.kind === 'PHONE_NATIONAL_EXACT_V1') {
       rawPredicates.push(Prisma.sql`
@@ -331,12 +333,18 @@ export async function discoverLeadIdentityCandidates(
     } else if (signal.kind === 'PERSON_NAME_EXACT_V1') {
       const [firstName, lastName] = signal.canonicalValue.split('\n');
       rawPredicates.push(Prisma.sql`
-        LOWER(REGEXP_REPLACE(BTRIM("firstName"), '[[:space:]]+', ' ', 'g')) = ${firstName}
-        AND LOWER(REGEXP_REPLACE(BTRIM("lastName"), '[[:space:]]+', ' ', 'g')) = ${lastName}
+        LOWER(NORMALIZE(
+          REGEXP_REPLACE(BTRIM("firstName"), '[[:space:]]+', ' ', 'g'), NFC
+        )) = ${firstName}
+        AND LOWER(NORMALIZE(
+          REGEXP_REPLACE(BTRIM("lastName"), '[[:space:]]+', ' ', 'g'), NFC
+        )) = ${lastName}
       `);
     } else if (signal.kind === 'COMPANY_NAME_EXACT_V1') {
       rawPredicates.push(Prisma.sql`
-        LOWER(REGEXP_REPLACE(BTRIM("companyName"), '[[:space:]]+', ' ', 'g'))
+        LOWER(NORMALIZE(
+          REGEXP_REPLACE(BTRIM("companyName"), '[[:space:]]+', ' ', 'g'), NFC
+        ))
           = ${signal.canonicalValue}
       `);
     }
@@ -404,7 +412,9 @@ export async function hasStrongRawLeadIdentityDuplicate(
 ) {
   const predicates: Prisma.Sql[] = [];
   const email = normalizeLeadIdentityEmail(input.email);
-  if (email) predicates.push(Prisma.sql`LOWER(BTRIM("email")) = ${email}`);
+  if (email) predicates.push(Prisma.sql`
+    LOWER(NORMALIZE(BTRIM("email"), NFC)) = ${email}
+  `);
   const phone = normalizeLeadIdentityPhone(input.phone);
   if (phone?.kind === 'PHONE_E164_EXACT_V1') {
     predicates.push(Prisma.sql`

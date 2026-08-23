@@ -265,7 +265,7 @@ after(async () => {
 
 test('N12 migration 39 is atomic, additive, empty and dedicated', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 40);
+  assert.equal(names.length, 41);
   assert.equal(names[38], migrationName);
   const migration = readFileSync(migrationPath, 'utf8');
   const executable = migration.replace(/^--.*$/gmu, '');
