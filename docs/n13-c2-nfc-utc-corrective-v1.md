@@ -18,6 +18,8 @@ Migration 40 remains byte-identical with SHA-256
 `20260822150000_n13_c2_nfc_utc_corrective_v1` is one fail-closed, business-empty transaction. It:
 
 - verifies that `sourceSubmittedAt` is exactly `timestamp(3) without time zone`, `NOT NULL`;
+- acquires `ACCESS EXCLUSIVE` on `PrivacyEvidenceReceipt` before catalog and row checks, so a
+  concurrent writer must finish before the empty-table decision and later writers remain blocked;
 - aborts with `N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT` if any evidence receipt exists;
 - changes the empty column to `TIMESTAMPTZ(3)` and verifies the catalog postcondition;
 - adds `Lead_active_email_n13_nfc_idx`;
@@ -26,9 +28,13 @@ Migration 40 remains byte-identical with SHA-256
 - replaces `privacy_evidence_receipt_validate_v1()` with the same contract and one canonical
   `AT TIME ZONE 'UTC'` conversion.
 
-The `USING` clause is reached only when the table is empty; existing rows are never reinterpreted
-or backfilled. Type drift, nullability drift or any receipt stops the whole transaction before
-index/function changes can persist. The migration does not insert, update or delete business data.
+The lock is acquired before the first precondition query and is held through commit. If an insert
+already owns a row-exclusive lock, the migration waits and then evaluates emptiness against the
+committed result; if the migration owns the lock first, later inserts wait until it completes. The
+`USING` clause is therefore reached only while the table is exclusively locked and empty; existing
+rows are never reinterpreted or backfilled. Type drift, nullability drift or any receipt stops the
+whole transaction before index/function changes can persist. The migration does not insert, update
+or delete business data.
 It creates no key, gate, worker, consumer, schedule or activation. The three legacy expression
 indexes remain present for PR107 N-1 compatibility. `NORMALIZE(..., NFC)` requires PostgreSQL
 server encoding `UTF8`, which is asserted by database qualification.
@@ -81,9 +87,10 @@ replaced function.
 ## Qualification and rollback
 
 Required qualification includes fresh 41, exact empty 40→41 upgrade, existing-receipt atomic
-failure, migration-40 checksum pin, catalog type/expressions, Unicode candidate/manual-create
-races, isolated session-timezone/DST invariance, full unit and PostgreSQL suites, typecheck, lint,
-build, Docker smoke, restore drill and PR107-on-DB41 N-1.
+failure, a two-session concurrent-insert race proving the precondition waits on `ACCESS EXCLUSIVE`,
+migration-40 checksum pin, catalog type/expressions, Unicode candidate/manual-create races,
+isolated session-timezone/DST invariance, full unit and PostgreSQL suites, typecheck, lint, build,
+Docker smoke, restore drill and PR107-on-DB41 N-1.
 
 The application rollback target is PR107 on DB41 in dormant/health-only mode. It must not receive
 N13 business traffic because PR107 does not contain the NFC application correction. There is no

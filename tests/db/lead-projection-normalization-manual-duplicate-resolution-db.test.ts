@@ -357,8 +357,13 @@ test('N13 migration 40 source is one additive, empty and activation-free transac
 test('N13-C2 migration 41 aligns timestamptz fail-closed and uses one UTC canonicalization', () => {
   const sql = readFileSync(correctiveMigrationPath, 'utf8');
   const executableSql = sql.replace(/^--.*$/gmu, '');
+  const receiptLock = 'LOCK TABLE ONLY "PrivacyEvidenceReceipt" IN ACCESS EXCLUSIVE MODE;';
   assert.equal((sql.match(/^BEGIN;$/gmu) ?? []).length, 1);
   assert.equal((sql.match(/^COMMIT;$/gmu) ?? []).length, 1);
+  assert.equal((sql.match(/^LOCK TABLE ONLY "PrivacyEvidenceReceipt" IN ACCESS EXCLUSIVE MODE;$/gmu) ?? []).length, 1);
+  assert.ok(sql.indexOf(receiptLock) < sql.indexOf('N13_C2_SOURCE_TIMESTAMP_TYPE_DRIFT'));
+  assert.ok(sql.indexOf(receiptLock) < sql.indexOf('N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT'));
+  assert.ok(sql.indexOf(receiptLock) < sql.indexOf('ALTER TABLE "PrivacyEvidenceReceipt"'));
   assert.equal((sql.match(/AT TIME ZONE 'UTC'/gu) ?? []).length, 2);
   assert.equal((sql.match(/ALTER COLUMN "sourceSubmittedAt" TYPE TIMESTAMPTZ\(3\)/gu) ?? []).length, 1);
   assert.equal((sql.match(/source_submitted_at_utc := NEW\."sourceSubmittedAt" AT TIME ZONE 'UTC'/gu) ?? []).length, 1);
@@ -680,25 +685,89 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   try {
     deploy(url.toString(), join(prismaDir, 'schema.prisma'));
     const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    const migrationGate = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    const observer = new PrismaClient({ datasources: { db: { url: url.toString() } } });
     try {
       await seedSyntheticPrivacyNotices(before);
       const event = syntheticEvent(390, {}, '2026-03-29T00:59:59.999Z');
       const admitted = await admitBusinessInboxEvent(before, event);
-      await before.$transaction(async (tx) => {
-        await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', 'UTC', true)`);
-        const created = await createBusinessLeadPrivacyEvidence(tx, {
-          businessInboxEventId: admitted.inboxEventId,
-          event,
-        });
-        assert.equal(created.count, 2);
+      let releaseWriter = () => {};
+      let writerReadyResolve = () => {};
+      let writerReadyReject: (error: unknown) => void = () => {};
+      const writerRelease = new Promise<void>((resolveWriter) => {
+        releaseWriter = resolveWriter;
       });
+      const writerReady = new Promise<void>((resolveWriter, rejectWriter) => {
+        writerReadyResolve = resolveWriter;
+        writerReadyReject = rejectWriter;
+      });
+      const writer = before.$transaction(async (tx) => {
+        try {
+          await tx.$queryRaw(Prisma.sql`SELECT set_config('TimeZone', 'UTC', true)`);
+          const created = await createBusinessLeadPrivacyEvidence(tx, {
+            businessInboxEventId: admitted.inboxEventId,
+            event,
+          });
+          assert.equal(created.count, 2);
+          writerReadyResolve();
+          await writerRelease;
+        } catch (error) {
+          writerReadyReject(error);
+          throw error;
+        }
+      }, { timeout: 30_000 });
+      void writer.catch(() => undefined);
+      await writerReady;
 
       const migrationSql = readFileSync(correctiveMigrationPath, 'utf8');
+      const receiptLock = migrationSql.match(
+        /^LOCK TABLE ONLY "PrivacyEvidenceReceipt" IN ACCESS EXCLUSIVE MODE;$/mu,
+      )?.[0];
       const failClosedGuard = migrationSql.match(
         /DO \$\$\nDECLARE[\s\S]*?N13_C2_SOURCE_TIMESTAMP_ROWS_PRESENT[\s\S]*?\nEND \$\$;/u,
       )?.[0];
+      assert.ok(receiptLock);
       assert.ok(failClosedGuard);
-      await assert.rejects(before.$executeRawUnsafe(failClosedGuard), (error: unknown) => {
+      let gateSettled = false;
+      let gateFailure: unknown;
+      const gate = migrationGate.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(receiptLock);
+        await tx.$executeRawUnsafe(failClosedGuard);
+      }, { timeout: 30_000 }).catch((error: unknown) => {
+        gateFailure = error;
+        throw error;
+      }).finally(() => {
+        gateSettled = true;
+      });
+      void gate.catch(() => undefined);
+
+      let waitingLocks = 0;
+      try {
+        for (let attempt = 0; attempt < 200 && waitingLocks === 0; attempt += 1) {
+          if (gateSettled) throw gateFailure ?? new Error('N13_C2_LOCK_GATE_SETTLED_EARLY');
+          const lockRows = await observer.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+            SELECT COUNT(*)::BIGINT AS "count"
+            FROM pg_locks lock_row
+            JOIN pg_class table_row ON table_row.oid = lock_row.relation
+            JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+            WHERE namespace_row.nspname = ${qualificationSchema}
+              AND table_row.relname = 'PrivacyEvidenceReceipt'
+              AND lock_row.mode = 'AccessExclusiveLock'
+              AND NOT lock_row.granted
+          `);
+          waitingLocks = Number(lockRows[0]?.count);
+          if (waitingLocks === 0) {
+            await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+          }
+        }
+        assert.equal(waitingLocks, 1);
+        assert.equal(gateSettled, false);
+      } finally {
+        releaseWriter();
+      }
+
+      await writer;
+      await assert.rejects(gate, (error: unknown) => {
         const directFailure = error as { message?: unknown; meta?: { message?: unknown } };
         return [directFailure.message, directFailure.meta?.message].some(
           (value) => typeof value === 'string'
@@ -706,6 +775,8 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
         );
       });
     } finally {
+      await observer.$disconnect();
+      await migrationGate.$disconnect();
       await before.$disconnect();
     }
 

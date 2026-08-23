@@ -4,6 +4,8 @@
 
 BEGIN;
 
+LOCK TABLE ONLY "PrivacyEvidenceReceipt" IN ACCESS EXCLUSIVE MODE;
+
 DO $$
 DECLARE
   source_type TEXT;
