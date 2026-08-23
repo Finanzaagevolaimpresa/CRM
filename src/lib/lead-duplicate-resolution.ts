@@ -26,6 +26,7 @@ import {
 } from './lead-event-contract';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { internalSessionMode } from './session';
+import { maybeEnrollProjectedCommercialLead } from './commercial-lead-inbox';
 
 export const LEAD_DUPLICATE_RESOLUTION_MANIFEST = Object.freeze({
   version: 1,
@@ -625,6 +626,12 @@ async function resolveOpenCase(
   });
   if (caseUpdated.count !== 1 || ledgerUpdated.count !== 1) {
     return duplicateFail('N13_DUPLICATE_CASE_VERSION_CONFLICT');
+  }
+  if (input.outcome === 'CREATE_NEW') {
+    await maybeEnrollProjectedCommercialLead(tx, {
+      leadId: resultingLeadId,
+      projectionLedgerId: row.ledgerId,
+    });
   }
   await auditDecision(
     tx,

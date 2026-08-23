@@ -388,7 +388,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 41);
+  assert.equal(allNames.length, 42);
   const names = allNames.slice(0, 40);
   assert.equal(names[39], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -513,7 +513,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 41);
+  assert.equal(names.length, 42);
   assert.equal(names[39], migrationName);
   assert.equal(names[40], correctiveMigrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -521,7 +521,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${qualificationSchema}"`);
   let historicalLeadId: string | null = null;
   try {
-    for (const name of upgrade ? names.slice(0, 40) : names) {
+    for (const name of upgrade ? names.slice(0, 40) : names.slice(0, 41)) {
       cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });
     }
     deploy(url.toString(), join(prismaDir, 'schema.prisma'));
@@ -674,7 +674,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 41);
+  assert.equal(names.length, 42);
   assert.equal(names[40], correctiveMigrationName);
   for (const name of names.slice(0, 40)) {
     cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });

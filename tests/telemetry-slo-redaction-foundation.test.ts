@@ -367,13 +367,13 @@ test('N06 SLOs have explicit targets, windows, denominators, failures and exclus
 });
 
 test('N06 catalogs and invariants are complete and internally consistent', () => {
-  assert.equal(Object.keys(OPERATIONAL_EVENT_CATALOG).length, 6);
+  assert.equal(Object.keys(OPERATIONAL_EVENT_CATALOG).length, 7);
   assert.equal(Object.keys(OPERATIONAL_METRIC_CATALOG).length, 6);
   assert.deepEqual(getOperationalTelemetryInvariantErrorsV1(), []);
 });
 
 test('N06 adds no migration, vendor dependency, exporter or production activation', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 41);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 42);
   const packageJson = readFileSync('package.json', 'utf8');
   for (const prohibited of [
     '@opentelemetry', 'prom-client', '@sentry', 'datadog', 'newrelic', 'splunk', 'elastic-apm',

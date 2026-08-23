@@ -1,0 +1,162 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import {
+  COMMERCIAL_LEAD_ACTIVITY_TYPES,
+  COMMERCIAL_LEAD_INBOX_MANIFEST,
+  COMMERCIAL_LEAD_ORIGIN_KINDS,
+  COMMERCIAL_LEAD_REASON_CODES,
+  commercialLeadInboxMode,
+  isCommercialLeadOriginKind,
+  isCommercialLeadReasonCode,
+  isCommercialLeadResponseTargetSeconds,
+} from '../src/lib/commercial-lead-inbox-contract';
+import { classifyDataField } from '../src/lib/data-classification';
+import { createOperationalCorrelationId, createOperationalEventV1 } from '../src/lib/operational-telemetry';
+import { hasPermission } from '../src/lib/permission-evaluator';
+
+test('N14 remains dormant and fail-closed for missing, empty and unknown modes', () => {
+  assert.equal(COMMERCIAL_LEAD_INBOX_MANIFEST.dormant, true);
+  assert.equal(COMMERCIAL_LEAD_INBOX_MANIFEST.activation, 'NONE');
+  assert.deepEqual(COMMERCIAL_LEAD_INBOX_MANIFEST.runtimeConsumers, []);
+  for (const value of [undefined, '', 'disabled', 'true', 'ENFORCED', 'unknown']) {
+    assert.equal(commercialLeadInboxMode(value), 'disabled');
+  }
+  assert.equal(commercialLeadInboxMode('enforced'), 'enforced');
+  for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
+    assert.match(readFileSync(path, 'utf8'), /COMMERCIAL_LEAD_INBOX_MODE="disabled"/u);
+  }
+});
+
+test('N14 exposes only closed provenance, lifecycle, activity and reason vocabularies', () => {
+  assert.deepEqual(COMMERCIAL_LEAD_ORIGIN_KINDS, [
+    'MANUAL_CRM', 'WEBSITE_LEGACY_N01', 'BUSINESS_PROJECTION_N13', 'LEGACY_UNVERIFIED',
+  ]);
+  assert.equal(COMMERCIAL_LEAD_ACTIVITY_TYPES.length, 7);
+  assert.equal(COMMERCIAL_LEAD_REASON_CODES.length, 12);
+  assert.equal(isCommercialLeadOriginKind('MANUAL_CRM'), true);
+  assert.equal(isCommercialLeadOriginKind('INFERRED_FROM_EMAIL'), false);
+  assert.equal(isCommercialLeadReasonCode('SELF_CLAIM'), true);
+  assert.equal(isCommercialLeadReasonCode('free text'), false);
+});
+
+test('N14 SLA target is positive, integer and bounded to one year', () => {
+  for (const value of [1, 60, 86_400, 31_536_000]) {
+    assert.equal(isCommercialLeadResponseTargetSeconds(value), true);
+  }
+  for (const value of [0, -1, 1.5, Number.NaN, 31_536_001, '3600']) {
+    assert.equal(isCommercialLeadResponseTargetSeconds(value), false);
+  }
+});
+
+test('N14 documentation fixes the database-clock and application rollback boundaries', () => {
+  const document = readFileSync('docs/n14-commercial-lead-inbox-attribution-sla-v1.md', 'utf8');
+  assert.match(document, /clock PostgreSQL/u);
+  assert.match(document, /fresh42/u);
+  assert.match(document, /PR108 N−1 su DB42/u);
+  assert.match(document, /nessuna down-migration/u);
+});
+
+test('N14 classifies identifiers, session bindings, provenance and SLA timestamps', () => {
+  assert.equal(classifyDataField('commercial_lead_inbox_item_v1', 'leadId').classification, 'PERSONAL');
+  assert.equal(classifyDataField('commercial_lead_inbox_item_v1', 'originKind').classification, 'INTERNAL');
+  assert.equal(classifyDataField('commercial_lead_sla_cycle_v1', 'dueAt').classification, 'PERSONAL');
+  assert.equal(classifyDataField('commercial_lead_activity_v1', 'actorSessionId').classification, 'AUTHENTICATION_SECRET');
+});
+
+test('N14 telemetry is aggregate-only and rejects identifiers or free metadata', () => {
+  const event = createOperationalEventV1({
+    eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
+    outcome: 'SUCCESS',
+    correlationId: createOperationalCorrelationId(() => '00000000-0000-4000-8000-000000000014'),
+    metadata: { operationCode: 'CLAIM' },
+    nowMs: Date.parse('2026-08-23T00:00:00.000Z'),
+  });
+  assert.deepEqual(event.metadata, { operationCode: 'CLAIM' });
+  assert.throws(() => createOperationalEventV1({
+    eventCode: 'COMMERCIAL_LEAD_INBOX_OPERATION_COMPLETED',
+    outcome: 'SUCCESS',
+    correlationId: createOperationalCorrelationId(() => '00000000-0000-4000-8000-000000000014'),
+    metadata: { operationCode: 'CLAIM', leadId: 'forbidden' },
+  }), /TELEMETRY_METADATA_INVALID/u);
+});
+
+test('N14 service fixes lock order, database clock and transaction-local Lead guard context', () => {
+  const source = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(source, /lockAuthoritativeInternalSession[\s\S]*lockLead[\s\S]*lockItem[\s\S]*lockOpenCycle/u);
+  assert.match(source, /clock_timestamp\(\)::timestamptz\(3\)/u);
+  assert.match(source, /set_config\('fai\.n14_write_context', 'authorized', true\)/u);
+  assert.doesNotMatch(source, /setInterval|setTimeout|\bfetch\s*\(|\bconsole\./u);
+});
+
+test('N14 separates self-claim from protected assignment permissions', () => {
+  const commerciale = { role: 'commerciale' as const, active: true, permissionOverrides: [] };
+  const direzione = { role: 'direzione' as const, active: true, permissionOverrides: [] };
+  assert.equal(hasPermission(commerciale, 'lead.inbox.claim'), true);
+  assert.equal(hasPermission(commerciale, 'lead.inbox.assign'), false);
+  assert.equal(hasPermission({ ...commerciale, permissionOverrides: [{ permission: 'lead.inbox.assign', allowed: true }] }, 'lead.inbox.assign'), false);
+  assert.equal(hasPermission(direzione, 'lead.inbox.assign'), true);
+  assert.equal(hasPermission(direzione, 'lead.inbox.claim'), false);
+});
+
+test('N14 protected actions require step-up before transactional registry revalidation', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  for (const code of ['N14_LEAD_INBOX_ASSIGN', 'N14_LEAD_INBOX_UNASSIGN', 'N14_LEAD_INBOX_REOPEN', 'N14_LEAD_INBOX_LEGACY_ENROLL']) {
+    assert.match(actions, new RegExp(`requireEnforcedPrivilegedMutation\\(session, '${code}'\\)`));
+  }
+  assert.match(actions, /commercialLeadActor\(session\)/u);
+});
+
+test('N13 projected-new paths enter N14 only through mode plus active-policy enrollment', () => {
+  const projection = readFileSync('src/lib/lead-projection.ts', 'utf8');
+  const duplicate = readFileSync('src/lib/lead-duplicate-resolution.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(projection, /result\.state === 'PROJECTED_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
+  assert.match(duplicate, /input\.outcome === 'CREATE_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
+  assert.match(service, /maybeEnrollProjectedCommercialLead[\s\S]*commercialLeadInboxMode\(\) !== 'enforced'[\s\S]*optionalActivePolicyAndClock/u);
+});
+
+test('N14 manual attribution is created only inside the createLead transaction', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(actions, /tx\.lead\.create[\s\S]*maybeEnrollManualCommercialLead\(tx/u);
+  assert.match(actions, /originKind === 'MANUAL_CRM'[\s\S]*provenienza manuale/u);
+  assert.match(service, /maybeEnrollManualCommercialLead[\s\S]*sourceSystem: 'CRM'[\s\S]*formCode: 'LEAD_CREATE_UI'/u);
+});
+
+test('N14 conversion requires first response and closes Client, Lead, cycle and item atomically', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  const validation = readFileSync('src/lib/validation.ts', 'utf8');
+  assert.match(actions, /convertCommercialLeadInboxItem\(prisma/u);
+  assert.match(service, /convertCommercialLeadInboxItem[\s\S]*N14_FIRST_RESPONSE_REQUIRED[\s\S]*tx\.client\.create[\s\S]*status: 'vinto'[\s\S]*reasonCode: 'CONVERTED'/u);
+  assert.match(service, /reopenCommercialLeadInboxItem[\s\S]*lead\.clientId[\s\S]*N14_LEAD_ALREADY_CONVERTED/u);
+  assert.doesNotMatch(validation, /commercialLeadInboxCloseSchema[\s\S]{0,180}'CONVERTED'/u);
+});
+
+test('N14 qualified-out is terminal across the legacy writer and database guard', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const migration = readFileSync('prisma/migrations/20260823160000_commercial_lead_inbox_attribution_sla_v1/migration.sql', 'utf8');
+  assert.match(actions, /protectedTerminalStatus = \[[^\]]*'non_qualificato'/u);
+  assert.match(migration, /NEW\."status"::text IN \([^)]*'non_qualificato'[\s\S]*OLD\."status"::text IN \([^)]*'non_qualificato'/u);
+});
+
+test('N14 manager assignment accepts only active commercial users', () => {
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  const page = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
+  assert.match(service, /target\[0\]\.role !== 'commerciale'/u);
+  assert.match(page, /role: 'commerciale'/u);
+});
+
+test('N14 UI is mode-gated, permission-scoped and query-bounded', () => {
+  const inboxPage = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
+  const leadsPage = readFileSync('src/app/leads/page.tsx', 'utf8');
+  assert.match(inboxPage, /requirePermission\('lead\.read'\)/u);
+  assert.match(inboxPage, /commercialLeadInboxMode\(\)[\s\S]*mode !== 'enforced'/u);
+  assert.match(inboxPage, /leadVisibilityWhere\(session\)/u);
+  assert.match(inboxPage, /take: coreQueryFetchSize\(\)/u);
+  assert.match(inboxPage, /clock_timestamp\(\)::timestamptz\(3\)/u);
+  assert.match(inboxPage, /slaCycles = \{ some: \{ closedAt: null, firstResponseAt: null, dueAt:/u);
+  assert.match(leadsPage, /commercialLeadInboxMode\(\) === "enforced"[\s\S]*\/leads\/inbox/u);
+  assert.doesNotMatch(inboxPage, /submissionId|envelopeJson|payloadHash|keyDigest/u);
+});

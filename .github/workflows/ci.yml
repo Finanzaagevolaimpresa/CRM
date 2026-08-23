@@ -44,6 +44,7 @@ jobs:
       SECURE_LEAD_GATEWAY_MODE: disabled
       SECURE_LEAD_GATEWAY_KEYRING_FILE: ""
       LEAD_IDENTITY_KEY_FILE: ""
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
     services:
       postgres:
         image: postgres:16
@@ -143,9 +144,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 41 database migrations
+      - name: Apply exactly 42 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "41"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "42"
           npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel
@@ -244,6 +245,6 @@ jobs:
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
           ROLLBACK_COMMIT="$rollback_commit" \
           ROLLBACK_TREE="$rollback_tree" \
-          EXPECTED_MIGRATION_COUNT=41 \
+          EXPECTED_MIGRATION_COUNT=42 \
           N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
             npm run test:n05:restore

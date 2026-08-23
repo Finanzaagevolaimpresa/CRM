@@ -137,7 +137,7 @@ test('retry policy is dynamic, bounded to three, and shares one deadline', async
   assert.equal(expiredAttempts, 1);
 });
 test('migration 32 is additive and route contains containment invariants', () => {
-  assert.equal(readdirSync('prisma/migrations').length, 41);
+  assert.equal(readdirSync('prisma/migrations').length, 42);
   const sql=readFileSync('prisma/migrations/20260813120000_website_lead_containment_atomicity_v1/migration.sql','utf8');
   assert.doesNotMatch(sql,/\b(?:DROP|ALTER|DELETE|UPDATE)\b/i); assert.match(sql,/WebsiteLeadReceipt/); assert.match(sql,/WebsiteLeadRateLimitBucket/);
   const route=readFileSync('src/app/api/integrations/website/leads/route.ts','utf8');

@@ -5,7 +5,7 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
   createExternalAiPayload,
   externalAiDataCategories,
@@ -67,6 +67,18 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
+import {
+  assignCommercialLeadInboxItem,
+  claimCommercialLeadInboxItem,
+  closeCommercialLeadInboxItem,
+  convertCommercialLeadInboxItem,
+  initializeCommercialLeadInboxItem,
+  maybeEnrollManualCommercialLead,
+  recordCommercialLeadFirstResponse,
+  reopenCommercialLeadInboxItem,
+  unassignCommercialLeadInboxItem,
+} from './commercial-lead-inbox';
+import { CommercialLeadInboxError } from './commercial-lead-inbox-contract';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
@@ -460,6 +472,10 @@ export async function createLead(form: FormData) {
         after: redactAuditPayload(lead) as Prisma.InputJsonValue,
       },
     });
+    await maybeEnrollManualCommercialLead(tx, {
+      leadId: lead.id,
+      actor: { userId: s.userId, sessionId: s.sessionId ?? '' },
+    });
     return lead;
   });
 }
@@ -503,11 +519,141 @@ export async function resolveLeadDuplicateCaseAction(form: FormData) {
   }
 }
 
+function commercialLeadActor(session: AuthSession) {
+  if (!session.sessionId) {
+    throw new UserFacingActionError('Sessione registry obbligatoria per la Commercial Lead Inbox.');
+  }
+  return { userId: session.userId, sessionId: session.sessionId } as const;
+}
+
+function mapCommercialLeadInboxError(error: unknown): never {
+  if (!(error instanceof CommercialLeadInboxError)) throw error;
+  if (error.code === 'N14_DISABLED' || error.code === 'N14_ACTIVE_POLICY_UNAVAILABLE') {
+    throw new UserFacingActionError('Commercial Lead Inbox non attiva o policy SLA non disponibile.');
+  }
+  if (error.code === 'N14_VERSION_CONFLICT') {
+    throw new UserFacingActionError('Il lead è stato modificato da un altro operatore. Ricarica.');
+  }
+  if (error.code === 'N14_PERMISSION_DENIED' || error.code === 'N14_SESSION_REVALIDATION_FAILED') {
+    throw new UserFacingActionError('Sessione o autorizzazione non più valida.');
+  }
+  if (error.code === 'N14_ATTRIBUTION_INVALID') {
+    throw new UserFacingActionError('Provenienza del lead non verificabile.');
+  }
+  if (error.code === 'N14_FIRST_RESPONSE_REQUIRED') {
+    throw new UserFacingActionError('Registra la prima risposta prima di convertire il lead.');
+  }
+  if (error.code === 'N14_LEAD_ALREADY_CONVERTED') {
+    throw new UserFacingActionError('Un lead già convertito in cliente non può essere riaperto.');
+  }
+  throw new UserFacingActionError('Operazione Commercial Lead Inbox non completata. Ricarica.');
+}
+
+export async function initializeCommercialLeadInboxAction(form: FormData) {
+  const data = commercialLeadInboxInitializeSchema.parse(clean(form));
+  if (data.originKind === 'MANUAL_CRM') {
+    throw new UserFacingActionError('La provenienza manuale può essere registrata soltanto nella transazione di creazione del Lead.');
+  }
+  const permission = data.originKind === 'LEGACY_UNVERIFIED' ? 'lead.inbox.assign' : 'lead.write';
+  const session = await requirePermission(permission);
+  if (data.originKind === 'LEGACY_UNVERIFIED') {
+    await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_LEGACY_ENROLL');
+  }
+  const reasonCode = data.originKind === 'BUSINESS_PROJECTION_N13'
+    ? 'PROJECTED_NEW' : 'LEGACY_ENROLLMENT';
+  try {
+    return await initializeCommercialLeadInboxItem(prisma, {
+      leadId: data.id,
+      actor: commercialLeadActor(session),
+      attribution: {
+        originKind: data.originKind,
+        projectionLedgerId: data.projectionLedgerId,
+        privacyEvidenceReceiptId: data.privacyEvidenceReceiptId,
+      },
+      reasonCode,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function claimCommercialLeadInboxAction(form: FormData) {
+  const session = await requirePermission('lead.inbox.claim');
+  const data = commercialLeadInboxCommandSchema.parse(clean(form));
+  try {
+    return await claimCommercialLeadInboxItem(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function assignCommercialLeadInboxAction(form: FormData) {
+  const session = await requirePermission('lead.inbox.assign');
+  await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_ASSIGN');
+  const data = commercialLeadInboxAssignSchema.parse(clean(form));
+  try {
+    return await assignCommercialLeadInboxItem(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), targetUserId: data.targetUserId,
+      expectedInboxVersion: data.expectedInboxVersion,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function unassignCommercialLeadInboxAction(form: FormData) {
+  const session = await requirePermission('lead.inbox.assign');
+  await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_UNASSIGN');
+  const data = commercialLeadInboxCommandSchema.parse(clean(form));
+  try {
+    return await unassignCommercialLeadInboxItem(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function recordCommercialLeadFirstResponseAction(form: FormData) {
+  const session = await requirePermission('lead.write');
+  const data = commercialLeadInboxCommandSchema.parse(clean(form));
+  try {
+    return await recordCommercialLeadFirstResponse(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function closeCommercialLeadInboxAction(form: FormData) {
+  const session = await requirePermission('lead.write');
+  const data = commercialLeadInboxCloseSchema.parse(clean(form));
+  try {
+    return await closeCommercialLeadInboxItem(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+      reasonCode: data.reasonCode,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
+export async function reopenCommercialLeadInboxAction(form: FormData) {
+  const session = await requirePermission('lead.inbox.assign');
+  await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_REOPEN');
+  const data = commercialLeadInboxCommandSchema.parse(clean(form));
+  try {
+    return await reopenCommercialLeadInboxItem(prisma, {
+      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+    });
+  } catch (error) { return mapCommercialLeadInboxError(error); }
+}
+
 export async function updateLeadCommercial(form: FormData) {
   const s = await requirePermission('lead.write');
   const data = leadCommercialUpdateSchema.parse(clean(form));
   const before = await requireLeadEditAccess(s, data.id);
+  const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
+    where: { leadId: data.id }, select: { id: true },
+  });
   const nextAssignedToId = data.assignedToId ?? null;
+  const protectedTerminalStatus = ['cliente_acquisito', 'vinto', 'perso', 'non_qualificato', 'archiviato'];
+  if (inboxItem && (before.assignedToId !== nextAssignedToId
+    || (before.status !== data.status && (protectedTerminalStatus.includes(before.status)
+      || protectedTerminalStatus.includes(data.status))))) {
+    throw new UserFacingActionError('Owner e stati terminali di un item N14 si gestiscono dalla Commercial Lead Inbox.');
+  }
   await requireActiveUser(nextAssignedToId);
   if (before.assignedToId !== nextAssignedToId && !hasGlobalAccess(s) && nextAssignedToId && nextAssignedToId !== s.userId) denyWriteAccess();
   const lead = await prisma.lead.update({ where: { id: data.id }, data: { status: data.status, priority: data.priority, assignedToId: nextAssignedToId, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal } });
@@ -528,6 +674,22 @@ export async function convertLeadToClient(form: FormData) {
     const existingClient = await prisma.client.findFirst({ where: { id: lead.clientId, deletedAt: null } });
     if (!existingClient) denyWriteAccess();
     return existingClient;
+  }
+  const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
+    where: { leadId: data.id }, select: { id: true },
+  });
+  if (inboxItem) {
+    if (!data.expectedInboxVersion) {
+      throw new UserFacingActionError('Versione Commercial Lead Inbox obbligatoria per la conversione.');
+    }
+    try {
+      return await convertCommercialLeadInboxItem(prisma, {
+        leadId: data.id,
+        actor: commercialLeadActor(s),
+        expectedInboxVersion: data.expectedInboxVersion,
+        clientType: data.type,
+      });
+    } catch (error) { return mapCommercialLeadInboxError(error); }
   }
   const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
   try {
