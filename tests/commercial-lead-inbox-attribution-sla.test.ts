@@ -115,3 +115,23 @@ test('N13 projected-new paths enter N14 only through mode plus active-policy enr
   assert.match(duplicate, /input\.outcome === 'CREATE_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
   assert.match(service, /maybeEnrollProjectedCommercialLead[\s\S]*commercialLeadInboxMode\(\) !== 'enforced'[\s\S]*optionalActivePolicyAndClock/u);
 });
+
+test('N14 manual attribution is created only inside the createLead transaction', () => {
+  const actions = readFileSync('src/lib/actions.ts', 'utf8');
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.match(actions, /tx\.lead\.create[\s\S]*maybeEnrollManualCommercialLead\(tx/u);
+  assert.match(actions, /originKind === 'MANUAL_CRM'[\s\S]*provenienza manuale/u);
+  assert.match(service, /maybeEnrollManualCommercialLead[\s\S]*sourceSystem: 'CRM'[\s\S]*formCode: 'LEAD_CREATE_UI'/u);
+});
+
+test('N14 UI is mode-gated, permission-scoped and query-bounded', () => {
+  const inboxPage = readFileSync('src/app/leads/inbox/page.tsx', 'utf8');
+  const leadsPage = readFileSync('src/app/leads/page.tsx', 'utf8');
+  assert.match(inboxPage, /requirePermission\('lead\.read'\)/u);
+  assert.match(inboxPage, /commercialLeadInboxMode\(\)[\s\S]*mode !== 'enforced'/u);
+  assert.match(inboxPage, /leadVisibilityWhere\(session\)/u);
+  assert.match(inboxPage, /take: coreQueryFetchSize\(\)/u);
+  assert.match(inboxPage, /clock_timestamp\(\)::timestamptz\(3\)/u);
+  assert.match(leadsPage, /commercialLeadInboxMode\(\) === "enforced"[\s\S]*\/leads\/inbox/u);
+  assert.doesNotMatch(inboxPage, /submissionId|envelopeJson|payloadHash|keyDigest/u);
+});

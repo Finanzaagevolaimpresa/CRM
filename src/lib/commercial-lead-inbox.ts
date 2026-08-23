@@ -113,6 +113,9 @@ async function authorizeActor(
   actor: CommercialLeadActor,
   requirement: 'CLAIM' | 'WORK' | 'MANAGE',
 ) {
+  if (!actor.userId || !/^[0-9a-f-]{36}$/u.test(actor.sessionId)) {
+    fail('N14_SESSION_REVALIDATION_FAILED');
+  }
   let registry = false;
   try { registry = internalSessionMode() === 'registry'; } catch { /* fail closed */ }
   if (!registry) fail('N14_SESSION_REVALIDATION_FAILED');
@@ -388,6 +391,37 @@ export async function maybeEnrollProjectedCommercialLead(
     entityType: 'CommercialLeadInboxItem', entityId: item.id,
     after: { originKind: 'BUSINESS_PROJECTION_N13', state: 'OPEN', version: 1, reasonCode: 'PROJECTED_NEW' },
   } });
+  return item;
+}
+
+export async function maybeEnrollManualCommercialLead(
+  tx: Prisma.TransactionClient,
+  input: Readonly<{ leadId: string; actor: CommercialLeadActor }>,
+) {
+  if (commercialLeadInboxMode() !== 'enforced') return null;
+  await authorizeActor(tx, input.actor, 'WORK');
+  const lead = await lockLead(tx, input.leadId);
+  if (await lockItem(tx, input.leadId)) return null;
+  const policy = await optionalActivePolicyAndClock(tx);
+  if (!policy) return null;
+  const item = await tx.commercialLeadInboxItem.create({ data: {
+    id: randomUUID(), leadId: lead.id, originKind: 'MANUAL_CRM',
+    attributionVersion: 'n14-v1', sourceSystem: 'CRM', formCode: 'LEAD_CREATE_UI',
+    formVersion: 'n14-v1', sourceOccurredAt: policy.now, projectionLedgerId: null,
+    privacyEvidenceReceiptId: null, state: 'OPEN', version: 1, initializedAt: policy.now,
+  } });
+  await tx.commercialLeadSlaCycle.create({ data: {
+    id: randomUUID(), inboxItemId: item.id, sequence: 1, policyVersionId: policy.id,
+    availableAt: policy.now, dueAt: policy.dueAt, version: 1,
+  } });
+  await appendActivity(tx, {
+    itemId: item.id, activityType: 'INITIALIZED', actor: input.actor,
+    reasonCode: 'MANUAL_INTAKE', assigneeBeforeId: lead.assignedToId,
+    assigneeAfterId: lead.assignedToId, versionBefore: 0, versionAfter: 1,
+  });
+  await appendAudit(tx, input.actor, 'commercial_lead_inbox_initialized', item.id, {
+    originKind: 'MANUAL_CRM', state: 'OPEN', version: 1, reasonCode: 'MANUAL_INTAKE',
+  });
   return item;
 }
 

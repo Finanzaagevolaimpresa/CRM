@@ -72,6 +72,7 @@ import {
   claimCommercialLeadInboxItem,
   closeCommercialLeadInboxItem,
   initializeCommercialLeadInboxItem,
+  maybeEnrollManualCommercialLead,
   recordCommercialLeadFirstResponse,
   reopenCommercialLeadInboxItem,
   unassignCommercialLeadInboxItem,
@@ -470,6 +471,10 @@ export async function createLead(form: FormData) {
         after: redactAuditPayload(lead) as Prisma.InputJsonValue,
       },
     });
+    await maybeEnrollManualCommercialLead(tx, {
+      leadId: lead.id,
+      actor: { userId: s.userId, sessionId: s.sessionId ?? '' },
+    });
     return lead;
   });
 }
@@ -539,14 +544,16 @@ function mapCommercialLeadInboxError(error: unknown): never {
 
 export async function initializeCommercialLeadInboxAction(form: FormData) {
   const data = commercialLeadInboxInitializeSchema.parse(clean(form));
+  if (data.originKind === 'MANUAL_CRM') {
+    throw new UserFacingActionError('La provenienza manuale può essere registrata soltanto nella transazione di creazione del Lead.');
+  }
   const permission = data.originKind === 'LEGACY_UNVERIFIED' ? 'lead.inbox.assign' : 'lead.write';
   const session = await requirePermission(permission);
   if (data.originKind === 'LEGACY_UNVERIFIED') {
     await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_LEGACY_ENROLL');
   }
-  const reasonCode = data.originKind === 'MANUAL_CRM'
-    ? 'MANUAL_INTAKE' : data.originKind === 'BUSINESS_PROJECTION_N13'
-      ? 'PROJECTED_NEW' : 'LEGACY_ENROLLMENT';
+  const reasonCode = data.originKind === 'BUSINESS_PROJECTION_N13'
+    ? 'PROJECTED_NEW' : 'LEGACY_ENROLLMENT';
   try {
     return await initializeCommercialLeadInboxItem(prisma, {
       leadId: data.id,
