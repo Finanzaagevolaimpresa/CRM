@@ -462,24 +462,31 @@ test('N12 classifies security state and forbids telemetry, egress and legacy reu
   assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
 });
 
-test('N13-C2 release surfaces pin migration 41 and keep every N12 gateway mode disabled', () => {
+test('N14 release surfaces pin migration 42 and keep every N12/N13/N14 mode disabled', () => {
   for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
     const source = readFileSync(path, 'utf8');
     assert.match(source, /SECURE_LEAD_GATEWAY_MODE="disabled"/);
     assert.match(source, /SECURE_LEAD_GATEWAY_KEYRING_FILE=""/);
+    assert.match(source, /LEAD_IDENTITY_KEY_FILE=""/);
+    assert.match(source, /COMMERCIAL_LEAD_INBOX_MODE="disabled"/);
   }
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  assert.match(ci, /Apply exactly 41 database migrations/);
+  assert.match(ci, /Apply exactly 42 database migrations/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_MODE: disabled/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_KEYRING_FILE: ""/);
+  assert.match(ci, /LEAD_IDENTITY_KEY_FILE: ""/);
+  assert.match(ci, /COMMERCIAL_LEAD_INBOX_MODE: disabled/);
   const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
-  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=41/);
+  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=42/);
   assert.match(smoke, /SECURE_LEAD_GATEWAY_MODE=disabled/);
+  assert.match(smoke, /COMMERCIAL_LEAD_INBOX_MODE=disabled/);
+  assert.match(smoke, /4\|25\|9\|5\|0\|0\|0\|0/);
   assert.match(smoke, /0\|0\|0\|0/);
   assert.match(smoke, /SHOW server_encoding/);
   assert.match(smoke, /Lead_active_email_n13_nfc_idx/);
   assert.match(smoke, /privacy_evidence_receipt_validate_v1/);
   const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
-  assert.match(restore, /EXPECTED_MIGRATION_COUNT:-41/);
+  assert.match(restore, /EXPECTED_MIGRATION_COUNT:-42/);
   assert.match(restore, /SECURE_LEAD_GATEWAY_MODE=disabled/);
+  assert.match(restore, /COMMERCIAL_LEAD_INBOX_MODE=disabled/);
 });

@@ -16,7 +16,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.example.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fai-crm-smoke-${GITHUB_RUN_ID:-$$}}"
 APP_SERVICE="${APP_SERVICE:-app}"
 DOCUMENTS_PATH="${DOCUMENTS_PATH:-/var/lib/fai-crm/documents}"
-EXPECTED_MIGRATION_COUNT=41
+EXPECTED_MIGRATION_COUNT=42
 SMOKE_ENV_FILE=""
 SMOKE_APP_IMAGE="${APP_IMAGE:-fai-crm:smoke-${COMPOSE_PROJECT_NAME}}"
 SMOKE_CREATED="false"
@@ -109,6 +109,7 @@ AI_API_KEY=
 SECURE_LEAD_GATEWAY_MODE=disabled
 SECURE_LEAD_GATEWAY_KEYRING_FILE=
 LEAD_IDENTITY_KEY_FILE=
+COMMERCIAL_LEAD_INBOX_MODE=disabled
 APP_ENV=production
 NODE_ENV=production
 ENV
@@ -145,6 +146,7 @@ export AI_API_KEY=
 export SECURE_LEAD_GATEWAY_MODE=disabled
 export SECURE_LEAD_GATEWAY_KEYRING_FILE=
 export LEAD_IDENTITY_KEY_FILE=
+export COMMERCIAL_LEAD_INBOX_MODE=disabled
 export APP_ENV=production
 export NODE_ENV=production
 
@@ -229,8 +231,10 @@ docker rm "$DORMANT_WORKER_CONTAINER" >/dev/null
 
 compose run --rm -T "$APP_SERVICE" npm run prisma:migrate:deploy
 compose run --rm -T "$APP_SERVICE" npm run prisma:seed:production
-[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "41" ]] \
-  || fail "Production image did not apply exactly 41 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" == "42" ]] \
+  || fail "Production image did not apply exactly 42 migrations"
+[[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'CommercialLead%') || '|' || (SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND tablename LIKE 'CommercialLead%') || '|' || (SELECT COUNT(*) FROM pg_trigger trigger_row JOIN pg_class table_row ON table_row.oid=trigger_row.tgrelid JOIN pg_namespace namespace_row ON namespace_row.oid=table_row.relnamespace WHERE namespace_row.nspname='public' AND NOT trigger_row.tgisinternal AND (table_row.relname LIKE 'CommercialLead%' OR trigger_row.tgname='Lead_n14_guard_row')) || '|' || (SELECT COUNT(*) FROM pg_proc function_row JOIN pg_namespace namespace_row ON namespace_row.oid=function_row.pronamespace WHERE namespace_row.nspname='public' AND function_row.proname LIKE 'n14_%') || '|' || (SELECT COUNT(*) FROM \"CommercialLeadSlaPolicyVersion\") || '|' || (SELECT COUNT(*) FROM \"CommercialLeadInboxItem\") || '|' || (SELECT COUNT(*) FROM \"CommercialLeadSlaCycle\") || '|' || (SELECT COUNT(*) FROM \"CommercialLeadActivity\")")" == "4|25|9|5|0|0|0|0" ]] \
+  || fail "N14 catalog or business-empty dormancy is not exact"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'SHOW server_encoding')" == "UTF8" ]] \
   || fail "N13-C2 NFC normalization requires UTF8 server encoding"
 [[ "$(compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('Lead_active_email_normalized_idx', 'Lead_active_person_name_normalized_idx', 'Lead_active_company_name_normalized_idx', 'Lead_active_email_n13_nfc_idx', 'Lead_active_person_name_n13_nfc_idx', 'Lead_active_company_name_n13_nfc_idx')")" == "6" ]] \
@@ -395,4 +399,4 @@ if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" -
   fail "Production Compose started an unauthorized worker or Orchestrator container"
 fi
 
-echo "Docker production smoke test completed: 41 migrations, dormant N12 gateway and N13 projection registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 42 migrations, dormant N12 gateway, N13 projection and N14 inbox registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
@@ -166,6 +167,54 @@ test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or acti
   assert.equal(triggerRows.length, 9);
   assert.equal(functionRows.length, 5);
   assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
+});
+
+test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy Lead', {
+  skip: !runDbTests,
+  timeout: 240_000,
+}, async () => {
+  const upgradeSchema = `n14_upgrade_${process.pid}`;
+  const temporaryRoot = mkdtempSync(join(tmpdir(), 'n14-upgrade-'));
+  const prismaDirectory = join(temporaryRoot, 'prisma');
+  const migrationsDirectory = join(prismaDirectory, 'migrations');
+  mkdirSync(migrationsDirectory, { recursive: true });
+  cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
+  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  assert.equal(names.length, 42);
+  assert.equal(names[41], migrationName);
+  const url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('schema', upgradeSchema);
+  await rootClient().$executeRawUnsafe(`CREATE SCHEMA "${upgradeSchema}"`);
+  try {
+    for (const name of names.slice(0, 41)) {
+      cpSync(join('prisma/migrations', name), join(migrationsDirectory, name), { recursive: true });
+    }
+    execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], {
+      env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000,
+    });
+    const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    try {
+      await before.lead.create({ data: {
+        id: 'n14-upgrade-legacy-lead', firstName: 'Legacy', lastName: 'Synthetic',
+        email: 'legacy@n14-upgrade.invalid', source: 'LEGACY', leadSource: 'altro',
+      } });
+      assert.equal(Number((await before.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0]?.count), 41);
+    } finally { await before.$disconnect(); }
+    cpSync(join('prisma/migrations', migrationName), join(migrationsDirectory, migrationName), { recursive: true });
+    execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], {
+      env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000,
+    });
+    const after = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+    try {
+      assert.equal(Number((await after.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0]?.count), 42);
+      assert.equal(await after.lead.count({ where: { id: 'n14-upgrade-legacy-lead', source: 'LEGACY' } }), 1);
+      assert.equal(await after.commercialLeadInboxItem.count(), 0);
+      assert.equal(await after.commercialLeadSlaPolicyVersion.count(), 0);
+    } finally { await after.$disconnect(); }
+  } finally {
+    await rootClient().$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${upgradeSchema}" CASCADE`);
+    rmSync(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test('N14 initialize binds database-clock SLA and writes item, cycle, activity and audit atomically', {
