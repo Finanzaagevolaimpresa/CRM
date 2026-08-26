@@ -789,7 +789,7 @@ test('N15 dependency closure has zero I/O and no runtime call-site, persistence 
   assert.match(readFileSync('tests/fixtures/n15-communication-mock.ts', 'utf8'), /outcome: 'HELD'/u);
   assert.doesNotMatch(readFileSync('Dockerfile.prod.example', 'utf8'), /COPY[^\n]*\/app\/tests/u);
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name));
-  assert.equal(migrations.length, 42);
+  assert.equal(migrations.length, 43);
   const prismaFiles = [
     'prisma/schema.prisma',
     ...sourceFilesUnder('prisma'),

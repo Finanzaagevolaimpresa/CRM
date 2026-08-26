@@ -301,7 +301,7 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
   ]) assert.equal(indexNames.has(expected), true, expected);
   assert.equal(triggers.length, 6);
   assert.equal(functions.length, 3);
-  assert.equal(Number(migrations[0]?.count), 42);
+  assert.equal(Number(migrations[0]?.count), 43);
   assert.deepEqual(await counts(), { inbox: 0, outbox: 0, attempts: 0 });
 });
 
@@ -785,7 +785,7 @@ async function qualifyMigrationChain(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 42);
+  assert.equal(allNames.length, 43);
   const names = allNames.slice(0, 38);
   const url = new URL(sourceUrl);
   url.searchParams.set('schema', schema);
