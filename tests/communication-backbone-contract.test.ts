@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
-import { canonicalJson } from '../src/lib/canonical-json';
+import { canonicalJson, canonicalSha256 } from '../src/lib/canonical-json';
 import {
   COMMUNICATION_GATE_CODES,
   COMMUNICATION_INTENT_CANONICALIZATION_VERSION,
@@ -124,6 +124,58 @@ test('N15 Phase 1A manifest is contract-only, outbound, dormant and provider-fre
     messageClasses: ['TRANSACTIONAL', 'SERVICE', 'SECURITY'],
   });
   assertDeepFrozen(COMMUNICATION_INTENT_MANIFEST);
+});
+
+test('N15 Phase 1C records a dedicated persistence boundary without implementing it', () => {
+  const adr = readFileSync(
+    'docs/adr/ADR-0014-n15-communication-intent-dedicated-persistence-boundary-v1.md',
+    'utf8',
+  );
+  for (const decision of [
+    'N15_PHASE1C_DECISION_STATUS=ACCEPTED_ARCHITECTURE_NOT_IMPLEMENTED',
+    'N15_PHASE1C_TARGET_STORAGE_BOUNDARY=DEDICATED_N15',
+    'N15_PHASE1C_SHARED_PRIMITIVES=PURE_ONLY',
+    'N15_PHASE1C_CURRENT_SCHEMA=UNCHANGED',
+    'N15_PHASE1C_CURRENT_MIGRATIONS=42',
+    'N15_PHASE1C_CURRENT_PERSISTENCE=NONE',
+    'N15_PHASE1C_CURRENT_RUNTIME=NONE',
+    'N15_PHASE1C_CURRENT_ACTIVATION=NONE',
+    'N15_PHASE1C_N11_STORAGE_REUSE=FORBIDDEN',
+    'N15_PHASE1C_N11_ADAPTER=NONE',
+    'N15_PHASE1C_QUEUE_LIFECYCLE=DEFERRED',
+    'N15_PHASE1C_F1_REMEDIATION=OUT_OF_SCOPE',
+  ]) {
+    assert.match(adr, new RegExp(`^${decision}$`, 'mu'), decision);
+  }
+  assert.match(adr, /OPEN_HUMAN_DECISION/u);
+  assert.match(adr, /merge senza autorizzazione umana separata e vincolata all'head qualificato/u);
+});
+
+test('N15 Phase 1A canonical artifacts remain byte-characterized across Phase 1C', () => {
+  const gate = createDisabledCommunicationGateSnapshotV1();
+  const held = createCommunicationHeldDecisionV1(
+    SYNTHETIC_COMMUNICATION_INTENT_V1,
+    gate,
+    SYNTHETIC_COMMUNICATION_EVALUATED_AT_V1,
+  );
+  const audit = createCommunicationAuditRecordV1(SYNTHETIC_COMMUNICATION_INTENT_V1, held);
+  const mock = executeDeterministicCommunicationMockV1(
+    SYNTHETIC_COMMUNICATION_INTENT_V1,
+    SYNTHETIC_COMMUNICATION_EVALUATED_AT_V1,
+  );
+  assert.deepEqual({
+    intent: canonicalSha256(SYNTHETIC_COMMUNICATION_INTENT_V1),
+    gate: canonicalSha256(gate),
+    held: canonicalSha256(held),
+    audit: canonicalSha256(audit),
+    mock: canonicalSha256(mock),
+  }, {
+    intent: '9bb7dd0390dfe3452cfa44ca7279b81249f97beb2ba39508ab00c561443eb07d',
+    gate: 'c42f4be529776f6a5a6b1ca12894010a9ceb1560f65d32084304e29aae4fbfab',
+    held: '04a6417fb912549d852c115fddcc32cb0c54ed40c930bb3a8fa0422ddeb9c64f',
+    audit: '332c86456cddc9d9250ff107ac83965122761fa499ecb618a179e4c1777ebf00',
+    mock: 'a249d46b5e0ab182fbb64e114427c142e0e49dd68031cfe735fe0ef94d361ec2',
+  });
 });
 
 test('N15 creates and parses a canonical frozen intent with stable golden hashes', () => {
@@ -725,12 +777,10 @@ test('N15 dependency closure has zero I/O and no runtime call-site, persistence 
   assert.doesNotMatch(readFileSync('src/lib/data-classification.ts', 'utf8'), /^import\s/mu);
 
   const runtimeFiles = [
-    ...sourceFilesUnder('src/app'),
-    ...sourceFilesUnder('src/components'),
+    ...sourceFilesUnder('src').filter((path) => path !== contractPath),
+    ...sourceFilesUnder('prisma'),
     ...sourceFilesUnder('scripts'),
     ...sourceFilesUnder('deploy'),
-    'src/middleware.ts',
-    'src/instrumentation.ts',
   ].filter(existsSync);
   for (const path of runtimeFiles) {
     assert.doesNotMatch(readFileSync(path, 'utf8'), /communication-backbone-contract/u, path);
@@ -738,16 +788,21 @@ test('N15 dependency closure has zero I/O and no runtime call-site, persistence 
   assert.equal(existsSync('src/lib/communication-backbone-mock.ts'), false);
   assert.match(readFileSync('tests/fixtures/n15-communication-mock.ts', 'utf8'), /outcome: 'HELD'/u);
   assert.doesNotMatch(readFileSync('Dockerfile.prod.example', 'utf8'), /COPY[^\n]*\/app\/tests/u);
-  assert.doesNotMatch(readFileSync('prisma/schema.prisma', 'utf8'), /model\s+Communication(?:Intent|Attempt|Delivery)/u);
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name));
   assert.equal(migrations.length, 42);
-  for (const path of [
-    'src/lib/business-event-backbone.ts',
-    'src/lib/secure-lead-gateway.ts',
-    'src/lib/lead-projection.ts',
-    'src/lib/commercial-lead-inbox.ts',
-  ]) {
-    assert.doesNotMatch(readFileSync(path, 'utf8'), /communication-backbone-contract/u, path);
+  const prismaFiles = [
+    'prisma/schema.prisma',
+    ...sourceFilesUnder('prisma'),
+    ...migrations
+      .map((migration) => `prisma/migrations/${migration}/migration.sql`)
+      .filter(existsSync),
+  ];
+  for (const path of prismaFiles) {
+    assert.doesNotMatch(
+      readFileSync(path, 'utf8'),
+      /fai\.communication-intent\.v1|COMMUNICATION_INTENT|Communication(?:Intent|Held|Audit)/u,
+      path,
+    );
   }
 });
 
