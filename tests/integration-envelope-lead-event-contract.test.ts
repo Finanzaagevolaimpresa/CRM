@@ -86,6 +86,34 @@ test('N10 canonicalization is deterministic across UTC offsets, Unicode and norm
   assert.deepEqual(first, second);
 });
 
+test('N10 preserves source provenance at 120/120/80 and rejects the first excess character', () => {
+  const input = syntheticLeadEventInputV1();
+  const maximum = createLeadSubmittedEventV1({
+    ...input,
+    source: {
+      ...input.source,
+      systemCode: 'S'.repeat(120),
+      formCode: 'F'.repeat(120),
+      formVersion: 'V'.repeat(80),
+    },
+  });
+  assert.equal(maximum.source.systemCode, 'S'.repeat(120));
+  assert.equal(maximum.source.formCode, 'F'.repeat(120));
+  assert.equal(maximum.source.formVersion, 'V'.repeat(80));
+  assert.deepEqual(parseLeadSubmittedEventV1(maximum), maximum);
+
+  for (const source of [
+    { ...input.source, systemCode: 'S'.repeat(121) },
+    { ...input.source, formCode: 'F'.repeat(121) },
+    { ...input.source, formVersion: 'V'.repeat(81) },
+  ]) {
+    expectContractError('LEAD_EVENT_FIELD_INVALID', () => createLeadSubmittedEventV1({
+      ...input,
+      source,
+    }));
+  }
+});
+
 test('N10 timestamp profile preserves milliseconds and rejects unsupported boundaries', () => {
   const input = syntheticLeadEventInputV1();
   const event = createLeadSubmittedEventV1({
@@ -345,5 +373,5 @@ test('N10 remains pure, migration-free, transport-free and distinct from N06', (
     /from ['"]node:(?:fs|http|https|net|tls)/,
     /service-catalog-publication/,
   ]) assert.doesNotMatch(source, forbidden);
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 42);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 43);
 });

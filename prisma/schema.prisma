@@ -2119,9 +2119,9 @@ model CommercialLeadInboxItem {
   leadId                   String                   @unique(map: "CommercialLeadInboxItem_leadId_key")
   originKind               String                   @db.VarChar(32)
   attributionVersion       String                   @default("n14-v1") @db.VarChar(16)
-  sourceSystem             String                   @db.VarChar(80)
-  formCode                 String                   @db.VarChar(80)
-  formVersion              String                   @db.VarChar(40)
+  sourceSystem             String                   @db.VarChar(120)
+  formCode                 String                   @db.VarChar(120)
+  formVersion              String                   @db.VarChar(80)
   sourceOccurredAt         DateTime                 @db.Timestamptz(3)
   projectionLedgerId       String?                  @unique(map: "CommercialLeadInboxItem_projectionLedgerId_key") @db.Uuid
   privacyEvidenceReceiptId String?                  @unique(map: "CommercialLeadInboxItem_privacyEvidenceReceiptId_key") @db.Uuid

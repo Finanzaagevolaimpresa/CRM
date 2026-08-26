@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { BUSINESS_EVENT_BACKBONE_MANIFEST } from '../src/lib/business-event-backbone';
 import {
   COMMERCIAL_LEAD_ACTIVITY_TYPES,
   COMMERCIAL_LEAD_INBOX_MANIFEST,
@@ -12,6 +13,7 @@ import {
   isCommercialLeadResponseTargetSeconds,
 } from '../src/lib/commercial-lead-inbox-contract';
 import { classifyDataField } from '../src/lib/data-classification';
+import { LEAD_EVENT_SCHEMA_VERSION } from '../src/lib/lead-event-contract';
 import { createOperationalCorrelationId, createOperationalEventV1 } from '../src/lib/operational-telemetry';
 import { hasPermission } from '../src/lib/permission-evaluator';
 
@@ -114,6 +116,20 @@ test('N13 projected-new paths enter N14 only through mode plus active-policy enr
   assert.match(projection, /result\.state === 'PROJECTED_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
   assert.match(duplicate, /input\.outcome === 'CREATE_NEW'[\s\S]*maybeEnrollProjectedCommercialLead/u);
   assert.match(service, /maybeEnrollProjectedCommercialLead[\s\S]*commercialLeadInboxMode\(\) !== 'enforced'[\s\S]*optionalActivePolicyAndClock/u);
+});
+
+test('N13 to N14 attribution reuses the canonical N10/N11 schema version without an alias', () => {
+  const service = readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8');
+  assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.schemaVersion, LEAD_EVENT_SCHEMA_VERSION);
+  assert.match(
+    service,
+    /import \{ LEAD_EVENT_SCHEMA_VERSION \} from '\.\/lead-event-contract';/u,
+  );
+  assert.match(
+    service,
+    /inbox\."schemaVersion" = \$\{LEAD_EVENT_SCHEMA_VERSION\}/u,
+  );
+  assert.doesNotMatch(service, /fai\.lead-submitted\.v1/u);
 });
 
 test('N14 manual attribution is created only inside the createLead transaction', () => {

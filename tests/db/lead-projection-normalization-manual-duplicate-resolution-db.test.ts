@@ -70,6 +70,7 @@ const correctiveMigrationPath = `prisma/migrations/${correctiveMigrationName}/mi
 const migration40Sha256 = '234f574703ec81f7ab0b43c0854a1dab3264c8462e6ccb1f0d0b92f288415c78';
 const suiteSchema = `n13_contract_${process.pid}`;
 const originalSessionMode = process.env.INTERNAL_SESSION_MODE;
+const originalCommercialLeadInboxMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
 
 let schemaUrl = '';
 let db: PrismaClient | null = null;
@@ -108,6 +109,10 @@ function syntheticEvent(
   ordinal: number,
   payload: Partial<LeadEventPayloadV1> = {},
   occurredAt?: string,
+  source: Partial<Pick<
+    ReturnType<typeof syntheticLeadEventInputV1>['source'],
+    'systemCode' | 'formCode' | 'formVersion'
+  >> = {},
 ) {
   const base = syntheticLeadEventInputV1();
   const ordinalText = ordinal.toString().padStart(6, '0');
@@ -120,6 +125,7 @@ function syntheticEvent(
       ...base.source,
       formCode: 'N13_DB_SYNTHETIC_FORM',
       submissionId: `N13-DB-${ordinalText}`,
+      ...source,
     },
     payload: {
       ...base.payload,
@@ -185,8 +191,12 @@ async function createSession(role: RoleCode, ordinal: number) {
   return { userId: user.id, sessionId: session.id };
 }
 
-async function admitAndClaim(ordinal: number, payload: Partial<LeadEventPayloadV1> = {}) {
-  const event = syntheticEvent(ordinal, payload);
+async function admitAndClaim(
+  ordinal: number,
+  payload: Partial<LeadEventPayloadV1> = {},
+  source: Parameters<typeof syntheticEvent>[3] = {},
+) {
+  const event = syntheticEvent(ordinal, payload, undefined, source);
   const admitted = await admitBusinessInboxEvent(client(), event);
   const lease = await claimBusinessQueueEvent(client(), {
     queueKind: 'INBOX',
@@ -208,8 +218,12 @@ function resolutionActor(actor = { userId: primaryUserId, sessionId: primarySess
   } as const;
 }
 
-async function createReviewCase(ordinal: number, candidateCount = 1) {
-  const event = syntheticEvent(ordinal);
+async function createReviewCase(
+  ordinal: number,
+  candidateCount = 1,
+  source: Parameters<typeof syntheticEvent>[3] = {},
+) {
+  const event = syntheticEvent(ordinal, {}, undefined, source);
   const email = event.payload.email!;
   const candidates = await Promise.all(Array.from({ length: candidateCount }, (_, index) => (
     client().lead.create({
@@ -294,6 +308,61 @@ function aggregateOutcomes(results: readonly { outcome: string }[]) {
   return aggregate;
 }
 
+const maximumSourceProvenance = Object.freeze({
+  systemCode: 'S'.repeat(120),
+  formCode: 'F'.repeat(120),
+  formVersion: 'V'.repeat(80),
+});
+
+let commercialPolicyVersion = 10_000;
+
+async function withCommercialLeadInboxMode<T>(
+  mode: 'disabled' | 'enforced',
+  operation: () => Promise<T>,
+) {
+  const previousMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  process.env.COMMERCIAL_LEAD_INBOX_MODE = mode;
+  try {
+    return await operation();
+  } finally {
+    if (previousMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+    else process.env.COMMERCIAL_LEAD_INBOX_MODE = previousMode;
+  }
+}
+
+async function withSyntheticActiveCommercialPolicy<T>(
+  operation: () => Promise<T>,
+  mode: 'disabled' | 'enforced' = 'enforced',
+) {
+  commercialPolicyVersion += 1;
+  const policyId = uuid(190_000 + commercialPolicyVersion);
+  await client().commercialLeadSlaPolicyVersion.create({ data: {
+    id: policyId,
+    policyCode: 'COMMERCIAL_FIRST_RESPONSE',
+    version: commercialPolicyVersion,
+    status: 'ACTIVE',
+    calendarCode: 'CONTINUOUS_24X7',
+    timezoneCode: 'UTC',
+    responseTargetSeconds: 3_600,
+    createdById: primaryUserId,
+  } });
+  const previousMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  process.env.COMMERCIAL_LEAD_INBOX_MODE = mode;
+  try {
+    return await operation();
+  } finally {
+    try {
+      await client().commercialLeadSlaPolicyVersion.update({
+        where: { id: policyId },
+        data: { status: 'RETIRED' },
+      });
+    } finally {
+      if (previousMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+      else process.env.COMMERCIAL_LEAD_INBOX_MODE = previousMode;
+    }
+  }
+}
+
 test.before(async () => {
   if (!runDbTests) return;
   await assertAiOrchestratorEphemeralDatabaseIdentity(rootClient());
@@ -332,6 +401,8 @@ test.before(async () => {
 test.after(async () => {
   if (originalSessionMode === undefined) delete process.env.INTERNAL_SESSION_MODE;
   else process.env.INTERNAL_SESSION_MODE = originalSessionMode;
+  if (originalCommercialLeadInboxMode === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE;
+  else process.env.COMMERCIAL_LEAD_INBOX_MODE = originalCommercialLeadInboxMode;
   await db?.$disconnect();
   if (runDbTests) {
     await assertAiOrchestratorEphemeralDatabaseIdentity(rootClient());
@@ -388,7 +459,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 42);
+  assert.equal(allNames.length, 43);
   const names = allNames.slice(0, 40);
   assert.equal(names[39], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -513,7 +584,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 42);
+  assert.equal(names.length, 43);
   assert.equal(names[39], migrationName);
   assert.equal(names[40], correctiveMigrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -674,7 +745,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 42);
+  assert.equal(names.length, 43);
   assert.equal(names[40], correctiveMigrationName);
   for (const name of names.slice(0, 40)) {
     cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });
@@ -1151,6 +1222,169 @@ test('projection matrix 0/1/N is atomic and binds exactly two privacy receipts',
   assert.equal(await client().leadIdentityKey.count({
     where: { sourceProjectionId: many.projected.result.ledgerId },
   }), 0);
+});
+
+test('N13 enrollment creates zero N14 items when mode is disabled or an ACTIVE policy is absent', {
+  skip: !runDbTests,
+}, async () => {
+  assert.equal(await client().commercialLeadSlaPolicyVersion.count({
+    where: { status: 'ACTIVE' },
+  }), 0);
+
+  await withCommercialLeadInboxMode('enforced', async () => {
+    const claimed = await admitAndClaim(498);
+    const projected = await projectClaimedLeadInboxEvent(
+      client(),
+      claimed.lease,
+      projectionOptions(),
+    );
+    assert.equal(projected.state, 'PROCESSED');
+    assert.equal(projected.result.state, 'PROJECTED_NEW');
+    assert.ok(projected.result.leadId);
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { leadId: projected.result.leadId },
+    }), 0);
+  });
+
+  await withSyntheticActiveCommercialPolicy(async () => {
+    const claimed = await admitAndClaim(499);
+    const projected = await projectClaimedLeadInboxEvent(
+      client(),
+      claimed.lease,
+      projectionOptions(),
+    );
+    assert.equal(projected.state, 'PROCESSED');
+    assert.equal(projected.result.state, 'PROJECTED_NEW');
+    assert.ok(projected.result.leadId);
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { leadId: projected.result.leadId },
+    }), 0);
+  }, 'disabled');
+});
+
+test('N13 PROJECTED_NEW enrolls one N14 aggregate with exact 120/120/80 provenance', {
+  skip: !runDbTests,
+}, async () => {
+  await withSyntheticActiveCommercialPolicy(async () => {
+    const claimed = await admitAndClaim(500, {}, maximumSourceProvenance);
+    const projected = await projectClaimedLeadInboxEvent(
+      client(),
+      claimed.lease,
+      projectionOptions(),
+    );
+    assert.equal(projected.state, 'PROCESSED');
+    assert.equal(projected.result.state, 'PROJECTED_NEW');
+    assert.ok(projected.result.leadId);
+
+    const [inboxEvent, ledger, item, receipts] = await Promise.all([
+      client().businessInboxEvent.findUniqueOrThrow({ where: { id: claimed.admitted.inboxEventId } }),
+      client().leadProjectionLedger.findUniqueOrThrow({ where: { id: projected.result.ledgerId } }),
+      client().commercialLeadInboxItem.findUniqueOrThrow({
+        where: { projectionLedgerId: projected.result.ledgerId },
+      }),
+      client().privacyEvidenceReceipt.findMany({
+        where: { businessInboxEventId: claimed.admitted.inboxEventId },
+      }),
+    ]);
+    assert.equal(inboxEvent.state, 'PROCESSED');
+    assert.equal(ledger.state, 'PROJECTED_NEW');
+    assert.equal(ledger.leadId, projected.result.leadId);
+    assert.equal(receipts.length, 2);
+    assert.equal(item.leadId, projected.result.leadId);
+    assert.equal(item.originKind, 'BUSINESS_PROJECTION_N13');
+    assert.equal(item.sourceSystem, maximumSourceProvenance.systemCode);
+    assert.equal(item.formCode, maximumSourceProvenance.formCode);
+    assert.equal(item.formVersion, maximumSourceProvenance.formVersion);
+    assert.equal(item.sourceOccurredAt.toISOString(), claimed.event.occurredAt);
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { projectionLedgerId: projected.result.ledgerId },
+    }), 1);
+    assert.equal(await client().commercialLeadSlaCycle.count({
+      where: { inboxItemId: item.id },
+    }), 1);
+    assert.deepEqual(await client().commercialLeadActivity.findFirstOrThrow({
+      where: { inboxItemId: item.id },
+      select: { activityType: true, actorKind: true, reasonCode: true },
+    }), {
+      activityType: 'INITIALIZED',
+      actorKind: 'SYSTEM',
+      reasonCode: 'PROJECTED_NEW',
+    });
+    assert.equal(await client().auditLog.count({
+      where: {
+        event: 'commercial_lead_inbox_initialized',
+        entityType: 'CommercialLeadInboxItem',
+        entityId: item.id,
+      },
+    }), 1);
+  });
+});
+
+test('N13 REVIEW_REQUIRED to CREATE_NEW enrolls N14 once with exact 120/120/80 provenance', {
+  skip: !runDbTests,
+}, async () => {
+  await withSyntheticActiveCommercialPolicy(async () => {
+    const review = await createReviewCase(501, 1, maximumSourceProvenance);
+    assert.equal(review.projected.result.state, 'REVIEW_REQUIRED');
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { projectionLedgerId: review.projected.result.ledgerId },
+    }), 0);
+
+    const created = await resolveLeadDuplicateCase(client(), {
+      caseId: review.duplicateCase.id,
+      expectedCaseVersion: 1,
+      outcome: 'CREATE_NEW',
+      reasonCode: 'SYNTHETIC_DISTINCT_LEAD',
+      ...resolutionActor(),
+    }, projectionOptions());
+    assert.equal(created.state, 'RESOLVED_NEW');
+    assert.ok(created.resultingLeadId);
+
+    const [ledger, item] = await Promise.all([
+      client().leadProjectionLedger.findUniqueOrThrow({
+        where: { id: review.projected.result.ledgerId },
+      }),
+      client().commercialLeadInboxItem.findUniqueOrThrow({
+        where: { projectionLedgerId: review.projected.result.ledgerId },
+      }),
+    ]);
+    assert.equal(ledger.state, 'RESOLVED_NEW');
+    assert.equal(ledger.leadId, created.resultingLeadId);
+    assert.equal(item.leadId, created.resultingLeadId);
+    assert.equal(item.sourceSystem, maximumSourceProvenance.systemCode);
+    assert.equal(item.formCode, maximumSourceProvenance.formCode);
+    assert.equal(item.formVersion, maximumSourceProvenance.formVersion);
+    assert.equal(item.sourceOccurredAt.toISOString(), review.event.occurredAt);
+    assert.equal(await client().commercialLeadSlaCycle.count({
+      where: { inboxItemId: item.id },
+    }), 1);
+    assert.deepEqual(await client().commercialLeadActivity.findFirstOrThrow({
+      where: { inboxItemId: item.id },
+      select: { activityType: true, actorKind: true, reasonCode: true },
+    }), {
+      activityType: 'INITIALIZED',
+      actorKind: 'SYSTEM',
+      reasonCode: 'PROJECTED_NEW',
+    });
+    assert.equal(await client().auditLog.count({
+      where: {
+        event: 'commercial_lead_inbox_initialized',
+        entityType: 'CommercialLeadInboxItem',
+        entityId: item.id,
+      },
+    }), 1);
+
+    await assert.rejects(resolveLeadDuplicateCase(client(), {
+      caseId: review.duplicateCase.id,
+      expectedCaseVersion: 1,
+      outcome: 'CREATE_NEW',
+      reasonCode: 'SYNTHETIC_DISTINCT_LEAD',
+      ...resolutionActor(),
+    }, projectionOptions()), (error: unknown) => error instanceof LeadDuplicateResolutionError);
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { projectionLedgerId: review.projected.result.ledgerId },
+    }), 1);
+  });
 });
 
 test('projection rejects stale token, expired lease and replay without a second effect', {

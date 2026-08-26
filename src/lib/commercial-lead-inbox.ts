@@ -9,6 +9,7 @@ import {
   type CommercialLeadReasonCode,
 } from './commercial-lead-inbox-contract';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { LEAD_EVENT_SCHEMA_VERSION } from './lead-event-contract';
 import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
 
@@ -243,7 +244,7 @@ async function verifiedAttribution(
       JOIN "BusinessInboxEvent" inbox ON inbox."id" = ledger."inboxEventId"
       WHERE ledger."id" = ${attribution.projectionLedgerId}::uuid
         AND ledger."leadId" = ${lead.id} AND ledger."state" IN ('PROJECTED_NEW', 'RESOLVED_NEW')
-        AND inbox."schemaVersion" = 'fai.lead-submitted.v1'
+        AND inbox."schemaVersion" = ${LEAD_EVENT_SCHEMA_VERSION}
       FOR SHARE OF ledger, inbox
     `);
     const row = rows[0];

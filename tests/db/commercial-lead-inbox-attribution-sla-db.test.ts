@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { canonicalSha256 } from '../../src/lib/canonical-json';
 import {
   claimCommercialLeadInboxItem,
   closeCommercialLeadInboxItem,
@@ -13,6 +14,7 @@ import {
   recordCommercialLeadFirstResponse,
   reopenCommercialLeadInboxItem,
 } from '../../src/lib/commercial-lead-inbox';
+import { createWebsiteLeadPrivacyEvidence } from '../../src/lib/privacy-evidence';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
@@ -146,7 +148,7 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
 });
 
-test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or activity rows', {
+test('current fresh43 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
   skip: !runDbTests,
   timeout: 240_000,
 }, async () => {
@@ -185,7 +187,7 @@ test('N14 fresh42 catalog is exact and contains zero policy, item, cycle or acti
         (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
     `,
   ]);
-  assert.equal(Number(migrationRows[0]?.count), 42);
+  assert.equal(Number(migrationRows[0]?.count), 43);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
     'CommercialLeadInboxItem',
@@ -209,7 +211,7 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 42);
+  assert.equal(names.length, 43);
   assert.equal(names[41], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set('schema', upgradeSchema);
@@ -267,6 +269,145 @@ test('N14 initialize binds database-clock SLA and writes item, cycle, activity a
   assert.equal(audit.event, 'commercial_lead_inbox_initialized');
   assert.equal(item.sourceSystem, 'CRM');
   assert.equal(item.formCode, 'LEAD_CREATE_UI');
+});
+
+test('N14 WEBSITE_LEGACY_N01 preserves maximum 120/120/80 provenance without duplicate enrollment', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(7);
+  const sourceSystem = 'S'.repeat(120);
+  const formCode = 'F'.repeat(120);
+  const formVersion = 'V'.repeat(80);
+  const sourceSubmittedAt = new Date('2026-08-23T12:34:56.789Z');
+  const privacyNoticeCode = 'N14_F2_WEBSITE_PRIVACY';
+  const marketingNoticeCode = 'N14_F2_WEBSITE_MARKETING';
+  const noticeVersion = 'n14-f2-v1';
+
+  await client().privacyNoticeVersion.createMany({ data: [
+    {
+      noticeCode: privacyNoticeCode,
+      noticeVersion,
+      purposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
+      legalBasisCode: 'PRE_CONTRACTUAL_MEASURES',
+      evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
+      contentHash: canonicalSha256({ noticeCode: privacyNoticeCode, noticeVersion }),
+    },
+    {
+      noticeCode: marketingNoticeCode,
+      noticeVersion,
+      purposeCode: 'DIRECT_MARKETING',
+      legalBasisCode: 'CONSENT',
+      evidenceKind: 'CONSENT',
+      contentHash: canonicalSha256({ noticeCode: marketingNoticeCode, noticeVersion }),
+    },
+  ] });
+  await client().privacyNoticeVersion.updateMany({
+    where: {
+      noticeCode: { in: [privacyNoticeCode, marketingNoticeCode] },
+      status: 'DRAFT',
+    },
+    data: { status: 'ACTIVE', effectiveFrom: new Date('2026-01-01T00:00:00.000Z') },
+  });
+
+  const websiteReceipt = await client().websiteLeadReceipt.create({ data: {
+    namespace: 'n14-f2-website-max-provenance',
+    keyDigest: canonicalSha256({ domain: 'n14-f2-website-key', leadId: lead.id }),
+    payloadHash: canonicalSha256({
+      domain: 'n14-f2-website-payload',
+      leadId: lead.id,
+      sourceSystem,
+      formCode,
+      formVersion,
+      sourceSubmittedAt: sourceSubmittedAt.toISOString(),
+    }),
+    status: 'pending',
+  } });
+  const evidence = await client().$transaction((tx) => createWebsiteLeadPrivacyEvidence(tx, {
+    leadId: lead.id,
+    websiteLeadReceiptId: websiteReceipt.id,
+    sourceEvidenceDigest: websiteReceipt.payloadHash,
+    sourceSystem,
+    formCode,
+    formVersion,
+    sourceSubmittedAt,
+    privacyAccepted: true,
+    privacyNoticeCode,
+    privacyNoticeVersion: noticeVersion,
+    privacyPurposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
+    privacyLegalBasisCode: 'PRE_CONTRACTUAL_MEASURES',
+    marketingAccepted: false,
+    marketingNoticeCode,
+    marketingNoticeVersion: noticeVersion,
+    marketingPurposeCode: 'DIRECT_MARKETING',
+    marketingLegalBasisCode: 'CONSENT',
+  }));
+  assert.equal(evidence.count, 2);
+  const serviceReceipt = await client().privacyEvidenceReceipt.findUniqueOrThrow({
+    where: { websiteLeadReceiptId_purposeCode: {
+      websiteLeadReceiptId: websiteReceipt.id,
+      purposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
+    } },
+  });
+
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id,
+    actor,
+    attribution: {
+      originKind: 'WEBSITE_LEGACY_N01',
+      privacyEvidenceReceiptId: serviceReceipt.id,
+    },
+    reasonCode: 'LEGACY_ENROLLMENT',
+  });
+  const [cycle, activity, audit] = await Promise.all([
+    client().commercialLeadSlaCycle.findFirstOrThrow({ where: { inboxItemId: item.id } }),
+    client().commercialLeadActivity.findFirstOrThrow({ where: { inboxItemId: item.id } }),
+    client().auditLog.findFirstOrThrow({
+      where: {
+        entityType: 'CommercialLeadInboxItem',
+        entityId: item.id,
+        event: 'commercial_lead_inbox_initialized',
+      },
+    }),
+  ]);
+  assert.equal(item.originKind, 'WEBSITE_LEGACY_N01');
+  assert.equal(item.sourceSystem, sourceSystem);
+  assert.equal(item.formCode, formCode);
+  assert.equal(item.formVersion, formVersion);
+  assert.equal(item.sourceOccurredAt.toISOString(), sourceSubmittedAt.toISOString());
+  assert.equal(item.privacyEvidenceReceiptId, serviceReceipt.id);
+  assert.equal(item.projectionLedgerId, null);
+  assert.equal(cycle.dueAt.getTime() - cycle.availableAt.getTime(), 3_600_000);
+  assert.equal(activity.activityType, 'INITIALIZED');
+  assert.equal(activity.actorKind, 'USER');
+  assert.equal(activity.reasonCode, 'LEGACY_ENROLLMENT');
+  assert.equal(audit.actorId, actor.userId);
+
+  await assert.rejects(initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id,
+    actor,
+    attribution: {
+      originKind: 'WEBSITE_LEGACY_N01',
+      privacyEvidenceReceiptId: serviceReceipt.id,
+    },
+    reasonCode: 'LEGACY_ENROLLMENT',
+  }), (error: unknown) => error instanceof Error
+    && (error as Error & { code?: unknown }).code === 'N14_ITEM_ALREADY_EXISTS');
+  const [itemCount, cycleCount, activityCount, auditCount, evidenceCount] = await Promise.all([
+    client().commercialLeadInboxItem.count({ where: { leadId: lead.id } }),
+    client().commercialLeadSlaCycle.count({ where: { inboxItemId: item.id } }),
+    client().commercialLeadActivity.count({ where: { inboxItemId: item.id } }),
+    client().auditLog.count({ where: {
+      entityType: 'CommercialLeadInboxItem',
+      entityId: item.id,
+      event: 'commercial_lead_inbox_initialized',
+    } }),
+    client().privacyEvidenceReceipt.count({ where: { websiteLeadReceiptId: websiteReceipt.id } }),
+  ]);
+  assert.deepEqual(
+    { itemCount, cycleCount, activityCount, auditCount, evidenceCount },
+    { itemCount: 1, cycleCount: 1, activityCount: 1, auditCount: 1, evidenceCount: 2 },
+  );
 });
 
 function claimInIndependentProcess(input: Readonly<{
