@@ -101,6 +101,25 @@ function deploy(databaseUrl: string, schemaPath: string) {
   );
 }
 
+function executeMigrationScript(databaseUrl: string, schemaPath: string) {
+  execFileSync(
+    resolve('node_modules/.bin/prisma'),
+    [
+      'db',
+      'execute',
+      '--file',
+      resolve(migration43Path),
+      '--schema',
+      schemaPath,
+    ],
+    {
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+      stdio: 'pipe',
+      timeout: 240_000,
+    },
+  );
+}
+
 function copyMigration(fixture: MigrationFixture, name: string) {
   cpSync(
     join('prisma/migrations', name),
@@ -265,6 +284,21 @@ async function readPhysicalState(client: PrismaClient): Promise<PhysicalState> {
     triggers,
     probeCount: Number(probes[0]?.count),
   };
+}
+
+async function assertMigration43RolledBack(
+  client: PrismaClient,
+  before: PhysicalState,
+) {
+  const [after, finishedMigrationCount, targetFinishedRows] = await Promise.all([
+    readPhysicalState(client),
+    readFinishedMigrationCount(client),
+    readTargetFinishedRows(client),
+  ]);
+  assert.deepEqual(after, before);
+  assert.equal(finishedMigrationCount, 42);
+  assert.equal(targetFinishedRows, 0);
+  assert.equal(after.probeCount, 0);
 }
 
 async function readBusinessRows(client: PrismaClient) {
@@ -475,6 +509,20 @@ test('a drifted v42 guard blocks migration 43 and rolls back every physical chan
     await client.$disconnect();
     client = null;
 
+    let scriptFailure: unknown;
+    try {
+      executeMigrationScript(fixture.databaseUrl, fixture.schemaPath);
+    } catch (error) {
+      scriptFailure = error;
+    }
+    assert.ok(scriptFailure);
+    assert.match(commandFailureText(scriptFailure), /N13_N14_ATTRIBUTION_GUARD_DRIFT/u);
+
+    client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
+    await assertMigration43RolledBack(client, before);
+    await client.$disconnect();
+    client = null;
+
     copyMigration(fixture, migration43Name);
     let migrationFailure: unknown;
     try {
@@ -483,14 +531,9 @@ test('a drifted v42 guard blocks migration 43 and rolls back every physical chan
       migrationFailure = error;
     }
     assert.ok(migrationFailure);
-    assert.match(commandFailureText(migrationFailure), /N13_N14_ATTRIBUTION_GUARD_DRIFT/u);
 
     client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
-    const after = await readPhysicalState(client);
-    assert.deepEqual(after, before);
-    assert.equal(await readFinishedMigrationCount(client), 42);
-    assert.equal(await readTargetFinishedRows(client), 0);
-    assert.equal(after.probeCount, 0);
+    await assertMigration43RolledBack(client, before);
   } finally {
     await client?.$disconnect();
     await destroyFixture(fixture);
@@ -524,6 +567,20 @@ test('a v42 trigger neutralized with WHEN false blocks migration 43 without part
     await client.$disconnect();
     client = null;
 
+    let scriptFailure: unknown;
+    try {
+      executeMigrationScript(fixture.databaseUrl, fixture.schemaPath);
+    } catch (error) {
+      scriptFailure = error;
+    }
+    assert.ok(scriptFailure);
+    assert.match(commandFailureText(scriptFailure), /N13_N14_ATTRIBUTION_TRIGGER_DRIFT/u);
+
+    client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
+    await assertMigration43RolledBack(client, before);
+    await client.$disconnect();
+    client = null;
+
     copyMigration(fixture, migration43Name);
     let migrationFailure: unknown;
     try {
@@ -532,14 +589,9 @@ test('a v42 trigger neutralized with WHEN false blocks migration 43 without part
       migrationFailure = error;
     }
     assert.ok(migrationFailure);
-    assert.match(commandFailureText(migrationFailure), /N13_N14_ATTRIBUTION_TRIGGER_DRIFT/u);
 
     client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
-    const after = await readPhysicalState(client);
-    assert.deepEqual(after, before);
-    assert.equal(await readFinishedMigrationCount(client), 42);
-    assert.equal(await readTargetFinishedRows(client), 0);
-    assert.equal(after.probeCount, 0);
+    await assertMigration43RolledBack(client, before);
   } finally {
     await client?.$disconnect();
     await destroyFixture(fixture);
@@ -587,26 +639,44 @@ test('migration 43 lock contention times out promptly and leaves the canonical v
     void heldLock.catch(() => undefined);
     await lockReady;
 
+    let scriptFailure: unknown;
     let migrationFailure: unknown;
-    const startedAt = Date.now();
+    let scriptElapsedMilliseconds = 0;
+    let migrationElapsedMilliseconds = 0;
     try {
-      deploy(fixture.databaseUrl, fixture.schemaPath);
-    } catch (error) {
-      migrationFailure = error;
+      const scriptStartedAt = Date.now();
+      try {
+        executeMigrationScript(fixture.databaseUrl, fixture.schemaPath);
+      } catch (error) {
+        scriptFailure = error;
+      }
+      scriptElapsedMilliseconds = Date.now() - scriptStartedAt;
+      assert.ok(scriptFailure);
+      assert.match(commandFailureText(scriptFailure), /lock timeout|55P03/iu);
+      assert.ok(
+        scriptElapsedMilliseconds >= 1_500 && scriptElapsedMilliseconds < 15_000,
+        `db execute lock timeout outside bounds: ${scriptElapsedMilliseconds}ms`,
+      );
+      await assertMigration43RolledBack(observer, before);
+
+      const migrationStartedAt = Date.now();
+      try {
+        deploy(fixture.databaseUrl, fixture.schemaPath);
+      } catch (error) {
+        migrationFailure = error;
+      }
+      migrationElapsedMilliseconds = Date.now() - migrationStartedAt;
     } finally {
       releaseLock();
+      await heldLock;
     }
-    const elapsedMilliseconds = Date.now() - startedAt;
-    await heldLock;
     assert.ok(migrationFailure);
-    assert.match(commandFailureText(migrationFailure), /lock timeout|55P03/iu);
-    assert.ok(elapsedMilliseconds >= 1_500, `lock timeout returned too early: ${elapsedMilliseconds}ms`);
+    assert.ok(
+      migrationElapsedMilliseconds >= 1_500 && migrationElapsedMilliseconds < 15_000,
+      `migrate deploy lock timeout outside bounds: ${migrationElapsedMilliseconds}ms`,
+    );
 
-    const after = await readPhysicalState(observer);
-    assert.deepEqual(after, before);
-    assert.equal(await readFinishedMigrationCount(observer), 42);
-    assert.equal(await readTargetFinishedRows(observer), 0);
-    assert.equal(after.probeCount, 0);
+    await assertMigration43RolledBack(observer, before);
   } finally {
     await observer?.$disconnect();
     await holder?.$disconnect();
