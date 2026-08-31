@@ -13,3 +13,4 @@ tsconfig.tsbuildinfo
 .env.production.*
 backups/
 .bootstrap-admin*
+/CRM TXT.txt
