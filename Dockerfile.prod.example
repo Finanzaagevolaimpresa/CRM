@@ -30,7 +30,10 @@ RUN npm ci
 COPY prisma ./prisma
 RUN npm run prisma:generate
 
-COPY . .
+COPY next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json ./
+COPY public ./public
+COPY scripts ./scripts
+COPY src ./src
 RUN npm run build
 RUN npm prune --omit=dev \
   && rm -rf node_modules/sharp node_modules/@img

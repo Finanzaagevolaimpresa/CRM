@@ -14,10 +14,40 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  build-context-guard:
+    name: Protect tracked-only Docker build context
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Test build context guard
+        run: node --test tests/vnx00a-build-context-guard.test.mjs
+
+      - name: Run build context guard
+        run: node scripts/vnx00a-build-context-guard.mjs
+
   validate:
     name: Validate, test and package
+    needs: build-context-guard
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: ../vnx00a-tracked
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fai_crm_test?schema=public
       AUTH_SECRET: ci-only-secret-change-me
@@ -60,10 +90,19 @@ jobs:
           --health-timeout=5s
           --health-retries=5
     steps:
-      - name: Checkout
+      - name: Checkout exact source head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare tracked-only source worktree
+        working-directory: .
+        run: |
+          test ! -e ../vnx00a-tracked
+          git worktree add --detach ../vnx00a-tracked HEAD
+          test "$(git -C ../vnx00a-tracked rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -248,3 +287,8 @@ jobs:
           EXPECTED_MIGRATION_COUNT=43 \
           N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
             npm run test:n05:restore
+
+      - name: Remove tracked-only source worktree
+        if: always()
+        working-directory: .
+        run: git worktree remove --force ../vnx00a-tracked

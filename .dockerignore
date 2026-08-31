@@ -11,3 +11,4 @@ backups
 *.tmp
 
 !.env.production.example
+/CRM TXT.txt
