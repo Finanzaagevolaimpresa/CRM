@@ -121,6 +121,10 @@ write_env_file() {
     printf 'PRIVILEGED_STEP_UP_SECRET=\n'
     printf 'SECURE_LEAD_GATEWAY_MODE=disabled\n'
     printf 'SECURE_LEAD_GATEWAY_KEYRING_FILE=\n'
+    printf 'VNX01_LEAD_INTAKE_CONSUMER_ENABLED=0\n'
+    printf 'VNX01_LEAD_INTAKE_LEASE_OWNER_ID=\n'
+    printf 'VNX01_LEAD_INTAKE_BATCH_SIZE=\n'
+    printf 'VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE=\n'
     printf 'LEAD_IDENTITY_KEY_FILE=\n'
     printf 'COMMERCIAL_LEAD_INBOX_MODE=disabled\n'
   } > "$file"

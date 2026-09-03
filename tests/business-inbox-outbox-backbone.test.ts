@@ -43,11 +43,11 @@ function event(overrides: Record<string, unknown> = {}) {
   });
 }
 
-test('N11 manifest is dormant, bounded and has no runtime producer or consumer', () => {
+test('N11 manifest remains dormant and bounded with only the gated VNX-01 consumer', () => {
   assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.dormant, true);
-  assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.activation, 'NONE');
+  assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.activation, 'EXPLICIT_ENV_GATE');
   assert.deepEqual(BUSINESS_EVENT_BACKBONE_MANIFEST.runtimeProducers, []);
-  assert.deepEqual(BUSINESS_EVENT_BACKBONE_MANIFEST.runtimeConsumers, []);
+  assert.deepEqual(BUSINESS_EVENT_BACKBONE_MANIFEST.runtimeConsumers, ['VNX01_LEAD_INTAKE_CONSUMER']);
   assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.maxEnvelopeBytes, 16 * 1024);
   assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.maxAttempts, 5);
   assert.equal(BUSINESS_EVENT_BACKBONE_MANIFEST.initialLeaseSeconds, 60);
@@ -211,7 +211,7 @@ test('N11 state transition matrix rejects terminal resurrection and cross-queue 
   assert.equal(isBusinessQueueTransitionAllowed('OUTBOX', 'DEAD_LETTER', 'AVAILABLE'), false);
 });
 
-test('N11 has no route, worker, script, telemetry, network or provider call site', () => {
+test('N11 has no direct automatic route, worker, telemetry, network or provider call site', () => {
   let output = '';
   try {
     output = execFileSync('git', [

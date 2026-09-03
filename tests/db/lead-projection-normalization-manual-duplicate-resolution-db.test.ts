@@ -39,6 +39,11 @@ import {
   type LeadProjectionFaultPoint,
 } from '../../src/lib/lead-projection';
 import {
+  createPrismaLeadIntakeConsumerOperations,
+  runLeadIntakeConsumer,
+} from '../../src/lib/lead-intake-consumer';
+import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
+import {
   createLeadSubmittedEventV1,
   type LeadEventPayloadV1,
 } from '../../src/lib/lead-event-contract';
@@ -209,6 +214,17 @@ async function admitAndClaim(
 
 function projectionOptions() {
   return { keyFilePath: secretPath, allowedSecretRoot: secretRoot } as const;
+}
+
+function consumerEnvironment(batchSize: number) {
+  return {
+    VNX01_LEAD_INTAKE_CONSUMER_ENABLED: '1',
+    VNX01_LEAD_INTAKE_LEASE_OWNER_ID: uuid(195_000),
+    VNX01_LEAD_INTAKE_BATCH_SIZE: String(batchSize),
+    VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE: '10',
+    LEAD_IDENTITY_KEY_FILE: secretPath,
+    WEBSITE_LEAD_MODE: 'disabled',
+  };
 }
 
 function resolutionActor(actor = { userId: primaryUserId, sessionId: primarySessionId }) {
@@ -1183,6 +1199,117 @@ test('N13-C2 privacy evidence is invariant across session timezones and DST boun
     await qualification.$disconnect();
     await rootClient().$executeRawUnsafe(`DROP SCHEMA "${qualificationSchema}" CASCADE`);
   }
+});
+
+test('VNX-01 gate and readiness precede claim, then the bounded bridge projects new and duplicate events exactly once', {
+  skip: !runDbTests,
+}, async () => {
+  const firstEvent = syntheticEvent(580);
+  const firstAdmission = await admitBusinessInboxEvent(client(), firstEvent);
+  const operations = createPrismaLeadIntakeConsumerOperations(client(), {
+    allowedSecretRoot: secretRoot,
+  });
+
+  const disabled = await runLeadIntakeConsumer(operations, {
+    environment: {},
+    logger: () => {},
+  });
+  assert.equal(disabled.status, 'DISABLED');
+  assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+    where: { id: firstAdmission.inboxEventId },
+    select: { state: true, attemptCount: true },
+  }), { state: 'AVAILABLE', attemptCount: 0 });
+
+  await assert.rejects(runLeadIntakeConsumer(operations, {
+    environment: {
+      ...consumerEnvironment(3),
+      LEAD_IDENTITY_KEY_FILE: join(secretRoot, 'missing-synthetic-key.json'),
+    },
+    logger: () => {},
+  }));
+  assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+    where: { id: firstAdmission.inboxEventId },
+    select: { state: true, attemptCount: true },
+  }), { state: 'AVAILABLE', attemptCount: 0 });
+
+  const secondEvent = syntheticEvent(581);
+  const thirdEvent = syntheticEvent(582);
+  const secondAdmission = await admitBusinessInboxEvent(client(), secondEvent);
+  const thirdAdmission = await admitBusinessInboxEvent(client(), thirdEvent);
+  const existing = await client().lead.create({
+    data: {
+      firstName: 'SyntheticExisting',
+      lastName: 'ConsumerCandidate',
+      email: thirdEvent.payload.email,
+      source: 'VNX01_SYNTHETIC_TEST',
+    },
+  });
+  const logs: unknown[] = [];
+  const completed = await runLeadIntakeConsumer(operations, {
+    environment: consumerEnvironment(3),
+    logger: (record) => logs.push(record),
+  });
+  assert.deepEqual(completed, {
+    status: 'COMPLETED', recovered: 0, retried: 0, deadLettered: 0,
+    claimed: 3, projectedNew: 2, reviewRequired: 1, failed: 0,
+  });
+  assert.deepEqual(await client().businessInboxEvent.findMany({
+    where: { id: { in: [
+      firstAdmission.inboxEventId,
+      secondAdmission.inboxEventId,
+      thirdAdmission.inboxEventId,
+    ] } },
+    orderBy: { id: 'asc' },
+    select: { state: true, attemptCount: true },
+  }), Array.from({ length: 3 }, () => ({ state: 'PROCESSED', attemptCount: 1 })));
+  const duplicateLedger = await client().leadProjectionLedger.findUniqueOrThrow({
+    where: { inboxEventId: thirdAdmission.inboxEventId },
+    include: { duplicateCase: { include: { candidates: true } } },
+  });
+  assert.equal(duplicateLedger.state, 'REVIEW_REQUIRED');
+  assert.equal(duplicateLedger.duplicateCase?.state, 'OPEN');
+  assert.deepEqual(duplicateLedger.duplicateCase?.candidates.map(({ leadId }) => leadId), [existing.id]);
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateLedger.duplicateCase?.id);
+  assert.ok(reviewItem);
+  assert.equal(reviewItem.caseVersion, 1);
+  assert.deepEqual(reviewItem.candidates.map(({ leadId }) => leadId), [existing.id]);
+  assert.doesNotMatch(JSON.stringify(reviewItem), /message|notes|payloadHash|keyDigest|recordHash/iu);
+  assert.equal(await client().lead.count({
+    where: { email: { in: [firstEvent.payload.email!, secondEvent.payload.email!] } },
+  }), 2);
+  assert.doesNotMatch(JSON.stringify(logs), /@n13-db\.invalid|Synthetic Company|secretBase64/iu);
+
+  const replay = await admitBusinessInboxEvent(client(), firstEvent);
+  assert.equal(replay.outcome, 'REPLAY');
+  const replayRun = await runLeadIntakeConsumer(operations, {
+    environment: consumerEnvironment(1),
+    logger: () => {},
+  });
+  assert.equal(replayRun.claimed, 0);
+  assert.equal(await client().leadProjectionLedger.count({
+    where: { inboxEventId: firstAdmission.inboxEventId },
+  }), 1);
+});
+
+test('VNX-01 reaches N14 only with a synthetic ACTIVE policy and test-scoped enforced mode', {
+  skip: !runDbTests,
+}, async () => {
+  await withSyntheticActiveCommercialPolicy(async () => {
+    const event = syntheticEvent(583);
+    const admitted = await admitBusinessInboxEvent(client(), event);
+    const result = await runLeadIntakeConsumer(
+      createPrismaLeadIntakeConsumerOperations(client(), { allowedSecretRoot: secretRoot }),
+      { environment: consumerEnvironment(1), logger: () => {} },
+    );
+    assert.equal(result.projectedNew, 1);
+    const ledger = await client().leadProjectionLedger.findUniqueOrThrow({
+      where: { inboxEventId: admitted.inboxEventId },
+    });
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { projectionLedgerId: ledger.id, originKind: 'BUSINESS_PROJECTION_N13' },
+    }), 1);
+  });
 });
 
 test('projection matrix 0/1/N is atomic and binds exactly two privacy receipts', {

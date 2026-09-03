@@ -73,6 +73,10 @@ jobs:
       AI_ALLOWED_MODELS: ""
       SECURE_LEAD_GATEWAY_MODE: disabled
       SECURE_LEAD_GATEWAY_KEYRING_FILE: ""
+      VNX01_LEAD_INTAKE_CONSUMER_ENABLED: "0"
+      VNX01_LEAD_INTAKE_LEASE_OWNER_ID: ""
+      VNX01_LEAD_INTAKE_BATCH_SIZE: ""
+      VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE: ""
       LEAD_IDENTITY_KEY_FILE: ""
       COMMERCIAL_LEAD_INBOX_MODE: disabled
     services:
@@ -168,6 +172,18 @@ jobs:
           test "$migration_count" = "29"
           if git diff --name-only "$BASE_SHA"...HEAD -- prisma/schema.prisma prisma/migrations | grep -q .; then
             echo "PR82 must not change prisma/schema.prisma or prisma/migrations" >&2
+            exit 1
+          fi
+
+      - name: Verify VNX-01 has exactly 43 migrations and no schema delta
+        if: github.event_name == 'pull_request' && github.head_ref == 'codex/vnx01-lead-intake-operational-bridge-r01'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          migration_count="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+          test "$migration_count" = "43"
+          if git diff --name-only "$BASE_SHA"...HEAD -- prisma/schema.prisma prisma/migrations | grep -q .; then
+            echo "VNX-01 must not change prisma/schema.prisma or prisma/migrations" >&2
             exit 1
           fi
 
