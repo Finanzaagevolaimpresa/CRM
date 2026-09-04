@@ -118,10 +118,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify dependency audits
+      - name: Install exact npm audit client
+        timeout-minutes: 3
         run: |
-          npm audit --omit=dev --audit-level=low
-          npm audit --audit-level=low
+          npm install --global npm@11.16.0 --registry=https://registry.npmjs.org/ --ignore-scripts --no-audit --no-fund --fetch-retries=2 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=3000 --fetch-timeout=30000
+          test "$(npm --version)" = "11.16.0"
+
+      - name: Verify dependency audit gate fail-closed controls
+        run: node --import tsx --test tests/npm-audit-gate.test.ts
+
+      - name: Verify dependency audits
+        timeout-minutes: 5
+        run: node --import tsx scripts/npm-audit-gate.ts
 
       - name: Verify patch and shell syntax
         env:
@@ -184,6 +192,10 @@ jobs:
           test "$migration_count" = "43"
           if git diff --name-only "$BASE_SHA"...HEAD -- prisma/schema.prisma prisma/migrations | grep -q .; then
             echo "VNX-01 must not change prisma/schema.prisma or prisma/migrations" >&2
+            exit 1
+          fi
+          if git diff --name-only "$BASE_SHA"...HEAD -- package.json package-lock.json | grep -q .; then
+            echo "VNX-01 must not change package.json or package-lock.json" >&2
             exit 1
           fi
 
