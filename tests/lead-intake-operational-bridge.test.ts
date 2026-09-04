@@ -67,6 +67,13 @@ test('VNX-01 manifest is default-off, finite, bounded and does not activate N14'
   assert.equal(LEAD_INTAKE_CONSUMER_MANIFEST.runMode, 'BOUNDED_ONE_SHOT');
   assert.equal(LEAD_INTAKE_CONSUMER_MANIFEST.maximumBatchSize, 100);
   assert.equal(LEAD_INTAKE_CONSUMER_MANIFEST.maximumRecoveryBatchSize, 100);
+  assert.deepEqual(LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction, {
+    isolationLevel: 'READ_COMMITTED',
+    maxWaitMs: 2_000,
+    timeoutMs: 5_000,
+    lockTimeoutMs: 1_000,
+    statementTimeoutMs: 4_000,
+  });
   assert.equal(LEAD_INTAKE_CONSUMER_MANIFEST.n14Activation, 'UNCHANGED');
 });
 
@@ -123,6 +130,54 @@ test('key and database readiness failure blocks recovery and claim', async () =>
   }), { environment: enabledEnvironment(), logger: () => {} }));
   assert.equal(recoverCalls, 0);
   assert.equal(claimCalls, 0);
+});
+
+test('shutdown requested during readiness exits stopped before recovery or claim', async () => {
+  const controller = new AbortController();
+  const logs: LeadIntakeConsumerLogRecord[] = [];
+  let readinessStarted!: () => void;
+  let releaseReadiness!: () => void;
+  const started = new Promise<void>((resolve) => { readinessStarted = resolve; });
+  const release = new Promise<void>((resolve) => { releaseReadiness = resolve; });
+  let queueCalls = 0;
+  const completion = runLeadIntakeConsumer(operations({
+    async assertReady() {
+      readinessStarted();
+      await release;
+      throw new Error('synthetic readiness unwind after shutdown');
+    },
+    async recover() {
+      queueCalls += 1;
+      return { recovered: 0, retried: 0, deadLettered: 0 };
+    },
+    async claim() {
+      queueCalls += 1;
+      return null;
+    },
+  }), {
+    environment: enabledEnvironment(),
+    signal: controller.signal,
+    logger: (record) => logs.push(record),
+  });
+  await started;
+  controller.abort();
+  releaseReadiness();
+  assert.deepEqual(await completion, {
+    status: 'STOPPED', recovered: 0, retried: 0, deadLettered: 0,
+    claimed: 0, projectedNew: 0, reviewRequired: 0, failed: 0,
+  });
+  assert.equal(queueCalls, 0);
+  assert.deepEqual(logs, [{
+    event: 'VNX01_CONSUMER_COMPLETED',
+    status: 'STOPPED',
+    recovered: 0,
+    retried: 0,
+    deadLettered: 0,
+    claimed: 0,
+    projectedNew: 0,
+    reviewRequired: 0,
+    failed: 0,
+  }]);
 });
 
 test('one bounded run recovers leases and classifies new, duplicate and failed projections', async () => {
@@ -217,6 +272,8 @@ test('runtime wiring uses N11/N13 primitives and has no automatic startup surfac
   assert.match(runtime, /recoverExpiredBusinessQueueLeases/u);
   assert.match(runtime, /projectClaimedLeadInboxEvent/u);
   assert.match(runtime, /readLeadIdentityKeyFile[\s\S]*assertLeadIdentityKeyConsensus[\s\S]*operations\.recover/u);
+  assert.match(runtime, /set_config\('lock_timeout'[\s\S]*set_config\('statement_timeout'/u);
+  assert.match(runtime, /TransactionIsolationLevel\.ReadCommitted[\s\S]*maxWait:[\s\S]*timeout:/u);
   assert.doesNotMatch(runtime, /envelopeJson|eventId|businessCorrelationId|leaseToken|payloadHash|keyDigest|error\.message/u);
   assert.match(script, /SIGINT[\s\S]*SIGTERM[\s\S]*runLeadIntakeConsumer/u);
   assert.match(packageJson, /"vnx01:lead-intake": "tsx scripts\/vnx01-lead-intake-consumer\.ts"/u);

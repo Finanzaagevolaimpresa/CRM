@@ -40,6 +40,7 @@ import {
 } from '../../src/lib/lead-projection';
 import {
   createPrismaLeadIntakeConsumerOperations,
+  LEAD_INTAKE_CONSUMER_MANIFEST,
   runLeadIntakeConsumer,
 } from '../../src/lib/lead-intake-consumer';
 import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
@@ -1291,6 +1292,68 @@ test('VNX-01 gate and readiness precede claim, then the bounded bridge projects 
   assert.equal(await client().leadProjectionLedger.count({
     where: { inboxEventId: firstAdmission.inboxEventId },
   }), 1);
+});
+
+test('VNX-01 readiness lock conflict honors shutdown within bounded transaction and never claims', {
+  skip: !runDbTests,
+  timeout: 30_000,
+}, async () => {
+  const event = syntheticEvent(585);
+  const admitted = await admitBusinessInboxEvent(client(), event);
+  const blocker = new PrismaClient({ datasources: { db: { url: schemaUrl } } });
+  let markLockAcquired!: () => void;
+  let releaseLock!: () => void;
+  const lockAcquired = new Promise<void>((resolve) => { markLockAcquired = resolve; });
+  const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+  const blockingTransaction = blocker.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id"
+      FROM "LeadIdentityKeyVersion"
+      WHERE "normalizationVersion" = ${LEAD_NORMALIZATION_VERSION}
+        AND "status" = 'ACTIVE'
+      FOR UPDATE
+    `);
+    assert.equal(locked.length, 1);
+    markLockAcquired();
+    await release;
+  }, { maxWait: 2_000, timeout: 15_000 });
+  await lockAcquired;
+
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const abortTimer = setTimeout(() => controller.abort(), 50);
+  try {
+    const summary = await runLeadIntakeConsumer(
+      createPrismaLeadIntakeConsumerOperations(client(), { allowedSecretRoot: secretRoot }),
+      {
+        environment: consumerEnvironment(1),
+        signal: controller.signal,
+        logger: () => {},
+      },
+    );
+    const elapsedMilliseconds = Date.now() - startedAt;
+    assert.equal(summary.status, 'STOPPED');
+    assert.ok(
+      elapsedMilliseconds >= LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.lockTimeoutMs / 2,
+      `readiness lock conflict returned unexpectedly early: ${elapsedMilliseconds}ms`,
+    );
+    assert.ok(
+      elapsedMilliseconds
+        < LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.timeoutMs
+          + LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.maxWaitMs
+          + 3_000,
+      `readiness lock conflict exceeded bounded shutdown: ${elapsedMilliseconds}ms`,
+    );
+    assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+      where: { id: admitted.inboxEventId },
+      select: { state: true, attemptCount: true },
+    }), { state: 'AVAILABLE', attemptCount: 0 });
+  } finally {
+    clearTimeout(abortTimer);
+    releaseLock();
+    await blockingTransaction;
+    await blocker.$disconnect();
+  }
 });
 
 test('VNX-01 duplicate queue keeps valid high-cardinality cases workable with a deterministic bounded window', {

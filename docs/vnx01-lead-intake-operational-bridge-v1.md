@@ -34,7 +34,10 @@ Con gate `1` sono obbligatori, prima di recovery o claim:
 
 Prima di mutare la coda, il consumer legge la key e verifica in sola lettura il consenso con
 l'unica versione N13 `ACTIVE`. Configurazione mancante, incoerente, key non valida o consenso DB
-assente bloccano quindi recovery e claim.
+assente bloccano quindi recovery e claim. Anche questo preflight usa gli stessi limiti transazionali
+N11: `READ COMMITTED`, attesa pool massima 2 secondi, transazione massima 5 secondi,
+`lock_timeout` 1 secondo e `statement_timeout` 4 secondi. Un lock concorrente sulla key fallisce
+quindi chiuso e bounded prima di qualsiasi mutazione della coda.
 
 ## Esecuzione e arresto
 
@@ -45,7 +48,8 @@ owner, token e fencing. Il processo non conserva payload o lease oltre la singol
 `SIGINT` e `SIGTERM` fermano nuovi claim. Se un evento è già stato reclamato, la projection corrente
 termina entro i timeout transazionali N11/N13 e chiude la lease come `PROCESSED`, retry o
 dead-letter. Un arresto non recuperabile resta coperto dall'expiry e dal recovery N11 della
-successiva esecuzione.
+successiva esecuzione. Se l'arresto arriva durante il preflight della key, il lock DB si sblocca per
+timeout e il consumer restituisce `STOPPED` senza eseguire recovery o claim.
 
 I log JSONL usano un vocabolario chiuso di stato, contatori e failure code. Non includono envelope,
 event/correlation/lead/case ID, lease token, hash, email, telefono, nomi, note, payload, path di key,

@@ -1,5 +1,6 @@
-import type { PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import {
+  BUSINESS_EVENT_BACKBONE_MANIFEST,
   BusinessEventBackboneError,
   claimBusinessQueueEvent,
   recoverExpiredBusinessQueueLeases,
@@ -26,6 +27,13 @@ export const LEAD_INTAKE_CONSUMER_MANIFEST = Object.freeze({
   maximumBatchSize: 100,
   maximumRecoveryBatchSize: 100,
   shutdownBehavior: 'FINISH_CURRENT_THEN_STOP' as const,
+  readinessTransaction: Object.freeze({
+    isolationLevel: 'READ_COMMITTED' as const,
+    maxWaitMs: BUSINESS_EVENT_BACKBONE_MANIFEST.transactionMaxWaitMs,
+    timeoutMs: BUSINESS_EVENT_BACKBONE_MANIFEST.transactionTimeoutMs,
+    lockTimeoutMs: BUSINESS_EVENT_BACKBONE_MANIFEST.lockTimeoutMs,
+    statementTimeoutMs: BUSINESS_EVENT_BACKBONE_MANIFEST.statementTimeoutMs,
+  }),
   n14Activation: 'UNCHANGED' as const,
   logFields: Object.freeze([
     'event',
@@ -218,7 +226,17 @@ export function createPrismaLeadIntakeConsumerOperations(
         allowedRoot: options.allowedSecretRoot,
       });
       await prisma.$transaction(async (tx) => {
+        const readiness = LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction;
+        await tx.$queryRaw(Prisma.sql`
+          SELECT
+            set_config('lock_timeout', ${`${readiness.lockTimeoutMs}ms`}, true),
+            set_config('statement_timeout', ${`${readiness.statementTimeoutMs}ms`}, true)
+        `);
         await assertLeadIdentityKeyConsensus(tx, key);
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        maxWait: LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.maxWaitMs,
+        timeout: LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.timeoutMs,
       });
     },
     recover(maximumRows) {
@@ -275,7 +293,14 @@ export async function runLeadIntakeConsumer(
     logger(Object.freeze({ event: 'VNX01_CONSUMER_COMPLETED', ...summary }));
     return summary;
   }
-  await operations.assertReady(config);
+  try {
+    await operations.assertReady(config);
+  } catch (error) {
+    if (!options.signal?.aborted) throw error;
+    const summary = emptySummary('STOPPED');
+    logger(Object.freeze({ event: 'VNX01_CONSUMER_COMPLETED', ...summary }));
+    return summary;
+  }
   logger(Object.freeze({
     event: 'VNX01_CONSUMER_READY',
     status: 'READY',
