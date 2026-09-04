@@ -5,6 +5,8 @@
     "start": "next start",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
+    "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php",
+    "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit --incremental false",
     "guard:build-context": "node scripts/vnx00a-build-context-guard.mjs",
