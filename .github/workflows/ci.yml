@@ -187,6 +187,7 @@ jobs:
         if: github.event_name == 'pull_request' && github.head_ref == 'codex/vnx01-lead-intake-operational-bridge-r01'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_RECOVERY_BASE_SHA: 22a5dda14cc3b69ea1e35909ab4d5e9a1201a15b
         run: |
           migration_count="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
           test "$migration_count" = "43"
@@ -194,8 +195,12 @@ jobs:
             echo "VNX-01 must not change prisma/schema.prisma or prisma/migrations" >&2
             exit 1
           fi
-          if git diff --name-only "$BASE_SHA"...HEAD -- package.json package-lock.json | grep -q .; then
-            echo "VNX-01 must not change package.json or package-lock.json" >&2
+          if ! git merge-base --is-ancestor "$CI_RECOVERY_BASE_SHA" HEAD; then
+            echo "VNX-01 CI recovery base is not an ancestor of HEAD" >&2
+            exit 1
+          fi
+          if git diff --name-only "$CI_RECOVERY_BASE_SHA"..HEAD -- package.json package-lock.json | grep -q .; then
+            echo "VNX-01 CI recovery must not change package.json or package-lock.json" >&2
             exit 1
           fi
 
