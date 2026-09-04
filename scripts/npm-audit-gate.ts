@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,8 +26,15 @@ export const OSV_FALLBACK_POLICY = Object.freeze({
   apiUrl: 'https://api.osv.dev/',
   emptyConfigSha256: '4c25ee4f56ca2b53807db3ed9c0e36d85a41ba0160d6bcc7f0f1cb9dc0e93136',
   lockfilePath: 'package-lock.json',
+  provisionConnectTimeoutSeconds: 10,
+  provisionMaxTimeSeconds: 120,
+  provisionRetryCount: 2,
+  provisionRetryDelaySeconds: 2,
+  provisionRetryMaxTimeSeconds: 180,
+  provisionTimeoutMs: 190_000,
   versionTimeoutMs: 10_000,
   scanTimeoutMs: 180_000,
+  provisionMaxOutputBytes: 1024 * 1024,
   maxOutputBytes: 32 * 1024 * 1024,
 });
 
@@ -56,8 +64,18 @@ export type AuditGateOptions = {
 
 export type AuditFileReader = (path: string) => Promise<Uint8Array>;
 
+export type OsvProvisionedScanner = {
+  binaryPath: string;
+  configPath: string;
+  expectedBinarySha256: string;
+  cleanup: () => Promise<void>;
+};
+
+export type OsvProvisioner = () => Promise<OsvProvisionedScanner>;
+
 export type DependencySecurityGateOptions = AuditGateOptions & {
   osvRunner?: AuditCommandRunner;
+  osvProvisioner?: OsvProvisioner;
   readBytes?: AuditFileReader;
   now?: () => Date;
   osvBinaryPath?: string;
@@ -695,7 +713,109 @@ function createOsvCommandRunner(binaryPath: string): AuditCommandRunner {
   );
 }
 
+function createOsvDownloadRunner(): AuditCommandRunner {
+  return (args, timeoutMs) => runCommand(
+    'curl',
+    args,
+    timeoutMs,
+    OSV_FALLBACK_POLICY.provisionMaxOutputBytes,
+    process.env,
+  );
+}
+
 const wait = (delayMs: number) => new Promise<void>((resolveDelay) => setTimeout(resolveDelay, delayMs));
+
+const EMPTY_OSV_CONFIG = Buffer.from('# An empty config file to override the ignore config\n');
+
+export async function provisionPinnedOsvScanner(options: {
+  runner?: AuditCommandRunner;
+  logger?: AuditLogger;
+} = {}): Promise<OsvProvisionedScanner> {
+  const runner = options.runner ?? createOsvDownloadRunner();
+  const logger = options.logger ?? console;
+  let provisionRoot = '';
+
+  try {
+    provisionRoot = await mkdtemp(join(tmpdir(), 'fai-crm-osv-'));
+    const binaryPath = join(
+      provisionRoot,
+      `osv-scanner-v${OSV_FALLBACK_POLICY.scannerVersion}-linux-amd64`,
+    );
+    const configPath = join(provisionRoot, 'osv-scanner-empty-config.toml');
+    const downloadResult = await runner(
+      [
+        '--fail',
+        '--location',
+        '--silent',
+        '--show-error',
+        '--connect-timeout',
+        String(OSV_FALLBACK_POLICY.provisionConnectTimeoutSeconds),
+        '--max-time',
+        String(OSV_FALLBACK_POLICY.provisionMaxTimeSeconds),
+        '--retry',
+        String(OSV_FALLBACK_POLICY.provisionRetryCount),
+        '--retry-delay',
+        String(OSV_FALLBACK_POLICY.provisionRetryDelaySeconds),
+        '--retry-max-time',
+        String(OSV_FALLBACK_POLICY.provisionRetryMaxTimeSeconds),
+        '--retry-all-errors',
+        OSV_FALLBACK_POLICY.linuxAmd64Url,
+        '--output',
+        binaryPath,
+      ],
+      OSV_FALLBACK_POLICY.provisionTimeoutMs,
+    );
+
+    if (
+      downloadResult.timedOut
+      || downloadResult.outputOverflow
+      || downloadResult.spawnErrorCode
+      || downloadResult.exitCode !== 0
+    ) {
+      throw new DependencyAuditGateError('OSV_SCANNER_PROVISIONING_UNAVAILABLE');
+    }
+
+    let binary: Uint8Array;
+    try {
+      binary = await readFile(binaryPath);
+    } catch {
+      throw new DependencyAuditGateError('OSV_SCANNER_PROVISIONING_UNAVAILABLE');
+    }
+    if (sha256(binary) !== OSV_FALLBACK_POLICY.linuxAmd64Sha256) {
+      throw new DependencyAuditGateError('OSV_SCANNER_PROVENANCE_UNVERIFIABLE');
+    }
+    if (sha256(EMPTY_OSV_CONFIG) !== OSV_FALLBACK_POLICY.emptyConfigSha256) {
+      throw new DependencyAuditGateError('OSV_SCANNER_PROVENANCE_UNVERIFIABLE');
+    }
+
+    await chmod(binaryPath, 0o755);
+    await writeFile(configPath, EMPTY_OSV_CONFIG, { flag: 'wx', mode: 0o600 });
+    logger.log(
+      `[dependency-audit] client=osv-scanner@${OSV_FALLBACK_POLICY.scannerVersion} `
+        + `status=provisioned assetSha256=${OSV_FALLBACK_POLICY.linuxAmd64Sha256} `
+        + `releaseCommit=${OSV_FALLBACK_POLICY.releaseCommit} `
+        + `releasePublishedAt=${OSV_FALLBACK_POLICY.releasePublishedAt}`,
+    );
+
+    let cleaned = false;
+    return {
+      binaryPath,
+      configPath,
+      expectedBinarySha256: OSV_FALLBACK_POLICY.linuxAmd64Sha256,
+      cleanup: async () => {
+        if (cleaned) return;
+        cleaned = true;
+        await rm(provisionRoot, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    if (provisionRoot) {
+      await rm(provisionRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (error instanceof DependencyAuditGateError) throw error;
+    throw new DependencyAuditGateError('OSV_SCANNER_PROVISIONING_UNAVAILABLE');
+  }
+}
 
 async function verifyPinnedNpm(runner: AuditCommandRunner): Promise<void> {
   const result = await runner(['--version'], NPM_AUDIT_POLICY.versionTimeoutMs);
@@ -942,7 +1062,40 @@ export async function runDependencySecurityGate(
     );
   }
 
-  await runOsvFallback(options);
+  const configuredBinaryPath = options.osvBinaryPath ?? process.env.OSV_SCANNER_BIN ?? '';
+  const configuredConfigPath = options.osvConfigPath ?? process.env.OSV_SCANNER_CONFIG ?? '';
+  let provisionedScanner: OsvProvisionedScanner | null = null;
+  let fallbackOptions = options;
+
+  if (!configuredBinaryPath && !configuredConfigPath) {
+    try {
+      provisionedScanner = await (
+        options.osvProvisioner
+        ?? (() => provisionPinnedOsvScanner({ logger }))
+      )();
+    } catch (error) {
+      if (error instanceof DependencyAuditGateError) throw error;
+      throw new DependencyAuditGateError('OSV_SCANNER_PROVISIONING_UNAVAILABLE');
+    }
+    fallbackOptions = {
+      ...options,
+      osvBinaryPath: provisionedScanner.binaryPath,
+      osvConfigPath: provisionedScanner.configPath,
+      expectedOsvBinarySha256: provisionedScanner.expectedBinarySha256,
+    };
+  }
+
+  try {
+    await runOsvFallback(fallbackOptions);
+  } finally {
+    if (provisionedScanner) {
+      try {
+        await provisionedScanner.cleanup();
+      } catch {
+        throw new DependencyAuditGateError('OSV_SCANNER_TEMP_CLEANUP_FAILED');
+      }
+    }
+  }
   return { source: 'osv' };
 }
 

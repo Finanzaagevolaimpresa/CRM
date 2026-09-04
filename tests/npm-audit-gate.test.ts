@@ -10,6 +10,7 @@ import {
   type AuditCommandResult,
   type AuditCommandRunner,
   parseNpmLockInventory,
+  provisionPinnedOsvScanner,
   runDependencyAuditGate,
   runDependencySecurityGate,
   runOsvFallback,
@@ -191,6 +192,8 @@ test('the gate is strictly bounded and keeps npm audit-level low', async () => {
   assert.equal(NPM_AUDIT_POLICY.maxAttemptsPerScope, 3);
   assert.ok(NPM_AUDIT_POLICY.attemptTimeoutMs <= 40_000);
   assert.equal(OSV_FALLBACK_POLICY.scannerVersion, '2.5.1');
+  assert.equal(OSV_FALLBACK_POLICY.provisionRetryCount, 2);
+  assert.ok(OSV_FALLBACK_POLICY.provisionTimeoutMs <= 190_000);
   assert.ok(OSV_FALLBACK_POLICY.scanTimeoutMs <= 180_000);
   assert.ok(
     NPM_AUDIT_POLICY.versionTimeoutMs
@@ -202,9 +205,10 @@ test('the gate is strictly bounded and keeps npm audit-level low', async () => {
     NPM_AUDIT_POLICY.versionTimeoutMs
       + (2 * NPM_AUDIT_POLICY.maxAttemptsPerScope * NPM_AUDIT_POLICY.attemptTimeoutMs)
       + (2 * (NPM_AUDIT_POLICY.maxAttemptsPerScope - 1) * NPM_AUDIT_POLICY.retryDelayMs)
+      + OSV_FALLBACK_POLICY.provisionTimeoutMs
       + OSV_FALLBACK_POLICY.versionTimeoutMs
       + OSV_FALLBACK_POLICY.scanTimeoutMs
-      < 480_000,
+      < 720_000,
   );
 
   const scripted = scriptedRunner([versionResult(), result(), result()]);
@@ -344,9 +348,10 @@ test('the exact npm client version and complete report consistency are mandatory
   });
 });
 
-test('a complete npm result remains primary and never invokes OSV', async () => {
+test('a complete npm result remains primary even when OSV distribution is unavailable', async () => {
   const npm = scriptedRunner([versionResult(), result(), result()]);
   let osvCalls = 0;
+  let provisioningCalls = 0;
 
   const gateResult = await runDependencySecurityGate({
     runner: npm.runner,
@@ -356,10 +361,15 @@ test('a complete npm result remains primary and never invokes OSV', async () => 
       osvCalls += 1;
       return result();
     },
+    osvProvisioner: async () => {
+      provisioningCalls += 1;
+      throw new Error('synthetic OSV distribution outage');
+    },
   });
 
   assert.deepEqual(gateResult, { source: 'npm' });
   assert.equal(osvCalls, 0);
+  assert.equal(provisioningCalls, 0);
 });
 
 test('OSV runs only after bounded npm service unavailability and verifies the full lock inventory', async () => {
@@ -509,6 +519,55 @@ test('unavailability of both npm and OSV is blocking and OSV is not retried', as
   assert.equal(fallback.osv.calls.length, 2);
 });
 
+test('npm and OSV distribution unavailability remain blocking', async () => {
+  const timeout = result({ exitCode: 1, stdout: '', stderr: 'network timeout', timedOut: true });
+  const npm = scriptedRunner([versionResult(), timeout, timeout, timeout]);
+  let provisioningCalls = 0;
+
+  await expectGateError(
+    runDependencySecurityGate({
+      runner: npm.runner,
+      sleep: async () => undefined,
+      logger: quietLogger,
+      osvProvisioner: async () => {
+        provisioningCalls += 1;
+        throw new Error('synthetic OSV distribution outage');
+      },
+    }),
+    'OSV_SCANNER_PROVISIONING_UNAVAILABLE',
+  );
+  assert.equal(npm.calls.length, 4);
+  assert.equal(provisioningCalls, 1);
+});
+
+test('OSV provisioning is checksum-pinned and bounded when the distribution is unavailable', async () => {
+  const download = scriptedRunner([
+    result({ exitCode: 28, stdout: '', stderr: 'network timeout', timedOut: true }),
+  ]);
+
+  await expectGateError(
+    provisionPinnedOsvScanner({ runner: download.runner, logger: quietLogger }),
+    'OSV_SCANNER_PROVISIONING_UNAVAILABLE',
+  );
+  assert.equal(download.calls.length, 1);
+  assert.equal(download.calls[0].timeoutMs, OSV_FALLBACK_POLICY.provisionTimeoutMs);
+  assert.ok(download.calls[0].args.includes(OSV_FALLBACK_POLICY.linuxAmd64Url));
+  assert.deepEqual(
+    download.calls[0].args.slice(
+      download.calls[0].args.indexOf('--retry'),
+      download.calls[0].args.indexOf('--retry') + 2,
+    ),
+    ['--retry', String(OSV_FALLBACK_POLICY.provisionRetryCount)],
+  );
+  assert.deepEqual(
+    download.calls[0].args.slice(
+      download.calls[0].args.indexOf('--retry-max-time'),
+      download.calls[0].args.indexOf('--retry-max-time') + 2,
+    ),
+    ['--retry-max-time', String(OSV_FALLBACK_POLICY.provisionRetryMaxTimeSeconds)],
+  );
+});
+
 test('OSV binary and empty configuration provenance are mandatory', async () => {
   assert.equal(
     createHash('sha256').update(EMPTY_OSV_CONFIG).digest('hex'),
@@ -535,20 +594,9 @@ test('CI pins the bulk-only npm client and keeps the audit gate blocking', () =>
   assert.match(workflow, /test "\$\(npm --version\)" = "11\.16\.0"/);
   assert.match(workflow, /node --import tsx --test tests\/npm-audit-gate\.test\.ts/);
   assert.match(workflow, /node --import tsx scripts\/npm-audit-gate\.ts/);
-  assert.match(
-    workflow,
-    /releases\/download\/v2\.5\.1\/osv-scanner_linux_amd64/,
-  );
-  assert.match(
-    workflow,
-    /OSV_SCANNER_ASSET_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be/,
-  );
-  assert.match(workflow, /sha256sum --check --strict/);
-  assert.match(workflow, /--retry 2/);
-  assert.match(workflow, /--retry-max-time 180/);
-  assert.match(workflow, /OSV_SCANNER_BIN=%s/);
-  assert.match(workflow, /OSV_SCANNER_CONFIG=%s/);
-  assert.match(workflow, /# An empty config file to override the ignore config/);
+  assert.doesNotMatch(workflow, /Provision checksum-verified OSV fallback scanner/);
+  assert.doesNotMatch(workflow, /OSV_SCANNER_ASSET_URL/);
+  assert.doesNotMatch(workflow, /OSV_SCANNER_BIN=%s/);
   assert.doesNotMatch(workflow, /audits\/quick/);
   assert.doesNotMatch(workflow, /continue-on-error/);
   assert.doesNotMatch(workflow, /allow-failure/);
