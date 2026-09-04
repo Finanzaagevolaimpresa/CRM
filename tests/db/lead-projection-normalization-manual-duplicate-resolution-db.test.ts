@@ -1353,6 +1353,7 @@ test('VNX-01 readiness lock conflict honors shutdown within bounded transaction 
     releaseLock();
     await blockingTransaction;
     await blocker.$disconnect();
+    await client().businessInboxEvent.delete({ where: { id: admitted.inboxEventId } });
   }
 });
 
