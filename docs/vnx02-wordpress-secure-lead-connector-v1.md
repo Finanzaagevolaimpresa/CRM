@@ -83,6 +83,16 @@ Un crash può causare un secondo invio dopo la scadenza della lease, non un seco
 il raw body N10 resta identico, mentre timestamp e nonce N12 sono nuovi. N12/N11 convergono quindi a
 `REPLAY` e restituiscono la stessa receipt come 202. Receipt, nonce, event ID e digest non sono loggati.
 
+Alla riattivazione e su ogni hook WordPress `init`, il connettore abilitato con configurazione valida
+recupera un evento cron mancante se esistono righe `PENDING` o `LEASED`. Il risveglio rispetta il
+backoff o la scadenza della lease; un evento esistente viene preservato. Il controllo non reclama
+righe, non azzera tentativi, non cambia il body e non esegue rete. Funziona anche dopo un'uscita del
+worker prima del `finally`, senza nuove submission. Configurazione assente, disabilitata o invalida
+e coda vuota/solo terminale non producono nuovi eventi.
+La ripresa richiede un successivo bootstrap WordPress e l'esecuzione degli eventi dovuti: senza
+richieste al sito e senza un trigger wp-cron autorizzato non si garantisce una scadenza wall-clock.
+Non vengono creati scheduler esterni o cron ricorrenti.
+
 ## Matrice deterministica
 
 | Esito | Azione connector |

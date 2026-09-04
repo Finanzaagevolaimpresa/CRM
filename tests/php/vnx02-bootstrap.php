@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 use FAI\VNX02\ConnectorConfig;
 
-$pluginRoot = dirname(__DIR__, 2) . '/integrations/wordpress/fai-secure-lead-connector';
+// A WordPress subprocess must load fixture contracts from the installed ZIP, not a second source copy.
+$pluginRoot = $vnx02FixturePluginRoot ?? dirname(__DIR__, 2) . '/integrations/wordpress/fai-secure-lead-connector';
 foreach (array(
     'class-connector-error.php',
     'class-runtime-requirements.php',

@@ -13,6 +13,7 @@ final class Plugin
     {
         register_activation_hook($pluginFile, array(self::class, 'activate'));
         register_deactivation_hook($pluginFile, array(self::class, 'deactivate'));
+        add_action('init', array(self::class, 'recoverQueue'));
         add_action('wpforms_process_complete', array(self::class, 'captureSubmission'), 100, 4);
         add_action(self::CRON_HOOK, array(self::class, 'runWorker'));
     }
@@ -22,11 +23,29 @@ final class Plugin
         RuntimeRequirements::assertContractRuntime();
         $queue = self::queue();
         $queue->install();
+        self::recoverQueue();
     }
 
     public static function deactivate(): void
     {
         wp_clear_scheduled_hook(self::CRON_HOOK);
+    }
+
+    /** Restore a lost wake-up without sending, claiming or resetting queued work. */
+    public static function recoverQueue(): void
+    {
+        try {
+            $config = ConnectorConfig::load();
+            if (!$config->enabled || is_int(wp_next_scheduled(self::CRON_HOOK))) {
+                return;
+            }
+            $queue = self::queue();
+            if ($queue->isReady() && $queue->hasOutstanding()) {
+                self::schedule($queue->nextDelaySeconds());
+            }
+        } catch (\Throwable $error) {
+            SafeLogger::workerFailure($error);
+        }
     }
 
     /**

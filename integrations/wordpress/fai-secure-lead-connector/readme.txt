@@ -10,9 +10,9 @@ Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the FAI N12 
 == Status ==
 
 This source package is dormant. It contains no live endpoint, form identifier, privacy reference,
-or secret. Activating the plugin creates only its local WordPress queue table. No cron event or
-network request is created until the complete server-side configuration exists and enabled is the
-boolean true.
+or secret. With enabled=false, activation creates only its local WordPress queue table. No cron event
+or network request is created until the complete server-side configuration exists and enabled is the
+boolean true. An enabled reactivation also restores a missing wake-up for preserved queued work.
 
 Installation, configuration, key provisioning, activation, synthetic traffic, live traffic, and
 cutover all require their own authorization. The repository delivery does none of them.
@@ -66,6 +66,14 @@ converted and approved upstream rather than guessed by this plugin.
 The successful wpforms_process_complete hook performs local validation, builds the canonical N10
 body, encrypts it, inserts it idempotently, and schedules a WordPress single event. It performs no
 remote I/O, so CRM timeout or outage cannot block form completion.
+
+On activation and each WordPress init, a valid enabled connector restores a missing single cron event
+for PENDING work or LEASED work, using its next available time or lease expiry. Existing events are
+preserved; no row is claimed, attempt reset, body replaced, or HTTP request made by this recovery.
+This also recovers after a worker exits before its finally block, without a new submission. Disabled,
+missing or invalid configuration never schedules recovery. Empty/terminal-only queues stay idle.
+Recovery needs a subsequent WordPress bootstrap and due-event processing: a site with no requests
+and no authorized wp-cron trigger cannot promise wall-clock delivery. No external scheduler is created.
 
 The queue stores only pseudonymous digests, a key ID, bounded state, and an XChaCha20-Poly1305 ciphertext.
 It never stores a plaintext payload or N12 secret. Short READ COMMITTED transactions using SKIP LOCKED
