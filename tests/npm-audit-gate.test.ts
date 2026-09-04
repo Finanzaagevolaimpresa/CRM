@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   DependencyAuditGateError,
   NPM_AUDIT_POLICY,
+  OSV_FALLBACK_POLICY,
   type AuditCommandResult,
   type AuditCommandRunner,
+  parseNpmLockInventory,
   runDependencyAuditGate,
+  runDependencySecurityGate,
+  runOsvFallback,
   validateAuditReport,
 } from '../scripts/npm-audit-gate';
 
@@ -55,13 +61,116 @@ function scriptedRunner(script: AuditCommandResult[]) {
   const runner: AuditCommandRunner = async (args, timeoutMs) => {
     calls.push({ args, timeoutMs });
     const next = script.shift();
-    assert.ok(next, 'Unexpected npm invocation');
+    assert.ok(next, 'Unexpected command invocation');
     return next;
   };
   return { calls, runner };
 }
 
 const versionResult = () => result({ stdout: `${NPM_AUDIT_POLICY.npmVersion}\n` });
+
+const OSV_BINARY_PATH = resolve('.synthetic-tools/osv-scanner');
+const OSV_CONFIG_PATH = resolve('.synthetic-tools/osv-scanner-empty-config.toml');
+const OSV_LOCKFILE_PATH = resolve('package-lock.synthetic.json');
+const SYNTHETIC_OSV_BINARY = Buffer.from('synthetic pinned osv scanner');
+const EMPTY_OSV_CONFIG = Buffer.from('# An empty config file to override the ignore config\n');
+const SYNTHETIC_LOCKFILE = Buffer.from(JSON.stringify({
+  name: 'synthetic-audit-fixture',
+  lockfileVersion: 3,
+  requires: true,
+  packages: {
+    '': {
+      name: 'synthetic-audit-fixture',
+      dependencies: { alpha: '1.0.0', parent: '2.0.0' },
+    },
+    'node_modules/alpha': {
+      version: '1.0.0',
+      resolved: 'https://registry.npmjs.org/alpha/-/alpha-1.0.0.tgz',
+      integrity: 'sha512-YQ==',
+    },
+    'node_modules/parent': {
+      version: '2.0.0',
+      resolved: 'https://registry.npmjs.org/parent/-/parent-2.0.0.tgz',
+      integrity: 'sha512-Yg==',
+    },
+    'node_modules/parent/node_modules/alpha': {
+      version: '1.0.0',
+      resolved: 'https://registry.npmjs.org/alpha/-/alpha-1.0.0.tgz',
+      integrity: 'sha512-YQ==',
+    },
+  },
+}));
+const SYNTHETIC_OSV_SHA256 = createHash('sha256').update(SYNTHETIC_OSV_BINARY).digest('hex');
+
+function osvVersionResult(): AuditCommandResult {
+  return result({
+    stdout: '',
+    stderr: `osv-scanner version: ${OSV_FALLBACK_POLICY.scannerVersion}\ncommit: synthetic\n`,
+  });
+}
+
+function osvReport(options: {
+  lockfilePath?: string;
+  packages?: Array<{ name: string; version: string }>;
+  vulnerability?: boolean;
+} = {}): string {
+  const packages = options.packages ?? [
+    { name: 'alpha', version: '1.0.0' },
+    { name: 'parent', version: '2.0.0' },
+  ];
+  return JSON.stringify({
+    results: [
+      {
+        source: {
+          path: options.lockfilePath ?? OSV_LOCKFILE_PATH,
+          type: 'lockfile',
+        },
+        packages: packages.map((packageValue, index) => ({
+          package: { ...packageValue, ecosystem: 'npm' },
+          ...(options.vulnerability && index === 0
+            ? { vulnerabilities: [{ id: 'OSV-SYNTHETIC-1' }] }
+            : {}),
+        })),
+      },
+    ],
+    experimental_config: {
+      licenses: { summary: false, allowlist: null },
+    },
+  });
+}
+
+function fallbackFiles(overrides: Partial<Record<'binary' | 'config' | 'lockfile', Uint8Array>> = {}) {
+  const calls: string[] = [];
+  const readBytes = async (path: string): Promise<Uint8Array> => {
+    calls.push(path);
+    if (path === OSV_BINARY_PATH) return overrides.binary ?? SYNTHETIC_OSV_BINARY;
+    if (path === OSV_CONFIG_PATH) return overrides.config ?? EMPTY_OSV_CONFIG;
+    if (path === OSV_LOCKFILE_PATH) return overrides.lockfile ?? SYNTHETIC_LOCKFILE;
+    throw new Error('Unexpected synthetic file read');
+  };
+  return { calls, readBytes };
+}
+
+function fallbackOptions(
+  osvScript: AuditCommandResult[],
+  files = fallbackFiles(),
+) {
+  const osv = scriptedRunner(osvScript);
+  return {
+    files,
+    osv,
+    options: {
+      osvRunner: osv.runner,
+      readBytes: files.readBytes,
+      now: () => new Date('2026-09-04T10:00:00.000Z'),
+      osvBinaryPath: OSV_BINARY_PATH,
+      osvConfigPath: OSV_CONFIG_PATH,
+      lockfilePath: OSV_LOCKFILE_PATH,
+      expectedOsvBinarySha256: SYNTHETIC_OSV_SHA256,
+      logger: quietLogger,
+    },
+  };
+}
 
 async function expectGateError(
   promise: Promise<unknown>,
@@ -81,11 +190,21 @@ test('the gate is strictly bounded and keeps npm audit-level low', async () => {
   assert.equal(NPM_AUDIT_POLICY.npmVersion, '11.16.0');
   assert.equal(NPM_AUDIT_POLICY.maxAttemptsPerScope, 3);
   assert.ok(NPM_AUDIT_POLICY.attemptTimeoutMs <= 40_000);
+  assert.equal(OSV_FALLBACK_POLICY.scannerVersion, '2.5.1');
+  assert.ok(OSV_FALLBACK_POLICY.scanTimeoutMs <= 180_000);
   assert.ok(
     NPM_AUDIT_POLICY.versionTimeoutMs
       + (2 * NPM_AUDIT_POLICY.maxAttemptsPerScope * NPM_AUDIT_POLICY.attemptTimeoutMs)
       + (2 * (NPM_AUDIT_POLICY.maxAttemptsPerScope - 1) * NPM_AUDIT_POLICY.retryDelayMs)
       < 300_000,
+  );
+  assert.ok(
+    NPM_AUDIT_POLICY.versionTimeoutMs
+      + (2 * NPM_AUDIT_POLICY.maxAttemptsPerScope * NPM_AUDIT_POLICY.attemptTimeoutMs)
+      + (2 * (NPM_AUDIT_POLICY.maxAttemptsPerScope - 1) * NPM_AUDIT_POLICY.retryDelayMs)
+      + OSV_FALLBACK_POLICY.versionTimeoutMs
+      + OSV_FALLBACK_POLICY.scanTimeoutMs
+      < 480_000,
   );
 
   const scripted = scriptedRunner([versionResult(), result(), result()]);
@@ -225,6 +344,190 @@ test('the exact npm client version and complete report consistency are mandatory
   });
 });
 
+test('a complete npm result remains primary and never invokes OSV', async () => {
+  const npm = scriptedRunner([versionResult(), result(), result()]);
+  let osvCalls = 0;
+
+  const gateResult = await runDependencySecurityGate({
+    runner: npm.runner,
+    sleep: async () => undefined,
+    logger: quietLogger,
+    osvRunner: async () => {
+      osvCalls += 1;
+      return result();
+    },
+  });
+
+  assert.deepEqual(gateResult, { source: 'npm' });
+  assert.equal(osvCalls, 0);
+});
+
+test('OSV runs only after bounded npm service unavailability and verifies the full lock inventory', async () => {
+  const timeout = result({ exitCode: 1, stdout: '', stderr: 'network timeout', timedOut: true });
+  const npm = scriptedRunner([versionResult(), timeout, timeout, timeout]);
+  const fallback = fallbackOptions([
+    osvVersionResult(),
+    result({ stdout: osvReport() }),
+  ]);
+
+  const gateResult = await runDependencySecurityGate({
+    runner: npm.runner,
+    sleep: async () => undefined,
+    ...fallback.options,
+  });
+
+  assert.deepEqual(gateResult, { source: 'osv' });
+  assert.equal(npm.calls.length, 4);
+  assert.equal(fallback.osv.calls.length, 2);
+  assert.deepEqual(fallback.osv.calls[0], {
+    args: ['--version'],
+    timeoutMs: OSV_FALLBACK_POLICY.versionTimeoutMs,
+  });
+  assert.deepEqual(fallback.osv.calls[1], {
+    args: [
+      'scan',
+      'source',
+      '--offline=false',
+      '--all-vulns',
+      '--all-packages',
+      '--format=json',
+      '--verbosity=error',
+      `--config=${OSV_CONFIG_PATH}`,
+      `--lockfile=${OSV_LOCKFILE_PATH}`,
+    ],
+    timeoutMs: OSV_FALLBACK_POLICY.scanTimeoutMs,
+  });
+  assert.deepEqual(fallback.files.calls, [
+    OSV_BINARY_PATH,
+    OSV_CONFIG_PATH,
+    OSV_LOCKFILE_PATH,
+    OSV_LOCKFILE_PATH,
+  ]);
+});
+
+test('the authorized package-lock inventory is complete and deterministic', () => {
+  const inventory = parseNpmLockInventory(readFileSync('package-lock.json'));
+  assert.equal(inventory.entryCount, 483);
+  assert.equal(inventory.coordinates.size, 474);
+});
+
+test('npm vulnerabilities, malformed reports and non-transient errors never activate OSV', async () => {
+  const cases: Array<{ command: AuditCommandResult; expectedCode: string }> = [
+    {
+      command: result({ exitCode: 1, stdout: report('low'), stderr: 'service unavailable' }),
+      expectedCode: 'VULNERABILITIES_AT_OR_ABOVE_LOW',
+    },
+    {
+      command: result({ exitCode: 1, stdout: 'not-json', stderr: '503 service unavailable' }),
+      expectedCode: 'MALFORMED_REPORT',
+    },
+    {
+      command: result({
+        exitCode: 1,
+        stdout: JSON.stringify({ auditReportVersion: 2 }),
+        stderr: 'E503',
+      }),
+      expectedCode: 'INCOMPLETE_REPORT',
+    },
+    {
+      command: result({ exitCode: 1, stdout: '', stderr: 'E401 authentication required' }),
+      expectedCode: 'EMPTY_REPORT',
+    },
+  ];
+
+  for (const testCase of cases) {
+    const npm = scriptedRunner([versionResult(), testCase.command]);
+    let osvCalls = 0;
+    await expectGateError(
+      runDependencySecurityGate({
+        runner: npm.runner,
+        sleep: async () => undefined,
+        logger: quietLogger,
+        osvRunner: async () => {
+          osvCalls += 1;
+          return result();
+        },
+      }),
+      testCase.expectedCode,
+    );
+    assert.equal(osvCalls, 0);
+    assert.equal(npm.calls.length, 2);
+  }
+});
+
+test('every OSV vulnerability is blocking regardless of severity or scanner exit semantics', async () => {
+  const fallback = fallbackOptions([
+    osvVersionResult(),
+    result({ exitCode: 1, stdout: osvReport({ vulnerability: true }) }),
+  ]);
+
+  await expectGateError(runOsvFallback(fallback.options), 'OSV_FINDINGS_DETECTED');
+  assert.equal(fallback.osv.calls.length, 2);
+  assert.ok(fallback.osv.calls[1].args.includes('--all-vulns'));
+  assert.ok(!fallback.osv.calls[1].args.some((arg) => /ignore|allowlist|suppress/i.test(arg)));
+});
+
+test('malformed, incomplete and partial OSV reports remain blocking', async () => {
+  const cases: Array<{ stdout: string; expectedCode: string }> = [
+    { stdout: 'not-json', expectedCode: 'OSV_MALFORMED_REPORT' },
+    {
+      stdout: JSON.stringify({ results: [] }),
+      expectedCode: 'OSV_INCOMPLETE_REPORT',
+    },
+    {
+      stdout: osvReport({ packages: [{ name: 'alpha', version: '1.0.0' }] }),
+      expectedCode: 'OSV_INVENTORY_MISMATCH',
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fallback = fallbackOptions([
+      osvVersionResult(),
+      result({ exitCode: 127, stdout: testCase.stdout }),
+    ]);
+    await expectGateError(runOsvFallback(fallback.options), testCase.expectedCode);
+    assert.equal(fallback.osv.calls.length, 2);
+  }
+});
+
+test('unavailability of both npm and OSV is blocking and OSV is not retried', async () => {
+  const timeout = result({ exitCode: 1, stdout: '', stderr: 'network timeout', timedOut: true });
+  const npm = scriptedRunner([versionResult(), timeout, timeout, timeout]);
+  const fallback = fallbackOptions([
+    osvVersionResult(),
+    result({ exitCode: 129, stdout: '', stderr: 'OSV API unavailable' }),
+  ]);
+
+  await expectGateError(
+    runDependencySecurityGate({
+      runner: npm.runner,
+      sleep: async () => undefined,
+      ...fallback.options,
+    }),
+    'OSV_SERVICE_UNAVAILABLE',
+  );
+  assert.equal(fallback.osv.calls.length, 2);
+});
+
+test('OSV binary and empty configuration provenance are mandatory', async () => {
+  assert.equal(
+    createHash('sha256').update(EMPTY_OSV_CONFIG).digest('hex'),
+    OSV_FALLBACK_POLICY.emptyConfigSha256,
+  );
+
+  for (const files of [
+    fallbackFiles({ binary: Buffer.from('tampered scanner') }),
+    fallbackFiles({ config: Buffer.from('[[IgnoredVulns]]\nid = "OSV-SYNTHETIC-1"\n') }),
+  ]) {
+    const fallback = fallbackOptions([osvVersionResult()], files);
+    await expectGateError(
+      runOsvFallback(fallback.options),
+      'OSV_SCANNER_PROVENANCE_UNVERIFIABLE',
+    );
+    assert.equal(fallback.osv.calls.length, 0);
+  }
+});
+
 test('CI pins the bulk-only npm client and keeps the audit gate blocking', () => {
   const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
   assert.match(workflow, /npm install --global npm@11\.16\.0/);
@@ -232,6 +535,21 @@ test('CI pins the bulk-only npm client and keeps the audit gate blocking', () =>
   assert.match(workflow, /test "\$\(npm --version\)" = "11\.16\.0"/);
   assert.match(workflow, /node --import tsx --test tests\/npm-audit-gate\.test\.ts/);
   assert.match(workflow, /node --import tsx scripts\/npm-audit-gate\.ts/);
+  assert.match(
+    workflow,
+    /releases\/download\/v2\.5\.1\/osv-scanner_linux_amd64/,
+  );
+  assert.match(
+    workflow,
+    /OSV_SCANNER_ASSET_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be/,
+  );
+  assert.match(workflow, /sha256sum --check --strict/);
+  assert.match(workflow, /--retry 2/);
+  assert.match(workflow, /--retry-max-time 180/);
+  assert.match(workflow, /OSV_SCANNER_BIN=%s/);
+  assert.match(workflow, /OSV_SCANNER_CONFIG=%s/);
+  assert.match(workflow, /# An empty config file to override the ignore config/);
   assert.doesNotMatch(workflow, /audits\/quick/);
   assert.doesNotMatch(workflow, /continue-on-error/);
+  assert.doesNotMatch(workflow, /allow-failure/);
 });

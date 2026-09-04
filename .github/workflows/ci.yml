@@ -124,11 +124,48 @@ jobs:
           npm install --global npm@11.16.0 --registry=https://registry.npmjs.org/ --ignore-scripts --no-audit --no-fund --fetch-retries=2 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=3000 --fetch-timeout=30000
           test "$(npm --version)" = "11.16.0"
 
+      - name: Provision checksum-verified OSV fallback scanner
+        timeout-minutes: 4
+        env:
+          OSV_SCANNER_VERSION: 2.5.1
+          OSV_SCANNER_RELEASE_COMMIT: c84fa4568f2526d0333e9a914ea8a0a5f74ad68b
+          OSV_SCANNER_RELEASE_PUBLISHED_AT: 2026-08-17T04:29:53Z
+          OSV_SCANNER_ASSET_URL: https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_linux_amd64
+          OSV_SCANNER_ASSET_SHA256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+          OSV_EMPTY_CONFIG_SHA256: 4c25ee4f56ca2b53807db3ed9c0e36d85a41ba0160d6bcc7f0f1cb9dc0e93136
+        run: |
+          set -euo pipefail
+          osv_bin="$RUNNER_TEMP/osv-scanner-v${OSV_SCANNER_VERSION}-linux-amd64"
+          osv_config="$RUNNER_TEMP/osv-scanner-empty-config.toml"
+          curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --connect-timeout 10 \
+            --max-time 120 \
+            --retry 2 \
+            --retry-delay 2 \
+            --retry-max-time 180 \
+            --retry-all-errors \
+            "$OSV_SCANNER_ASSET_URL" \
+            --output "$osv_bin"
+          printf '%s  %s\n' "$OSV_SCANNER_ASSET_SHA256" "$osv_bin" | sha256sum --check --strict
+          chmod 0755 "$osv_bin"
+          printf '%s\n' '# An empty config file to override the ignore config' > "$osv_config"
+          test "$(sha256sum "$osv_config" | cut -d ' ' -f 1)" = "$OSV_EMPTY_CONFIG_SHA256"
+          printf 'OSV_SCANNER_BIN=%s\nOSV_SCANNER_CONFIG=%s\n' "$osv_bin" "$osv_config" >> "$GITHUB_ENV"
+          printf 'osv-scanner version=%s release_commit=%s release_published_at=%s asset_sha256=%s\n' \
+            "$OSV_SCANNER_VERSION" \
+            "$OSV_SCANNER_RELEASE_COMMIT" \
+            "$OSV_SCANNER_RELEASE_PUBLISHED_AT" \
+            "$OSV_SCANNER_ASSET_SHA256"
+
       - name: Verify dependency audit gate fail-closed controls
         run: node --import tsx --test tests/npm-audit-gate.test.ts
 
       - name: Verify dependency audits
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: node --import tsx scripts/npm-audit-gate.ts
 
       - name: Verify patch and shell syntax

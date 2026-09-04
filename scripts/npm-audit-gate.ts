@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const NPM_AUDIT_POLICY = Object.freeze({
@@ -11,6 +13,21 @@ export const NPM_AUDIT_POLICY = Object.freeze({
   retryDelayMs: 2_000,
   npmFetchTimeoutMs: 30_000,
   maxOutputBytes: 16 * 1024 * 1024,
+});
+
+export const OSV_FALLBACK_POLICY = Object.freeze({
+  scannerVersion: '2.5.1',
+  releaseCommit: 'c84fa4568f2526d0333e9a914ea8a0a5f74ad68b',
+  releasePublishedAt: '2026-08-17T04:29:53Z',
+  linuxAmd64Url:
+    'https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_linux_amd64',
+  linuxAmd64Sha256: 'f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be',
+  apiUrl: 'https://api.osv.dev/',
+  emptyConfigSha256: '4c25ee4f56ca2b53807db3ed9c0e36d85a41ba0160d6bcc7f0f1cb9dc0e93136',
+  lockfilePath: 'package-lock.json',
+  versionTimeoutMs: 10_000,
+  scanTimeoutMs: 180_000,
+  maxOutputBytes: 32 * 1024 * 1024,
 });
 
 export type AuditScope = 'runtime' | 'complete';
@@ -31,10 +48,22 @@ export type AuditCommandRunner = (
 
 type AuditLogger = Pick<Console, 'log' | 'warn'>;
 
-type AuditGateOptions = {
+export type AuditGateOptions = {
   runner?: AuditCommandRunner;
   sleep?: (delayMs: number) => Promise<void>;
   logger?: AuditLogger;
+};
+
+export type AuditFileReader = (path: string) => Promise<Uint8Array>;
+
+export type DependencySecurityGateOptions = AuditGateOptions & {
+  osvRunner?: AuditCommandRunner;
+  readBytes?: AuditFileReader;
+  now?: () => Date;
+  osvBinaryPath?: string;
+  osvConfigPath?: string;
+  lockfilePath?: string;
+  expectedOsvBinarySha256?: string;
 };
 
 type VulnerabilitySeverity = 'info' | 'low' | 'moderate' | 'high' | 'critical';
@@ -57,6 +86,26 @@ type ReportValidation =
         | 'INCOMPLETE_REPORT'
         | 'UNSUPPORTED_REPORT_VERSION'
         | 'INCONSISTENT_REPORT';
+    };
+
+type NpmLockInventory = {
+  entryCount: number;
+  coordinates: ReadonlySet<string>;
+};
+
+type OsvReportValidation =
+  | {
+      ok: true;
+      findingCount: number;
+      uniquePackageCount: number;
+    }
+  | {
+      ok: false;
+      code:
+        | 'OSV_EMPTY_REPORT'
+        | 'OSV_MALFORMED_REPORT'
+        | 'OSV_INCOMPLETE_REPORT'
+        | 'OSV_INVENTORY_MISMATCH';
     };
 
 const AUDIT_SCOPES: ReadonlyArray<{ scope: AuditScope; args: readonly string[] }> = [
@@ -266,11 +315,251 @@ export function validateAuditReport(stdout: string): ReportValidation {
   };
 }
 
+function sha256(contents: Uint8Array): string {
+  return createHash('sha256').update(contents).digest('hex');
+}
+
+function npmPackageNameFromPath(packagePath: string): string | null {
+  const marker = 'node_modules/';
+  const markerIndex = packagePath.lastIndexOf(marker);
+  if (markerIndex < 0 || packagePath.includes('\\')) return null;
+
+  const tail = packagePath.slice(markerIndex + marker.length);
+  const segments = tail.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null;
+  if (tail.startsWith('@')) return segments.length === 2 ? tail : null;
+  return segments.length === 1 ? tail : null;
+}
+
+function inventoryCoordinate(name: string, version: string): string {
+  return JSON.stringify([name, version]);
+}
+
+export function parseNpmLockInventory(contents: Uint8Array): NpmLockInventory {
+  let lockfile: unknown;
+  try {
+    lockfile = JSON.parse(Buffer.from(contents).toString('utf8'));
+  } catch {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+  }
+
+  if (
+    !isRecord(lockfile)
+    || lockfile.lockfileVersion !== 3
+    || !isRecord(lockfile.packages)
+    || !isRecord(lockfile.packages[''])
+  ) {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+  }
+
+  const coordinates = new Set<string>();
+  let entryCount = 0;
+  for (const [packagePath, packageValue] of Object.entries(lockfile.packages)) {
+    if (packagePath === '') continue;
+    const name = npmPackageNameFromPath(packagePath);
+    if (!name || !isRecord(packageValue)) {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+
+    const version = packageValue.version;
+    const resolvedUrl = packageValue.resolved;
+    const integrity = packageValue.integrity;
+    if (
+      typeof version !== 'string'
+      || version.length === 0
+      || /[\u0000-\u001f\u007f]/.test(version)
+      || typeof resolvedUrl !== 'string'
+      || typeof integrity !== 'string'
+      || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)
+      || packageValue.link === true
+      || (Object.hasOwn(packageValue, 'name') && packageValue.name !== name)
+    ) {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+
+    let resolvedPackageUrl: URL;
+    try {
+      resolvedPackageUrl = new URL(resolvedUrl);
+    } catch {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+    if (resolvedPackageUrl.origin !== 'https://registry.npmjs.org') {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+
+    entryCount += 1;
+    coordinates.add(inventoryCoordinate(name, version));
+  }
+
+  if (entryCount === 0 || coordinates.size === 0) {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+  }
+  return { entryCount, coordinates };
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function validateOptionalArray(value: Record<string, unknown>, key: string): unknown[] | null {
+  if (!Object.hasOwn(value, key)) return [];
+  return Array.isArray(value[key]) ? value[key] : null;
+}
+
+export function validateOsvReport(
+  stdout: string,
+  lockfilePath: string,
+  inventory: NpmLockInventory,
+): OsvReportValidation {
+  const trimmed = stdout.trim();
+  if (!trimmed) return { ok: false, code: 'OSV_EMPTY_REPORT' };
+
+  let report: unknown;
+  try {
+    report = JSON.parse(trimmed);
+  } catch {
+    return { ok: false, code: 'OSV_MALFORMED_REPORT' };
+  }
+
+  if (
+    !isRecord(report)
+    || !hasOnlyKeys(report, [
+      'results',
+      'experimental_config',
+      'experimental_generic_findings',
+      'license_summary',
+    ])
+    || !Array.isArray(report.results)
+    || report.results.length !== 1
+    || !isRecord(report.experimental_config)
+    || !hasOnlyKeys(report.experimental_config, ['licenses'])
+    || !isRecord(report.experimental_config.licenses)
+    || !hasOnlyKeys(report.experimental_config.licenses, ['summary', 'allowlist'])
+    || report.experimental_config.licenses.summary !== false
+    || report.experimental_config.licenses.allowlist !== null
+  ) {
+    return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+  }
+
+  const genericFindings = validateOptionalArray(report, 'experimental_generic_findings');
+  const licenseSummary = validateOptionalArray(report, 'license_summary');
+  if (!genericFindings || !licenseSummary) {
+    return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+  }
+
+  const result = report.results[0];
+  if (
+    !isRecord(result)
+    || !hasOnlyKeys(result, ['source', 'packages', 'experimental_pes'])
+    || !isRecord(result.source)
+    || !hasOnlyKeys(result.source, ['path', 'type'])
+    || result.source.type !== 'lockfile'
+    || typeof result.source.path !== 'string'
+    || resolve(result.source.path) !== resolve(lockfilePath)
+    || !Array.isArray(result.packages)
+    || result.packages.length === 0
+  ) {
+    return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+  }
+
+  const experimentalPes = validateOptionalArray(result, 'experimental_pes');
+  if (!experimentalPes) return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+
+  const reportedCoordinates = new Set<string>();
+  let findingCount = genericFindings.length + licenseSummary.length + experimentalPes.length;
+  for (const packageResult of result.packages) {
+    if (
+      !isRecord(packageResult)
+      || !hasOnlyKeys(packageResult, [
+        'package',
+        'dependency_groups',
+        'vulnerabilities',
+        'groups',
+        'licenses',
+        'license_violations',
+      ])
+      || !isRecord(packageResult.package)
+      || !hasOnlyKeys(packageResult.package, ['name', 'version', 'ecosystem', 'deprecated'])
+      || typeof packageResult.package.name !== 'string'
+      || typeof packageResult.package.version !== 'string'
+      || packageResult.package.ecosystem !== 'npm'
+      || (Object.hasOwn(packageResult.package, 'deprecated')
+        && typeof packageResult.package.deprecated !== 'boolean')
+    ) {
+      return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+    }
+
+    const dependencyGroups = validateOptionalArray(packageResult, 'dependency_groups');
+    const vulnerabilities = validateOptionalArray(packageResult, 'vulnerabilities');
+    const groups = validateOptionalArray(packageResult, 'groups');
+    const licenses = validateOptionalArray(packageResult, 'licenses');
+    const licenseViolations = validateOptionalArray(packageResult, 'license_violations');
+    if (
+      !dependencyGroups
+      || dependencyGroups.some((group) => typeof group !== 'string')
+      || !vulnerabilities
+      || vulnerabilities.some((vulnerability) => (
+        !isRecord(vulnerability)
+        || typeof vulnerability.id !== 'string'
+        || vulnerability.id.length === 0
+      ))
+      || !groups
+      || !licenses
+      || !licenseViolations
+    ) {
+      return { ok: false, code: 'OSV_INCOMPLETE_REPORT' };
+    }
+
+    const coordinate = inventoryCoordinate(
+      packageResult.package.name,
+      packageResult.package.version,
+    );
+    if (
+      reportedCoordinates.has(coordinate)
+      || !inventory.coordinates.has(coordinate)
+    ) {
+      return { ok: false, code: 'OSV_INVENTORY_MISMATCH' };
+    }
+    reportedCoordinates.add(coordinate);
+    findingCount += vulnerabilities.length + groups.length + licenseViolations.length;
+    if (packageResult.package.deprecated === true) findingCount += 1;
+  }
+
+  if (
+    reportedCoordinates.size !== inventory.coordinates.size
+    || [...inventory.coordinates].some((coordinate) => !reportedCoordinates.has(coordinate))
+  ) {
+    return { ok: false, code: 'OSV_INVENTORY_MISMATCH' };
+  }
+
+  return {
+    ok: true,
+    findingCount,
+    uniquePackageCount: reportedCoordinates.size,
+  };
+}
+
+function permitsTransientClassification(stdout: string): boolean {
+  const trimmed = stdout.trim();
+  if (!trimmed) return true;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!isRecord(parsed) || !Object.hasOwn(parsed, 'error')) return false;
+  return typeof parsed.error === 'string' || isRecord(parsed.error);
+}
+
 function transientReason(result: AuditCommandResult): string | null {
   if (result.timedOut) return 'ATTEMPT_TIMEOUT';
   if (result.spawnErrorCode && TRANSIENT_ERROR_CODES.has(result.spawnErrorCode)) {
     return result.spawnErrorCode;
   }
+  if (!permitsTransientClassification(result.stdout)) return null;
 
   const output = `${result.stdout}\n${result.stderr}`;
   for (const code of TRANSIENT_ERROR_CODES) {
@@ -292,12 +581,13 @@ function safeSpawnErrorCode(error: unknown): string {
   return 'UNKNOWN';
 }
 
-export const runNpmCommand: AuditCommandRunner = async (args, timeoutMs) => {
-  const npmExecutable = process.platform === 'win32' ? process.execPath : 'npm';
-  const npmArguments = process.platform === 'win32'
-    ? [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), ...args]
-    : [...args];
-
+function runCommand(
+  executable: string,
+  args: readonly string[],
+  timeoutMs: number,
+  maxOutputBytes: number,
+  environment: NodeJS.ProcessEnv,
+): Promise<AuditCommandResult> {
   return new Promise<AuditCommandResult>((finish) => {
     let stdout = '';
     let stderr = '';
@@ -316,17 +606,9 @@ export const runNpmCommand: AuditCommandRunner = async (args, timeoutMs) => {
 
     let child;
     try {
-      child = spawn(npmExecutable, npmArguments, {
+      child = spawn(executable, [...args], {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          npm_config_audit_level: 'low',
-          npm_config_fetch_retries: '0',
-          npm_config_fetch_timeout: String(NPM_AUDIT_POLICY.npmFetchTimeoutMs),
-          npm_config_fund: 'false',
-          npm_config_loglevel: 'error',
-          npm_config_update_notifier: 'false',
-        },
+        env: environment,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -347,7 +629,7 @@ export const runNpmCommand: AuditCommandRunner = async (args, timeoutMs) => {
       if (outputOverflow) return;
       const text = chunk.toString('utf8');
       const nextBytes = Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + Buffer.byteLength(text);
-      if (nextBytes > NPM_AUDIT_POLICY.maxOutputBytes) {
+      if (nextBytes > maxOutputBytes) {
         outputOverflow = true;
         child.kill('SIGKILL');
         return;
@@ -378,7 +660,40 @@ export const runNpmCommand: AuditCommandRunner = async (args, timeoutMs) => {
       timers.forceKill = setTimeout(() => child.kill('SIGKILL'), 1_000);
     }, timeoutMs);
   });
+}
+
+export const runNpmCommand: AuditCommandRunner = async (args, timeoutMs) => {
+  const npmExecutable = process.platform === 'win32' ? process.execPath : 'npm';
+  const npmArguments = process.platform === 'win32'
+    ? [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), ...args]
+    : [...args];
+
+  return runCommand(
+    npmExecutable,
+    npmArguments,
+    timeoutMs,
+    NPM_AUDIT_POLICY.maxOutputBytes,
+    {
+      ...process.env,
+      npm_config_audit_level: 'low',
+      npm_config_fetch_retries: '0',
+      npm_config_fetch_timeout: String(NPM_AUDIT_POLICY.npmFetchTimeoutMs),
+      npm_config_fund: 'false',
+      npm_config_loglevel: 'error',
+      npm_config_update_notifier: 'false',
+    },
+  );
 };
+
+function createOsvCommandRunner(binaryPath: string): AuditCommandRunner {
+  return (args, timeoutMs) => runCommand(
+    binaryPath,
+    args,
+    timeoutMs,
+    OSV_FALLBACK_POLICY.maxOutputBytes,
+    process.env,
+  );
+}
 
 const wait = (delayMs: number) => new Promise<void>((resolveDelay) => setTimeout(resolveDelay, delayMs));
 
@@ -467,9 +782,173 @@ export async function runDependencyAuditGate(options: AuditGateOptions = {}): Pr
   return summaries;
 }
 
+async function verifyOsvScanner(
+  binaryPath: string,
+  configPath: string,
+  expectedBinarySha256: string,
+  runner: AuditCommandRunner,
+  readBytes: AuditFileReader,
+): Promise<void> {
+  if (!isAbsolute(binaryPath) || !isAbsolute(configPath)) {
+    throw new DependencyAuditGateError('OSV_SCANNER_CONFIGURATION_INVALID');
+  }
+
+  let binary: Uint8Array;
+  let config: Uint8Array;
+  try {
+    binary = await readBytes(binaryPath);
+    config = await readBytes(configPath);
+  } catch {
+    throw new DependencyAuditGateError('OSV_SCANNER_PROVENANCE_UNVERIFIABLE');
+  }
+
+  if (
+    !/^[a-f0-9]{64}$/.test(expectedBinarySha256)
+    || sha256(binary) !== expectedBinarySha256
+    || sha256(config) !== OSV_FALLBACK_POLICY.emptyConfigSha256
+  ) {
+    throw new DependencyAuditGateError('OSV_SCANNER_PROVENANCE_UNVERIFIABLE');
+  }
+
+  const versionResult = await runner(['--version'], OSV_FALLBACK_POLICY.versionTimeoutMs);
+  const versionLines = `${versionResult.stdout}\n${versionResult.stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  if (
+    versionResult.timedOut
+    || versionResult.outputOverflow
+    || versionResult.spawnErrorCode
+    || versionResult.exitCode !== 0
+    || !versionLines.includes(`osv-scanner version: ${OSV_FALLBACK_POLICY.scannerVersion}`)
+  ) {
+    throw new DependencyAuditGateError('OSV_SCANNER_VERSION_UNVERIFIABLE');
+  }
+}
+
+export async function runOsvFallback(
+  options: Omit<DependencySecurityGateOptions, 'runner' | 'sleep'> = {},
+): Promise<{ uniquePackageCount: number }> {
+  const logger = options.logger ?? console;
+  const readBytes = options.readBytes ?? readFile;
+  const now = options.now ?? (() => new Date());
+  const binaryPath = options.osvBinaryPath ?? process.env.OSV_SCANNER_BIN ?? '';
+  const configPath = options.osvConfigPath ?? process.env.OSV_SCANNER_CONFIG ?? '';
+  const lockfilePath = resolve(options.lockfilePath ?? OSV_FALLBACK_POLICY.lockfilePath);
+  const expectedBinarySha256 = options.expectedOsvBinarySha256
+    ?? OSV_FALLBACK_POLICY.linuxAmd64Sha256;
+  const runner = options.osvRunner ?? createOsvCommandRunner(binaryPath);
+
+  await verifyOsvScanner(
+    binaryPath,
+    configPath,
+    expectedBinarySha256,
+    runner,
+    readBytes,
+  );
+  logger.log(
+    `[dependency-audit] client=osv-scanner@${OSV_FALLBACK_POLICY.scannerVersion} `
+      + `status=verified assetSha256=${expectedBinarySha256} `
+      + `releaseCommit=${OSV_FALLBACK_POLICY.releaseCommit}`,
+  );
+
+  let lockfileBefore: Uint8Array;
+  try {
+    lockfileBefore = await readBytes(lockfilePath);
+  } catch {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_UNAVAILABLE');
+  }
+  const lockfileSha256 = sha256(lockfileBefore);
+  const inventory = parseNpmLockInventory(lockfileBefore);
+  const queryStartedAt = now().toISOString();
+  logger.log(
+    `[dependency-audit] source=osv status=query api=${OSV_FALLBACK_POLICY.apiUrl} `
+      + `queryStartedAt=${queryStartedAt} lockfileSha256=${lockfileSha256} `
+      + `inventoryEntries=${inventory.entryCount} uniquePackages=${inventory.coordinates.size}`,
+  );
+
+  const result = await runner(
+    [
+      'scan',
+      'source',
+      '--offline=false',
+      '--all-vulns',
+      '--all-packages',
+      '--format=json',
+      '--verbosity=error',
+      `--config=${configPath}`,
+      `--lockfile=${lockfilePath}`,
+    ],
+    OSV_FALLBACK_POLICY.scanTimeoutMs,
+  );
+
+  let lockfileAfter: Uint8Array;
+  try {
+    lockfileAfter = await readBytes(lockfilePath);
+  } catch {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_UNAVAILABLE');
+  }
+  if (sha256(lockfileAfter) !== lockfileSha256) {
+    throw new DependencyAuditGateError('OSV_LOCKFILE_CHANGED_DURING_SCAN');
+  }
+
+  if (result.outputOverflow) {
+    throw new DependencyAuditGateError('OSV_OUTPUT_LIMIT_EXCEEDED');
+  }
+  if (result.timedOut || result.exitCode === 129) {
+    throw new DependencyAuditGateError('OSV_SERVICE_UNAVAILABLE');
+  }
+  if (result.spawnErrorCode) {
+    throw new DependencyAuditGateError('OSV_SCANNER_EXECUTION_FAILED');
+  }
+
+  const validation = validateOsvReport(result.stdout, lockfilePath, inventory);
+  if (!validation.ok) throw new DependencyAuditGateError(validation.code);
+  if (validation.findingCount > 0) {
+    throw new DependencyAuditGateError('OSV_FINDINGS_DETECTED');
+  }
+  if (result.exitCode !== 0) {
+    throw new DependencyAuditGateError('OSV_RESULT_EXIT_MISMATCH');
+  }
+
+  logger.log(
+    `[dependency-audit] source=osv status=pass api=${OSV_FALLBACK_POLICY.apiUrl} `
+      + `queryStartedAt=${queryStartedAt} queryCompletedAt=${now().toISOString()} `
+      + `lockfileSha256=${lockfileSha256} inventoryEntries=${inventory.entryCount} `
+      + `uniquePackages=${validation.uniquePackageCount} findings=0`,
+  );
+  return { uniquePackageCount: validation.uniquePackageCount };
+}
+
+export async function runDependencySecurityGate(
+  options: DependencySecurityGateOptions = {},
+): Promise<{ source: 'npm' | 'osv' }> {
+  const logger = options.logger ?? console;
+  try {
+    await runDependencyAuditGate({
+      runner: options.runner,
+      sleep: options.sleep,
+      logger,
+    });
+    return { source: 'npm' };
+  } catch (error) {
+    if (
+      !(error instanceof DependencyAuditGateError)
+      || error.code !== 'AUDIT_SERVICE_UNAVAILABLE'
+    ) {
+      throw error;
+    }
+    logger.warn(
+      '[dependency-audit] primary=npm status=service-unavailable fallback=osv status=start',
+    );
+  }
+
+  await runOsvFallback(options);
+  return { source: 'osv' };
+}
+
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  runDependencyAuditGate().catch((error: unknown) => {
+  runDependencySecurityGate().catch((error: unknown) => {
     const failure = error instanceof DependencyAuditGateError
       ? error
       : new DependencyAuditGateError('UNEXPECTED_GATE_FAILURE');
