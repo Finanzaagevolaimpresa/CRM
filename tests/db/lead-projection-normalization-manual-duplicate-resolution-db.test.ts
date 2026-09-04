@@ -19,6 +19,7 @@ import {
   admitBusinessInboxEvent,
   BusinessEventBackboneError,
   claimBusinessQueueEvent,
+  failBusinessQueueEvent,
   type BusinessQueueLease,
 } from '../../src/lib/business-event-backbone';
 import {
@@ -1351,9 +1352,57 @@ test('VNX-01 readiness lock conflict honors shutdown within bounded transaction 
   } finally {
     clearTimeout(abortTimer);
     releaseLock();
-    await blockingTransaction;
-    await blocker.$disconnect();
-    await client().businessInboxEvent.delete({ where: { id: admitted.inboxEventId } });
+    try {
+      await blockingTransaction;
+    } finally {
+      try {
+        await blocker.$disconnect();
+      } finally {
+        const cleanupLease = await claimBusinessQueueEvent(client(), {
+          queueKind: 'INBOX',
+          leaseOwnerId: uuid(196_585),
+        });
+        assert.ok(cleanupLease);
+        assert.equal(cleanupLease.eventRowId, admitted.inboxEventId);
+        assert.equal((await failBusinessQueueEvent(client(), {
+          ...cleanupLease,
+          failureCode: 'VNX01_SYNTHETIC_FIXTURE_CLEANUP',
+          retryable: false,
+        })).state, 'DEAD_LETTER');
+        assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+          where: { id: admitted.inboxEventId },
+          select: {
+            state: true,
+            attemptCount: true,
+            leaseOwnerId: true,
+            leaseTokenHash: true,
+            leaseClaimedAt: true,
+            leaseExpiresAt: true,
+            leaseMaxExpiresAt: true,
+            lastFailureCode: true,
+          },
+        }), {
+          state: 'DEAD_LETTER',
+          attemptCount: 1,
+          leaseOwnerId: null,
+          leaseTokenHash: null,
+          leaseClaimedAt: null,
+          leaseExpiresAt: null,
+          leaseMaxExpiresAt: null,
+          lastFailureCode: 'VNX01_SYNTHETIC_FIXTURE_CLEANUP',
+        });
+        assert.deepEqual(await client().$queryRaw<Array<{ enabled: string }>>(Prisma.sql`
+          SELECT trigger_row.tgenabled::TEXT AS "enabled"
+          FROM pg_trigger AS trigger_row
+          JOIN pg_class AS relation_row ON relation_row.oid = trigger_row.tgrelid
+          JOIN pg_namespace AS namespace_row ON namespace_row.oid = relation_row.relnamespace
+          WHERE namespace_row.nspname = current_schema()
+            AND relation_row.relname = 'BusinessInboxEvent'
+            AND trigger_row.tgname = 'BusinessInboxEvent_guard_v1'
+            AND NOT trigger_row.tgisinternal
+        `), [{ enabled: 'O' }]);
+      }
+    }
   }
 });
 
