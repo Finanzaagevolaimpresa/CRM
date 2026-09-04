@@ -21,7 +21,7 @@ function integrityFail(): never {
   throw new LeadDuplicateReviewIntegrityError();
 }
 
-function exactCurrentCandidates<T extends Readonly<{
+function exactCurrentCandidateWindow<T extends Readonly<{
   discoveryRevision: number;
   rank: number;
   leadId: string;
@@ -34,15 +34,19 @@ function exactCurrentCandidates<T extends Readonly<{
   candidates: readonly T[],
   discoveryRevision: number,
   expectedCount: number,
+  actualCount: number,
   sourceRecordHash: string,
 ) {
-  if (expectedCount < 0 || expectedCount > CORE_QUERY_MAX_CANDIDATES) {
+  if (!Number.isSafeInteger(expectedCount)
+    || expectedCount < 0
+    || actualCount !== expectedCount) {
     return integrityFail();
   }
   const current = candidates.filter((candidate) => (
     candidate.discoveryRevision === discoveryRevision
   ));
-  if (current.length !== expectedCount
+  const visibleCount = Math.min(expectedCount, CORE_QUERY_MAX_CANDIDATES);
+  if (current.length !== visibleCount
     || new Set(current.map(({ leadId }) => leadId)).size !== current.length
     || current.some((candidate, index) => {
       if (candidate.rank !== index + 1
@@ -64,7 +68,10 @@ function exactCurrentCandidates<T extends Readonly<{
     })) {
     return integrityFail();
   }
-  return current;
+  return Object.freeze({
+    candidates: Object.freeze(current),
+    truncated: expectedCount > visibleCount,
+  });
 }
 
 export async function listLeadDuplicateReviewCases(
@@ -125,7 +132,7 @@ export async function listLeadDuplicateReviewCases(
       },
       candidates: {
         orderBy: [{ discoveryRevision: 'desc' }, { rank: 'asc' }],
-        take: CORE_QUERY_MAX_CANDIDATES + 1,
+        take: CORE_QUERY_MAX_CANDIDATES,
         select: {
           discoveryRevision: true,
           leadId: true,
@@ -155,6 +162,23 @@ export async function listLeadDuplicateReviewCases(
       },
     },
   });
+
+  const candidateCounts = rows.length === 0
+    ? []
+    : await prisma.leadDuplicateCandidate.groupBy({
+      by: ['duplicateCaseId', 'discoveryRevision'],
+      where: {
+        OR: rows.map((row) => ({
+          duplicateCaseId: row.id,
+          discoveryRevision: row.discoveryRevision,
+        })),
+      },
+      _count: { _all: true },
+    });
+  const candidateCountByCaseRevision = new Map(candidateCounts.map((count) => [
+    `${count.duplicateCaseId}:${count.discoveryRevision}`,
+    count._count._all,
+  ]));
 
   return rows.map((row) => {
     if (row.state !== 'OPEN'
@@ -198,10 +222,11 @@ export async function listLeadDuplicateReviewCases(
     } catch {
       return integrityFail();
     }
-    const candidates = exactCurrentCandidates(
+    const candidateWindow = exactCurrentCandidateWindow(
       row.candidates,
       row.discoveryRevision,
       row.candidateCount,
+      candidateCountByCaseRevision.get(`${row.id}:${row.discoveryRevision}`) ?? 0,
       row.projectionLedger.sourceRecordHash,
     );
     return Object.freeze({
@@ -209,6 +234,8 @@ export async function listLeadDuplicateReviewCases(
       caseVersion: row.version,
       discoveryRevision: row.discoveryRevision,
       candidateCount: row.candidateCount,
+      visibleCandidateCount: candidateWindow.candidates.length,
+      candidatesTruncated: candidateWindow.truncated,
       incoming: Object.freeze({
         occurredAt: new Date(event.occurredAt),
         sourceSystem: event.source.systemCode,
@@ -219,7 +246,7 @@ export async function listLeadDuplicateReviewCases(
         email: event.payload.email ?? null,
         phone: event.payload.phone ?? null,
       }),
-      candidates: Object.freeze(candidates.map((candidate) => Object.freeze({
+      candidates: Object.freeze(candidateWindow.candidates.map((candidate) => Object.freeze({
         leadId: candidate.leadId,
         rank: candidate.rank,
         strongestSignal: candidate.strongestSignal,

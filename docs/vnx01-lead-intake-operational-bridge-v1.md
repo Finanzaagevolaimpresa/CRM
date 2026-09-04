@@ -57,6 +57,11 @@ La pagina `/leads/duplicates` richiede `lead.duplicate.resolve`, permesso non de
 ad `admin` e `direzione`. La lettura espone soltanto i campi di identità necessari al confronto e
 rifiuta una coda con envelope, record hash, ledger o snapshot incoerenti.
 
+Per mantenere la query operativa bounded, un caso con più di 500 candidati conserva l'intero
+snapshot N13 ma mostra il prefisso dei primi 500 secondo il ranking deterministico. La vista verifica
+separatamente che il conteggio persistito della revisione sia esatto e segnala esplicitamente
+all'operatore che la finestra è troncata, senza classificare il caso valido come corrotto.
+
 Le decisioni usano la server action N13 esistente e richiedono session registry viva, privileged
 access `enforced`, step-up session-bound, versione attesa del caso e candidate snapshot corrente.
 L'operatore può:

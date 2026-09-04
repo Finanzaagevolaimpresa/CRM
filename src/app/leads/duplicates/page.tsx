@@ -83,6 +83,10 @@ export default async function Page({
             <div><dt className="font-bold text-slate-500">Telefono</dt><dd>{item.incoming.phone || '—'}</dd></div>
           </dl>
         </section>
+        {item.candidatesTruncated && <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+          Caso ad alta cardinalità: sono mostrati i primi {item.visibleCandidateCount} candidati su {item.candidateCount},
+          secondo il ranking N13 deterministico. Tutti gli snapshot restano conservati; la decisione operatore non è automatica.
+        </p>}
         <div className="mt-4 space-y-3">
           {item.candidates.map((candidate) => <article
             key={candidate.leadId}

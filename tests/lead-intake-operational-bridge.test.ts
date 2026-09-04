@@ -239,7 +239,9 @@ test('duplicate queue UI is permission-scoped, bounded and excludes free-text pa
   assert.match(review, /candidate\.snapshotHash !== canonicalSha256/u);
   assert.match(review, /discoveryRevision[\s\S]*candidateCount/u);
   assert.match(review, /take: input\.take/u);
-  assert.match(review, /take: CORE_QUERY_MAX_CANDIDATES \+ 1/u);
+  assert.match(review, /take: CORE_QUERY_MAX_CANDIDATES/u);
+  assert.match(review, /leadDuplicateCandidate\.groupBy/u);
+  assert.match(review, /candidatesTruncated/u);
   assert.ok(visibleNavItemsForTest({
     role: 'admin',
     effectivePermissions: ['lead.duplicate.resolve'],

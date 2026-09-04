@@ -188,6 +188,11 @@ outcome ammessi restano soltanto:
 Non esistono merge, delete, overwrite, auto-link o riscrittura dello storico. Un Lead creato e poi
 riaperto non viene cancellato o alterato e può riapparire come candidato via fallback raw.
 
+La vista VNX-01 mantiene bounded il carico UI mostrando al massimo i primi 500 candidati della
+revisione corrente, sempre nell'ordine N13 persistito. Il conteggio esatto della revisione viene
+verificato separatamente e l'eventuale troncamento è dichiarato all'operatore; tutti gli snapshot
+oltre la finestra restano immutati e conservati nel contratto N13.
+
 Ogni comando richiede `expectedCaseVersion > 0`, `reasonCode` chiuso uppercase e un eventuale
 `reasonNote` di massimo 500 caratteri. `selectedLeadId` è obbligatorio soltanto per link existing.
 

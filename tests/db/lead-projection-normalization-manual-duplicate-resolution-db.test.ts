@@ -43,6 +43,7 @@ import {
   runLeadIntakeConsumer,
 } from '../../src/lib/lead-intake-consumer';
 import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
+import { CORE_QUERY_MAX_CANDIDATES } from '../../src/lib/core-query-policy';
 import {
   createLeadSubmittedEventV1,
   type LeadEventPayloadV1,
@@ -1290,6 +1291,59 @@ test('VNX-01 gate and readiness precede claim, then the bounded bridge projects 
   assert.equal(await client().leadProjectionLedger.count({
     where: { inboxEventId: firstAdmission.inboxEventId },
   }), 1);
+});
+
+test('VNX-01 duplicate queue keeps valid high-cardinality cases workable with a deterministic bounded window', {
+  skip: !runDbTests,
+}, async () => {
+  const event = syntheticEvent(584);
+  const candidateCount = CORE_QUERY_MAX_CANDIDATES + 1;
+  await client().lead.createMany({
+    data: Array.from({ length: candidateCount }, (_, index) => ({
+      firstName: `HighCardinality${index.toString().padStart(3, '0')}`,
+      lastName: 'Candidate584',
+      email: event.payload.email!,
+      source: 'VNX01_HIGH_CARDINALITY_SYNTHETIC',
+    })),
+  });
+  const admitted = await admitBusinessInboxEvent(client(), event);
+  const lease = await claimBusinessQueueEvent(client(), {
+    queueKind: 'INBOX',
+    leaseOwnerId: uuid(196_581),
+  });
+  assert.ok(lease);
+  assert.equal(lease.eventRowId, admitted.inboxEventId);
+  const projected = await projectClaimedLeadInboxEvent(client(), lease, projectionOptions());
+  assert.equal(projected.result.state, 'REVIEW_REQUIRED');
+  assert.equal(projected.result.candidateCount, candidateCount);
+
+  const duplicateCase = await client().leadDuplicateCase.findUniqueOrThrow({
+    where: { projectionLedgerId: projected.result.ledgerId },
+  });
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateCase.id);
+  assert.ok(reviewItem);
+  assert.equal(reviewItem.candidateCount, candidateCount);
+  assert.equal(reviewItem.visibleCandidateCount, CORE_QUERY_MAX_CANDIDATES);
+  assert.equal(reviewItem.candidatesTruncated, true);
+  assert.equal(reviewItem.candidates.length, CORE_QUERY_MAX_CANDIDATES);
+  assert.deepEqual(
+    reviewItem.candidates.map(({ rank }) => rank),
+    Array.from({ length: CORE_QUERY_MAX_CANDIDATES }, (_, index) => index + 1),
+  );
+
+  const selected = reviewItem.candidates.at(-1);
+  assert.ok(selected);
+  const resolved = await resolveLeadDuplicateCase(client(), {
+    caseId: duplicateCase.id,
+    expectedCaseVersion: duplicateCase.version,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE',
+    selectedLeadId: selected.leadId,
+    reasonCode: 'SYNTHETIC_HIGH_CARDINALITY_LINK',
+    ...resolutionActor(),
+  }, projectionOptions());
+  assert.equal(resolved.state, 'RESOLVED_EXISTING');
+  assert.equal(resolved.resultingLeadId, selected.leadId);
 });
 
 test('VNX-01 reaches N14 only with a synthetic ACTIVE policy and test-scoped enforced mode', {
