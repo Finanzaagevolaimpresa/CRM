@@ -31,7 +31,8 @@ import { maybeEnrollProjectedCommercialLead } from './commercial-lead-inbox';
 export const LEAD_DUPLICATE_RESOLUTION_MANIFEST = Object.freeze({
   version: 1,
   dormant: true,
-  activation: 'NONE' as const,
+  activation: 'PROTECTED_OPERATOR_UI' as const,
+  operatorRoute: '/leads/duplicates' as const,
   permission: 'lead.duplicate.resolve' as const,
   decisionHashDomain: 'fai.lead-duplicate-decision.v1',
   resolutionHashDomain: 'fai.lead-projection.resolution.v1',

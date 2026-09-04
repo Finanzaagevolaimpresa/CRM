@@ -19,6 +19,7 @@ import {
   admitBusinessInboxEvent,
   BusinessEventBackboneError,
   claimBusinessQueueEvent,
+  failBusinessQueueEvent,
   type BusinessQueueLease,
 } from '../../src/lib/business-event-backbone';
 import {
@@ -38,6 +39,13 @@ import {
   projectClaimedLeadInboxEvent,
   type LeadProjectionFaultPoint,
 } from '../../src/lib/lead-projection';
+import {
+  createPrismaLeadIntakeConsumerOperations,
+  LEAD_INTAKE_CONSUMER_MANIFEST,
+  runLeadIntakeConsumer,
+} from '../../src/lib/lead-intake-consumer';
+import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
+import { CORE_QUERY_MAX_CANDIDATES } from '../../src/lib/core-query-policy';
 import {
   createLeadSubmittedEventV1,
   type LeadEventPayloadV1,
@@ -209,6 +217,17 @@ async function admitAndClaim(
 
 function projectionOptions() {
   return { keyFilePath: secretPath, allowedSecretRoot: secretRoot } as const;
+}
+
+function consumerEnvironment(batchSize: number) {
+  return {
+    VNX01_LEAD_INTAKE_CONSUMER_ENABLED: '1',
+    VNX01_LEAD_INTAKE_LEASE_OWNER_ID: uuid(195_000),
+    VNX01_LEAD_INTAKE_BATCH_SIZE: String(batchSize),
+    VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE: '10',
+    LEAD_IDENTITY_KEY_FILE: secretPath,
+    WEBSITE_LEAD_MODE: 'disabled',
+  };
 }
 
 function resolutionActor(actor = { userId: primaryUserId, sessionId: primarySessionId }) {
@@ -1183,6 +1202,281 @@ test('N13-C2 privacy evidence is invariant across session timezones and DST boun
     await qualification.$disconnect();
     await rootClient().$executeRawUnsafe(`DROP SCHEMA "${qualificationSchema}" CASCADE`);
   }
+});
+
+test('VNX-01 gate and readiness precede claim, then the bounded bridge projects new and duplicate events exactly once', {
+  skip: !runDbTests,
+}, async () => {
+  const firstEvent = syntheticEvent(580);
+  const firstAdmission = await admitBusinessInboxEvent(client(), firstEvent);
+  const operations = createPrismaLeadIntakeConsumerOperations(client(), {
+    allowedSecretRoot: secretRoot,
+  });
+
+  const disabled = await runLeadIntakeConsumer(operations, {
+    environment: {},
+    logger: () => {},
+  });
+  assert.equal(disabled.status, 'DISABLED');
+  assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+    where: { id: firstAdmission.inboxEventId },
+    select: { state: true, attemptCount: true },
+  }), { state: 'AVAILABLE', attemptCount: 0 });
+
+  await assert.rejects(runLeadIntakeConsumer(operations, {
+    environment: {
+      ...consumerEnvironment(3),
+      LEAD_IDENTITY_KEY_FILE: join(secretRoot, 'missing-synthetic-key.json'),
+    },
+    logger: () => {},
+  }));
+  assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+    where: { id: firstAdmission.inboxEventId },
+    select: { state: true, attemptCount: true },
+  }), { state: 'AVAILABLE', attemptCount: 0 });
+
+  const secondEvent = syntheticEvent(581);
+  const thirdEvent = syntheticEvent(582);
+  const secondAdmission = await admitBusinessInboxEvent(client(), secondEvent);
+  const thirdAdmission = await admitBusinessInboxEvent(client(), thirdEvent);
+  const existing = await client().lead.create({
+    data: {
+      firstName: 'SyntheticExisting',
+      lastName: 'ConsumerCandidate',
+      email: thirdEvent.payload.email,
+      source: 'VNX01_SYNTHETIC_TEST',
+    },
+  });
+  const logs: unknown[] = [];
+  const completed = await runLeadIntakeConsumer(operations, {
+    environment: consumerEnvironment(3),
+    logger: (record) => logs.push(record),
+  });
+  assert.deepEqual(completed, {
+    status: 'COMPLETED', recovered: 0, retried: 0, deadLettered: 0,
+    claimed: 3, projectedNew: 2, reviewRequired: 1, failed: 0,
+  });
+  assert.deepEqual(await client().businessInboxEvent.findMany({
+    where: { id: { in: [
+      firstAdmission.inboxEventId,
+      secondAdmission.inboxEventId,
+      thirdAdmission.inboxEventId,
+    ] } },
+    orderBy: { id: 'asc' },
+    select: { state: true, attemptCount: true },
+  }), Array.from({ length: 3 }, () => ({ state: 'PROCESSED', attemptCount: 1 })));
+  const duplicateLedger = await client().leadProjectionLedger.findUniqueOrThrow({
+    where: { inboxEventId: thirdAdmission.inboxEventId },
+    include: { duplicateCase: { include: { candidates: true } } },
+  });
+  assert.equal(duplicateLedger.state, 'REVIEW_REQUIRED');
+  assert.equal(duplicateLedger.duplicateCase?.state, 'OPEN');
+  assert.deepEqual(duplicateLedger.duplicateCase?.candidates.map(({ leadId }) => leadId), [existing.id]);
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateLedger.duplicateCase?.id);
+  assert.ok(reviewItem);
+  assert.equal(reviewItem.caseVersion, 1);
+  assert.deepEqual(reviewItem.candidates.map(({ leadId }) => leadId), [existing.id]);
+  assert.doesNotMatch(JSON.stringify(reviewItem), /message|notes|payloadHash|keyDigest|recordHash/iu);
+  assert.equal(await client().lead.count({
+    where: { email: { in: [firstEvent.payload.email!, secondEvent.payload.email!] } },
+  }), 2);
+  assert.doesNotMatch(JSON.stringify(logs), /@n13-db\.invalid|Synthetic Company|secretBase64/iu);
+
+  const replay = await admitBusinessInboxEvent(client(), firstEvent);
+  assert.equal(replay.outcome, 'REPLAY');
+  const replayRun = await runLeadIntakeConsumer(operations, {
+    environment: consumerEnvironment(1),
+    logger: () => {},
+  });
+  assert.equal(replayRun.claimed, 0);
+  assert.equal(await client().leadProjectionLedger.count({
+    where: { inboxEventId: firstAdmission.inboxEventId },
+  }), 1);
+});
+
+test('VNX-01 readiness lock conflict honors shutdown within bounded transaction and never claims', {
+  skip: !runDbTests,
+  timeout: 30_000,
+}, async () => {
+  const event = syntheticEvent(585);
+  const admitted = await admitBusinessInboxEvent(client(), event);
+  const blocker = new PrismaClient({ datasources: { db: { url: schemaUrl } } });
+  let markLockAcquired!: () => void;
+  let releaseLock!: () => void;
+  const lockAcquired = new Promise<void>((resolve) => { markLockAcquired = resolve; });
+  const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+  const blockingTransaction = blocker.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id"
+      FROM "LeadIdentityKeyVersion"
+      WHERE "normalizationVersion" = ${LEAD_NORMALIZATION_VERSION}
+        AND "status" = 'ACTIVE'
+      FOR UPDATE
+    `);
+    assert.equal(locked.length, 1);
+    markLockAcquired();
+    await release;
+  }, { maxWait: 2_000, timeout: 15_000 });
+  await lockAcquired;
+
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const abortTimer = setTimeout(() => controller.abort(), 50);
+  try {
+    const summary = await runLeadIntakeConsumer(
+      createPrismaLeadIntakeConsumerOperations(client(), { allowedSecretRoot: secretRoot }),
+      {
+        environment: consumerEnvironment(1),
+        signal: controller.signal,
+        logger: () => {},
+      },
+    );
+    const elapsedMilliseconds = Date.now() - startedAt;
+    assert.equal(summary.status, 'STOPPED');
+    assert.ok(
+      elapsedMilliseconds >= LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.lockTimeoutMs / 2,
+      `readiness lock conflict returned unexpectedly early: ${elapsedMilliseconds}ms`,
+    );
+    assert.ok(
+      elapsedMilliseconds
+        < LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.timeoutMs
+          + LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.maxWaitMs
+          + 3_000,
+      `readiness lock conflict exceeded bounded shutdown: ${elapsedMilliseconds}ms`,
+    );
+    assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+      where: { id: admitted.inboxEventId },
+      select: { state: true, attemptCount: true },
+    }), { state: 'AVAILABLE', attemptCount: 0 });
+  } finally {
+    clearTimeout(abortTimer);
+    releaseLock();
+    try {
+      await blockingTransaction;
+    } finally {
+      try {
+        await blocker.$disconnect();
+      } finally {
+        const cleanupLease = await claimBusinessQueueEvent(client(), {
+          queueKind: 'INBOX',
+          leaseOwnerId: uuid(196_585),
+        });
+        assert.ok(cleanupLease);
+        assert.equal(cleanupLease.eventRowId, admitted.inboxEventId);
+        assert.equal((await failBusinessQueueEvent(client(), {
+          ...cleanupLease,
+          failureCode: 'VNX01_SYNTHETIC_FIXTURE_CLEANUP',
+          retryable: false,
+        })).state, 'DEAD_LETTER');
+        assert.deepEqual(await client().businessInboxEvent.findUniqueOrThrow({
+          where: { id: admitted.inboxEventId },
+          select: {
+            state: true,
+            attemptCount: true,
+            leaseOwnerId: true,
+            leaseTokenHash: true,
+            leaseClaimedAt: true,
+            leaseExpiresAt: true,
+            leaseMaxExpiresAt: true,
+            lastFailureCode: true,
+          },
+        }), {
+          state: 'DEAD_LETTER',
+          attemptCount: 1,
+          leaseOwnerId: null,
+          leaseTokenHash: null,
+          leaseClaimedAt: null,
+          leaseExpiresAt: null,
+          leaseMaxExpiresAt: null,
+          lastFailureCode: 'VNX01_SYNTHETIC_FIXTURE_CLEANUP',
+        });
+        assert.deepEqual(await client().$queryRaw<Array<{ enabled: string }>>(Prisma.sql`
+          SELECT trigger_row.tgenabled::TEXT AS "enabled"
+          FROM pg_trigger AS trigger_row
+          JOIN pg_class AS relation_row ON relation_row.oid = trigger_row.tgrelid
+          JOIN pg_namespace AS namespace_row ON namespace_row.oid = relation_row.relnamespace
+          WHERE namespace_row.nspname = current_schema()
+            AND relation_row.relname = 'BusinessInboxEvent'
+            AND trigger_row.tgname = 'BusinessInboxEvent_guard_v1'
+            AND NOT trigger_row.tgisinternal
+        `), [{ enabled: 'O' }]);
+      }
+    }
+  }
+});
+
+test('VNX-01 duplicate queue keeps valid high-cardinality cases workable with a deterministic bounded window', {
+  skip: !runDbTests,
+}, async () => {
+  const event = syntheticEvent(584);
+  const candidateCount = CORE_QUERY_MAX_CANDIDATES + 1;
+  await client().lead.createMany({
+    data: Array.from({ length: candidateCount }, (_, index) => ({
+      firstName: `HighCardinality${index.toString().padStart(3, '0')}`,
+      lastName: 'Candidate584',
+      email: event.payload.email!,
+      source: 'VNX01_HIGH_CARDINALITY_SYNTHETIC',
+    })),
+  });
+  const admitted = await admitBusinessInboxEvent(client(), event);
+  const lease = await claimBusinessQueueEvent(client(), {
+    queueKind: 'INBOX',
+    leaseOwnerId: uuid(196_581),
+  });
+  assert.ok(lease);
+  assert.equal(lease.eventRowId, admitted.inboxEventId);
+  const projected = await projectClaimedLeadInboxEvent(client(), lease, projectionOptions());
+  assert.equal(projected.result.state, 'REVIEW_REQUIRED');
+  assert.equal(projected.result.candidateCount, candidateCount);
+
+  const duplicateCase = await client().leadDuplicateCase.findUniqueOrThrow({
+    where: { projectionLedgerId: projected.result.ledgerId },
+  });
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateCase.id);
+  assert.ok(reviewItem);
+  assert.equal(reviewItem.candidateCount, candidateCount);
+  assert.equal(reviewItem.visibleCandidateCount, CORE_QUERY_MAX_CANDIDATES);
+  assert.equal(reviewItem.candidatesTruncated, true);
+  assert.equal(reviewItem.candidates.length, CORE_QUERY_MAX_CANDIDATES);
+  assert.deepEqual(
+    reviewItem.candidates.map(({ rank }) => rank),
+    Array.from({ length: CORE_QUERY_MAX_CANDIDATES }, (_, index) => index + 1),
+  );
+
+  const selected = reviewItem.candidates.at(-1);
+  assert.ok(selected);
+  const resolved = await resolveLeadDuplicateCase(client(), {
+    caseId: duplicateCase.id,
+    expectedCaseVersion: duplicateCase.version,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE',
+    selectedLeadId: selected.leadId,
+    reasonCode: 'SYNTHETIC_HIGH_CARDINALITY_LINK',
+    ...resolutionActor(),
+  }, projectionOptions());
+  assert.equal(resolved.state, 'RESOLVED_EXISTING');
+  assert.equal(resolved.resultingLeadId, selected.leadId);
+});
+
+test('VNX-01 reaches N14 only with a synthetic ACTIVE policy and test-scoped enforced mode', {
+  skip: !runDbTests,
+}, async () => {
+  await withSyntheticActiveCommercialPolicy(async () => {
+    const event = syntheticEvent(583);
+    const admitted = await admitBusinessInboxEvent(client(), event);
+    const result = await runLeadIntakeConsumer(
+      createPrismaLeadIntakeConsumerOperations(client(), { allowedSecretRoot: secretRoot }),
+      { environment: consumerEnvironment(1), logger: () => {} },
+    );
+    assert.equal(result.projectedNew, 1);
+    const ledger = await client().leadProjectionLedger.findUniqueOrThrow({
+      where: { inboxEventId: admitted.inboxEventId },
+    });
+    assert.equal(await client().commercialLeadInboxItem.count({
+      where: { projectionLedgerId: ledger.id, originKind: 'BUSINESS_PROJECTION_N13' },
+    }), 1);
+  });
 });
 
 test('projection matrix 0/1/N is atomic and binds exactly two privacy receipts', {

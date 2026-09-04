@@ -2,9 +2,9 @@
 
 ## Stato e boundary
 
-N11 aggiunge una fondazione persistente business, dormiente e separata per l'envelope N10 `fai.lead-event.v1` / `LEAD_SUBMITTED`. Le tre tabelle sono inizialmente vuote e nessuna funzione N11 ha call site in route, worker, scheduler, timer, script, UI o telemetria.
+N11 aggiunge una fondazione persistente business, dormiente e separata per l'envelope N10 `fai.lead-event.v1` / `LEAD_SUBMITTED`. Le tre tabelle erano inizialmente vuote e la release N11 non aveva call site runtime. VNX-01 aggiunge successivamente il consumer manuale e bounded `VNX01_LEAD_INTAKE_CONSUMER`, chiuso per default e mai avviato da route, startup hook, Compose, scheduler o timer.
 
-N11 non collega la route website N01, non crea o aggiorna `Lead`, non esegue projection o duplicate resolution, non autentica producer, non introduce replay window o rate limit v2, non invia comunicazioni e non effettua network egress. Restano fuori scope N12–N17, N21, provider esterni, catalog publication, Stripe, checkout, deploy e activation.
+N11 non collega la route website N01, non crea o aggiorna direttamente `Lead`, non autentica producer, non introduce replay window o rate limit v2, non invia comunicazioni e non effettua network egress. Il consumer VNX-01 usa le primitive N11 esistenti per consegnare una lease al proiettore N13; N14 resta un'integrazione separatamente gated. Restano fuori scope N15–N17, N21, provider esterni, catalog publication, Stripe e checkout.
 
 Il modello è distinto sia da `WebsiteLeadReceipt`, che appartiene al contenimento legacy N01, sia da `AiWorkflowJobOutboxEvent`, che appartiene all'orchestrazione AI. Non esistono FK o lock verso `Lead`, N01, privacy evidence o tabelle AI.
 

@@ -6,19 +6,23 @@ N13 introduce una foundation server-side dormiente per proiettare un evento N10 
 preso in lease da N11, individuare possibili Lead omonimi senza dedurne l'identità e registrare una
 decisione umana non distruttiva.
 
-Questo documento descrive il contratto del codice. Non autorizza merge, deploy, migration su
-ambienti persistenti, provisioning di chiavi, consumer, worker, traffico, projection reale o
-risoluzione di duplicati reali. Tali operazioni richiedono autorizzazioni successive e separate.
+Questo documento descrive il contratto del codice. VNX-01 aggiunge un consumer manuale
+bounded e una vista operatore protetta, entrambi default-off sul runtime produttivo. Il codice non
+autorizza provisioning di chiavi, traffico, projection reale o risoluzione di duplicati reali:
+tali operazioni richiedono un mandato di activation separato.
 
 La release N13 resta chiusa per costruzione:
 
 - `LEAD_PROJECTION_MANIFEST.dormant = true`;
-- `LEAD_PROJECTION_MANIFEST.runtimeConsumers = []`;
-- `LEAD_PROJECTION_MANIFEST.activation = NONE`;
+- `LEAD_PROJECTION_MANIFEST.runtimeConsumers = [VNX01_LEAD_INTAKE_CONSUMER]`;
+- `LEAD_PROJECTION_MANIFEST.activation = EXPLICIT_ENV_GATE`;
 - `LEAD_DUPLICATE_RESOLUTION_MANIFEST.dormant = true`;
-- `LEAD_DUPLICATE_RESOLUTION_MANIFEST.activation = NONE`;
+- `LEAD_DUPLICATE_RESOLUTION_MANIFEST.activation = PROTECTED_OPERATOR_UI`;
+- la route `/leads/duplicates` richiede `lead.duplicate.resolve` e una sessione privilegiata valida
+  prima di esporre le azioni di decisione;
 - `LEAD_IDENTITY_KEY_FILE` è vuoto negli esempi, nella CI, nello smoke e nel restore drill;
-- nessuna route, pagina, worker, cron, scheduler, timer o startup hook importa il projector;
+- nessuna route, cron, scheduler, timer o startup hook invoca il projector; l'unico call site
+  runtime è lo script manuale VNX-01 e rifiuta il claim finché il gate e il preflight non sono validi;
 - non vengono creati o attivati record `LeadIdentityKeyVersion` dalla migration o dai seed;
 - non vengono aggiunti eventi N06, chiamate di rete, provider o telemetria N13.
 
@@ -172,7 +176,8 @@ di identità, versione e transizione. Delete e truncate sono negati. Tutte le FK
 
 ## Risoluzione manuale
 
-La server action è una primitiva senza chiamante UI N13. Gli outcome ammessi sono soltanto:
+La server action è esposta dalla vista protetta `/leads/duplicates` introdotta da VNX-01. Gli
+outcome ammessi restano soltanto:
 
 - `LINK_EXISTING_NO_OVERWRITE`: il Lead deve appartenere alla revision corrente ed essere attivo;
   nessun suo campo viene aggiornato;
@@ -182,6 +187,11 @@ La server action è una primitiva senza chiamante UI N13. Gli outcome ammessi so
 
 Non esistono merge, delete, overwrite, auto-link o riscrittura dello storico. Un Lead creato e poi
 riaperto non viene cancellato o alterato e può riapparire come candidato via fallback raw.
+
+La vista VNX-01 mantiene bounded il carico UI mostrando al massimo i primi 500 candidati della
+revisione corrente, sempre nell'ordine N13 persistito. Il conteggio esatto della revisione viene
+verificato separatamente e l'eventuale troncamento è dichiarato all'operatore; tutti gli snapshot
+oltre la finestra restano immutati e conservati nel contratto N13.
 
 Ogni comando richiede `expectedCaseVersion > 0`, `reasonCode` chiuso uppercase e un eventuale
 `reasonNote` di massimo 500 caratteri. `selectedLeadId` è obbligatorio soltanto per link existing.

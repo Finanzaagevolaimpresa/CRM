@@ -51,12 +51,13 @@ function syntheticIdentityKey(): LeadIdentityKeyFile {
   });
 }
 
-test('N13 manifest and release surfaces remain dormant with no consumer or activation', () => {
+test('N13 manifest remains dormant behind the explicit VNX-01 consumer gate', () => {
   assert.equal(LEAD_PROJECTION_MANIFEST.dormant, true);
-  assert.equal(LEAD_PROJECTION_MANIFEST.activation, 'NONE');
-  assert.deepEqual(LEAD_PROJECTION_MANIFEST.runtimeConsumers, []);
+  assert.equal(LEAD_PROJECTION_MANIFEST.activation, 'EXPLICIT_ENV_GATE');
+  assert.deepEqual(LEAD_PROJECTION_MANIFEST.runtimeConsumers, ['VNX01_LEAD_INTAKE_CONSUMER']);
   for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
     assert.match(readFileSync(path, 'utf8'), /LEAD_IDENTITY_KEY_FILE=""/u);
+    assert.match(readFileSync(path, 'utf8'), /VNX01_LEAD_INTAKE_CONSUMER_ENABLED="0"/u);
   }
   assert.match(readFileSync('.github/workflows/ci.yml', 'utf8'), /LEAD_IDENTITY_KEY_FILE: ""/u);
   const projection = readFileSync('src/lib/lead-projection.ts', 'utf8');
@@ -458,7 +459,8 @@ test('manual create precheck considers only exact active email and E.164 strong 
 
 test('manual resolution stays dormant, non-destructive and audit-minimized', () => {
   assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.dormant, true);
-  assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.activation, 'NONE');
+  assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.activation, 'PROTECTED_OPERATOR_UI');
+  assert.equal(LEAD_DUPLICATE_RESOLUTION_MANIFEST.operatorRoute, '/leads/duplicates');
   const resolution = readFileSync('src/lib/lead-duplicate-resolution.ts', 'utf8');
   assert.doesNotMatch(
     resolution,

@@ -28,8 +28,8 @@ import { maybeEnrollProjectedCommercialLead } from './commercial-lead-inbox';
 export const LEAD_PROJECTION_MANIFEST = Object.freeze({
   version: 1,
   dormant: true,
-  runtimeConsumers: Object.freeze([] as string[]),
-  activation: 'NONE' as const,
+  runtimeConsumers: Object.freeze(['VNX01_LEAD_INTAKE_CONSUMER'] as const),
+  activation: 'EXPLICIT_ENV_GATE' as const,
   normalizationVersion: LEAD_NORMALIZATION_VERSION,
   projectionHashDomain: 'fai.lead-projection.result.v1',
   candidateHashDomain: 'fai.lead-duplicate-candidate.snapshot.v1',

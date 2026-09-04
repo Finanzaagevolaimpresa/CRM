@@ -727,3 +727,31 @@ rimosso dall'immagine runtime.
 Contratto completo:
 [Admission, Claim & Lease Wiring Foundation v1](ai-orchestrator-admission-claim-lease-wiring-v1.md)
 e [ADR-0009](adr/ADR-0009-ai-orchestrator-admission-claim-lease-wiring-v1.md).
+
+## VNX-01 Lead Intake Operational Bridge v1
+
+L'immagine include l'entrypoint manuale `npm run vnx01:lead-intake`, ma Compose e `npm start` non
+lo invocano. Un deploy dormiente deve mantenere:
+
+```text
+VNX01_LEAD_INTAKE_CONSUMER_ENABLED=0
+VNX01_LEAD_INTAKE_LEASE_OWNER_ID=
+VNX01_LEAD_INTAKE_BATCH_SIZE=
+VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE=
+LEAD_IDENTITY_KEY_FILE=
+WEBSITE_LEAD_MODE=disabled
+SECURE_LEAD_GATEWAY_MODE=disabled
+COMMERCIAL_LEAD_INBOX_MODE=disabled
+```
+
+Non aggiungere un servizio Compose, systemd, timer, cron o scheduler per il consumer e non
+eseguirlo sul VPS senza un distinto mandato di activation. VNX-01 non modifica Prisma: il totale
+resta 43 e il deploy applicativo non richiede `prisma migrate deploy`.
+
+Prima di uno switch applicativo usare il preflight e il backup N05 già qualificati, registrare
+l'immagine N-1 immutabile e verificare dopo lo switch che il gate sia ancora `0`, il processo non
+esista, nessun evento sia stato reclamato, N14 enforced sia spento e le migration siano ancora
+43/43 senza drift. Il rollback è lo switch app-only all'immagine precedente; non comprende
+down-migration o scritture dati.
+
+Contratto completo: [VNX-01 Lead Intake Operational Bridge v1](vnx01-lead-intake-operational-bridge-v1.md).

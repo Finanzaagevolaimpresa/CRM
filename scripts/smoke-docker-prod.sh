@@ -108,6 +108,10 @@ AI_ORCHESTRATOR_WORKER_ENABLED=0
 AI_API_KEY=
 SECURE_LEAD_GATEWAY_MODE=disabled
 SECURE_LEAD_GATEWAY_KEYRING_FILE=
+VNX01_LEAD_INTAKE_CONSUMER_ENABLED=0
+VNX01_LEAD_INTAKE_LEASE_OWNER_ID=
+VNX01_LEAD_INTAKE_BATCH_SIZE=
+VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE=
 LEAD_IDENTITY_KEY_FILE=
 COMMERCIAL_LEAD_INBOX_MODE=disabled
 APP_ENV=production
@@ -164,8 +168,34 @@ compose build "$APP_SERVICE"
 SMOKE_CREATED="true"
 compose up -d postgres
 compose run --rm -T --entrypoint sh "$APP_SERVICE" -c \
-  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\"); let sharpPresent=true; try{require.resolve(\"sharp\")}catch(error){if(error.code!==\"MODULE_NOT_FOUND\")throw error;sharpPresent=false} if(sharpPresent)process.exit(1); const p=require(\"./package.json\"); if(p.scripts[\"ai:orchestrator:worker\"]!==\"tsx scripts/ai-orchestrator-worker.ts\") process.exit(1)" && ! grep -Eq "runtime-testing-composition|mock-execution-result-wiring|mock-handler-registry|consumeMockResult" scripts/ai-orchestrator-worker.ts src/lib/ai-orchestrator/worker-admission-claim-lease-process-v1.ts src/lib/ai-orchestrator/worker-runtime-adapter-v1.ts && ! find .next/server -type f -print0 | xargs -0 grep -El "createAiOrchestratorWorkerSyntheticTestingCompositionV1|consumeMockResult" | grep -q . && test ! -e node_modules/sharp && test ! -e node_modules/@img && test -z "$(find node_modules -type d \( -path "*/node_modules/sharp" -o -path "*/node_modules/@img" \) -print -quit)" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f scripts/ai-orchestrator-worker.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test -f src/lib/ai-orchestrator/dormant-worker-process-v1.ts && test -f src/lib/ai-orchestrator/worker-admission-claim-lease-process-v1.ts && test -f src/lib/ai-orchestrator/worker-admission-claim-lease-wiring-v1.ts && test -f src/lib/ai-orchestrator/worker-control-plane-authority-v1.ts && test -f src/lib/ai-orchestrator/worker-runtime-adapter-v1.ts && test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d " ")" = "$2" && test "${AI_PROVIDER:-}" = "mock" && test "${AI_ORCHESTRATOR_WORKER_ENABLED:-}" = "0" && test "${AI_EXTERNAL_PROVIDERS_ENABLED:-}" = "false" && test -z "${AI_ALLOWED_MODELS:-}" && test -w "$1"' \
+  'node -e "require.resolve(\"prisma\"); require.resolve(\"tsx\"); let sharpPresent=true; try{require.resolve(\"sharp\")}catch(error){if(error.code!==\"MODULE_NOT_FOUND\")throw error;sharpPresent=false} if(sharpPresent)process.exit(1); const p=require(\"./package.json\"); if(p.scripts[\"ai:orchestrator:worker\"]!==\"tsx scripts/ai-orchestrator-worker.ts\" || p.scripts[\"vnx01:lead-intake\"]!==\"tsx scripts/vnx01-lead-intake-consumer.ts\") process.exit(1)" && ! grep -Eq "runtime-testing-composition|mock-execution-result-wiring|mock-handler-registry|consumeMockResult" scripts/ai-orchestrator-worker.ts src/lib/ai-orchestrator/worker-admission-claim-lease-process-v1.ts src/lib/ai-orchestrator/worker-runtime-adapter-v1.ts && ! find .next/server -type f -print0 | xargs -0 grep -El "createAiOrchestratorWorkerSyntheticTestingCompositionV1|consumeMockResult" | grep -q . && test ! -e node_modules/sharp && test ! -e node_modules/@img && test -z "$(find node_modules -type d \( -path "*/node_modules/sharp" -o -path "*/node_modules/@img" \) -print -quit)" && test -f prisma/schema.prisma && test -f prisma/seed-production.ts && test -f scripts/bootstrap-admin.ts && test -f scripts/ai-orchestrator-worker.ts && test -f scripts/vnx01-lead-intake-consumer.ts && test -f src/lib/lead-intake-consumer.ts && test -f src/lib/lead-duplicate-review.ts && test -f src/lib/prisma.ts && test -f src/lib/ai-run-reliability.ts && test -f src/lib/ai-orchestrator/dormant-worker-process-v1.ts && test -f src/lib/ai-orchestrator/worker-admission-claim-lease-process-v1.ts && test -f src/lib/ai-orchestrator/worker-admission-claim-lease-wiring-v1.ts && test -f src/lib/ai-orchestrator/worker-control-plane-authority-v1.ts && test -f src/lib/ai-orchestrator/worker-runtime-adapter-v1.ts && test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d " ")" = "$2" && test "${AI_PROVIDER:-}" = "mock" && test "${AI_ORCHESTRATOR_WORKER_ENABLED:-}" = "0" && test "${VNX01_LEAD_INTAKE_CONSUMER_ENABLED:-}" = "0" && test "${AI_EXTERNAL_PROVIDERS_ENABLED:-}" = "false" && test -z "${AI_ALLOWED_MODELS:-}" && test -w "$1"' \
   sh "$DOCUMENTS_PATH" "$EXPECTED_MIGRATION_COUNT"
+
+VNX01_DISABLED_LOGS="$(docker run --rm \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  -e APP_ENV=production \
+  -e NODE_ENV=production \
+  -e VNX01_LEAD_INTAKE_CONSUMER_ENABLED=0 \
+  -e 'DATABASE_URL=postgresql://127.0.0.1:1/must-not-connect?schema=public' \
+  --entrypoint node \
+  "$SMOKE_APP_IMAGE" \
+  --import tsx scripts/vnx01-lead-intake-consumer.ts)" \
+  || fail "Disabled VNX-01 consumer did not exit successfully"
+printf '%s\n' "$VNX01_DISABLED_LOGS" | node -e '
+  const fs = require("node:fs");
+  const lines = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean);
+  if (lines.length !== 1) process.exit(1);
+  const row = JSON.parse(lines[0]);
+  if (JSON.stringify(Object.keys(row)) !== JSON.stringify(["event", "status"])) process.exit(1);
+  if (row.event !== "VNX01_CONSUMER_DISABLED" || row.status !== "DISABLED") process.exit(1);
+' || fail "Disabled VNX-01 log is not canonical"
+if printf '%s\n' "$VNX01_DISABLED_LOGS" | grep -Eqi 'postgresql|must-not-connect|database_url|secret|stack|payload|email|phone|token|hash'; then
+  fail "Disabled VNX-01 logs contain prohibited data"
+fi
 
 DORMANT_WORKER_CONTAINER="${COMPOSE_PROJECT_NAME}-dormant-worker"
 LOCKED_WORKER_CONTAINER="${COMPOSE_PROJECT_NAME}-locked-worker"
@@ -395,8 +425,8 @@ mapfile -t RUNNING_SERVICES < <(compose ps --services --status running | LC_ALL=
 if [[ "${#RUNNING_SERVICES[@]}" -ne 2 || "${RUNNING_SERVICES[0]}" != "app" || "${RUNNING_SERVICES[1]}" != "postgres" ]]; then
   fail "Only app and postgres may be running after production Compose startup"
 fi
-if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" --format '{{.Names}}' | grep -Eqi 'worker|orchestrator'; then
-  fail "Production Compose started an unauthorized worker or Orchestrator container"
+if docker ps --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" --format '{{.Names}}' | grep -Eqi 'worker|orchestrator|vnx01|consumer'; then
+  fail "Production Compose started an unauthorized worker, Orchestrator or VNX-01 consumer container"
 fi
 
-echo "Docker production smoke test completed: 43 migrations, dormant N12 gateway, N13 projection and N14 inbox registries, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."
+echo "Docker production smoke test completed: 43 migrations, dormant VNX-01/N12/N13/N14 paths, N04 privacy registries, production seed, app health, N03 report-only security headers, closed image optimizer, ai:reconcile, fail-closed worker gates, and cleanup succeeded for $COMPOSE_PROJECT_NAME."

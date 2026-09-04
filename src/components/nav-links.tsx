@@ -37,6 +37,7 @@ const sections: NavSection[] = [
     title: "Commerciale",
     items: [
       { label: "Lead e offerte", href: "/leads", requiredPermission: "lead.read" },
+      { label: "Revisione duplicati", href: "/leads/duplicates", requiredPermission: "lead.duplicate.resolve" },
       { label: "Offerte", href: "/commercial-offers", requiredPermission: "lead.read" },
       { label: "Contratti", href: "/contracts", requiredPermission: "contract.read" },
       { label: "Pagamenti", href: "/payments", requiredPermission: "payment.read" },
