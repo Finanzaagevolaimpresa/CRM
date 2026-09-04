@@ -38,6 +38,7 @@ privacy sono configurabili, ma devono anche rispettare la semantica vincolante N
 `DIRECT_MARKETING` / `CONSENT` / `CONSENT`. Un campo privacy mancante o un valore non censito blocca
 l'enqueue. Il rifiuto marketing è esplicito solo quando il campo esiste e il suo valore, incluso
 l'eventuale stringa vuota, è elencato in `denied_values`.
+La stringa vuota è vietata nelle configurazioni di acknowledgement e grant, anche dopo normalizzazione.
 
 I file chiave devono risolvere fuori da `ABSPATH`, essere file regolari non symlink, avere massimo 64
 byte e, su Unix, nessun permesso group/world. Il contenuto è esclusivamente il Base64 canonico di 32

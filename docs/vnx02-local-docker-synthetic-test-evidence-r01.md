@@ -50,11 +50,19 @@ trasporto finto; l'equivalenza della firma è verificata direttamente contro il 
 Le prove hanno individuato e corretto un deadlock nel precedente claim con UPDATE concorrente e una
 lettura errata dell'adapter wpdb. Il claim finale usa una transazione breve READ COMMITTED con
 SKIP LOCKED; la rete avviene dopo il commit. La suite include il comportamento di retry con key assenti.
+L'autocontrollo finale ha inoltre escluso stringhe vuote (anche dopo normalizzazione) dai valori di
+acknowledgement e consenso; lint, gli undici test PHP e il lifecycle WordPress del ZIP aggiornato
+sono stati rieseguiti con successo.
+
+Il full unit locale sul commit `da12dcf`, Windows/Node 24, ha riportato 500 PASS e 20 fallimenti nelle
+suite preesistenti non modificate. Questo esito non è presentato come verde: il gate completo della
+PR è la CI Linux/Node 22, che esegue anche PostgreSQL, build, smoke e restore. Lint e typecheck locali
+sono PASS. Non sono stati alterati i test preesistenti per adattarli all'host Windows.
 
 ## Pacchetto verificato
 
 `fai-secure-lead-connector-1.0.0.zip`, 14 entry, SHA-256:
-`643bd4db3449a5ae26760d114edb84fccb803950211aa6b10724a104608df65f`.
+`24067139601738fe6bc58f82fec9d5b00e41211499b1bad773de67c47c0be2e8`.
 
 Il ZIP è generato localmente in `dist/` (ignorata da Git); i sorgenti e il packager sono versionati.
 
@@ -62,10 +70,11 @@ Il ZIP è generato localmente in `dist/` (ignorata da Git); i sorgenti e il pack
 
 Tutti i nomi riportati hanno il prefisso `vnx02-20260904-mtne8bc2-`:
 
-- Container `php-probe`, `db-probe`, `php-tests`, `php-final`, `php-fixture`, `queue-tests`, `wp-install`
+- Container `php-probe`, `db-probe`, `php-tests`, `php-final`, `php-fixture`, `queue-tests`, `wp-install`,
+  `privacy-tests`, `privacy-install`
   rimossi automaticamente con `--rm`, anche dopo le prove inizialmente fallite.
-- Container `db` fermato e rimosso dopo verifica del nome e della label di sessione.
-- Rete interna `net` rimossa dopo il DB.
+- Container `db` e `privacy-db` fermati e rimossi dopo verifica del nome e della label di sessione.
+- Reti interne `net` e `privacy-net` rimosse dopo i rispettivi DB.
 - Nessun volume Docker creato; tutti i dati sintetici erano in tmpfs.
 
 Controllo finale: nessun container/rete con la label della sessione. Il container preesistente

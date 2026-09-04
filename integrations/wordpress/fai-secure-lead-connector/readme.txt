@@ -51,7 +51,8 @@ Every key file contains exactly the canonical Base64 encoding of 32 bytes, optio
 LF. On Unix it must be a regular non-symlink file with no group/world permission and must resolve
 outside ABSPATH. The plugin never prints its path or contents.
 
-The service checkbox is accepted only when its normalized value is in accepted_values. The marketing
+The service checkbox is accepted only when its normalized value is in accepted_values. Empty values
+are forbidden in accepted_values and granted_values, including after whitespace normalization. The marketing
 field must exist and its normalized value must be in exactly one of granted_values or denied_values;
 an unchecked field may be represented by the explicitly configured empty string. No decision is
 inferred from a missing field.

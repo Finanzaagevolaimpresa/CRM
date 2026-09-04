@@ -89,6 +89,13 @@ vnx02_test('configuration is default-off and rejects incomplete or semantically 
         ConnectorException::CONFIGURATION_INVALID,
         fn () => ConnectorConfig::fromArray($wrongPrivacy)
     );
+    $emptyAcknowledgement = vnx02_synthetic_config();
+    $emptyAcknowledgement['forms'][900001]['privacy']['service']['accepted_values'] = array('');
+    vnx02_throws(ConnectorException::CONFIGURATION_INVALID, fn () => ConnectorConfig::fromArray($emptyAcknowledgement));
+    $emptyConsent = vnx02_synthetic_config();
+    $emptyConsent['forms'][900001]['privacy']['marketing']['granted_values'] = array('');
+    $emptyConsent['forms'][900001]['privacy']['marketing']['denied_values'] = array('SYNTHETIC_MARKETING_DENIED');
+    vnx02_throws(ConnectorException::CONFIGURATION_INVALID, fn () => ConnectorConfig::fromArray($emptyConsent));
     $duplicateField = vnx02_synthetic_config();
     $duplicateField['forms'][900001]['privacy']['service']['field_id'] = 4;
     vnx02_throws(

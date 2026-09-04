@@ -319,13 +319,17 @@ final class ConnectorConfig
         );
         if ($kind === 'service') {
             $output['accepted_values'] = self::choices($value['accepted_values'] ?? null);
+            if (in_array('', $output['accepted_values'], true)) {
+                throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+            }
             $validSemantics = $output['purpose_code'] === 'SERVICE_REQUEST_FOLLOW_UP'
                 && $output['legal_basis_code'] === 'PRE_CONTRACTUAL_MEASURES'
                 && $output['evidence_kind'] === 'NOTICE_ACKNOWLEDGEMENT';
         } else {
             $output['granted_values'] = self::choices($value['granted_values'] ?? null);
             $output['denied_values'] = self::choices($value['denied_values'] ?? null);
-            if (array_intersect($output['granted_values'], $output['denied_values']) !== array()) {
+            if (in_array('', $output['granted_values'], true)
+                || array_intersect($output['granted_values'], $output['denied_values']) !== array()) {
                 throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
             }
             $validSemantics = $output['purpose_code'] === 'DIRECT_MARKETING'
