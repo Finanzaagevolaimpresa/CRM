@@ -209,7 +209,13 @@ async function main() {
     privacy: await db.privacyEvidenceReceipt.count(),
     attempts: await db.businessQueueAttempt.count(),
   };
-  assert.deepEqual(counts, expected);
+  assert.equal(counts.inbox, expected.inbox);
+  assert.equal(counts.receipts, expected.receipts);
+  assert.equal(counts.requests, expected.requests);
+  assert.equal(counts.leads, expected.leads);
+  assert.equal(counts.ledgers, expected.ledgers);
+  assert.equal(counts.privacy, expected.privacy);
+  assert.equal(counts.attempts, expected.attempts);
   assert.equal(await db.websiteLeadReceipt.count(), 0);
   assert.equal(await db.commercialLeadInboxItem.count(), 0);
   assert.equal(await db.commercialLeadSlaCycle.count(), 0);
@@ -230,8 +236,12 @@ async function main() {
 }
 
 void main()
-  .catch(() => {
-    process.stderr.write('VNX03_ASSERTION_FAILED\n');
+  .catch((error: unknown) => {
+    const stack = error instanceof Error ? error.stack ?? '' : '';
+    const line = /assert-state\.ts:(\d+):\d+/u.exec(stack)?.[1] ?? 'UNKNOWN';
+    const rawCheckpoint = process.env.VNX03_ASSERT_CHECKPOINT ?? '';
+    const checkpoint = /^[a-z_]+$/u.test(rawCheckpoint) ? rawCheckpoint : 'invalid';
+    process.stderr.write(`VNX03_ASSERTION_FAILED:${checkpoint}:LINE_${line}\n`);
     process.exitCode = 1;
   })
   .finally(async () => {
