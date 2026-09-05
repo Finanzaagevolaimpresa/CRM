@@ -211,24 +211,30 @@ compose_resources_created=true
   'npm run prisma:migrate:deploy && node --import tsx tests/vnx03/provision.ts'
 "${compose[@]}" up -d --wait --wait-timeout 180 crm gateway wordpress
 
-wp=("${compose[@]}" exec -T --user 33:33 -e HOME=/tmp wordpress wp --path=/var/www/html --quiet)
-"${wp[@]}" core install \
+wp=("${compose[@]}" exec -T --user 33:33 -e HOME=/tmp wordpress wp --path=/var/www/html)
+wp_quiet=("${wp[@]}" --quiet)
+"${wp_quiet[@]}" core install \
   --url="$VNX03_WORDPRESS_PUBLIC_URL" \
   --title='FAI VNX03 Synthetic' \
   --admin_user=vnx03_synthetic_admin \
   --admin_password="$VNX03_WORDPRESS_ADMIN_PASSWORD" \
   --admin_email=admin@vnx03.invalid \
   --skip-email
-"${wp[@]}" rewrite structure '/%postname%/' --hard
-[[ "$("${wp[@]}" option get permalink_structure)" == '/%postname%/' ]] \
+"${wp_quiet[@]}" rewrite structure '/%postname%/' --hard
+[[ "$("${wp_quiet[@]}" option get permalink_structure)" == '/%postname%/' ]] \
   || fail 'VNX03_WORDPRESS_REWRITE_MISMATCH'
+echo 'VNX03_WPFORMS_INSTALL_BEGIN'
 "${wp[@]}" plugin install /opt/vnx03/wpforms-lite.zip --activate
-"${wp[@]}" eval-file /opt/vnx03/setup-wordpress.php
+echo 'VNX03_WPFORMS_INSTALL_OK'
+"${wp_quiet[@]}" eval-file /opt/vnx03/setup-wordpress.php
+echo 'VNX03_CONNECTOR_INSTALL_BEGIN'
 "${wp[@]}" plugin install /opt/vnx03/fai-secure-lead-connector.zip --activate
+echo 'VNX03_CONNECTOR_INSTALL_OK'
+"${wp[@]}" plugin list --fields=name,status,version --format=table
 
-wordpress_version="$("${wp[@]}" core version)"
-wpforms_version="$("${wp[@]}" plugin get wpforms-lite --field=version)"
-connector_version="$("${wp[@]}" plugin get fai-secure-lead-connector --field=version)"
+wordpress_version="$("${wp_quiet[@]}" core version)"
+wpforms_version="$("${wp_quiet[@]}" plugin get wpforms-lite --field=version)"
+connector_version="$("${wp_quiet[@]}" plugin get fai-secure-lead-connector --field=version)"
 [[ "$wordpress_version" == '7.1' ]] || fail 'VNX03_WORDPRESS_VERSION_MISMATCH'
 [[ "$wpforms_version" == "$WPFORMS_VERSION" ]] || fail 'VNX03_WPFORMS_VERSION_MISMATCH'
 [[ "$connector_version" == '1.0.0' ]] || fail 'VNX03_CONNECTOR_VERSION_MISMATCH'
