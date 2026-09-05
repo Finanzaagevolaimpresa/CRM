@@ -61,7 +61,11 @@ def main():
         plain_prod = json.loads(docker.compose("fai-crm", ROOT, fixed, "config", "--format", "json", env_file=env))
         keys_prod = json.loads(docker.compose("fai-crm", ROOT, fixed + [ROOT / "docker-compose.prod.key-mounts.yml"],
                                              "config", "--format", "json", env_file=env))
+        print("N05_SYNTHETIC_COMPOSE_VERSION|" + docker.run("compose", "version", "--short").strip(), flush=True)
+        # Only fixed public mount metadata; never effective environment values.
+        print("N05_SYNTHETIC_MOUNT_MODEL|" + json.dumps(keys_prod["services"]["app"]["volumes"], sort_keys=True), flush=True)
         n05.validate_pair(plain_prod, keys_prod, "fai-crm", n05.PRODUCTION_KEY_ROOT)
+        print("N05_SYNTHETIC_PRODUCTION_MODEL_PASS", flush=True)
         n05.require(not n05.PRODUCTION_KEY_ROOT.exists(), "SYNTHETIC_RUNNER_CONTAINS_PRODUCTION_KEY_ROOT")
         # Distinct fixture identity. Never weaken or invoke the production guard
         # against this stack. Only identity/ports/host sources are substituted.
@@ -91,6 +95,7 @@ def main():
         initial["networks"]["default"].pop("external")
         initial_file = root / "initial.json"
         n05.freeze_model(docker, project, ROOT, initial, initial_file)
+        print("N05_SYNTHETIC_INITIAL_FREEZE_PASS", flush=True)
         created = True
         docker.compose(project, ROOT, [initial_file], "up", "-d", "--no-build", "--pull", "never")
         current_id = n05.app_id(docker, project)
