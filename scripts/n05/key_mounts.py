@@ -218,6 +218,17 @@ def validate_runtime(app, image, model, project, key_root, enabled):
     require((host.get("PortBindings") or {}) == expected_ports, "CURRENT_APP_PORTS_MISMATCH")
 
 
+def normalize_compose_model(model):
+    model = copy.deepcopy(model)
+    for service in model.get("services", {}).values():
+        for mount in service.get("volumes", []):
+            if mount.get("type") == "bind" and mount.get("bind") == {}:
+                # Compose 2.38 omits this false boolean when serializing. Write
+                # it explicitly into the frozen input; never rely on a default.
+                mount["bind"]["create_host_path"] = False
+    return model
+
+
 class Docker:
     def __init__(self, command=None, environment=None):
         self.command = command or ["docker", "--host", "unix:///var/run/docker.sock"]
@@ -238,13 +249,17 @@ class Docker:
                         "--env-file", str(env_file),
                         *[item for file in files for item in ("-f", str(file))], *args)
 
+    def model(self, project, root, files, env_file="/dev/null"):
+        return normalize_compose_model(json.loads(self.compose(project, root, files,
+                                       "config", "--format", "json", env_file=env_file)))
+
 
 def freeze_model(docker, project, root, model, destination):
     # config --format json already escapes dollars for replay. A second escape
     # would corrupt runtime values. Prove a fixed point before actual use.
     destination.write_text(canonical(model), encoding="utf-8")
     destination.chmod(0o600)
-    reread = json.loads(docker.compose(project, root, [destination], "config", "--format", "json"))
+    reread = docker.model(project, root, [destination])
     require(reread == model, "FROZEN_COMPOSE_MODEL_MISMATCH")
 
 
@@ -276,7 +291,7 @@ def recreate_app(docker, project, root, frozen, expected_model, image, approval,
     validate_provenance(docker.inspect(approval["image"], "image"), docker.inspect(before_id), approval)
     validate_runtime(docker.inspect(before_id), image, current_model, project, key_root, not enabled)
     before = persistent_snapshot(docker, project, postgres_id)
-    require(json.loads(docker.compose(project, root, [frozen], "config", "--format", "json")) == expected_model,
+    require(docker.model(project, root, [frozen]) == expected_model,
             "FROZEN_COMPOSE_CHANGED")
     docker.compose(project, root, [frozen], "up", "-d", "--no-deps", "--no-build",
                    "--pull", "never", "--force-recreate", "app")
@@ -339,6 +354,7 @@ def validate_tools(approval):
             "REMOTE_TOOLS_MAIN_MISMATCH")
     require(git("rev-parse", approval["image_source_commit"] + "^{tree}") == approval["image_source_tree"],
             "IMAGE_SOURCE_TREE_MISMATCH")
+    git("merge-base", "--is-ancestor", approval["image_source_commit"], approval["tools_commit"])
     require(re.fullmatch(r"fai-crm:pr[0-9]+-" + approval["image_source_commit"][:12], approval["image"]),
             "IMAGE_TAG_SOURCE_MISMATCH")
     # An old image is allowed ONLY when all its functional inputs are unchanged.
@@ -389,6 +405,9 @@ def production(action, approval_path):
     require(pwd.getpwuid(os.getuid()).pw_name == "faiadmin", "PRODUCTION_HOST_IDENTITY_MISMATCH")
     require(not any(os.environ.get(k) for k in ("DOCKER_HOST", "DOCKER_CONTEXT", "COMPOSE_PROFILES",
                                                "COMPOSE_ENV_FILES", "COMPOSE_FILE")), "AMBIENT_DOCKER_COMPOSE_OVERRIDE")
+    require(os.environ.get("CONFIRM_LEGACY_RESOURCE_IDENTITY") == "FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1",
+            "LEGACY_RESOURCE_BRIDGE_CONFIRMATION_MISMATCH")
+    require(os.environ.get("INCOMPATIBLE_PR_COUNT") == "0", "INCOMPATIBLE_PR_PRESENT")
     s = trusted_path(Path(approval_path))
     require(stat.S_IMODE(s.st_mode) == 0o600, "APPROVAL_FILE_PERMISSIONS")
     approval = load_json(approval_path)
@@ -415,8 +434,8 @@ def production(action, approval_path):
     require(info["Name"] == "fai-crm-prod-02" and info["OSType"] == "linux"
             and not any("rootless" in x or "userns" in x for x in info["SecurityOptions"]),
             "DOCKER_DAEMON_IDENTITY_MISMATCH")
-    ordinary = json.loads(docker.compose("fai-crm", REPO, fixed, "config", "--format", "json", env_file=env_file))
-    mounted = json.loads(docker.compose("fai-crm", REPO, fixed + [overlay], "config", "--format", "json", env_file=env_file))
+    ordinary = docker.model("fai-crm", REPO, fixed, env_file=env_file)
+    mounted = docker.model("fai-crm", REPO, fixed + [overlay], env_file=env_file)
     validate_pair(ordinary, mounted, "fai-crm", PRODUCTION_KEY_ROOT)
     current_id = app_id(docker, "fai-crm")
     app = docker.inspect(current_id)
@@ -446,7 +465,7 @@ def production(action, approval_path):
         "ENV_FILE": str(env_file), "APP_ORIGIN": "https://desk.finanzaagevolaimpresa.it",
         "APP_IMAGE": approval["image"], "EXPECTED_APP_IMAGE_ID": approval["image_id"],
         "POSTGRES_IMAGE": approval["postgres_image"], "BACKUP_RESOURCE_PROVENANCE": "authorized-legacy-compose-identity",
-        "CONFIRM_LEGACY_RESOURCE_IDENTITY": "FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1", "N05_POSTGRES_ID": postgres_id,
+        "CONFIRM_LEGACY_RESOURCE_IDENTITY": os.environ["CONFIRM_LEGACY_RESOURCE_IDENTITY"], "N05_POSTGRES_ID": postgres_id,
         "DOCKER_HOST": "unix:///var/run/docker.sock",
         "N05_CURRENT_APP_STATE": "running" if app["State"]["Running"] else "quiesced",
     }

@@ -58,9 +58,8 @@ def main():
             "POSTGRES_IMAGE": "postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685",
         })
         fixed = [ROOT / "docker-compose.prod.example.yml", ROOT / "docker-compose.prod.legacy-resources.yml"]
-        plain_prod = json.loads(docker.compose("fai-crm", ROOT, fixed, "config", "--format", "json", env_file=env))
-        keys_prod = json.loads(docker.compose("fai-crm", ROOT, fixed + [ROOT / "docker-compose.prod.key-mounts.yml"],
-                                             "config", "--format", "json", env_file=env))
+        plain_prod = docker.model("fai-crm", ROOT, fixed, env_file=env)
+        keys_prod = docker.model("fai-crm", ROOT, fixed + [ROOT / "docker-compose.prod.key-mounts.yml"], env_file=env)
         print("N05_SYNTHETIC_COMPOSE_VERSION|" + docker.run("compose", "version", "--short").strip(), flush=True)
         # Only fixed public mount metadata; never effective environment values.
         print("N05_SYNTHETIC_MOUNT_MODEL|" + json.dumps(keys_prod["services"]["app"]["volumes"], sort_keys=True), flush=True)
@@ -133,6 +132,22 @@ def main():
             if file.stat().st_uid != uid or file.stat().st_gid != gid:
                 n05.command(["sudo", "-n", "chown", f"{uid}:{gid}", str(file)])
         n05.validate_key_sources(keys, uid, gid)
+        # Native bind creation must refuse an absent source too. This disposable
+        # negative probe belongs only to the collision-checked synthetic project.
+        missing = keys / "absent-source.json"
+        try:
+            docker.run("create", "--name", project + "-missing",
+                       "--label", "com.docker.compose.project=" + project,
+                       "--network", "none", "--read-only", "--cap-drop", "ALL",
+                       "--security-opt", "no-new-privileges=true", "--user", f"{uid}:{gid}",
+                       "--mount", f"type=bind,src={missing},dst=/run/secrets/absent.json,readonly",
+                       image_tag, "true")
+            raise RuntimeError("DOCKER_CREATED_MISSING_BIND_SOURCE")
+        except n05.Denied:
+            n05.require(not missing.exists(), "DOCKER_CREATED_SOURCE_PATH")
+            n05.require(not docker.run("ps", "-aq", "--filter", "name=^/" + project + "-missing$").strip(),
+                        "DOCKER_CREATED_MISSING_BIND_CONTAINER")
+        print("N05_SYNTHETIC_MISSING_BIND_REJECTED_PASS", flush=True)
         enabled = copy.deepcopy(plain)
         for key, (name, target) in n05.KEYS.items():
             enabled["services"]["app"]["environment"][key] = target

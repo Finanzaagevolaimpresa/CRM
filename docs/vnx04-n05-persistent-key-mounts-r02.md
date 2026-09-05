@@ -20,6 +20,11 @@ actions are preflight, enable and restore, each taking one private approval JSON
 path. The example under deploy/n05 is intentionally invalid and cannot activate
 anything.
 
+The existing explicit legacy bridge confirmation
+CONFIRM_LEGACY_RESOURCE_IDENTITY=FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1 and the
+verified INCOMPATIBLE_PR_COUNT=0 are also mandatory; the wrapper does not supply
+these operator confirmations automatically.
+
 This entry point is fixed to the production host, operating user, repository,
 local Docker daemon, canonical Compose file and certified legacy override. It
 does not offer synthetic/remote/profile bypasses or an arbitrary override path.
@@ -87,6 +92,11 @@ private digest approved for each variant binds all resolved values. The actual
 up command uses this frozen file, not a newly substituted environment file.
 The frozen file is mode 0600 in a mode 0700 temporary directory and is removed on
 exit. Neither it nor subprocess output is published.
+
+Compose 2.38 serializes a false create_host_path as an empty bind object. The
+normalizer restores an explicit false in the frozen file before use, and never
+normalizes true away. A native daemon negative probe verifies that an absent
+source is refused without creating its path or a container.
 
 Preflight is read-only. It checks current runtime image, user, environment,
 mounts, ports, network, health, legacy resource identity and key-source metadata,

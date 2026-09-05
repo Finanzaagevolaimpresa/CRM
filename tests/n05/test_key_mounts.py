@@ -90,8 +90,8 @@ class ModelTests(unittest.TestCase):
         class ComposeResult:
             def __init__(self, result):
                 self.result = result
-            def compose(self, *_args):
-                return n05.canonical(self.result)
+            def model(self, *_args):
+                return self.result
         with tempfile.TemporaryDirectory() as temp:
             file = Path(temp) / "frozen.json"
             n05.freeze_model(ComposeResult(original), "synthetic", ROOT, original, file)
@@ -105,6 +105,16 @@ class ModelTests(unittest.TestCase):
             file.write_text('{"image": "one", "image": "two"}')
             with self.assertRaises(n05.Denied):
                 n05.load_json(file)
+
+    def test_omitted_false_is_written_explicitly_but_true_is_never_normalized_away(self):
+        plain, mounted, project = models()
+        mounted["services"]["app"]["volumes"][-1]["bind"] = {}
+        normalized = n05.normalize_compose_model(mounted)
+        self.assertIs(normalized["services"]["app"]["volumes"][-1]["bind"]["create_host_path"], False)
+        n05.validate_pair(plain, normalized, project, Path("/private"))
+        mounted["services"]["app"]["volumes"][-1]["bind"] = {"create_host_path": True}
+        with self.assertRaises(n05.Denied):
+            n05.validate_pair(plain, n05.normalize_compose_model(mounted), project, Path("/private"))
 
     def test_production_entrypoint_has_no_synthetic_profile_or_environment_bypass(self):
         result = subprocess.run(["python3", str(ROOT / "scripts/n05/key_mounts.py"), "enable", "/missing"],
