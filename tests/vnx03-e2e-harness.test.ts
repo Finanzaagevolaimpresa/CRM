@@ -42,6 +42,13 @@ test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   assert.match(compose, /\$\{COMPOSE_PROJECT_NAME[^\n]*\}-harness:/u);
   assert.match(compose, /127\.0\.0\.1:\$\{VNX03_WP_PORT/u);
   assert.match(compose, /internal: true/u);
+  assert.match(compose, /browser-proxy:[\s\S]*browser-ingress/u);
+  assert.match(compose, /com\.docker\.network\.bridge\.host_binding_ipv4: "127\.0\.0\.1"/u);
+  const wordpressService = compose.slice(
+    compose.indexOf('  wordpress:'),
+    compose.indexOf('  browser-proxy:'),
+  );
+  assert.doesNotMatch(wordpressService, /browser-ingress/u);
   assert.doesNotMatch(compose, /privileged:/u);
   assert.doesNotMatch(compose, /docker\.sock/u);
   assert.doesNotMatch(compose, /SECURE_LEAD_GATEWAY_MODE: disabled/u);

@@ -34,17 +34,20 @@ sanitizzati della CI.
 
 ## Isolamento
 
-Ogni esecuzione crea un progetto Compose univoco `fai-vnx03-*`, una rete `internal: true` e volumi
-nuovi con la label `VNX-03-SYNTHETIC`. I database ammessi sono soltanto
+Ogni esecuzione crea un progetto Compose univoco `fai-vnx03-*`, una rete applicativa
+`internal: true`, un ingresso browser dedicato e volumi nuovi con la label
+`VNX-03-SYNTHETIC`. I database ammessi sono soltanto
 `fai_vnx03_e2e` e `fai_vnx03_wordpress`; il database PostgreSQL riceve il commento sentinella
 `FAI_CRM_VNX03_EPHEMERAL_TEST_ONLY_V1` prima delle fixture applicative.
 
-L'unica porta pubblicata è WordPress HTTP su `127.0.0.1`, necessaria al browser del runner. CRM,
-gateway TLS, PostgreSQL e MySQL non pubblicano porte. Nessun container è privilegiato e nessun
-socket Docker è montato. Il codice sotto test entra nelle immagini durante la build; non è montato
-in scrittura. Una CA privata effimera viene aggiunta soltanto al trust store del container
-WordPress. cURL conserva `CURLOPT_SSL_VERIFYPEER=true`, `CURLOPT_SSL_VERIFYHOST=2`, protocollo solo
-HTTPS e nessun redirect.
+L'unica porta pubblicata è il proxy HTTP minimale del harness su `127.0.0.1`, necessario al browser
+del runner. Il proxy inoltra soltanto `GET`, `HEAD` e `POST` verso il nome fisso `wordpress` sulla
+rete applicativa interna; è l'unico servizio collegato anche alla rete d'ingresso. WordPress, CRM,
+gateway TLS, PostgreSQL e MySQL restano esclusivamente sulla rete interna e non pubblicano porte.
+Nessun container è privilegiato e nessun socket Docker è montato. Il codice sotto test entra nelle
+immagini durante la build; non è montato in scrittura. Una CA privata effimera viene aggiunta
+soltanto al trust store del container WordPress. cURL conserva `CURLOPT_SSL_VERIFYPEER=true`,
+`CURLOPT_SSL_VERIFYHOST=2`, protocollo solo HTTPS e nessun redirect.
 
 Il preflight registra contesto Docker locale, progetto, rete, database ed endpoint prima delle
 scritture applicative. Il cleanup usa il nome progetto appena creato e rimuove soltanto i relativi

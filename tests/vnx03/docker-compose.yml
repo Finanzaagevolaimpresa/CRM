@@ -223,8 +223,6 @@ services:
       - control:/run/vnx03-control
     networks:
       - vnx03
-    ports:
-      - "127.0.0.1:${VNX03_WP_PORT:?VNX03_WP_PORT_REQUIRED}:80"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1/wp-admin/install.php"]
       interval: 3s
@@ -232,6 +230,35 @@ services:
       retries: 40
     depends_on:
       mysql:
+        condition: service_healthy
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  browser-proxy:
+    image: ${COMPOSE_PROJECT_NAME}-harness:${VNX03_SOURCE_COMMIT}
+    command: ["node", "tests/vnx03/http-browser-proxy.mjs"]
+    environment:
+      VNX03_BROWSER_PROXY_CONFIRMED: "1"
+    networks:
+      - vnx03
+      - browser-ingress
+    ports:
+      - "127.0.0.1:${VNX03_WP_PORT:?VNX03_WP_PORT_REQUIRED}:8080"
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - const n=require('node:net').connect(8080,'127.0.0.1',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      wordpress:
         condition: service_healthy
     labels:
       it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
@@ -259,5 +286,11 @@ volumes:
 networks:
   vnx03:
     internal: true
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  browser-ingress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
     labels:
       it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC

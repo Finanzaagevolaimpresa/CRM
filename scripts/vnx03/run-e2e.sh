@@ -97,7 +97,8 @@ node -e '
     dockerContext: process.env.VNX03_DOCKER_CONTEXT,
     dockerEndpoint: process.env.VNX03_DOCKER_ENDPOINT,
     composeProject: process.env.COMPOSE_PROJECT_NAME,
-    network: `${process.env.COMPOSE_PROJECT_NAME}_vnx03`,
+    applicationNetwork: `${process.env.COMPOSE_PROJECT_NAME}_vnx03`,
+    browserIngressNetwork: `${process.env.COMPOSE_PROJECT_NAME}_browser-ingress`,
     databases: ["fai_vnx03_e2e", "fai_vnx03_wordpress"],
     endpoints: {
       browser: process.env.VNX03_WORDPRESS_PUBLIC_URL,
@@ -107,6 +108,8 @@ node -e '
       mysql: "mysql:3306"
     },
     runtimeNetworkInternal: true,
+    applicationComponentsOnBrowserIngress: false,
+    browserIngressLoopbackOnly: true,
     productionContact: false
   };
   writeFileSync(process.argv[1], `${JSON.stringify(output, null, 2)}\n`, { mode: 0o600 });
@@ -209,7 +212,9 @@ compose_resources_created=true
 "${compose[@]}" run --rm -T materials bash tests/vnx03/init-materials.sh
 "${compose[@]}" run --rm -T harness bash -lc \
   'npm run prisma:migrate:deploy && node --import tsx tests/vnx03/provision.ts'
-"${compose[@]}" up -d --wait --wait-timeout 180 crm gateway wordpress
+"${compose[@]}" up -d --wait --wait-timeout 180 crm gateway wordpress browser-proxy
+curl --fail --silent --show-error --max-time 10 \
+  "$VNX03_WORDPRESS_PUBLIC_URL/wp-admin/install.php" >/dev/null
 
 wp=("${compose[@]}" exec -T --user 33:33 -e HOME=/tmp wordpress wp --path=/var/www/html)
 wp_quiet=("${wp[@]}" --quiet)
