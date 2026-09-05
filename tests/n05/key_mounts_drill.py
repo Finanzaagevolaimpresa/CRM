@@ -79,7 +79,7 @@ def main():
         app["environment"].update({
             "APP_ENV": "test", "FAI_ENVIRONMENT": "vnx04-synthetic",
             "FAI_ENVIRONMENT_SENTINEL": "FAI_CRM_VNX04_SYNTHETIC_KEYS_V1",
-            "N05_SYNTHETIC_$_CANARY": "value-${MUST_NOT_INTERPOLATE}-$literal",
+            "N05_SYNTHETIC_LITERAL_CANARY": "value-$${MUST_NOT_INTERPOLATE}-$$literal",
         })
         app.pop("ports", None)
         app["healthcheck"]["test"] = ["CMD", "node", "-e",
@@ -88,7 +88,7 @@ def main():
         plain["services"]["postgres"]["healthcheck"].update(interval="2s", timeout="2s", retries=30)
         initial = copy.deepcopy(plain)
         initial["volumes"] = {name: {"name": project + "_" + name} for name in plain["volumes"]}
-        initial["networks"] = {"default": {"name": project + "_default"}}
+        initial["networks"]["default"].pop("external")
         initial_file = root / "initial.json"
         n05.freeze_model(docker, project, ROOT, initial, initial_file)
         created = True

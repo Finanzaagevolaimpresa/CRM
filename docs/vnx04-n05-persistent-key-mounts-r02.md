@@ -80,8 +80,9 @@ The verifier compares complete effective models: the only allowed difference is
 the two fixed app mounts and the two existing key references. Extra services,
 resources, writable mounts, privilege additions and open intake/AI gates fail.
 
-A private JSON representation freezes the selected effective model. Dollar signs
-are escaped, and Compose re-reads it to prove exact equivalence before use; the
+A private JSON representation freezes the selected effective model. Compose's
+literal-dollar escaping is preserved, and Compose re-reads the representation
+to prove exact equivalence before use; the
 private digest approved for each variant binds all resolved values. The actual
 up command uses this frozen file, not a newly substituted environment file.
 The frozen file is mode 0600 in a mode 0700 temporary directory and is removed on

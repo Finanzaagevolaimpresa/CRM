@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import pwd
 import re
 import socket
 import stat
@@ -131,7 +130,12 @@ def validate_pair(ordinary, mounted, project, key_root):
         for logical in ("crm_documents", "postgres_data"):
             require(model["volumes"][logical] == {"external": True, "name": f"{project}_{logical}"},
                     "COMPOSE_VOLUME_NOT_EXACT_EXTERNAL")
-        require(model["networks"]["default"] == {"external": True, "name": f"{project}_default"},
+        network = copy.deepcopy(model["networks"]["default"])
+        # Compose 2.x emits an empty IPAM object for an external network.
+        # Accept only that empty normalization; never an IPAM configuration.
+        if network.get("ipam") == {}:
+            network.pop("ipam")
+        require(network == {"external": True, "name": f"{project}_default"},
                 "COMPOSE_NETWORK_NOT_EXACT_EXTERNAL")
         for service in model["services"].values():
             for forbidden in ("privileged", "cap_add", "devices", "device_cgroup_rules", "pid", "ipc",
@@ -158,7 +162,7 @@ def validate_pair(ordinary, mounted, project, key_root):
     for key, (name, target) in KEYS.items():
         expected_app["environment"][key] = target
         expected_app["volumes"].append({
-            "type": "bind", "source": str(Path(key_root) / name), "target": target,
+            "type": "bind", "source": (Path(key_root) / name).as_posix(), "target": target,
             "read_only": True, "bind": {"create_host_path": False},
         })
     # Compose sorts the volume sequence by target.
@@ -188,7 +192,9 @@ def env_map(values):
 def validate_runtime(app, image, model, project, key_root, enabled):
     service = model["services"]["app"]
     expected_env = env_map(image["Config"].get("Env"))
-    expected_env.update({k: str(v) for k, v in service["environment"].items()})
+    # Compose's config JSON is a replayable representation; literal dollars
+    # are doubled by its serializer. Docker receives one unescaped level.
+    expected_env.update({k: str(v).replace("$$", "$") for k, v in service["environment"].items()})
     require(env_map(app["Config"].get("Env")) == expected_env, "CURRENT_APP_ENVIRONMENT_MISMATCH")
     for key in ("Cmd", "Entrypoint", "User"):
         require(app["Config"].get(key) == image["Config"].get(key), "CURRENT_APP_EXECUTION_MISMATCH")
@@ -210,16 +216,6 @@ def validate_runtime(app, image, model, project, key_root, enabled):
             "HostIp": port.get("host_ip", ""), "HostPort": str(port["published"]),
         })
     require((host.get("PortBindings") or {}) == expected_ports, "CURRENT_APP_PORTS_MISMATCH")
-
-
-def escape_compose(value):
-    if isinstance(value, str):
-        return value.replace("$", "$$")
-    if isinstance(value, list):
-        return [escape_compose(item) for item in value]
-    if isinstance(value, dict):
-        return {key: escape_compose(item) for key, item in value.items()}
-    return value
 
 
 class Docker:
@@ -244,7 +240,9 @@ class Docker:
 
 
 def freeze_model(docker, project, root, model, destination):
-    destination.write_text(canonical(escape_compose(model)), encoding="utf-8")
+    # config --format json already escapes dollars for replay. A second escape
+    # would corrupt runtime values. Prove a fixed point before actual use.
+    destination.write_text(canonical(model), encoding="utf-8")
     destination.chmod(0o600)
     reread = json.loads(docker.compose(project, root, [destination], "config", "--format", "json"))
     require(reread == model, "FROZEN_COMPOSE_MODEL_MISMATCH")
@@ -254,11 +252,12 @@ def persistent_snapshot(docker, project, postgres_id):
     db = docker.inspect(postgres_id)
     require(db["State"]["Running"] and db["State"].get("Health", {}).get("Status") == "healthy",
             "POSTGRES_NOT_HEALTHY")
+    network = docker.inspect(f"{project}_default", "network")
     return {
         "postgres": {key: db[key] for key in ("Id", "Image", "Created", "Mounts")},
         "volumes": [docker.inspect(f"{project}_{name}", "volume") for name in ("crm_documents", "postgres_data")],
         # Endpoints change on app recreation; the network identity must not.
-        "network": {key: docker.inspect(f"{project}_default", "network")[key]
+        "network": {key: network[key]
                     for key in ("Id", "Name", "Created", "Driver", "Scope", "Labels", "Options", "IPAM")},
     }
 
@@ -384,8 +383,10 @@ def recovery_gate(approval):
 def production(action, approval_path):
     require(action in {"preflight", "enable", "restore"}, "ACTION_INVALID")
     require(os.environ.get("N05_KEY_MOUNTS_OPERATION") == "FAI_CRM_N05_SAME_IMAGE_KEYS_V1", "EXPLICIT_MODE_REQUIRED")
-    require(REPO == Path("/opt/fai-crm") and socket.gethostname() == "fai-crm-prod-02"
-            and pwd.getpwuid(os.getuid()).pw_name == "faiadmin", "PRODUCTION_HOST_IDENTITY_MISMATCH")
+    require(sys.platform == "linux" and REPO == Path("/opt/fai-crm")
+            and socket.gethostname() == "fai-crm-prod-02", "PRODUCTION_HOST_IDENTITY_MISMATCH")
+    import pwd
+    require(pwd.getpwuid(os.getuid()).pw_name == "faiadmin", "PRODUCTION_HOST_IDENTITY_MISMATCH")
     require(not any(os.environ.get(k) for k in ("DOCKER_HOST", "DOCKER_CONTEXT", "COMPOSE_PROFILES",
                                                "COMPOSE_ENV_FILES", "COMPOSE_FILE")), "AMBIENT_DOCKER_COMPOSE_OVERRIDE")
     s = trusted_path(Path(approval_path))
@@ -449,7 +450,9 @@ def production(action, approval_path):
         "DOCKER_HOST": "unix:///var/run/docker.sock",
         "N05_CURRENT_APP_STATE": "running" if app["State"]["Running"] else "quiesced",
     }
-    command(["bash", "-c", 'set -Eeuo pipefail; source /opt/fai-crm/scripts/n05/lib.sh; '
+    command(["bash", "-c", 'set -Eeuo pipefail; '
+             'docker() { command docker --host unix:///var/run/docker.sock "$@"; }; '
+             'source /opt/fai-crm/scripts/n05/lib.sh; '
              'n05_assert_environment_identity production; '
              'n05_assert_authorized_legacy_compose_resources "$N05_POSTGRES_ID" "$N05_CURRENT_APP_STATE"'], guard_env)
     source_inventory = validate_key_sources(PRODUCTION_KEY_ROOT, uid, gid) if action != "restore" else None

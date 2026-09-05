@@ -75,11 +75,29 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(n05.Denied):
             n05.validate_pair(plain, mounted, project, Path("/private"))
 
-    def test_frozen_model_preserves_dollars_without_ambient_substitution(self):
-        original = {"environment": {"SYNTHETIC": "canary-${NOT_AN_OVERRIDE}-$value-$$"}}
-        escaped = n05.escape_compose(original)
-        self.assertEqual(escaped["environment"]["SYNTHETIC"], "canary-$${NOT_AN_OVERRIDE}-$$value-$$$$")
-        self.assertEqual(original["environment"]["SYNTHETIC"], "canary-${NOT_AN_OVERRIDE}-$value-$$")
+    def test_compose_empty_ipam_is_accepted_but_configuration_is_not(self):
+        plain, mounted, project = models()
+        for model in (plain, mounted):
+            model["networks"]["default"]["ipam"] = {}
+        n05.validate_pair(plain, mounted, project, Path("/private"))
+        for model in (plain, mounted):
+            model["networks"]["default"]["ipam"] = {"config": [{"subnet": "10.2.0.0/16"}]}
+        with self.assertRaises(n05.Denied):
+            n05.validate_pair(plain, mounted, project, Path("/private"))
+
+    def test_frozen_model_rejects_a_changed_compose_round_trip(self):
+        original = {"services": {"app": {"environment": {"SYNTHETIC": "canary-$${NOT_AN_OVERRIDE}"}}}}
+        class ComposeResult:
+            def __init__(self, result):
+                self.result = result
+            def compose(self, *_args):
+                return n05.canonical(self.result)
+        with tempfile.TemporaryDirectory() as temp:
+            file = Path(temp) / "frozen.json"
+            n05.freeze_model(ComposeResult(original), "synthetic", ROOT, original, file)
+            self.assertEqual(n05.load_json(file), original)
+            with self.assertRaisesRegex(n05.Denied, "FROZEN_COMPOSE_MODEL_MISMATCH"):
+                n05.freeze_model(ComposeResult({}), "synthetic", ROOT, original, file)
 
     def test_duplicate_approval_keys_are_denied(self):
         with tempfile.TemporaryDirectory() as temp:
