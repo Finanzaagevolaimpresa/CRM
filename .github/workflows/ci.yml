@@ -380,7 +380,6 @@ jobs:
     timeout-minutes: 60
     env:
       VNX03_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-      VNX03_EVIDENCE_DIR: ${{ runner.temp }}/vnx03-evidence
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@v4
@@ -434,6 +433,7 @@ jobs:
       - name: Run isolated authentic WPForms qualification
         env:
           VNX03_SYNTHETIC_E2E_CONFIRMED: "1"
+          VNX03_EVIDENCE_DIR: ${{ runner.temp }}/vnx03-evidence
         run: npm run test:vnx03:e2e
 
       - name: Upload sanitized VNX-03 evidence
