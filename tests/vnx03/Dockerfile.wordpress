@@ -50,6 +50,7 @@ RUN printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms-lite.zip | sha256sum 
   && printf '%s  %s\n' "$WP_CLI_SHA256" /usr/local/bin/wp | sha256sum -c - \
   && unzip -t /opt/vnx03/wpforms-lite.zip >/dev/null \
   && unzip -t /opt/vnx03/fai-secure-lead-connector.zip >/dev/null \
+  && chmod 0644 /opt/vnx03/wpforms-lite.zip /opt/vnx03/fai-secure-lead-connector.zip \
   && chmod 0755 /usr/local/bin/wp /usr/local/bin/vnx03-wordpress-entrypoint.sh \
   && printf '%s\n' \
     'curl.cainfo="/etc/ssl/certs/ca-certificates.crt"' \
