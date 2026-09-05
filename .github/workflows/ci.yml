@@ -372,3 +372,75 @@ jobs:
         if: always()
         working-directory: .
         run: git worktree remove --force ../vnx00a-tracked
+
+  vnx03-wpforms-https-e2e:
+    name: VNX-03 authentic WPForms HTTPS end-to-end
+    needs: build-context-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VNX03_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source head and protected scope
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          if [[ -n "$VNX03_BASE_SHA" ]] \
+            && git cat-file -e "$VNX03_BASE_SHA^{commit}" 2>/dev/null \
+            && git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
+              tests/vnx03 tests/vnx03-e2e-harness.test.ts scripts/vnx03 \
+              docs/vnx03-wpforms-https-end-to-end-qualification-r01.md \
+              | grep -q .; then
+            if git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
+              prisma/schema.prisma prisma/migrations src \
+              Dockerfile.prod.example docker-compose.prod.example.yml \
+              .env.example .env.production.example .env.staging.example \
+              | grep -q .; then
+              echo "VNX-03 must not change CRM runtime, Prisma, migrations, or production configuration" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked test dependencies and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Verify fail-closed harness preflight
+        run: |
+          bash -n scripts/vnx03/run-e2e.sh tests/vnx03/init-materials.sh tests/vnx03/wordpress-entrypoint.sh
+          set +e
+          preflight_output="$(bash scripts/vnx03/run-e2e.sh --preflight-only 2>&1)"
+          preflight_status=$?
+          set -e
+          test "$preflight_status" -ne 0
+          grep -Fq 'VNX03_SYNTHETIC_CONFIRMATION_MISSING' <<<"$preflight_output"
+          VNX03_SYNTHETIC_E2E_CONFIRMED=1 bash scripts/vnx03/run-e2e.sh --preflight-only
+
+      - name: Run isolated authentic WPForms qualification
+        env:
+          VNX03_SYNTHETIC_E2E_CONFIRMED: "1"
+          VNX03_EVIDENCE_DIR: ${{ runner.temp }}/vnx03-evidence
+        run: npm run test:vnx03:e2e
+
+      - name: Upload sanitized VNX-03 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnx03-synthetic-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vnx03-evidence
+          if-no-files-found: error
+          retention-days: 14

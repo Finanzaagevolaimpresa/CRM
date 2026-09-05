@@ -1,0 +1,83 @@
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+
+FROM ${NODE_IMAGE} AS build
+
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
+RUN printf '%s\n' "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' \
+  && printf '%s\n' "$SOURCE_TREE" | grep -Eq '^[0-9a-f]{40}$' \
+  || { echo 'VNX03_SOURCE_IDENTITY_INVALID' >&2; exit 1; }
+
+WORKDIR /app
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV SECURITY_HEADERS_MODE=report-only
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY prisma ./prisma
+RUN npm run prisma:generate
+
+COPY next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json ./
+COPY public ./public
+COPY scripts ./scripts
+COPY src ./src
+RUN npm run build
+
+FROM build AS harness
+
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
+COPY integrations ./integrations
+COPY tests ./tests
+COPY tools ./tools
+
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
+  it.finanzaagevolaimpresa.source-tree=${SOURCE_TREE} \
+  it.finanzaagevolaimpresa.qualification=VNX-03-SYNTHETIC
+
+CMD ["node", "--version"]
+
+FROM ${NODE_IMAGE} AS crm
+
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+
+WORKDIR /app
+ENV NODE_ENV=production
+ENV APP_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT} \
+  it.finanzaagevolaimpresa.source-tree=${SOURCE_TREE} \
+  it.finanzaagevolaimpresa.qualification=VNX-03-SYNTHETIC
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --system --gid 1001 nodejs \
+  && useradd --system --uid 1001 --gid nodejs nextjs
+
+COPY --from=build --chown=nextjs:nodejs /app/package.json ./package.json
+COPY --from=build --chown=nextjs:nodejs /app/package-lock.json ./package-lock.json
+COPY --from=build --chown=nextjs:nodejs /app/node_modules ./node_modules
+COPY --from=build --chown=nextjs:nodejs /app/prisma ./prisma
+COPY --from=build --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=build --chown=nextjs:nodejs /app/src ./src
+COPY --from=build --chown=nextjs:nodejs /app/public ./public
+COPY --from=build --chown=nextjs:nodejs /app/.next ./.next
+
+RUN npm prune --omit=dev \
+  && rm -rf node_modules/sharp node_modules/@img
+
+USER nextjs
+EXPOSE 3000
+CMD ["npm", "run", "start"]

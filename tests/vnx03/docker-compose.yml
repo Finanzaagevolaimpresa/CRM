@@ -1,0 +1,296 @@
+name: ${COMPOSE_PROJECT_NAME:?VNX03_PROJECT_REQUIRED}
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_DB: fai_vnx03_e2e
+      POSTGRES_USER: fai_vnx03_e2e
+      POSTGRES_PASSWORD: ${VNX03_POSTGRES_PASSWORD:?VNX03_POSTGRES_PASSWORD_REQUIRED}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - vnx03
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fai_vnx03_e2e -d fai_vnx03_e2e"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  mysql:
+    image: mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+    environment:
+      MYSQL_DATABASE: fai_vnx03_wordpress
+      MYSQL_USER: fai_vnx03_wordpress
+      MYSQL_PASSWORD: ${VNX03_MYSQL_PASSWORD:?VNX03_MYSQL_PASSWORD_REQUIRED}
+      MYSQL_ROOT_PASSWORD: ${VNX03_MYSQL_ROOT_PASSWORD:?VNX03_MYSQL_ROOT_PASSWORD_REQUIRED}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - vnx03
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  harness:
+    image: ${COMPOSE_PROJECT_NAME:?VNX03_PROJECT_REQUIRED}-harness:${VNX03_SOURCE_COMMIT:?VNX03_SOURCE_COMMIT_REQUIRED}
+    build:
+      context: .
+      dockerfile: tests/vnx03/Dockerfile.crm
+      target: harness
+      args:
+        SOURCE_COMMIT: ${VNX03_SOURCE_COMMIT}
+        SOURCE_TREE: ${VNX03_SOURCE_TREE:?VNX03_SOURCE_TREE_REQUIRED}
+    environment:
+      DATABASE_URL: postgresql://fai_vnx03_e2e:${VNX03_POSTGRES_PASSWORD}@postgres:5432/fai_vnx03_e2e?schema=public
+      APP_ENV: test
+      NODE_ENV: test
+      VNX03_SYNTHETIC_E2E_CONFIRMED: "1"
+      VNX01_LEAD_INTAKE_CONSUMER_ENABLED: "1"
+      VNX01_LEAD_INTAKE_LEASE_OWNER_ID: 00000000-0000-4000-8000-000000030001
+      VNX01_LEAD_INTAKE_BATCH_SIZE: "1"
+      VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE: "10"
+      LEAD_IDENTITY_KEY_FILE: /run/secrets/n13-identity.json
+      WEBSITE_LEAD_MODE: disabled
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      FEATURE_AI_WORKER_ENABLED: "false"
+      FEATURE_AI_DISPATCH_ENABLED: "false"
+      FEATURE_AI_EGRESS_ENABLED: "false"
+      AI_ORCHESTRATOR_WORKER_ENABLED: "0"
+      AI_EXTERNAL_PROVIDERS_ENABLED: "false"
+      AI_ALLOWED_MODELS: ""
+      AI_PROVIDER: mock
+    volumes:
+      - secrets:/run/secrets:ro
+      - control:/run/vnx03-control
+      - gateway-evidence:/run/vnx03-evidence
+    networks:
+      - vnx03
+    user: "1001:1001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  materials:
+    image: ${COMPOSE_PROJECT_NAME}-harness:${VNX03_SOURCE_COMMIT}
+    environment:
+      VNX03_MATERIALS_CONFIRMED: "1"
+    volumes:
+      - secrets:/run/secrets
+      - control:/run/vnx03-control
+      - gateway-evidence:/run/vnx03-evidence
+    networks:
+      - vnx03
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  crm:
+    image: ${COMPOSE_PROJECT_NAME}-crm:${VNX03_SOURCE_COMMIT}
+    build:
+      context: .
+      dockerfile: tests/vnx03/Dockerfile.crm
+      target: crm
+      args:
+        SOURCE_COMMIT: ${VNX03_SOURCE_COMMIT}
+        SOURCE_TREE: ${VNX03_SOURCE_TREE}
+    environment:
+      DATABASE_URL: postgresql://fai_vnx03_e2e:${VNX03_POSTGRES_PASSWORD}@postgres:5432/fai_vnx03_e2e?schema=public
+      AUTH_SECRET: ${VNX03_AUTH_SECRET:?VNX03_AUTH_SECRET_REQUIRED}
+      AUTH_COOKIE_NAME: fai_vnx03_session
+      INTERNAL_SESSION_MODE: legacy
+      PRIVILEGED_ACCESS_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://crm:3000
+      FEATURE_INTEGRATIONS_ENABLED: "true"
+      FEATURE_CUSTOMER_PORTAL_ENABLED: "false"
+      FEATURE_PAYMENTS_ENABLED: "false"
+      FEATURE_AI_WORKER_ENABLED: "false"
+      FEATURE_AI_DISPATCH_ENABLED: "false"
+      FEATURE_AI_EGRESS_ENABLED: "false"
+      AI_PROVIDER: mock
+      AI_ORCHESTRATOR_WORKER_ENABLED: "0"
+      AI_EXTERNAL_PROVIDERS_ENABLED: "false"
+      AI_ALLOWED_MODELS: ""
+      SECURE_LEAD_GATEWAY_MODE: enforced
+      SECURE_LEAD_GATEWAY_KEYRING_FILE: /run/secrets/n12-keyring.json
+      VNX01_LEAD_INTAKE_CONSUMER_ENABLED: "0"
+      LEAD_IDENTITY_KEY_FILE: ""
+      WEBSITE_LEAD_MODE: disabled
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - secrets:/run/secrets:ro
+    networks:
+      - vnx03
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  gateway:
+    image: ${COMPOSE_PROJECT_NAME}-harness:${VNX03_SOURCE_COMMIT}
+    command: ["node", "tests/vnx03/tls-gateway.mjs"]
+    environment:
+      VNX03_TLS_GATEWAY_CONFIRMED: "1"
+      VNX03_GATEWAY_UPSTREAM_HOST: crm
+      VNX03_GATEWAY_UPSTREAM_PORT: "3000"
+    volumes:
+      - secrets:/run/vnx03-secrets:ro
+      - control:/run/vnx03-control:ro
+      - gateway-evidence:/run/vnx03-evidence
+    networks:
+      vnx03:
+        aliases:
+          - gateway.vnx03.test
+          - wrong-host.vnx03.test
+          - untrusted-gateway.vnx03.test
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - const n=require('node:net').connect(8443,'127.0.0.1',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      crm:
+        condition: service_healthy
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  wordpress:
+    image: ${COMPOSE_PROJECT_NAME}-wordpress:${VNX03_SOURCE_COMMIT}
+    build:
+      context: .
+      dockerfile: tests/vnx03/Dockerfile.wordpress
+      args:
+        WPFORMS_SHA256: ${VNX03_WPFORMS_SHA256:?VNX03_WPFORMS_SHA256_REQUIRED}
+        WP_CLI_SHA256: ${VNX03_WP_CLI_SHA256:?VNX03_WP_CLI_SHA256_REQUIRED}
+        CONNECTOR_SHA256: ${VNX03_CONNECTOR_SHA256:?VNX03_CONNECTOR_SHA256_REQUIRED}
+    environment:
+      WORDPRESS_DB_HOST: mysql:3306
+      WORDPRESS_DB_USER: fai_vnx03_wordpress
+      WORDPRESS_DB_PASSWORD: ${VNX03_MYSQL_PASSWORD}
+      WORDPRESS_DB_NAME: fai_vnx03_wordpress
+      WORDPRESS_CONFIG_EXTRA: require '/opt/vnx03/wordpress-config.php';
+      VNX03_WORDPRESS_PUBLIC_URL: ${VNX03_WORDPRESS_PUBLIC_URL:?VNX03_WORDPRESS_PUBLIC_URL_REQUIRED}
+      WORDPRESS_AUTH_KEY: ${VNX03_WORDPRESS_AUTH_KEY:?VNX03_WORDPRESS_AUTH_KEY_REQUIRED}
+      WORDPRESS_SECURE_AUTH_KEY: ${VNX03_WORDPRESS_SECURE_AUTH_KEY:?VNX03_WORDPRESS_SECURE_AUTH_KEY_REQUIRED}
+      WORDPRESS_LOGGED_IN_KEY: ${VNX03_WORDPRESS_LOGGED_IN_KEY:?VNX03_WORDPRESS_LOGGED_IN_KEY_REQUIRED}
+      WORDPRESS_NONCE_KEY: ${VNX03_WORDPRESS_NONCE_KEY:?VNX03_WORDPRESS_NONCE_KEY_REQUIRED}
+      WORDPRESS_AUTH_SALT: ${VNX03_WORDPRESS_AUTH_SALT:?VNX03_WORDPRESS_AUTH_SALT_REQUIRED}
+      WORDPRESS_SECURE_AUTH_SALT: ${VNX03_WORDPRESS_SECURE_AUTH_SALT:?VNX03_WORDPRESS_SECURE_AUTH_SALT_REQUIRED}
+      WORDPRESS_LOGGED_IN_SALT: ${VNX03_WORDPRESS_LOGGED_IN_SALT:?VNX03_WORDPRESS_LOGGED_IN_SALT_REQUIRED}
+      WORDPRESS_NONCE_SALT: ${VNX03_WORDPRESS_NONCE_SALT:?VNX03_WORDPRESS_NONCE_SALT_REQUIRED}
+    volumes:
+      - wordpress-data:/var/www/html
+      - secrets:/run/vnx03-secrets:ro
+      - control:/run/vnx03-control
+    networks:
+      - vnx03
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/wp-admin/install.php"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    depends_on:
+      mysql:
+        condition: service_healthy
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+  browser-proxy:
+    image: ${COMPOSE_PROJECT_NAME}-harness:${VNX03_SOURCE_COMMIT}
+    command: ["node", "tests/vnx03/http-browser-proxy.mjs"]
+    environment:
+      VNX03_BROWSER_PROXY_CONFIRMED: "1"
+    networks:
+      - vnx03
+      - browser-ingress
+    ports:
+      - "127.0.0.1:${VNX03_WP_PORT:?VNX03_WP_PORT_REQUIRED}:8080"
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - const n=require('node:net').connect(8080,'127.0.0.1',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+volumes:
+  postgres-data:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  mysql-data:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  wordpress-data:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  secrets:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  control:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  gateway-evidence:
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+
+networks:
+  vnx03:
+    internal: true
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC
+  browser-ingress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
+    labels:
+      it.finanzaagevolaimpresa.qualification: VNX-03-SYNTHETIC

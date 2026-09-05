@@ -6,6 +6,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
     "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
+    "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
     "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit --incremental false",
@@ -34,6 +35,7 @@
     "tsx": "^4.19.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
