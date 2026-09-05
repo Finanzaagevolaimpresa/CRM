@@ -154,17 +154,35 @@ async function verifyProjection(checkpoint: string) {
     assert.equal(lead.source, 'N10:WORDPRESS:VNX03_SYNTHETIC_WPFORMS:v1');
     assert.equal(lead.requestedAmount?.mul(100).toNumber(), expected.requestedMinorUnits);
 
-    const evidence = await db.privacyEvidenceReceipt.findMany({
+    const ledger = await db.leadProjectionLedger.findFirstOrThrow({
       where: { leadId: lead.id },
+      select: { inboxEventId: true },
+    });
+    const evidence = await db.privacyEvidenceReceipt.findMany({
+      where: { businessInboxEventId: ledger.inboxEventId },
       orderBy: { purposeCode: 'asc' },
-      select: { purposeCode: true, evidenceKind: true, decision: true },
+      select: {
+        purposeCode: true,
+        evidenceKind: true,
+        decision: true,
+        leadId: true,
+        websiteLeadReceiptId: true,
+      },
     });
     assert.deepEqual(evidence, [
-      { purposeCode: 'DIRECT_MARKETING', evidenceKind: 'CONSENT', decision: expected.marketing },
+      {
+        purposeCode: 'DIRECT_MARKETING',
+        evidenceKind: 'CONSENT',
+        decision: expected.marketing,
+        leadId: null,
+        websiteLeadReceiptId: null,
+      },
       {
         purposeCode: 'SERVICE_REQUEST_FOLLOW_UP',
         evidenceKind: 'NOTICE_ACKNOWLEDGEMENT',
         decision: 'ACKNOWLEDGED',
+        leadId: null,
+        websiteLeadReceiptId: null,
       },
     ]);
   }
