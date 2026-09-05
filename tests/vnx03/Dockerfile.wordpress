@@ -1,0 +1,41 @@
+FROM wordpress:7.1-php8.4-apache@sha256:b8f37de278183840a09f5a4b5bf5ec9f09177a9984d2fe5cc072b4388128bd9d
+
+ARG WPFORMS_SHA256
+ARG WP_CLI_SHA256
+ARG CONNECTOR_SHA256
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libcurl4-openssl-dev \
+    libicu-dev \
+    libonig-dev \
+    openssl \
+    unzip \
+  && docker-php-ext-install -j"$(nproc)" curl intl mbstring \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY wpforms-lite.zip /opt/vnx03/wpforms-lite.zip
+COPY wp-cli.phar /usr/local/bin/wp
+COPY fai-secure-lead-connector.zip /opt/vnx03/fai-secure-lead-connector.zip
+COPY wordpress-config.php /opt/vnx03/wordpress-config.php
+COPY setup-wordpress.php /opt/vnx03/setup-wordpress.php
+COPY wp-state.php /opt/vnx03/wp-state.php
+COPY wordpress-entrypoint.sh /usr/local/bin/vnx03-wordpress-entrypoint.sh
+
+RUN printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms-lite.zip | sha256sum -c - \
+  && printf '%s  %s\n' "$WP_CLI_SHA256" /usr/local/bin/wp | sha256sum -c - \
+  && printf '%s  %s\n' "$CONNECTOR_SHA256" /opt/vnx03/fai-secure-lead-connector.zip | sha256sum -c - \
+  && unzip -t /opt/vnx03/wpforms-lite.zip >/dev/null \
+  && unzip -t /opt/vnx03/fai-secure-lead-connector.zip >/dev/null \
+  && chmod 0755 /usr/local/bin/wp /usr/local/bin/vnx03-wordpress-entrypoint.sh \
+  && printf '%s\n' \
+    'curl.cainfo="/etc/ssl/certs/ca-certificates.crt"' \
+    'openssl.cafile="/etc/ssl/certs/ca-certificates.crt"' \
+    > /usr/local/etc/php/conf.d/vnx03-synthetic-ca.ini \
+  && php -r 'foreach (["curl", "intl", "json", "mbstring", "mysqli", "sodium"] as $extension) { if (!extension_loaded($extension)) { fwrite(STDERR, "VNX03_PHP_EXTENSION_MISSING\n"); exit(1); } }' \
+  && php /usr/local/bin/wp --info >/dev/null
+
+ENTRYPOINT ["/usr/local/bin/vnx03-wordpress-entrypoint.sh"]
+CMD ["apache2-foreground"]
