@@ -212,6 +212,29 @@ class ProvenanceTests(unittest.TestCase):
 
 
 
+
+class RuntimeTests(unittest.TestCase):
+    def test_certified_document_bind_is_accepted_and_socket_bind_is_denied(self):
+        plain, _, project = models()
+        image = {"Config": {"Env": [], "User": "nextjs", "Cmd": ["npm", "run", "start"], "Entrypoint": None}}
+        app = {
+            "Config": {"Env": [key + "=" + value for key, value in plain["services"]["app"]["environment"].items()],
+                       "User": "nextjs", "Cmd": image["Config"]["Cmd"], "Entrypoint": None},
+            "HostConfig": {"Binds": [project + "_crm_documents:/var/lib/fai-crm/documents:rw"]},
+            "Mounts": [{"Destination": "/var/lib/fai-crm/documents", "Type": "volume",
+                        "Name": project + "_crm_documents", "RW": True}],
+            "NetworkSettings": {"Networks": {project + "_default": {}}},
+        }
+        n05.validate_runtime(app, image, plain, project, Path("/private"), False)
+        app["HostConfig"]["Binds"].append("/var/run/docker.sock:/var/run/docker.sock:ro")
+        with self.assertRaisesRegex(n05.Denied, "CURRENT_APP_BINDS_MISMATCH"):
+            n05.validate_runtime(app, image, plain, project, Path("/private"), False)
+        app["HostConfig"]["Binds"] = []
+        app["HostConfig"]["SecurityOpt"] = ["seccomp=unconfined"]
+        with self.assertRaisesRegex(n05.Denied, "CURRENT_APP_AUTHORITY_MISMATCH"):
+            n05.validate_runtime(app, image, plain, project, Path("/private"), False)
+
+
 class ToolGateTests(unittest.TestCase):
     def test_ci_identity_cannot_be_replaced_by_another_head(self):
         approval = {key: "" for key in n05.APPROVAL_KEYS}

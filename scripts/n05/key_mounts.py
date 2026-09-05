@@ -200,7 +200,16 @@ def validate_runtime(app, image, model, project, key_root, enabled):
         require(app["Config"].get(key) == image["Config"].get(key), "CURRENT_APP_EXECUTION_MISMATCH")
     host = app["HostConfig"]
     require(not host.get("Privileged") and not host.get("CapAdd") and not host.get("Devices")
-            and not host.get("GroupAdd") and not host.get("Binds"), "CURRENT_APP_AUTHORITY_MISMATCH")
+            and not host.get("DeviceRequests") and not host.get("GroupAdd")
+            and host.get("PidMode", "") != "host" and host.get("IpcMode", "") != "host"
+            and all(option in {"no-new-privileges", "no-new-privileges=true"}
+                    for option in host.get("SecurityOpt") or []), "CURRENT_APP_AUTHORITY_MISMATCH")
+    # Compose 2.x may send the certified named volume through the legacy Binds
+    # API. Bind-file keys must use Mounts (no implicit host-path creation).
+    document_bind = f"{project}_crm_documents:/var/lib/fai-crm/documents"
+    require(len(host.get("Binds") or []) <= 1
+            and all(bind in {document_bind, document_bind + ":rw"} for bind in host.get("Binds") or []),
+            "CURRENT_APP_BINDS_MISMATCH")
     expected_mounts = {"/var/lib/fai-crm/documents": ("volume", f"{project}_crm_documents", True)}
     if enabled:
         expected_mounts.update({target: ("bind", str(Path(key_root) / name), False)

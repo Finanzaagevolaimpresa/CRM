@@ -135,18 +135,17 @@ def main():
         # Native bind creation must refuse an absent source too. This disposable
         # negative probe belongs only to the collision-checked synthetic project.
         missing = keys / "absent-source.json"
-        try:
-            docker.run("create", "--name", project + "-missing",
+        missing_result = subprocess.run(docker.command + ["create", "--name", project + "-missing",
                        "--label", "com.docker.compose.project=" + project,
                        "--network", "none", "--read-only", "--cap-drop", "ALL",
                        "--security-opt", "no-new-privileges=true", "--user", f"{uid}:{gid}",
                        "--mount", f"type=bind,src={missing},dst=/run/secrets/absent.json,readonly",
-                       image_tag, "true")
-            raise RuntimeError("DOCKER_CREATED_MISSING_BIND_SOURCE")
-        except n05.Denied:
-            n05.require(not missing.exists(), "DOCKER_CREATED_SOURCE_PATH")
-            n05.require(not docker.run("ps", "-aq", "--filter", "name=^/" + project + "-missing$").strip(),
-                        "DOCKER_CREATED_MISSING_BIND_CONTAINER")
+                       image_tag, "true"], env=docker.env, capture_output=True, text=True, timeout=30, check=False)
+        n05.require(missing_result.returncode != 0 and "bind source path does not exist" in missing_result.stderr.lower(),
+                    "MISSING_BIND_NOT_DENIED_AS_EXPECTED")
+        n05.require(not missing.exists(), "DOCKER_CREATED_SOURCE_PATH")
+        n05.require(not docker.run("ps", "-aq", "--filter", "name=^/" + project + "-missing$").strip(),
+                    "DOCKER_CREATED_MISSING_BIND_CONTAINER")
         print("N05_SYNTHETIC_MISSING_BIND_REJECTED_PASS", flush=True)
         enabled = copy.deepcopy(plain)
         for key, (name, target) in n05.KEYS.items():
@@ -162,21 +161,24 @@ def main():
         n05.freeze_model(docker, project, ROOT, plain, ordinary_file)
         # Wrong image/source/configuration must fail before a new app is created.
         bad = approval | {"image_source_tree": "0" * 40}
-        for candidate in (bad, approval | {"image_id": "sha256:" + "0" * 64}):
+        for candidate, code in ((bad, "IMAGE_PROVENANCE_MISMATCH"),
+                                (approval | {"image_id": "sha256:" + "0" * 64}, "SAME_IMAGE_ID_MISMATCH")):
             try:
                 n05.recreate_app(docker, project, ROOT, mounted_file, enabled, image, candidate, keys,
                                   uid, gid, postgres_id, True, current_id, plain)
                 raise RuntimeError("INCOHERENT_PROVENANCE_ACCEPTED")
-            except n05.Denied:
+            except n05.Denied as error:
+                n05.require(str(error) == code, "UNEXPECTED_PROVENANCE_REJECTION")
                 n05.require(n05.app_id(docker, project) == current_id, "NEGATIVE_TEST_MUTATED_APP")
         tampered = copy.deepcopy(enabled)
-        tampered["services"]["app"]["volumes"][-1]["read_only"] = False
+        next(m for m in tampered["services"]["app"]["volumes"] if m["type"] == "bind")["source"] = str(keys / "unexpected.json")
         n05.freeze_model(docker, project, ROOT, tampered, mounted_file)
         try:
             n05.recreate_app(docker, project, ROOT, mounted_file, enabled, image, approval, keys,
                               uid, gid, postgres_id, True, current_id, plain)
             raise RuntimeError("TAMPERED_CONFIG_ACCEPTED")
-        except n05.Denied:
+        except n05.Denied as error:
+            n05.require(str(error) == "FROZEN_COMPOSE_CHANGED", "UNEXPECTED_CONFIGURATION_REJECTION")
             n05.require(n05.app_id(docker, project) == current_id, "NEGATIVE_TEST_MUTATED_APP")
         n05.freeze_model(docker, project, ROOT, enabled, mounted_file)
         enabled_id = n05.recreate_app(docker, project, ROOT, mounted_file, enabled, image, approval, keys,
