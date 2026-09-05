@@ -11,6 +11,7 @@ import {
   getAiOrchestratorAdminControlSnapshot,
   listAiOrchestratorAdminPolicyRevisions,
   mutateAiOrchestratorAdminControlPolicy,
+  type AiOrchestratorAdminControlCommand,
 } from '../../src/lib/ai-orchestrator/admin-control-plane-v1';
 import {
   AI_ORCHESTRATOR_ADMIN_CONTROL_TARGETS,
@@ -179,16 +180,120 @@ function scopePolicyFor(
   });
 }
 
+interface AdminAuditRow {
+  id: string;
+  actorId: string | null;
+  event: string;
+  entityType: string | null;
+  entityId: string | null;
+  before: unknown;
+  after: Record<string, unknown>;
+}
+
+const auditRequestHashes = new Map<string, Set<string>>();
+
+async function independentRequestHash(command: AiOrchestratorAdminControlCommand) {
+  const scoped = command.operationCode === 'SET_SCOPE_POLICY';
+  const emergency = command.operationCode === 'EMERGENCY_STOP';
+  const identity = {
+    schemaVersion: 1,
+    domain: 'AI_ORCHESTRATOR_ADMIN_CONTROL_REQUEST',
+    actorUserId: command.actorUserId,
+    requestId: command.requestId,
+    scopeType: scoped ? command.policy.scopeType : 'GLOBAL',
+    scopeCode: scoped ? command.policy.scopeCode : 'global',
+    expectedVersion: emergency ? null : command.expectedVersion,
+    expectedRevisionHash: emergency ? null : command.expectedRevisionHash,
+    operationCode: command.operationCode,
+    reasonCode: command.reasonCode,
+    reason: command.reason,
+    confirmed: command.confirmed,
+  };
+  const policyHash = emergency
+    ? Prisma.sql`"ai_orchestrator_admin_emergency_intent_hash_v1"()`
+    : Prisma.sql`"ai_orchestrator_admin_policy_hash_v1"(${JSON.stringify(command.policy)}::JSONB)`;
+  // Independent SQL canonicalization of the submitted command. Do not derive
+  // the selector from an audit row, the TS request-hash builder or N04 redaction.
+  const [row] = await db().$queryRaw<Array<{ hash: string }>>(Prisma.sql`
+    SELECT "ai_orchestrator_admin_request_hash_v1"(
+      ${JSON.stringify(identity)}::JSONB
+      || JSONB_BUILD_OBJECT('requestedPolicyHash', ${policyHash})
+    ) AS "hash"
+  `);
+  return row.hash;
+}
+
+async function physicalAuditRows() {
+  return db().$queryRaw<AdminAuditRow[]>(Prisma.sql`
+    SELECT "id", "actorId", "event", "entityType", "entityId", "before", "after"
+    FROM "AuditLog" ORDER BY "createdAt", "id"
+  `);
+}
+
+function assertSingleCommandAudit(
+  rows: AdminAuditRow[],
+  expected: Pick<AdminAuditRow, 'actorId' | 'event' | 'entityId' | 'after'>,
+) {
+  assert.equal(rows.length, 1, 'Exactly one physical audit event is required');
+  const [row] = rows;
+  assert.equal(row.actorId, expected.actorId);
+  assert.equal(row.event, expected.event);
+  assert.equal(row.entityType, 'AiOrchestratorAdminPolicyRevision');
+  assert.equal(row.entityId, expected.entityId);
+  for (const [key, value] of Object.entries(expected.after)) {
+    assert.deepEqual(row.after[key], value, `Independent audit field: ${key}`);
+  }
+}
+
+// Only used around sequential calls. Race tests keep the real concurrent API.
+// The unfiltered physical delta catches extra/wrongly correlated events that
+// a request-hash-only SELECT could otherwise omit.
+async function mutateWithAudit(client: PrismaClient, command: AiOrchestratorAdminControlCommand) {
+  const requestHash = await independentRequestHash(command);
+  const hashes = auditRequestHashes.get(command.requestId) ?? new Set<string>();
+  hashes.add(requestHash);
+  auditRequestHashes.set(command.requestId, hashes);
+  const before = new Set((await physicalAuditRows()).map(({ id }) => id));
+  let result: Awaited<ReturnType<typeof mutateAiOrchestratorAdminControlPolicy>>;
+  try {
+    result = await mutateAiOrchestratorAdminControlPolicy(client, command);
+  } catch (error) {
+    assert.equal((await physicalAuditRows()).filter(({ id }) => !before.has(id)).length, 0);
+    throw error;
+  }
+  const delta = (await physicalAuditRows()).filter(({ id }) => !before.has(id));
+  if (result.ok && result.replayed) {
+    assert.equal(delta.length, 0, 'An identical replay must not append another audit');
+    return result;
+  }
+  const scopeType = command.operationCode === 'SET_SCOPE_POLICY' ? command.policy.scopeType : 'GLOBAL';
+  const scopeCode = command.operationCode === 'SET_SCOPE_POLICY' ? command.policy.scopeCode : 'global';
+  assertSingleCommandAudit(delta, {
+    actorId: command.actorUserId,
+    event: result.ok
+      ? command.operationCode === 'EMERGENCY_STOP'
+        ? 'ai_orchestrator_emergency_stop_activated' : 'ai_orchestrator_control_policy_changed'
+      : result.code === 'CAS_MISMATCH'
+        ? 'ai_orchestrator_control_cas_conflict' : 'ai_orchestrator_control_change_blocked',
+    entityId: result.ok ? result.revision.id : `${scopeType}:${scopeCode}`,
+    after: {
+      requestHash,
+      operationCode: command.operationCode,
+      scopeType,
+      scopeCode,
+      ...(result.ok ? { version: result.revision.version } : { rejectionCode: result.code }),
+    },
+  });
+  return result;
+}
+
 async function auditRowsForRequest(requestId: string) {
-  return db().$queryRaw<Array<{
-    id: string;
-    event: string;
-    before: unknown;
-    after: unknown;
-  }>>(Prisma.sql`
-    SELECT "id", "event", "before", "after"
+  const hashes = auditRequestHashes.get(requestId);
+  assert.ok(hashes?.size, 'Every audit lookup must have an independently registered command');
+  return db().$queryRaw<AdminAuditRow[]>(Prisma.sql`
+    SELECT "id", "actorId", "event", "entityType", "entityId", "before", "after"
     FROM "AuditLog"
-    WHERE "after" ->> 'requestId' = ${requestId}
+    WHERE "after" ->> 'requestHash' IN (${Prisma.join([...hashes])})
     ORDER BY "createdAt", "id"
   `);
 }
@@ -519,7 +624,7 @@ test('global mutation usa CAS, audit atomico, replay idempotente e collision det
   expanded.emergencyStopEngaged = false;
   expanded.globalKillSwitch = false;
   expanded.limits.dailyJobLimit = 1;
-  const requestId = randomUUID();
+  const requestId = '01987654-abcd-4abc-8def-abcdefabcdef';
   const command = {
     actorUserId: adminUser.id,
     requestId,
@@ -532,7 +637,7 @@ test('global mutation usa CAS, audit atomico, replay idempotente e collision det
     policy: expanded,
   };
 
-  const result = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), command));
+  const result = mutationSucceeded(await mutateWithAudit(db(), command));
   assert.equal(result.replayed, false);
   assert.equal(result.revision.version, 2);
   assert.equal(result.revision.previousRevisionHash, genesis.revisionHash);
@@ -567,20 +672,20 @@ test('global mutation usa CAS, audit atomico, replay idempotente e collision det
     operationCode: 'SET_GLOBAL_POLICY',
     policyHash: result.revision.policyHash,
     requestHash: result.revision.requestHash,
-    requestId,
+    requestId: '[REDACTED:PERSONAL]-abcd-4abc-8def-abcdefabcdef',
     revisionHash: result.revision.revisionHash,
     scopeCode: 'global',
     scopeType: 'GLOBAL',
     version: result.revision.version,
   });
 
-  const replay = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), command));
+  const replay = mutationSucceeded(await mutateWithAudit(db(), command));
   assert.equal(replay.replayed, true);
   assert.equal(replay.revision.revisionHash, result.revision.revisionHash);
   assert.equal(await db().aiOrchestratorAdminPolicyRevision.count({ where: { requestId } }), 1);
   assert.equal((await auditRowsForRequest(requestId)).length, 1);
 
-  const collision = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const collision = await mutateWithAudit(db(), {
     ...command,
     reason: 'Contenuto differente associato alla stessa chiave idempotente.',
   });
@@ -592,7 +697,7 @@ test('global mutation usa CAS, audit atomico, replay idempotente e collision det
   assert.equal((await auditRowsForRequest(requestId)).length, 2);
 
   const staleRequestId = randomUUID();
-  const stale = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const stale = await mutateWithAudit(db(), {
     ...command,
     requestId: staleRequestId,
   });
@@ -604,17 +709,132 @@ test('global mutation usa CAS, audit atomico, replay idempotente e collision det
   assert.equal((await auditRowsForRequest(staleRequestId)).length, 1);
 
   const invalidReasonRequest = randomUUID();
-  await assert.rejects(mutateAiOrchestratorAdminControlPolicy(db(), {
+  await assert.rejects(mutateWithAudit(db(), {
     ...command,
     requestId: invalidReasonRequest,
     expectedVersion: result.revision.version,
     expectedRevisionHash: result.revision.revisionHash,
     reason: 'Cambio con token segreto non ammesso dal contratto.',
-  }));
+  }), { name: 'ZodError' });
   assert.equal(await db().aiOrchestratorAdminPolicyRevision.count({
     where: { requestId: invalidReasonRequest },
   }), 0);
   assert.equal((await auditRowsForRequest(invalidReasonRequest)).length, 0);
+});
+
+test('N04: UUID numerici redatti restano correlati tramite identità indipendente del comando', {
+  skip: !runDbTests,
+}, async () => {
+  const actor = await db().user.create({
+    data: {
+      id: 'vnx02-audit-probe-admin',
+      email: 'audit-probe@vnx02.invalid',
+      name: 'Synthetic audit probe',
+      passwordHash: TEST_PASSWORD_HASH,
+      role: 'admin',
+      active: true,
+    },
+  });
+  const genesis = await db().aiOrchestratorAdminPolicyRevision.findFirstOrThrow({
+    where: { scopeType: 'GLOBAL', scopeCode: 'global', version: 1 },
+  });
+  const policy = structuredClone(globalPolicy(genesis));
+  policy.limits.dailyJobLimit = 1;
+  const fixtures = [
+    {
+      requestId: 'abcdefab-cdef-4abc-8def-abcdeabcdefa',
+      persisted: 'abcdefab-cdef-4abc-8def-abcdeabcdefa',
+      originalCount: 1,
+      requestHash: '6e9a22566f8e5c4f98ede0cec35550a10bb431408871cfa60454134c5fb1b128',
+    },
+    {
+      requestId: '01234567-abcd-4abc-8def-abcdefabcdef',
+      persisted: '[REDACTED:PERSONAL]-abcd-4abc-8def-abcdefabcdef',
+      originalCount: 0,
+      requestHash: '0779cd1cc58eebbda97b181f1c9724ad567cd83965aa89810a5cf0dbabc163bd',
+    },
+    {
+      requestId: '07654321-abcd-4abc-8def-abcdefabcdef',
+      persisted: '[REDACTED:PERSONAL]-abcd-4abc-8def-abcdefabcdef',
+      originalCount: 0,
+      requestHash: 'a7d12c9106d39b151d98b9278b78a1a4fe004bb5304010620ea471c4a77deec8',
+    },
+    {
+      requestId: 'abcdefab-0123-4567-8901-abcdefabcdef',
+      persisted: 'abcdefab-[REDACTED:PERSONAL]-abcdefabcdef',
+      originalCount: 0,
+      requestHash: 'b52fbe2055227e9bcddd6d0ca71b8c4866381a1389b9cc22b66b123fff956754',
+    },
+  ];
+  const physicalIds = new Set<string>();
+  for (const fixture of fixtures) {
+    const command: AiOrchestratorAdminControlCommand = {
+      actorUserId: actor.id,
+      requestId: fixture.requestId,
+      operationCode: 'SET_GLOBAL_POLICY',
+      expectedVersion: 1,
+      expectedRevisionHash: genesis.revisionHash,
+      reasonCode: 'LIMIT_CHANGE',
+      reason: 'Verifica sintetica deterministica della correlazione audit.',
+      confirmed: true,
+      policy,
+    };
+    // Golden vectors, cross-checked with SQL on three fresh databases. No
+    // sanitizer is called to manufacture the expected redacted identifier.
+    assert.equal(await independentRequestHash(command), fixture.requestHash);
+    const result = await mutateWithAudit(db(), command);
+    assert.deepEqual({ ok: result.ok, code: result.ok ? null : result.code }, {
+      ok: false, code: 'CAS_MISMATCH',
+    });
+    const rows = await auditRowsForRequest(fixture.requestId);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].after.requestId, fixture.persisted);
+    assert.equal(rows[0].after.requestHash, fixture.requestHash);
+    assert.equal(rows[0].after.actorRole, 'admin');
+    assert.equal(rows[0].after.expectedVersion, 1);
+    assert.equal(rows[0].after.currentVersion, 2);
+    const originalQuery = await db().$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "AuditLog" WHERE "after" ->> 'requestId' = ${fixture.requestId}
+    `);
+    assert.equal(originalQuery.length, fixture.originalCount);
+    assert.equal(await db().aiOrchestratorAdminPolicyRevision.count({
+      where: { requestId: fixture.requestId },
+    }), 0);
+    physicalIds.add(rows[0].id);
+  }
+  assert.equal(physicalIds.size, fixtures.length);
+  assert.equal(fixtures[1].persisted, fixtures[2].persisted);
+  assert.notEqual(fixtures[1].requestHash, fixtures[2].requestHash);
+});
+
+test('audit oracle rifiuta assenza, duplicati, altra richiesta, attore, target ed esito errati', {
+  skip: !runDbTests,
+}, () => {
+  const expected = {
+    actorId: 'synthetic-admin',
+    event: 'ai_orchestrator_control_cas_conflict',
+    entityId: 'GLOBAL:global',
+    after: { requestHash: SHA_A, rejectionCode: 'CAS_MISMATCH' },
+  };
+  const row: AdminAuditRow = {
+    id: 'synthetic-audit',
+    ...structuredClone(expected),
+    entityType: 'AiOrchestratorAdminPolicyRevision',
+    before: null,
+  };
+  assert.doesNotThrow(() => assertSingleCommandAudit([row], expected));
+  assert.throws(() => assertSingleCommandAudit([], expected), assert.AssertionError);
+  assert.throws(() => assertSingleCommandAudit([row, { ...row, id: 'duplicate' }], expected), assert.AssertionError);
+  for (const invalid of [
+    { ...row, actorId: 'another-admin' },
+    { ...row, event: 'ai_orchestrator_control_change_blocked' },
+    { ...row, entityType: 'WrongEntity' },
+    { ...row, entityId: 'JOB:another-target' },
+    { ...row, after: { ...row.after, requestHash: SHA_B } },
+    { ...row, after: { ...row.after, rejectionCode: 'NO_CHANGE' } },
+  ]) {
+    assert.throws(() => assertSingleCommandAudit([invalid], expected), assert.AssertionError);
+  }
 });
 
 test('scope mutation rilegge override DB e fallisce chiusa dopo revoca o senza grant', {
@@ -635,7 +855,7 @@ test('scope mutation rilegge override DB e fallisce chiusa dopo revoca o senza g
     confirmed: true as const,
     policy: scopePolicyFor(allowedTarget, true, false),
   };
-  const allowed = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), allowedCommand));
+  const allowed = mutationSucceeded(await mutateWithAudit(db(), allowedCommand));
   assert.equal(allowed.replayed, false);
   assert.deepEqual(allowed.revision.requiredPermissions, [
     'ai.orchestrator.configure',
@@ -646,12 +866,12 @@ test('scope mutation rilegge override DB e fallisce chiusa dopo revoca o senza g
     decision.allowed && decision.source === 'OVERRIDE'
   )));
 
-  const replay = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), allowedCommand));
+  const replay = mutationSucceeded(await mutateWithAudit(db(), allowedCommand));
   assert.equal(replay.replayed, true);
   assert.equal(replay.revision.revisionHash, allowed.revision.revisionHash);
 
   const staleScopeId = randomUUID();
-  const staleScope = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const staleScope = await mutateWithAudit(db(), {
     ...allowedCommand,
     actorUserId: adminUser.id,
     requestId: staleScopeId,
@@ -674,7 +894,7 @@ test('scope mutation rilegge override DB e fallisce chiusa dopo revoca o senza g
   const revokedTarget = jobTargets[1];
   const revokedHead = await latestRevision(revokedTarget.scopeType, revokedTarget.scopeCode);
   const revokedRequestId = randomUUID();
-  const revoked = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const revoked = await mutateWithAudit(db(), {
     ...allowedCommand,
     requestId: revokedRequestId,
     expectedVersion: revokedHead.version,
@@ -693,7 +913,7 @@ test('scope mutation rilegge override DB e fallisce chiusa dopo revoca o senza g
   const plainTarget = jobTargets[2];
   const plainHead = await latestRevision(plainTarget.scopeType, plainTarget.scopeCode);
   const plainRequestId = randomUUID();
-  const plain = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const plain = await mutateWithAudit(db(), {
     actorUserId: plainUser.id,
     requestId: plainRequestId,
     operationCode: 'SET_SCOPE_POLICY',
@@ -972,7 +1192,7 @@ test('emergency stop è CAS-less e vince la race contro una proposta espansiva',
     reason: 'Arresto di emergenza sintetico confermato per il test.',
     confirmed: true as const,
   };
-  const stopped = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), emergencyCommand));
+  const stopped = mutationSucceeded(await mutateWithAudit(db(), emergencyCommand));
   assert.equal(stopped.replayed, false);
   assert.equal(stopped.revision.version, beforeEmergency.version + 1);
   assert.equal(stopped.revision.expectedVersion, null);
@@ -985,12 +1205,12 @@ test('emergency stop è CAS-less e vince la race contro una proposta espansiva',
   assert.equal(stoppedPolicy.globalKillSwitch, true);
   assert.equal((await auditRowsForRequest(emergencyRequestId))[0]?.event, 'ai_orchestrator_emergency_stop_activated');
 
-  const exactReplay = mutationSucceeded(await mutateAiOrchestratorAdminControlPolicy(db(), emergencyCommand));
+  const exactReplay = mutationSucceeded(await mutateWithAudit(db(), emergencyCommand));
   assert.equal(exactReplay.replayed, true);
   assert.equal(exactReplay.revision.revisionHash, stopped.revision.revisionHash);
 
   const redundantEmergencyRequestId = randomUUID();
-  const redundantEmergency = await mutateAiOrchestratorAdminControlPolicy(db(), {
+  const redundantEmergency = await mutateWithAudit(db(), {
     ...emergencyCommand,
     requestId: redundantEmergencyRequestId,
     reason: 'Arresto già inserito senza nuova modifica della policy.',

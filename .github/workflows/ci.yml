@@ -79,6 +79,12 @@ jobs:
       VNX01_LEAD_INTAKE_RECOVERY_BATCH_SIZE: ""
       LEAD_IDENTITY_KEY_FILE: ""
       COMMERCIAL_LEAD_INBOX_MODE: disabled
+      VNX02_MYSQL_TESTS_CONFIRMED: "1"
+      VNX02_MYSQL_HOST: 127.0.0.1
+      VNX02_MYSQL_PORT: "3306"
+      VNX02_MYSQL_DATABASE: fai_vnx02_test
+      VNX02_MYSQL_USER: fai_vnx02_test
+      VNX02_MYSQL_PASSWORD: synthetic-vnx02-password
     services:
       postgres:
         image: postgres:16
@@ -93,6 +99,20 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: synthetic-root-password
+          MYSQL_DATABASE: fai_vnx02_test
+          MYSQL_USER: fai_vnx02_test
+          MYSQL_PASSWORD: synthetic-vnx02-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -u root -psynthetic-root-password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@v4
@@ -204,11 +224,38 @@ jobs:
             exit 1
           fi
 
+      - name: Verify VNX-02 has exactly 43 migrations and no CRM runtime delta
+        if: github.event_name == 'pull_request' && github.head_ref == 'codex/vnx02-wordpress-secure-lead-connector'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          migration_count="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+          test "$migration_count" = "43"
+          if git diff --name-only "$BASE_SHA"...HEAD -- prisma/schema.prisma prisma/migrations src/app src/lib docker-compose.prod.example.yml .env.production.example .env.staging.example .env.example | grep -q .; then
+            echo "VNX-02 must not change Prisma, CRM runtime, Compose, or CRM environment surfaces" >&2
+            exit 1
+          fi
+
       - name: Validate Prisma schema
         run: npx prisma validate
 
       - name: Generate Prisma client
         run: npm run prisma:generate
+
+      - name: Verify VNX-02 PHP runtime and syntax
+        run: |
+          php -r 'foreach (["curl", "intl", "json", "mbstring", "mysqli", "sodium"] as $extension) { if (!extension_loaded($extension)) { fwrite(STDERR, "VNX02_PHP_EXTENSION_MISSING\n"); exit(1); } }'
+          find integrations/wordpress/fai-secure-lead-connector tests/php -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Test VNX-02 WordPress connector
+        run: |
+          npm run test:wordpress-connector
+          php tests/php/vnx02-wordpress-queue-mysql.test.php
+
+      - name: Package VNX-02 WordPress connector
+        run: |
+          npm run package:wordpress-connector
+          unzip -t dist/fai-secure-lead-connector-1.0.0.zip
 
       - name: Lint
         run: npm run lint
