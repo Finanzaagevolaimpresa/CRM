@@ -45,7 +45,7 @@ services:
   harness:
     image: ${COMPOSE_PROJECT_NAME:?VNX03_PROJECT_REQUIRED}-harness:${VNX03_SOURCE_COMMIT:?VNX03_SOURCE_COMMIT_REQUIRED}
     build:
-      context: ../..
+      context: .
       dockerfile: tests/vnx03/Dockerfile.crm
       target: harness
       args:
@@ -103,7 +103,7 @@ services:
   crm:
     image: ${COMPOSE_PROJECT_NAME}-crm:${VNX03_SOURCE_COMMIT}
     build:
-      context: ../..
+      context: .
       dockerfile: tests/vnx03/Dockerfile.crm
       target: crm
       args:
@@ -196,8 +196,8 @@ services:
   wordpress:
     image: ${COMPOSE_PROJECT_NAME}-wordpress:${VNX03_SOURCE_COMMIT}
     build:
-      context: ${VNX03_WORDPRESS_BUILD_CONTEXT:?VNX03_WORDPRESS_BUILD_CONTEXT_REQUIRED}
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: tests/vnx03/Dockerfile.wordpress
       args:
         WPFORMS_SHA256: ${VNX03_WPFORMS_SHA256:?VNX03_WPFORMS_SHA256_REQUIRED}
         WP_CLI_SHA256: ${VNX03_WP_CLI_SHA256:?VNX03_WP_CLI_SHA256_REQUIRED}

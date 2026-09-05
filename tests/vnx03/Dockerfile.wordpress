@@ -1,8 +1,22 @@
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+
+FROM ${NODE_IMAGE} AS connector
+
+ARG CONNECTOR_SHA256
+
+WORKDIR /src
+COPY integrations/wordpress/fai-secure-lead-connector ./integrations/wordpress/fai-secure-lead-connector
+COPY tools/package-vnx02-wordpress-connector.mjs ./tools/package-vnx02-wordpress-connector.mjs
+
+RUN mkdir -p /out \
+  && node tools/package-vnx02-wordpress-connector.mjs --output /out >/tmp/package.log \
+  && printf '%s  %s\n' "$CONNECTOR_SHA256" /out/fai-secure-lead-connector-1.0.0.zip \
+    | sha256sum -c -
+
 FROM wordpress:7.1-php8.4-apache@sha256:b8f37de278183840a09f5a4b5bf5ec9f09177a9984d2fe5cc072b4388128bd9d
 
 ARG WPFORMS_SHA256
 ARG WP_CLI_SHA256
-ARG CONNECTOR_SHA256
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -14,19 +28,26 @@ RUN apt-get update \
     openssl \
     unzip \
   && docker-php-ext-install -j"$(nproc)" curl intl mbstring \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /opt/vnx03
 
-COPY wpforms-lite.zip /opt/vnx03/wpforms-lite.zip
-COPY wp-cli.phar /usr/local/bin/wp
-COPY fai-secure-lead-connector.zip /opt/vnx03/fai-secure-lead-connector.zip
-COPY wordpress-config.php /opt/vnx03/wordpress-config.php
-COPY setup-wordpress.php /opt/vnx03/setup-wordpress.php
-COPY wp-state.php /opt/vnx03/wp-state.php
-COPY wordpress-entrypoint.sh /usr/local/bin/vnx03-wordpress-entrypoint.sh
+RUN curl --fail --silent --show-error --location \
+    --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 180 \
+    --output /opt/vnx03/wpforms-lite.zip \
+    https://downloads.wordpress.org/plugin/wpforms-lite.2.0.1.1.zip \
+  && curl --fail --silent --show-error --location \
+    --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 180 \
+    --output /usr/local/bin/wp \
+    https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar
+
+COPY --from=connector /out/fai-secure-lead-connector-1.0.0.zip /opt/vnx03/fai-secure-lead-connector.zip
+COPY tests/vnx03/wordpress-config.php /opt/vnx03/wordpress-config.php
+COPY tests/vnx03/setup-wordpress.php /opt/vnx03/setup-wordpress.php
+COPY tests/vnx03/wp-state.php /opt/vnx03/wp-state.php
+COPY tests/vnx03/wordpress-entrypoint.sh /usr/local/bin/vnx03-wordpress-entrypoint.sh
 
 RUN printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms-lite.zip | sha256sum -c - \
   && printf '%s  %s\n' "$WP_CLI_SHA256" /usr/local/bin/wp | sha256sum -c - \
-  && printf '%s  %s\n' "$CONNECTOR_SHA256" /opt/vnx03/fai-secure-lead-connector.zip | sha256sum -c - \
   && unzip -t /opt/vnx03/wpforms-lite.zip >/dev/null \
   && unzip -t /opt/vnx03/fai-secure-lead-connector.zip >/dev/null \
   && chmod 0755 /usr/local/bin/wp /usr/local/bin/vnx03-wordpress-entrypoint.sh \

@@ -34,7 +34,7 @@ test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   const provision = source('tests/vnx03/provision.ts');
 
   assert.match(runner, /VNX03_SYNTHETIC_E2E_CONFIRMED/u);
-  assert.match(runner, /VNX03_TRACKED_WORKTREE_DIRTY/u);
+  assert.match(runner, /VNX03_WORKTREE_NOT_EXACT_HEAD/u);
   assert.match(runner, /VNX03_FORBIDDEN_RUNTIME_OR_SCHEMA_DELTA/u);
   assert.match(runner, /VNX03_NONLOCAL_DOCKER_CONTEXT_FORBIDDEN/u);
   assert.match(runner, /down --volumes --remove-orphans/u);

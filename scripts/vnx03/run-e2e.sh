@@ -22,7 +22,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
 
 [[ "$(git rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'VNX03_REPOSITORY_ROOT_INVALID'
-[[ -z "$(git status --porcelain=v2 --untracked-files=no)" ]] || fail 'VNX03_TRACKED_WORKTREE_DIRTY'
+[[ -z "$(git status --porcelain=v2 --untracked-files=all)" ]] || fail 'VNX03_WORKTREE_NOT_EXACT_HEAD'
 
 source_commit="$(git rev-parse HEAD)"
 source_tree="$(git rev-parse 'HEAD^{tree}')"
@@ -112,7 +112,7 @@ node -e '
   writeFileSync(process.argv[1], `${JSON.stringify(output, null, 2)}\n`, { mode: 0o600 });
 ' "$evidence_dir/preflight.json"
 
-compose=(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$VNX03_COMPOSE_FILE")
+compose=(docker compose --project-directory "$repo_root" -p "$COMPOSE_PROJECT_NAME" -f "$VNX03_COMPOSE_FILE")
 compose_resources_created=false
 cleanup_status='NOT_CREATED'
 cleanup() {
@@ -164,8 +164,7 @@ cleanup() {
 trap cleanup EXIT
 
 artifacts_dir="$runtime_dir/artifacts"
-wordpress_build_context="$runtime_dir/wordpress-build"
-mkdir -p "$artifacts_dir" "$wordpress_build_context"
+mkdir -p "$artifacts_dir"
 
 download_and_verify() {
   local url="$1"
@@ -186,16 +185,6 @@ connector_zip="$artifacts_dir/fai-secure-lead-connector-1.0.0.zip"
 connector_sha256="$(sha256sum "$connector_zip" | awk '{print $1}')"
 [[ "$connector_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'VNX03_CONNECTOR_DIGEST_INVALID'
 
-cp tests/vnx03/Dockerfile.wordpress "$wordpress_build_context/Dockerfile"
-cp tests/vnx03/wordpress-entrypoint.sh "$wordpress_build_context/wordpress-entrypoint.sh"
-cp tests/vnx03/wordpress-config.php "$wordpress_build_context/wordpress-config.php"
-cp tests/vnx03/setup-wordpress.php "$wordpress_build_context/setup-wordpress.php"
-cp tests/vnx03/wp-state.php "$wordpress_build_context/wp-state.php"
-cp "$artifacts_dir/wpforms-lite.zip" "$wordpress_build_context/wpforms-lite.zip"
-cp "$artifacts_dir/wp-cli.phar" "$wordpress_build_context/wp-cli.phar"
-cp "$connector_zip" "$wordpress_build_context/fai-secure-lead-connector.zip"
-
-export VNX03_WORDPRESS_BUILD_CONTEXT="$wordpress_build_context"
 export VNX03_WPFORMS_SHA256="$WPFORMS_SHA256"
 export VNX03_WP_CLI_SHA256="$WP_CLI_SHA256"
 export VNX03_CONNECTOR_SHA256="$connector_sha256"
@@ -287,7 +276,7 @@ node -e '
   writeFileSync(process.argv[1], `${JSON.stringify(output, null, 2)}\n`, { mode: 0o600 });
 ' "$evidence_dir/runtime.json"
 
-[[ -z "$(git status --porcelain=v2 --untracked-files=no)" ]] \
+[[ -z "$(git status --porcelain=v2 --untracked-files=all)" ]] \
   || fail 'VNX03_TRACKED_WORKTREE_CHANGED_DURING_TEST'
 
 echo 'VNX03_E2E_COMPLETE'
