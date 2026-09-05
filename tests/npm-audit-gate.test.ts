@@ -417,8 +417,8 @@ test('OSV runs only after bounded npm service unavailability and verifies the fu
 
 test('the authorized package-lock inventory is complete and deterministic', () => {
   const inventory = parseNpmLockInventory(readFileSync('package-lock.json'));
-  assert.equal(inventory.entryCount, 483);
-  assert.equal(inventory.coordinates.size, 474);
+  assert.equal(inventory.entryCount, 486);
+  assert.equal(inventory.coordinates.size, 477);
 });
 
 test('npm vulnerabilities, malformed reports and non-transient errors never activate OSV', async () => {

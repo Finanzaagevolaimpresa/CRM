@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 if (!defined('ABSPATH') || !function_exists('wpforms')) {
     throw new RuntimeException('VNX03_WPFORMS_RUNTIME_MISSING');
 }

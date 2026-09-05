@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 if (!defined('ABSPATH')) {
     throw new RuntimeException('VNX03_WORDPRESS_RUNTIME_MISSING');
 }
