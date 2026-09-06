@@ -1,0 +1,21 @@
+# Optional N05 same-image configuration path. Never use as an arbitrary override.
+# scripts/n05/reconfigure-production-keys.sh validates and freezes the full model.
+# The ordinary production Compose command does not load this file.
+services:
+  app:
+    environment:
+      SECURE_LEAD_GATEWAY_KEYRING_FILE: /run/secrets/n12-keyring.json
+      LEAD_IDENTITY_KEY_FILE: /run/secrets/n13-identity.json
+    volumes:
+      - type: bind
+        source: /etc/fai-crm/keys/n12-keyring.json
+        target: /run/secrets/n12-keyring.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/fai-crm/keys/n13-identity.json
+        target: /run/secrets/n13-identity.json
+        read_only: true
+        bind:
+          create_host_path: false

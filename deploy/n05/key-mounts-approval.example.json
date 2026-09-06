@@ -1,0 +1,20 @@
+{
+  "schema": "FAI_CRM_N05_KEY_MOUNTS_V1",
+  "tools_commit": "REQUIRED_REVIEWED_MERGED_TOOLS_COMMIT",
+  "tools_tree": "REQUIRED_TOOLS_TREE",
+  "tools_first_parent": "REQUIRED_TOOLS_FIRST_PARENT",
+  "tools_ci_sha": "REQUIRED_EXACT_TOOLS_COMMIT",
+  "tools_ci_conclusion": "REQUIRED_SUCCESS",
+  "image": "REQUIRED_EXISTING_IMMUTABLE_APP_TAG",
+  "image_id": "REQUIRED_EXISTING_IMAGE_ID",
+  "image_source_commit": "REQUIRED_IMAGE_SOURCE_COMMIT",
+  "image_source_tree": "REQUIRED_IMAGE_SOURCE_TREE",
+  "postgres_image": "REQUIRED_CURRENT_POSTGRES_TAG",
+  "ordinary_config_sha256": "REQUIRED_PRIVATE_PREFLIGHT_DIGEST",
+  "mounted_config_sha256": "REQUIRED_PRIVATE_PREFLIGHT_DIGEST",
+  "app_uid": 0,
+  "app_gid": 0,
+  "backup_set": "REQUIRED_FRESH_N05_BACKUP_SET",
+  "recovery_directory": "REQUIRED_PRIVATE_RECOVERY_DIRECTORY",
+  "recovery_manifest_sha256": "REQUIRED_PRIVATE_RECOVERY_MANIFEST_DIGEST"
+}

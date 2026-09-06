@@ -373,6 +373,50 @@ jobs:
         working-directory: .
         run: git worktree remove --force ../vnx00a-tracked
 
+  n05-persistent-key-mounts:
+    name: N05 same-image persistent key mounts and rollback
+    needs: build-context-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify N05 source and synthetic validators
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          python3 -B tests/n05/test_key_mounts.py
+          bash -n scripts/n05/reconfigure-production-keys.sh
+
+      - name: Qualify actual Compose freeze, app recreation and restoration
+        env:
+          N05_SYNTHETIC_KEYS_CONFIRMED: "1"
+          N05_SYNTHETIC_APP_IMAGE: fai-crm:n05-keys-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          if docker image inspect "$N05_SYNTHETIC_APP_IMAGE" >/dev/null 2>&1; then
+            echo 'N05 synthetic image already exists' >&2
+            exit 1
+          fi
+          image_source=18c8bf252cca9d6f1ff369e3d4f69149ef462f69
+          image_context="$(mktemp -d /tmp/fai-crm-vnx04-image.XXXXXX)"
+          cleanup_image() {
+            docker image rm "$N05_SYNTHETIC_APP_IMAGE" >/dev/null
+            find "$image_context" -depth -mindepth 1 -delete
+            rmdir "$image_context"
+          }
+          trap cleanup_image EXIT
+          docker pull postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+          git archive "$image_source" | tar -x -C "$image_context"
+          docker build --build-arg SOURCE_COMMIT="$image_source" \
+            --build-arg SOURCE_TREE="$(git rev-parse "$image_source^{tree}")" \
+            -f "$image_context/Dockerfile.prod.example" -t "$N05_SYNTHETIC_APP_IMAGE" "$image_context"
+          python3 -B tests/n05/key_mounts_drill.py
+
   vnx03-wpforms-https-e2e:
     name: VNX-03 authentic WPForms HTTPS end-to-end
     needs: build-context-guard
