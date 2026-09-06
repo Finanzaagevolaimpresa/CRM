@@ -7,6 +7,8 @@ import {
 } from '../src/lib/lead-intake-consumer';
 
 async function main() {
+  // VNX-05 selection is parsed and frozen by runLeadIntakeConsumer before preflight.
+  // This same manual entrypoint serves both explicitly scoped and ordinary runs.
   const controller = new AbortController();
   const requestShutdown = () => controller.abort();
   process.on('SIGINT', requestShutdown);

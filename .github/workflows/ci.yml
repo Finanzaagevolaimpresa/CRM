@@ -313,6 +313,14 @@ jobs:
       - name: Docker production application and worker packaging smoke test
         run: COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh
 
+      - name: VNX-05 scoped consumer PostgreSQL qualification in the packaged application
+        env:
+          VNX05_SYNTHETIC_TESTS_CONFIRMED: "1"
+        run: |
+          bash -n scripts/vnx05/packaging-smoke.sh
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          bash scripts/vnx05/packaging-smoke.sh
+
       - name: Run isolated staging read-only preflight
         run: |
           staging_root="$(mktemp -d /tmp/fai-crm-n05-staging.XXXXXX)"

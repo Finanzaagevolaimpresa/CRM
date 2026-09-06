@@ -3,6 +3,7 @@ import {
   BUSINESS_EVENT_BACKBONE_MANIFEST,
   BusinessEventBackboneError,
   claimBusinessQueueEvent,
+  freezeBusinessInboxEventIds,
   recoverExpiredBusinessQueueLeases,
   type BusinessQueueLease,
 } from './business-event-backbone';
@@ -26,6 +27,14 @@ export const LEAD_INTAKE_CONSUMER_MANIFEST = Object.freeze({
   runMode: 'BOUNDED_ONE_SHOT' as const,
   maximumBatchSize: 100,
   maximumRecoveryBatchSize: 100,
+  pilot: Object.freeze({
+    gateEnvironment: 'VNX05_LEAD_INTAKE_PILOT_ENABLED' as const,
+    selectionEnvironment: 'VNX05_LEAD_INTAKE_INBOX_EVENT_IDS' as const,
+    identifier: 'BusinessInboxEvent.id' as const,
+    maximumSelectionSize: BUSINESS_EVENT_BACKBONE_MANIFEST.maximumInboxSelectionSize,
+    maximumSelectionCharacters: 8_192,
+    dormantByDefault: true,
+  }),
   shutdownBehavior: 'FINISH_CURRENT_THEN_STOP' as const,
   readinessTransaction: Object.freeze({
     isolationLevel: 'READ_COMMITTED' as const,
@@ -56,6 +65,9 @@ export const LEAD_INTAKE_CONSUMER_CONFIGURATION_ERROR_CODES = Object.freeze([
   'VNX01_CONFIG_INCOMPLETE',
   'VNX01_CONFIG_INVALID',
   'VNX01_WEBSITE_LEAD_MODE_UNSAFE',
+  'VNX05_PILOT_GATE_INVALID',
+  'VNX05_PILOT_CONFIG_INVALID',
+  'VNX05_SELECTION_INVALID',
 ] as const);
 
 export type LeadIntakeConsumerConfigurationErrorCode =
@@ -77,6 +89,7 @@ export type LeadIntakeConsumerConfig =
     batchSize: number;
     recoveryBatchSize: number;
     keyFilePath: string;
+    inboxEventIds?: readonly string[];
   }>;
 
 export type LeadIntakeConsumerSummary = Readonly<{
@@ -104,7 +117,7 @@ export type LeadIntakeConsumerLogRecord =
   }>
   | Readonly<{
     event: 'VNX01_CONSUMER_COMPLETED';
-    status: 'COMPLETED' | 'STOPPED';
+    status: 'COMPLETED' | 'STOPPED' | 'FAILED';
     recovered: number;
     retried: number;
     deadLettered: number;
@@ -125,12 +138,12 @@ type ProjectionResult = Awaited<ReturnType<typeof projectClaimedLeadInboxEvent>>
 
 export type LeadIntakeConsumerOperations = Readonly<{
   assertReady: (config: Extract<LeadIntakeConsumerConfig, { enabled: true }>) => Promise<void>;
-  recover: (maximumRows: number) => Promise<Readonly<{
+  recover: (maximumRows: number, inboxEventIds?: readonly string[]) => Promise<Readonly<{
     recovered: number;
     retried: number;
     deadLettered: number;
   }>>;
-  claim: (leaseOwnerId: string) => Promise<BusinessQueueLease | null>;
+  claim: (leaseOwnerId: string, inboxEventIds?: readonly string[]) => Promise<BusinessQueueLease | null>;
   project: (
     lease: BusinessQueueLease,
     config: Extract<LeadIntakeConsumerConfig, { enabled: true }>,
@@ -165,6 +178,7 @@ function boundedInteger(value: string, maximum: number) {
 export function readLeadIntakeConsumerConfig(
   environment: ConsumerEnvironment = process.env,
 ): LeadIntakeConsumerConfig {
+  const inboxEventIds = readPilotSelection(environment);
   const gate = environment[LEAD_INTAKE_CONSUMER_MANIFEST.gateEnvironment];
   if (gate === undefined || gate === '' || gate === '0') {
     return Object.freeze({ enabled: false, status: 'GATE_CLOSED' as const });
@@ -196,7 +210,27 @@ export function readLeadIntakeConsumerConfig(
     batchSize,
     recoveryBatchSize,
     keyFilePath,
+    ...(inboxEventIds === undefined ? {} : { inboxEventIds }),
   });
+}
+
+function readPilotSelection(environment: ConsumerEnvironment) {
+  const pilot = LEAD_INTAKE_CONSUMER_MANIFEST.pilot;
+  const gate = environment[pilot.gateEnvironment];
+  const selection = environment[pilot.selectionEnvironment];
+  if (gate === undefined || gate === '' || gate === '0') {
+    if (selection !== undefined && selection !== '') configFail('VNX05_PILOT_CONFIG_INVALID');
+    return undefined;
+  }
+  if (gate !== '1') configFail('VNX05_PILOT_GATE_INVALID');
+  if (!selection || selection.length > pilot.maximumSelectionCharacters) {
+    configFail('VNX05_SELECTION_INVALID');
+  }
+  try {
+    return freezeBusinessInboxEventIds(JSON.parse(selection));
+  } catch {
+    return configFail('VNX05_SELECTION_INVALID');
+  }
 }
 
 export function safeLeadIntakeConsumerFailureCode(error: unknown) {
@@ -239,16 +273,18 @@ export function createPrismaLeadIntakeConsumerOperations(
         timeout: LEAD_INTAKE_CONSUMER_MANIFEST.readinessTransaction.timeoutMs,
       });
     },
-    recover(maximumRows) {
+    recover(maximumRows, inboxEventIds) {
       return recoverExpiredBusinessQueueLeases(prisma, {
         queueKind: LEAD_INTAKE_CONSUMER_MANIFEST.queueKind,
         maximumRows,
+        inboxEventIds,
       });
     },
-    claim(leaseOwnerId) {
+    claim(leaseOwnerId, inboxEventIds) {
       return claimBusinessQueueEvent(prisma, {
         queueKind: LEAD_INTAKE_CONSUMER_MANIFEST.queueKind,
         leaseOwnerId,
+        inboxEventIds,
       });
     },
     project(lease, config) {
@@ -312,14 +348,25 @@ export async function runLeadIntakeConsumer(
     logger(Object.freeze({ event: 'VNX01_CONSUMER_COMPLETED', ...summary }));
     return summary;
   }
-  const recovery = await operations.recover(config.recoveryBatchSize);
+  const recovery = await operations.recover(config.recoveryBatchSize, config.inboxEventIds);
   let claimed = 0;
   let projectedNew = 0;
   let reviewRequired = 0;
   let failed = 0;
   for (let index = 0; index < config.batchSize; index += 1) {
     if (options.signal?.aborted) break;
-    const lease = await operations.claim(config.leaseOwnerId);
+    let lease: BusinessQueueLease | null;
+    try {
+      lease = await operations.claim(config.leaseOwnerId, config.inboxEventIds);
+    } catch (error) {
+      // Earlier projections are already committed. Preserve their acknowledged
+      // counters even if a later claim fails; the entrypoint still exits nonzero.
+      logger(Object.freeze({
+        event: 'VNX01_CONSUMER_COMPLETED', status: 'FAILED',
+        ...recovery, claimed, projectedNew, reviewRequired, failed,
+      }));
+      throw error;
+    }
     if (!lease) break;
     claimed += 1;
     try {
