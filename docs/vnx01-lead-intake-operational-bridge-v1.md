@@ -7,6 +7,10 @@ controllabile. Il deploy resta dormiente: nessun servizio Compose, route, startu
 cron o scheduler avvia il consumer. N12, N14, worker AI, dispatch AI, provider esterni e agenti
 non vengono attivati.
 
+Per una selezione finita di righe INBOX, lo stesso entrypoint supporta il gate
+pilota esplicito documentato in [VNX-05](vnx05-pilot-scoped-lead-intake-v1.md).
+Un batch piccolo, da solo, non identifica quali eventi si possano reclamare.
+
 Il consumer usa esclusivamente:
 
 - `recoverExpiredBusinessQueueLeases` per un recovery N11 bounded;

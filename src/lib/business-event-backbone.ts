@@ -12,6 +12,7 @@ export const BUSINESS_EVENT_BACKBONE_ERROR_CODES = Object.freeze([
   'BUSINESS_INBOX_EVENT_INVALID',
   'BUSINESS_INBOX_HASH_INVALID',
   'BUSINESS_INBOX_IDEMPOTENCY_CONFLICT',
+  'BUSINESS_INBOX_SELECTION_INVALID',
   'BUSINESS_OUTBOX_SOURCE_INVALID',
   'BUSINESS_OUTBOX_IDEMPOTENCY_CONFLICT',
   'BUSINESS_QUEUE_STATE_CONFLICT',
@@ -51,6 +52,7 @@ export const BUSINESS_EVENT_BACKBONE_MANIFEST = Object.freeze({
   initialLeaseSeconds: 60,
   maximumLeaseSeconds: 300,
   maximumRecoveryBatch: 100,
+  maximumInboxSelectionSize: 100,
   transactionAttempts: 3,
   transactionTimeoutMs: 5_000,
   transactionMaxWaitMs: 2_000,
@@ -214,6 +216,34 @@ function normalizeUuid(value: unknown) {
   const normalized = value.toLowerCase();
   if (!UUID_V4_PATTERN.test(normalized)) fail('BUSINESS_QUEUE_STATE_CONFLICT');
   return normalized;
+}
+
+// Only stable N11 row IDs are accepted. Copy before any await/transaction retry;
+// an empty, ambiguous or malformed selection must never mean the whole queue.
+export function freezeBusinessInboxEventIds(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length < 1
+    || value.length > BUSINESS_EVENT_BACKBONE_MANIFEST.maximumInboxSelectionSize) {
+    fail('BUSINESS_INBOX_SELECTION_INVALID');
+  }
+  const ids: string[] = [];
+  for (const id of value) {
+    if (typeof id !== 'string' || id.length !== 36 || !UUID_V4_PATTERN.test(id) || ids.includes(id)) {
+      fail('BUSINESS_INBOX_SELECTION_INVALID');
+    }
+    ids.push(id);
+  }
+  return Object.freeze(ids);
+}
+
+function inboxSelectionPredicate(ids: readonly string[] | undefined) {
+  return ids === undefined ? Prisma.empty
+    : Prisma.sql`AND "id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::UUID`))})`;
+}
+
+function queueSelection(queueKind: BusinessQueueKind, ids: readonly string[] | undefined) {
+  if (ids === undefined) return undefined;
+  if (queueKind !== 'INBOX') fail('BUSINESS_INBOX_SELECTION_INVALID');
+  return freezeBusinessInboxEventIds(ids);
 }
 
 export function normalizeBusinessQueueCode(value: unknown) {
@@ -696,11 +726,16 @@ export async function enqueueBusinessOutboxEvent(
   return { outcome: 'REPLAY', outboxEventId: row.id };
 }
 
-async function selectClaimCandidate(tx: Tx, queueKind: BusinessQueueKind) {
+async function selectClaimCandidate(
+  tx: Tx,
+  queueKind: BusinessQueueKind,
+  inboxEventIds: readonly string[] | undefined,
+) {
   if (queueKind === 'INBOX') {
     return (await tx.$queryRaw<InboxRow[]>(Prisma.sql`
       SELECT * FROM "BusinessInboxEvent"
       WHERE "state" = 'AVAILABLE' AND "availableAt" <= clock_timestamp()
+        ${inboxSelectionPredicate(inboxEventIds)}
       ORDER BY "availableAt", "id"
       LIMIT 1
       FOR UPDATE SKIP LOCKED
@@ -751,15 +786,20 @@ async function updateClaimedQueue(
 
 export async function claimBusinessQueueEvent(
   prisma: PrismaClient,
-  input: { readonly queueKind: BusinessQueueKind; readonly leaseOwnerId: string },
+  input: {
+    readonly queueKind: BusinessQueueKind;
+    readonly leaseOwnerId: string;
+    readonly inboxEventIds?: readonly string[];
+  },
 ): Promise<BusinessQueueLease | null> {
   const queueKind = input.queueKind;
   if (queueKind !== 'INBOX' && queueKind !== 'OUTBOX') {
     fail('BUSINESS_QUEUE_STATE_CONFLICT');
   }
   const leaseOwnerId = normalizeUuid(input.leaseOwnerId);
+  const inboxEventIds = queueSelection(queueKind, input.inboxEventIds);
   return withBusinessTransaction(prisma, async (tx) => {
-    const row = await selectClaimCandidate(tx, queueKind);
+    const row = await selectClaimCandidate(tx, queueKind, inboxEventIds);
     if (!row) return null;
     const verified = queueKind === 'INBOX'
       ? verifyInboxRow(row as InboxRow)
@@ -1127,11 +1167,13 @@ async function selectExpiredRows(
   tx: Tx,
   queueKind: BusinessQueueKind,
   maximumRows: number,
+  inboxEventIds: readonly string[] | undefined,
 ) {
   if (queueKind === 'INBOX') {
     return tx.$queryRaw<InboxRow[]>(Prisma.sql`
       SELECT * FROM "BusinessInboxEvent"
       WHERE "state" = 'LEASED' AND "leaseExpiresAt" <= clock_timestamp()
+        ${inboxSelectionPredicate(inboxEventIds)}
       ORDER BY "leaseExpiresAt", "id"
       LIMIT ${maximumRows}
       FOR UPDATE SKIP LOCKED
@@ -1148,9 +1190,14 @@ async function selectExpiredRows(
 
 export async function recoverExpiredBusinessQueueLeases(
   prisma: PrismaClient,
-  input: { readonly queueKind: BusinessQueueKind; readonly maximumRows?: number },
+  input: {
+    readonly queueKind: BusinessQueueKind;
+    readonly maximumRows?: number;
+    readonly inboxEventIds?: readonly string[];
+  },
 ) {
-  if (input.queueKind !== 'INBOX' && input.queueKind !== 'OUTBOX') {
+  const queueKind = input.queueKind;
+  if (queueKind !== 'INBOX' && queueKind !== 'OUTBOX') {
     fail('BUSINESS_QUEUE_STATE_CONFLICT');
   }
   const maximumRows = input.maximumRows
@@ -1159,30 +1206,31 @@ export async function recoverExpiredBusinessQueueLeases(
     || maximumRows > BUSINESS_EVENT_BACKBONE_MANIFEST.maximumRecoveryBatch) {
     fail('BUSINESS_QUEUE_STATE_CONFLICT');
   }
+  const inboxEventIds = queueSelection(queueKind, input.inboxEventIds);
   return withBusinessTransaction(prisma, async (tx) => {
-    const rows = await selectExpiredRows(tx, input.queueKind, maximumRows);
+    const rows = await selectExpiredRows(tx, queueKind, maximumRows, inboxEventIds);
     let retried = 0;
     let deadLettered = 0;
     for (const row of rows) {
-      if (input.queueKind === 'INBOX') verifyInboxRow(row as InboxRow);
+      if (queueKind === 'INBOX') verifyInboxRow(row as InboxRow);
       else verifyOutboxRow(row as OutboxRow);
       const attempts = await tx.$queryRaw<AttemptRow[]>(Prisma.sql`
         SELECT * FROM "BusinessQueueAttempt"
-        WHERE "queueKind" = ${input.queueKind} AND "finishedAt" IS NULL
-          AND ("inboxEventId" = ${input.queueKind === 'INBOX' ? row.id : null}::UUID
-            OR "outboxEventId" = ${input.queueKind === 'OUTBOX' ? row.id : null}::UUID)
+        WHERE "queueKind" = ${queueKind} AND "finishedAt" IS NULL
+          AND ("inboxEventId" = ${queueKind === 'INBOX' ? row.id : null}::UUID
+            OR "outboxEventId" = ${queueKind === 'OUTBOX' ? row.id : null}::UUID)
         FOR UPDATE
       `);
       const attempt = attempts[0];
       if (!attempt || attempts.length !== 1) fail('BUSINESS_QUEUE_INTEGRITY_FAILURE');
-      verifyOpenAttemptForQueueRow(input.queueKind, row, attempt);
+      verifyOpenAttemptForQueueRow(queueKind, row, attempt);
       const now = await databaseNow(tx);
       const retry = row.attemptCount < row.maxAttempts;
       const nextAvailableAt = retry
         ? new Date(now.getTime() + getBusinessQueueRetryDelaySeconds(row.attemptCount) * 1_000)
         : null;
       const nextState = retry ? 'AVAILABLE' : 'DEAD_LETTER';
-      const query = input.queueKind === 'INBOX'
+      const query = queueKind === 'INBOX'
         ? Prisma.sql`UPDATE "BusinessInboxEvent" SET "state" = ${nextState},
             "availableAt" = ${nextAvailableAt ?? row.availableAt}, "lastFailureCode" = 'LEASE_EXPIRED',
             "terminalAt" = ${retry ? null : now}, "terminalReasonCode" = ${retry ? null : 'LEASE_EXPIRED'},
