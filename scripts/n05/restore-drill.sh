@@ -155,11 +155,13 @@ compose_target() (
 wait_for_postgres() {
   local compose_name="$1" database_user="$2" database_name="$3"
   [[ "$compose_name" == source || "$compose_name" == target ]] || n05_fail RESTORE_COMPOSE_NAME_INVALID
+  # The official image's temporary init server accepts Unix sockets only.
+  # Wait for its final server on loopback without changing bounds or guards.
   for _ in $(seq 1 120); do
     if [[ "$compose_name" == source ]]; then
-      compose_source exec -T postgres pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
+      compose_source exec -T postgres pg_isready -h 127.0.0.1 -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
     else
-      compose_target exec -T postgres pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
+      compose_target exec -T postgres pg_isready -h 127.0.0.1 -U "$database_user" -d "$database_name" >/dev/null 2>&1 && return 0
     fi
     sleep 0.5
   done
