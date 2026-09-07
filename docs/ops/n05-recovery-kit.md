@@ -142,6 +142,14 @@ auto-acceptance is used. The remote receiver program's digest and private receiv
 plan must be delivered and reviewed before transfer. The receiver supports this
 one pinned receive operation and does not need a copy of the Git repository.
 
+A failed first SSH connection can leave only the sender journal initialized.
+The same explicit transfer resume then allows the receive command to initialize
+an absent receiver operation using its already pinned plan. Creation remains
+exclusive: an existing directory without a valid journal, a changed plan or an
+active operation is refused. Sender resume and cleanup never create missing
+journals. Resume still retransmits and verifies the whole ciphertext before
+atomic publication; it does not overwrite a divergent destination.
+
 The age recipient is an explicit X25519 public recipient. The private identity
 file is separate from encrypted copies. Do not place custody keys in the bundle
 they decrypt, share them in logs, or conflate the test identity with real custody.
@@ -163,6 +171,13 @@ without starting the CRM application; a real backup still needs its own qualific
 
 Private functional plan examples are exercised in `tests/n05/recovery_drill.py`.
 They are synthetic fixtures, not preapproved production plans.
+
+Cleanup checks the pinned engine, nonproduction destination, exact target names,
+labels and recorded resource identities independently of image availability.
+Missing recovery images cannot strand owned resources or decrypted material.
+All image/provenance and empty-destination checks remain mandatory for a new
+recovery. Cleanup still requires the approved plan, its journal and the preserved
+source bundle; missing or inconsistent ownership receipts stop removal.
 
 ## Preflight, authorization, verified result
 

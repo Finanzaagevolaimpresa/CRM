@@ -402,6 +402,49 @@ def main():
             bad["run_id"] = uuid.uuid4().hex
             bad["ssh"]["known_hosts_sha256"] = "0" * 64
             invoke(root, bad, expect="SSH_HOST_KEY_BINDING_MISMATCH")
+            # F01: the first SSH attempt fails before the receiver program runs.
+            # Stop only this fixture's recorded receiver, then restart the same
+            # instance/key/plan. No remote journal exists until explicit resume.
+            early_receiver = receiver_plan | {"run_id": uuid.uuid4().hex}
+            early_bytes = kit.canonical(early_receiver)
+            docker("exec", "-i", receiver, "python3", "-c",
+                   "import pathlib,sys;p=pathlib.Path('/work/receive-early.json');"
+                   "p.write_bytes(sys.stdin.buffer.read());p.chmod(0o600)", data=early_bytes)
+            early_transfer = copy.deepcopy(transfer)
+            early_transfer["run_id"] = uuid.uuid4().hex
+            early_transfer["ssh"].update(remote_plan="/work/receive-early.json",
+                remote_plan_sha256=kit.sha(early_bytes), receiver_run_id=early_receiver["run_id"])
+            early_path, early_hash = save(root, early_transfer)
+            receiver_info = json.loads(docker("inspect", receiver_id))[0]
+            check(receiver_info["Id"] == own_containers[receiver]
+                  and receiver_info["Config"]["Labels"].get(TEST_LABEL) == test_id,
+                  "early-ssh-failure-receiver-recorded-instance")
+            docker("stop", "--time", "5", receiver_id)
+            invoke(root, early_transfer, expect="COMMAND_FAILED_SSH")
+            check((work / early_transfer["run_id"] / "operation.json").is_file(),
+                  "early-ssh-failure-sender-journal-retained")
+            docker("start", receiver_id)
+            deadline = time.monotonic() + 30
+            while True:
+                ready = subprocess.run(["docker", "--host", "unix:///var/run/docker.sock",
+                    "exec", receiver_id, "python3", "-c",
+                    "import socket;s=socket.create_connection(('127.0.0.1',22),timeout=1);s.close()"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if ready.returncode == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("SYNTHETIC_SSH_RESTART_TIMEOUT")
+                time.sleep(0.2)
+            absent = docker("exec", receiver_id, "python3", "-c",
+                "import pathlib,sys;sys.stdout.write(str(pathlib.Path(sys.argv[1]).exists()))",
+                "/work/" + early_receiver["run_id"])
+            check(absent == b"False", "early-ssh-failure-receiver-never-initialized")
+            invoke(root, early_transfer, expect="OPERATION_ALREADY_EXISTS")
+            early_receipt = invoke(root, early_transfer, extra=("--resume",))
+            check(early_receipt["status"] == "RECEIVE_VERIFIED"
+                  and early_receipt["run_id"] == early_receiver["run_id"]
+                  and kit.digest(early_path) == early_hash,
+                  "early-ssh-failure-resumes-with-identical-plans-and-hashes")
             interrupted = subprocess.run([str(a) for a in kit.ssh_command(transfer)],
                                          input=Path(transfer["bundle"]).read_bytes()[:100],
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)

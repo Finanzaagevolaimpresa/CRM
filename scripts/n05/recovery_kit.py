@@ -271,11 +271,16 @@ def load_plan(path, expected_hash):
 
 
 class Operation:
-    def __init__(self, plan, plan_hash, resume=False):
+    def __init__(self, plan, plan_hash, resume=False, *, initialize_missing_receive=False):
         self.plan = plan
         self.plan_hash = plan_hash
-        self.root = private_dir(plan["work_root"]) / plan["run_id"]
-        if not resume:
+        self.root = path_checked(str(private_dir(plan["work_root"]) / plan["run_id"]), exists=False)
+        require(not initialize_missing_receive or (resume and plan["phase"] == "receive"),
+                "RESUME_INITIALIZATION_DENIED")
+        # A transport failure may leave only the sender initialized. Only the
+        # explicitly resumed receive command can create its absent operation;
+        # mkdir/exclusive still refuse any competing or occupied destination.
+        if not resume or (initialize_missing_receive and not self.root.exists()):
             require(not self.root.exists(), "OPERATION_ALREADY_EXISTS")
             self.root.mkdir(mode=0o700)
             exclusive(self.root / "operation.json", canonical({
@@ -284,7 +289,8 @@ class Operation:
         else:
             private_dir(self.root)
             original = decode(private_file(self.root / "operation.json").read_bytes())
-            require(original["plan_sha256"] == plan_hash and original["run_id"] == plan["run_id"]
+            require(original["schema"] == SCHEMA and original["phase"] == plan["phase"]
+                    and original["plan_sha256"] == plan_hash and original["run_id"] == plan["run_id"]
                     and original["host"] == plan["host"], "RESUME_IDENTITY_MISMATCH")
         lock_path = self.root / "operation.lock"
         if lock_path.exists() or lock_path.is_symlink():
@@ -673,11 +679,16 @@ def target_names(plan):
             "documents_volume": project + "-documents-data"}
 
 
-def destination_preflight(plan, occupied=False):
+def destination_identity(plan):
     require(plan["host"] != "fai-crm-prod-02", "PRODUCTION_RECOVERY_HOST_DENIED")
     actual = decode(docker("info", "--format", "{{json .}}"))
     require(actual["ID"] == plan["engine_id"] and actual["OSType"] == "linux", "DOCKER_ENGINE_MISMATCH")
     require(actual["Name"] != "fai-crm-prod-02", "PRODUCTION_DOCKER_ENGINE_DENIED")
+    return target_names(plan)
+
+
+def destination_preflight(plan):
+    names = destination_identity(plan)
     image_id(plan["postgres_image_id"])
     pg = docker_object("image", plan["postgres_image_id"])
     require(pg["Id"] == plan["postgres_image_id"], "POSTGRES_IMAGE_MISMATCH")
@@ -692,15 +703,13 @@ def destination_preflight(plan, occupied=False):
         require(plan["expected"]["image_provenance"] == "authorized-legacy-image-id"
                 and not labels.get("org.opencontainers.image.revision")
                 and not labels.get("it.finanzaagevolaimpresa.source-tree"), "LEGACY_PROVENANCE_MISMATCH")
-    names = target_names(plan)
-    if not occupied:
-        containers = docker("ps", "-aq", "--filter", "label=" + LABEL + "=" + plan["run_id"]).strip()
-        volumes = docker("volume", "ls", "-q", "--filter", "label=" + LABEL + "=" + plan["run_id"]).strip()
-        require(not containers and not volumes, "RECOVERY_RESOURCES_ALREADY_EXIST")
-        existing_names = set(docker("ps", "-a", "--format", "{{.Names}}").decode().splitlines())
-        volume_names = set(docker("volume", "ls", "-q").decode().splitlines())
-        require(not existing_names.intersection(names.values()) and not volume_names.intersection(names.values()),
-                "DESTINATION_OCCUPIED")
+    containers = docker("ps", "-aq", "--filter", "label=" + LABEL + "=" + plan["run_id"]).strip()
+    volumes = docker("volume", "ls", "-q", "--filter", "label=" + LABEL + "=" + plan["run_id"]).strip()
+    require(not containers and not volumes, "RECOVERY_RESOURCES_ALREADY_EXIST")
+    existing_names = set(docker("ps", "-a", "--format", "{{.Names}}").decode().splitlines())
+    volume_names = set(docker("volume", "ls", "-q").decode().splitlines())
+    require(not existing_names.intersection(names.values()) and not volume_names.intersection(names.values()),
+            "DESTINATION_OCCUPIED")
     return names
 
 
@@ -935,9 +944,10 @@ def cleanup(plan, op):
         op.event("CLEANUP_VERIFIED", published_ciphertext_preserved=True)
         return {"status": "CLEANUP_VERIFIED", "published_ciphertext_preserved": True}
     require(plan["phase"] == "recover", "CLEANUP_BACKUP_NOT_SUPPORTED")
-    destination_preflight(plan, occupied=True)
+    # Deletion needs the pinned engine and recorded resource identities, not
+    # images required only to create/verify a new recovery destination.
+    names = set(destination_identity(plan).values())
     intents = {(e["kind"], e["name"]) for e in op.events() if e["phase"] == "RESOURCE_INTENT"}
-    names = set(target_names(plan).values())
     for kind, name in sorted(intents, key=lambda x: x[0] == "volume"):
         require(name in names, "CLEANUP_NAME_DENIED")
         listing = docker("volume", "ls", "-q") if kind == "volume" else docker("ps", "-a", "--format", "{{.Names}}")
@@ -1078,7 +1088,8 @@ def main():
             # A partial database is NEVER reused as an empty recovery target.
             # Cleanup the owned failed attempt and use a new plan/run identity.
             preflight(plan)
-        op = Operation(plan, args.plan_sha256, resume=args.resume or args.command == "cleanup")
+        op = Operation(plan, args.plan_sha256, resume=args.resume or args.command == "cleanup",
+                       initialize_missing_receive=args.command == "receive" and args.resume)
         op.event("BEGIN", command=args.command)
         if args.command == "backup":
             wrapper = backup_preflight(plan)

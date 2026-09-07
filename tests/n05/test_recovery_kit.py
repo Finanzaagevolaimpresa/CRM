@@ -225,6 +225,170 @@ class RecoveryGuards(unittest.TestCase):
         self.assertEqual(resumed.events()[0]["phase"], "STARTED")
         resumed.close()
 
+    def receiver_cli(self, command="receive", resume=True):
+        path = self.file("receiver-plan.json", kit.canonical(self.plan))
+        args = ["kit", command, "--plan", str(path), "--plan-sha256", kit.digest(path),
+                "--authorize", "FAI_CRM_N05_RECOVERY_" + command.upper() + "_V1"]
+        if resume:
+            args.append("--resume")
+        output = io.StringIO()
+        with patch.object(kit.sys, "argv", args), patch.object(kit.sys, "stdout", output), \
+             patch.object(kit.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"abc"))):
+            try:
+                kit.main()
+            finally:
+                kit.signal.alarm(0)
+        return json.loads(output.getvalue())
+
+    def test_receiver_cli_resume_initializes_only_missing_operation(self):
+        receipt = self.receiver_cli()
+        self.assertEqual(receipt["status"], "RECEIVE_VERIFIED")
+        root = self.work / self.plan["run_id"]
+        original = (root / "operation.json").read_bytes()
+        repeat = self.receiver_cli()
+        self.assertEqual(repeat["bundle_sha256"], receipt["bundle_sha256"])
+        self.assertEqual((root / "operation.json").read_bytes(), original)
+        self.assertEqual((root / "received.bundle.tar").read_bytes(), b"abc")
+
+    def test_receiver_resume_refuses_inconsistent_or_occupied_journal(self):
+        root = self.work / self.plan["run_id"]
+        root.mkdir(mode=0o700)
+        kept = root / "preserve"
+        kept.write_bytes(b"preexisting")
+        kept.chmod(0o600)
+        for kind in ("missing-journal", "wrong-plan"):
+            if kind == "wrong-plan":
+                kit.exclusive(root / "operation.json", kit.canonical({
+                    "schema": kit.SCHEMA, "phase": "receive", "run_id": self.plan["run_id"],
+                    "host": self.plan["host"], "plan_sha256": "0" * 64}))
+            with self.subTest(kind=kind), patch.object(kit.sys, "stderr", io.StringIO()), \
+                 self.assertRaises(SystemExit) as error:
+                self.receiver_cli()
+            self.assertEqual(error.exception.code, 1)
+            self.assertEqual(kept.read_bytes(), b"preexisting")
+            self.assertFalse((root / "received.bundle.tar").exists())
+
+    def test_resume_initialization_does_not_apply_to_cleanup_or_sender(self):
+        with patch.object(kit.sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.receiver_cli(command="cleanup", resume=False)
+        self.assertFalse((self.work / self.plan["run_id"]).exists())
+        sender = self.plan | {"phase": "transfer"}
+        self.denied("PATH_MISSING", kit.Operation, sender, "a" * 64, resume=True)
+        self.assertFalse((self.work / self.plan["run_id"]).exists())
+
+    def cleanup_fixture(self, kinds=("container", "volume")):
+        plan = self.plan | {"phase": "recover", "run_id": kit.uuid.uuid4().hex,
+                            "engine_id": "synthetic-engine", "postgres_image_id": "sha256:" + "1" * 64,
+                            "expected": {"app_image_id": "sha256:" + "2" * 64}}
+        plan["target_project"] = "fai-crm-recovery-" + plan["run_id"]
+        plan["bundle"] = str(self.file("preserved-bundle-" + plan["run_id"], b"synthetic ciphertext"))
+        plan["bundle_sha256"] = kit.digest(plan["bundle"])
+        op = kit.Operation(plan, "a" * 64)
+        self.addCleanup(op.close)
+        names = kit.target_names(plan)
+        labels = {kit.LABEL: plan["run_id"], kit.TEST_LABEL: plan["run_id"],
+                  "it.finanzaagevolaimpresa.sentinel": kit.SENTINEL}
+        resources = {}
+        for kind in kinds:
+            name = names["postgres"] if kind == "container" else names["documents_volume"]
+            op.event("RESOURCE_INTENT", kind=kind, name=name)
+            if kind == "container":
+                resources[name] = {"Id": "c" * 64, "Config": {"Labels": labels.copy()}}
+                op.event("RESOURCE_CREATED", kind=kind, name=name, resource_id="c" * 64)
+            else:
+                resources[name] = {"Name": name, "Labels": labels.copy(), "CreatedAt": "synthetic-created",
+                                   "Mountpoint": "/synthetic/" + name, "Driver": "local"}
+                op.event("RESOURCE_CREATED", kind=kind, name=name, created_at="synthetic-created",
+                         mountpoint="/synthetic/" + name, driver="local")
+        for component in kit.COMPONENTS:
+            directory = op.root / component
+            directory.mkdir(mode=0o700)
+            kit.exclusive(directory / "synthetic", b"synthetic private material")
+        calls = []
+
+        def absent_image_docker(*args, **kwargs):
+            calls.append(args)
+            if args[0] == "info":
+                return kit.canonical({"ID": plan["engine_id"], "OSType": "linux", "Name": "synthetic-engine"})
+            if args[0] == "image":
+                raise kit.Denied("COMMAND_FAILED_DOCKER")
+            if args[0] == "inspect":
+                return kit.canonical([resources[args[1]]])
+            if args[:2] == ("volume", "inspect"):
+                return kit.canonical([resources[args[2]]])
+            if args[0] == "ps":
+                values = [n for n, v in resources.items() if "Id" in v]
+                return ("\n".join(values) + ("\n" if values else "")).encode()
+            if args[:2] == ("volume", "ls"):
+                values = [n for n, v in resources.items() if "Id" not in v]
+                return ("\n".join(values) + ("\n" if values else "")).encode()
+            if args[:2] == ("rm", "-f"):
+                match = next(n for n, v in resources.items() if v.get("Id") == args[2])
+                del resources[match]
+                return b""
+            if args[:2] == ("volume", "rm"):
+                del resources[args[2]]
+                return b""
+            raise AssertionError("Unexpected Docker operation")
+        return plan, op, resources, calls, absent_image_docker
+
+    def test_cleanup_without_images_removes_owned_resources_and_plaintext(self):
+        plan, op, resources, calls, docker = self.cleanup_fixture()
+        original = Path(plan["bundle"]).read_bytes()
+        with patch.object(kit, "docker", side_effect=docker):
+            result = kit.cleanup(plan, op)
+        self.assertEqual(result["status"], "CLEANUP_VERIFIED")
+        self.assertEqual(resources, {})
+        self.assertFalse(any(call[0] == "image" for call in calls))
+        self.assertTrue(all(not (op.root / c).exists() for c in kit.COMPONENTS))
+        self.assertEqual(Path(plan["bundle"]).read_bytes(), original)
+        self.assertTrue((op.root / "operation.json").exists())
+
+    def test_cleanup_without_images_still_rejects_foreign_or_replaced_resources(self):
+        for kind in ("container", "volume"):
+            for fault, code in (("foreign", "RESOURCE_OWNERSHIP_MISMATCH"),
+                                ("replaced", "CLEANUP_RESOURCE_REPLACED"),
+                                ("missing-receipt", "CLEANUP_CREATION_RECEIPT_MISSING")):
+                with self.subTest(kind=kind, fault=fault):
+                    plan, op, resources, calls, docker = self.cleanup_fixture((kind,))
+                    value = next(iter(resources.values()))
+                    if fault == "foreign":
+                        labels = value["Config"]["Labels"] if kind == "container" else value["Labels"]
+                        labels[kit.LABEL] = "unrelated-run"
+                    elif fault == "replaced":
+                        value["Id" if kind == "container" else "CreatedAt"] = "replaced-identity"
+                    events = op.events()
+                    if fault == "missing-receipt":
+                        events = [e for e in events if e["phase"] != "RESOURCE_CREATED"]
+                    with patch.object(kit, "docker", side_effect=docker), \
+                         patch.object(op, "events", return_value=events):
+                        self.denied(code, kit.cleanup, plan, op)
+                    self.assertFalse(any(c[0] == "rm" or c[:2] == ("volume", "rm") for c in calls))
+                    self.assertTrue(all((op.root / c).exists() for c in kit.COMPONENTS))
+
+    def test_cleanup_identity_checks_survive_missing_images(self):
+        for changes, code in (({"ID": "wrong"}, "DOCKER_ENGINE_MISMATCH"),
+                              ({"OSType": "windows"}, "DOCKER_ENGINE_MISMATCH"),
+                              ({"Name": "fai-crm-prod-02"}, "PRODUCTION_DOCKER_ENGINE_DENIED")):
+            with self.subTest(changes=changes):
+                plan, op, resources, calls, docker = self.cleanup_fixture()
+                def altered_engine(*args, **kwargs):
+                    if args[0] == "info":
+                        return kit.canonical({"ID": plan["engine_id"], "OSType": "linux",
+                                              "Name": "synthetic"} | changes)
+                    return docker(*args, **kwargs)
+                with patch.object(kit, "docker", side_effect=altered_engine):
+                    self.denied(code, kit.cleanup, plan, op)
+                self.assertEqual(calls, [])
+                self.assertEqual(len(resources), 2)
+
+    def test_new_recovery_still_requires_images_when_cleanup_does_not(self):
+        plan, op, resources, calls, docker = self.cleanup_fixture()
+        with patch.object(kit, "docker", side_effect=docker):
+            self.denied("COMMAND_FAILED_DOCKER", kit.destination_preflight, plan)
+        self.assertTrue(any(c[0] == "image" for c in calls))
+        self.assertEqual(len(resources), 2)
+
     def test_interrupted_receive_resume_and_changed_destination(self):
         op = kit.Operation(self.plan, "a" * 64)
         try:
@@ -309,7 +473,8 @@ class RecoveryGuards(unittest.TestCase):
         for events, code in (([intent], "CLEANUP_CREATION_RECEIPT_MISSING"),
                              ([intent, created], "CLEANUP_RESOURCE_REPLACED")):
             operation = SimpleNamespace(events=lambda: events)
-            with patch.object(kit, "destination_preflight"), patch.object(kit, "docker_object", return_value=value), \
+            with patch.object(kit, "destination_identity", return_value=kit.target_names(plan)), \
+                 patch.object(kit, "docker_object", return_value=value), \
                  patch.object(kit, "docker", return_value=(name + "\n").encode()) as commands:
                 self.denied(code, kit.cleanup, plan, operation)
                 self.assertFalse(any("rm" in call.args for call in commands.call_args_list))
