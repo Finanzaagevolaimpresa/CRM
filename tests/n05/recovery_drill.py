@@ -352,12 +352,23 @@ def main():
             remote_plan_bytes = kit.canonical(receiver_plan)
             receiver_start = ("mkdir -p /run/sshd /root/.ssh /work /opt/kit/scripts/n05; "
                 "chmod 700 /root/.ssh /work; ssh-keygen -A >/dev/null 2>&1; "
+                "/usr/sbin/sshd -t; touch /run/q04-sshd.ready; "
                 "exec /usr/sbin/sshd -D -e -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no "
                 "-o PermitRootLogin=prohibit-password -o AllowTcpForwarding=no -o X11Forwarding=no")
             receiver_id = create_container(receiver, ["--pull", "never", "--hostname", receiver,
                    "--label", TEST_LABEL + "=" + test_id, "--network", network,
                    "--entrypoint", "sh", runner_image, "-ceu", receiver_start])
             docker("start", receiver_id)
+            deadline = time.monotonic() + 30
+            while True:
+                ready = subprocess.run(["docker", "--host", "unix:///var/run/docker.sock",
+                    "exec", receiver_id, "sh", "-c",
+                    "test -f /run/q04-sshd.ready && test -s /etc/ssh/ssh_host_ed25519_key.pub"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if ready.returncode == 0:
+                    break
+                check(time.monotonic() < deadline, "synthetic-ssh-initialization-within-timeout")
+                time.sleep(0.2)
             for path, payload in [
                 ("/root/.ssh/authorized_keys", (ssh_identity.with_suffix(".identity.pub")).read_bytes()),
                 ("/opt/kit/scripts/n05/recovery_kit.py", kit.PROGRAM.read_bytes()),
