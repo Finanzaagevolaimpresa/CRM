@@ -8,6 +8,7 @@ umask 077
 : "${N05_RECOVERY_RUNNER_IMAGE:?prebuilt recovery-runner image required}"
 : "${N05_RECOVERY_APP_IMAGE:?prebuilt real application source image required}"
 : "${N05_RECOVERY_POSTGRES_IMAGE:?pinned PostgreSQL image required}"
+: "${N05_RECOVERY_DOCUMENT_HELPER_IMAGE:?pinned GNU tar document helper required}"
 [[ "$(hostname)" != fai-crm-prod-02 ]]
 ROOT="$(git rev-parse --show-toplevel)"
 HEAD="$(git rev-parse HEAD)"
@@ -65,6 +66,7 @@ RUNNER_ID="$(docker create --pull never --name "$RUNNER" --hostname "$RUNNER" \
   -e "N05_RECOVERY_TEST_NETWORK=$NETWORK" -e "N05_RECOVERY_RUNNER_IMAGE=$N05_RECOVERY_RUNNER_IMAGE" \
   -e "N05_RECOVERY_APP_IMAGE=$N05_RECOVERY_APP_IMAGE" \
   -e "N05_RECOVERY_POSTGRES_IMAGE=$N05_RECOVERY_POSTGRES_IMAGE" \
+  -e "N05_RECOVERY_DOCUMENT_HELPER_IMAGE=$N05_RECOVERY_DOCUMENT_HELPER_IMAGE" \
   --entrypoint sh "$N05_RECOVERY_RUNNER_IMAGE" -ceu '
     cp -a --no-preserve=ownership /input /workspace/repo
     test "$(git -C /workspace/repo rev-parse HEAD)" = "$1"

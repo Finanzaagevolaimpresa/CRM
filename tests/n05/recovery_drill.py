@@ -148,15 +148,18 @@ def main():
     runner_image = os.environ["N05_RECOVERY_RUNNER_IMAGE"]
     app_image = os.environ["N05_RECOVERY_APP_IMAGE"]
     pg_image = os.environ["N05_RECOVERY_POSTGRES_IMAGE"]
+    document_helper = os.environ["N05_RECOVERY_DOCUMENT_HELPER_IMAGE"]
     network_info = json.loads(docker("network", "inspect", network))[0]
     check(network_info["Internal"] and network_info["Labels"].get(TEST_LABEL) == test_id,
           "internal-fixture-network")
-    for image in (runner_image, app_image, pg_image):
+    for image in (runner_image, app_image, pg_image, document_helper):
         docker("image", "inspect", image)
     binding = kit.tools_binding()
     kit.verify_tools(binding)
     app = json.loads(docker("image", "inspect", app_image))[0]
     pg_id = json.loads(docker("image", "inspect", pg_image))[0]["Id"]
+    document_helper_id = json.loads(docker("image", "inspect", document_helper))[0]["Id"]
+    check(document_helper_id != pg_id, "separate-pinned-document-helper")
     source_commit = app["Config"]["Labels"]["org.opencontainers.image.revision"]
     source_tree = app["Config"]["Labels"]["it.finanzaagevolaimpresa.source-tree"]
     check(source_commit != binding["commit"], "distinct-image-and-tools-source")
@@ -460,8 +463,26 @@ def main():
             restored = basic("recover", work, binding) | {
                 "bundle": protection["output"], "bundle_sha256": protected["bundle_sha256"],
                 "bundle_bytes": protected["bundle_bytes"], "recipient": public, "identity_file": str(identity),
-                "expected": expected, "engine_id": engine, "postgres_image_id": pg_id}
+                "expected": expected, "engine_id": engine, "postgres_image_id": pg_id,
+                "document_helper_image_id": document_helper_id}
             restored["target_project"] = "fai-crm-recovery-" + restored["run_id"]
+            # These actual CLI calls must stop before decryption, the parent
+            # journal, or any destination/anonymous volume allocation.
+            probe_containers = set(docker("ps", "-aq", "--no-trunc").decode().split())
+            probe_volumes = set(docker("volume", "ls", "-q").decode().split())
+            for helper, code in (
+                ("node:22-bookworm", "IMAGE_ID_REQUIRED"),
+                ("sha256:" + "0" * 64, "DOCUMENT_HELPER_IMAGE_UNAVAILABLE"),
+                (pg_id, "DOCUMENT_HELPER_CAPABILITY_FAILED"),
+            ):
+                bad = copy.deepcopy(restored)
+                bad["document_helper_image_id"] = helper
+                invoke(root, bad, expect=code)
+                check(not (work / bad["run_id"]).exists(), "helper-refused-before-parent-" + code)
+                check(set(docker("volume", "ls", "-q").decode().split()) == probe_volumes,
+                      "helper-refusal-no-target-or-anonymous-volumes-" + code)
+                check(set(docker("ps", "-aq", "--no-trunc").decode().split()) == probe_containers,
+                      "helper-refusal-probe-cleaned-" + code)
             wrong_identity = root / "wrong-age.identity"
             command(["age-keygen", "-o", wrong_identity])
             wrong_identity.chmod(0o600)
@@ -507,6 +528,7 @@ def main():
             result = invoke(root, restored)
             check(result["status"] == "RECOVERY_VERIFIED" and result["migrations"] == 43, "complete-database-and-documents-recovery")
             check(result["document_metadata_verified"], "document-root-directory-file-ownership-and-mode")
+            check(result["document_helper_image_id"] == document_helper_id, "recovery-receipt-pins-helper")
             # Use the image's actual nonroot identity, without starting its app.
             # Creation and replacement fail on the previous root-owned restore.
             access = json.loads(fixture_helper([
