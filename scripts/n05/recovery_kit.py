@@ -10,6 +10,7 @@ import ctypes
 import datetime
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -47,7 +48,7 @@ PHASE_KEYS = {
                 "program_sha256"},
     "recover": {"bundle", "bundle_sha256", "bundle_bytes", "recipient",
                 "identity_file", "expected", "engine_id", "postgres_image_id",
-                "target_project"},
+                "document_helper_image_id", "target_project"},
 }
 ENV_KEYS = {
     "CONFIRM_PRODUCTION_BACKUP", "FAI_ENVIRONMENT", "FAI_ENVIRONMENT_SENTINEL",
@@ -238,6 +239,12 @@ def load_plan(path, expected_hash):
     value = decode(p.read_bytes())
     require(isinstance(value, dict) and value.get("schema") == SCHEMA, "PLAN_SCHEMA_MISMATCH")
     phase = value.get("phase")
+    if (phase == "recover"
+            and set(value) == BASE_KEYS | (PHASE_KEYS["recover"] - {"document_helper_image_id"})):
+        # Historic plans also bind the original tool commit/program. Keep that
+        # checkout for status/cleanup instead of rewriting plans or relaxing
+        # the ordinary exact-tools identity gate.
+        raise Denied("LEGACY_RECOVERY_PLAN_USE_ORIGINAL_TOOLS")
     require(phase in PHASE_KEYS and set(value) == BASE_KEYS | PHASE_KEYS[phase], "PLAN_KEYS_INVALID")
     require(value["data_class"] in ("synthetic", "production"), "DATA_CLASS_REQUIRED")
     require(re.fullmatch(r"[a-f0-9]{32}", value["run_id"] or ""), "RUN_ID_INVALID")
@@ -738,6 +745,86 @@ def recovery_preflight(plan):
     require(run(["age-keygen", "-y", identity]).decode().strip() == plan["recipient"],
             "DECRYPTION_IDENTITY_MISMATCH")
     destination_preflight(plan)
+    document_helper_preflight(plan)
+
+
+def document_helper_image(plan):
+    """No pull/fallback; named image must already exist on the pinned engine."""
+    identifier = plan.get("document_helper_image_id")
+    require(isinstance(identifier, str), "DOCUMENT_HELPER_IMAGE_REQUIRED")
+    image_id(identifier)
+    try:
+        image = docker_object("image", identifier)
+    except Denied:
+        raise Denied("DOCUMENT_HELPER_IMAGE_UNAVAILABLE") from None
+    require(image.get("Id") == identifier, "DOCUMENT_HELPER_IMAGE_MISMATCH")
+    require(image.get("Os") == "linux", "DOCUMENT_HELPER_PLATFORM_UNSUPPORTED")
+    # temporary_container covers the official PostgreSQL VOLUME with tmpfs,
+    # including the incompatible BusyBox regression. Any other implicit volume
+    # must be refused BEFORE Docker create, not discovered after allocation.
+    volumes = image.get("Config", {}).get("Volumes") or {}
+    require(set(volumes) <= {"/var/lib/postgresql/data"},
+            "DOCUMENT_HELPER_IMPLICIT_VOLUMES_DENIED")
+    return identifier
+
+
+def document_helper_probe_archive(path):
+    """Only invented bytes, with distinct numeric owners and directory modes."""
+    with tarfile.open(path, "x:gz") as archive:
+        for name, mode in ((".", 0o750), ("nested", 0o700), ("empty", 0o710),
+                           ("nested/synthetic-probe", 0o640)):
+            item = tarfile.TarInfo(name)
+            item.uid, item.gid, item.mode = 12345, 23456, mode
+            item.type = tarfile.REGTYPE if name.endswith("synthetic-probe") else tarfile.DIRTYPE
+            data = b"N05 document helper synthetic capability probe\n"
+            item.size = len(data) if item.isfile() else 0
+            archive.addfile(item, io.BytesIO(data) if item.isfile() else None)
+    os.chmod(path, 0o600)
+
+
+def document_helper_preflight(plan):
+    helper = document_helper_image(plan)
+    # A separate, fully receipted cohort contains only a synthetic tmpfs probe.
+    # Its valid pinned plan can be used with status/cleanup after interruption;
+    # it cannot be mistaken for the parent recovery's new/empty destination.
+    probe_id = uuid.uuid4().hex
+    probe = plan | {"run_id": probe_id, "data_class": "synthetic",
+                    "target_project": "fai-crm-recovery-" + probe_id}
+    probe_path = private_dir(plan["work_root"]) / ("document-helper-probe-" + probe_id + ".json")
+    exclusive(probe_path, canonical(probe))
+    op = Operation(probe, digest(probe_path))
+    op.event("DOCUMENT_HELPER_PROBE", parent_run_id=plan["run_id"],
+             image_id=helper, plan_path=str(probe_path), plan_sha256=digest(probe_path))
+    original, exported = op.root / "probe-input.tar", op.root / "probe-output.tar"
+    try:
+        document_helper_probe_archive(original)
+        with original.open("rb") as source, exported.open("xb") as target:
+            os.chmod(exported, 0o600)
+            temporary_container(probe, op, target_names(probe)["documents_helper"],
+                ["--user", "0:0", "--cap-add", "CHOWN", "--cap-add", "FOWNER",
+                 "--cap-add", "DAC_OVERRIDE", "--memory", "64m", "--memory-swap", "64m",
+                 "--cpus", "1", "--pids-limit", "32",
+                 "--tmpfs", "/probe:rw,nosuid,nodev,noexec,size=1m,mode=0700",
+                 "--entrypoint", "sh", helper, "-ceu",
+                 "tar --version | grep -q '^tar (GNU tar)'; "
+                 "tar --numeric-owner --same-owner --same-permissions --delay-directory-restore "
+                 "-xzf - -C /probe; exec tar -czf - -C /probe ."],
+                input_file=source, output_file=target)
+        require(document_inventory(exported) == document_inventory(original),
+                "DOCUMENT_HELPER_METADATA_MISMATCH")
+        op.event("DOCUMENT_HELPER_VERIFIED", image_id=helper,
+                 numeric_ownership_modes_root_directories_bytes=True)
+    except (Denied, tarfile.TarError, OSError) as error:
+        # Never return helper stdout/stderr or container diagnostics to callers.
+        op.event("DOCUMENT_HELPER_FAILED", error_type=type(error).__name__)
+        raise Denied("DOCUMENT_HELPER_CAPABILITY_FAILED") from None
+    finally:
+        try:
+            # Existing cleanup uses engine + creation receipts, never images.
+            # Probe plans/journals stay private; input/output synthetic tars go.
+            cleanup(probe, op)
+        finally:
+            op.close()
 
 
 def owned_container_args(plan, name):
@@ -789,6 +876,7 @@ def recover(plan, op):
     verify_n05(backup, plan["expected"])
     names = destination_preflight(plan)
     pg_image = plan["postgres_image_id"]
+    document_image = document_helper_image(plan)
     # Validate the authenticated custom dump in a disposable networkless process
     # before allocating any persistent target volume.
     with (backup / "postgres.dump").open("rb") as source:
@@ -847,7 +935,7 @@ def recover(plan, op):
         temporary_container(plan, op, names["documents_helper"], ["--user", "0:0",
                "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE", "--mount",
                "type=volume,src=" + names["documents_volume"] + ",dst=/recovery",
-               "--entrypoint", "sh", pg_image, "-ceu",
+                "--entrypoint", "sh", document_image, "-ceu",
                'test -z "$(ls -A /recovery)"; exec tar --numeric-owner --same-owner --same-permissions --delay-directory-restore -xzf - -C /recovery'],
                input_file=source)
     op.event("DOCUMENTS_RESTORED")
@@ -877,7 +965,7 @@ def recover(plan, op):
         temporary_container(plan, op, names["documents_helper"],
                ["--cap-add", "DAC_OVERRIDE", "--mount",
                "type=volume,src=" + names["documents_volume"] + ",dst=/recovery,readonly",
-               "--entrypoint", "tar", pg_image, "-czf", "-", "-C", "/recovery", "."],
+               "--entrypoint", "tar", document_image, "-czf", "-", "-C", "/recovery", "."],
                output_file=target)
     original_docs = document_inventory(backup / "documents.tar.gz")
     require(document_inventory(exported) == original_docs, "RESTORED_DOCUMENTS_MISMATCH")
@@ -886,7 +974,7 @@ def recover(plan, op):
     result = {"status": "RECOVERY_VERIFIED", "source": plan["expected"],
               "migrations": len(observed),
               "document_files": sum(x["kind"] == "file" for x in original_docs.values()),
-              "document_metadata_verified": True,
+              "document_metadata_verified": True, "document_helper_image_id": document_image,
               "configuration_files": len(private_inventory(op.root / "configuration")),
               "cryptographic_files": len(private_inventory(op.root / "cryptographic-material")),
               "database_restore": "single transaction; rebuilt constraints/indexes",

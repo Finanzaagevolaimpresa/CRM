@@ -521,7 +521,8 @@ jobs:
           N05_RECOVERY_SYNTHETIC_CONFIRMED: "1"
           N05_RECOVERY_RUNNER_IMAGE: fai-crm:recovery-runner-${{ github.run_id }}-${{ github.run_attempt }}
           N05_RECOVERY_APP_IMAGE: fai-crm:recovery-source-${{ github.run_id }}-${{ github.run_attempt }}
-          N05_RECOVERY_POSTGRES_IMAGE: postgres@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+          N05_RECOVERY_POSTGRES_IMAGE: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+          N05_RECOVERY_DOCUMENT_HELPER_IMAGE: node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
         run: |
           for image in "$N05_RECOVERY_RUNNER_IMAGE" "$N05_RECOVERY_APP_IMAGE"; do
             if docker image inspect "$image" >/dev/null 2>&1; then
@@ -546,6 +547,7 @@ jobs:
             prisma next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json public scripts src \
             | tar -xf - -C "$context"
           docker pull "$N05_RECOVERY_POSTGRES_IMAGE"
+          docker pull "$N05_RECOVERY_DOCUMENT_HELPER_IMAGE"
           docker build --build-arg SOURCE_COMMIT="$image_source" \
             --build-arg SOURCE_TREE="$(git rev-parse "$image_source^{tree}")" \
             -f "$context/Dockerfile.prod.example" -t "$N05_RECOVERY_APP_IMAGE" "$context"

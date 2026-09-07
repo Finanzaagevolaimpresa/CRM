@@ -122,6 +122,96 @@ class RecoveryGuards(unittest.TestCase):
         self.plan["environment_override"] = {"DOCKER_HOST": "tcp://outside:2375"}
         self.denied("PLAN_KEYS_INVALID", self.load)
 
+    def test_legacy_recovery_plan_requires_its_preserved_original_tools(self):
+        fields = kit.BASE_KEYS | (kit.PHASE_KEYS["recover"] - {"document_helper_image_id"})
+        legacy = {key: None for key in fields} | {"schema": kit.SCHEMA, "phase": "recover"}
+        self.denied("LEGACY_RECOVERY_PLAN_USE_ORIGINAL_TOOLS", self.load, legacy)
+        self.assertEqual(list(self.work.iterdir()), [])
+
+    def test_document_helper_identity_and_implicit_volume_guards(self):
+        identifier = "sha256:" + "3" * 64
+        plan = {"document_helper_image_id": identifier}
+        image = {"Id": identifier, "Os": "linux", "Config": {"Volumes": None}}
+        self.denied("DOCUMENT_HELPER_IMAGE_REQUIRED", kit.document_helper_image, {})
+        self.denied("IMAGE_ID_REQUIRED", kit.document_helper_image,
+                    {"document_helper_image_id": "node:22-bookworm"})
+        with patch.object(kit, "docker_object", side_effect=kit.Denied("COMMAND_FAILED_DOCKER")):
+            self.denied("DOCUMENT_HELPER_IMAGE_UNAVAILABLE", kit.document_helper_image, plan)
+        for wrong, code in (
+            (image | {"Id": "sha256:" + "4" * 64}, "DOCUMENT_HELPER_IMAGE_MISMATCH"),
+            (image | {"Os": "windows"}, "DOCUMENT_HELPER_PLATFORM_UNSUPPORTED"),
+            (image | {"Config": {"Volumes": {"/unregistered": {}}}},
+             "DOCUMENT_HELPER_IMPLICIT_VOLUMES_DENIED"),
+        ):
+            with self.subTest(code=code), patch.object(kit, "docker_object", return_value=wrong), \
+                 patch.object(kit, "temporary_container") as create:
+                self.denied(code, kit.document_helper_preflight, plan)
+                create.assert_not_called()
+        with patch.object(kit, "docker_object", return_value=image):
+            self.assertEqual(kit.document_helper_image(plan), identifier)
+
+    def test_helper_gate_precedes_decryption_and_parent_operation(self):
+        identity = self.file("age-test.identity")
+        plan = {"expected": {}, "recipient": "synthetic-recipient", "identity_file": str(identity)}
+        order = []
+        def step(name, result=None):
+            def call(*args, **kwargs):
+                order.append(name)
+                return result
+            return call
+        with patch.object(kit, "expected_source", side_effect=step("source")), \
+             patch.object(kit, "bundle_preflight", side_effect=step("bundle")), \
+             patch.object(kit, "age_ready", side_effect=step("age")), \
+             patch.object(kit, "recipient", side_effect=step("recipient")), \
+             patch.object(kit, "run", return_value=b"synthetic-recipient"), \
+             patch.object(kit, "destination_preflight", side_effect=step("destination")), \
+             patch.object(kit, "document_helper_preflight",
+                          side_effect=kit.Denied("DOCUMENT_HELPER_CAPABILITY_FAILED")), \
+             patch.object(kit, "recover") as recover, patch.object(kit, "Operation") as operation:
+            self.denied("DOCUMENT_HELPER_CAPABILITY_FAILED", kit.recovery_preflight, plan)
+            recover.assert_not_called()
+            operation.assert_not_called()
+        self.assertEqual(order, ["source", "bundle", "age", "recipient", "destination"])
+
+    def test_probe_checks_metadata_and_always_cleans_its_distinct_cohort(self):
+        for outcome in ("valid", "metadata-loss", "incompatible"):
+            with self.subTest(outcome=outcome):
+                plan = self.plan | {"phase": "recover", "document_helper_image_id": "sha256:" + "3" * 64}
+                plan["target_project"] = "fai-crm-recovery-" + plan["run_id"]
+                observed = {}
+                def container(probe, op, name, arguments, *, input_file, output_file):
+                    observed.update(probe=probe, root=op.root, arguments=arguments)
+                    if outcome == "incompatible":
+                        raise kit.Denied("COMMAND_FAILED_DOCKER")
+                    if outcome == "valid":
+                        output_file.write(input_file.read())
+                    else:
+                        output_file.write(self.document_tar().read_bytes())
+                def cleanup(probe, op):
+                    self.assertNotEqual(probe["run_id"], plan["run_id"])
+                    self.assertEqual(probe["data_class"], "synthetic")
+                    self.assertFalse((self.work / plan["run_id"]).exists())
+                    for path in op.root.glob("*.tar"):
+                        path.unlink()
+                    op.event("CLEANUP_VERIFIED")
+                with patch.object(kit, "document_helper_image", return_value=plan["document_helper_image_id"]), \
+                     patch.object(kit, "temporary_container", side_effect=container), \
+                     patch.object(kit, "cleanup", side_effect=cleanup) as clean:
+                    if outcome == "valid":
+                        kit.document_helper_preflight(plan)
+                    else:
+                        self.denied("DOCUMENT_HELPER_CAPABILITY_FAILED", kit.document_helper_preflight, plan)
+                    clean.assert_called_once()
+                events = [json.loads(path.read_text())
+                          for path in sorted(observed["root"].glob("event-*.json"))]
+                self.assertEqual(events[-1]["phase"], "CLEANUP_VERIFIED")
+                self.assertFalse(list(observed["root"].glob("*.tar")))
+                args = observed["arguments"]
+                self.assertIn(plan["document_helper_image_id"], args)
+                self.assertIn("--same-owner", args[-1])
+                self.assertIn("--same-permissions", args[-1])
+                self.assertIn("--numeric-owner", args[-1])
+
     def test_duplicate_json_keys_denied(self):
         self.denied("DUPLICATE_JSON_KEY", kit.decode, b'{"phase":"receive","phase":"recover"}')
 
@@ -279,6 +369,7 @@ class RecoveryGuards(unittest.TestCase):
     def cleanup_fixture(self, kinds=("container", "volume")):
         plan = self.plan | {"phase": "recover", "run_id": kit.uuid.uuid4().hex,
                             "engine_id": "synthetic-engine", "postgres_image_id": "sha256:" + "1" * 64,
+                            "document_helper_image_id": "sha256:" + "3" * 64,
                             "expected": {"app_image_id": "sha256:" + "2" * 64}}
         plan["target_project"] = "fai-crm-recovery-" + plan["run_id"]
         plan["bundle"] = str(self.file("preserved-bundle-" + plan["run_id"], b"synthetic ciphertext"))
@@ -343,6 +434,16 @@ class RecoveryGuards(unittest.TestCase):
         self.assertTrue(all(not (op.root / c).exists() for c in kit.COMPONENTS))
         self.assertEqual(Path(plan["bundle"]).read_bytes(), original)
         self.assertTrue((op.root / "operation.json").exists())
+
+    def test_cleanup_primitive_preserves_legacy_plan_and_receipts_without_helper_field(self):
+        plan, op, resources, calls, docker = self.cleanup_fixture()
+        del plan["document_helper_image_id"]
+        original = (op.root / "operation.json").read_bytes()
+        with patch.object(kit, "docker", side_effect=docker):
+            self.assertEqual(kit.cleanup(plan, op)["status"], "CLEANUP_VERIFIED")
+        self.assertEqual(resources, {})
+        self.assertEqual((op.root / "operation.json").read_bytes(), original)
+        self.assertFalse(any(call[0] == "image" for call in calls))
 
     def test_cleanup_without_images_still_rejects_foreign_or_replaced_resources(self):
         for kind in ("container", "volume"):

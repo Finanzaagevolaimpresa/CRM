@@ -118,7 +118,7 @@ Additional exact keys by phase:
 | protect | `backup_set`, `expected`, `recipient`, `configuration_dir`, `cryptographic_dir`, `configuration_sha256`, `cryptographic_sha256`, `output` |
 | transfer | `bundle`, `bundle_sha256`, `bundle_bytes`, `recipient_sha256`, `ssh` |
 | receive | `bundle_sha256`, `bundle_bytes`, `recipient_sha256`, `sender_host`, `program_sha256` |
-| recover | `bundle`, `bundle_sha256`, `bundle_bytes`, `recipient`, `identity_file`, `expected`, `engine_id`, `postgres_image_id`, `target_project` |
+| recover | `bundle`, `bundle_sha256`, `bundle_bytes`, `recipient`, `identity_file`, `expected`, `engine_id`, `postgres_image_id`, `document_helper_image_id`, `target_project` |
 
 The backup `environment` contains only N05's existing explicit variables
 (see `ENV_KEYS` in the tool). It must provide absolute ENV_FILE/APP_ENV_FILE
@@ -156,6 +156,47 @@ they decrypt, share them in logs, or conflate the test identity with real custod
 Passphrase/interactive modes and age plugins are deliberately not selected here.
 
 For recovery, `target_project` must equal `fai-crm-recovery-` plus `run_id`.
+The document helper is a separate, explicitly approved Linux image, pinned by
+the immutable `document_helper_image_id` returned by the target engine's image
+inspect. It supplies GNU tar for **both** extraction and the comparison export.
+The PostgreSQL image continues to supply only the database and pg_restore tools;
+its BusyBox tar is not treated as GNU tar and no packages are installed into it.
+Neither helper substitution nor image pull occurs inside recovery.
+
+CI uses the official Node Bookworm distribution already pinned as its runner
+base, `node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d`.
+Acquire that distribution during separately authorized preparation, record its
+registry provenance, platform and inspected immutable image ID, and pin that ID
+in the private plan. A registry/index digest is not assumed to equal every
+engine's platform image ID. Node and the application are not started by this
+helper. CI exercises the separate PostgreSQL Alpine distribution pinned at
+`postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`.
+
+Recovery preflight checks availability/identity, Linux and declared volumes,
+then executes a small synthetic GNU tar round-trip **before decryption or target
+volume creation**. It compares bytes, numeric UID/GID, modes, root and empty
+directories. Unsupported tar or changed metadata produces
+`DOCUMENT_HELPER_CAPABILITY_FAILED`. There is no fallback or metadata relaxation.
+The probe runs networkless with a read-only root and bounded tmpfs, memory and
+processes. An inherited PostgreSQL data VOLUME is covered explicitly by tmpfs;
+other implicit volumes are rejected before container creation.
+
+Unlike the read-only receive preflight, this recovery capability check creates
+a separately identified synthetic probe container and private plan/journal under
+`work_root`. The parent recovery remains uninitialized. Probe receipts record the
+container ID before execution and cleanup checks engine, names, labels and that ID.
+Normal completion removes the probe container and synthetic archives; it retains
+`document-helper-probe-<uuid>.json` and its journal for inspection. If interrupted,
+use that exact child plan/hash with `status` and `cleanup`; do not run `recover`
+on the child plan. Cleanup does not require the helper, PostgreSQL or app images.
+
+Plans created before the helper field existed remain bound to their original
+tool commit/tree/program hash. Preserve that original tooling and use it for
+`status`/`cleanup` of those operations. The new loader explicitly reports
+`LEGACY_RECOVERY_PLAN_USE_ORIGINAL_TOOLS`; do not edit historical plans, hashes,
+journals or manifests to satisfy the new schema. New recovery plans must bind
+the corrected tools and the helper. The ordinary exact-tools gate is unchanged.
+
 The kit allocates new database/document volumes and refuses occupied names.
 It decrypts and checks all archives before allocating those volumes, restores the
 database in a single transaction, rebuilds constraints and indexes, checks the
