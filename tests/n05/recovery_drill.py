@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -41,6 +42,18 @@ def command(args, *, data=None, timeout=300):
                       b"P1001", b"P1002", b"P1012", b"P3018", b"P3006", b"not found",
                       b"permission denied", b"network", b"read-only") if code in diagnostic]
         print("DRILL_DIAGNOSTIC|" + ",".join(c.decode() for c in categories), file=sys.stderr)
+        # Only technical error lines from this wholly synthetic fixture. Never
+        # dump arbitrary stdout, command arguments, SQL rows or custody material.
+        lines = []
+        for line in diagnostic.decode(errors="replace").splitlines():
+            if not re.search(r"error|fatal|failed|cannot|could not|unable|invalid|unsupported", line, re.I):
+                continue
+            line = line.replace(MARKER.decode(), "[synthetic-marker]").replace("synthetic-only", "[synthetic-password]")
+            line = re.sub(r"postgres(?:ql)?://\S+", "[synthetic-database-url]", line)
+            line = re.sub(r"AGE-SECRET-KEY-\S+", "[synthetic-age-identity]", line)
+            if "PRIVATE KEY" not in line:
+                lines.append(line[:300])
+        print("DRILL_TECHNICAL_ERROR|" + " | ".join(lines[:4]), file=sys.stderr)
         raise RuntimeError("DRILL_COMMAND_FAILED_" + Path(str(args[0])).name)
     return result.stdout
 
