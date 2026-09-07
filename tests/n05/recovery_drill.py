@@ -367,8 +367,10 @@ def main():
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if ready.returncode == 0:
                     break
-                check(time.monotonic() < deadline, "synthetic-ssh-initialization-within-timeout")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("SYNTHETIC_SSH_INITIALIZATION_TIMEOUT")
                 time.sleep(0.2)
+            check(True, "synthetic-ssh-initialized-within-timeout")
             for path, payload in [
                 ("/root/.ssh/authorized_keys", (ssh_identity.with_suffix(".identity.pub")).read_bytes()),
                 ("/opt/kit/scripts/n05/recovery_kit.py", kit.PROGRAM.read_bytes()),
@@ -525,7 +527,8 @@ def main():
                 check(info["Labels"].get(TEST_LABEL) == test_id
                       and recorded == {k: info[k] for k in recorded}, "fixture-volume-cleanup-recorded-identity")
                 docker("volume", "rm", name)
-    print(json.dumps({"status": "N05_RECOVERY_DRILL_PASS", "checks": len(passed),
+        print(json.dumps({"status": "N05_RECOVERY_DRILL_PASS", "assertions": len(passed),
+                      "distinct_checks": sorted(set(passed)),
                       "app_started": False, "fixture": "synthetic", "cleanup": "verified",
                       "engine_id": engine, "runner_image_id": json.loads(docker("image", "inspect", runner_image))[0]["Id"],
                       "tools": binding, "source_image_id": app["Id"]}), flush=True)

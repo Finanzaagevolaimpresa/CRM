@@ -846,9 +846,7 @@ def recover(plan, op):
     expected = {Path(p).parent.name: sha(run(["git", "-C", ROOT, "show",
                  plan["expected"]["source_commit"] + ":" + p])) for p in migration_paths
                 if p.endswith("/migration.sql")}
-    require(len(expected) == 43 and len(observed) == 43
-            and all(x["finished"] and not x["rolled_back"] and expected.get(x["name"]) == x["checksum"]
-                    for x in observed), "RESTORED_MIGRATIONS_MISMATCH")
+    verify_restored_migrations(observed, expected)
     invalid = sql(plan, names["postgres"],
         "BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; "
         "SELECT count(*) FROM pg_constraint WHERE contype IN ('f','c') AND NOT convalidated; ROLLBACK;").strip()
@@ -876,6 +874,13 @@ def recover(plan, op):
               "data_class": plan["data_class"]}
     op.event("RECOVERY_VERIFIED", result=result)
     return result
+
+
+def verify_restored_migrations(observed, expected):
+    require(len(expected) == 43 and len(observed) == 43
+            and {x["name"] for x in observed} == set(expected)
+            and all(x["finished"] and not x["rolled_back"] and expected.get(x["name"]) == x["checksum"]
+                    for x in observed), "RESTORED_MIGRATIONS_MISMATCH")
 
 
 def archive_digests(path):

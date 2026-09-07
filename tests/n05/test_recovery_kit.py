@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -239,6 +240,34 @@ class RecoveryGuards(unittest.TestCase):
     def test_cleanup_labels_do_not_authorize_other_resources(self):
         self.denied("RESOURCE_OWNERSHIP_MISMATCH", kit.check_owner,
                     {"Labels": {kit.LABEL: self.plan["run_id"]}}, self.plan)
+
+    def test_restored_migrations_require_exact_set_and_completed_checksums(self):
+        expected = {"migration-" + str(n): kit.sha(str(n).encode()) for n in range(43)}
+        observed = [{"name": n, "checksum": c, "finished": True, "rolled_back": False}
+                    for n, c in expected.items()]
+        kit.verify_restored_migrations(observed, expected)
+        for field, value in (("checksum", "0" * 64), ("finished", False), ("rolled_back", True)):
+            changed = copy.deepcopy(observed)
+            changed[0][field] = value
+            self.denied("RESTORED_MIGRATIONS_MISMATCH", kit.verify_restored_migrations, changed, expected)
+        duplicate = observed[:-1] + [observed[0]]
+        self.denied("RESTORED_MIGRATIONS_MISMATCH", kit.verify_restored_migrations, duplicate, expected)
+
+    def test_cleanup_requires_recorded_instance_even_with_matching_labels(self):
+        plan = self.plan | {"phase": "recover", "target_project": "fai-crm-recovery-" + self.plan["run_id"]}
+        name = kit.target_names(plan)["postgres"]
+        intent = {"phase": "RESOURCE_INTENT", "kind": "container", "name": name}
+        created = {"phase": "RESOURCE_CREATED", "kind": "container", "name": name, "resource_id": "a" * 64}
+        value = {"Id": "b" * 64, "Config": {"Labels": {
+            kit.LABEL: plan["run_id"], kit.TEST_LABEL: plan["run_id"],
+            "it.finanzaagevolaimpresa.sentinel": kit.SENTINEL}}}
+        for events, code in (([intent], "CLEANUP_CREATION_RECEIPT_MISSING"),
+                             ([intent, created], "CLEANUP_RESOURCE_REPLACED")):
+            operation = SimpleNamespace(events=lambda: events)
+            with patch.object(kit, "destination_preflight"), patch.object(kit, "docker_object", return_value=value), \
+                 patch.object(kit, "docker", return_value=(name + "\n").encode()) as commands:
+                self.denied(code, kit.cleanup, plan, operation)
+                self.assertFalse(any("rm" in call.args for call in commands.call_args_list))
 
 
 if __name__ == "__main__":
