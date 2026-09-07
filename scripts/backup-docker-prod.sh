@@ -30,4 +30,4 @@ export EXPECTED_DATABASE_NAME="${EXPECTED_DATABASE_NAME:?EXPECTED_DATABASE_NAME 
 export EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-37}"
 export BACKUP_CONSISTENCY=application-quiesced
 
-exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/n05/backup-compose.sh"
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/n05/backup-compose.sh" "$@"

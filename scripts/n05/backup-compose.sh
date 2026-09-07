@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
+MODE="${1:---create}"
+[[ "$#" -le 1 && ( "$MODE" == "--create" || "$MODE" == "--preflight" ) ]] \
+  || n05_fail BACKUP_MODE_INVALID
+
 : "${BACKUP_ROOT:?BACKUP_ROOT is required and must already exist}"
 : "${BACKUP_SET_ID:?BACKUP_SET_ID is required}"
 : "${SOURCE_COMMIT:?SOURCE_COMMIT is required}"
@@ -45,10 +49,7 @@ BACKUP_ROOT="$(n05_realpath "$BACKUP_ROOT")"
 FINAL_DIR="$BACKUP_ROOT/$BACKUP_SET_ID"
 PARTIAL_DIR="$BACKUP_ROOT/.partial-$BACKUP_SET_ID"
 [[ ! -e "$FINAL_DIR" && ! -e "$PARTIAL_DIR" ]] || n05_fail BACKUP_SET_ALREADY_EXISTS
-mkdir "$PARTIAL_DIR"
-chmod 700 "$PARTIAL_DIR"
-
-PARTIAL_ACTIVE=true
+PARTIAL_ACTIVE=false
 cleanup_partial() {
   set +e
   if [[ "$PARTIAL_ACTIVE" == true && -d "$PARTIAL_DIR" && ! -L "$PARTIAL_DIR" && "$(dirname "$PARTIAL_DIR")" == "$BACKUP_ROOT" ]]; then
@@ -144,6 +145,24 @@ migration_count="$(compose exec -T postgres sh -c \
   'SELECT COUNT(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')"
 [[ "$migration_count" == "${EXPECTED_MIGRATION_COUNT:-37}" ]] || n05_fail DATABASE_MIGRATION_COUNT_MISMATCH
 
+mapfile -t documents_volumes < <(docker volume ls -q \
+  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+  --filter "label=com.docker.compose.volume=$documents_logical_volume")
+[[ "${#documents_volumes[@]}" -eq 1 && -n "${documents_volumes[0]}" ]] \
+  || n05_fail DOCUMENTS_VOLUME_IDENTITY_MISMATCH
+documents_volume="${documents_volumes[0]}"
+
+# The preflight exercises the same identity/quiescence guards without creating
+# even a partial set. It neither grants production authorization nor stops app.
+if [[ "$MODE" == "--preflight" ]]; then
+  printf 'N05_BACKUP_PREFLIGHT_PASS|environment=%s|project=%s|migrations=%s\n' \
+    "$FAI_ENVIRONMENT" "$COMPOSE_PROJECT_NAME" "$migration_count"
+  exit 0
+fi
+mkdir "$PARTIAL_DIR"
+chmod 700 "$PARTIAL_DIR"
+PARTIAL_ACTIVE=true
+
 DATABASE_FILE="postgres.dump"
 DOCUMENTS_FILE="documents.tar.gz"
 compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc --no-owner --no-privileges' \
@@ -151,13 +170,6 @@ compose exec -T postgres sh -c 'exec pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_D
 chmod 600 "$PARTIAL_DIR/$DATABASE_FILE"
 [[ -s "$PARTIAL_DIR/$DATABASE_FILE" ]] || n05_fail DATABASE_BACKUP_EMPTY
 compose exec -T postgres pg_restore --list < "$PARTIAL_DIR/$DATABASE_FILE" >/dev/null
-
-mapfile -t documents_volumes < <(docker volume ls -q \
-  --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
-  --filter "label=com.docker.compose.volume=$documents_logical_volume")
-[[ "${#documents_volumes[@]}" -eq 1 && -n "${documents_volumes[0]}" ]] \
-  || n05_fail DOCUMENTS_VOLUME_IDENTITY_MISMATCH
-documents_volume="${documents_volumes[0]}"
 
 docker run --rm --pull never \
   --network none \
