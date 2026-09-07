@@ -46,7 +46,7 @@ def command(args, *, data=None, timeout=300):
         # dump arbitrary stdout, command arguments, SQL rows or custody material.
         lines = []
         for line in diagnostic.decode(errors="replace").splitlines():
-            if not re.search(r"error|fatal|failed|cannot|could not|unable|invalid|unsupported", line, re.I):
+            if not re.search(r"error|fatal|failed|cannot|could not|unable|invalid|unsupported|Applying migration", line, re.I):
                 continue
             line = line.replace(MARKER.decode(), "[synthetic-marker]").replace("synthetic-only", "[synthetic-password]")
             line = re.sub(r"postgres(?:ql)?://\S+", "[synthetic-database-url]", line)
@@ -450,6 +450,16 @@ def main():
             invoke(root, restored2, "cleanup")
             check(before_containers <= set(docker("ps", "-aq", "--no-trunc").decode().split())
                   and before_volumes <= set(docker("volume", "ls", "-q").decode().split()), "preexisting-resources-preserved")
+        except Exception:
+            if source_pg in own_containers:
+                # Only PostgreSQL error categories from the synthetic database;
+                # SQL statement lines and row contents are never returned.
+                logs = docker("logs", "--tail", "100", own_containers[source_pg])
+                for line in logs.decode(errors="replace").splitlines():
+                    if "ERROR:" in line and MARKER.decode() not in line:
+                        print("SYNTHETIC_POSTGRES_ERROR|" + line.split("ERROR:", 1)[1][:300],
+                              file=sys.stderr)
+            raise
         finally:
             # Real kit cleanup first. A failed step cannot target any unlabelled
             # resource; outer fixture cleanup is restricted to this random test.
