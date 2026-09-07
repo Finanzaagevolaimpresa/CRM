@@ -244,7 +244,7 @@ def load_plan(path, expected_hash):
             require(material != operation_root and operation_root not in material.parents
                     and material not in operation_root.parents, "OPERATION_OVERLAPS_INPUT_OR_OUTPUT")
     require(p != operation_root and operation_root not in p.parents, "PLAN_INSIDE_OPERATION")
-    if phase != "backup":
+    if phase in ("receive", "recover"):
         require(value["host"] != "fai-crm-prod-02" and "/opt/fai-crm" not in str(root)
                 and ".env.production" not in str(root), "PRODUCTION_DESTINATION_DENIED")
     if phase == "receive":

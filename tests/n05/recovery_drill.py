@@ -35,6 +35,12 @@ def command(args, *, data=None, timeout=300):
                             stderr=subprocess.PIPE, timeout=timeout, cwd=ROOT)
     if result.returncode:
         # Do not echo command arguments, database errors or private material.
+        diagnostic = result.stderr + result.stdout
+        # Only recognized tool failure categories are reported; contents stay private.
+        categories = [code for code in (b"EACCES", b"EROFS", b"ECONNREFUSED", b"P1000",
+                      b"P1001", b"P1002", b"P1012", b"P3018", b"P3006", b"not found",
+                      b"permission denied", b"network", b"read-only") if code in diagnostic]
+        print("DRILL_DIAGNOSTIC|" + ",".join(c.decode() for c in categories), file=sys.stderr)
         raise RuntimeError("DRILL_COMMAND_FAILED_" + Path(str(args[0])).name)
     return result.stdout
 
@@ -160,7 +166,7 @@ def main():
             wait_sql(source_pg)
             database_url = "postgresql://fai_source:synthetic-only@postgres:5432/fai_recovery_source?schema=public"
             docker("run", "--rm", "--pull", "never", *labels, "--network", network,
-                   "--read-only", "--tmpfs", "/tmp", "-e", "DATABASE_URL=" + database_url,
+                   "--tmpfs", "/tmp", "-e", "DATABASE_URL=" + database_url,
                    "--entrypoint", "npm", app_image, "run", "prisma:migrate:deploy", timeout=300)
             sql = ('COMMENT ON DATABASE fai_recovery_source IS \'FAI_CRM_N05_RESTORE_SOURCE_V1\'; '
                    'CREATE TABLE recovery_synthetic_parent(id integer PRIMARY KEY, value text NOT NULL); '
@@ -325,4 +331,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
