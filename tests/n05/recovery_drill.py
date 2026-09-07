@@ -229,13 +229,35 @@ def main():
                 docker("volume", "create", *labels, "--label", "com.docker.compose.volume=" + logical, name)
                 info = json.loads(docker("volume", "inspect", name))[0]
                 own_volumes[name] = {k: info[k] for k in ("Name", "CreatedAt", "Mountpoint", "Driver")}
-            source_id = create_container(source_pg, ["--pull", "never",
-                   *labels, "--label", "com.docker.compose.service=postgres",
-                   "--label", "com.docker.compose.container-number=1",
-                   "--network", network, "--network-alias", "postgres",
-                   "--mount", "type=volume,src=" + source_db + ",dst=/var/lib/postgresql/data",
-                   "-e", "POSTGRES_USER=fai_source", "-e", "POSTGRES_DB=fai_recovery_source",
-                   "-e", "POSTGRES_PASSWORD=synthetic-only", pg_id])
+            # Have Compose generate its own service metadata. This separate,
+            # explicitly synthetic source fixture has one database and reuses
+            # only the new volumes/network whose identities were recorded above.
+            fixture_compose = write(root / "source-compose.json", kit.canonical({
+                "name": source_project,
+                "services": {"postgres": {
+                    "image": pg_id, "container_name": source_pg,
+                    "labels": {TEST_LABEL: test_id,
+                               "it.finanzaagevolaimpresa.environment": "restore-source",
+                               "it.finanzaagevolaimpresa.sentinel": sentinel},
+                    "environment": {"POSTGRES_USER": "fai_source",
+                                    "POSTGRES_DB": "fai_recovery_source",
+                                    "POSTGRES_PASSWORD": "synthetic-only"},
+                    "volumes": ["database:/var/lib/postgresql/data"],
+                    "networks": {"default": {"aliases": ["postgres"]}}}},
+                "volumes": {"database": {"external": True, "name": source_db}},
+                "networks": {"default": {"external": True, "name": network}}}))
+            check(not docker("ps", "-aq", "--filter", "name=^/" + source_pg + "$").strip(),
+                  "source-container-name-empty-before-compose")
+            docker("compose", "-p", source_project, "-f", fixture_compose,
+                   "create", "--no-build", "--pull", "never", "postgres")
+            source_id = docker("compose", "-p", source_project, "-f", fixture_compose,
+                               "ps", "--all", "-q", "postgres").decode().strip()
+            source_info = json.loads(docker("inspect", source_id))[0]
+            check(source_info["Id"] == source_id
+                  and source_info["Config"]["Labels"].get(TEST_LABEL) == test_id
+                  and source_info["Name"] == "/" + source_pg,
+                  "compose-created-source-recorded-id-and-owner")
+            own_containers[source_pg] = source_id
             docker("start", source_id)
             wait_sql(source_pg)
             database_url = "postgresql://fai_source:synthetic-only@postgres:5432/fai_recovery_source?schema=public"
