@@ -53,7 +53,7 @@ def command(args, *, data=None, timeout=300):
             line = re.sub(r"AGE-SECRET-KEY-\S+", "[synthetic-age-identity]", line)
             if "PRIVATE KEY" not in line:
                 lines.append(line[:300])
-        print("DRILL_TECHNICAL_ERROR|" + " | ".join(lines[:4]), file=sys.stderr)
+        print("DRILL_TECHNICAL_ERROR|" + " | ".join(lines[-8:]), file=sys.stderr)
         raise RuntimeError("DRILL_COMMAND_FAILED_" + Path(str(args[0])).name)
     return result.stdout
 
@@ -455,7 +455,7 @@ def main():
                 # Only PostgreSQL error categories from the synthetic database;
                 # SQL statement lines and row contents are never returned.
                 logs = subprocess.run(["docker", "--host", "unix:///var/run/docker.sock",
-                    "logs", "--tail", "100", own_containers[source_pg]],
+                    "logs", "--tail", "2000", own_containers[source_pg]],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30, check=True).stdout
                 for line in logs.decode(errors="replace").splitlines():
                     if "ERROR:" in line and MARKER.decode() not in line:
