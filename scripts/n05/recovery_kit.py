@@ -337,7 +337,7 @@ def verify_n05(directory, expected):
     env = {"EXPECTED_" + k.upper(): str(v) for k, v in expected.items()
            if k not in ("manifest_sha256", "checksums_sha256")}
     run(["bash", ROOT / "scripts/n05/verify-backup-manifest.sh", directory], env=env)
-    safe_members(directory / "documents.tar.gz", compressed=True)
+    document_inventory(directory / "documents.tar.gz")
 
 
 def safe_members(archive, *, compressed=False, exact=None):
@@ -346,13 +346,18 @@ def safe_members(archive, *, compressed=False, exact=None):
     entries = []
     seen = set()
     total = 0
+    member_count = 0
+    root_seen = False
     with tarfile.open(archive, "r:gz" if compressed else "r:") as source:
         for item in source:
-            require(len(entries) < MAX_MEMBERS, "ARCHIVE_ENTRY_LIMIT")
+            member_count += 1
+            require(member_count <= MAX_MEMBERS, "ARCHIVE_ENTRY_LIMIT")
             name = item.name
             normalized = name[2:] if name.startswith("./") else name
             if normalized in ("", "."):
                 require(item.isdir(), "ARCHIVE_ROOT_INVALID")
+                require(not root_seen, "ARCHIVE_DUPLICATE_PATH")
+                root_seen = True
                 continue
             p = PurePosixPath(normalized)
             require(not p.is_absolute() and ".." not in p.parts and "\\" not in normalized
@@ -830,10 +835,11 @@ def recover(plan, op):
                input_file=source, timeout=900)
     op.event("DATABASE_RESTORED")
     with (backup / "documents.tar.gz").open("rb") as source:
-        temporary_container(plan, op, names["documents_helper"], ["--user", "0:0", "--mount",
+        temporary_container(plan, op, names["documents_helper"], ["--user", "0:0",
+               "--cap-add", "CHOWN", "--cap-add", "FOWNER", "--cap-add", "DAC_OVERRIDE", "--mount",
                "type=volume,src=" + names["documents_volume"] + ",dst=/recovery",
                "--entrypoint", "sh", pg_image, "-ceu",
-               'test -z "$(ls -A /recovery)"; exec tar --no-same-owner --no-same-permissions -xzf - -C /recovery'],
+               'test -z "$(ls -A /recovery)"; exec tar --numeric-owner --same-owner --same-permissions --delay-directory-restore -xzf - -C /recovery'],
                input_file=source)
     op.event("DOCUMENTS_RESTORED")
     migrations_sql = ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; '
@@ -853,20 +859,25 @@ def recover(plan, op):
         "SELECT count(*) FROM pg_constraint WHERE contype IN ('f','c') AND NOT convalidated; ROLLBACK;").strip()
     require(invalid == b"0", "RESTORED_CONSTRAINTS_NOT_VALIDATED")
     # Re-export documents from the newly allocated volume, validate paths again
-    # and compare each byte digest internally. Never output client filenames.
+    # and compare every byte digest, numeric owner and permission, including
+    # directory/root metadata. Read traversal bypass is confined to a readonly
+    # volume; no helper has a host mount or a Docker socket.
     exported = op.root / "verified-documents.tar.gz"
     with exported.open("xb") as target:
         os.chmod(exported, 0o600)
         temporary_container(plan, op, names["documents_helper"],
-               ["--mount", "type=volume,src=" + names["documents_volume"] + ",dst=/recovery,readonly",
+               ["--cap-add", "DAC_OVERRIDE", "--mount",
+               "type=volume,src=" + names["documents_volume"] + ",dst=/recovery,readonly",
                "--entrypoint", "tar", pg_image, "-czf", "-", "-C", "/recovery", "."],
                output_file=target)
-    original_docs = archive_digests(backup / "documents.tar.gz")
-    require(archive_digests(exported) == original_docs, "RESTORED_DOCUMENTS_MISMATCH")
+    original_docs = document_inventory(backup / "documents.tar.gz")
+    require(document_inventory(exported) == original_docs, "RESTORED_DOCUMENTS_MISMATCH")
     verify_n05(backup, plan["expected"])
     require(digest(plan["bundle"]) == plan["bundle_sha256"], "SOURCE_BUNDLE_CHANGED")
     result = {"status": "RECOVERY_VERIFIED", "source": plan["expected"],
-              "migrations": len(observed), "document_files": len(original_docs),
+              "migrations": len(observed),
+              "document_files": sum(x["kind"] == "file" for x in original_docs.values()),
+              "document_metadata_verified": True,
               "configuration_files": len(private_inventory(op.root / "configuration")),
               "cryptographic_files": len(private_inventory(op.root / "cryptographic-material")),
               "database_restore": "single transaction; rebuilt constraints/indexes",
@@ -884,18 +895,29 @@ def verify_restored_migrations(observed, expected):
                     for x in observed), "RESTORED_MIGRATIONS_MISMATCH")
 
 
-def archive_digests(path):
+def document_inventory(path):
     safe_members(path, compressed=True)
     result = {}
     with tarfile.open(path, "r:gz") as archive:
         for item in archive:
+            name = item.name.removeprefix("./").rstrip("/") or "."
+            require(type(item.uid) is int and type(item.gid) is int
+                    and 0 <= item.uid < 2**32 - 1 and 0 <= item.gid < 2**32 - 1
+                    and 0 <= item.mode <= 0o777, "DOCUMENT_ARCHIVE_METADATA_UNSUPPORTED")
+            metadata = {"kind": "file" if item.isfile() else "directory",
+                        "uid": item.uid, "gid": item.gid, "mode": item.mode}
             if item.isfile():
-                name = item.name[2:] if item.name.startswith("./") else item.name
                 h = hashlib.sha256()
                 with archive.extractfile(item) as stream:
                     for block in iter(lambda: stream.read(1024 * 1024), b""):
                         h.update(block)
-                result[name] = h.hexdigest()
+                metadata["sha256"] = h.hexdigest()
+            result[name] = metadata
+    require("." in result and result["."]["kind"] == "directory",
+            "DOCUMENT_ARCHIVE_ROOT_MISSING")
+    require(all(str(parent) in result and result[str(parent)]["kind"] == "directory"
+                for name in result for parent in PurePosixPath(name).parents),
+            "DOCUMENT_ARCHIVE_DIRECTORY_MISSING")
     return result
 
 

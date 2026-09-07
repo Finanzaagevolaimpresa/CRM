@@ -273,7 +273,13 @@ def main():
                    "-U", "fai_source", "-d", "fai_recovery_source", data=sql.encode())
             docs = io.BytesIO()
             with tarfile.open(fileobj=docs, mode="w") as archive:
-                item = tarfile.TarInfo("synthetic-document.txt")
+                for name in (".", "nested", "empty"):
+                    directory_item = tarfile.TarInfo(name)
+                    directory_item.type = tarfile.DIRTYPE
+                    directory_item.uid = directory_item.gid = 1001
+                    directory_item.mode = 0o700
+                    archive.addfile(directory_item)
+                item = tarfile.TarInfo("nested/synthetic-document.txt")
                 item.uid = item.gid = 1001
                 item.mode = 0o600
                 item.size = len(MARKER)
@@ -457,6 +463,26 @@ def main():
             recovery_plans.append(restored)
             result = invoke(root, restored)
             check(result["status"] == "RECOVERY_VERIFIED" and result["migrations"] == 43, "complete-database-and-documents-recovery")
+            check(result["document_metadata_verified"], "document-root-directory-file-ownership-and-mode")
+            # Use the image's actual nonroot identity, without starting its app.
+            # Creation and replacement fail on the previous root-owned restore.
+            access = json.loads(fixture_helper([
+                "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges=true",
+                "--mount", "type=volume,src=" + kit.target_names(restored)["documents_volume"] + ",dst=/recovery",
+                "--entrypoint", "node", app_image, "-e",
+                "const fs=require('fs');const root='/recovery';"
+                "if(process.getuid()!==1001||process.getgid()!==1001)throw Error('SYNTHETIC_APP_IDENTITY');"
+                "for(const p of ['', '/nested', '/empty', '/nested/synthetic-document.txt']){"
+                "const s=fs.statSync(root+p);if(s.uid!==1001||s.gid!==1001||"
+                "(s.mode&4095)!==(s.isDirectory()?448:384))throw Error('SYNTHETIC_DOCUMENT_METADATA');}"
+                "const p=root+'/nested/synthetic-document.txt',b=fs.readFileSync(p),n=p+'.new';"
+                "fs.writeFileSync(n,b,{flag:'wx',mode:384});fs.renameSync(n,p);"
+                "fs.writeFileSync(root+'/empty/probe','synthetic',{flag:'wx',mode:384});"
+                "fs.unlinkSync(root+'/empty/probe');"
+                "process.stdout.write(JSON.stringify({uid:process.getuid(),gid:process.getgid(),writable:true}));"]))
+            check(access == {"uid": 1001, "gid": 1001, "writable": True},
+                  "actual-app-uid-can-create-and-replace-recovered-document")
             recovered_pg = kit.target_names(restored)["postgres"]
             content = docker("exec", recovered_pg, "psql", "-X", "-q", "-At", "-U", "fai_recovery", "-d", "fai_crm_recovery",
                              "-c", "SELECT p.value FROM recovery_synthetic_parent p JOIN recovery_synthetic_child c ON c.parent_id=p.id WHERE c.id=9;").strip()

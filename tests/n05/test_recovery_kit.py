@@ -65,6 +65,51 @@ class RecoveryGuards(unittest.TestCase):
         with self.assertRaisesRegex(kit.Denied, "^" + code + "$"):
             function(*args, **kwargs)
 
+    def document_tar(self, changes=None, omit=()):
+        path = self.root / ("documents-" + kit.uuid.uuid4().hex + ".tar.gz")
+        with tarfile.open(path, "w:gz") as archive:
+            for name in (".", "nested", "empty", "nested/document"):
+                if name in omit:
+                    continue
+                item = tarfile.TarInfo(name)
+                item.uid = item.gid = 1001
+                item.type = tarfile.REGTYPE if name == "nested/document" else tarfile.DIRTYPE
+                item.mode = 0o600 if item.isfile() else 0o700
+                contents = b"synthetic unchanged document"
+                item.size = len(contents) if item.isfile() else 0
+                for key, value in (changes or {}).get(name, {}).items():
+                    setattr(item, key, value)
+                archive.addfile(item, io.BytesIO(contents) if item.isfile() else None)
+        return path
+
+    def test_document_inventory_detects_metadata_loss_with_identical_bytes(self):
+        expected = kit.document_inventory(self.document_tar())
+        self.assertEqual(set(expected), {".", "nested", "empty", "nested/document"})
+        for name in expected:
+            for field, value in (("uid", 0), ("gid", 0), ("mode", 0o755)):
+                with self.subTest(name=name, field=field):
+                    observed = kit.document_inventory(self.document_tar({name: {field: value}}))
+                    self.assertEqual(observed["nested/document"]["sha256"],
+                                     expected["nested/document"]["sha256"])
+                    self.assertNotEqual(observed, expected)
+
+    def test_document_metadata_unsafe_or_incomplete_is_denied(self):
+        for name in (".", "nested/document"):
+            for field, value in (("uid", -1), ("gid", 2**32 - 1), ("mode", 0o4700)):
+                with self.subTest(name=name, field=field):
+                    self.denied("DOCUMENT_ARCHIVE_METADATA_UNSUPPORTED", kit.document_inventory,
+                                self.document_tar({name: {field: value}}))
+        self.denied("DOCUMENT_ARCHIVE_ROOT_MISSING", kit.document_inventory,
+                    self.document_tar(omit=(".",)))
+        self.denied("DOCUMENT_ARCHIVE_DIRECTORY_MISSING", kit.document_inventory,
+                    self.document_tar(omit=("nested",)))
+
+    def test_duplicate_roots_and_roots_over_entry_limit_are_denied(self):
+        path = self.tar([(".", tarfile.DIRTYPE, b""), ("./", tarfile.DIRTYPE, b"")])
+        self.denied("ARCHIVE_DUPLICATE_PATH", kit.safe_members, path)
+        with patch.object(kit, "MAX_MEMBERS", 1):
+            self.denied("ARCHIVE_ENTRY_LIMIT", kit.safe_members, path)
+
     def test_valid_pinned_plan_and_no_preflight_side_effect(self):
         plan = self.load()
         kit.preflight(plan)

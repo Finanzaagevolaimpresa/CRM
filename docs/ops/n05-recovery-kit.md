@@ -5,12 +5,16 @@ does not establish that a real backup is recoverable, create an off-host copy, o
 authorize a production action. The ordinary release gate, existing N05 backup
 confirmation, legacy provenance checks and restore drill remain applicable.
 
-The initial implementation recovers PostgreSQL and document bytes, and decrypts
+The initial implementation recovers PostgreSQL and document bytes/ownership/modes, and decrypts
 configuration and cryptographic material into separate private directories. It
 **never starts the CRM application**, runs a consumer, sources recovered environment
 files, or installs recovered keys. It creates no application service or network.
 PostgreSQL and document helpers use network mode `none`, no published ports, a
-read-only root filesystem, dropped capabilities and no Docker socket. Its temporary
+read-only root filesystem and no Docker socket. Capabilities are dropped first;
+only the document extractor adds CHOWN/FOWNER/DAC_OVERRIDE to preserve the validated
+numeric ownership and modes in its new volume. The verification helper adds
+DAC_OVERRIDE for traversal of that volume mounted read-only. PostgreSQL has none.
+No application gains capabilities. Its temporary
 PostgreSQL Unix socket directory is writable inside its private tmpfs; this is not
 a permission change to key files or document storage.
 
@@ -148,7 +152,14 @@ The kit allocates new database/document volumes and refuses occupied names.
 It decrypts and checks all archives before allocating those volumes, restores the
 database in a single transaction, rebuilds constraints and indexes, checks the
 43 migration names/checksums against the image's source commit, and compares every
-document file digest internally. It does not output customer records or filenames.
+document file digest, numeric UID/GID and mode internally, including the volume
+root and empty directories. GNU tar preserves numeric owners and permissions.
+An archive with special permission bits, invalid numeric ownership or omitted
+directory metadata is refused before restore; metadata is never silently relaxed.
+This covers POSIX mode/ownership recorded by N05, not ACLs/xattrs absent from its
+archive. It does not output customer records or filenames. The synthetic drill
+also creates and replaces a document using the source image's actual UID/GID,
+without starting the CRM application; a real backup still needs its own qualification.
 
 Private functional plan examples are exercised in `tests/n05/recovery_drill.py`.
 They are synthetic fixtures, not preapproved production plans.
