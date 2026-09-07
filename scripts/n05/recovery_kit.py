@@ -709,7 +709,8 @@ def check_owner(value, plan):
 
 
 def sql(plan, container, statement, *, data=None):
-    return docker("exec", "-i", "-u", "postgres", container, "psql", "-X", "-q", "-A", "-t",
+    # Final server only: the official image's temporary init server is socket-only.
+    return docker("exec", "-i", "-u", "postgres", container, "psql", "-h", "127.0.0.1", "-X", "-q", "-A", "-t",
                   "-v", "ON_ERROR_STOP=1", "-U", "fai_recovery", "-d", "fai_crm_recovery",
                   data=data if data is not None else statement.encode(), timeout=180)
 

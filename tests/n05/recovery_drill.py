@@ -111,7 +111,7 @@ def invoke(root, plan, action=None, expect=None, data=None, extra=()):
 def wait_sql(container):
     for _ in range(120):
         p = subprocess.run(["docker", "--host", "unix:///var/run/docker.sock", "exec", container,
-                            "pg_isready", "-U", "fai_source", "-d", "fai_recovery_source"],
+                            "pg_isready", "-h", "127.0.0.1", "-U", "fai_source", "-d", "fai_recovery_source"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if p.returncode == 0:
             return

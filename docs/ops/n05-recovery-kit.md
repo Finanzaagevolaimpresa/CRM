@@ -235,8 +235,11 @@ its resources. A newly generated production-format **synthetic** manifest tests
 preservation of source production identity; it is never presented as a real
 production backup or as an execution of the production backup wrapper.
 
-Ordinary N05 restore/rollback and all existing CI suites remain unchanged and
-mandatory, including A05 and VNX-03. Passing this kit validates only its tested
+Ordinary N05 restore/rollback guards and all existing CI suites remain mandatory,
+including A05 and VNX-03. The inherited drill now waits for PostgreSQL on
+loopback, excluding the official image's socket-only temporary init server;
+its timeout, source/target identities and manifest restrictions are preserved.
+Passing this kit validates only its tested
 procedure. A separately authorized real-set drill must establish data-specific
 recovery, the exact target/custody/window and the fresh backup needed before any
 future intervention. No application-level login, document download, key-parser
