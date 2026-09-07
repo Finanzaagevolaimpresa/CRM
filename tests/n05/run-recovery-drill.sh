@@ -66,7 +66,7 @@ RUNNER_ID="$(docker create --pull never --name "$RUNNER" --hostname "$RUNNER" \
   -e "N05_RECOVERY_APP_IMAGE=$N05_RECOVERY_APP_IMAGE" \
   -e "N05_RECOVERY_POSTGRES_IMAGE=$N05_RECOVERY_POSTGRES_IMAGE" \
   --entrypoint sh "$N05_RECOVERY_RUNNER_IMAGE" -ceu '
-    cp -a /input /workspace/repo
+    cp -a --no-preserve=ownership /input /workspace/repo
     test "$(git -C /workspace/repo rev-parse HEAD)" = "$1"
     cd /workspace/repo
     exec python3 -B tests/n05/recovery_drill.py
