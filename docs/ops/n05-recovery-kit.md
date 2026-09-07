@@ -110,7 +110,7 @@ Additional exact keys by phase:
 
 | Phase | Additional fields |
 | --- | --- |
-| backup | `environment`, `env_file_sha256`, `app_env_file_sha256` |
+| backup | `environment`, `env_file_sha256`, `app_env_file_sha256`, `engine_id` |
 | protect | `backup_set`, `expected`, `recipient`, `configuration_dir`, `cryptographic_dir`, `configuration_sha256`, `cryptographic_sha256`, `output` |
 | transfer | `bundle`, `bundle_sha256`, `bundle_bytes`, `recipient_sha256`, `ssh` |
 | receive | `bundle_sha256`, `bundle_bytes`, `recipient_sha256`, `sender_host`, `program_sha256` |
@@ -126,6 +126,8 @@ Nonproduction qualification permits only the existing restore-source identity.
 Shell environment overrides are not inherited. The canonical Compose files and
 the two supplied environment file hashes are checked; no arbitrary Compose
 override is accepted.
+The source Docker engine ID is explicit too. The kit pins N05 to the inspected
+local Unix socket, so a saved Docker context cannot redirect the backup.
 
 The transfer `ssh` object has exactly: `host`, `port`, `user`,
 `known_hosts`, `known_hosts_sha256`, `identity_file`, `remote_program`,

@@ -295,7 +295,11 @@ def main():
                    "EXPECTED_MIGRATION_COUNT": "43", "EXPECTED_DATABASE_SENTINEL": sentinel,
                    "BACKUP_CONSISTENCY": "application-quiesced"}
             backup_plan = basic("backup", work, binding) | {"environment": env,
+                "engine_id": engine,
                 "env_file_sha256": kit.digest(env_file), "app_env_file_sha256": kit.digest(env_file)}
+            wrong_source_engine = backup_plan | {"engine_id": "wrong-synthetic-engine"}
+            invoke(root, wrong_source_engine, "preflight", expect="BACKUP_DOCKER_ENGINE_MISMATCH")
+            check(list(backups.iterdir()) == [], "wrong-source-engine-creates-no-backup")
             invoke(root, backup_plan, "preflight")
             check(list(backups.iterdir()) == [], "backup-preflight-creates-no-set")
             invoke(root, backup_plan)

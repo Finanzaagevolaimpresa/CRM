@@ -39,7 +39,7 @@ TOOL_FILES = ("scripts/n05/recovery_kit.py", "scripts/n05/lib.sh",
               "docker-compose.restore-drill.yml")
 BASE_KEYS = {"schema", "phase", "data_class", "run_id", "host", "work_root", "tools"}
 PHASE_KEYS = {
-    "backup": {"environment", "env_file_sha256", "app_env_file_sha256"},
+    "backup": {"environment", "env_file_sha256", "app_env_file_sha256", "engine_id"},
     "protect": {"backup_set", "expected", "recipient", "configuration_dir",
                 "cryptographic_dir", "configuration_sha256", "cryptographic_sha256", "output"},
     "transfer": {"bundle", "bundle_sha256", "bundle_bytes", "recipient_sha256", "ssh"},
@@ -967,6 +967,9 @@ def backup_preflight(plan):
     require(isinstance(value, dict) and set(value) <= ENV_KEYS
             and all(isinstance(v, str) for v in value.values()), "BACKUP_ENVIRONMENT_INVALID")
     require(value.get("EXPECTED_MIGRATION_COUNT") == "43", "EXACTLY_43_MIGRATIONS_REQUIRED")
+    actual = decode(docker("info", "--format", "{{json .}}"))
+    require(actual["ID"] == plan["engine_id"] and actual["OSType"] == "linux",
+            "BACKUP_DOCKER_ENGINE_MISMATCH")
     verify_backup_configuration(plan)
     production = value.get("FAI_ENVIRONMENT") == "production"
     if production:
@@ -977,8 +980,14 @@ def backup_preflight(plan):
         require(plan["data_class"] == "synthetic" and value.get("FAI_ENVIRONMENT") == "restore-source",
                 "SYNTHETIC_BACKUP_IDENTITY_MISMATCH")
         wrapper = ROOT / "scripts/n05/backup-compose.sh"
-    run(["bash", wrapper, "--preflight"], env=value)
+    run(["bash", wrapper, "--preflight"], env=backup_environment(plan))
     return wrapper
+
+
+def backup_environment(plan):
+    # Force the same local socket inspected above. A saved Docker context in
+    # the operator's HOME must not redirect the N05 wrapper to another engine.
+    return plan["environment"] | {"DOCKER_HOST": "unix:///var/run/docker.sock"}
 
 
 def verify_backup_configuration(plan):
@@ -1050,7 +1059,7 @@ def main():
         op.event("BEGIN", command=args.command)
         if args.command == "backup":
             wrapper = backup_preflight(plan)
-            backup_output = run(["bash", wrapper, "--create"], env=plan["environment"], timeout=1800)
+            backup_output = run(["bash", wrapper, "--create"], env=backup_environment(plan), timeout=1800)
             helper_ids = re.findall(rb"N05_BACKUP_HELPER_REMOVED\|container_id=([a-f0-9]{64})", backup_output)
             require(len(helper_ids) == 1, "BACKUP_HELPER_RECEIPT_MISSING")
             op.event("BACKUP_HELPER_REMOVED", resource_id=helper_ids[0].decode(),

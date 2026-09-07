@@ -269,6 +269,20 @@ class RecoveryGuards(unittest.TestCase):
                 self.denied(code, kit.cleanup, plan, operation)
                 self.assertFalse(any("rm" in call.args for call in commands.call_args_list))
 
+    def test_backup_socket_and_engine_are_bound_before_wrapper(self):
+        plan = {"host": socket.gethostname(), "data_class": "synthetic", "engine_id": "expected-engine",
+                "environment": {"FAI_ENVIRONMENT": "restore-source", "EXPECTED_MIGRATION_COUNT": "43"}}
+        with patch.object(kit, "docker", return_value=b'{"ID":"other-engine","OSType":"linux"}'), \
+             patch.object(kit, "run") as runner:
+            self.denied("BACKUP_DOCKER_ENGINE_MISMATCH", kit.backup_preflight, plan)
+            runner.assert_not_called()
+        with patch.object(kit, "docker", return_value=b'{"ID":"expected-engine","OSType":"linux"}'), \
+             patch.object(kit, "verify_backup_configuration"), patch.object(kit, "run") as runner, \
+             patch.dict(os.environ, {"DOCKER_CONTEXT": "unapproved-context"}):
+            kit.backup_preflight(plan)
+            self.assertEqual(runner.call_args.kwargs["env"]["DOCKER_HOST"], "unix:///var/run/docker.sock")
+            self.assertNotIn("DOCKER_CONTEXT", runner.call_args.kwargs["env"])
+
 
 if __name__ == "__main__":
     os.umask(0o077)
