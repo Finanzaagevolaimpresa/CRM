@@ -192,7 +192,13 @@ def run(argv, *, data=None, input_file=None, output_file=None, env=None, timeout
         raise Denied("DEPENDENCY_UNAVAILABLE") from None
     # Never surface subprocess diagnostics: pg_restore/age/SSH errors may contain
     # confidential material. The command category and phase remain identifiable.
-    require(result.returncode == 0, "COMMAND_FAILED_" + Path(str(argv[0])).name.upper())
+    if result.returncode:
+        category = "COMMAND_FAILED_" + Path(str(argv[0])).name.upper()
+        if Path(str(argv[0])).name == "bash":
+            codes = re.findall(rb"N05_FAILED\|code=([A-Z0-9_]{1,100})(?:\r?\n|$)", result.stderr)
+            if codes:
+                category += "__" + codes[-1].decode()
+        raise Denied(category)
     return result.stdout or b""
 
 

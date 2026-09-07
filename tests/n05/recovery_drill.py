@@ -454,7 +454,9 @@ def main():
             if source_pg in own_containers:
                 # Only PostgreSQL error categories from the synthetic database;
                 # SQL statement lines and row contents are never returned.
-                logs = docker("logs", "--tail", "100", own_containers[source_pg])
+                logs = subprocess.run(["docker", "--host", "unix:///var/run/docker.sock",
+                    "logs", "--tail", "100", own_containers[source_pg]],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30, check=True).stdout
                 for line in logs.decode(errors="replace").splitlines():
                     if "ERROR:" in line and MARKER.decode() not in line:
                         print("SYNTHETIC_POSTGRES_ERROR|" + line.split("ERROR:", 1)[1][:300],
