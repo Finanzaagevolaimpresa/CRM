@@ -542,7 +542,7 @@ jobs:
           }
           trap cleanup_images EXIT
           image_source=ff71b130d2476d77329c07bd492c95c6782162ca
-          git archive "$image_source" -- .dockerignore Dockerfile.prod.example package.json package-lock.json \
+          git -c core.autocrlf=false archive "$image_source" -- .dockerignore Dockerfile.prod.example package.json package-lock.json \
             prisma next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json public scripts src \
             | tar -xf - -C "$context"
           docker pull "$N05_RECOVERY_POSTGRES_IMAGE"

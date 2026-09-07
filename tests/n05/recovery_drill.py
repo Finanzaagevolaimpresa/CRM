@@ -208,6 +208,20 @@ def main():
             check(info["State"]["ExitCode"] == 0, "fixture-helper-success")
             return result
         try:
+            migration_files = [p for p in kit.git("ls-tree", "-r", "--name-only", source_commit,
+                               "--", "prisma/migrations").splitlines() if p.endswith("/migration.sql")]
+            canonical_migrations = {Path(p).parent.name: kit.sha(kit.run(
+                ["git", "-C", ROOT, "show", source_commit + ":" + p])) for p in migration_files}
+            image_migrations = json.loads(fixture_helper([
+                "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges=true", "--entrypoint", "node", app_image,
+                "-e", "const fs=require('fs'),c=require('crypto'),r={};"
+                "for(const d of fs.readdirSync('/app/prisma/migrations',{withFileTypes:true})){"
+                "if(d.isDirectory()){const p='/app/prisma/migrations/'+d.name+'/migration.sql';"
+                "r[d.name]=c.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}}"
+                "process.stdout.write(JSON.stringify(r));"]))
+            check(len(canonical_migrations) == 43 and image_migrations == canonical_migrations,
+                  "image-migration-bytes-match-canonical-git-before-database-creation")
             # These are new synthetic resources with the real N05 source identity.
             # Only this explicit internal network is used; no application server runs.
             for name, logical in [(source_db, "restore_postgres_data"), (source_docs, "restore_documents")]:

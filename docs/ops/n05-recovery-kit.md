@@ -202,6 +202,10 @@ transfer and receive cleanup remove only their incomplete local files, preservin
 published ciphertext and receipts. Backup cleanup is intentionally not exposed:
 N05 owns its partial-set lifecycle.
 
+A resource without its creation receipt cannot be deleted automatically, even
+when its label matches. Retain the journal and stop that cleanup for explicit
+identification; never reconstruct ownership from a label alone.
+
 No down-migration, ledger deletion, destructive restore onto a pre-existing
 volume or ordinary data rollback is provided. Closing a gate does not undo
 persisted records. No source application is stopped or resumed by this kit.
@@ -215,6 +219,11 @@ receiver, recovered PostgreSQL or document helper containers. A minimized test
 context retains the original commit/tree objects and only needed blobs; it copies
 neither local Git configuration/history nor protected files. It is not a complete
 repository archive or a substitute release artifact.
+
+Export image sources with `git -c core.autocrlf=false archive` to preserve
+canonical bytes on Windows too. Before creating the fixture database, the drill
+compares all 43 migration checksums inside the image with its source Git commit.
+OCI labels alone do not establish that byte-level correspondence.
 
 Run guard tests with `python3 -B tests/n05/test_recovery_kit.py`. The separate
 `n05-recovery-kit` CI job builds a real baseline application image, runs actual
@@ -231,4 +240,3 @@ recovery, the exact target/custody/window and the fresh backup needed before any
 future intervention. No application-level login, document download, key-parser
 activation, integration delivery or production recovery is implied by this
 database/document drill.
-
