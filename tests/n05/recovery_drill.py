@@ -67,7 +67,13 @@ def basic(phase, work, binding):
 
 
 def save(root, plan):
-    path = write(root / (plan["run_id"] + ".json"), kit.canonical(plan))
+    contents = kit.canonical(plan)
+    path = root / (plan["run_id"] + "-" + kit.sha(contents)[:16] + ".json")
+    if path.exists():
+        if path.read_bytes() != contents:
+            raise RuntimeError("FIXTURE_PLAN_REPLACED")
+    else:
+        write(path, contents)
     return path, kit.digest(path)
 
 
@@ -100,6 +106,26 @@ def wait_sql(container):
     raise RuntimeError("SYNTHETIC_DATABASE_NOT_READY")
 
 
+def tampered_bundle(source, destination):
+    # Deliberately inconsistent authenticated ciphertext with a recomputed outer
+    # checksum: this exercises age authentication, beyond the transport digest.
+    with tarfile.open(source, "r:") as archive:
+        members = {m.name: archive.extractfile(m).read() for m in archive if m.isfile()}
+    payload = bytearray(members["database-documents.age"])
+    payload[-1] ^= 1
+    members["database-documents.age"] = bytes(payload)
+    index = json.loads(members["INDEX.json"])
+    index["components"]["database-documents"]["sha256"] = kit.sha(payload)
+    members["INDEX.json"] = kit.canonical(index)
+    with tarfile.open(destination, "w") as archive:
+        for name, data in members.items():
+            item = tarfile.TarInfo(name)
+            item.size = len(data)
+            item.mode = 0o600
+            archive.addfile(item, io.BytesIO(data))
+    destination.chmod(0o600)
+
+
 def main():
     os.umask(0o077)
     check(os.environ.get("N05_RECOVERY_SYNTHETIC_CONFIRMED") == "1", "synthetic-confirmation")
@@ -123,6 +149,7 @@ def main():
     check(source_commit != binding["commit"], "distinct-image-and-tools-source")
     check(kit.git("rev-parse", source_commit + "^{tree}") == source_tree, "image-source-tree")
     engine = json.loads(docker("info", "--format", "{{json .}}"))["ID"]
+    check(engine == os.environ["N05_RECOVERY_ENGINE_ID"], "orchestrator-engine-identity")
     before_containers = set(docker("ps", "-aq", "--no-trunc").decode().split())
     before_volumes = set(docker("volume", "ls", "-q").decode().split())
     source_project = "fai-crm-restore-" + test_id + "-source"
@@ -130,8 +157,8 @@ def main():
     source_db = source_project + "_restore_postgres_data"
     source_docs = source_project + "_restore_documents"
     receiver = "fai-crm-recovery-receiver-" + test_id
-    own_containers = []
-    own_volumes = []
+    own_containers = {}
+    own_volumes = {}
     recovery_plans = []
     with tempfile.TemporaryDirectory(prefix="fai-crm-n05-kit-drill-") as directory:
         root = Path(directory)
@@ -148,26 +175,46 @@ def main():
                   "--label", "com.docker.compose.project=" + source_project,
                   "--label", "it.finanzaagevolaimpresa.environment=restore-source",
                   "--label", "it.finanzaagevolaimpresa.sentinel=" + sentinel]
+        def create_container(name, args):
+            identifier = docker("create", "--name", name, *args).decode().strip()
+            info = json.loads(docker("inspect", identifier))[0]
+            check(info["Id"] == identifier and info["Config"]["Labels"].get(TEST_LABEL) == test_id,
+                  "fixture-created-container-identity")
+            own_containers[name] = identifier
+            return identifier
+
+        def fixture_helper(args, data=None):
+            name = "fai-crm-recovery-fixture-" + uuid.uuid4().hex
+            identifier = create_container(name, ["-i", "--pull", "never", *labels, *args])
+            result = docker("start", "--attach", "--interactive", identifier, data=data)
+            info = json.loads(docker("inspect", identifier))[0]
+            check(info["Id"] == own_containers[name] and not info["State"]["Running"],
+                  "fixture-helper-recorded-instance")
+            docker("rm", identifier)
+            del own_containers[name]
+            check(info["State"]["ExitCode"] == 0, "fixture-helper-success")
+            return result
         try:
             # These are new synthetic resources with the real N05 source identity.
             # Only this explicit internal network is used; no application server runs.
             for name, logical in [(source_db, "restore_postgres_data"), (source_docs, "restore_documents")]:
                 check(name not in before_volumes, "new-source-volume-" + logical)
                 docker("volume", "create", *labels, "--label", "com.docker.compose.volume=" + logical, name)
-                own_volumes.append(name)
-            docker("run", "-d", "--pull", "never", "--name", source_pg,
+                info = json.loads(docker("volume", "inspect", name))[0]
+                own_volumes[name] = {k: info[k] for k in ("Name", "CreatedAt", "Mountpoint", "Driver")}
+            source_id = create_container(source_pg, ["--pull", "never",
                    *labels, "--label", "com.docker.compose.service=postgres",
                    "--label", "com.docker.compose.container-number=1",
                    "--network", network, "--network-alias", "postgres",
                    "--mount", "type=volume,src=" + source_db + ",dst=/var/lib/postgresql/data",
                    "-e", "POSTGRES_USER=fai_source", "-e", "POSTGRES_DB=fai_recovery_source",
-                   "-e", "POSTGRES_PASSWORD=synthetic-only", pg_id)
-            own_containers.append(source_pg)
+                   "-e", "POSTGRES_PASSWORD=synthetic-only", pg_id])
+            docker("start", source_id)
             wait_sql(source_pg)
             database_url = "postgresql://fai_source:synthetic-only@postgres:5432/fai_recovery_source?schema=public"
-            docker("run", "--rm", "--pull", "never", *labels, "--network", network,
+            fixture_helper(["--network", network,
                    "--tmpfs", "/tmp", "-e", "DATABASE_URL=" + database_url,
-                   "--entrypoint", "npm", app_image, "run", "prisma:migrate:deploy", timeout=300)
+                   "--entrypoint", "npm", app_image, "run", "prisma:migrate:deploy"])
             sql = ('COMMENT ON DATABASE fai_recovery_source IS \'FAI_CRM_N05_RESTORE_SOURCE_V1\'; '
                    'CREATE TABLE recovery_synthetic_parent(id integer PRIMARY KEY, value text NOT NULL); '
                    'CREATE TABLE recovery_synthetic_child(id integer PRIMARY KEY, parent_id integer REFERENCES recovery_synthetic_parent(id)); '
@@ -182,9 +229,9 @@ def main():
                 item.mode = 0o600
                 item.size = len(MARKER)
                 archive.addfile(item, io.BytesIO(MARKER))
-            docker("run", "--rm", "-i", "--pull", "never", *labels, "--network", "none",
+            fixture_helper(["--network", "none", "--tmpfs", "/var/lib/postgresql/data",
                    "--mount", "type=volume,src=" + source_docs + ",dst=/docs",
-                   "--entrypoint", "tar", pg_id, "-xf", "-", "-C", "/docs", data=docs.getvalue())
+                   "--entrypoint", "tar", pg_id, "-xf", "-", "-C", "/docs"], data=docs.getvalue())
             check(True, "43-actual-prisma-migrations-and-relational-doc-fixture")
             env_file = write(root / "source.env", b"# synthetic only\n")
             env = {"FAI_ENVIRONMENT": "restore-source", "FAI_ENVIRONMENT_SENTINEL": sentinel,
@@ -198,7 +245,8 @@ def main():
                    "BACKUP_RESOURCE_PROVENANCE": "n05-labels", "EXPECTED_DATABASE_NAME": "fai_recovery_source",
                    "EXPECTED_MIGRATION_COUNT": "43", "EXPECTED_DATABASE_SENTINEL": sentinel,
                    "BACKUP_CONSISTENCY": "application-quiesced"}
-            backup_plan = basic("backup", work, binding) | {"environment": env}
+            backup_plan = basic("backup", work, binding) | {"environment": env,
+                "env_file_sha256": kit.digest(env_file), "app_env_file_sha256": kit.digest(env_file)}
             invoke(root, backup_plan, "preflight")
             check(list(backups.iterdir()) == [], "backup-preflight-creates-no-set")
             invoke(root, backup_plan)
@@ -209,7 +257,8 @@ def main():
                         "source_commit": source_commit, "source_tree": source_tree,
                         "app_image_id": app["Id"], "image_provenance": "oci-labels",
                         "resource_provenance": "n05-labels", "migration_count": 43,
-                        "manifest_sha256": kit.digest(backup / "MANIFEST.txt")}
+                        "manifest_sha256": kit.digest(backup / "MANIFEST.txt"),
+                        "checksums_sha256": kit.digest(backup / "SHA256SUMS")}
             identity = root / "age.identity"
             command(["age-keygen", "-o", identity])
             identity.chmod(0o600)
@@ -217,6 +266,8 @@ def main():
             protection = basic("protect", work, binding) | {
                 "backup_set": str(backup), "expected": expected, "recipient": public,
                 "configuration_dir": str(configs), "cryptographic_dir": str(keys),
+                "configuration_sha256": kit.component_identity(configs)["sha256"],
+                "cryptographic_sha256": kit.component_identity(keys)["sha256"],
                 "output": str(out / "protected.bundle.tar")}
             protected = invoke(root, protection)
             check(protected["status"] == "PROTECTION_VERIFIED", "three-distinct-encrypted-components")
@@ -225,6 +276,21 @@ def main():
             invoke(root, bad, expect="OUTPUT_OCCUPIED")
             check(keys_file.read_bytes() == MARKER + b"-key" and config_file.read_bytes() == MARKER + b"-config",
                   "source-config-and-key-preserved")
+            for component, code in [("MANIFEST.txt", "MANIFEST_DIGEST_MISMATCH"),
+                                    ("SHA256SUMS", "CHECKSUMS_IDENTITY_MISMATCH"),
+                                    ("documents.tar.gz", "COMMAND_FAILED_BASH")]:
+                damaged = mkdir(root / ("damaged-" + component.replace(".", "-")))
+                for name in kit.N05_FILES:
+                    write(damaged / name, (backup / name).read_bytes())
+                content = bytearray((damaged / component).read_bytes())
+                content[-1] ^= 1
+                write(damaged / component, content)
+                bad = copy.deepcopy(protection)
+                bad["run_id"] = uuid.uuid4().hex
+                bad["backup_set"] = str(damaged)
+                bad["output"] = str(out / (bad["run_id"] + ".tar"))
+                invoke(root, bad, expect=code)
+                check(not Path(bad["output"]).exists(), "damaged-set-never-published-" + component)
             # Real SSH with a distinct receiver, a pinned host key and a pinned
             # private receiver plan. No browser, agent or production credential.
             ssh_identity = root / "ssh.identity"
@@ -239,10 +305,10 @@ def main():
                 "chmod 700 /root/.ssh /work; ssh-keygen -A >/dev/null 2>&1; "
                 "exec /usr/sbin/sshd -D -e -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no "
                 "-o PermitRootLogin=prohibit-password -o AllowTcpForwarding=no -o X11Forwarding=no")
-            docker("run", "-d", "--pull", "never", "--name", receiver, "--hostname", receiver,
+            receiver_id = create_container(receiver, ["--pull", "never", "--hostname", receiver,
                    "--label", TEST_LABEL + "=" + test_id, "--network", network,
-                   "--entrypoint", "sh", runner_image, "-ceu", receiver_start)
-            own_containers.append(receiver)
+                   "--entrypoint", "sh", runner_image, "-ceu", receiver_start])
+            docker("start", receiver_id)
             for path, payload in [
                 ("/root/.ssh/authorized_keys", (ssh_identity.with_suffix(".identity.pub")).read_bytes()),
                 ("/opt/kit/scripts/n05/recovery_kit.py", kit.PROGRAM.read_bytes()),
@@ -264,7 +330,15 @@ def main():
             bad["run_id"] = uuid.uuid4().hex
             bad["ssh"]["known_hosts_sha256"] = "0" * 64
             invoke(root, bad, expect="SSH_HOST_KEY_BINDING_MISMATCH")
-            receipt = invoke(root, transfer)
+            interrupted = subprocess.run([str(a) for a in kit.ssh_command(transfer)],
+                                         input=Path(transfer["bundle"]).read_bytes()[:100],
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            check(interrupted.returncode != 0 and b"RECEIVE_VERIFIED" not in interrupted.stdout,
+                  "interrupted-ssh-no-success-receipt")
+            # First local attempt encounters the receiver's existing partial
+            # operation; an explicit resume is required at both ends.
+            invoke(root, transfer, expect="COMMAND_FAILED_SSH")
+            receipt = invoke(root, transfer, extra=("--resume",))
             check(receipt["status"] == "RECEIVE_VERIFIED" and receipt["host"] == receiver, "pinned-off-host-ssh-receipt")
             repeat = invoke(root, transfer, extra=("--resume",))
             check(repeat["bundle_sha256"] == receipt["bundle_sha256"], "ssh-resume-idempotent-no-overwrite")
@@ -273,6 +347,15 @@ def main():
                 "bundle_bytes": protected["bundle_bytes"], "recipient": public, "identity_file": str(identity),
                 "expected": expected, "engine_id": engine, "postgres_image_id": pg_id}
             restored["target_project"] = "fai-crm-recovery-" + restored["run_id"]
+            wrong_identity = root / "wrong-age.identity"
+            command(["age-keygen", "-o", wrong_identity])
+            wrong_identity.chmod(0o600)
+            bad = copy.deepcopy(restored)
+            bad["identity_file"] = str(wrong_identity)
+            invoke(root, bad, expect="DECRYPTION_IDENTITY_MISMATCH")
+            bad = copy.deepcopy(restored)
+            bad["expected"]["source_tree"] = "0" * 40
+            invoke(root, bad, expect="SOURCE_TREE_MISMATCH")
             for field, bad_value, code in [
                 ("engine_id", "other-engine", "DOCKER_ENGINE_MISMATCH"),
                 ("target_project", "fai-crm", "RECOVERY_PROJECT_INVALID"),
@@ -284,10 +367,27 @@ def main():
             # Occupancy is checked before any extraction or Docker mutation.
             occupied_name = kit.target_names(restored)["documents_volume"]
             docker("volume", "create", "--label", TEST_LABEL + "=" + test_id, occupied_name)
-            own_volumes.append(occupied_name)
+            info = json.loads(docker("volume", "inspect", occupied_name))[0]
+            own_volumes[occupied_name] = {k: info[k] for k in ("Name", "CreatedAt", "Mountpoint", "Driver")}
             invoke(root, restored, expect="DESTINATION_OCCUPIED")
+            info = json.loads(docker("volume", "inspect", occupied_name))[0]
+            check(own_volumes[occupied_name] == {k: info[k] for k in own_volumes[occupied_name]},
+                  "occupied-fixture-volume-recorded-identity")
             docker("volume", "rm", occupied_name)
-            own_volumes.remove(occupied_name)
+            del own_volumes[occupied_name]
+            corrupt = out / "tampered.bundle.tar"
+            tampered_bundle(Path(protection["output"]), corrupt)
+            bad = copy.deepcopy(restored)
+            bad["run_id"] = uuid.uuid4().hex
+            bad["target_project"] = "fai-crm-recovery-" + bad["run_id"]
+            bad["bundle"] = str(corrupt)
+            bad["bundle_sha256"] = kit.digest(corrupt)
+            bad["bundle_bytes"] = corrupt.stat().st_size
+            recovery_plans.append(bad)
+            invoke(root, bad, expect="COMMAND_FAILED_AGE")
+            check(not docker("volume", "ls", "-q", "--filter", "label=" + kit.LABEL + "=" + bad["run_id"]).strip(),
+                  "ciphertext-authentication-before-target-allocation")
+            invoke(root, bad, "cleanup")
             recovery_plans.append(restored)
             result = invoke(root, restored)
             check(result["status"] == "RECOVERY_VERIFIED" and result["migrations"] == 43, "complete-database-and-documents-recovery")
@@ -309,6 +409,32 @@ def main():
             check(kit.digest(protection["output"]) == protected["bundle_sha256"] and identity.exists(),
                   "encrypted-source-and-custody-key-preserved")
             check({p.name: kit.digest(p) for p in backup.iterdir()} == original_backup, "original-n05-manifest-unchanged")
+            # New, explicitly synthetic production-format fixture. Neither the
+            # authentic source set nor any historical/real manifest is rewritten.
+            production_fixture = mkdir(root / "synthetic-production-format")
+            for name in kit.N05_FILES - {"MANIFEST.txt"}:
+                write(production_fixture / name, (backup / name).read_bytes())
+            metadata = dict(line.split("=", 1) for line in (backup / "MANIFEST.txt").read_text().splitlines())
+            metadata.update(environment="production", environment_sentinel="FAI_CRM_PRODUCTION_V1",
+                            compose_project="fai-crm")
+            write(production_fixture / "MANIFEST.txt",
+                  "".join(k + "=" + v + "\n" for k, v in metadata.items()).encode())
+            production_expected = expected | {"environment": "production", "project": "fai-crm",
+                "manifest_sha256": kit.digest(production_fixture / "MANIFEST.txt")}
+            protection2 = copy.deepcopy(protection)
+            protection2.update(run_id=uuid.uuid4().hex, backup_set=str(production_fixture),
+                               expected=production_expected, output=str(out / "synthetic-production.bundle.tar"))
+            protected2 = invoke(root, protection2)
+            restored2 = copy.deepcopy(restored)
+            restored2.update(run_id=uuid.uuid4().hex, bundle=protection2["output"],
+                             bundle_sha256=protected2["bundle_sha256"], bundle_bytes=protected2["bundle_bytes"],
+                             expected=production_expected)
+            restored2["target_project"] = "fai-crm-recovery-" + restored2["run_id"]
+            recovery_plans.append(restored2)
+            result2 = invoke(root, restored2)
+            check(result2["status"] == "RECOVERY_VERIFIED" and result2["source"]["environment"] == "production",
+                  "production-format-source-retained-with-isolated-target")
+            invoke(root, restored2, "cleanup")
             check(before_containers <= set(docker("ps", "-aq", "--no-trunc").decode().split())
                   and before_volumes <= set(docker("volume", "ls", "-q").decode().split()), "preexisting-resources-preserved")
         finally:
@@ -317,16 +443,20 @@ def main():
             for plan in recovery_plans:
                 if (work / plan["run_id"] / "operation.json").exists():
                     invoke(root, plan, "cleanup")
-            for name in reversed(own_containers):
-                info = json.loads(docker("inspect", name))[0]
-                check(info["Config"]["Labels"].get(TEST_LABEL) == test_id, "fixture-container-cleanup-owner")
-                docker("rm", "-f", info["Id"])
-            for name in own_volumes:
+            for name, identifier in reversed(list(own_containers.items())):
+                info = json.loads(docker("inspect", identifier))[0]
+                check(info["Config"]["Labels"].get(TEST_LABEL) == test_id and info["Id"] == identifier
+                      and info["Name"] == "/" + name, "fixture-container-cleanup-recorded-id-and-owner")
+                docker("rm", "-f", identifier)
+            for name, recorded in own_volumes.items():
                 info = json.loads(docker("volume", "inspect", name))[0]
-                check(info["Labels"].get(TEST_LABEL) == test_id, "fixture-volume-cleanup-owner")
+                check(info["Labels"].get(TEST_LABEL) == test_id
+                      and recorded == {k: info[k] for k in recorded}, "fixture-volume-cleanup-recorded-identity")
                 docker("volume", "rm", name)
     print(json.dumps({"status": "N05_RECOVERY_DRILL_PASS", "checks": len(passed),
-                      "app_started": False, "fixture": "synthetic", "cleanup": "verified"}), flush=True)
+                      "app_started": False, "fixture": "synthetic", "cleanup": "verified",
+                      "engine_id": engine, "runner_image_id": json.loads(docker("image", "inspect", runner_image))[0]["Id"],
+                      "tools": binding, "source_image_id": app["Id"]}), flush=True)
 
 
 if __name__ == "__main__":

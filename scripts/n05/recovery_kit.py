@@ -10,7 +10,6 @@ import ctypes
 import datetime
 import fcntl
 import hashlib
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -29,17 +28,20 @@ ROOT = Path(__file__).resolve().parents[2]
 PROGRAM = Path(__file__).resolve()
 SCHEMA = "FAI_CRM_N05_RECOVERY_KIT_V1"
 LABEL = "it.finanzaagevolaimpresa.recovery-operation"
+TEST_LABEL = "it.finanzaagevolaimpresa.recovery-test"
 SENTINEL = "FAI_CRM_N05_ISOLATED_RECOVERY_V1"
 N05_FILES = {"MANIFEST.txt", "SHA256SUMS", "postgres.dump", "documents.tar.gz"}
 COMPONENTS = ("database-documents", "configuration", "cryptographic-material")
 TOOL_FILES = ("scripts/n05/recovery_kit.py", "scripts/n05/lib.sh",
               "scripts/n05/verify-backup-manifest.sh",
-              "scripts/n05/backup-compose.sh", "scripts/backup-docker-prod.sh")
+              "scripts/n05/backup-compose.sh", "scripts/backup-docker-prod.sh",
+              "docker-compose.prod.example.yml", "docker-compose.staging.example.yml",
+              "docker-compose.restore-drill.yml")
 BASE_KEYS = {"schema", "phase", "data_class", "run_id", "host", "work_root", "tools"}
 PHASE_KEYS = {
-    "backup": {"environment"},
+    "backup": {"environment", "env_file_sha256", "app_env_file_sha256"},
     "protect": {"backup_set", "expected", "recipient", "configuration_dir",
-                "cryptographic_dir", "output"},
+                "cryptographic_dir", "configuration_sha256", "cryptographic_sha256", "output"},
     "transfer": {"bundle", "bundle_sha256", "bundle_bytes", "recipient_sha256", "ssh"},
     "receive": {"bundle_sha256", "bundle_bytes", "recipient_sha256", "sender_host",
                 "program_sha256"},
@@ -60,7 +62,7 @@ ENV_KEYS = {
 }
 EXPECTED_KEYS = {"environment", "project", "source_commit", "source_tree",
                  "app_image_id", "image_provenance", "resource_provenance",
-                 "migration_count", "manifest_sha256"}
+                 "migration_count", "manifest_sha256", "checksums_sha256"}
 MAX_FILE = 128 * 1024**3
 MAX_MEMBERS = 20000
 SAFE_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8",
@@ -313,6 +315,7 @@ def expected_source(value):
             "SOURCE_TREE_MISMATCH")
     image_id(value["app_image_id"])
     hash_value(value["manifest_sha256"])
+    hash_value(value["checksums_sha256"])
 
 
 def verify_n05(directory, expected):
@@ -323,8 +326,10 @@ def verify_n05(directory, expected):
         private_file(p)
     require(digest(directory / "MANIFEST.txt") == expected["manifest_sha256"],
             "MANIFEST_DIGEST_MISMATCH")
+    require(digest(directory / "SHA256SUMS") == expected["checksums_sha256"],
+            "CHECKSUMS_IDENTITY_MISMATCH")
     env = {"EXPECTED_" + k.upper(): str(v) for k, v in expected.items()
-           if k != "manifest_sha256"}
+           if k not in ("manifest_sha256", "checksums_sha256")}
     run(["bash", ROOT / "scripts/n05/verify-backup-manifest.sh", directory], env=env)
     safe_members(directory / "documents.tar.gz", compressed=True)
 
@@ -422,12 +427,20 @@ def tar_component(files, destination):
                     archive.addfile(info, source)
 
 
+def component_identity(root):
+    files = private_inventory(root)
+    items = sorted((name, digest(path)) for path, name in files)
+    return {"sha256": sha(canonical(items)), "files": len(items),
+            "bytes": sum(p.stat().st_size for p, _ in files)}
+
+
 def protect_preflight(plan):
     age_ready()
     recipient(plan["recipient"])
     verify_n05(plan["backup_set"], plan["expected"])
-    for field in ("configuration_dir", "cryptographic_dir"):
-        private_inventory(plan[field])
+    for field in ("configuration", "cryptographic"):
+        require(component_identity(plan[field + "_dir"])["sha256"]
+                == hash_value(plan[field + "_sha256"]), "COVERAGE_IDENTITY_MISMATCH")
     output = path_checked(plan["output"], exists=False)
     private_dir(output.parent)
     require(not output.exists(), "OUTPUT_OCCUPIED")
@@ -545,7 +558,16 @@ def ssh_command(plan):
         require(re.fullmatch(r"/[A-Za-z0-9_./-]+", value[key] or "")
                 and ".." not in PurePosixPath(value[key]).parts, "SSH_REMOTE_PATH_INVALID")
     hash_value(value["remote_plan_sha256"])
-    remote = ["python3", value["remote_program"], "receive", "--plan", value["remote_plan"],
+    # Authenticate the receiver's bytes before executing them. Do not depend on
+    # a replaced receiver program to attest its own identity.
+    bootstrap = ("import hashlib,pathlib,sys;"
+                 "p=sys.argv[1];b=pathlib.Path(p).read_bytes();"
+                 "ok=hashlib.sha256(b).hexdigest()==sys.argv[2];"
+                 "sys.exit(71) if not ok else None;"
+                 "sys.argv=[p]+sys.argv[3:];"
+                 "exec(compile(b,p,'exec'),{'__name__':'__main__','__file__':p})")
+    remote = ["python3", "-c", bootstrap, value["remote_program"], digest(PROGRAM),
+              "receive", "--plan", value["remote_plan"],
               "--plan-sha256", value["remote_plan_sha256"], "--authorize",
               "FAI_CRM_N05_RECOVERY_RECEIVE_V1"]
     return ["ssh", "-F", "/dev/null", "-T", "-o", "BatchMode=yes",
@@ -676,6 +698,8 @@ def check_owner(value, plan):
     require(labels.get(LABEL) == plan["run_id"]
             and labels.get("it.finanzaagevolaimpresa.sentinel") == SENTINEL,
             "RESOURCE_OWNERSHIP_MISMATCH")
+    if plan["data_class"] == "synthetic":
+        require(labels.get(TEST_LABEL) == plan["run_id"], "SYNTHETIC_RESOURCE_LABEL_MISMATCH")
 
 
 def sql(plan, container, statement, *, data=None):
@@ -696,10 +720,35 @@ def recovery_preflight(plan):
 
 
 def owned_container_args(plan, name):
-    return ["--name", name, "--label", LABEL + "=" + plan["run_id"],
+    result = ["--name", name, "--label", LABEL + "=" + plan["run_id"],
             "--label", "it.finanzaagevolaimpresa.sentinel=" + SENTINEL,
             "--network", "none", "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges=true", "--pull", "never"]
+    if plan["data_class"] == "synthetic":
+        result += ["--label", TEST_LABEL + "=" + plan["run_id"]]
+    return result
+
+
+def temporary_container(plan, op, name, arguments, *, input_file=None, output_file=None):
+    op.event("RESOURCE_INTENT", kind="container", name=name)
+    identifier = docker("create", "-i", *owned_container_args(plan, name),
+                        "--tmpfs", "/var/lib/postgresql/data:rw,nosuid,noexec,mode=0700",
+                        *arguments).decode().strip()
+    value = docker_object("container", identifier)
+    check_owner(value, plan)
+    require(value["Id"] == identifier, "CREATED_CONTAINER_ID_MISMATCH")
+    op.event("RESOURCE_CREATED", kind="container", name=name, resource_id=identifier)
+    # Explicit instance ID is recorded before execution and checked before removal.
+    docker("start", "--attach", "--interactive", identifier,
+           input_file=input_file, output_file=output_file)
+    value = docker_object("container", identifier)
+    check_owner(value, plan)
+    require(value["Id"] == identifier and not value["State"]["Running"],
+            "HELPER_INSTANCE_CHANGED_OR_RUNNING")
+    exit_code = value["State"]["ExitCode"]
+    docker("rm", identifier)
+    op.event("RESOURCE_REMOVED", kind="container", name=name, resource_id=identifier)
+    require(exit_code == 0, "RECOVERY_HELPER_FAILED")
 
 
 def recover(plan, op):
@@ -721,29 +770,34 @@ def recover(plan, op):
     pg_image = plan["postgres_image_id"]
     # Validate the authenticated custom dump in a disposable networkless process
     # before allocating any persistent target volume.
-    op.event("RESOURCE_INTENT", kind="container", name=names["validator"])
     with (backup / "postgres.dump").open("rb") as source:
-        docker("run", "--rm", "-i", *owned_container_args(plan, names["validator"]),
-               "--entrypoint", "pg_restore", pg_image, "--list", input_file=source)
+        temporary_container(plan, op, names["validator"],
+                            ["--entrypoint", "pg_restore", pg_image, "--list"], input_file=source)
     for key in ("postgres_volume", "documents_volume"):
         op.event("RESOURCE_INTENT", kind="volume", name=names[key])
-        docker("volume", "create", "--label", LABEL + "=" + plan["run_id"],
-               "--label", "it.finanzaagevolaimpresa.sentinel=" + SENTINEL, names[key])
+        volume_labels = ["--label", LABEL + "=" + plan["run_id"],
+                         "--label", "it.finanzaagevolaimpresa.sentinel=" + SENTINEL]
+        if plan["data_class"] == "synthetic":
+            volume_labels += ["--label", TEST_LABEL + "=" + plan["run_id"]]
+        docker("volume", "create", *volume_labels, names[key])
         value = docker_object("volume", names[key])
         check_owner(value, plan)
-        op.event("RESOURCE_CREATED", kind="volume", name=names[key], created_at=value["CreatedAt"])
+        op.event("RESOURCE_CREATED", kind="volume", name=names[key], created_at=value["CreatedAt"],
+                 mountpoint=value["Mountpoint"], driver=value["Driver"])
     op.event("RESOURCE_INTENT", kind="container", name=names["postgres"])
     # The official image supplies the empty directory's postgres ownership via
     # Docker volume initialization. PostgreSQL itself runs without capabilities.
-    docker("run", "-d", *owned_container_args(plan, names["postgres"]), "--user", "postgres",
+    created_id = docker("create", *owned_container_args(plan, names["postgres"]), "--user", "postgres",
            "--tmpfs", "/tmp:rw,nosuid,noexec,mode=1777",
            "--tmpfs", "/var/run/postgresql:rw,nosuid,noexec,mode=1777",
            "--mount", "type=volume,src=" + names["postgres_volume"] + ",dst=/var/lib/postgresql/data",
            "-e", "POSTGRES_USER=fai_recovery", "-e", "POSTGRES_DB=fai_crm_recovery",
-           "-e", "POSTGRES_HOST_AUTH_METHOD=trust", pg_image)
-    value = docker_object("container", names["postgres"])
+           "-e", "POSTGRES_HOST_AUTH_METHOD=trust", pg_image).decode().strip()
+    value = docker_object("container", created_id)
     check_owner(value, plan)
+    require(value["Id"] == created_id, "CREATED_CONTAINER_ID_MISMATCH")
     op.event("RESOURCE_CREATED", kind="container", name=names["postgres"], resource_id=value["Id"])
+    docker("start", created_id)
     require(value["HostConfig"]["NetworkMode"] == "none"
             and not value["HostConfig"].get("PortBindings")
             and not value["HostConfig"]["Privileged"], "RECOVERY_ISOLATION_MISMATCH")
@@ -768,13 +822,11 @@ def recover(plan, op):
                "--no-privileges", "-U", "fai_recovery", "-d", "fai_crm_recovery",
                input_file=source, timeout=900)
     op.event("DATABASE_RESTORED")
-    op.event("RESOURCE_INTENT", kind="container", name=names["documents_helper"])
     with (backup / "documents.tar.gz").open("rb") as source:
-        docker("run", "--rm", "-i", *owned_container_args(plan, names["documents_helper"]),
-               "--user", "0:0", "--mount",
+        temporary_container(plan, op, names["documents_helper"], ["--user", "0:0", "--mount",
                "type=volume,src=" + names["documents_volume"] + ",dst=/recovery",
                "--entrypoint", "sh", pg_image, "-ceu",
-               'test -z "$(ls -A /recovery)"; exec tar --no-same-owner --no-same-permissions -xzf - -C /recovery',
+               'test -z "$(ls -A /recovery)"; exec tar --no-same-owner --no-same-permissions -xzf - -C /recovery'],
                input_file=source)
     op.event("DOCUMENTS_RESTORED")
     migrations_sql = ('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; '
@@ -798,12 +850,11 @@ def recover(plan, op):
     # Re-export documents from the newly allocated volume, validate paths again
     # and compare each byte digest internally. Never output client filenames.
     exported = op.root / "verified-documents.tar.gz"
-    op.event("RESOURCE_INTENT", kind="container", name=names["documents_helper"])
     with exported.open("xb") as target:
         os.chmod(exported, 0o600)
-        docker("run", "--rm", *owned_container_args(plan, names["documents_helper"]),
-               "--mount", "type=volume,src=" + names["documents_volume"] + ",dst=/recovery,readonly",
-               "--entrypoint", "tar", pg_image, "-czf", "-", "-C", "/recovery", ".",
+        temporary_container(plan, op, names["documents_helper"],
+               ["--mount", "type=volume,src=" + names["documents_volume"] + ",dst=/recovery,readonly",
+               "--entrypoint", "tar", pg_image, "-czf", "-", "-C", "/recovery", "."],
                output_file=target)
     original_docs = archive_digests(backup / "documents.tar.gz")
     require(archive_digests(exported) == original_docs, "RESTORED_DOCUMENTS_MISMATCH")
@@ -862,10 +913,13 @@ def cleanup(plan, op):
         check_owner(value, plan)
         events = [e for e in op.events() if e["phase"] == "RESOURCE_CREATED"
                   and e["name"] == name and e["kind"] == kind]
-        if events:
-            identity = value["CreatedAt"] if kind == "volume" else value["Id"]
-            recorded = events[-1]["created_at"] if kind == "volume" else events[-1]["resource_id"]
-            require(identity == recorded, "CLEANUP_RESOURCE_REPLACED")
+        require(events, "CLEANUP_CREATION_RECEIPT_MISSING")
+        identity = value["CreatedAt"] if kind == "volume" else value["Id"]
+        recorded = events[-1]["created_at"] if kind == "volume" else events[-1]["resource_id"]
+        require(identity == recorded, "CLEANUP_RESOURCE_REPLACED")
+        if kind == "volume":
+            require(value["Name"] == name and value["Mountpoint"] == events[-1]["mountpoint"]
+                    and value["Driver"] == events[-1]["driver"], "CLEANUP_RESOURCE_REPLACED")
         if kind == "volume":
             docker("volume", "rm", name)
         else:
@@ -902,6 +956,7 @@ def backup_preflight(plan):
     require(isinstance(value, dict) and set(value) <= ENV_KEYS
             and all(isinstance(v, str) for v in value.values()), "BACKUP_ENVIRONMENT_INVALID")
     require(value.get("EXPECTED_MIGRATION_COUNT") == "43", "EXACTLY_43_MIGRATIONS_REQUIRED")
+    verify_backup_configuration(plan)
     production = value.get("FAI_ENVIRONMENT") == "production"
     if production:
         require(plan["data_class"] == "production" and plan["host"] == "fai-crm-prod-02",
@@ -913,6 +968,12 @@ def backup_preflight(plan):
         wrapper = ROOT / "scripts/n05/backup-compose.sh"
     run(["bash", wrapper, "--preflight"], env=value)
     return wrapper
+
+
+def verify_backup_configuration(plan):
+    for field, expected in (("ENV_FILE", "env_file_sha256"), ("APP_ENV_FILE", "app_env_file_sha256")):
+        p = private_file(plan["environment"][field])
+        require(digest(p) == hash_value(plan[expected]), "BACKUP_CONFIGURATION_CHANGED")
 
 
 def preflight(plan):
@@ -935,17 +996,21 @@ def preflight(plan):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("identity", "preflight", "backup", "protect",
+    parser.add_argument("command", choices=("identity", "inspect-component", "preflight", "backup", "protect",
                                            "transfer", "receive", "recover", "status", "cleanup"))
     parser.add_argument("--plan")
     parser.add_argument("--plan-sha256")
     parser.add_argument("--authorize")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--directory")
     args = parser.parse_args()
     op = None
     try:
         if args.command == "identity":
             print(json.dumps({"tools": tools_binding(), "host": socket.gethostname()}))
+            return
+        if args.command == "inspect-component":
+            print(json.dumps(component_identity(args.directory), sort_keys=True))
             return
         plan = load_plan(args.plan, args.plan_sha256)
         require(args.command in ("preflight", "status", "cleanup", plan["phase"]), "PLAN_PHASE_MISMATCH")
@@ -974,7 +1039,12 @@ def main():
         op.event("BEGIN", command=args.command)
         if args.command == "backup":
             wrapper = backup_preflight(plan)
-            run(["bash", wrapper, "--create"], env=plan["environment"], timeout=1800)
+            backup_output = run(["bash", wrapper, "--create"], env=plan["environment"], timeout=1800)
+            helper_ids = re.findall(rb"N05_BACKUP_HELPER_REMOVED\|container_id=([a-f0-9]{64})", backup_output)
+            require(len(helper_ids) == 1, "BACKUP_HELPER_RECEIPT_MISSING")
+            op.event("BACKUP_HELPER_REMOVED", resource_id=helper_ids[0].decode(),
+                     removal="Docker automatic removal bound to recorded instance")
+            verify_backup_configuration(plan)
             result = {"status": "BACKUP_WRAPPER_COMPLETED", "verification": "N05 atomic verified publication"}
             op.event("BACKUP_VERIFIED")
         elif args.command == "protect":

@@ -12,14 +12,15 @@ umask 077
 ROOT="$(git rev-parse --show-toplevel)"
 HEAD="$(git rev-parse HEAD)"
 [[ -z "$(git ls-tree "$HEAD" -- 'CRM TXT.txt')" ]]
-GIT_DIRECTORY="$(git rev-parse --path-format=absolute --git-common-dir)"
 RUN_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 NETWORK="fai-crm-recovery-test-$RUN_ID"
 RUNNER="fai-crm-recovery-runner-$RUN_ID"
 PROJECT="fai-crm-restore-$RUN_ID-source"
 LABEL="it.finanzaagevolaimpresa.recovery-test"
+CONTEXT=""
 docker() { command docker --host unix:///var/run/docker.sock "$@"; }
 [[ "$(docker info --format '{{.Name}}')" != fai-crm-prod-02 ]]
+ENGINE_ID="$(docker info --format '{{.ID}}')"
 for image in "$N05_RECOVERY_RUNNER_IMAGE" "$N05_RECOVERY_APP_IMAGE" "$N05_RECOVERY_POSTGRES_IMAGE"; do
   docker image inspect "$image" >/dev/null
 done
@@ -40,9 +41,17 @@ cleanup() {
     [[ "$(docker network inspect -f '{{len .Containers}}' "$NETWORK_ID")" == 0 ]] || exit 1
     docker network rm "$NETWORK_ID" >/dev/null || exit 1
   fi
+  if [[ -n "$CONTEXT" ]]; then
+    [[ "$CONTEXT" == /tmp/fai-crm-n05-context.* && -d "$CONTEXT" && ! -L "$CONTEXT" ]] || exit 1
+    find "$CONTEXT" -depth -mindepth 1 -delete
+    rmdir "$CONTEXT"
+  fi
   exit "$result"
 }
 trap cleanup EXIT
+CONTEXT="$(mktemp -d /tmp/fai-crm-n05-context.XXXXXX)"
+image_source="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$N05_RECOVERY_APP_IMAGE")"
+python3 -B tests/n05/prepare_recovery_context.py --image-source "$image_source" --destination "$CONTEXT/repo"
 NETWORK_ID="$(docker network create --internal --label "$LABEL=$RUN_ID" \
   --label "com.docker.compose.project=$PROJECT" \
   --label it.finanzaagevolaimpresa.environment=restore-source \
@@ -50,14 +59,15 @@ NETWORK_ID="$(docker network create --internal --label "$LABEL=$RUN_ID" \
 RUNNER_ID="$(docker create --pull never --name "$RUNNER" --hostname "$RUNNER" \
   --label "$LABEL=$RUN_ID" --network "$NETWORK" \
   --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
-  --mount "type=bind,src=$GIT_DIRECTORY,dst=/sourcegit,readonly" \
+  --mount "type=bind,src=$CONTEXT/repo,dst=/input,readonly" \
   -e N05_RECOVERY_SYNTHETIC_CONFIRMED=1 -e "N05_RECOVERY_TEST_ID=$RUN_ID" \
+  -e "N05_RECOVERY_ENGINE_ID=$ENGINE_ID" \
   -e "N05_RECOVERY_TEST_NETWORK=$NETWORK" -e "N05_RECOVERY_RUNNER_IMAGE=$N05_RECOVERY_RUNNER_IMAGE" \
   -e "N05_RECOVERY_APP_IMAGE=$N05_RECOVERY_APP_IMAGE" \
   -e "N05_RECOVERY_POSTGRES_IMAGE=$N05_RECOVERY_POSTGRES_IMAGE" \
   --entrypoint sh "$N05_RECOVERY_RUNNER_IMAGE" -ceu '
-    git -c safe.directory=/sourcegit clone --no-local --no-checkout /sourcegit /workspace/repo
-    git -C /workspace/repo checkout --detach "$1"
+    cp -a /input /workspace/repo
+    test "$(git -C /workspace/repo rev-parse HEAD)" = "$1"
     cd /workspace/repo
     exec python3 -B tests/n05/recovery_drill.py
   ' sh "$HEAD")"

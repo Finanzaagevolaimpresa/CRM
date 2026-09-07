@@ -496,3 +496,58 @@ jobs:
           path: ${{ runner.temp }}/vnx03-evidence
           if-no-files-found: error
           retention-days: 14
+
+  n05-recovery-kit:
+    name: N05 encrypted transfer and isolated recovery
+    needs: build-context-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify recovery scope and syntax
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          bash -n scripts/backup-docker-prod.sh scripts/n05/backup-compose.sh tests/n05/run-recovery-drill.sh
+          python3 -B tests/n05/test_recovery_kit.py
+
+      - name: Qualify real N05, age, pinned SSH and isolated recovery
+        env:
+          N05_RECOVERY_SYNTHETIC_CONFIRMED: "1"
+          N05_RECOVERY_RUNNER_IMAGE: fai-crm:recovery-runner-${{ github.run_id }}-${{ github.run_attempt }}
+          N05_RECOVERY_APP_IMAGE: fai-crm:recovery-source-${{ github.run_id }}-${{ github.run_attempt }}
+          N05_RECOVERY_POSTGRES_IMAGE: postgres@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        run: |
+          for image in "$N05_RECOVERY_RUNNER_IMAGE" "$N05_RECOVERY_APP_IMAGE"; do
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              echo 'Synthetic image destination already occupied' >&2
+              exit 1
+            fi
+          done
+          context="$(mktemp -d /tmp/fai-crm-n05-recovery-image.XXXXXX)"
+          cleanup_images() {
+            for image in "$N05_RECOVERY_RUNNER_IMAGE" "$N05_RECOVERY_APP_IMAGE"; do
+              if docker image inspect "$image" >/dev/null 2>&1; then
+                docker image rm "$image" >/dev/null || return 1
+              fi
+            done
+            test -d "$context" && test ! -L "$context"
+            find "$context" -depth -mindepth 1 -delete
+            rmdir "$context"
+          }
+          trap cleanup_images EXIT
+          image_source=ff71b130d2476d77329c07bd492c95c6782162ca
+          git archive "$image_source" -- .dockerignore Dockerfile.prod.example package.json package-lock.json \
+            prisma next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json public scripts src \
+            | tar -xf - -C "$context"
+          docker pull "$N05_RECOVERY_POSTGRES_IMAGE"
+          docker build --build-arg SOURCE_COMMIT="$image_source" \
+            --build-arg SOURCE_TREE="$(git rev-parse "$image_source^{tree}")" \
+            -f "$context/Dockerfile.prod.example" -t "$N05_RECOVERY_APP_IMAGE" "$context"
+          docker build -f tests/n05/recovery-runner.Dockerfile -t "$N05_RECOVERY_RUNNER_IMAGE" tests/n05
+          bash tests/n05/run-recovery-drill.sh

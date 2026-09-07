@@ -171,7 +171,15 @@ chmod 600 "$PARTIAL_DIR/$DATABASE_FILE"
 [[ -s "$PARTIAL_DIR/$DATABASE_FILE" ]] || n05_fail DATABASE_BACKUP_EMPTY
 compose exec -T postgres pg_restore --list < "$PARTIAL_DIR/$DATABASE_FILE" >/dev/null
 
-docker run --rm --pull never \
+helper_labels=()
+if [[ "$FAI_ENVIRONMENT" == "restore-source" ]]; then
+  helper_test_id="${COMPOSE_PROJECT_NAME#fai-crm-restore-}"
+  helper_test_id="${helper_test_id%-source}"
+  helper_labels=(--label "it.finanzaagevolaimpresa.recovery-test=$helper_test_id")
+fi
+# Docker records the created instance before execution; --rm is bound to that
+# same instance, never a name or a label-selected container.
+docker run --rm --cidfile "$PARTIAL_DIR/.documents-helper.cid" --pull never "${helper_labels[@]}" \
   --network none \
   --read-only \
   --cap-drop ALL \
@@ -185,6 +193,11 @@ docker run --rm --pull never \
   test -d "$2"
   exec tar -czf - -C "$2" -- .
 ' sh "$FAI_ENVIRONMENT_SENTINEL" /var/lib/fai-crm/documents > "$PARTIAL_DIR/$DOCUMENTS_FILE"
+helper_id="$(cat "$PARTIAL_DIR/.documents-helper.cid")"
+[[ "$helper_id" =~ ^[0-9a-f]{64}$ ]] || n05_fail DOCUMENTS_HELPER_ID_INVALID
+[[ -z "$(docker ps -aq --no-trunc --filter "id=$helper_id")" ]] || n05_fail DOCUMENTS_HELPER_NOT_REMOVED
+printf 'N05_BACKUP_HELPER_REMOVED|container_id=%s\n' "$helper_id"
+rm "$PARTIAL_DIR/.documents-helper.cid"
 chmod 600 "$PARTIAL_DIR/$DOCUMENTS_FILE"
 n05_assert_archive_safe "$PARTIAL_DIR/$DOCUMENTS_FILE"
 
