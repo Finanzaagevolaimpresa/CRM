@@ -17,6 +17,16 @@ if [[ -z "$base_sha" ]] || ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; t
   exit 0
 fi
 
+harness_paths=(
+  tests/vnx03 tests/vnx03-e2e-harness.test.ts tests/vnx03-protected-scope.test.ts
+  scripts/vnx03 docs/vnx03-wpforms-https-end-to-end-qualification-r01.md
+)
+harness_delta="$(git diff --name-only "$base_sha"...HEAD -- "${harness_paths[@]}")"
+
+# This is a co-modification guard, not a global runtime-change policy. Normal
+# CRM changes remain governed by their own jobs when the VNX-03 harness is untouched.
+[[ -n "$harness_delta" ]] || exit 0
+
 protected_paths=(
   prisma/schema.prisma prisma/migrations src
   Dockerfile.prod.example docker-compose.prod.example.yml
@@ -25,7 +35,7 @@ protected_paths=(
 protected_delta="$(git diff --name-only "$base_sha"...HEAD -- "${protected_paths[@]}")"
 
 # Preserve the pre-existing harness-only case. The N15 exception is evaluated
-# only when this candidate actually changes a protected runtime/schema path.
+# only when a harness change also modifies a protected runtime/schema path.
 [[ -n "$protected_delta" ]] || exit 0
 
 readonly n15_migration='prisma/migrations/20260909120000_n15_dedicated_communication_persistence_v1/migration.sql'
