@@ -126,7 +126,7 @@ test('N15 Phase 1A manifest is contract-only, outbound, dormant and provider-fre
   assertDeepFrozen(COMMUNICATION_INTENT_MANIFEST);
 });
 
-test('N15 Phase 1C records a dedicated persistence boundary without implementing it', () => {
+test('N15 Phase 1C remains an unmodified historical architecture decision', () => {
   const adr = readFileSync(
     'docs/adr/ADR-0014-n15-communication-intent-dedicated-persistence-boundary-v1.md',
     'utf8',
@@ -755,7 +755,7 @@ test('N04 classifies every N15 contract field exactly and denies additions', () 
   );
 });
 
-test('N15 dependency closure has zero I/O and no runtime call-site, persistence or migration', () => {
+test('N15 pure-contract dependency closure has zero I/O and no runtime activation call-site', () => {
   const contractPath = 'src/lib/communication-backbone-contract.ts';
   const contractSource = readFileSync(contractPath, 'utf8');
   const imports = [...contractSource.matchAll(/from\s+'([^']+)'/gu)].map((match) => match[1]).sort();
@@ -778,10 +778,9 @@ test('N15 dependency closure has zero I/O and no runtime call-site, persistence 
 
   const runtimeFiles = [
     ...sourceFilesUnder('src').filter((path) => path !== contractPath),
-    ...sourceFilesUnder('prisma'),
     ...sourceFilesUnder('scripts'),
     ...sourceFilesUnder('deploy'),
-  ].filter(existsSync);
+  ].filter((path) => path !== 'src/lib/communication-intent-persistence.ts').filter(existsSync);
   for (const path of runtimeFiles) {
     assert.doesNotMatch(readFileSync(path, 'utf8'), /communication-backbone-contract/u, path);
   }
@@ -789,21 +788,11 @@ test('N15 dependency closure has zero I/O and no runtime call-site, persistence 
   assert.match(readFileSync('tests/fixtures/n15-communication-mock.ts', 'utf8'), /outcome: 'HELD'/u);
   assert.doesNotMatch(readFileSync('Dockerfile.prod.example', 'utf8'), /COPY[^\n]*\/app\/tests/u);
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name));
-  assert.equal(migrations.length, 43);
-  const prismaFiles = [
-    'prisma/schema.prisma',
-    ...sourceFilesUnder('prisma'),
-    ...migrations
-      .map((migration) => `prisma/migrations/${migration}/migration.sql`)
-      .filter(existsSync),
-  ];
-  for (const path of prismaFiles) {
-    assert.doesNotMatch(
-      readFileSync(path, 'utf8'),
-      /fai\.communication-intent\.v1|COMMUNICATION_INTENT|Communication(?:Intent|Held|Audit)/u,
-      path,
-    );
-  }
+  assert.equal(migrations.length, 44);
+  const persistence = readFileSync('src/lib/communication-intent-persistence.ts', 'utf8');
+  assert.match(persistence, /Prisma\.TransactionClient/u);
+  assert.doesNotMatch(persistence, /Business(?:InboxEvent|OutboxEvent|QueueAttempt)|PracticeCommunication|AuditLog/u);
+  assert.doesNotMatch(persistence, /fetch\s*\(|setTimeout|setInterval/u);
 });
 
 test('N15 gate code list is closed and never inferred from arbitrary caller keys', () => {

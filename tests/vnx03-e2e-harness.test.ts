@@ -57,7 +57,7 @@ test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   assert.match(compose, /AI_EXTERNAL_PROVIDERS_ENABLED: "false"/u);
   assert.match(compose, /WEBSITE_LEAD_MODE: disabled/u);
   assert.match(provision, /FAI_CRM_VNX03_EPHEMERAL_TEST_ONLY_V1/u);
-  assert.match(provision, /Number\(migrations\[0\]\?\.count\), 43/u);
+  assert.match(provision, /Number\(migrations\[0\]\?\.count\), 44/u);
 });
 
 test('VNX-03 positive path uses authentic WPForms UI, HTTPS and bounded production components', () => {

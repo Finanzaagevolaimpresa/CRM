@@ -462,7 +462,7 @@ test('N12 classifies security state and forbids telemetry, egress and legacy reu
   assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
 });
 
-test('current release surfaces pin migration 43 and keeps every N12/N13/N14 mode disabled', () => {
+test('current release surfaces pin migration 44 and keeps every N12/N13/N14/N15 mode disabled', () => {
   for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
     const source = readFileSync(path, 'utf8');
     assert.match(source, /SECURE_LEAD_GATEWAY_MODE="disabled"/);
@@ -471,13 +471,13 @@ test('current release surfaces pin migration 43 and keeps every N12/N13/N14 mode
     assert.match(source, /COMMERCIAL_LEAD_INBOX_MODE="disabled"/);
   }
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  assert.match(ci, /Apply exactly 43 database migrations/);
+  assert.match(ci, /Apply exactly 44 database migrations/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_MODE: disabled/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_KEYRING_FILE: ""/);
   assert.match(ci, /LEAD_IDENTITY_KEY_FILE: ""/);
   assert.match(ci, /COMMERCIAL_LEAD_INBOX_MODE: disabled/);
   const smoke = readFileSync('scripts/smoke-docker-prod.sh', 'utf8');
-  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=43/);
+  assert.match(smoke, /EXPECTED_MIGRATION_COUNT=44/);
   assert.match(smoke, /SECURE_LEAD_GATEWAY_MODE=disabled/);
   assert.match(smoke, /COMMERCIAL_LEAD_INBOX_MODE=disabled/);
   assert.match(smoke, /4\|25\|9\|5\|0\|0\|0\|0/);

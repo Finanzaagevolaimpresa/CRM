@@ -373,5 +373,5 @@ test('N10 remains pure, migration-free, transport-free and distinct from N06', (
     /from ['"]node:(?:fs|http|https|net|tls)/,
     /service-catalog-publication/,
   ]) assert.doesNotMatch(source, forbidden);
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 43);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 44);
 });

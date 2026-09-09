@@ -263,9 +263,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 43 database migrations
+      - name: Apply exactly 44 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel

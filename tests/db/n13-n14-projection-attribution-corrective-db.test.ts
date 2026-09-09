@@ -350,7 +350,7 @@ test('fresh43 has exact provenance types, validated CHECK, corrected guard and z
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 43);
+  assert.equal(names.length, 44);
   assert.equal(names[41], migration42Name);
   assert.equal(names[42], migration43Name);
   const fixture = await createFixture('fresh', names);
@@ -410,7 +410,7 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 43);
+  assert.equal(names.length, 44);
   const fixture = await createFixture('upgrade', names.slice(0, 42));
   const leadId = 'n13-n14-upgrade-sentinel-lead';
   const itemId = '00000000-0000-4000-8000-000000430001';

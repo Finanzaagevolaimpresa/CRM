@@ -144,7 +144,7 @@ test.before(async () => {
   schemaUrl = url.toString();
   await root!.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
   schemaCreated = true;
-  assert.equal(readdirSync('prisma/migrations', { withFileTypes: true }).filter((item) => item.isDirectory()).length, 43);
+  assert.equal(readdirSync('prisma/migrations', { withFileTypes: true }).filter((item) => item.isDirectory()).length, 44);
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
     env: { ...process.env, DATABASE_URL: schemaUrl }, stdio: 'pipe', timeout: 180_000,
   });

@@ -76,15 +76,15 @@ test('migration 42 remains byte-identical and is the only executable historical 
   assert.deepEqual(executableMatches, [historicalMigrationPath]);
 });
 
-test('the corrective extends the current chain to 43 without rewriting Phase 1C history', () => {
+test('the corrective remains migration 43 in the current 44-migration chain without rewriting Phase 1C history', () => {
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
   const adr = readFileSync(
     'docs/adr/ADR-0014-n15-communication-intent-dedicated-persistence-boundary-v1.md',
     'utf8',
   );
   const document = readFileSync('docs/n13-n14-projection-attribution-corrective-v1.md', 'utf8');
-  assert.equal(migrations.length, 43);
-  assert.equal(migrations.at(-1), correctiveMigrationName);
+  assert.equal(migrations.length, 44);
+  assert.equal(migrations[42], correctiveMigrationName);
   assert.match(adr, /^N15_PHASE1C_CURRENT_MIGRATIONS=42$/mu);
   assert.match(adr, /Phase 1C non crea alcuna migration e lascia il catalogo a 42/u);
   for (const marker of [
