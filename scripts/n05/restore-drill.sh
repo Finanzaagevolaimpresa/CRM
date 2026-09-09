@@ -26,19 +26,26 @@ n05_assert_git_oid "$ROLLBACK_TREE" ROLLBACK_TREE
 [[ "$(git -C "$REPO_ROOT" rev-parse "$ROLLBACK_COMMIT^{tree}")" == "$ROLLBACK_TREE" ]] || n05_fail ROLLBACK_TREE_MISMATCH
 [[ "$EXPECTED_MIGRATION_COUNT" == "43" || "$EXPECTED_MIGRATION_COUNT" == "44" ]] \
   || n05_fail RESTORE_DRILL_MIGRATION_COUNT_UNQUALIFIED
-[[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "43" ]] \
-  || n05_fail RESTORE_DRILL_ROLLBACK_MIGRATION_COUNT_MUST_BE_43
+[[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "43" || "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "44" ]] \
+  || n05_fail RESTORE_DRILL_ROLLBACK_MIGRATION_COUNT_UNQUALIFIED
+[[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" -le "$EXPECTED_MIGRATION_COUNT" ]] \
+  || n05_fail ROLLBACK_SCHEMA_AHEAD_OF_SOURCE
 rollback_migration_count="$(git -C "$REPO_ROOT" ls-tree -d --name-only "$ROLLBACK_COMMIT:prisma/migrations" | wc -l | tr -d ' ')"
 [[ "$rollback_migration_count" == "$EXPECTED_ROLLBACK_MIGRATION_COUNT" ]] \
   || n05_fail ROLLBACK_SOURCE_MIGRATION_COUNT_MISMATCH
 N15_SCHEMA_STATE=schema-absent-at-43
 if [[ "$EXPECTED_MIGRATION_COUNT" == "44" ]]; then
   N15_SCHEMA_STATE=dormant-at-44
-  n15_migration="prisma/migrations/20260909120000_n15_dedicated_communication_persistence_v1/migration.sql"
-  [[ "$(git -C "$REPO_ROOT" diff --diff-filter=A --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" == "$n15_migration" ]] \
-    || n05_fail N15_MIGRATION_DELTA_INVALID
-  [[ -z "$(git -C "$REPO_ROOT" diff --diff-filter=DMRTUXB --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" ]] \
-    || n05_fail HISTORICAL_MIGRATION_CHANGED
+  if [[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "43" ]]; then
+    n15_migration="prisma/migrations/20260909120000_n15_dedicated_communication_persistence_v1/migration.sql"
+    [[ "$(git -C "$REPO_ROOT" diff --diff-filter=A --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" == "$n15_migration" ]] \
+      || n05_fail N15_MIGRATION_DELTA_INVALID
+    [[ -z "$(git -C "$REPO_ROOT" diff --diff-filter=DMRTUXB --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" ]] \
+      || n05_fail HISTORICAL_MIGRATION_CHANGED
+  else
+    git -C "$REPO_ROOT" diff --quiet "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations \
+      || n05_fail ROLLBACK_MIGRATIONS_CHANGED
+  fi
 fi
 
 raw_run_id="${N05_RUN_ID:-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${BASHPID}}"

@@ -65,7 +65,7 @@ test('N15 CI qualifies migration 44 without weakening historical 43 boundaries',
   assert.match(vnx03Guard, /n15_migration='prisma\/migrations\/20260909120000_n15_dedicated_communication_persistence_v1\/migration\.sql'/u);
   assert.match(vnx03Guard, /git diff --diff-filter=A/u);
   assert.match(vnx03Guard, /--diff-filter=DMRTUXB/u);
-  assert.match(ci, /EXPECTED_MIGRATION_COUNT=44[\s\S]*?EXPECTED_ROLLBACK_MIGRATION_COUNT=43/u);
+  assert.match(ci, /EXPECTED_MIGRATION_COUNT=44[\s\S]*?EXPECTED_ROLLBACK_MIGRATION_COUNT="\$rollback_migration_count"/u);
   assert.match(restore, /EXPECTED_MIGRATION_COUNT" == "43" \|\| "\$EXPECTED_MIGRATION_COUNT" == "44"/u);
   assert.match(restore, /ROLLBACK_SOURCE_MIGRATION_COUNT_MISMATCH/u);
   assert.match(restore, /HISTORICAL_MIGRATION_CHANGED/u);

@@ -392,10 +392,11 @@ jobs:
             rollback_commit="$(git rev-parse HEAD^1)"
           fi
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
+          rollback_migration_count="$(git ls-tree -d --name-only "$rollback_commit:prisma/migrations" | wc -l | tr -d ' ')"
           ROLLBACK_COMMIT="$rollback_commit" \
           ROLLBACK_TREE="$rollback_tree" \
           EXPECTED_MIGRATION_COUNT=44 \
-          EXPECTED_ROLLBACK_MIGRATION_COUNT=43 \
+          EXPECTED_ROLLBACK_MIGRATION_COUNT="$rollback_migration_count" \
           N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
             npm run test:n05:restore
 

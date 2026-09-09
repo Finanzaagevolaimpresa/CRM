@@ -62,3 +62,5 @@ intatti. Non è prevista né autorizzata una down migration distruttiva.
 
 Restano spenti worker, cron, scheduler, dispatch, egress, canali e provider. Purpose, base giuridica,
 retention e permessi business richiedono qualifica separata prima di dati reali o attivazione.
+
+The CI derives the rollback migration count from the selected PR base or first-parent commit. The synthetic restore boundary qualifies 43→43, the additive N15 transition 43→44, and later 44→44 application rollbacks with byte-identical migrations. It rejects a rollback schema ahead of the source, a mismatched declared count, and any changed migration on the 44→44 path. This keeps subsequent schema-44 pull requests usable without changing the frozen historical recovery baseline.
