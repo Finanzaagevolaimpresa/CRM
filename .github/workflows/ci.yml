@@ -148,8 +148,30 @@ jobs:
         run: node --import tsx --test tests/npm-audit-gate.test.ts
 
       - name: Verify dependency audits
+        id: dependency-audit
         timeout-minutes: 12
         run: node --import tsx scripts/npm-audit-gate.ts
+
+      - name: Report minimal public npm advisory diagnostics
+        if: ${{ always() && steps.dependency-audit.outcome == 'failure' }}
+        timeout-minutes: 3
+        run: |
+          reports="$(mktemp -d)"
+          trap 'rm -rf "$reports"' EXIT
+          for scope in runtime complete; do
+            scope_args=(--include=prod --include=optional --include=peer)
+            if [[ "$scope" == runtime ]]; then
+              scope_args+=(--omit=dev)
+            else
+              scope_args+=(--include=dev)
+            fi
+            npm audit "${scope_args[@]}" \
+              --audit-level=low --json --registry=https://registry.npmjs.org/ \
+              --offline=false --prefer-online=true --fetch-retries=0 --fetch-timeout=30000 \
+              > "$reports/$scope.json" || true
+            node --import tsx scripts/npm-audit-public-diagnostics.ts \
+              "$reports/$scope.json" package-lock.json "$scope"
+          done
 
       - name: Verify patch and shell syntax
         env:
@@ -160,7 +182,7 @@ jobs:
             git diff --check "$BASE_SHA"...HEAD
           fi
           bash -n scripts/smoke-docker-prod.sh
-          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh
+          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh scripts/vnx03/*.sh
 
       - name: Verify legacy production resources resolve as external
         env:
@@ -263,9 +285,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 43 database migrations
+      - name: Apply exactly 44 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel
@@ -318,7 +340,7 @@ jobs:
           VNX05_SYNTHETIC_TESTS_CONFIRMED: "1"
         run: |
           bash -n scripts/vnx05/packaging-smoke.sh
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           bash scripts/vnx05/packaging-smoke.sh
 
       - name: Run isolated staging read-only preflight
@@ -370,9 +392,11 @@ jobs:
             rollback_commit="$(git rev-parse HEAD^1)"
           fi
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
+          rollback_migration_count="$(git ls-tree -d --name-only "$rollback_commit:prisma/migrations" | wc -l | tr -d ' ')"
           ROLLBACK_COMMIT="$rollback_commit" \
           ROLLBACK_TREE="$rollback_tree" \
-          EXPECTED_MIGRATION_COUNT=43 \
+          EXPECTED_MIGRATION_COUNT=44 \
+          EXPECTED_ROLLBACK_MIGRATION_COUNT="$rollback_migration_count" \
           N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
             npm run test:n05:restore
 
@@ -397,7 +421,7 @@ jobs:
       - name: Verify N05 source and synthetic validators
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           python3 -B tests/n05/test_key_mounts.py
           bash -n scripts/n05/reconfigure-production-keys.sh
 
@@ -443,22 +467,7 @@ jobs:
       - name: Verify exact source head and protected scope
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
-          if [[ -n "$VNX03_BASE_SHA" ]] \
-            && git cat-file -e "$VNX03_BASE_SHA^{commit}" 2>/dev/null \
-            && git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              tests/vnx03 tests/vnx03-e2e-harness.test.ts scripts/vnx03 \
-              docs/vnx03-wpforms-https-end-to-end-qualification-r01.md \
-              | grep -q .; then
-            if git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              prisma/schema.prisma prisma/migrations src \
-              Dockerfile.prod.example docker-compose.prod.example.yml \
-              .env.example .env.production.example .env.staging.example \
-              | grep -q .; then
-              echo "VNX-03 must not change CRM runtime, Prisma, migrations, or production configuration" >&2
-              exit 1
-            fi
-          fi
+          bash scripts/vnx03/verify-protected-scope.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
