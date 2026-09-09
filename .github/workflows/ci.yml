@@ -173,14 +173,6 @@ jobs:
               "$reports/$scope.json" package-lock.json "$scope"
           done
 
-      - name: Resolve qualified N15 dependency patch in an ephemeral copy
-        if: ${{ always() && steps.dependency-audit.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.base.sha == 'f48475a748315d1d8d9722412207f41b8890ad10' }}
-        timeout-minutes: 5
-        env:
-          N15_DEPENDENCY_PATCH_CONFIRMED: "1"
-          N15_DEPENDENCY_PATCH_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/n15-resolve-dependency-patch.sh
-
       - name: Verify patch and shell syntax
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -190,7 +182,7 @@ jobs:
             git diff --check "$BASE_SHA"...HEAD
           fi
           bash -n scripts/smoke-docker-prod.sh
-          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh scripts/vnx03/*.sh scripts/n15-resolve-dependency-patch.sh
+          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh scripts/vnx03/*.sh
 
       - name: Verify legacy production resources resolve as external
         env:

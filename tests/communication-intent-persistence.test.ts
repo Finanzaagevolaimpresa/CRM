@@ -73,23 +73,3 @@ test('N15 CI qualifies migration 44 without weakening historical 43 boundaries',
   assert.match(restore, /N15_NOT_DORMANT_AFTER_ROLLBACK/u);
   assert.match(restore, /database_reachable=true/u);
 });
-
-test('N15 temporary dependency resolver is isolated, bounded and preserves manifest placement', () => {
-  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  const resolver = readFileSync('scripts/n15-resolve-dependency-patch.sh', 'utf8');
-  assert.match(ci, /steps\.dependency-audit\.outcome == 'failure'/u);
-  assert.match(ci, /github\.event\.pull_request\.base\.sha == 'f48475a748315d1d8d9722412207f41b8890ad10'/u);
-  assert.match(resolver, /mktemp -d \/tmp\/fai-crm-n15-dependency-patch/u);
-  assert.match(resolver, /npm install --package-lock-only --ignore-scripts/u);
-  assert.match(resolver, /npm update sharp js-yaml --package-lock-only --ignore-scripts/u);
-  assert.doesNotMatch(resolver, /npm update sharp@|js-yaml@4\.3\.2/u);
-  assert.match(resolver, /value\.dependencies\.next = '16\.3\.4'/u);
-  assert.match(resolver, /value\.devDependencies\['eslint-config-next'\] = '16\.3\.4'/u);
-  assert.match(resolver, /diff_bytes <= 131072/u);
-  assert.match(resolver, /N15_DEPENDENCY_PATCH_BEGIN/u);
-  assert.match(resolver, /N15_DEPENDENCY_PATCH_END/u);
-  assert.match(resolver, /Object\.keys\(value\)\.sort\(\)/u);
-  assert.match(resolver, /LOCK_ROOT_SCOPE_INVALID/u);
-  assert.match(resolver, /QUALIFIED_VERSION_SET_INVALID/u);
-  assert.doesNotMatch(resolver, /npm audit fix|--force|printenv|\benv\b >|github\.token/iu);
-});
