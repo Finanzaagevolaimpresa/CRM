@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
 import { canonicalJson, canonicalSha256 } from './canonical-json';
 import {
   CommunicationIntentContractError,
@@ -17,6 +17,15 @@ import {
 } from './communication-backbone-contract';
 
 const AUTHORITY = Symbol('N15_INTERNAL_AUTHORITY');
+const TRANSACTION = Symbol('N15_CALLER_TRANSACTION');
+
+export interface CommunicationPersistenceTransactionV1 {
+  readonly [TRANSACTION]: true;
+  readonly client: Prisma.TransactionClient;
+}
+
+type TransactionState = { failure?: { error: unknown } };
+const activeTransactions = new WeakMap<CommunicationPersistenceTransactionV1, TransactionState>();
 
 /** Created only at an internal composition boundary; never deserialize this from business input. */
 export interface CommunicationPersistenceAuthorityV1 {
@@ -50,6 +59,7 @@ export interface RecordCommunicationIntentHeldInputV1 {
 }
 
 export type CommunicationPersistenceErrorCode =
+  | 'N15_TRANSACTION_REQUIRED'
   | 'N15_AUTHORITY_INVALID'
   | 'N15_CLOCK_INVALID'
   | 'N15_IDEMPOTENCY_CONFLICT'
@@ -90,7 +100,7 @@ type StoredAggregate = {
 function schemaUnavailable(error: unknown) {
   if (typeof error !== 'object' || error === null) return false;
   const candidate = error as { code?: unknown; meta?: { code?: unknown } };
-  return candidate.code === 'P2021' || candidate.meta?.code === '42P01';
+  return candidate.code === 'P2021' || candidate.meta?.code === '42P01' || candidate.meta?.code === '42704';
 }
 
 function parseStored(row: StoredAggregate): Omit<CommunicationPersistenceAggregateV1, 'outcome'> {
@@ -134,11 +144,52 @@ async function findAggregates(tx: Prisma.TransactionClient, intent: Communicatio
   }) as Promise<StoredAggregate[]>;
 }
 
-/**
- * Writes the complete aggregate inside the caller's transaction. The caller owns commit/rollback.
- * No application producer invokes this foundation yet.
- */
+/** The caller supplies one callback containing its cause and every N15 write. */
+export async function runCommunicationPersistenceTransactionV1<T>(
+  client: PrismaClient,
+  action: (scope: CommunicationPersistenceTransactionV1) => Promise<T>,
+): Promise<T> {
+  if (!client || typeof client.$transaction !== 'function') {
+    throw new CommunicationPersistenceError('N15_TRANSACTION_REQUIRED');
+  }
+  return client.$transaction(async (tx) => {
+    const scope: CommunicationPersistenceTransactionV1 = Object.freeze({ [TRANSACTION]: true as const, client: tx });
+    const state: TransactionState = {};
+    activeTransactions.set(scope, state);
+    try {
+      const result = await action(scope);
+      if (state.failure) throw state.failure.error;
+      // Surface deferred failures while still inside Prisma's callback, before engine commit.
+      await tx.$executeRaw`SET CONSTRAINTS "CommunicationIntentRecord_complete_at_commit" IMMEDIATE`;
+      return result;
+    } catch (error) {
+      if (schemaUnavailable(error)) throw new CommunicationPersistenceError('N15_SCHEMA_UNAVAILABLE');
+      throw error;
+    } finally {
+      activeTransactions.delete(scope);
+    }
+  });
+}
+
 export async function recordCommunicationIntentHeldV1(
+  scope: CommunicationPersistenceTransactionV1,
+  authority: CommunicationPersistenceAuthorityV1,
+  input: RecordCommunicationIntentHeldInputV1,
+  fault?: (point: 'AFTER_INTENT' | 'AFTER_DECISION') => void,
+): Promise<CommunicationPersistenceAggregateV1> {
+  const state = scope && activeTransactions.get(scope);
+  if (!state) throw new CommunicationPersistenceError('N15_TRANSACTION_REQUIRED');
+  if (state.failure) throw state.failure.error;
+  try {
+    return await recordInCallerTransaction(scope.client, authority, input, fault);
+  } catch (error) {
+    state.failure = { error };
+    throw error;
+  }
+}
+
+/** Writes within the single transaction owned by the caller's scoped callback. */
+async function recordInCallerTransaction(
   tx: Prisma.TransactionClient,
   authority: CommunicationPersistenceAuthorityV1,
   input: RecordCommunicationIntentHeldInputV1,

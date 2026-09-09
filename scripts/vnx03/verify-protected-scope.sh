@@ -52,7 +52,7 @@ echo 'b23956d412e6b9addeb0cebbb7ac07f42fbf15905b8936bfb4f819d6e9cfa770  prisma/s
 echo "b023cf7a24f2ee9020e2d40da88aa3d229dfff079e4b62c7c0842a01a102766b  $n15_migration" \
   | sha256sum --check --strict >/dev/null \
   || fail 'VNX03_N15_MIGRATION_BYTES_INVALID'
-echo 'ccf64189af3f0ba857fe8f4ca18c3a77aa9f8d9852c985c4912b7ec5bc01ea86  src/lib/communication-intent-persistence.ts' \
+echo '20f25522681f10a1d4e90271f4213b28a56f8042f92333b2acdcb9c8bbe4e568  src/lib/communication-intent-persistence.ts' \
   | sha256sum --check --strict >/dev/null \
   || fail 'VNX03_N15_LAYER_BYTES_INVALID'
 

@@ -21,16 +21,21 @@ descrizioni storiche delle migrazioni.
 
 ## Atomicità, autorità e idempotenza
 
-`recordCommunicationIntentHeldV1` riceve obbligatoriamente un `Prisma.TransactionClient`: il
-chiamante decide commit o rollback e non esiste un percorso dual-write/best-effort. Intento,
-decisione e audit, nonché ogni causa sintetica scritta dal chiamante, appartengono quindi alla stessa
-transazione. Un constraint trigger PostgreSQL differito verifica la completezza al commit:
-se il chiamante intercetta un fault dopo intento o decisione e prova a confermare, il database
-rifiuta il commit e annulla anche la causa. Il normale client fuori transazione non può confermare
-il primo record isolato. Il trigger usa lo schema della tabella che lo ha attivato, senza dipendere
-dal search path del chiamante. Le foreign key, le unique dei figli e i trigger append-only conservano
-l'aggregate completo dopo il commit. Trigger per istruzione rifiutano anche TRUNCATE su tutte
-e tre le tabelle, conservando lo storico e l'audit. Il producer e i due istanti provengono da un oggetto di autorità interna creato dal
+`runCommunicationPersistenceTransactionV1` apre una sola transazione Prisma per il callback del
+chiamante. La causa business usa `scope.client`; `recordCommunicationIntentHeldV1` accetta soltanto
+lo scope attivo creato da quel confine, mai un normale PrismaClient, un TransactionClient esterno
+o uno scope scaduto. Il chiamante conserva la decisione di completare o annullare il proprio
+callback, senza transazioni annidate né dual-write/best-effort.
+
+Ogni errore dell'operazione N15 invalida lo scope: anche se il callback lo intercetta, il confine
+rilancia l'errore prima del commit, annullando intento, decisione, audit e causa. Alla fine del
+callback verifica inoltre il constraint differito mentre il callback Prisma è ancora attivo.
+Questo rende osservabile l'errore prima della fase di commit del motore Prisma 5.22.
+
+Il constraint trigger PostgreSQL differito impedisce comunque la conferma di un aggregate
+incompleto. Usa lo schema della tabella che lo ha attivato, senza dipendere dal search path del
+chiamante. Foreign key, unique dei figli e trigger append-only conservano l'aggregate completo;
+trigger per istruzione rifiutano TRUNCATE su tutte e tre le tabelle. Il producer e i due istanti provengono da un oggetto di autorità interna creato dal
 composition boundary, non dai valori business del caller. In R01 tale autorità è qualificata
 esclusivamente dalle fixture; non esistono producer o call-site applicativi.
 

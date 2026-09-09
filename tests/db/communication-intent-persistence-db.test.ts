@@ -10,6 +10,8 @@ import {
   CommunicationPersistenceError,
   createCommunicationPersistenceAuthorityV1,
   recordCommunicationIntentHeldV1,
+  runCommunicationPersistenceTransactionV1,
+  type CommunicationPersistenceTransactionV1,
   type RecordCommunicationIntentHeldInputV1,
 } from '../../src/lib/communication-intent-persistence';
 import {
@@ -83,7 +85,7 @@ test('N15 fresh install applies 44 migrations, creates empty dedicated storage a
     client().businessInboxEvent.count(), client().businessOutboxEvent.count(), client().businessQueueAttempt.count(),
     client().practiceCommunication.count(), client().auditLog.count(),
   ]);
-  const result = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(1)));
+  const result = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(1)));
   assert.equal(result.outcome, 'RECORDED');
   assert.deepEqual(await Promise.all([
     client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
@@ -95,27 +97,27 @@ test('N15 fresh install applies 44 migrations, creates empty dedicated storage a
 });
 
 test('N15 replay returns the original aggregate; conflicts and intentId collisions write nothing', { skip: !run }, async () => {
-  const original = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(2)));
-  const replay = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, {
+  const original = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(2)));
+  const replay = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, {
     ...input(2), intentId: '00000000-0000-4000-8000-000000159999',
   }));
   assert.equal(replay.outcome, 'REPLAYED');
   assert.deepEqual(replay.intent, original.intent);
   const count = await client().communicationIntentRecord.count();
   await assert.rejects(
-    client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(2, {
+    runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(2, {
       message: { ...input(2).message, reasonCode: 'DIVERGENT_SYNTHETIC' },
     }))),
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_IDEMPOTENCY_CONFLICT',
   );
   await assert.rejects(
-    client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(3, {
+    runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(3, {
       intentId: original.intent.intentId, message: { ...input(3).message, reasonCode: 'COLLIDING_SYNTHETIC' },
     }))),
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_IDEMPOTENCY_CONFLICT',
   );
   assert.equal(await client().communicationIntentRecord.count(), count);
-  const sameSemantic = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(4)));
+  const sameSemantic = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(4)));
   assert.equal(sameSemantic.outcome, 'RECORDED');
   assert.equal(sameSemantic.intent.idempotency.semanticHash, original.intent.idempotency.semanticHash);
 });
@@ -127,8 +129,8 @@ test('N15 fault injection and caller rollback atomically remove intent, HELD, au
   ]);
   for (const [ordinal, point] of [[5, 'AFTER_INTENT'], [6, 'AFTER_DECISION']] as const) {
     const causeId = `fault-${point}`;
-    await assert.rejects(client().$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
+    await assert.rejects(runCommunicationPersistenceTransactionV1(client(), async (tx) => {
+      await tx.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
       return recordCommunicationIntentHeldV1(tx, authority, input(ordinal), (at) => {
         if (at === point) throw new Error(`SYNTHETIC_FAULT_${point}`);
       });
@@ -136,8 +138,8 @@ test('N15 fault injection and caller rollback atomically remove intent, HELD, au
     assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = ${causeId}`)[0]?.count), 0);
   }
 
-  await client().$transaction(async (tx) => {
-    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('committed-cause')`;
+  await runCommunicationPersistenceTransactionV1(client(), async (tx) => {
+    await tx.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('committed-cause')`;
     await recordCommunicationIntentHeldV1(tx, authority, input(7));
   });
   assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'committed-cause'`)[0]?.count), 1);
@@ -146,8 +148,8 @@ test('N15 fault injection and caller rollback atomically remove intent, HELD, au
     client().communicationIntentAudit.count(),
   ]), before.map((count) => count + 1));
 
-  await assert.rejects(client().$transaction(async (tx) => {
-    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('rolled-back-cause')`;
+  await assert.rejects(runCommunicationPersistenceTransactionV1(client(), async (tx) => {
+    await tx.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('rolled-back-cause')`;
     await recordCommunicationIntentHeldV1(tx, authority, input(12));
     throw new Error('SYNTHETIC_CALLER_ROLLBACK');
   }));
@@ -160,7 +162,7 @@ test('N15 fault injection and caller rollback atomically remove intent, HELD, au
 
 test('N15 concurrent same-key writers produce one aggregate and one original identity', { skip: !run }, async () => {
   const results = await Promise.all(Array.from({ length: 8 }, () =>
-    client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(8)))));
+    runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(8)))));
   assert.equal(results.filter((result) => result.outcome === 'RECORDED').length, 1);
   assert.equal(results.filter((result) => result.outcome === 'REPLAYED').length, 7);
   assert.equal(new Set(results.map((result) => result.intent.intentId)).size, 1);
@@ -168,21 +170,21 @@ test('N15 concurrent same-key writers produce one aggregate and one original ide
 
 test('N15 rows are immutable and replay fails closed for incomplete and hash-manipulated aggregates', { skip: !run }, async () => {
   const incompleteInput = input(9);
-  const incomplete = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, incompleteInput));
+  const incomplete = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, incompleteInput));
   const incompleteRow = await client().communicationIntentRecord.findUniqueOrThrow({ where: { intentId: incomplete.intent.intentId } });
   await assert.rejects(client().communicationIntentAudit.delete({ where: { intentRecordId: incompleteRow.id } }));
   await client().$executeRawUnsafe('ALTER TABLE "CommunicationIntentAudit" DISABLE TRIGGER "CommunicationIntentAudit_append_only"');
   await client().communicationIntentAudit.delete({ where: { intentRecordId: incompleteRow.id } });
   await client().$executeRawUnsafe('ALTER TABLE "CommunicationIntentAudit" ENABLE TRIGGER "CommunicationIntentAudit_append_only"');
-  await assert.rejects(client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(9))),
+  await assert.rejects(runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(9))),
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOMPLETE');
 
-  const created = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(10)));
+  const created = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(10)));
   await assert.rejects(client().communicationIntentRecord.update({ where: { intentId: created.intent.intentId }, data: { envelopeHash: 'f'.repeat(64) } }));
   await client().$executeRawUnsafe('ALTER TABLE "CommunicationIntentRecord" DISABLE TRIGGER "CommunicationIntentRecord_append_only"');
   await client().communicationIntentRecord.update({ where: { intentId: created.intent.intentId }, data: { envelopeHash: 'f'.repeat(64) } });
   await client().$executeRawUnsafe('ALTER TABLE "CommunicationIntentRecord" ENABLE TRIGGER "CommunicationIntentRecord_append_only"');
-  await assert.rejects(client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(10))),
+  await assert.rejects(runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, input(10))),
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOHERENT');
 });
 
@@ -192,12 +194,11 @@ test('N15 rejects autocommit and commits with swallowed faults, preserving calle
     client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
   ]);
   const before = await counts();
-  const incompleteAtCommit = (error: unknown) => String(error).includes('N15_COMMUNICATION_AGGREGATE_INCOMPLETE');
   for (const [ordinal, point] of [[20, 'AFTER_INTENT'], [21, 'AFTER_DECISION']] as const) {
     const causeId = 'caught-' + point;
     let faultCaught = false;
-    await assert.rejects(client().$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
+    await assert.rejects(runCommunicationPersistenceTransactionV1(client(), async (tx) => {
+      await tx.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
       try {
         await recordCommunicationIntentHeldV1(tx, authority, input(ordinal), (at) => {
           if (at === point) throw new Error('SYNTHETIC_CAUGHT_' + point);
@@ -207,27 +208,50 @@ test('N15 rejects autocommit and commits with swallowed faults, preserving calle
         faultCaught = true;
       }
       return 'attempt-to-commit';
-    }), incompleteAtCommit);
+    }), (error: unknown) => (error as Error).message === 'SYNTHETIC_CAUGHT_' + point);
     assert.equal(faultCaught, true);
     assert.deepEqual(await counts(), before);
     assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = ${causeId}`)[0]?.count), 0);
   }
 
-  // PrismaClient is structurally assignable to TransactionClient; the database must still refuse a partial autocommit.
-  await assert.rejects(recordCommunicationIntentHeldV1(client(), authority, input(22)), incompleteAtCommit);
+  // Exercise the native deferred constraint separately from the operation-error latch.
+  await assert.rejects(runCommunicationPersistenceTransactionV1(client(), async (scope) => {
+    await scope.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('native-completeness-cause')`;
+    await scope.client.communicationIntentRecord.create({ data: {
+      id: '00000000-0000-4000-8000-000000150090',
+      intentId: '00000000-0000-4000-8000-000000150091',
+      producerCode: 'N15_SYNTHETIC_FIXTURE', keyDigest: '2'.repeat(64), semanticHash: '3'.repeat(64),
+      envelopeHash: '4'.repeat(64), canonicalEnvelope: '{}', state: 'RECORDED',
+      occurredAt: new Date('2026-09-09T12:00:00.000Z'),
+    } });
+    return 'attempt-native-partial-commit';
+  }), (error: unknown) => String(error).includes('N15_COMMUNICATION_AGGREGATE_INCOMPLETE'));
   assert.deepEqual(await counts(), before);
+  assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'native-completeness-cause'`)[0]?.count), 0);
+
+  const transactionRequired = (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_TRANSACTION_REQUIRED';
+  await assert.rejects(recordCommunicationIntentHeldV1(client() as unknown as CommunicationPersistenceTransactionV1, authority, input(22)), transactionRequired);
   await client().$transaction(async (tx) => {
-    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('complete-after-caught-fault')`;
+    await assert.rejects(recordCommunicationIntentHeldV1(tx as unknown as CommunicationPersistenceTransactionV1, authority, input(22)), transactionRequired);
+  });
+  assert.deepEqual(await counts(), before);
+  let expiredScope: CommunicationPersistenceTransactionV1 | undefined;
+  await runCommunicationPersistenceTransactionV1(client(), async (tx) => {
+    expiredScope = tx;
+    await tx.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('complete-after-caught-fault')`;
     await recordCommunicationIntentHeldV1(tx, authority, input(23));
   });
   assert.deepEqual(await counts(), before.map((count) => count + 1));
   assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'complete-after-caught-fault'`)[0]?.count), 1);
+  assert.ok(expiredScope);
+  await assert.rejects(recordCommunicationIntentHeldV1(expiredScope, authority, input(24)), transactionRequired);
+  assert.deepEqual(await counts(), before.map((count) => count + 1));
 });
 
 test('N15 replay rejects each divergent authority/time column and preserves the restored original aggregate', { skip: !run }, async () => {
   for (const [index, field] of ['producerCode', 'occurredAt', 'evaluatedAt'].entries()) {
     const candidateInput = input(30 + index);
-    const original = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
+    const original = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
     const row = await client().communicationIntentRecord.findUniqueOrThrow({
       where: { intentId: original.intent.intentId }, include: { heldDecision: true },
     });
@@ -252,11 +276,11 @@ test('N15 replay rejects each divergent authority/time column and preserves the 
     ]);
     const before = await counts();
     await alterProjection(false);
-    await assert.rejects(client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput)),
+    await assert.rejects(runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput)),
       (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOHERENT');
     assert.deepEqual(await counts(), before, field);
     await alterProjection(true);
-    const replay = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
+    const replay = await runCommunicationPersistenceTransactionV1(client(), (tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
     assert.equal(replay.outcome, 'REPLAYED');
     assert.deepEqual({ ...replay, outcome: 'RECORDED' }, original, field);
     assert.deepEqual(await counts(), before, field);
@@ -298,7 +322,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   try {
     execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000 });
     assert.equal(Number((await oldClient.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations"`)[0]?.count), 43);
-    await assert.rejects(oldClient.$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(11))),
+    await assert.rejects(runCommunicationPersistenceTransactionV1(oldClient, (tx) => recordCommunicationIntentHeldV1(tx, authority, input(11))),
       (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_SCHEMA_UNAVAILABLE');
     cpSync(join('prisma/migrations', migrationName), join(migrationsDirectory, migrationName), { recursive: true });
     execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000 });
