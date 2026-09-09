@@ -81,11 +81,15 @@ test('N15 temporary dependency resolver is isolated, bounded and preserves manif
   assert.match(ci, /github\.event\.pull_request\.base\.sha == 'f48475a748315d1d8d9722412207f41b8890ad10'/u);
   assert.match(resolver, /mktemp -d \/tmp\/fai-crm-n15-dependency-patch/u);
   assert.match(resolver, /npm install --package-lock-only --ignore-scripts/u);
-  assert.match(resolver, /npm update sharp@0\.35\.4 js-yaml@4\.3\.2 --package-lock-only --ignore-scripts/u);
+  assert.match(resolver, /npm update sharp js-yaml --package-lock-only --ignore-scripts/u);
+  assert.doesNotMatch(resolver, /npm update sharp@|js-yaml@4\.3\.2/u);
   assert.match(resolver, /value\.dependencies\.next = '16\.3\.4'/u);
   assert.match(resolver, /value\.devDependencies\['eslint-config-next'\] = '16\.3\.4'/u);
   assert.match(resolver, /diff_bytes <= 131072/u);
   assert.match(resolver, /N15_DEPENDENCY_PATCH_BEGIN/u);
   assert.match(resolver, /N15_DEPENDENCY_PATCH_END/u);
+  assert.match(resolver, /Object\.keys\(value\)\.sort\(\)/u);
+  assert.match(resolver, /LOCK_ROOT_SCOPE_INVALID/u);
+  assert.match(resolver, /QUALIFIED_VERSION_SET_INVALID/u);
   assert.doesNotMatch(resolver, /npm audit fix|--force|printenv|\benv\b >|github\.token/iu);
 });

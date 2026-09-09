@@ -23,13 +23,15 @@ cp package.json package-lock.json "$work/result/"
 node - "$work/result/package.json" <<'NODE'
 const fs = require('node:fs');
 const path = process.argv[2];
-const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+const deny = code => { console.error(`N15_DEPENDENCY_PATCH_ERROR|code=${code}`); process.exit(1); };
+let value;
+try { value = JSON.parse(fs.readFileSync(path, 'utf8')); } catch { deny('PACKAGE_JSON_INVALID'); }
 if (value.dependencies?.next !== '16.3.0'
   || value.devDependencies?.['eslint-config-next'] !== '16.3.0'
   || Object.hasOwn(value.dependencies ?? {}, 'sharp')
   || Object.hasOwn(value.dependencies ?? {}, 'js-yaml')
   || Object.hasOwn(value.devDependencies ?? {}, 'sharp')
-  || Object.hasOwn(value.devDependencies ?? {}, 'js-yaml')) process.exit(1);
+  || Object.hasOwn(value.devDependencies ?? {}, 'js-yaml')) deny('PACKAGE_BASELINE_INVALID');
 value.dependencies.next = '16.3.4';
 value.devDependencies['eslint-config-next'] = '16.3.4';
 fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
@@ -40,7 +42,7 @@ NODE
   npm install --package-lock-only --ignore-scripts --no-audit --no-fund \
     --registry=https://registry.npmjs.org/ --fetch-retries=2 \
     --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=3000 --fetch-timeout=30000
-  npm update sharp@0.35.4 js-yaml@4.3.2 --package-lock-only --ignore-scripts \
+  npm update sharp js-yaml --package-lock-only --ignore-scripts \
     --no-save --no-audit --no-fund --registry=https://registry.npmjs.org/ \
     --fetch-retries=2 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=3000 --fetch-timeout=30000
 )
@@ -48,32 +50,45 @@ NODE
 node - "$work/original/package.json" "$work/result/package.json" "$work/result/package-lock.json" <<'NODE'
 const fs = require('node:fs');
 const [originalPath, resultPath, lockPath] = process.argv.slice(2);
-const original = JSON.parse(fs.readFileSync(originalPath, 'utf8'));
-const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+const deny = code => { console.error(`N15_DEPENDENCY_PATCH_ERROR|code=${code}`); process.exit(1); };
+let original, result, lock;
+try {
+  original = JSON.parse(fs.readFileSync(originalPath, 'utf8'));
+  result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+  lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+} catch { deny('RESOLVED_JSON_INVALID'); }
+const canonical = value => {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') return Object.fromEntries(
+    Object.keys(value).sort().map(key => [key, canonical(value[key])]),
+  );
+  return value;
+};
+const equivalent = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 const expected = structuredClone(original);
 expected.dependencies.next = '16.3.4';
 expected.devDependencies['eslint-config-next'] = '16.3.4';
-if (JSON.stringify(result) !== JSON.stringify(expected)) process.exit(1);
-if (JSON.stringify(lock.packages?.['']?.dependencies) !== JSON.stringify(result.dependencies)
-  || JSON.stringify(lock.packages?.['']?.devDependencies) !== JSON.stringify(result.devDependencies)) process.exit(1);
+if (!equivalent(result, expected)) deny('PACKAGE_DELTA_INVALID');
+if (!equivalent(lock.packages?.['']?.dependencies, result.dependencies)
+  || !equivalent(lock.packages?.['']?.devDependencies, result.devDependencies)) deny('LOCK_ROOT_SCOPE_INVALID');
 const observed = new Map();
 for (const [path, item] of Object.entries(lock.packages ?? {})) {
   if (!path.includes('node_modules/') || !item || typeof item !== 'object') continue;
   if (item.link === true || typeof item.resolved !== 'string'
-    || typeof item.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(item.integrity)) process.exit(1);
-  const url = new URL(item.resolved);
-  if (url.origin !== 'https://registry.npmjs.org' || url.username || url.password) process.exit(1);
+    || typeof item.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(item.integrity)) deny('LOCK_PACKAGE_PROVENANCE_INVALID');
+  let url;
+  try { url = new URL(item.resolved); } catch { deny('LOCK_PACKAGE_URL_INVALID'); }
+  if (url.origin !== 'https://registry.npmjs.org' || url.username || url.password) deny('LOCK_PACKAGE_URL_INVALID');
   const tail = path.slice(path.lastIndexOf('node_modules/') + 13);
   const name = tail.startsWith('@') ? tail.split('/').slice(0, 2).join('/') : tail.split('/')[0];
-  if (name.startsWith('@next/') && item.version !== '16.3.4') process.exit(1);
+  if (name.startsWith('@next/') && item.version !== '16.3.4') deny('NEXT_COMPANION_VERSION_INVALID');
   if (['next', 'eslint-config-next', 'sharp', 'js-yaml'].includes(name)) {
     const versions = observed.get(name) ?? new Set(); versions.add(item.version); observed.set(name, versions);
   }
 }
 for (const [name, version] of Object.entries({ next: '16.3.4', 'eslint-config-next': '16.3.4', sharp: '0.35.4', 'js-yaml': '4.3.2' })) {
   const versions = [...(observed.get(name) ?? [])];
-  if (versions.length !== 1 || versions[0] !== version) process.exit(1);
+  if (versions.length !== 1 || versions[0] !== version) deny('QUALIFIED_VERSION_SET_INVALID');
 }
 NODE
 
