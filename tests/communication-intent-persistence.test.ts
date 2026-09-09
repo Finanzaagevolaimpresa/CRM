@@ -40,10 +40,34 @@ test('N15 producer and clock require an explicit internal authority object', () 
 test('N15 contract stays pure and persistence has no runtime producer or activation call-site', () => {
   const contract = readFileSync('src/lib/communication-backbone-contract.ts', 'utf8');
   assert.doesNotMatch(contract, /@prisma\/client|communication-intent-persistence/u);
-  const sources = ['src/app', 'scripts'].flatMap((directory) => {
+  const sources = ['src', 'scripts', 'prisma'].flatMap((directory) => {
     return execFileSync('find', [directory, '-type', 'f'], { encoding: 'utf8' }).trim().split('\n');
-  }).filter(Boolean);
+  }).filter((source) => source && /\.(?:c|m)?(?:j|t)sx?$/u.test(source)
+    && source !== 'src/lib/communication-intent-persistence.ts'
+    && source !== 'src/lib/communication-backbone-contract.ts');
   for (const source of sources) {
-    assert.doesNotMatch(readFileSync(source, 'utf8'), /recordCommunicationIntentHeldV1/u, source);
+    assert.doesNotMatch(
+      readFileSync(source, 'utf8'),
+      /recordCommunicationIntentHeldV1|communication-intent-persistence/u,
+      source,
+    );
   }
+});
+
+test('N15 CI qualifies migration 44 without weakening historical 43 boundaries', () => {
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const restore = readFileSync('scripts/n05/restore-drill.sh', 'utf8');
+  assert.match(ci, /VNX-05 scoped consumer[\s\S]*?= "44"/u);
+  assert.match(ci, /N05 same-image persistent key mounts[\s\S]*?= "44"/u);
+  assert.match(ci, /VNX-03 authentic WPForms[\s\S]*?= "44"/u);
+  assert.match(ci, /n15_migration="prisma\/migrations\/20260909120000_n15_dedicated_communication_persistence_v1\/migration\.sql"/u);
+  assert.match(ci, /git diff --diff-filter=A/u);
+  assert.match(ci, /--diff-filter=DMRTUXB/u);
+  assert.match(ci, /EXPECTED_MIGRATION_COUNT=44[\s\S]*?EXPECTED_ROLLBACK_MIGRATION_COUNT=43/u);
+  assert.match(restore, /EXPECTED_MIGRATION_COUNT" == "43" \|\| "\$EXPECTED_MIGRATION_COUNT" == "44"/u);
+  assert.match(restore, /ROLLBACK_SOURCE_MIGRATION_COUNT_MISMATCH/u);
+  assert.match(restore, /HISTORICAL_MIGRATION_CHANGED/u);
+  assert.match(restore, /N15_NOT_DORMANT_BEFORE_ROLLBACK/u);
+  assert.match(restore, /N15_NOT_DORMANT_AFTER_ROLLBACK/u);
+  assert.match(restore, /database_reachable=true/u);
 });

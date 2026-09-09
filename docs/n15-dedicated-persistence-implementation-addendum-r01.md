@@ -37,7 +37,10 @@ relativi hash; righe mancanti o incoerenti falliscono chiuso.
 
 ## Compatibilità e rollback
 
-L'applicazione N−1 ignora le nuove tabelle dormienti. La nuova API contro lo schema a 43 migrazioni
+Il drill Docker N05 costruisce l'immagine candidata, conserva il database a 44 migrazioni, verifica
+health e tabelle N15 vuote, quindi sostituisce realmente l'app con un'immagine costruita dalla base
+N−1 e ripete health e inerzia N15. La ricevuta vincola commit, tree, image ID e conteggi schema.
+Separatamente, la nuova API contro lo schema a 43 migrazioni
 fallisce esplicitamente con `N15_SCHEMA_UNAVAILABLE` e non ripiega su N11 o su un altro storage.
 Il rollback applicativo consiste nel distribuire nuovamente la versione N−1 lasciando schema e righe
 intatti. Non è prevista né autorizzata una down migration distruttiva.

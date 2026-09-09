@@ -64,6 +64,7 @@ test.before(async () => {
     env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000,
   });
   db = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+  await db.$executeRaw`CREATE TABLE "N15SyntheticCallerCause" ("id" TEXT PRIMARY KEY)`;
 });
 
 test.after(async () => {
@@ -120,21 +121,41 @@ test('N15 replay returns the original aggregate; conflicts and intentId collisio
 });
 
 test('N15 fault injection and caller rollback atomically remove intent, HELD, audit and caller cause', { skip: !run }, async () => {
-  const before = await client().communicationIntentRecord.count();
+  const before = await Promise.all([
+    client().communicationIntentRecord.count(), client().communicationHeldDecision.count(),
+    client().communicationIntentAudit.count(),
+  ]);
   for (const [ordinal, point] of [[5, 'AFTER_INTENT'], [6, 'AFTER_DECISION']] as const) {
-    await assert.rejects(client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, input(ordinal), (at) => {
-      if (at === point) throw new Error(`SYNTHETIC_FAULT_${point}`);
-    })));
+    const causeId = `fault-${point}`;
+    await assert.rejects(client().$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
+      return recordCommunicationIntentHeldV1(tx, authority, input(ordinal), (at) => {
+        if (at === point) throw new Error(`SYNTHETIC_FAULT_${point}`);
+      });
+    }));
+    assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = ${causeId}`)[0]?.count), 0);
   }
-  await assert.rejects(client().$transaction(async (tx) => {
-    await tx.$executeRaw`CREATE TEMP TABLE n15_synthetic_cause(value TEXT) ON COMMIT DROP`;
-    await tx.$executeRaw`INSERT INTO n15_synthetic_cause(value) VALUES ('synthetic')`;
+
+  await client().$transaction(async (tx) => {
+    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('committed-cause')`;
     await recordCommunicationIntentHeldV1(tx, authority, input(7));
+  });
+  assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'committed-cause'`)[0]?.count), 1);
+  assert.deepEqual(await Promise.all([
+    client().communicationIntentRecord.count(), client().communicationHeldDecision.count(),
+    client().communicationIntentAudit.count(),
+  ]), before.map((count) => count + 1));
+
+  await assert.rejects(client().$transaction(async (tx) => {
+    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('rolled-back-cause')`;
+    await recordCommunicationIntentHeldV1(tx, authority, input(12));
     throw new Error('SYNTHETIC_CALLER_ROLLBACK');
   }));
-  assert.equal(await client().communicationIntentRecord.count(), before);
-  assert.equal(await client().communicationHeldDecision.count(), before);
-  assert.equal(await client().communicationIntentAudit.count(), before);
+  assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'rolled-back-cause'`)[0]?.count), 0);
+  assert.deepEqual(await Promise.all([
+    client().communicationIntentRecord.count(), client().communicationHeldDecision.count(),
+    client().communicationIntentAudit.count(),
+  ]), before.map((count) => count + 1));
 });
 
 test('N15 concurrent same-key writers produce one aggregate and one original identity', { skip: !run }, async () => {
@@ -165,7 +186,7 @@ test('N15 rows are immutable and replay fails closed for incomplete and hash-man
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOHERENT');
 });
 
-test('N15 upgrades 43 to 44 and fails explicitly without schema; N-1 remains compatible with dormant schema', { skip: !run, timeout: 180_000 }, async () => {
+test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema', { skip: !run, timeout: 180_000 }, async () => {
   const temporary = mkdtempSync(join(tmpdir(), 'n15-upgrade-'));
   const prismaDirectory = join(temporary, 'prisma');
   const migrationsDirectory = join(prismaDirectory, 'migrations');
@@ -187,7 +208,7 @@ test('N15 upgrades 43 to 44 and fails explicitly without schema; N-1 remains com
     execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000 });
     assert.equal(Number((await oldClient.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations"`)[0]?.count), 44);
     assert.deepEqual(await Promise.all([oldClient.communicationIntentRecord.count(), oldClient.communicationHeldDecision.count(), oldClient.communicationIntentAudit.count()]), [0, 0, 0]);
-    // An N-1 application performs no N15 call, so the additive dormant tables are inert.
+    // Schema dormancy is checked here; the N05 Docker drill executes the actual N-1 application.
     assert.equal(await oldClient.businessInboxEvent.count(), 0);
   } finally {
     await oldClient.$disconnect();
