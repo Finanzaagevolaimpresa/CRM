@@ -74,13 +74,17 @@ export interface CommunicationPersistenceAggregateV1 {
 type StoredAggregate = {
   id: string;
   intentId: string;
+  producerCode: string;
+  occurredAt: Date;
   keyDigest: string;
   semanticHash: string;
   envelopeHash: string;
   canonicalEnvelope: string;
   state: string;
-  heldDecision: null | { decisionHash: string; canonicalDecision: string; state: string };
-  auditRecord: null | { recordHash: string; canonicalAudit: string };
+  heldDecision: null | {
+    intentRecordId: string; decisionHash: string; canonicalDecision: string; state: string; evaluatedAt: Date;
+  };
+  auditRecord: null | { intentRecordId: string; recordHash: string; canonicalAudit: string };
 };
 
 function schemaUnavailable(error: unknown) {
@@ -99,6 +103,13 @@ function parseStored(row: StoredAggregate): Omit<CommunicationPersistenceAggrega
     const audit = createCommunicationAuditRecordV1(intent, decision);
     if (row.state !== 'RECORDED' || row.heldDecision.state !== 'HELD'
       || row.intentId !== intent.intentId
+      || row.producerCode !== intent.source.producerCode
+      || !(row.occurredAt instanceof Date)
+      || row.occurredAt.valueOf() !== Date.parse(intent.occurredAt)
+      || row.heldDecision.intentRecordId !== row.id
+      || row.auditRecord.intentRecordId !== row.id
+      || !(row.heldDecision.evaluatedAt instanceof Date)
+      || row.heldDecision.evaluatedAt.valueOf() !== Date.parse(decision.evaluatedAt)
       || row.keyDigest !== intent.idempotency.keyDigest
       || row.semanticHash !== intent.idempotency.semanticHash
       || row.envelopeHash !== intent.idempotency.envelopeHash

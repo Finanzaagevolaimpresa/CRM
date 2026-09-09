@@ -64,4 +64,40 @@ CREATE TRIGGER "CommunicationIntentAudit_append_only"
 BEFORE UPDATE OR DELETE ON "CommunicationIntentAudit"
 FOR EACH ROW EXECUTE FUNCTION "N15_communication_aggregate_append_only"();
 
+CREATE TRIGGER "CommunicationIntentRecord_no_truncate"
+BEFORE TRUNCATE ON "CommunicationIntentRecord"
+FOR EACH STATEMENT EXECUTE FUNCTION "N15_communication_aggregate_append_only"();
+CREATE TRIGGER "CommunicationHeldDecision_no_truncate"
+BEFORE TRUNCATE ON "CommunicationHeldDecision"
+FOR EACH STATEMENT EXECUTE FUNCTION "N15_communication_aggregate_append_only"();
+CREATE TRIGGER "CommunicationIntentAudit_no_truncate"
+BEFORE TRUNCATE ON "CommunicationIntentAudit"
+FOR EACH STATEMENT EXECUTE FUNCTION "N15_communication_aggregate_append_only"();
+
+-- Check completeness at commit, including when a caller catches a JavaScript fault.
+-- Child uniqueness, foreign keys and append-only triggers preserve the complete aggregate.
+CREATE FUNCTION "N15_communication_aggregate_require_complete"()
+RETURNS TRIGGER AS $
+DECLARE
+  aggregate_complete BOOLEAN;
+BEGIN
+  EXECUTE format(
+    'SELECT EXISTS (SELECT 1 FROM %I."CommunicationHeldDecision" AS decision
+       JOIN %I."CommunicationIntentAudit" AS audit
+         ON audit."intentRecordId" = decision."intentRecordId"
+       WHERE decision."intentRecordId" = $1)',
+    TG_TABLE_SCHEMA, TG_TABLE_SCHEMA
+  ) INTO aggregate_complete USING NEW."id";
+  IF aggregate_complete IS NOT TRUE THEN
+    RAISE EXCEPTION 'N15_COMMUNICATION_AGGREGATE_INCOMPLETE' USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  RETURN NULL;
+END;
+$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER "CommunicationIntentRecord_complete_at_commit"
+AFTER INSERT ON "CommunicationIntentRecord"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION "N15_communication_aggregate_require_complete"();
+
 COMMIT;

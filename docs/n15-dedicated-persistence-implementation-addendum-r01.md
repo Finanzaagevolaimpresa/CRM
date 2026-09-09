@@ -24,7 +24,13 @@ descrizioni storiche delle migrazioni.
 `recordCommunicationIntentHeldV1` riceve obbligatoriamente un `Prisma.TransactionClient`: il
 chiamante decide commit o rollback e non esiste un percorso dual-write/best-effort. Intento,
 decisione e audit, nonché ogni causa sintetica scritta dal chiamante, appartengono quindi alla stessa
-transazione. Il producer e i due istanti provengono da un oggetto di autorità interna creato dal
+transazione. Un constraint trigger PostgreSQL differito verifica la completezza al commit:
+se il chiamante intercetta un fault dopo intento o decisione e prova a confermare, il database
+rifiuta il commit e annulla anche la causa. Il normale client fuori transazione non può confermare
+il primo record isolato. Il trigger usa lo schema della tabella che lo ha attivato, senza dipendere
+dal search path del chiamante. Le foreign key, le unique dei figli e i trigger append-only conservano
+l'aggregate completo dopo il commit. Trigger per istruzione rifiutano anche TRUNCATE su tutte
+e tre le tabelle, conservando lo storico e l'audit. Il producer e i due istanti provengono da un oggetto di autorità interna creato dal
 composition boundary, non dai valori business del caller. In R01 tale autorità è qualificata
 esclusivamente dalle fixture; non esistono producer o call-site applicativi.
 
@@ -33,7 +39,9 @@ semantica restituiscono l'aggregate originario (inclusi `intentId`, byte canonic
 chiave e semantica diversa restituiscono `N15_IDEMPOTENCY_CONFLICT` senza scritture. Un `intentId`
 già associato a un aggregate divergente produce lo stesso conflitto. Chiavi differenti possono
 invece registrare la stessa semantica. Ogni replay ricalcola e verifica envelope, decisione, audit e
-relativi hash; righe mancanti o incoerenti falliscono chiuso.
+relativi hash; righe mancanti o incoerenti falliscono chiuso. Il replay confronta inoltre producer,
+occurredAt, evaluatedAt e i riferimenti dei figli al record radice con l'aggregate canonico. I campi
+createdAt rimangono metadati di inserimento generati dal database, distinti dai tempi del contratto.
 
 ## Compatibilità e rollback
 

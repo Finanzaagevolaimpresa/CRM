@@ -186,6 +186,102 @@ test('N15 rows are immutable and replay fails closed for incomplete and hash-man
     (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOHERENT');
 });
 
+
+test('N15 rejects autocommit and commits with swallowed faults, preserving caller-cause atomicity', { skip: !run }, async () => {
+  const counts = () => Promise.all([
+    client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
+  ]);
+  const before = await counts();
+  const incompleteAtCommit = (error: unknown) => String(error).includes('N15_COMMUNICATION_AGGREGATE_INCOMPLETE');
+  for (const [ordinal, point] of [[20, 'AFTER_INTENT'], [21, 'AFTER_DECISION']] as const) {
+    const causeId = 'caught-' + point;
+    let faultCaught = false;
+    await assert.rejects(client().$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
+      try {
+        await recordCommunicationIntentHeldV1(tx, authority, input(ordinal), (at) => {
+          if (at === point) throw new Error('SYNTHETIC_CAUGHT_' + point);
+        });
+      } catch (error) {
+        assert.equal((error as Error).message, 'SYNTHETIC_CAUGHT_' + point);
+        faultCaught = true;
+      }
+      return 'attempt-to-commit';
+    }), incompleteAtCommit);
+    assert.equal(faultCaught, true);
+    assert.deepEqual(await counts(), before);
+    assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = ${causeId}`)[0]?.count), 0);
+  }
+
+  // PrismaClient is structurally assignable to TransactionClient; the database must still refuse a partial autocommit.
+  await assert.rejects(recordCommunicationIntentHeldV1(client(), authority, input(22)), incompleteAtCommit);
+  assert.deepEqual(await counts(), before);
+  await client().$transaction(async (tx) => {
+    await tx.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES ('complete-after-caught-fault')`;
+    await recordCommunicationIntentHeldV1(tx, authority, input(23));
+  });
+  assert.deepEqual(await counts(), before.map((count) => count + 1));
+  assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = 'complete-after-caught-fault'`)[0]?.count), 1);
+});
+
+test('N15 replay rejects each divergent authority/time column and preserves the restored original aggregate', { skip: !run }, async () => {
+  for (const [index, field] of ['producerCode', 'occurredAt', 'evaluatedAt'].entries()) {
+    const candidateInput = input(30 + index);
+    const original = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
+    const row = await client().communicationIntentRecord.findUniqueOrThrow({
+      where: { intentId: original.intent.intentId }, include: { heldDecision: true },
+    });
+    const table = field === 'evaluatedAt' ? 'CommunicationHeldDecision' : 'CommunicationIntentRecord';
+    const alterProjection = async (restore: boolean) => {
+      // Controlled corruption of invented fixture data; restore the guard even if the mutation fails.
+      await client().$executeRawUnsafe('ALTER TABLE "' + table + '" DISABLE TRIGGER "' + table + '_append_only"');
+      try {
+        if (field === 'producerCode') {
+          await client().communicationIntentRecord.update({ where: { id: row.id }, data: { producerCode: restore ? row.producerCode : 'DIVERGENT_SYNTHETIC' } });
+        } else if (field === 'occurredAt') {
+          await client().communicationIntentRecord.update({ where: { id: row.id }, data: { occurredAt: restore ? row.occurredAt : new Date(row.occurredAt.valueOf() + 1) } });
+        } else {
+          await client().communicationHeldDecision.update({ where: { intentRecordId: row.id }, data: { evaluatedAt: restore ? row.heldDecision!.evaluatedAt : new Date(row.heldDecision!.evaluatedAt.valueOf() + 1) } });
+        }
+      } finally {
+        await client().$executeRawUnsafe('ALTER TABLE "' + table + '" ENABLE TRIGGER "' + table + '_append_only"');
+      }
+    };
+    const counts = () => Promise.all([
+      client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
+    ]);
+    const before = await counts();
+    await alterProjection(false);
+    await assert.rejects(client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput)),
+      (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_AGGREGATE_INCOHERENT');
+    assert.deepEqual(await counts(), before, field);
+    await alterProjection(true);
+    const replay = await client().$transaction((tx) => recordCommunicationIntentHeldV1(tx, authority, candidateInput));
+    assert.equal(replay.outcome, 'REPLAYED');
+    assert.deepEqual({ ...replay, outcome: 'RECORDED' }, original, field);
+    assert.deepEqual(await counts(), before, field);
+  }
+});
+
+test('N15 rejects TRUNCATE of either child and the complete aggregate without changing rows or hashes', { skip: !run }, async () => {
+  const snapshot = () => Promise.all([
+    client().communicationIntentRecord.findMany({ orderBy: { id: 'asc' } }),
+    client().communicationHeldDecision.findMany({ orderBy: { id: 'asc' } }),
+    client().communicationIntentAudit.findMany({ orderBy: { id: 'asc' } }),
+  ]);
+  const before = await snapshot();
+  assert.equal(before.every((rows) => rows.length > 0), true);
+  for (const statement of [
+    'TRUNCATE TABLE "CommunicationHeldDecision"',
+    'TRUNCATE TABLE "CommunicationIntentAudit"',
+    'TRUNCATE TABLE "CommunicationIntentRecord", "CommunicationHeldDecision", "CommunicationIntentAudit"',
+  ]) {
+    await assert.rejects(client().$executeRawUnsafe(statement),
+      (error: unknown) => String(error).includes('N15_COMMUNICATION_AGGREGATE_APPEND_ONLY'));
+    assert.deepEqual(await snapshot(), before);
+  }
+});
+
 test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema', { skip: !run, timeout: 180_000 }, async () => {
   const temporary = mkdtempSync(join(tmpdir(), 'n15-upgrade-'));
   const prismaDirectory = join(temporary, 'prisma');
