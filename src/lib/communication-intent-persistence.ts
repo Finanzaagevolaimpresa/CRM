@@ -160,11 +160,13 @@ export async function runCommunicationPersistenceTransactionV1<T>(
       const result = await action(scope);
       if (state.failure) throw state.failure.error;
       // Surface deferred failures while still inside Prisma's callback, before engine commit.
-      await tx.$executeRaw`SET CONSTRAINTS "CommunicationIntentRecord_complete_at_commit" IMMEDIATE`;
+      try {
+        await tx.$executeRaw`SET CONSTRAINTS "CommunicationIntentRecord_complete_at_commit" IMMEDIATE`;
+      } catch (error) {
+        if (schemaUnavailable(error)) throw new CommunicationPersistenceError('N15_SCHEMA_UNAVAILABLE');
+        throw error;
+      }
       return result;
-    } catch (error) {
-      if (schemaUnavailable(error)) throw new CommunicationPersistenceError('N15_SCHEMA_UNAVAILABLE');
-      throw error;
     } finally {
       activeTransactions.delete(scope);
     }

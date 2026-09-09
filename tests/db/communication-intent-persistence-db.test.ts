@@ -248,6 +248,41 @@ test('N15 rejects autocommit and commits with swallowed faults, preserving calle
   assert.deepEqual(await counts(), before.map((count) => count + 1));
 });
 
+test('N15 preserves unrelated caller database errors and rolls back its cause and aggregate', { skip: !run }, async () => {
+  const counts = () => Promise.all([
+    client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
+  ]);
+  const before = await counts();
+  for (const [index, code] of ['P2021', '42P01', '42704'].entries()) {
+    const causeId = 'unrelated-caller-error-' + code;
+    let callerError: unknown;
+    let aggregateWritten = false;
+    await assert.rejects(runCommunicationPersistenceTransactionV1(client(), async (scope) => {
+      await scope.client.$executeRaw`INSERT INTO "N15SyntheticCallerCause" ("id") VALUES (${causeId})`;
+      await recordCommunicationIntentHeldV1(scope, authority, input(40 + index));
+      aggregateWritten = true;
+      try {
+        if (code === 'P2021') {
+          throw Object.assign(new Error('SYNTHETIC_CALLER_MODEL_UNAVAILABLE'), { code: 'P2021' });
+        } else if (code === '42P01') {
+          await scope.client.$queryRaw`SELECT * FROM "N15SyntheticMissingBusinessTable"`;
+        } else {
+          await scope.client.$executeRaw`SET CONSTRAINTS "N15SyntheticMissingBusinessConstraint" IMMEDIATE`;
+        }
+      } catch (error) {
+        callerError = error;
+        throw error;
+      }
+    }), (error: unknown) => error === callerError && !(error instanceof CommunicationPersistenceError));
+    assert.equal(aggregateWritten, true, 'N15 objects were available before the caller failed');
+    assert.ok(callerError instanceof Error);
+    const reported = callerError as Error & { code?: string; meta?: { code?: string } };
+    assert.equal(code === 'P2021' ? reported.code : reported.meta?.code, code);
+    assert.deepEqual(await counts(), before);
+    assert.equal(Number((await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "N15SyntheticCallerCause" WHERE "id" = ${causeId}`)[0]?.count), 0);
+  }
+});
+
 test('N15 replay rejects each divergent authority/time column and preserves the restored original aggregate', { skip: !run }, async () => {
   for (const [index, field] of ['producerCode', 'occurredAt', 'evaluatedAt'].entries()) {
     const candidateInput = input(30 + index);

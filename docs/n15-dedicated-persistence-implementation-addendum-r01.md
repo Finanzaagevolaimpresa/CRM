@@ -31,6 +31,8 @@ Ogni errore dell'operazione N15 invalida lo scope: anche se il callback lo inter
 rilancia l'errore prima del commit, annullando intento, decisione, audit e causa. Alla fine del
 callback verifica inoltre il constraint differito mentre il callback Prisma è ancora attivo.
 Questo rende osservabile l'errore prima della fase di commit del motore Prisma 5.22.
+Gli errori del callback business restano originali: la traduzione in N15_SCHEMA_UNAVAILABLE
+è circoscritta alle operazioni N15 e alla verifica finale del suo vincolo.
 
 Il constraint trigger PostgreSQL differito impedisce comunque la conferma di un aggregate
 incompleto. Usa lo schema della tabella che lo ha attivato, senza dipendere dal search path del
