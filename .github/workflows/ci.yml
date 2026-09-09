@@ -148,20 +148,30 @@ jobs:
         run: node --import tsx --test tests/npm-audit-gate.test.ts
 
       - name: Verify dependency audits
+        id: dependency-audit
         timeout-minutes: 12
         run: node --import tsx scripts/npm-audit-gate.ts
 
       - name: Report minimal public npm advisory diagnostics
-        if: failure()
-        timeout-minutes: 2
+        if: ${{ always() && steps.dependency-audit.outcome == 'failure' }}
+        timeout-minutes: 3
         run: |
-          report="$(mktemp)"
-          trap 'rm -f "$report"' EXIT
-          npm audit --omit=dev --include=prod --include=optional --include=peer \
-            --audit-level=low --json --registry=https://registry.npmjs.org/ \
-            --offline=false --prefer-online=true --fetch-retries=0 --fetch-timeout=30000 \
-            > "$report" || true
-          node --import tsx scripts/npm-audit-public-diagnostics.ts "$report" package-lock.json
+          reports="$(mktemp -d)"
+          trap 'rm -rf "$reports"' EXIT
+          for scope in runtime complete; do
+            scope_args=(--include=prod --include=optional --include=peer)
+            if [[ "$scope" == runtime ]]; then
+              scope_args+=(--omit=dev)
+            else
+              scope_args+=(--include=dev)
+            fi
+            npm audit "${scope_args[@]}" \
+              --audit-level=low --json --registry=https://registry.npmjs.org/ \
+              --offline=false --prefer-online=true --fetch-retries=0 --fetch-timeout=30000 \
+              > "$reports/$scope.json" || true
+            node --import tsx scripts/npm-audit-public-diagnostics.ts \
+              "$reports/$scope.json" package-lock.json "$scope"
+          done
 
       - name: Verify patch and shell syntax
         env:
@@ -456,31 +466,7 @@ jobs:
       - name: Verify exact source head and protected scope
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
-          if [[ -n "$VNX03_BASE_SHA" ]] \
-            && git cat-file -e "$VNX03_BASE_SHA^{commit}" 2>/dev/null \
-            && git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              tests/vnx03 tests/vnx03-e2e-harness.test.ts scripts/vnx03 \
-              docs/vnx03-wpforms-https-end-to-end-qualification-r01.md \
-              | grep -q .; then
-            n15_migration="prisma/migrations/20260909120000_n15_dedicated_communication_persistence_v1/migration.sql"
-            test "$(git ls-tree -d --name-only "$VNX03_BASE_SHA:prisma/migrations" | wc -l | tr -d ' ')" = "43"
-            test "$(git diff --diff-filter=A --name-only "$VNX03_BASE_SHA"...HEAD -- prisma/migrations)" = "$n15_migration"
-            test -z "$(git diff --diff-filter=DMRTUXB --name-only "$VNX03_BASE_SHA"...HEAD -- prisma/migrations)"
-            echo "b23956d412e6b9addeb0cebbb7ac07f42fbf15905b8936bfb4f819d6e9cfa770  prisma/schema.prisma" | sha256sum --check --strict
-            echo "49bb5acd948644d3da5669a497d61bd4b482f6156fad65773377c22130bade88  $n15_migration" | sha256sum --check --strict
-            echo "cb5b47e72b8a08e373e5ba0864f7a0fca0c683fe3452c7d2448727e5d8ad6eea  src/lib/communication-intent-persistence.ts" | sha256sum --check --strict
-            unexpected_protected="$(git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              prisma/schema.prisma prisma/migrations src \
-              Dockerfile.prod.example docker-compose.prod.example.yml \
-              .env.example .env.production.example .env.staging.example \
-              | grep -Fvx -e prisma/schema.prisma -e "$n15_migration" \
-                  -e src/lib/communication-intent-persistence.ts || true)"
-            if [[ -n "$unexpected_protected" ]]; then
-              echo "VNX-03 protected scope contains changes outside the authorized N15 foundation" >&2
-              exit 1
-            fi
-          fi
+          bash scripts/vnx03/verify-protected-scope.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

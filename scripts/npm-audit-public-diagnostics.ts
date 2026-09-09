@@ -5,7 +5,7 @@ type PublicDiagnostic = Readonly<{
   installedVersions: readonly string[];
   affectedRange: string;
   advisoryReferences: readonly string[];
-  fixAvailable: false | Readonly<{ package: string; version: string; semverMajor: boolean }>;
+  fixAvailable: boolean | Readonly<{ package: string; version: string; semverMajor: boolean }>;
 }>;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -55,8 +55,10 @@ export function npmAuditPublicDiagnostics(reportText: string, lockText: string):
       return [source, url].filter((value): value is string => value !== null);
     }).sort();
     const rawFix = vulnerability.fixAvailable;
-    let fixAvailable: PublicDiagnostic['fixAvailable'] = false;
-    if (rawFix !== false) {
+    let fixAvailable: PublicDiagnostic['fixAvailable'];
+    if (typeof rawFix === 'boolean') {
+      fixAvailable = rawFix;
+    } else {
       const fix = record(rawFix);
       const fixName = safeText(fix?.name, /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu, 214);
       const version = safeText(fix?.version, /^[0-9A-Za-z.+_-]+$/u, 80);
@@ -75,18 +77,39 @@ export function npmAuditPublicDiagnostics(reportText: string, lockText: string):
   }).sort((left, right) => left.package.localeCompare(right.package));
 }
 
+const DIAGNOSTIC_CODES = Object.freeze({
+  ARGUMENT: 'ARGUMENT_INVALID',
+  REPORT: 'REPORT_UNAVAILABLE_OR_INVALID',
+  LOCK: 'LOCKFILE_UNAVAILABLE_OR_INVALID',
+  CONTENT: 'PUBLIC_FINDING_INVALID',
+} as const);
+
 if (process.argv[1]?.endsWith('npm-audit-public-diagnostics.ts')) {
+  let code: typeof DIAGNOSTIC_CODES[keyof typeof DIAGNOSTIC_CODES] = DIAGNOSTIC_CODES.CONTENT;
   try {
-    const [reportPath, lockPath] = process.argv.slice(2);
-    if (!reportPath || !lockPath) throw new Error('NPM_AUDIT_DIAGNOSTIC_ARGUMENT_MISSING');
+    const [reportPath, lockPath, scope] = process.argv.slice(2);
+    if (!reportPath || !lockPath || !['runtime', 'complete'].includes(scope)) {
+      code = DIAGNOSTIC_CODES.ARGUMENT;
+      throw new Error('NPM_AUDIT_DIAGNOSTIC_ARGUMENT_INVALID');
+    }
+    code = DIAGNOSTIC_CODES.REPORT;
+    const reportText = readFileSync(reportPath, 'utf8');
+    JSON.parse(reportText);
+    code = DIAGNOSTIC_CODES.LOCK;
+    const lockText = readFileSync(lockPath, 'utf8');
+    JSON.parse(lockText);
+    code = DIAGNOSTIC_CODES.CONTENT;
     const diagnostics = npmAuditPublicDiagnostics(
-      readFileSync(reportPath, 'utf8'), readFileSync(lockPath, 'utf8'),
+      reportText, lockText,
     );
     for (const diagnostic of diagnostics) {
-      process.stdout.write(`[dependency-audit-diagnostic] ${JSON.stringify(diagnostic)}\n`);
+      process.stdout.write(`[dependency-audit-diagnostic] scope=${scope} finding=${JSON.stringify(diagnostic)}\n`);
     }
-    if (diagnostics.length === 0) process.stdout.write('[dependency-audit-diagnostic] status=no-public-findings\n');
+    if (diagnostics.length === 0) {
+      process.stdout.write(`[dependency-audit-diagnostic] scope=${scope} status=no-public-findings\n`);
+    }
   } catch {
-    process.stdout.write('[dependency-audit-diagnostic] status=unavailable\n');
+    const scope = ['runtime', 'complete'].includes(process.argv[4] ?? '') ? process.argv[4] : 'invalid';
+    process.stdout.write(`[dependency-audit-diagnostic] scope=${scope} status=unavailable code=${code}\n`);
   }
 }

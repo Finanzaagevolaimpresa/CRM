@@ -141,7 +141,7 @@ async function main() {
 
   gatewaySecret.fill(0);
   identityKey.secret.fill(0);
-  process.stdout.write('{"provision":"ready","migrations":43,"synthetic":true}\n');
+  process.stdout.write('{"provision":"ready","migrations":44,"synthetic":true}\n');
 }
 
 void main()

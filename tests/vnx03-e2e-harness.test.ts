@@ -30,12 +30,16 @@ test('VNX-03 pins official WPForms, WordPress, database and browser inputs', () 
 
 test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   const runner = source('scripts/vnx03/run-e2e.sh');
+  const scopeGuard = source('scripts/vnx03/verify-protected-scope.sh');
   const compose = source('tests/vnx03/docker-compose.yml');
   const provision = source('tests/vnx03/provision.ts');
 
   assert.match(runner, /VNX03_SYNTHETIC_E2E_CONFIRMED/u);
   assert.match(runner, /VNX03_WORKTREE_NOT_EXACT_HEAD/u);
-  assert.match(runner, /VNX03_FORBIDDEN_RUNTIME_OR_SCHEMA_DELTA/u);
+  assert.match(runner, /verify-protected-scope\.sh/u);
+  assert.match(scopeGuard, /VNX03_FORBIDDEN_RUNTIME_OR_SCHEMA_DELTA/u);
+  assert.match(scopeGuard, /VNX03_N15_HISTORICAL_MIGRATION_CHANGED/u);
+  assert.match(scopeGuard, /protected_delta/u);
   assert.match(runner, /VNX03_NONLOCAL_DOCKER_CONTEXT_FORBIDDEN/u);
   assert.match(runner, /down --volumes --remove-orphans/u);
   assert.match(runner, /docker image rm/u);

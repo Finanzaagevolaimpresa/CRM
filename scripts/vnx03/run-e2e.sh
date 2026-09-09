@@ -29,28 +29,7 @@ source_tree="$(git rev-parse 'HEAD^{tree}')"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'VNX03_SOURCE_COMMIT_INVALID'
 [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]] || fail 'VNX03_SOURCE_TREE_INVALID'
 
-migration_count="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
-[[ "$migration_count" == '43' ]] || fail 'VNX03_MIGRATION_COUNT_INVALID'
-
-if [[ -n "${VNX03_BASE_SHA:-}" ]] \
-  && git cat-file -e "${VNX03_BASE_SHA}^{commit}" 2>/dev/null \
-  && git diff --name-only "${VNX03_BASE_SHA}"...HEAD -- \
-    tests/vnx03 tests/vnx03-e2e-harness.test.ts scripts/vnx03 \
-    docs/vnx03-wpforms-https-end-to-end-qualification-r01.md \
-    | grep -q .; then
-  if git diff --name-only "${VNX03_BASE_SHA}"...HEAD -- \
-    prisma/schema.prisma \
-    prisma/migrations \
-    src \
-    Dockerfile.prod.example \
-    docker-compose.prod.example.yml \
-    .env.example \
-    .env.production.example \
-    .env.staging.example \
-    | grep -q .; then
-    fail 'VNX03_FORBIDDEN_RUNTIME_OR_SCHEMA_DELTA'
-  fi
-fi
+bash scripts/vnx03/verify-protected-scope.sh
 
 docker_context="$(docker context show)"
 docker_endpoint="$(docker context inspect "$docker_context" --format '{{ (index .Endpoints "docker").Host }}')"
@@ -279,7 +258,7 @@ node -e '
     node: process.env.VNX03_RUNTIME_NODE_VERSION,
     docker: process.env.VNX03_RUNTIME_DOCKER_VERSION,
     dockerCompose: process.env.VNX03_RUNTIME_COMPOSE_VERSION,
-    migrations: 43,
+    migrations: 44,
     n14Enabled: false,
     externalProvidersEnabled: false,
     productionContact: false
