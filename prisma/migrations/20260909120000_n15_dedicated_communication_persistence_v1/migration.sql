@@ -77,7 +77,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION "N15_communication_aggregate_append_only"();
 -- Check completeness at commit, including when a caller catches a JavaScript fault.
 -- Child uniqueness, foreign keys and append-only triggers preserve the complete aggregate.
 CREATE FUNCTION "N15_communication_aggregate_require_complete"()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $n15_complete$
 DECLARE
   aggregate_complete BOOLEAN;
 BEGIN
@@ -93,7 +93,7 @@ BEGIN
   END IF;
   RETURN NULL;
 END;
-$ LANGUAGE plpgsql;
+$n15_complete$ LANGUAGE plpgsql;
 
 CREATE CONSTRAINT TRIGGER "CommunicationIntentRecord_complete_at_commit"
 AFTER INSERT ON "CommunicationIntentRecord"

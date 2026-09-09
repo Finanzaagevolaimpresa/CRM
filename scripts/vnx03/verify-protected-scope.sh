@@ -49,7 +49,7 @@ readonly n15_migration='prisma/migrations/20260909120000_n15_dedicated_communica
 echo 'b23956d412e6b9addeb0cebbb7ac07f42fbf15905b8936bfb4f819d6e9cfa770  prisma/schema.prisma' \
   | sha256sum --check --strict >/dev/null \
   || fail 'VNX03_N15_SCHEMA_BYTES_INVALID'
-echo "76bc07c82f271feda8ebd35c4057058c0325aa223620b500388345892f47ef16  $n15_migration" \
+echo "b023cf7a24f2ee9020e2d40da88aa3d229dfff079e4b62c7c0842a01a102766b  $n15_migration" \
   | sha256sum --check --strict >/dev/null \
   || fail 'VNX03_N15_MIGRATION_BYTES_INVALID'
 echo 'ccf64189af3f0ba857fe8f4ca18c3a77aa9f8d9852c985c4912b7ec5bc01ea86  src/lib/communication-intent-persistence.ts' \
