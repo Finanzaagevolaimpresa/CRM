@@ -5,6 +5,7 @@ import {
   recordCommercialLeadFirstResponse,
 } from '../../src/lib/commercial-lead-inbox';
 import { CommercialLeadInboxError } from '../../src/lib/commercial-lead-inbox-contract';
+import { internalSessionMode } from '../../src/lib/session';
 
 const db = new PrismaClient();
 
@@ -36,6 +37,7 @@ async function actor(userId: string) {
 
 async function main() {
   assert.equal(process.env.COMMERCIAL_LEAD_INBOX_MODE, 'enforced');
+  assert.equal(internalSessionMode(), 'registry', 'VNX03_N14_REGISTRY_AUTHORITY_REQUIRED');
   const scenario = process.env.VNX03_N14_REJECTION;
   const before = await snapshot();
   let expectedCode: 'N14_VERSION_CONFLICT' | 'N14_PERMISSION_DENIED';

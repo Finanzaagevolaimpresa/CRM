@@ -34,6 +34,7 @@ function assertState(checkpoint: 'projected' | 'claimed' | 'contacted') {
 
 function assertRejection(scenario: 'stale_claim' | 'foreign_first_response', code: string) {
   const output = compose(['run', '--rm', '-T', '-e', 'COMMERCIAL_LEAD_INBOX_MODE=enforced',
+    '-e', 'INTERNAL_SESSION_MODE=registry',
     '-e', `VNX03_N14_REJECTION=${scenario}`, 'harness', 'node', '--import', 'tsx',
     'tests/vnx03/exercise-n14-rejections.ts']);
   assert.match(output, new RegExp(`"rejectedBy":"${code}"`, 'u'));
@@ -51,11 +52,9 @@ async function submitLogin(context: BrowserContext, email: string) {
 
 async function writeLoginFailureDiagnostic(
   page: Page,
-  context: BrowserContext,
   identity: 'commercial_one' | 'commercial_two',
 ) {
   const current = new URL(page.url());
-  const cookies = await context.cookies(crmUrl);
   writeFileSync(join(evidenceDirectory, `n14-login-failure-${identity}.json`), `${JSON.stringify({
     phase: 'ACTIVE_COMMERCIAL_LOGIN',
     syntheticIdentity: identity,
@@ -63,7 +62,6 @@ async function writeLoginFailureDiagnostic(
     expectedOrigin: current.origin === new URL(crmUrl).origin,
     dashboardReached: current.pathname === '/dashboard',
     invalidLoginShown: current.pathname === '/login' && current.searchParams.get('error') === 'invalid',
-    registryCookiePresent: cookies.some(({ name }) => name === 'fai_vnx03_n14_session'),
     loginHeadingVisible: await page.getByRole('heading', { name: 'Accesso interno FAI' }).isVisible().catch(() => false),
   }, null, 2)}\n`, { mode: 0o600 });
 }
@@ -81,29 +79,38 @@ async function loginActive(
     await page.getByRole('button', { name: 'Login interno' }).click();
     await page.waitForURL((url) => url.pathname === '/dashboard', { timeout: 15_000 });
   } catch (error) {
-    await writeLoginFailureDiagnostic(page, context, identity);
+    await writeLoginFailureDiagnostic(page, identity);
     throw error;
   }
   await expect(page).toHaveURL(`${crmUrl}/dashboard`);
   return page;
 }
 
-async function serverActionName(page: Page, buttonName: string) {
+type ServerActionIdentity = Readonly<{ formField: string; nextAction: string }>;
+
+async function serverActionIdentity(page: Page, buttonName: string): Promise<ServerActionIdentity> {
   return page.getByRole('button', { name: buttonName }).evaluate((button) => {
     const form = button.closest('form');
     if (!form) throw new Error('VNX03_N14_ACTION_FORM_MISSING');
-    const action = [...new FormData(form).keys()].find((name) => name.startsWith('$ACTION_ID_'));
-    if (!action) throw new Error('VNX03_N14_ACTION_ID_MISSING');
-    return action;
+    const actionFields = [...new FormData(form).keys()]
+      .filter((name) => name.startsWith('$ACTION_ID_') || name.startsWith('$ACTION_REF_'));
+    if (actionFields.length !== 1) throw new Error('VNX03_N14_ACTION_ID_MISSING');
+    const formField = actionFields[0]!;
+    if (formField.startsWith('$ACTION_REF_')) throw new Error('VNX03_N14_BOUND_ACTION_UNEXPECTED');
+    return { formField, nextAction: formField.slice('$ACTION_ID_'.length) };
   });
 }
 
-function isServerActionRequest(request: import('@playwright/test').Request, path: string, action: string) {
+function isServerActionRequest(
+  request: import('@playwright/test').Request,
+  path: string,
+  action: ServerActionIdentity,
+) {
   const url = new URL(request.url());
   return request.method() === 'POST'
     && url.origin === new URL(crmUrl).origin
     && `${url.pathname}${url.search}` === path
-    && (request.postData() ?? '').includes(action);
+    && request.headers()['next-action'] === action.nextAction;
 }
 
 async function submitSyntheticLead(page: Page) {
@@ -149,8 +156,8 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
   const duplicatePage = await owner.newPage();
   await duplicatePage.goto(`${crmUrl}/leads/inbox?queue=unassigned`);
-  const claimAction = await serverActionName(ownerPage, 'Prendi in carico');
-  assert.equal(await serverActionName(duplicatePage, 'Prendi in carico'), claimAction);
+  const claimAction = await serverActionIdentity(ownerPage, 'Prendi in carico');
+  assert.deepEqual(await serverActionIdentity(duplicatePage, 'Prendi in carico'), claimAction);
   const claimPath = '/leads/inbox?queue=unassigned';
   let releaseClaims!: () => void;
   const claimGate = new Promise<void>((resolve) => { releaseClaims = resolve; });
@@ -211,7 +218,7 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   assertRejection('foreign_first_response', 'N14_PERMISSION_DENIED');
 
   await ownerPage.reload();
-  const firstResponseAction = await serverActionName(ownerPage, 'Registra prima risposta');
+  const firstResponseAction = await serverActionIdentity(ownerPage, 'Registra prima risposta');
   const firstResponsePath = '/leads/inbox?queue=mine';
   const firstResponseReply = ownerPage.waitForResponse((response) =>
     isServerActionRequest(response.request(), firstResponsePath, firstResponseAction));

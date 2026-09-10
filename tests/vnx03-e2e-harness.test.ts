@@ -135,10 +135,10 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   assert.match(browser, /getByRole\('button', \{ name: 'Login interno' \}\)\.click\(\)/u);
   assert.match(browser, /waitForURL\(\(url\) => url\.pathname === '\/dashboard'/u);
   assert.match(browser, /n14-login-failure-\$\{identity\}\.json/u);
-  assert.match(browser, /registryCookiePresent/u);
-  assert.doesNotMatch(browser, /cookie\.value|password[^\n]*JSON\.stringify/u);
+  assert.doesNotMatch(browser, /context\.cookies|cookie\.value|password[^\n]*JSON\.stringify/u);
   assert.match(browser, /Prendi in carico[\s\S]*Promise\.allSettled/u);
-  assert.match(browser, /isServerActionRequest[\s\S]*request\.postData\(\)[\s\S]*includes\(action\)/u);
+  assert.match(browser, /\$ACTION_ID_[\s\S]*\$ACTION_REF_/u);
+  assert.match(browser, /request\.headers\(\)\['next-action'\] === action\.nextAction/u);
   assert.match(browser, /response\.finished\(\)[\s\S]*\[null, null\]/u);
   assert.match(browser, /claimHttpStatuses, \[200, 500\]/u);
   assert.match(browser, /staleClaimCodeVerifiedSeparately: true/u);
@@ -149,6 +149,8 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   assert.match(browser, /commercial\.inactive@vnx03\.invalid/u);
   assert.doesNotMatch(browser, /addCookies|document\.cookie/u);
   const rejectionProbe = source('tests/vnx03/exercise-n14-rejections.ts');
+  assert.match(browser, /'-e', 'INTERNAL_SESSION_MODE=registry'/u);
+  assert.match(rejectionProbe, /internalSessionMode\(\), 'registry'/u);
   assert.match(rejectionProbe, /N14_VERSION_CONFLICT/u);
   assert.match(rejectionProbe, /N14_PERMISSION_DENIED/u);
   assert.match(rejectionProbe, /assert\.deepEqual\(await snapshot\(\), before\)/u);
