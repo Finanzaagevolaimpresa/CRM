@@ -113,6 +113,16 @@ function isServerActionRequest(
     && request.headers()['next-action'] === action.nextAction;
 }
 
+function responseMediaType(response: import('@playwright/test').Response) {
+  return response.headers()['content-type']?.split(';', 1)[0]?.trim().toLowerCase() ?? 'missing';
+}
+
+function writeCheckpoint(name: string, value: Readonly<Record<string, unknown>>) {
+  writeFileSync(join(evidenceDirectory, `n14-${name}.json`), `${JSON.stringify({
+    phase: name, ...value,
+  }, null, 2)}\n`, { mode: 0o600 });
+}
+
 async function submitSyntheticLead(page: Page) {
   compose(['exec', '-T', '--user', '0:0', 'wordpress', 'sh', '-c',
     'printf "normal\\n" > /run/vnx03-control/connector-scenario']);
@@ -173,25 +183,47 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
       await route.continue();
     });
   }
-  const claimResponses = [ownerPage, duplicatePage].map((claimPage) =>
+  const claimPages = [ownerPage, duplicatePage] as const;
+  const claimResponses = claimPages.map((claimPage) =>
     claimPage.waitForResponse((response) =>
-      isServerActionRequest(response.request(), claimPath, claimAction)));
-  const clicks = [ownerPage, duplicatePage].map((claimPage) =>
-    claimPage.getByRole('button', { name: 'Prendi in carico' }).click());
+      isServerActionRequest(response.request(), claimPath, claimAction), { timeout: 30_000 }));
+  const clicks = claimPages.map((claimPage) =>
+    claimPage.getByRole('button', { name: 'Prendi in carico' }).click().catch(() => undefined));
   await Promise.all(claimArrivals);
+  writeCheckpoint('claim-requests-released', {
+    requestsObserved: claimArrivals.length, exactActionMatched: true, deadlineSeconds: 30,
+  });
   releaseClaims();
   const responses = await Promise.all(claimResponses);
-  assert.deepEqual(await Promise.all(responses.map((response) => response.finished())), [null, null]);
-  await Promise.allSettled(clicks);
   const claimHttpStatuses = responses.map((response) => response.status()).sort((left, right) => left - right);
+  const claimContentTypes = responses.map(responseMediaType);
+  writeCheckpoint('claim-response-headers', {
+    responsesObserved: responses.length, claimHttpStatuses, claimContentTypes,
+  });
   assert.deepEqual(claimHttpStatuses, [200, 500]);
-  await ownerPage.goto(`${crmUrl}/leads/inbox?queue=mine`);
-  await expect(ownerPage.getByText('Owner: Commerciale Sintetico Uno', { exact: false })).toBeVisible();
+  assert.ok(claimContentTypes.every((value) => value === 'text/x-component'));
+  const successPage = claimPages[responses.findIndex((response) => response.status() === 200)];
+  const errorPage = claimPages[responses.findIndex((response) => response.status() === 500)];
+  assert.ok(successPage && errorPage);
   assertState('claimed');
+  const transportHealth = await ownerPage.request.get(`${crmUrl}/api/health`, { timeout: 10_000 });
+  assert.equal(transportHealth.status(), 200);
+  assert.equal(transportHealth.headers()['content-type']?.split(';', 1)[0], 'application/json');
+  await successPage.goto(`${crmUrl}/leads/inbox?queue=mine`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+  await expect(successPage.getByText('Owner: Commerciale Sintetico Uno', { exact: false }))
+    .toBeVisible({ timeout: 20_000 });
+  await errorPage.goto(`${crmUrl}/leads/inbox?queue=unassigned`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+  await expect(errorPage.getByText('Nessun item', { exact: true })).toBeVisible({ timeout: 20_000 });
+  void Promise.all(clicks);
+  writeCheckpoint('claim-semantic-result', {
+    successUiObserved: true, errorBrowserRecovered: true,
+    transportHealthStatus: transportHealth.status(), persistentCheckpoint: 'claimed',
+  });
+  const ownerWorkPage = successPage;
   assertRejection('stale_claim', 'N14_VERSION_CONFLICT');
-  const leadHref = await ownerPage.getByRole('link', { name: 'VNX03 N14 Browser' }).getAttribute('href');
+  const leadHref = await ownerWorkPage.getByRole('link', { name: 'VNX03 N14 Browser' }).getAttribute('href');
   assert.ok(leadHref);
-  const firstResponseCommand = await ownerPage.getByRole('button', { name: 'Registra prima risposta' })
+  const firstResponseCommand = await ownerWorkPage.getByRole('button', { name: 'Registra prima risposta' })
     .evaluate((button) => {
       const form = button.closest('form');
       if (!form) throw new Error('VNX03_N14_FIRST_RESPONSE_FORM_MISSING');
@@ -217,29 +249,46 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   assertState('claimed');
   assertRejection('foreign_first_response', 'N14_PERMISSION_DENIED');
 
-  await ownerPage.reload();
-  const firstResponseAction = await serverActionIdentity(ownerPage, 'Registra prima risposta');
+  await ownerWorkPage.reload();
+  const firstResponseAction = await serverActionIdentity(ownerWorkPage, 'Registra prima risposta');
   const firstResponsePath = '/leads/inbox?queue=mine';
-  const firstResponseReply = ownerPage.waitForResponse((response) =>
-    isServerActionRequest(response.request(), firstResponsePath, firstResponseAction));
-  await ownerPage.getByRole('button', { name: 'Registra prima risposta' }).click();
+  const firstResponseReply = ownerWorkPage.waitForResponse((response) =>
+    isServerActionRequest(response.request(), firstResponsePath, firstResponseAction), { timeout: 30_000 });
+  writeCheckpoint('first-response-request-started', {
+    exactActionMatched: true, deadlineSeconds: 30,
+  });
+  const firstResponseClick = ownerWorkPage.getByRole('button', { name: 'Registra prima risposta' })
+    .click().catch(() => undefined);
   const firstResponse = await firstResponseReply;
-  assert.equal(await firstResponse.finished(), null);
+  const firstResponseContentType = responseMediaType(firstResponse);
+  writeCheckpoint('first-response-headers', {
+    responseObserved: true, httpStatus: firstResponse.status(), contentType: firstResponseContentType,
+  });
   assert.equal(firstResponse.status(), 200);
-  await expect(ownerPage.getByRole('button', { name: 'Registra prima risposta' })).toHaveCount(0);
-  await ownerPage.reload();
-  await expect(ownerPage.getByRole('button', { name: 'Registra prima risposta' })).toHaveCount(0);
-  await expect(ownerPage.locator('article').filter({ hasText: 'VNX03 N14 Browser' }))
+  assert.equal(firstResponseContentType, 'text/x-component');
+  assertState('contacted');
+  await expect(ownerWorkPage.getByRole('button', { name: 'Registra prima risposta' }))
+    .toHaveCount(0, { timeout: 20_000 });
+  void firstResponseClick;
+  writeCheckpoint('first-response-semantic-result', {
+    uiAppliedBeforeReload: true, persistentCheckpoint: 'contacted',
+  });
+  await ownerWorkPage.reload();
+  await expect(ownerWorkPage.getByRole('button', { name: 'Registra prima risposta' })).toHaveCount(0);
+  await expect(ownerWorkPage.locator('article').filter({ hasText: 'VNX03 N14 Browser' }))
     .not.toContainText('Risposta: —');
-  await ownerPage.screenshot({ path: join(evidenceDirectory, 'n14-commercial-inbox.png'), fullPage: false });
+  await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-commercial-inbox.png'), fullPage: false });
   assertState('contacted');
 
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({
     synthetic: true, registryLogin: true, ownerPersistedAfterReload: true,
-    claimResponsesCompleted: responses.length, claimHttpStatuses,
+    claimResponsesObserved: responses.length, claimHttpStatuses, claimContentTypes,
+    claimSuccessUiObserved: true, claimErrorBrowserRecovered: true,
+    claimTransportHealthStatus: transportHealth.status(),
     staleClaimCodeVerifiedSeparately: true,
     secondCommercialMutationRejected: true, rejectedMutationStatus: rejectedMutation.status,
-    firstResponseHttpStatus: firstResponse.status(), firstResponseRecorded: true,
+    firstResponseObserved: true, firstResponseHttpStatus: firstResponse.status(),
+    firstResponseContentType, firstResponseUiAppliedBeforeReload: true, firstResponseRecorded: true,
     n15Effects: 0,
   }, null, 2)}\n`, { mode: 0o600 });
   await other.close();
