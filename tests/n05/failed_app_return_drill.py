@@ -1,5 +1,5 @@
 """Real Docker/Compose drill of the production daemon-facing adapter."""
-import hashlib, importlib.util, json, os, pathlib, subprocess, tempfile, time, uuid
+import hashlib, importlib.util, json, os, pathlib, subprocess, sys, tempfile, time, uuid
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('n05',ROOT/'scripts/n05/failed_app_return.py'); n05=importlib.util.module_from_spec(spec); spec.loader.exec_module(n05)
 
@@ -60,21 +60,23 @@ def scenario(reason,tags,private,registered):
  'resources':{'volumes':volumes,'network':network},'configs':configs,'ledger':{'schema':'synthetic-v1','count':1,'digest':'0'*64},
  'compatibility':{'path':'/x','sha256':'5'*64,'kind':'return-image-schema-compatibility'},'deadline_epoch':time.time()+180,
  'gates':{x:{'path':'/x','sha256':str(i)*64,'kind':x} for x,i in [('recovery',6),('artifacts',7),('reviewed_plan',8),('authorization',9)]},
- 'return_reason':{'kind':reason,'evidence':{'path':'/x','sha256':'a'*64,'kind':'functional-failure'} if reason=='functional-failure' else None},
+ 'return_policy':{'allowed_reasons':['functional-failure','unhealthy','exited','absent']},
  'migrator':{'id':migrator_raw['Id'],'created':migrator_raw['Created'],'image_id':migrator_raw['Image'],'role':'migrate','project':project},
- 'receipt_path':str(private/(project+'-receipt.json')),'journal_path':str(private/(project+'-journal.json'))}
+ 'receipt_path':str(private/(project+'-receipt.json')),'return_request_path':str(private/(project+'-request.json')),'journal_path':str(private/(project+'-journal.json'))}
  adapter=n05.DockerEngine(base,ROOT,files=[compose],env_file=env,command=['docker'],synthetic_candidate_absence=reason=='absent',
                           created_callback=lambda identity: registered.append(('container',identity)))
  base['ledger']=adapter.ledger(pg['Id'],base['deadline_epoch'])
  n05.finish_registered_migrator(adapter,base)
  receipt=n05.ForwardRecorder(adapter).run(base,pathlib.Path(base['receipt_path']))
+ request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':base['run_id'],'plan_sha256':n05.sha(base),'receipt_sha256':n05.sha(receipt),'reason':reason,'evidence':{'path':'/synthetic/functional.json','sha256':'a'*64,'kind':'functional-failure'} if reason=='functional-failure' else None}
+ n05.validate_return_request(request,base,receipt)
  # Concrete stopped foreign container must block, then exact cleanup permits return.
  foreign=run('create','--label','com.docker.compose.project='+project,'alpine:3.20','true'); registered.append(('container',foreign))
- try:n05.ReturnController(adapter).return_app(base,receipt,pathlib.Path(base['journal_path'])); raise RuntimeError('FOREIGN_ACCEPTED')
+ try:n05.ReturnController(adapter).return_app(base,receipt,request,pathlib.Path(base['journal_path'])); raise RuntimeError('FOREIGN_ACCEPTED')
  except n05.Denied:pass
  # Pre-mutation denial did not create the attempt journal.
  run('rm',foreign); registered.remove(('container',foreign))
- n05.ReturnController(adapter).return_app(base,receipt,pathlib.Path(base['journal_path']))
+ n05.ReturnController(adapter).return_app(base,receipt,request,pathlib.Path(base['journal_path']))
  returned=run('ps','-aq','--filter','label=com.docker.compose.project='+project,'--filter','label=com.docker.compose.service=app')
  n05.require(run('exec',pg['Id'],'psql','-U','postgres','-d','synthetic','-Atc','select count(*) from _prisma_migrations')=='1','LEDGER_SENTINEL_LOST')
  n05.require(run('exec',returned,'cat','/var/lib/fai-crm/documents/sentinel')=='preserved','DOCUMENT_SENTINEL_LOST')
@@ -89,8 +91,14 @@ def main():
    for reason in ('functional-failure','unhealthy','exited','absent'):scenario(reason,tags,private,registered)
    print('N05_FAILED_APP_RETURN_SYNTHETIC_DOCKER_PASS')
   finally:
+   primary_error=sys.exc_info()[0] is not None; cleanup_errors=[]
    for kind,x in reversed(registered):
     command=['docker','rm','-f',x] if kind=='container' else ['docker',kind,'rm',x]
-    r=subprocess.run(command,capture_output=True); n05.require(r.returncode==0 or b'No such' in r.stderr,'DRILL_CLEANUP_FAILED')
-   for tag in tags:run('image','rm','-f',tag)
+    r=subprocess.run(command,capture_output=True)
+    if r.returncode!=0 and b'No such' not in r.stderr:cleanup_errors.append((kind,x))
+   for tag in tags:subprocess.run(['docker','image','rm','-f',tag],capture_output=True)
+   for kind,x in registered:
+    command=['docker','container','inspect',x] if kind=='container' else ['docker',kind,'inspect',x]
+    if subprocess.run(command,capture_output=True).returncode==0:cleanup_errors.append((kind,x))
+   if cleanup_errors and not primary_error:raise n05.Denied('DRILL_CLEANUP_FAILED')
 if __name__=='__main__':main()

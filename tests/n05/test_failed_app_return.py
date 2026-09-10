@@ -15,13 +15,13 @@ def plan(reason='unhealthy'):
   'configs':{x:ref('frozen-compose-'+x,str(i)) for x,i in [('previous',1),('candidate',2),('return',3)]},
   'ledger':{'schema':'v44','count':44,'digest':'4'*64},'compatibility':ref('return-image-schema-compatibility','5'),
   'deadline_epoch':2000,'gates':{x:ref(x,str(i)) for x,i in [('recovery',6),('artifacts',7),('reviewed_plan',8),('authorization',9)]},
-  'return_reason':{'kind':reason,'evidence':ref('functional-failure','a') if reason=='functional-failure' else None},
+  'return_policy':{'allowed_reasons':['functional-failure','unhealthy','exited','absent']},
   'migrator':None,
-  'receipt_path':'/private/receipt.json','journal_path':'/private/journal.json'}
+  'receipt_path':'/private/receipt.json','return_request_path':'/private/request.json','journal_path':'/private/journal.json'}
 
 class Engine:
  def __init__(self,p,reason='unhealthy',absent_forward=False):
-  self.p=p; self.done=set(); self.absent_forward=absent_forward
+  self.p=p; self.done=set(); self.absent_forward=absent_forward; self.reason=reason
   self.snap={'engine':p['engine'],'project':p['project'],'postgres':copy.deepcopy(p['postgres']),'resources':copy.deepcopy(p['resources']),
    'postgres_healthy':True,'migrators':[],'foreign_containers':[],'ledger':copy.deepcopy(p['ledger']),
    'app':{'id':'9'*64,'created':'source-created','image_id':p['source_app']['image_id'],'config_sha256':p['configs']['previous']['sha256'],'state':'healthy'}}
@@ -36,7 +36,7 @@ class Engine:
  def observe_app_absence(self,d): return self.snap['app'] is None
  def create_candidate(self,p,d):
   if self.absent_forward:return None
-  state={'functional-failure':'healthy','unhealthy':'running-unhealthy','exited':'exited','absent':'exited'}[p['return_reason']['kind']]
+  state={'functional-failure':'healthy','unhealthy':'running-unhealthy','exited':'exited','absent':'exited'}[self.reason]
   self.snap['app']={'id':'a'*64,'created':'candidate-created','image_id':p['candidate']['id'],'config_sha256':p['configs']['candidate']['sha256'],'state':state}
   return {k:self.snap['app'][k] for k in ('id','created','image_id')}
  def start_candidate(self,i,d): pass
@@ -45,9 +45,11 @@ class Engine:
  def recreate_return(self,p,d):
   self.snap['app']={'id':'b'*64,'created':'new','image_id':p['return_image']['id'],'config_sha256':p['configs']['return']['sha256'],'state':'healthy'}; return 'b'*64
 
-def real_receipt(p,e,d):
- path=pathlib.Path(d)/'receipt.json'; p['receipt_path']=str(path); p['journal_path']=str(pathlib.Path(d)/'journal.json')
- return n05.ForwardRecorder(e,lambda:1000).run(p,path)
+def real_receipt(p,e,d,reason='unhealthy'):
+ path=pathlib.Path(d)/'receipt.json'; p['receipt_path']=str(path); p['return_request_path']=str(pathlib.Path(d)/'request.json'); p['journal_path']=str(pathlib.Path(d)/'journal.json')
+ receipt=n05.ForwardRecorder(e,lambda:1000).run(p,path)
+ request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':p['run_id'],'plan_sha256':n05.sha(p),'receipt_sha256':n05.sha(receipt),'reason':reason,'evidence':ref('functional-failure') if reason=='functional-failure' else None}
+ return receipt,request
 
 class Protocol(unittest.TestCase):
  def test_unverified_strings_are_not_gates(self):
@@ -81,6 +83,13 @@ class Protocol(unittest.TestCase):
  def test_global_deadline_terminates_subprocess_group(self):
   with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED'):
    n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),n05.time.time()+0.05)
+ def test_ledger_defaults_postgres_user_without_weakening_rows(self):
+  p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker']); captured=[]
+  engine.run=lambda *args,**kwargs:(captured.extend(args) or 'migration_001\tchecksum\tstarted\tfinished\t\t1\n')
+  self.assertEqual(engine.ledger('f'*64,1500)['count'],1)
+  self.assertIn('POSTGRES_USER:-postgres',captured[4])
+  engine.run=lambda *args,**kwargs:'migration_001\tchecksum\tstarted\t\t\t0\n'
+  with self.assertRaisesRegex(n05.Denied,'LEDGER_INCOMPLETE_FAILED_OR_ROLLED_BACK'): engine.ledger('f'*64,1500)
  def test_handwritten_two_event_absence_denied(self):
   p=plan('absent'); a=n05.event(None,p['run_id'],'healthy-source','verified',{}); b=n05.event(a,p['run_id'],'forward-result','candidate-absent-attributed',{'absence_attributed':True})
   r={'schema':'FAI_CRM_N05_FORWARD_RECEIPT_V1','run_id':p['run_id'],'engine':p['engine'],'project':p['project'],'plan_sha256':n05.sha(p),'lock_id':p['engine']['id']+':fai-crm','events':[a,b]}
@@ -89,30 +98,36 @@ class Protocol(unittest.TestCase):
   for reason in ('functional-failure','unhealthy','exited','absent'):
    p=plan(reason); e=Engine(p,reason,reason=='absent')
    with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-protocol-') as d:
-    pathlib.Path(d).chmod(0o700); r=real_receipt(p,e,d)
-    out=pathlib.Path(p['journal_path']); got=n05.ReturnController(e,lambda:1000).return_app(p,r,out)
+    pathlib.Path(d).chmod(0o700); r,q=real_receipt(p,e,d,reason)
+    out=pathlib.Path(p['journal_path']); got=n05.ReturnController(e,lambda:1000).return_app(p,r,q,out)
     self.assertEqual(got['result'],'PASS'); self.assertEqual(json.loads(out.read_text())['result'],'PASS')
+ def test_post_forward_request_is_bound_and_cannot_relabel_outcome(self):
+  p=plan(); e=Engine(p,'unhealthy')
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-request-') as d:
+   pathlib.Path(d).chmod(0o700); receipt,request=real_receipt(p,e,d,'unhealthy')
+   for changed in (request|{'reason':'exited'},request|{'receipt_sha256':'0'*64},request|{'plan_sha256':'0'*64}):
+    with self.assertRaises(n05.Denied): n05.validate_return_request(changed,p,receipt)
  def test_identity_runtime_resource_ledger_and_inventory_drift(self):
   mutations=[('app','created','changed'),('app','image_id','sha256:'+'0'*64),('app','config_sha256','0'*64),('postgres',None,{'id':'other'}),('resources',None,{}),('ledger',None,{}),('foreign_containers',None,['stopped-stranger']),('migrators',None,['migrate-id'])]
   for root,key,value in mutations:
    p=plan(); e=Engine(p)
    with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-drift-') as d:
-    pathlib.Path(d).chmod(0o700); r=real_receipt(p,e,d)
+    pathlib.Path(d).chmod(0o700); r,q=real_receipt(p,e,d)
     if key:e.snap[root][key]=value
     else:e.snap[root]=value
-    with self.subTest(root=root,key=key),self.assertRaises(n05.Denied): n05.ReturnController(e,lambda:1000).return_app(p,r,pathlib.Path(p['journal_path']))
+    with self.subTest(root=root,key=key),self.assertRaises(n05.Denied): n05.ReturnController(e,lambda:1000).return_app(p,r,q,pathlib.Path(p['journal_path']))
  def test_failed_attempt_is_durable_across_engine_restart(self):
   p=plan(); e=Engine(p)
   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-attempt-') as d:
-   pathlib.Path(d).chmod(0o700); r=real_receipt(p,e,d); e.recreate_return=lambda *x:(_ for _ in ()).throw(n05.Denied('SYNTHETIC_MUTATION_FAILED'))
+   pathlib.Path(d).chmod(0o700); r,q=real_receipt(p,e,d); e.recreate_return=lambda *x:(_ for _ in ()).throw(n05.Denied('SYNTHETIC_MUTATION_FAILED'))
    journal=pathlib.Path(p['journal_path'])
-   with self.assertRaises(n05.Denied): n05.ReturnController(e,lambda:1000).return_app(p,r,journal)
+   with self.assertRaises(n05.Denied): n05.ReturnController(e,lambda:1000).return_app(p,r,q,journal)
    self.assertEqual(json.loads(journal.read_text())['result'],'FAILED')
-   with self.assertRaisesRegex(n05.Denied,'RETURN_ALREADY_ATTEMPTED'): n05.ReturnController(Engine(p),lambda:1000).return_app(p,r,journal)
+   with self.assertRaisesRegex(n05.Denied,'RETURN_ALREADY_ATTEMPTED'): n05.ReturnController(Engine(p),lambda:1000).return_app(p,r,q,journal)
  def test_incomplete_forward_on_observation_error_denied(self):
   p=plan('absent'); e=Engine(p,absent_forward=True); e.observe_app_absence=lambda d: (_ for _ in ()).throw(n05.Denied('DAEMON_UNCERTAIN'))
   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-incomplete-') as d:
-   pathlib.Path(d).chmod(0o700); path=pathlib.Path(d)/'receipt'; p['receipt_path']=str(path); p['journal_path']=str(pathlib.Path(d)/'journal')
+   pathlib.Path(d).chmod(0o700); path=pathlib.Path(d)/'receipt'; p['receipt_path']=str(path); p['return_request_path']=str(pathlib.Path(d)/'request'); p['journal_path']=str(pathlib.Path(d)/'journal')
    with self.assertRaises(n05.Denied): n05.ForwardRecorder(e,lambda:1000).run(p,path)
    with self.assertRaises(n05.Denied): n05.validate_receipt(json.loads(path.read_text()),p)
  def test_entry_rejects_before_private_read_or_daemon(self):

@@ -130,7 +130,7 @@ RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{15,79}$")
 
 PLAN_KEYS = {"schema", "run_id", "engine", "project", "tools", "source_app", "candidate", "return_image",
              "postgres", "resources", "configs", "ledger", "compatibility", "deadline_epoch", "gates",
-             "return_reason", "migrator", "receipt_path", "journal_path"}
+             "return_policy", "migrator", "receipt_path", "return_request_path", "journal_path"}
 IMAGE_KEYS = {"tag", "id", "oci_commit", "oci_tree"}
 REF_KEYS = {"path", "sha256", "kind"}
 VOLUME_KEYS = {"Name","Driver","Mountpoint","CreatedAt","Labels","Options","Scope"}
@@ -218,18 +218,30 @@ def validate_plan(plan, now=None):
     require(set(plan["gates"]) == {"recovery", "artifacts", "reviewed_plan", "authorization"} and
             all(type(x) is dict for x in plan["gates"].values()), "PRODUCTION_GATES_INCOMPLETE")
     for kind, value in plan["gates"].items(): validate_ref(value, kind)
-    require(type(plan["return_reason"]) is dict and set(plan["return_reason"]) == {"kind", "evidence"}
-            and plan["return_reason"]["kind"] in {"functional-failure", "unhealthy", "exited", "absent"},
-            "RETURN_REASON_INVALID")
-    if plan["return_reason"]["kind"] == "functional-failure":
-        validate_ref(plan["return_reason"]["evidence"], "functional-failure")
-    else:
-        require(plan["return_reason"]["evidence"] is None, "RETURN_REASON_EVIDENCE_UNEXPECTED")
-    for key in ("receipt_path", "journal_path"):
+    require(plan["return_policy"] == {"allowed_reasons":["functional-failure","unhealthy","exited","absent"]},
+            "RETURN_POLICY_INVALID")
+    for key in ("receipt_path", "return_request_path", "journal_path"):
         require(type(plan[key]) is str and Path(plan[key]).is_absolute(), "PRIVATE_OUTPUT_PATH_INVALID")
     require(type(plan["deadline_epoch"]) in (int, float) and plan["deadline_epoch"] > (now or time.time()),
             "DEADLINE_EXPIRED")
     return plan
+
+
+def validate_return_request(request, plan, receipt):
+    require(type(request) is dict and set(request) == {"schema","run_id","plan_sha256","receipt_sha256","reason","evidence"},
+            "RETURN_REQUEST_SCHEMA_INVALID")
+    require(request["schema"] == "FAI_CRM_N05_RETURN_REQUEST_V1" and request["run_id"] == plan["run_id"]
+            and request["plan_sha256"] == sha(plan) and request["receipt_sha256"] == sha(receipt),
+            "RETURN_REQUEST_BINDING_INVALID")
+    require(request["reason"] in plan["return_policy"]["allowed_reasons"], "RETURN_REASON_NOT_ALLOWED")
+    final = validate_receipt(receipt,plan)
+    observed = final["observation"].get("state") if final["result"] == "candidate-observed" else "absent"
+    if request["reason"] == "functional-failure":
+        require(observed == "healthy", "FUNCTIONAL_FAILURE_APP_NOT_HEALTHY")
+        validate_ref(request["evidence"], "functional-failure")
+    else:
+        require(request["evidence"] is None and request["reason"] == observed, "RETURN_REASON_OBSERVATION_MISMATCH")
+    return request
 
 
 def event(previous, run_id, phase, result, observation):
@@ -278,7 +290,9 @@ def validate_receipt(receipt, plan):
         require(type(created) is dict and set(created) == {"id","created","image_id"}
                 and re.fullmatch(r"[0-9a-f]{64}",created["id"]) and created["image_id"] == plan["candidate"]["id"]
                 and receipt["events"][5]["observation"] == {"candidate":created}
-                and final["observation"] == {"candidate":created}, "CANDIDATE_RECEIPT_IDENTITY_INVALID")
+                and type(final["observation"]) is dict and set(final["observation"]) == {"candidate","state"}
+                and final["observation"]["candidate"] == created
+                and final["observation"]["state"] in {"healthy","unhealthy","exited"}, "CANDIDATE_RECEIPT_IDENTITY_INVALID")
     elif final["result"] == "candidate-absent-attributed":
         require(phases == prefix + ["forward-result"] and receipt["events"][4]["result"] == "absence-observed"
                 and receipt["events"][4]["observation"] == {"inventory_complete": True, "app": None}
@@ -336,8 +350,9 @@ class ForwardRecorder:
             require(observed and {k:observed[k] for k in ("id","created","image_id")} == created,
                     "CANDIDATE_START_IDENTITY_DRIFT")
             events.append(event(events[-1], plan["run_id"], "candidate-start", "started-exact", {"candidate":created}))
+            receipt_state = "unhealthy" if observed["state"] == "running-unhealthy" else observed["state"]
             events.append(event(events[-1], plan["run_id"], "forward-result", "candidate-observed",
-                                {"candidate":created}))
+                                {"candidate":created,"state":receipt_state}))
         except (Denied, subprocess.SubprocessError):
             # Persist the incomplete chain. It is evidence, never return authority.
             atomic_json(receipt_path, receipt)
@@ -369,7 +384,7 @@ class ReturnController:
     def __init__(self, engine, clock=time.time):
         self.engine, self.clock = engine, clock
 
-    def _check(self, plan, receipt=None):
+    def _check(self, plan, receipt=None, request=None):
         require(self.clock() < plan["deadline_epoch"], "DEADLINE_EXPIRED")
         snapshot = self.engine.snapshot(plan["deadline_epoch"])
         require(snapshot["engine"] == plan["engine"] and snapshot["project"] == plan["project"], "ENGINE_PROJECT_DRIFT")
@@ -380,34 +395,36 @@ class ReturnController:
         require(snapshot["ledger"] == plan["ledger"], "LEDGER_DRIFT")
         if receipt:
             final = validate_receipt(receipt, plan)
+            require(request is not None, "RETURN_REQUEST_MISSING")
+            validate_return_request(request,plan,receipt)
             app = snapshot["app"]
             if final["result"] == "candidate-observed":
                 expected = final["observation"]["candidate"]
                 require(app is not None and {k: app[k] for k in ("id", "created", "image_id")} == expected,
                         "CANDIDATE_IDENTITY_DRIFT")
                 require(app["config_sha256"] == plan["configs"]["candidate"]["sha256"], "CANDIDATE_CONFIG_DRIFT")
-                reason = plan["return_reason"]["kind"]
+                reason = request["reason"]
                 allowed = ((reason == "functional-failure" and app["state"] == "healthy") or
                            (reason == "unhealthy" and app["state"] == "running-unhealthy") or
                            (reason == "exited" and app["state"] == "exited"))
                 require(allowed, "CANDIDATE_STATE_NOT_RETURNABLE")
             else:
-                require(plan["return_reason"]["kind"] == "absent" and app is None and
+                require(request["reason"] == "absent" and app is None and
                         final["observation"] == {"absence_proven_by_sequence": True},
                         "ABSENCE_NOT_ATTRIBUTED")
         return snapshot
 
-    def return_app(self, plan, receipt, journal_path):
+    def return_app(self, plan, receipt, request, journal_path):
         validate_plan(plan, self.clock())
         require(not journal_path.exists(), "RETURN_ALREADY_ATTEMPTED")
         require(not self.engine.attempted(plan["run_id"]), "RETURN_ALREADY_ATTEMPTED")
-        before = self._check(plan, receipt)
+        before = self._check(plan, receipt, request)
         require(self.engine.image(plan["return_image"], plan["deadline_epoch"]), "RETURN_IMAGE_UNAVAILABLE")
         require(self.engine.config_digest("return", plan["deadline_epoch"]) == plan["configs"]["return"]["sha256"], "RETURN_CONFIG_DRIFT")
         self.engine.mark_attempt(plan["run_id"])
         journal = {"schema":"FAI_CRM_N05_RETURN_JOURNAL_V1", "run_id":plan["run_id"],
                    "result":"ATTEMPT_STARTED", "plan_sha256":sha(plan), "receipt_sha256":sha(receipt),
-                   "before_snapshot_sha256":sha(before)}
+                   "request_sha256":sha(request), "before_snapshot_sha256":sha(before)}
         atomic_json(journal_path, journal)
         try:
             new_id = self.engine.recreate_return(plan, plan["deadline_epoch"])
@@ -501,7 +518,7 @@ class DockerEngine:
         # Fixed SQL, using the container's own POSTGRES_USER/DB. No credential or row is logged.
         sql = "SELECT migration_name,checksum,started_at::text,coalesce(finished_at::text,''),coalesce(rolled_back_at::text,''),applied_steps_count::text FROM _prisma_migrations ORDER BY migration_name"
         output = self.run("exec", pg, "sh", "-ceu",
-          'exec psql -X -qAt -F "\t" -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"',
+          'user="${POSTGRES_USER:-postgres}"; db="${POSTGRES_DB:-$user}"; exec psql -X -qAt -F "\t" -v ON_ERROR_STOP=1 -U "$user" -d "$db" -c "$1"',
           "n05-ledger", sql, deadline=deadline)
         rows = [line.split("\t") for line in output.splitlines()]
         require(rows and all(len(row) == 6 and row[0] and row[1] and row[2] and row[3]
@@ -596,7 +613,7 @@ class DockerEngine:
             require(self.observe_app_absence(deadline), "CANDIDATE_ABSENCE_UNCERTAIN")
             return None
         self.run("compose", "-p", self.project, "--project-directory", str(self.repo),
-          "--env-file", str(self.env_file), "-f", plan["configs"]["candidate"]["path"], "create", "--no-deps",
+          "--env-file", str(self.env_file), "-f", plan["configs"]["candidate"]["path"], "up", "--no-start", "--no-deps",
           "--no-build", "--pull", "never", "app", deadline=deadline)
         ids = self.ids("app", deadline); require(len(ids) == 1, "CANDIDATE_CREATION_UNOBSERVED")
         self.created_callback(ids[0])
@@ -605,13 +622,11 @@ class DockerEngine:
 
     def start_candidate(self, identity, deadline):
         self.run("start", identity, deadline=deadline)
-        reason = self.plan["return_reason"]["kind"]
         while time.time() < deadline:
             raw = self.inspect("container",identity,deadline)
             health = (raw["State"].get("Health") or {}).get("Status")
-            if ((reason == "functional-failure" and raw["State"].get("Running") and health == "healthy") or
-                (reason == "unhealthy" and raw["State"].get("Running") and health == "unhealthy") or
-                (reason == "exited" and not raw["State"].get("Running"))):
+            if ((raw["State"].get("Running") and health in {"healthy","unhealthy"}) or
+                not raw["State"].get("Running")):
                 return
             time.sleep(min(0.5,max(0,deadline-time.time())))
         raise Denied("CANDIDATE_OBSERVATION_DEADLINE_EXPIRED")
@@ -662,16 +677,15 @@ def production_main(argv):
     plan = validate_plan(strict_json(plan_path))
     require(plan["project"] == "fai-crm", "PRODUCTION_PROJECT_DENIED")
     receipt_path = Path(plan["receipt_path"])
+    request_path = Path(plan["return_request_path"])
     journal_path = Path(plan["journal_path"])
-    require(receipt_path.parent == plan_path.parent == journal_path.parent, "PRIVATE_RUN_DIRECTORY_MISMATCH")
+    require(receipt_path.parent == request_path.parent == plan_path.parent == journal_path.parent, "PRIVATE_RUN_DIRECTORY_MISMATCH")
     binding = {"run_id":plan["run_id"], "tools_commit":plan["tools"]["commit"],
                "tools_tree":plan["tools"]["tree"], "ci_sha":plan["tools"]["ci_sha"],
                "engine_id":plan["engine"]["id"], "project":plan["project"],
                "return_image_id":plan["return_image"]["id"], "ledger_digest":plan["ledger"]["digest"]}
     for reference in plan["gates"].values(): validate_evidence(reference, plan, binding)
     validate_evidence(plan["compatibility"], plan, binding)
-    if plan["return_reason"]["evidence"]:
-        validate_evidence(plan["return_reason"]["evidence"], plan, binding)
     for reference in [*plan["configs"].values(), *plan["gates"].values(), plan["compatibility"]]:
         require(Path(reference["path"]).parent == plan_path.parent, "PRIVATE_EVIDENCE_DIRECTORY_MISMATCH")
     repo = Path(__file__).resolve().parents[2]
@@ -693,8 +707,12 @@ def production_main(argv):
         else:
             private_file(receipt_path)
             receipt = strict_json(receipt_path)
+            private_file(request_path)
+            request = validate_return_request(strict_json(request_path),plan,receipt)
+            if request["evidence"]:
+                validate_evidence(request["evidence"],plan,binding)
             require(not journal_path.exists(), "RETURN_ALREADY_ATTEMPTED")
-            ReturnController(engine).return_app(plan, receipt, journal_path)
+            ReturnController(engine).return_app(plan, receipt, request, journal_path)
     finally:
         os.close(fd)
     print("N05_FAILED_APP_" + argv[1].upper() + "_PASS|run=" + plan["run_id"] +

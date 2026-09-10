@@ -1,4 +1,4 @@
 {
   "schema": "FAI_CRM_N05_FAILED_APP_RETURN_V2",
-  "documentation": "DELIBERATELY INCOMPLETE AND NON-EXECUTABLE. The private 0600 plan must bind run, measured Docker engine ID/name/OS, project, tool commit/tree/CI, exact source/candidate/return images, PostgreSQL, full volume/network metadata, three frozen Compose models, complete ledger, typed hashed evidence for recovery/artifacts/review/authorization/image-schema compatibility, return reason, deadline, receipt and durable attempt journal. Evidence must be separately produced, qualified, non-synthetic and bound to the same identities. No credential belongs here."
+  "documentation": "DELIBERATELY INCOMPLETE AND NON-EXECUTABLE. The private 0600 pre-forward plan binds run, measured engine, project, tool/CI, exact source/candidate/return images, PostgreSQL, resources, frozen models, ledger, evidence, allowed return policy, deadline, receipt, post-forward request and journal. The later request selects only the state actually bound to the completed receipt. No credential belongs here."
 }
