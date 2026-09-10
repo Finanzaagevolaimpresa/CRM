@@ -14,6 +14,10 @@ async function main() {
   const item = await db.commercialLeadInboxItem.findUniqueOrThrow({
     where: { leadId: lead.id }, include: { slaCycles: true, activities: { orderBy: { sequence: 'asc' } } },
   });
+  const auditEvents = await db.auditLog.findMany({
+    where: { entityType: 'CommercialLeadInboxItem', entityId: item.id },
+    orderBy: { createdAt: 'asc' }, select: { event: true },
+  });
   assert.equal(item.originKind, 'BUSINESS_PROJECTION_N13');
   assert.equal(item.projectionLedgerId !== null, true);
   assert.equal(item.slaCycles.length, 1);
@@ -22,16 +26,24 @@ async function main() {
     assert.equal(lead.assignedToId, null);
     assert.equal(item.version, 1);
     assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED']);
+    assert.deepEqual(auditEvents.map((row) => row.event), ['commercial_lead_inbox_initialized']);
     assert.equal(item.slaCycles[0]?.firstResponseAt, null);
   } else if (checkpoint === 'claimed') {
     assert.equal(lead.assignedToId, 'vnx03-n14-commercial-one');
     assert.equal(item.version, 2);
     assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'CLAIMED']);
+    assert.deepEqual(auditEvents.map((row) => row.event), [
+      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_claimed',
+    ]);
     assert.equal(item.activities[1]?.actorSessionId !== null, true);
   } else if (checkpoint === 'contacted') {
     assert.equal(lead.assignedToId, 'vnx03-n14-commercial-one');
     assert.equal(item.version, 3);
     assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'CLAIMED', 'FIRST_RESPONSE_RECORDED']);
+    assert.deepEqual(auditEvents.map((row) => row.event), [
+      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_claimed',
+      'commercial_lead_inbox_first_response_recorded',
+    ]);
     assert.equal(item.slaCycles[0]?.outcome, 'MET');
     assert.equal(item.slaCycles[0]?.firstResponseAt !== null, true);
   } else throw new Error('VNX03_N14_CHECKPOINT_INVALID');
