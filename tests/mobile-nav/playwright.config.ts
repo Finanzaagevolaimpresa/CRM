@@ -7,7 +7,7 @@ export default defineConfig({
   reporter: "line",
   use: { baseURL: "http://127.0.0.1:3417", screenshot: "only-on-failure" },
   webServer: {
-    command: "npx next dev fixture --hostname 127.0.0.1 --port 3417",
+    command: "npx next dev --webpack fixture --hostname 127.0.0.1 --port 3417",
     url: "http://127.0.0.1:3417",
     reuseExistingServer: false,
     timeout: 120_000,

@@ -1,6 +1,7 @@
 import { chromium } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
+import { once } from "node:events";
 import path from "node:path";
 
 const [sourceRoot, label, evidenceDir, portText] = process.argv.slice(2);
@@ -8,19 +9,28 @@ if (!sourceRoot || !["baseline", "candidate"].includes(label) || !evidenceDir ||
   throw new Error("usage: measure-navigation.mjs <source-root> <baseline|candidate> <evidence-dir> <port>");
 }
 const port = Number(portText);
-const server = spawn(path.join(sourceRoot, "node_modules/.bin/next"), ["dev", "tests/mobile-nav/fixture", "--hostname", "127.0.0.1", "--port", String(port)], {
+const server = spawn(path.join(sourceRoot, "node_modules/.bin/next"), ["dev", "--webpack", "tests/mobile-nav/fixture", "--hostname", "127.0.0.1", "--port", String(port)], {
   cwd: sourceRoot,
   env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverLog = "";
+let spawnError;
 server.stdout.on("data", (chunk) => { serverLog += chunk; });
 server.stderr.on("data", (chunk) => { serverLog += chunk; });
+server.on("error", (error) => { spawnError = error; });
 
 try {
   const url = `http://127.0.0.1:${port}/?profile=admin`;
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    try { if ((await fetch(url)).ok) break; } catch {}
+    if (spawnError || server.exitCode !== null) {
+      throw new Error(`fixture exited before readiness (${spawnError?.message ?? server.exitCode}): ${serverLog.slice(-4000)}`);
+    }
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+      const body = await response.text();
+      if (response.ok && body.includes("Contenuto commerciale raggiungibile")) break;
+    } catch {}
     if (attempt === 119) throw new Error(`fixture did not start: ${serverLog.slice(-2000)}`);
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -54,6 +64,10 @@ try {
 } finally {
   if (server.exitCode === null) {
     server.kill("SIGTERM");
-    await new Promise((resolve) => server.once("exit", resolve));
+    const stopped = await Promise.race([
+      once(server, "exit").then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    if (!stopped && server.exitCode === null) server.kill("SIGKILL");
   }
 }
