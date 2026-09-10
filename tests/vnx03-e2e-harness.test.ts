@@ -138,6 +138,9 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   const browser = source('tests/vnx03/n14-commercial-browser.spec.ts');
   assert.match(compose, /crm:[\s\S]*INTERNAL_SESSION_MODE: legacy[\s\S]*COMMERCIAL_LEAD_INBOX_MODE: disabled/u);
   assert.match(compose, /crm-n14:[\s\S]*INTERNAL_SESSION_MODE: registry[\s\S]*COMMERCIAL_LEAD_INBOX_MODE: enforced/u);
+  const crmProxy = compose.slice(compose.indexOf('  crm-browser-proxy:'), compose.indexOf('\nvolumes:'));
+  assert.match(crmProxy, /healthcheck:[\s\S]*connect\(8080,'127\.0\.0\.1'/u);
+  assert.match(crmProxy, /interval: 2s[\s\S]*timeout: 3s[\s\S]*retries: 30/u);
   assert.match(runner, /provision-n14\.ts[\s\S]*crm-n14 crm-browser-proxy[\s\S]*n14-commercial-browser\.spec\.ts/u);
   assert.match(browser, /getByRole\('button', \{ name: 'Login interno' \}\)\.click\(\)/u);
   assert.match(browser, /waitForURL\(\(url\) => url\.pathname === '\/dashboard'/u);

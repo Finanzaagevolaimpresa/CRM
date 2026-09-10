@@ -326,6 +326,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - const n=require('node:net').connect(8080,'127.0.0.1',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 30
     depends_on:
       crm-n14:
         condition: service_healthy
