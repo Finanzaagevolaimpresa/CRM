@@ -214,6 +214,7 @@ def validate_plan(plan, now=None):
         require(IMAGE_ID.fullmatch(plan[name]["id"]), "IMAGE_ID_INVALID")
         require(all(OID.fullmatch(plan[name][key]) for key in ("oci_commit", "oci_tree")),
                 "IMAGE_PROVENANCE_INVALID")
+    require(plan["candidate"]["id"] != plan["return_image"]["id"], "CANDIDATE_RETURN_IMAGE_ALIAS")
     require(type(plan["source_app"]) is dict and set(plan["source_app"]) == {"id", "created", "image_id"}
             and re.fullmatch(r"[0-9a-f]{64}",plan["source_app"]["id"])
             and IMAGE_ID.fullmatch(plan["source_app"]["image_id"])

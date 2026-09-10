@@ -111,6 +111,11 @@ class Protocol(unittest.TestCase):
   for value in (float('inf'),float('-inf'),float('nan')):
    p=plan();p['deadline_epoch']=value
    with self.assertRaises(n05.Denied):n05.validate_plan(p,1000)
+ def test_candidate_return_image_alias_is_rejected_before_daemon_or_mutation(self):
+  p=plan();p['return_image']['id']=p['candidate']['id'];engine=mock.Mock()
+  with self.assertRaisesRegex(n05.Denied,'CANDIDATE_RETURN_IMAGE_ALIAS'):
+   n05.ForwardRecorder(engine,lambda:1000).run(p,pathlib.Path(p['receipt_path']))
+  self.assertEqual(engine.mock_calls,[])
  def test_unverified_strings_are_not_gates(self):
   p=plan(); p['gates']={k:'unverified' for k in p['gates']}
   with self.assertRaisesRegex(n05.Denied,'PRODUCTION_GATES_INCOMPLETE'): n05.validate_plan(p,1000)
