@@ -124,3 +124,17 @@ test('VNX-03 is a mandatory CI gate with sanitized evidence', () => {
   assert.doesNotMatch(job, /continue-on-error/u);
   assert.doesNotMatch(job, /if:.*vnx03.*branch/iu);
 });
+
+test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic registry sessions', () => {
+  const runner = source('scripts/vnx03/run-e2e.sh');
+  const compose = source('tests/vnx03/docker-compose.yml');
+  const browser = source('tests/vnx03/n14-commercial-browser.spec.ts');
+  assert.match(compose, /crm:[\s\S]*INTERNAL_SESSION_MODE: legacy[\s\S]*COMMERCIAL_LEAD_INBOX_MODE: disabled/u);
+  assert.match(compose, /crm-n14:[\s\S]*INTERNAL_SESSION_MODE: registry[\s\S]*COMMERCIAL_LEAD_INBOX_MODE: enforced/u);
+  assert.match(runner, /provision-n14\.ts[\s\S]*crm-n14 crm-browser-proxy[\s\S]*n14-commercial-browser\.spec\.ts/u);
+  assert.match(browser, /getByRole\('button', \{ name: 'Login interno' \}\)\.click\(\)/u);
+  assert.match(browser, /Promise\.allSettled[\s\S]*Prendi in carico/u);
+  assert.match(browser, /Registra prima risposta/u);
+  assert.match(browser, /commercial\.inactive@vnx03\.invalid/u);
+  assert.doesNotMatch(browser, /addCookies|document\.cookie/u);
+});

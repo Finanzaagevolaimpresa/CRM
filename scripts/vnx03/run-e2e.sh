@@ -58,9 +58,14 @@ export COMPOSE_PROJECT_NAME="fai-vnx03-${project_suffix}"
 export VNX03_SOURCE_COMMIT="$source_commit"
 export VNX03_SOURCE_TREE="$source_tree"
 export VNX03_WP_PORT="${VNX03_WP_PORT:-18083}"
+export VNX03_CRM_PORT="${VNX03_CRM_PORT:-18084}"
 [[ "$VNX03_WP_PORT" =~ ^[0-9]+$ ]] || fail 'VNX03_WORDPRESS_PORT_INVALID'
 (( VNX03_WP_PORT >= 1024 && VNX03_WP_PORT <= 65535 )) || fail 'VNX03_WORDPRESS_PORT_INVALID'
+[[ "$VNX03_CRM_PORT" =~ ^[0-9]+$ ]] || fail 'VNX03_CRM_PORT_INVALID'
+(( VNX03_CRM_PORT >= 1024 && VNX03_CRM_PORT <= 65535 )) || fail 'VNX03_CRM_PORT_INVALID'
+[[ "$VNX03_CRM_PORT" != "$VNX03_WP_PORT" ]] || fail 'VNX03_BROWSER_PORT_COLLISION'
 export VNX03_WORDPRESS_PUBLIC_URL="http://127.0.0.1:${VNX03_WP_PORT}"
+export VNX03_CRM_PUBLIC_URL="http://127.0.0.1:${VNX03_CRM_PORT}"
 export VNX03_COMPOSE_FILE="$repo_root/$COMPOSE_RELATIVE_PATH"
 export VNX03_EVIDENCE_DIR="$evidence_dir"
 export VNX03_DOCKER_CONTEXT="$docker_context"
@@ -174,6 +179,7 @@ export VNX03_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_AUTH_SECRET="$(openssl rand -hex 32)"
+export VNX03_COMMERCIAL_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
 export VNX03_WORDPRESS_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_WORDPRESS_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
 export VNX03_WORDPRESS_SECURE_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
@@ -237,6 +243,28 @@ npx playwright test tests/vnx03/wpforms-https-e2e.spec.ts \
   --workers=1 \
   --reporter=line \
   --output="$runtime_dir/playwright-output"
+
+# N14 is enabled only after its synthetic policy/users preflight. The historical
+# CRM and VNX03 assertions above remain in legacy-session/N14-disabled mode.
+"${compose[@]}" run --rm -T \
+  -e COMMERCIAL_LEAD_INBOX_MODE=enforced \
+  -e VNX03_COMMERCIAL_PASSWORD \
+  harness node --import tsx tests/vnx03/provision-n14.ts
+"${compose[@]}" --profile n14 up -d --wait --wait-timeout 120 crm-n14 crm-browser-proxy
+curl --fail --silent --show-error --max-time 10 "$VNX03_CRM_PUBLIC_URL/login" >/dev/null
+npx playwright test tests/vnx03/n14-commercial-browser.spec.ts \
+  --workers=1 \
+  --reporter=line \
+  --output="$runtime_dir/playwright-output-n14"
+
+node -e '
+  const { writeFileSync } = require("node:fs");
+  writeFileSync(process.argv[1], `${JSON.stringify({
+    qualification: "VNX-03-N14-SYNTHETIC", n14Enabled: true,
+    internalSessionMode: "registry", n15Enabled: false,
+    browserIngressLoopbackOnly: true, productionContact: false
+  }, null, 2)}\n`, { mode: 0o600 });
+' "$evidence_dir/n14-runtime.json"
 
 "${compose[@]}" images --format json > "$evidence_dir/images.json"
 node -e '
