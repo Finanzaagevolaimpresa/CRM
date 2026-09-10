@@ -25,6 +25,9 @@ import tempfile
 import time
 
 
+PRODUCTION_LOCK_PATH = Path("/run/fai-crm-n05/n05-failed-app-return.lock")
+
+
 class Denied(Exception):
     pass
 
@@ -770,8 +773,7 @@ def production_main(argv):
     require(git("branch", "--show-current") == "main" and git("rev-parse", "HEAD") == plan["tools"]["commit"] and
             git("rev-parse", "HEAD^{tree}") == plan["tools"]["tree"] and
             not git("status", "--porcelain=v1", "--untracked-files=no"), "TOOLS_IDENTITY_DRIFT")
-    lock_path = Path("/run/lock/fai-crm/n05-failed-app-return.lock")
-    fd = acquire_lock(lock_path, {"engine_id":plan["engine"]["id"],"project":plan["project"]})
+    fd = acquire_lock(PRODUCTION_LOCK_PATH, {"engine_id":plan["engine"]["id"],"project":plan["project"]})
     try:
         engine = DockerEngine(plan, repo)
         if argv[1] == "forward":

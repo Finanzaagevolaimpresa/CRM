@@ -528,8 +528,15 @@ jobs:
           docker compose up --help | grep -F -- '--no-deps'
           docker compose up --help | grep -F -- '--no-build'
           docker compose up --help | grep -F -- '--pull'
-      - name: Protocol tests and production pre-daemon guard
-        run: python3 -B -m unittest -v tests/n05/test_failed_app_return.py
+      - name: Protocol tests, canonical lock and production pre-daemon guard
+        env:
+          N05_TEST_CANONICAL_LOCK: "1"
+        run: |
+          test ! -e /run/fai-crm-n05
+          sudo mkdir -m 0700 /run/fai-crm-n05
+          sudo chown "$(id -u):$(id -g)" /run/fai-crm-n05
+          trap 'rm -f /run/fai-crm-n05/n05-failed-app-return.lock; rmdir /run/fai-crm-n05' EXIT
+          python3 -B -m unittest -v tests/n05/test_failed_app_return.py
       - name: Real Docker synthetic return and persistence drill
         env:
           N05_FAILED_RETURN_SYNTHETIC_CONFIRMED: "1"

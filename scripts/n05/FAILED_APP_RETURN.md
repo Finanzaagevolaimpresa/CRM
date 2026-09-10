@@ -16,6 +16,26 @@ Both commands acquire the single canonical engine/project lock. If a migrator is
 
 The forward preflight verifies both candidate and return images and replayable models before removing anything, and rechecks return availability at the mutation boundary. Inventory includes all containers selected by project labels plus consumers of the protected network and both volumes, including stopped volume consumers. Unlabeled users of these resources block mutation too.
 
+## Lock preparation before the change window
+
+The fixed lock is `/run/fai-crm-n05/n05-failed-app-return.lock`. Before admitting
+an operational plan, provision its dedicated directory as `0700`, owned by the
+operator that will execute both commands. Its ancestors `/run` and `/` must be
+real, trusted directories with no group/other write permission. For a new
+absent directory, the administrator can use `mkdir -m 0700` followed by `chown`
+to the identified operator. Record and verify the actual owner and mode before
+the change window. The controller neither creates this directory nor changes
+permissions. If it already exists, inspect it without replacing it or changing
+an active lock. `/run` is ephemeral: provision again after a reboot before use.
+Do not use `/run/lock`, relax ancestor checks, or delete a lock to overcome
+contention or an engine binding mismatch.
+
+CI exclusively creates this same directory on its isolated runner. The real
+entrypoint holds the real `flock` through forward/migrator removal and return
+with synthetic daemon/qualification inputs, verifies contention and release,
+and refuses missing or writable parents before daemon access. This proves lock
+usability, not production host or qualification admission.
+
 ## Synthetic Docker drill
 
 On an isolated GitHub runner:

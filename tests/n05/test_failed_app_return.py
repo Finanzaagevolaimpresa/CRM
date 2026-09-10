@@ -272,16 +272,24 @@ class Protocol(unittest.TestCase):
      receipt,request=real_receipt(p,e,d)
      self.assertEqual(removed,[p['migrator']['id']]);self.assertEqual(e.snap['migrators'],[])
      n05.validate_return_request(request,p,receipt)
- def test_production_entrypoint_removes_migrator_under_lock_with_synthetic_io(self):
-  # Exercise the real dispatcher and recorder; substitute only host, daemon,
-  # Git and private qualification I/O. This never opens production inputs.
+ def test_production_entrypoint_forward_and_return_hold_real_lock_with_synthetic_io(self):
+  # Host, daemon, Git and qualification I/O are synthetic. The actual private
+  # file checks and flock run through both dispatch paths. CI provisions the
+  # fixed production lock path on its isolated runner; local tests use home.
   p=plan();p['deadline_epoch']=n05.time.time()+30
   p['migrator']={'id':'3'*64,'created':'migrator-created','image_id':'sha256:'+'2'*64,'role':'migrate','project':p['project']}
-  engine=Engine(p);engine.snap['migrators']=[p['migrator']['id']];fds=[];events=[]
+  engine=Engine(p);engine.snap['migrators']=[p['migrator']['id']];events=[]
   engine.migrator=lambda identity,deadline:p['migrator']|{'state':'exited','exit_code':0} if engine.snap['migrators'] else None
+  binding={'engine_id':p['engine']['id'],'project':p['project']}
+  def assert_locked():
+   with self.assertRaisesRegex(n05.Denied,'RETURN_LOCK_CONTENDED'):n05.acquire_lock(lock_path,binding)
   def remove(identity,deadline):
-   os.fstat(fds[0]);events.append('migrator-removed-under-lock');engine.snap['migrators']=[]
+   assert_locked();events.append('migrator-removed-under-lock');engine.snap['migrators']=[]
   engine.remove_migrator=remove
+  recreate=engine.recreate_return
+  def recreate_locked(*args):
+   assert_locked();events.append('return-under-lock');return recreate(*args)
+  engine.recreate_return=recreate_locked
   def git(command,env,deadline,input_text=None):
    if command[3]=='branch':output='main'
    elif command[3]=='rev-parse':output=p['tools']['tree'] if command[-1]=='HEAD^{tree}' else p['tools']['commit']
@@ -292,14 +300,28 @@ class Protocol(unittest.TestCase):
    for key,name in [('receipt_path','receipt.json'),('return_request_path','request.json'),('journal_path','journal.json')]:p[key]=str(private/name)
    for reference in [*p['configs'].values(),*p['gates'].values(),p['compatibility']]:reference['path']=str(private/(reference['kind']+'.json'))
    plan_path=private/'plan.json';plan_path.write_text(n05.canonical(p));plan_path.chmod(0o600)
-   def lock(path,binding):
-    fd=os.open(private/'synthetic-lock',os.O_CREAT|os.O_RDWR,0o600);fds.append(fd);return fd
+   canonical_lock=os.environ.get('N05_TEST_CANONICAL_LOCK')=='1'
+   self.assertEqual(n05.PRODUCTION_LOCK_PATH,pathlib.Path('/run/fai-crm-n05/n05-failed-app-return.lock'))
+   lock_path=n05.PRODUCTION_LOCK_PATH if canonical_lock else private/'synthetic-lock'
    env={'FAI_ENVIRONMENT':'production','FAI_ENVIRONMENT_SENTINEL':'FAI_CRM_PRODUCTION_V1','COMPOSE_PROJECT_NAME':'fai-crm'}
-   with mock.patch.dict(os.environ,env,clear=True),mock.patch.object(n05.socket,'gethostname',return_value='fai-crm-prod-02'),mock.patch.object(n05,'validate_evidence'),mock.patch.object(n05,'run_deadline',side_effect=git),mock.patch.object(n05,'DockerEngine',return_value=engine),mock.patch.object(n05,'acquire_lock',side_effect=lock),contextlib.redirect_stdout(io.StringIO()):
+   with mock.patch.dict(os.environ,env,clear=True),mock.patch.object(n05.socket,'gethostname',return_value='fai-crm-prod-02'),mock.patch.object(n05,'validate_evidence'),mock.patch.object(n05,'run_deadline',side_effect=git),mock.patch.object(n05,'DockerEngine',return_value=engine) as adapter,mock.patch.object(n05,'PRODUCTION_LOCK_PATH',lock_path),contextlib.redirect_stdout(io.StringIO()):
+    # Missing or writable lock parents must still fail before daemon access.
+    bad_parent=private/'bad-lock-parent'
+    with mock.patch.object(n05,'PRODUCTION_LOCK_PATH',bad_parent/'lock'):
+     with self.assertRaises(OSError):n05.production_main(['failed_app_return.py','forward',str(plan_path)])
+     bad_parent.mkdir(mode=0o775);bad_parent.chmod(0o775)
+     with self.assertRaisesRegex(n05.Denied,'PRIVATE_PARENT_OWNER_MODE'):n05.production_main(['failed_app_return.py','forward',str(plan_path)])
+    adapter.assert_not_called()
     n05.production_main(['failed_app_return.py','forward',str(plan_path)])
-   self.assertEqual(events,['migrator-removed-under-lock']);self.assertEqual(engine.snap['migrators'],[])
-   n05.validate_receipt(json.loads(pathlib.Path(p['receipt_path']).read_text()),p)
-   with self.assertRaises(OSError):os.fstat(fds[0])
+    receipt=json.loads(pathlib.Path(p['receipt_path']).read_text());n05.validate_receipt(receipt,p)
+    os.close(n05.acquire_lock(lock_path,binding))
+    request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':p['run_id'],'plan_sha256':n05.sha(p),'receipt_sha256':n05.sha(receipt),'reason':'unhealthy','evidence':None}
+    n05.atomic_json(pathlib.Path(p['return_request_path']),request)
+    n05.production_main(['failed_app_return.py','return',str(plan_path)])
+    os.close(n05.acquire_lock(lock_path,binding))
+   self.assertEqual(events,['migrator-removed-under-lock','return-under-lock']);self.assertEqual(engine.snap['migrators'],[])
+   self.assertEqual(engine.snap['app']['image_id'],p['return_image']['id'])
+   if canonical_lock:print('N05_CANONICAL_LOCK_ENTRYPOINT_FORWARD_RETURN_PASS')
  def test_post_forward_request_is_bound_and_cannot_relabel_outcome(self):
   p=plan(); e=Engine(p,'unhealthy')
   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-request-') as d:
