@@ -14,6 +14,65 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  mobile-navigation:
+    name: Mobile navigation browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Measure baseline and candidate navigation shells
+        env:
+          MOBILE_NAV_BASELINE_SHA: 75d6fd42d16aa9edd3655d37bd1af4d9e1d80b07
+          MOBILE_NAV_BASELINE_TREE: a66c2588972bf39fad8ed32e25597de06822bf87
+          MOBILE_NAV_EVIDENCE_DIR: ${{ runner.temp }}/mobile-nav-evidence
+        run: |
+          baseline_root="$(mktemp -d /tmp/fai-crm-mobile-baseline.XXXXXX)"
+          cleanup() {
+            git worktree remove --force "$baseline_root" 2>/dev/null || true
+            test ! -e "$baseline_root" || rm -rf "$baseline_root"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$baseline_root" "$MOBILE_NAV_BASELINE_SHA"
+          test "$(git -C "$baseline_root" rev-parse HEAD)" = "$MOBILE_NAV_BASELINE_SHA"
+          test "$(git -C "$baseline_root" rev-parse HEAD^{tree})" = "$MOBILE_NAV_BASELINE_TREE"
+          mkdir -p "$baseline_root/tests/mobile-nav"
+          cp -R tests/mobile-nav/fixture "$baseline_root/tests/mobile-nav/fixture"
+          ln -s "$PWD/node_modules" "$baseline_root/node_modules"
+          node tests/mobile-nav/measure-navigation.mjs "$baseline_root" baseline "$MOBILE_NAV_EVIDENCE_DIR" 3418
+          node tests/mobile-nav/measure-navigation.mjs "$PWD" candidate "$MOBILE_NAV_EVIDENCE_DIR" 3419
+          printf '%s\n' \
+            "baseline_commit=$MOBILE_NAV_BASELINE_SHA" \
+            "baseline_tree=$MOBILE_NAV_BASELINE_TREE" \
+            "candidate_commit=$(git rev-parse HEAD)" \
+            "candidate_tree=$(git rev-parse HEAD^{tree})" \
+            > "$MOBILE_NAV_EVIDENCE_DIR/source-identities.txt"
+      - name: Run mobile navigation browser checks
+        run: npm run test:mobile-nav
+      - name: Upload synthetic navigation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-navigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mobile-nav-evidence
+          if-no-files-found: error
+          retention-days: 14
+
   build-context-guard:
     name: Protect tracked-only Docker build context
     runs-on: ubuntu-latest

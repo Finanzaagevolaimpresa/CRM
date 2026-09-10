@@ -1,5 +1,6 @@
 node_modules
 .next
+tests/mobile-nav/fixture/.next/
 .env
 .env*.local
 /generated
