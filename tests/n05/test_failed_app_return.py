@@ -94,6 +94,34 @@ class Protocol(unittest.TestCase):
   p=plan('absent'); a=n05.event(None,p['run_id'],'healthy-source','verified',{}); b=n05.event(a,p['run_id'],'forward-result','candidate-absent-attributed',{'absence_attributed':True})
   r={'schema':'FAI_CRM_N05_FORWARD_RECEIPT_V1','run_id':p['run_id'],'engine':p['engine'],'project':p['project'],'plan_sha256':n05.sha(p),'lock_id':p['engine']['id']+':fai-crm','events':[a,b]}
   with self.assertRaisesRegex(n05.Denied,'FORWARD_SEQUENCE_INCOMPLETE'): n05.validate_receipt(r,p)
+ def test_native_null_volume_metadata_is_preserved_and_drift_denied(self):
+  p=plan(); p['resources']['volumes']['crm_documents'].update(Labels=None,Options=None)
+  n05.validate_plan(p,1000)
+  e=Engine(p); e.snap['resources']['volumes']['crm_documents']['Options']={}
+  with self.assertRaisesRegex(n05.Denied,'PERSISTENT_RESOURCE_DRIFT'):
+   n05.ReturnController(e,lambda:1000)._check(p)
+  p['resources']['volumes']['crm_documents']['Options']=[]
+  with self.assertRaisesRegex(n05.Denied,'VOLUME_SPEC_INVALID'): n05.validate_plan(p,1000)
+ def test_real_adapter_failed_create_requires_fresh_absence_and_boundary(self):
+  p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker']); checked=[]
+  engine.config_digest=lambda which,deadline:p['configs'][which]['sha256']
+  engine.run=lambda *args,**kwargs:(_ for _ in ()).throw(n05.Denied('DOCKER_COMMAND_FAILED'))
+  engine.snapshot=lambda deadline:{'app':None}
+  engine.validate_boundary=lambda *args,**kwargs:checked.append(args[1])
+  self.assertIsNone(engine.create_candidate(p,1500)); self.assertEqual(checked,[{'app':None}])
+  engine.snapshot=lambda deadline:{'app':{'id':'partial'}}
+  with self.assertRaisesRegex(n05.Denied,'FAILED_CREATE_LEFT_CANDIDATE'): engine.create_candidate(p,1500)
+  engine.snapshot=lambda deadline:(_ for _ in ()).throw(n05.Denied('DAEMON_UNCERTAIN'))
+  with self.assertRaisesRegex(n05.Denied,'DAEMON_UNCERTAIN'): engine.create_candidate(p,1500)
+  engine.snapshot=lambda deadline:{'app':None}
+  engine.validate_boundary=lambda *args,**kwargs:(_ for _ in ()).throw(n05.Denied('MUTATION_BOUNDARY_DRIFT'))
+  with self.assertRaisesRegex(n05.Denied,'MUTATION_BOUNDARY_DRIFT'): engine.create_candidate(p,1500)
+ def test_create_timeout_never_produces_an_absence_receipt(self):
+  p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker'])
+  engine.config_digest=lambda which,deadline:p['configs'][which]['sha256']
+  engine.run=lambda *args,**kwargs:(_ for _ in ()).throw(n05.Denied('SUBPROCESS_DEADLINE_EXPIRED'))
+  engine.snapshot=lambda deadline:self.fail('a deadline is not an absence observation')
+  with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED'):engine.create_candidate(p,1500)
  def test_true_forward_receipts_and_four_return_states(self):
   for reason in ('functional-failure','unhealthy','exited','absent'):
    p=plan(reason); e=Engine(p,reason,reason=='absent')

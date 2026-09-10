@@ -203,7 +203,8 @@ def validate_plan(plan, now=None):
     for volume in plan["resources"]["volumes"].values():
         require(type(volume) is dict and set(volume) == VOLUME_KEYS and
                 all(type(volume[k]) is str and volume[k] for k in ("Name","Driver","Mountpoint","CreatedAt","Scope"))
-                and type(volume["Labels"]) is dict and type(volume["Options"]) is dict, "VOLUME_SPEC_INVALID")
+                and all(volume[k] is None or type(volume[k]) is dict for k in ("Labels", "Options")),
+                "VOLUME_SPEC_INVALID")
     network = plan["resources"]["network"]
     require(type(network) is dict and set(network) == NETWORK_KEYS and re.fullmatch(r"[0-9a-f]{64}",network["Id"])
             and all(type(network[k]) is str and network[k] for k in ("Name","Created","Driver","Scope"))
@@ -447,15 +448,13 @@ class ReturnController:
 
 class DockerEngine:
     """Fixed production Docker adapter; no caller-controlled executable or host."""
-    def __init__(self, plan, repo, *, files=None, env_file=None, command=None,
-                 synthetic_candidate_absence=False, created_callback=None):
+    def __init__(self, plan, repo, *, files=None, env_file=None, command=None, created_callback=None):
         self.plan, self.repo = plan, repo
         self.project = plan["project"]
         self.command = command or ["docker", "--host", "unix:///var/run/docker.sock"]
         self.files = files or [repo / "docker-compose.prod.example.yml", repo / "docker-compose.prod.legacy-resources.yml"]
         self.env_file = env_file or repo / ".env.production"
         self._attempt = False
-        self.synthetic_candidate_absence = synthetic_candidate_absence
         self.created_callback = created_callback or (lambda _identity: None)
 
     def run(self, *args, deadline, input_text=None):
@@ -607,14 +606,21 @@ class DockerEngine:
 
     def create_candidate(self, plan, deadline):
         require(self.config_digest("candidate", deadline) == plan["configs"]["candidate"]["sha256"], "CANDIDATE_CONFIG_DRIFT")
-        if self.synthetic_candidate_absence:
-            # Internal drill hook: the forward was interrupted at the explicit create boundary.
-            # Production construction cannot select it; absence is still measured with docker ps.
-            require(self.observe_app_absence(deadline), "CANDIDATE_ABSENCE_UNCERTAIN")
+        try:
+            self.run("compose", "-p", self.project, "--project-directory", str(self.repo),
+              "--env-file", str(self.env_file), "-f", plan["configs"]["candidate"]["path"], "up", "--no-start", "--no-deps",
+              "--no-build", "--pull", "never", "app", deadline=deadline)
+        except Denied as error:
+            # A failed create is not itself proof of absence. Require a fresh,
+            # successful full observation and unchanged persistence before
+            # completing the attributed-absence receipt. Observation errors,
+            # timeouts and a partially created container remain fail-closed.
+            if str(error) != "DOCKER_COMMAND_FAILED":
+                raise
+            observed = self.snapshot(deadline)
+            require(observed["app"] is None, "FAILED_CREATE_LEFT_CANDIDATE")
+            self.validate_boundary(plan, observed, deadline)
             return None
-        self.run("compose", "-p", self.project, "--project-directory", str(self.repo),
-          "--env-file", str(self.env_file), "-f", plan["configs"]["candidate"]["path"], "up", "--no-start", "--no-deps",
-          "--no-build", "--pull", "never", "app", deadline=deadline)
         ids = self.ids("app", deadline); require(len(ids) == 1, "CANDIDATE_CREATION_UNOBSERVED")
         self.created_callback(ids[0])
         raw = self.inspect("container", ids[0], deadline)
