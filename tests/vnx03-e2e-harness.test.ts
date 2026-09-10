@@ -133,6 +133,10 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   assert.match(compose, /crm-n14:[\s\S]*INTERNAL_SESSION_MODE: registry[\s\S]*COMMERCIAL_LEAD_INBOX_MODE: enforced/u);
   assert.match(runner, /provision-n14\.ts[\s\S]*crm-n14 crm-browser-proxy[\s\S]*n14-commercial-browser\.spec\.ts/u);
   assert.match(browser, /getByRole\('button', \{ name: 'Login interno' \}\)\.click\(\)/u);
+  assert.match(browser, /waitForURL\(\(url\) => url\.pathname === '\/dashboard'/u);
+  assert.match(browser, /n14-login-failure-\$\{identity\}\.json/u);
+  assert.match(browser, /registryCookiePresent/u);
+  assert.doesNotMatch(browser, /cookie\.value|password[^\n]*JSON\.stringify/u);
   assert.match(browser, /Prendi in carico[\s\S]*Promise\.allSettled/u);
   assert.match(browser, /claimRequestsProcessed: responses\.length/u);
   assert.match(browser, /foreign_first_response[\s\S]*N14_PERMISSION_DENIED/u);

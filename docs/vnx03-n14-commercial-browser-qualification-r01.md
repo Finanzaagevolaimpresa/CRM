@@ -24,6 +24,12 @@ DB provano owner, versione, SLA, activity e audit invariati. Una sonda supplemen
 sessione comprova il diniego N14 specifico senza dedurlo da un generico HTTP 500. Anonimo e utente
 inattivo non accedono.
 
+Per ogni commerciale attivo il helper non prosegue al caricamento dell'inbox finché il redirect
+autentico a `/dashboard` non è concluso. Se tale contratto fallisce, prima del cleanup salva una
+diagnostica minimizzata con fase, path corrente e soli indicatori booleani per redirect, messaggio
+di login e presenza del cookie registry; non registra valore del cookie, password, token, hash,
+header o dump di environment.
+
 Gli assert DB controllano attribution N13, owner, versioni, sequenze activity, session id registry,
 timestamp/outcome SLA e assenza di record N15. Screenshot ed evidenze JSON contengono esclusivamente
 identità `.invalid`; l'ingresso browser CRM, come quello WordPress, è pubblicato solo su loopback.

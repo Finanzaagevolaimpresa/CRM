@@ -40,12 +40,51 @@ function assertRejection(scenario: 'stale_claim' | 'foreign_first_response', cod
   assert.match(output, /"stateUnchanged":true/u);
 }
 
-async function login(context: BrowserContext, email: string) {
+async function submitLogin(context: BrowserContext, email: string) {
   const page = await context.newPage();
   await page.goto(`${crmUrl}/login`);
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click();
+  return page;
+}
+
+async function writeLoginFailureDiagnostic(
+  page: Page,
+  context: BrowserContext,
+  identity: 'commercial_one' | 'commercial_two',
+) {
+  const current = new URL(page.url());
+  const cookies = await context.cookies(crmUrl);
+  writeFileSync(join(evidenceDirectory, `n14-login-failure-${identity}.json`), `${JSON.stringify({
+    phase: 'ACTIVE_COMMERCIAL_LOGIN',
+    syntheticIdentity: identity,
+    currentPath: `${current.pathname}${current.search}`,
+    expectedOrigin: current.origin === new URL(crmUrl).origin,
+    dashboardReached: current.pathname === '/dashboard',
+    invalidLoginShown: current.pathname === '/login' && current.searchParams.get('error') === 'invalid',
+    registryCookiePresent: cookies.some(({ name }) => name === 'fai_vnx03_n14_session'),
+    loginHeadingVisible: await page.getByRole('heading', { name: 'Accesso interno FAI' }).isVisible().catch(() => false),
+  }, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function loginActive(
+  context: BrowserContext,
+  email: string,
+  identity: 'commercial_one' | 'commercial_two',
+) {
+  const page = await context.newPage();
+  try {
+    await page.goto(`${crmUrl}/login`);
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Login interno' }).click();
+    await page.waitForURL((url) => url.pathname === '/dashboard', { timeout: 15_000 });
+  } catch (error) {
+    await writeLoginFailureDiagnostic(page, context, identity);
+    throw error;
+  }
+  await expect(page).toHaveURL(`${crmUrl}/dashboard`);
   return page;
 }
 
@@ -82,12 +121,12 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   await expect(page).toHaveURL(/\/login$/u);
 
   const inactive = await browser.newContext();
-  const inactivePage = await login(inactive, 'commercial.inactive@vnx03.invalid');
+  const inactivePage = await submitLogin(inactive, 'commercial.inactive@vnx03.invalid');
   await expect(inactivePage).toHaveURL(/\/login\?error=invalid$/u);
   await inactive.close();
 
   const owner = await browser.newContext();
-  const ownerPage = await login(owner, 'commercial.one@vnx03.invalid');
+  const ownerPage = await loginActive(owner, 'commercial.one@vnx03.invalid', 'commercial_one');
   await ownerPage.goto(`${crmUrl}/leads/inbox?queue=unassigned`);
   await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
   const duplicatePage = await owner.newPage();
@@ -134,7 +173,7 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
     });
 
   const other = await browser.newContext();
-  const otherPage = await login(other, 'commercial.two@vnx03.invalid');
+  const otherPage = await loginActive(other, 'commercial.two@vnx03.invalid', 'commercial_two');
   await otherPage.goto(`${crmUrl}/leads/inbox?queue=open`);
   await expect(otherPage.getByText('VNX03 N14 Browser', { exact: true })).toHaveCount(0);
   await otherPage.goto(`${crmUrl}${leadHref}`);
