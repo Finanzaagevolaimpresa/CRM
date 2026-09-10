@@ -15,6 +15,10 @@ import {
   type RecordCommunicationIntentHeldInputV1,
 } from '../../src/lib/communication-intent-persistence';
 import {
+  claimCommercialLeadInboxItem,
+  initializeCommercialLeadInboxItem,
+} from '../../src/lib/commercial-lead-inbox';
+import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
 } from './ai-orchestrator-db-test-guard';
@@ -359,6 +363,55 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
     assert.equal(Number((await oldClient.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations"`)[0]?.count), 43);
     await assert.rejects(runCommunicationPersistenceTransactionV1(oldClient, (tx) => recordCommunicationIntentHeldV1(tx, authority, input(11))),
       (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_SCHEMA_UNAVAILABLE');
+    const environment = process.env as Record<string, string | undefined>;
+    const previousEnvironment = { inbox: environment.COMMERCIAL_LEAD_INBOX_MODE, session: environment.INTERNAL_SESSION_MODE,
+      app: environment.APP_ENV, node: environment.NODE_ENV, optIn: environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN };
+    environment.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+    environment.INTERNAL_SESSION_MODE = 'registry';
+    environment.APP_ENV = 'test';
+    environment.NODE_ENV = 'test';
+    const userId = '00000000-0000-4000-8000-000000154302';
+    const sessionId = '00000000-0000-4000-8000-000000154300';
+    try {
+      await oldClient.user.create({ data: { id: userId, email: 'schema43@n15.invalid', name: 'N15 Schema43',
+        passwordHash: 'synthetic-not-a-real-password-hash', role: 'commerciale', active: true } });
+      await oldClient.internalSession.create({ data: { id: sessionId, userId, tokenDigest: Buffer.alloc(32, 43),
+        expiresAt: new Date('2099-01-01T00:00:00.000Z') } });
+      await oldClient.commercialLeadSlaPolicyVersion.create({ data: { id: '00000000-0000-4000-8000-000000154301',
+        policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: 1, status: 'ACTIVE', calendarCode: 'CONTINUOUS_24X7',
+        timezoneCode: 'UTC', responseTargetSeconds: 3600, createdById: userId } });
+      const actor = { userId, sessionId };
+      const createItem = async (suffix: string) => {
+        const lead = await oldClient.lead.create({ data: { id: `n15-schema43-lead-${suffix}`, firstName: 'Synthetic',
+          lastName: suffix, source: 'CRM', leadSource: 'manuale' } });
+        const item = await initializeCommercialLeadInboxItem(oldClient, { leadId: lead.id, actor,
+          attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' });
+        return { lead, item };
+      };
+      const disabled = await createItem('disabled');
+      delete environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN;
+      await claimCommercialLeadInboxItem(oldClient, { leadId: disabled.lead.id, actor, expectedInboxVersion: 1 });
+      assert.equal((await oldClient.lead.findUniqueOrThrow({ where: { id: disabled.lead.id } })).assignedToId, userId);
+      const enabled = await createItem('enabled');
+      environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN = 'N15_SYNTHETIC_SELF_CLAIM_V1';
+      await assert.rejects(claimCommercialLeadInboxItem(oldClient, {
+        leadId: enabled.lead.id, actor, expectedInboxVersion: 1,
+      }), (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_SCHEMA_UNAVAILABLE');
+      assert.equal((await oldClient.lead.findUniqueOrThrow({ where: { id: enabled.lead.id } })).assignedToId, null);
+      assert.equal((await oldClient.commercialLeadInboxItem.findUniqueOrThrow({ where: { id: enabled.item.id } })).version, 1);
+      assert.equal(await oldClient.commercialLeadActivity.count({ where: {
+        inboxItemId: enabled.item.id, activityType: 'CLAIMED',
+      } }), 0);
+      assert.equal(await oldClient.auditLog.count({ where: {
+        entityId: enabled.item.id, event: 'commercial_lead_inbox_claimed',
+      } }), 0);
+    } finally {
+      for (const [key, value] of Object.entries({ COMMERCIAL_LEAD_INBOX_MODE: previousEnvironment.inbox,
+        INTERNAL_SESSION_MODE: previousEnvironment.session, APP_ENV: previousEnvironment.app,
+        NODE_ENV: previousEnvironment.node, N15_SYNTHETIC_SELF_CLAIM_OPT_IN: previousEnvironment.optIn })) {
+        if (value === undefined) delete environment[key]; else environment[key] = value;
+      }
+    }
     cpSync(join('prisma/migrations', migrationName), join(migrationsDirectory, migrationName), { recursive: true });
     execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000 });
     assert.equal(Number((await oldClient.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations"`)[0]?.count), 44);

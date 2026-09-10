@@ -12,6 +12,12 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { LEAD_EVENT_SCHEMA_VERSION } from './lead-event-contract';
 import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
+import {
+  isN15SyntheticSelfClaimAdmitted,
+  N15_SYNTHETIC_DATABASE_NAME,
+  N15_SYNTHETIC_DATABASE_SENTINEL,
+} from './n15-synthetic-self-claim-admission';
+import type { CommunicationPersistenceTransactionV1 } from './communication-intent-persistence';
 
 export const COMMERCIAL_LEAD_INBOX_TRANSACTION = Object.freeze({
   attempts: 3,
@@ -32,7 +38,10 @@ export type CommercialLeadFaultPoint =
   | 'AFTER_LEAD'
   | 'AFTER_CYCLE'
   | 'AFTER_ACTIVITY'
-  | 'AFTER_AUDIT';
+  | 'AFTER_AUDIT'
+  | 'N15_AFTER_INTENT'
+  | 'N15_AFTER_DECISION'
+  | 'N15_AFTER_AGGREGATE';
 
 export type CommercialLeadAttribution = Readonly<{
   originKind: CommercialLeadOriginKind;
@@ -90,23 +99,32 @@ function retryable(error: unknown) {
 
 async function transaction<T>(
   db: PrismaClient,
-  operation: (tx: Prisma.TransactionClient, commandNow: Date) => Promise<T>,
+  operation: (
+    tx: Prisma.TransactionClient,
+    commandNow: Date,
+    n15Scope?: CommunicationPersistenceTransactionV1,
+  ) => Promise<T>,
+  n15Synthetic = false,
 ) {
   for (let attempt = 1; attempt <= COMMERCIAL_LEAD_INBOX_TRANSACTION.attempts; attempt += 1) {
     try {
-      return await db.$transaction(async (tx) => {
+      const action = async (tx: Prisma.TransactionClient, scope?: CommunicationPersistenceTransactionV1) => {
         await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${COMMERCIAL_LEAD_INBOX_TRANSACTION.lockTimeoutMs}ms'`);
         await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '${COMMERCIAL_LEAD_INBOX_TRANSACTION.statementTimeoutMs}ms'`);
         const clockRows = await tx.$queryRaw<Array<{ now: Date }>>`
           SELECT clock_timestamp()::timestamptz(3) AS now
         `;
         const commandNow = clockRows[0]?.now ?? fail('N14_VERSION_CONFLICT');
-        return operation(tx, commandNow);
-      }, {
+        return operation(tx, commandNow, scope);
+      };
+      const options = {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         maxWait: COMMERCIAL_LEAD_INBOX_TRANSACTION.maxWaitMs,
         timeout: COMMERCIAL_LEAD_INBOX_TRANSACTION.timeoutMs,
-      });
+      } as const;
+      if (!n15Synthetic) return await db.$transaction(action, options);
+      const { runCommunicationPersistenceTransactionV1 } = await import('./communication-intent-persistence');
+      return await runCommunicationPersistenceTransactionV1(db, (scope) => action(scope.client, scope), options);
     } catch (error) {
       if (!retryable(error)) throw error;
       if (attempt === COMMERCIAL_LEAD_INBOX_TRANSACTION.attempts) fail('N14_VERSION_CONFLICT');
@@ -452,7 +470,22 @@ async function mutateOwner(
   }>,
 ) {
   requireEnforcedMode();
-  return transaction(db, async (tx, commandNow) => {
+  const n15Synthetic = input.activityType === 'CLAIMED' && isN15SyntheticSelfClaimAdmitted();
+  return transaction(db, async (tx, commandNow, n15Scope) => {
+    if (n15Synthetic) {
+      const rows = await tx.$queryRaw<Array<{
+        databaseName: string;
+        sentinel: string | null;
+      }>>`
+        SELECT CURRENT_DATABASE() AS "databaseName",
+          SHOBJ_DESCRIPTION(database_row.oid, 'pg_database') AS "sentinel"
+        FROM pg_database database_row WHERE database_row.datname = CURRENT_DATABASE()
+      `;
+      if (rows[0]?.databaseName !== N15_SYNTHETIC_DATABASE_NAME
+        || rows[0].sentinel !== N15_SYNTHETIC_DATABASE_SENTINEL) {
+        throw new Error('N15_SYNTHETIC_DATABASE_IDENTITY_INVALID');
+      }
+    }
     await authorizeActor(tx, input.actor, input.requirement);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
@@ -478,7 +511,7 @@ async function mutateOwner(
       where: { id: item.id }, data: { version: item.version + 1, updatedAt: commandNow },
     });
     inject(input.faultAt, 'AFTER_ITEM');
-    await appendActivity(tx, {
+    const activity = await appendActivity(tx, {
       itemId: item.id, activityType: input.activityType, actor: input.actor,
       reasonCode: input.reasonCode, assigneeBeforeId: lead.assignedToId,
       assigneeAfterId: input.targetUserId, versionBefore: item.version,
@@ -489,8 +522,21 @@ async function mutateOwner(
       state: item.state, version: updated.version, reasonCode: input.reasonCode,
     });
     inject(input.faultAt, 'AFTER_AUDIT');
+    if (n15Synthetic) {
+      if (!n15Scope) throw new Error('N15_SYNTHETIC_SELF_CLAIM_TRANSACTION_REQUIRED');
+      const { recordN15SyntheticSelfClaim } = await import('./n15-synthetic-self-claim');
+      await recordN15SyntheticSelfClaim(n15Scope, activity, (point) => {
+        if ((point === 'AFTER_INTENT' && input.faultAt === 'N15_AFTER_INTENT')
+          || (point === 'AFTER_DECISION' && input.faultAt === 'N15_AFTER_DECISION')) {
+          throw new Error(`N14_SYNTHETIC_FAULT_${point}`);
+        }
+      });
+      if (input.faultAt === 'N15_AFTER_AGGREGATE') {
+        throw new Error('N14_SYNTHETIC_FAULT_N15_AFTER_AGGREGATE');
+      }
+    }
     return updated;
-  });
+  }, n15Synthetic);
 }
 
 export function claimCommercialLeadInboxItem(db: PrismaClient, input: Readonly<{
