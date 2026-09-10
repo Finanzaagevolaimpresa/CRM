@@ -535,7 +535,7 @@ jobs:
           test ! -e /run/fai-crm-n05
           sudo mkdir -m 0700 /run/fai-crm-n05
           sudo chown "$(id -u):$(id -g)" /run/fai-crm-n05
-          trap 'rm -f /run/fai-crm-n05/n05-failed-app-return.lock; rmdir /run/fai-crm-n05' EXIT
+          trap 'rm -f /run/fai-crm-n05/n05-failed-app-return.lock; sudo rmdir /run/fai-crm-n05' EXIT
           python3 -B -m unittest -v tests/n05/test_failed_app_return.py
       - name: Real Docker synthetic return and persistence drill
         env:
