@@ -344,10 +344,14 @@ test('N15 admitted rejection paths preserve N14 state and create no aggregate', 
   };
   await withN15SyntheticProfile(async () => {
     for (const [ordinal, sessionData] of [
-      [1516, { revokedAt: new Date() }],
-      [1517, { expiresAt: new Date(0) }],
+      [1516, { revokedAt: new Date('2098-01-01T00:00:00.000Z') }],
+      [1517, {
+        createdAt: new Date('2020-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2020-01-02T00:00:00.000Z'),
+      }],
     ] as const) {
       const { lead, item } = await fixture(ordinal);
+      const sessionBefore = await client().internalSession.findUniqueOrThrow({ where: { id: actor.sessionId } });
       await client().internalSession.update({ where: { id: actor.sessionId }, data: sessionData });
       const before = await snapshot(lead.id, item.id);
       try {
@@ -357,7 +361,9 @@ test('N15 admitted rejection paths preserve N14 state and create no aggregate', 
         assert.deepEqual(await snapshot(lead.id, item.id), before);
       } finally {
         await client().internalSession.update({ where: { id: actor.sessionId }, data: {
-          revokedAt: null, expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+          createdAt: sessionBefore.createdAt,
+          expiresAt: sessionBefore.expiresAt,
+          revokedAt: sessionBefore.revokedAt,
         } });
       }
     }
