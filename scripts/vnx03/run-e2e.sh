@@ -58,9 +58,14 @@ export COMPOSE_PROJECT_NAME="fai-vnx03-${project_suffix}"
 export VNX03_SOURCE_COMMIT="$source_commit"
 export VNX03_SOURCE_TREE="$source_tree"
 export VNX03_WP_PORT="${VNX03_WP_PORT:-18083}"
+export VNX03_CRM_PORT="${VNX03_CRM_PORT:-18084}"
 [[ "$VNX03_WP_PORT" =~ ^[0-9]+$ ]] || fail 'VNX03_WORDPRESS_PORT_INVALID'
 (( VNX03_WP_PORT >= 1024 && VNX03_WP_PORT <= 65535 )) || fail 'VNX03_WORDPRESS_PORT_INVALID'
+[[ "$VNX03_CRM_PORT" =~ ^[0-9]+$ ]] || fail 'VNX03_CRM_PORT_INVALID'
+(( VNX03_CRM_PORT >= 1024 && VNX03_CRM_PORT <= 65535 )) || fail 'VNX03_CRM_PORT_INVALID'
+[[ "$VNX03_CRM_PORT" != "$VNX03_WP_PORT" ]] || fail 'VNX03_BROWSER_PORT_COLLISION'
 export VNX03_WORDPRESS_PUBLIC_URL="http://127.0.0.1:${VNX03_WP_PORT}"
+export VNX03_CRM_PUBLIC_URL="http://127.0.0.1:${VNX03_CRM_PORT}"
 export VNX03_COMPOSE_FILE="$repo_root/$COMPOSE_RELATIVE_PATH"
 export VNX03_EVIDENCE_DIR="$evidence_dir"
 export VNX03_DOCKER_CONTEXT="$docker_context"
@@ -97,12 +102,38 @@ node -e '
 compose=(docker compose --project-directory "$repo_root" -p "$COMPOSE_PROJECT_NAME" -f "$VNX03_COMPOSE_FILE")
 compose_resources_created=false
 cleanup_status='NOT_CREATED'
+cleanup_verification='NOT_RUN'
+verify_project_cleanup() {
+  local containers volumes networks image_name image_ids
+  containers="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_CONTAINERS'; return 1; }
+  volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_VOLUMES'; return 1; }
+  networks="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_NETWORKS'; return 1; }
+  if [[ -n "$containers" || -n "$volumes" || -n "$networks" ]]; then
+    cleanup_verification='RESOURCES_REMAIN'
+    return 1
+  fi
+  for image_name in \
+    "$COMPOSE_PROJECT_NAME-harness:$source_commit" \
+    "$COMPOSE_PROJECT_NAME-crm:$source_commit" \
+    "$COMPOSE_PROJECT_NAME-wordpress:$source_commit"; do
+    image_ids="$(docker image ls --quiet --no-trunc "$image_name")" \
+      || { cleanup_verification='INVENTORY_FAILED_IMAGES'; return 1; }
+    if [[ -n "$image_ids" ]]; then
+      cleanup_verification='IMAGES_REMAIN'
+      return 1
+    fi
+  done
+  cleanup_verification='VERIFIED_ABSENT'
+}
 cleanup() {
   local command_status=$?
   trap - EXIT
   set +e
   if [[ "$compose_resources_created" == true ]]; then
-    if "${compose[@]}" down --volumes --remove-orphans --timeout 20 >/dev/null 2>&1; then
+    if "${compose[@]}" --profile n14 down --volumes --remove-orphans --timeout 20 >/dev/null 2>&1; then
       cleanup_status='REMOVED_CONTAINERS_NETWORKS_VOLUMES'
       local image_names=(
         "$COMPOSE_PROJECT_NAME-harness:$source_commit"
@@ -126,6 +157,9 @@ cleanup() {
     else
       cleanup_status='FAILED_RESOURCE_REMOVAL'
     fi
+    if ! verify_project_cleanup; then
+      cleanup_status='FAILED_CLEANUP_VERIFICATION'
+    fi
   fi
   case "$runtime_dir" in
     "$runtime_base"/fai-vnx03.*)
@@ -135,9 +169,15 @@ cleanup() {
   esac
   node -e '
     const { writeFileSync } = require("node:fs");
-    writeFileSync(process.argv[1], `${JSON.stringify({ cleanup: process.argv[2] })}\n`, { mode: 0o600 });
-  ' "$evidence_dir/cleanup.json" "$cleanup_status" \
+    writeFileSync(process.argv[1], `${JSON.stringify({
+      cleanup: process.argv[2], verification: process.argv[3],
+      resourcesAbsent: process.argv[3] === "VERIFIED_ABSENT",
+      originalCommandSucceeded: process.argv[4] === "0"
+    })}\n`, { mode: 0o600 });
+  ' "$evidence_dir/cleanup.json" "$cleanup_status" "$cleanup_verification" "$command_status" \
     || cleanup_status='FAILED_EVIDENCE_WRITE'
+  printf 'VNX03_CLEANUP_STATUS=%s VNX03_CLEANUP_VERIFICATION=%s\n' \
+    "$cleanup_status" "$cleanup_verification"
   if [[ "$command_status" -eq 0 && "$cleanup_status" == FAILED* ]]; then
     command_status=1
   fi
@@ -174,6 +214,7 @@ export VNX03_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_AUTH_SECRET="$(openssl rand -hex 32)"
+export VNX03_COMMERCIAL_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
 export VNX03_WORDPRESS_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_WORDPRESS_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
 export VNX03_WORDPRESS_SECURE_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
@@ -237,6 +278,28 @@ npx playwright test tests/vnx03/wpforms-https-e2e.spec.ts \
   --workers=1 \
   --reporter=line \
   --output="$runtime_dir/playwright-output"
+
+# N14 is enabled only after its synthetic policy/users preflight. The historical
+# CRM and VNX03 assertions above remain in legacy-session/N14-disabled mode.
+"${compose[@]}" run --rm -T \
+  -e COMMERCIAL_LEAD_INBOX_MODE=enforced \
+  -e VNX03_COMMERCIAL_PASSWORD \
+  harness node --import tsx tests/vnx03/provision-n14.ts
+"${compose[@]}" --profile n14 up -d --wait --wait-timeout 120 crm-n14 crm-browser-proxy
+curl --fail --silent --show-error --max-time 10 "$VNX03_CRM_PUBLIC_URL/login" >/dev/null
+npx playwright test tests/vnx03/n14-commercial-browser.spec.ts \
+  --workers=1 \
+  --reporter=line \
+  --output="$runtime_dir/playwright-output-n14"
+
+node -e '
+  const { writeFileSync } = require("node:fs");
+  writeFileSync(process.argv[1], `${JSON.stringify({
+    qualification: "VNX-03-N14-SYNTHETIC", n14Enabled: true,
+    internalSessionMode: "registry", n15Enabled: false,
+    browserIngressLoopbackOnly: true, productionContact: false
+  }, null, 2)}\n`, { mode: 0o600 });
+' "$evidence_dir/n14-runtime.json"
 
 "${compose[@]}" images --format json > "$evidence_dir/images.json"
 node -e '
