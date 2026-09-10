@@ -69,7 +69,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mobile-navigation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mobile-nav-evidence
+          path: |
+            ${{ runner.temp }}/mobile-nav-evidence
+            test-results/mobile-nav
           if-no-files-found: error
           retention-days: 14
 

@@ -1,5 +1,49 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    const events: unknown[] = [];
+    Object.assign(window, { mobileNavEvents: events });
+    const describe = (target: EventTarget | null) => target instanceof HTMLElement
+      ? { tag: target.tagName, text: target === document.body ? "body" : target.textContent?.trim().slice(0, 50), rects: target.getClientRects().length }
+      : null;
+    const record = (event: Event) => {
+      events.push({
+        event: event.type, time: Math.round(performance.now()),
+        target: describe(event.target), active: describe(document.activeElement),
+        related: event instanceof FocusEvent ? describe(event.relatedTarget) : null,
+        width: innerWidth, scrollY, ready: document.readyState,
+      });
+      if (events.length > 80) events.shift();
+    };
+    for (const type of ["focusin", "focusout", "click"]) document.addEventListener(type, record, true);
+    for (const type of ["resize", "scroll", "load"]) window.addEventListener(type, record, true);
+    window.matchMedia("(max-width: 767px)").addEventListener("change", record);
+  });
+});
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  const diagnostics = await page.evaluate(() => {
+    const describe = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return { tag: element.tagName, className: element.className, top: box.top, height: box.height, scrollHeight: element.scrollHeight, scrollTop: element.scrollTop, overflowY: style.overflowY, display: style.display };
+    };
+    return {
+      url: location.href, width: innerWidth, height: innerHeight, scrollY,
+      body: describe(document.body), html: describe(document.documentElement),
+      content: describe(document.querySelector('[data-testid="page-content"]')),
+      underWheel: describe(document.elementFromPoint(innerWidth / 2, innerHeight - 30)),
+      active: describe(document.activeElement),
+      events: (window as Window & { mobileNavEvents?: unknown[] }).mobileNavEvents,
+    };
+  });
+  console.log("MOBILE_NAV_FAILURE_STATE", JSON.stringify(diagnostics));
+  await testInfo.attach("navigation-diagnostics", { body: JSON.stringify(diagnostics, null, 2), contentType: "application/json" });
+});
+
 for (const viewport of [
   { width: 320, height: 568 },
   { width: 390, height: 844 },
