@@ -375,12 +375,15 @@ test('N15 admitted rejection paths preserve N14 state and create no aggregate', 
     assert.deepEqual(await snapshot(wrongVersion.lead.id, wrongVersion.item.id), wrongVersionBefore);
 
     const closed = await fixture(1529);
-    await client().commercialLeadInboxItem.update({
-      where: { id: closed.item.id }, data: { state: 'CLOSED', closedAt: new Date() },
+    await assignCommercialLeadInboxItem(client(), {
+      leadId: closed.lead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
+    });
+    await closeCommercialLeadInboxItem(client(), {
+      leadId: closed.lead.id, actor, expectedInboxVersion: 2, reasonCode: 'LOST',
     });
     const closedBefore = await snapshot(closed.lead.id, closed.item.id);
     await assert.rejects(claimCommercialLeadInboxItem(client(), {
-      leadId: closed.lead.id, actor, expectedInboxVersion: 1,
+      leadId: closed.lead.id, actor, expectedInboxVersion: 3,
     }), expectedCode('N14_ITEM_NOT_OPEN'));
     assert.deepEqual(await snapshot(closed.lead.id, closed.item.id), closedBefore);
 
