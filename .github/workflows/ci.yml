@@ -53,7 +53,7 @@ jobs:
           test "$(git -C "$baseline_root" rev-parse HEAD^{tree})" = "$MOBILE_NAV_BASELINE_TREE"
           mkdir -p "$baseline_root/tests/mobile-nav"
           cp -R tests/mobile-nav/fixture "$baseline_root/tests/mobile-nav/fixture"
-          ln -s "$PWD/node_modules" "$baseline_root/node_modules"
+          cp -a "$PWD/node_modules" "$baseline_root/node_modules"
           node tests/mobile-nav/measure-navigation.mjs "$baseline_root" baseline "$MOBILE_NAV_EVIDENCE_DIR" 3418
           node tests/mobile-nav/measure-navigation.mjs "$PWD" candidate "$MOBILE_NAV_EVIDENCE_DIR" 3419
           printf '%s\n' \
