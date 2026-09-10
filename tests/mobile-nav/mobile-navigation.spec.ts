@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
       });
       if (events.length > 80) events.shift();
     };
-    for (const type of ["focusin", "focusout", "click"]) document.addEventListener(type, record, true);
+    for (const type of ["focusin", "focusout", "click", "wheel"]) document.addEventListener(type, record, true);
     for (const type of ["resize", "scroll", "load"]) window.addEventListener(type, record, true);
     window.matchMedia("(max-width: 767px)").addEventListener("change", record);
   });
@@ -78,6 +78,8 @@ for (const viewport of [
     await finalAdminEntry.click();
     await expect(page).toHaveURL(/\/audit-log$/);
     await expect(page.getByRole("button", { name: "Apri menu" })).toHaveAttribute("aria-expanded", "false");
+    // Finish the router scroll restoration before issuing a new user scroll.
+    await expect.poll(() => page.evaluate(() => scrollY)).toBe(0);
     await page.mouse.move(viewport.width / 2, viewport.height - 30);
     const scrollBeforeWheel = await page.evaluate(() => scrollY);
     await page.mouse.wheel(0, 900);
@@ -103,8 +105,15 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
 });
 
 test("resize conserva il focus su controlli visibili", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  // Exercise an interactive control before checking effect-driven resize behavior.
+  await page.getByRole("button", { name: "Apri menu" }).click();
+  await expect(page.getByRole("button", { name: "Chiudi menu" })).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Apri menu" })).toBeFocused();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.getByRole("link", { name: /Gestionale CRM/ })).toBeFocused();
   await page.getByRole("link", { name: "Audit log" }).focus();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "Apri menu" })).toBeFocused();
