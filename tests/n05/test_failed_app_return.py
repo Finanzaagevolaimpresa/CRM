@@ -53,6 +53,64 @@ def real_receipt(p,e,d,reason='unhealthy'):
  return receipt,request
 
 class Protocol(unittest.TestCase):
+ def test_forward_preserves_source_when_return_artifacts_are_unavailable(self):
+  for failure in ('image','config','replay'):
+   p=plan();e=Engine(p)
+   if failure=='image':e.image=lambda value,deadline:value!=p['return_image']
+   if failure=='config':e.config_digest=lambda which,deadline:'0'*64 if which=='return' else p['configs'][which]['sha256']
+   if failure=='replay':e.config_digest=lambda which,deadline:(_ for _ in ()).throw(n05.Denied('FROZEN_COMPOSE_REPLAY_MISMATCH')) if which=='return' else p['configs'][which]['sha256']
+   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-return-preflight-') as d:
+    pathlib.Path(d).chmod(0o700)
+    with self.assertRaises(n05.Denied):real_receipt(p,e,d)
+    self.assertEqual(e.snap['app']['id'],p['source_app']['id'])
+    self.assertFalse(pathlib.Path(p['receipt_path']).exists())
+ def test_output_aliases_and_existing_request_stop_forward_before_mutation(self):
+  keys=('receipt_path','return_request_path','journal_path')
+  for first,second in ((0,1),(0,2),(1,2)):
+   p=plan();p[keys[second]]=p[keys[first]];e=Engine(p);e.remove_source=mock.Mock()
+   with self.assertRaisesRegex(n05.Denied,'PROTOCOL_OUTPUT_PATH_ALIAS'):
+    n05.ForwardRecorder(e,lambda:1000).run(p,pathlib.Path(p['receipt_path']))
+   e.remove_source.assert_not_called()
+  p=plan();p['receipt_path']=p['configs']['return']['path']
+  with self.assertRaisesRegex(n05.Denied,'PROTOCOL_OUTPUT_INPUT_ALIAS'):n05.validate_plan(p,1000)
+  for path in ('/private/./receipt.json','/private/a/../receipt.json','//private/receipt.json'):
+   p=plan();p['receipt_path']=path
+   with self.assertRaisesRegex(n05.Denied,'PRIVATE_OUTPUT_PATH_INVALID'):n05.validate_plan(p,1000)
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-existing-output-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);p=plan();e=Engine(p)
+   for key in keys:p[key]=str(private/(key+'.json'))
+   request=pathlib.Path(p['return_request_path']);request.write_text('{}');request.chmod(0o600)
+   with self.assertRaisesRegex(n05.Denied,'PROTOCOL_OUTPUT_ALREADY_EXISTS'):
+    n05.ForwardRecorder(e,lambda:1000).run(p,pathlib.Path(p['receipt_path']))
+   self.assertEqual(e.snap['app']['id'],p['source_app']['id'])
+ def test_resource_consumer_inventory_includes_unlabeled_containers_and_fails_closed(self):
+  p=plan();e=n05.DockerEngine(p,ROOT,command=['docker']);queries=[]
+  values={'network=fai-crm_default':'a'*64,'volume=fai-crm_crm_documents':'b'*64,'volume=fai-crm_postgres_data':'c'*64}
+  e.run=lambda *args,**kwargs:(queries.append(args) or values[args[-1]])
+  self.assertEqual(e.protected_consumers(1500),set(values.values()))
+  self.assertTrue(all(args[:4]==('ps','-aq','--no-trunc','--filter') for args in queries))
+  e.run=lambda *args,**kwargs:(_ for _ in ()).throw(n05.Denied('DAEMON_UNCERTAIN'))
+  with self.assertRaisesRegex(n05.Denied,'DAEMON_UNCERTAIN'):e.protected_consumers(1500)
+ def test_qualification_binding_covers_operational_plan_without_hash_cycle(self):
+  p=plan();binding=n05.evidence_binding(p)
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-plan-binding-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);f=private/'synthetic-parser-evidence.json'
+   document={'schema':'FAI_CRM_N05_EVIDENCE_V1','kind':'reviewed_plan','synthetic':False,'binding':binding,'result':'qualified','details':{'purpose':'parser unit fixture only'}}
+   f.write_text(n05.canonical(document));f.chmod(0o600)
+   reference={'path':str(f),'sha256':n05.hashlib.sha256(f.read_bytes()).hexdigest(),'kind':'reviewed_plan'}
+   n05.validate_evidence(reference,p,binding)
+   for section,key,value in [('candidate','id','sha256:'+'1'*64),('configs','candidate',ref('frozen-compose-candidate','f')),('source_app','id','1'*64),('postgres','id','2'*64),(None,'deadline_epoch',2100),(None,'return_request_path','/private/changed.json')]:
+    changed=copy.deepcopy(p)
+    if section:changed[section][key]=value
+    else:changed[key]=value
+    with self.assertRaisesRegex(n05.Denied,'EVIDENCE_BINDING_INVALID'):
+     n05.validate_evidence(reference,changed,n05.evidence_binding(changed))
+   changed=copy.deepcopy(p);changed['gates']['reviewed_plan']['sha256']='1'*64;changed['compatibility']['sha256']='2'*64
+   self.assertEqual(n05.evidence_binding(changed),binding)
+ def test_nonfinite_deadline_is_not_an_unbounded_operation(self):
+  for value in (float('inf'),float('-inf'),float('nan')):
+   p=plan();p['deadline_epoch']=value
+   with self.assertRaises(n05.Denied):n05.validate_plan(p,1000)
  def test_unverified_strings_are_not_gates(self):
   p=plan(); p['gates']={k:'unverified' for k in p['gates']}
   with self.assertRaisesRegex(n05.Denied,'PRODUCTION_GATES_INCOMPLETE'): n05.validate_plan(p,1000)

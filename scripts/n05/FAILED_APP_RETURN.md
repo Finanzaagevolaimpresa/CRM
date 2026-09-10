@@ -8,9 +8,13 @@ A production run uses a private `0700` directory containing `0600`, single-link 
 
 Each frozen app service must name its planned content-addressed `sha256:` image ID. Tags, including the expected display tag, are rejected as executable references before mutation. This also prevents later retagging from redirecting Compose. A running app is unhealthy only when Docker explicitly reports `unhealthy`; starting, unknown, paused, restarting and dead states do not authorize the unhealthy return.
 
+Qualification receipts include `operation_sha256`, computed from the entire operational plan after excluding only the `gates` and `compatibility` references whose files contain that binding. This avoids a hash cycle while binding candidate, frozen models, source, resources, output paths, deadline and all other operational fields. The forward receipt still hashes the complete final plan, including evidence references. Receipt, request and journal paths must be canonical, pairwise distinct, distinct from inputs, and absent before forward; all private output parents are checked before mutation.
+
 `forward` verifies the same healthy source and project invariants at the mutation boundary, records an atomic hash chain before and after removal/create/start, and creates the selected app with `docker compose up --no-start --no-deps --no-build --pull never app` before starting its recorded ID. CI checks these flags against the installed Compose help. After a failed create command, an absent candidate is returnable only after a fresh successful snapshot proves absence and unchanged persistence; an inspect error, timeout, uncertain inventory or partially created candidate is not authority.
 
 Both commands acquire the single canonical engine/project lock. If a migrator is registered, the supported forward path verifies its successful exit, ledger, engine and persistent resources, removes that exact container and rechecks inventory before the app transition. `return` writes `ATTEMPT_STARTED` durably before mutation and compares the last app observation with the exact app or absence admitted by the receipt, including ID, creation time, image, configuration and state. Any failure is retained and every later invocation for that journal is denied. PASS follows health plus repeated runtime, ledger, image, configuration and persistence checks. No retry, down migration, ledger rewrite, `down`, prune or unregistered cleanup is performed.
+
+The forward preflight verifies both candidate and return images and replayable models before removing anything, and rechecks return availability at the mutation boundary. Inventory includes all containers selected by project labels plus consumers of the protected network and both volumes, including stopped volume consumers. Unlabeled users of these resources block mutation too.
 
 ## Synthetic Docker drill
 
@@ -23,5 +27,7 @@ N05_FAILED_RETURN_SYNTHETIC_CONFIRMED=1 python3 -B tests/n05/failed_app_return_d
 ```
 
 The drill uses image-owned commands and health checks, matching the production runtime validator. A registered container name collision makes the same production adapter's candidate creation fail; there is no synthetic absence hook. The other cases produce functional failure, an unhealthy app and an exited app. A real stopped migrator is verified and removed before the forward transition. Temporary objects are inventoried even after partial Compose failures; final PASS follows cleanup verification. Native null volume metadata is retained and compared exactly, rather than replaced with an empty object.
+
+Additional Docker negatives prove that unavailable return provenance leaves source and migrator untouched, and that unlabeled volume-only or network-only consumers prevent return. The volume probes stay stopped; the network probe is actually attached. Only registered synthetic objects are removed.
 
 Synthetic evidence proves only protocol mechanics. It does **not** qualify production recovery, real artifacts, the concrete schema compatibility proof, authorization, review, host identity or change window; those remain mandatory private inputs.

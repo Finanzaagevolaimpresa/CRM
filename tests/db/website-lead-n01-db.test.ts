@@ -216,13 +216,18 @@ test('database statement deadline rolls back slow business writes but preserves 
   await db.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION n01_slow_lead() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(6); RETURN NEW; END $$`);
   await db.$executeRawUnsafe(`CREATE TRIGGER n01_slow_lead_trigger BEFORE INSERT ON "Lead" FOR EACH ROW EXECUTE FUNCTION n01_slow_lead()`);
   const started = Date.now();
+  let requestDurationMs = Number.POSITIVE_INFINITY;
   try {
-    assert.equal((await POST(request('slow-database'))).status, 503);
+    const response = await POST(request('slow-database'));
+    requestDurationMs = Date.now() - started;
+    assert.equal(response.status, 503);
   } finally {
     await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS n01_slow_lead_trigger ON "Lead"`);
     await db.$executeRawUnsafe('DROP FUNCTION IF EXISTS n01_slow_lead()');
   }
-  assert.ok(Date.now() - started < 6_000);
+  // Measure the request deadline; fixture DDL cleanup is covered by the
+  // unchanged 8-second test timeout and can wait on unrelated DB maintenance.
+  assert.ok(requestDurationMs < 6_000);
   assert.deepEqual(await counts(), { leads: 0, audits: 0, receipts: 0, evidence: 0, buckets: 1 });
 });
 

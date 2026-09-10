@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -233,10 +234,30 @@ def validate_plan(plan, now=None):
     require(plan["return_policy"] == {"allowed_reasons":["functional-failure","unhealthy","exited","absent"]},
             "RETURN_POLICY_INVALID")
     for key in ("receipt_path", "return_request_path", "journal_path"):
-        require(type(plan[key]) is str and Path(plan[key]).is_absolute(), "PRIVATE_OUTPUT_PATH_INVALID")
-    require(type(plan["deadline_epoch"]) in (int, float) and plan["deadline_epoch"] > (now or time.time()),
+        require(type(plan[key]) is str and Path(plan[key]).is_absolute() and
+                str(Path(plan[key])) == plan[key] and not plan[key].startswith("//") and
+                ".." not in Path(plan[key]).parts, "PRIVATE_OUTPUT_PATH_INVALID")
+    outputs = {plan[key] for key in ("receipt_path", "return_request_path", "journal_path")}
+    require(len(outputs) == 3, "PROTOCOL_OUTPUT_PATH_ALIAS")
+    inputs = {str(Path(reference["path"])) for reference in
+              [*plan["configs"].values(), *plan["gates"].values(), plan["compatibility"]]}
+    require(not outputs & inputs, "PROTOCOL_OUTPUT_INPUT_ALIAS")
+    require(type(plan["deadline_epoch"]) in (int, float) and math.isfinite(plan["deadline_epoch"]) and
+            plan["deadline_epoch"] > (now or time.time()),
             "DEADLINE_EXPIRED")
     return plan
+
+
+def evidence_binding(plan):
+    # Evidence files contain this binding, so their own hashes cannot be in
+    # its input. Every operational plan field, including candidate/configs,
+    # identities, output paths and deadline, remains covered.
+    operation = {key: value for key, value in plan.items() if key not in {"gates", "compatibility"}}
+    return {"run_id":plan["run_id"], "tools_commit":plan["tools"]["commit"],
+            "tools_tree":plan["tools"]["tree"], "ci_sha":plan["tools"]["ci_sha"],
+            "engine_id":plan["engine"]["id"], "project":plan["project"],
+            "return_image_id":plan["return_image"]["id"], "ledger_digest":plan["ledger"]["digest"],
+            "operation_sha256":sha(operation)}
 
 
 def validate_return_request(request, plan, receipt):
@@ -320,9 +341,14 @@ class ForwardRecorder:
 
     def run(self, plan, receipt_path):
         validate_plan(plan, self.clock())
-        require(self.engine.config_digest("candidate", plan["deadline_epoch"]) == plan["configs"]["candidate"]["sha256"],
-                "CANDIDATE_CONFIG_DRIFT")
-        require(self.engine.image(plan["candidate"], plan["deadline_epoch"]), "CANDIDATE_IMAGE_UNAVAILABLE")
+        require(receipt_path == Path(plan["receipt_path"]), "RECEIPT_PATH_MISMATCH")
+        for key in ("receipt_path", "return_request_path", "journal_path"):
+            output = Path(plan[key]); private_file(output, may_create=True)
+            require(not output.exists(), "PROTOCOL_OUTPUT_ALREADY_EXISTS")
+        for which, image_key in (("candidate", "candidate"), ("return", "return_image")):
+            require(self.engine.config_digest(which, plan["deadline_epoch"]) == plan["configs"][which]["sha256"],
+                    which.upper()+"_CONFIG_DRIFT")
+            require(self.engine.image(plan[image_key], plan["deadline_epoch"]), which.upper()+"_IMAGE_UNAVAILABLE")
         if plan["migrator"] is not None:
             finish_registered_migrator(self.engine, plan)
         before = self.engine.snapshot(plan["deadline_epoch"])
@@ -490,6 +516,14 @@ class DockerEngine:
         return self.run("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={self.project}",
                         "--filter", f"label=com.docker.compose.service={service}", deadline=deadline).split()
 
+    def protected_consumers(self, deadline):
+        consumers = set()
+        for selector in ("network="+self.project+"_default",
+                         "volume="+self.project+"_crm_documents", "volume="+self.project+"_postgres_data"):
+            consumers.update(self.run("ps", "-aq", "--no-trunc", "--filter", selector,
+                                      deadline=deadline).split())
+        return consumers
+
     def model(self, image, deadline):
         remaining = deadline - time.time(); require(remaining > 0, "DEADLINE_EXPIRED")
         env = {k: os.environ[k] for k in ("PATH", "HOME") if k in os.environ}
@@ -555,6 +589,7 @@ class DockerEngine:
         app_ids, pg_ids, migrators = self.ids("app", deadline), self.ids("postgres", deadline), self.ids("migrate", deadline)
         require(len(app_ids) <= 1 and len(pg_ids) == 1, "PROJECT_INVENTORY_INVALID")
         all_ids = self.run("ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={self.project}", deadline=deadline).split()
+        resource_consumers = self.protected_consumers(deadline)
         known = set(app_ids + pg_ids + migrators)
         pg = self.inspect("container", pg_ids[0], deadline)
         require(pg["Id"] == self.plan["postgres"]["id"] and pg["Image"] == self.plan["postgres"]["image"]
@@ -603,7 +638,7 @@ class DockerEngine:
           "postgres": {"id": pg["Id"], "image": pg["Image"], "created": pg["Created"]},
           "resources": {"volumes": volumes, "network": network},
           "postgres_healthy": pg["State"].get("Running") and (pg["State"].get("Health") or {}).get("Status") == "healthy",
-          "migrators": migrators, "foreign_containers": sorted(set(all_ids)-known),
+          "migrators": migrators, "foreign_containers": sorted((set(all_ids) | resource_consumers)-known),
           "ledger": self.ledger(pg_ids[0], deadline), "app": app}
 
     def attempted(self, run): return self._attempt
@@ -682,6 +717,10 @@ class DockerEngine:
                 snapshot["ledger"] == plan["ledger"] and not snapshot["migrators"] and
                 not snapshot["foreign_containers"], "MUTATION_BOUNDARY_DRIFT")
         require(self.image(plan["candidate" if not returning else "return_image"], deadline), "BOUNDARY_IMAGE_UNAVAILABLE")
+        if not returning:
+            require(self.image(plan["return_image"], deadline), "BOUNDARY_RETURN_IMAGE_UNAVAILABLE")
+            require(self.config_digest("return", deadline) == plan["configs"]["return"]["sha256"],
+                    "BOUNDARY_RETURN_CONFIG_DRIFT")
         version = self.run("compose","version","--short",deadline=deadline).strip().lstrip("v")
         match = re.match(r"^(\d+)\.(\d+)\.(\d+)",version)
         require(match and tuple(map(int,match.groups())) >= (2,24,4), "COMPOSE_VERSION_UNSUPPORTED")
@@ -716,10 +755,8 @@ def production_main(argv):
     request_path = Path(plan["return_request_path"])
     journal_path = Path(plan["journal_path"])
     require(receipt_path.parent == request_path.parent == plan_path.parent == journal_path.parent, "PRIVATE_RUN_DIRECTORY_MISMATCH")
-    binding = {"run_id":plan["run_id"], "tools_commit":plan["tools"]["commit"],
-               "tools_tree":plan["tools"]["tree"], "ci_sha":plan["tools"]["ci_sha"],
-               "engine_id":plan["engine"]["id"], "project":plan["project"],
-               "return_image_id":plan["return_image"]["id"], "ledger_digest":plan["ledger"]["digest"]}
+    require(plan_path not in {receipt_path, request_path, journal_path}, "PLAN_OUTPUT_PATH_ALIAS")
+    binding = evidence_binding(plan)
     for reference in plan["gates"].values(): validate_evidence(reference, plan, binding)
     validate_evidence(plan["compatibility"], plan, binding)
     for reference in [*plan["configs"].values(), *plan["gates"].values(), plan["compatibility"]]:
