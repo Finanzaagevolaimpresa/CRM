@@ -102,12 +102,38 @@ node -e '
 compose=(docker compose --project-directory "$repo_root" -p "$COMPOSE_PROJECT_NAME" -f "$VNX03_COMPOSE_FILE")
 compose_resources_created=false
 cleanup_status='NOT_CREATED'
+cleanup_verification='NOT_RUN'
+verify_project_cleanup() {
+  local containers volumes networks image_name image_ids
+  containers="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_CONTAINERS'; return 1; }
+  volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_VOLUMES'; return 1; }
+  networks="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || { cleanup_verification='INVENTORY_FAILED_NETWORKS'; return 1; }
+  if [[ -n "$containers" || -n "$volumes" || -n "$networks" ]]; then
+    cleanup_verification='RESOURCES_REMAIN'
+    return 1
+  fi
+  for image_name in \
+    "$COMPOSE_PROJECT_NAME-harness:$source_commit" \
+    "$COMPOSE_PROJECT_NAME-crm:$source_commit" \
+    "$COMPOSE_PROJECT_NAME-wordpress:$source_commit"; do
+    image_ids="$(docker image ls --quiet --no-trunc "$image_name")" \
+      || { cleanup_verification='INVENTORY_FAILED_IMAGES'; return 1; }
+    if [[ -n "$image_ids" ]]; then
+      cleanup_verification='IMAGES_REMAIN'
+      return 1
+    fi
+  done
+  cleanup_verification='VERIFIED_ABSENT'
+}
 cleanup() {
   local command_status=$?
   trap - EXIT
   set +e
   if [[ "$compose_resources_created" == true ]]; then
-    if "${compose[@]}" down --volumes --remove-orphans --timeout 20 >/dev/null 2>&1; then
+    if "${compose[@]}" --profile n14 down --volumes --remove-orphans --timeout 20 >/dev/null 2>&1; then
       cleanup_status='REMOVED_CONTAINERS_NETWORKS_VOLUMES'
       local image_names=(
         "$COMPOSE_PROJECT_NAME-harness:$source_commit"
@@ -131,6 +157,9 @@ cleanup() {
     else
       cleanup_status='FAILED_RESOURCE_REMOVAL'
     fi
+    if ! verify_project_cleanup; then
+      cleanup_status='FAILED_CLEANUP_VERIFICATION'
+    fi
   fi
   case "$runtime_dir" in
     "$runtime_base"/fai-vnx03.*)
@@ -140,9 +169,15 @@ cleanup() {
   esac
   node -e '
     const { writeFileSync } = require("node:fs");
-    writeFileSync(process.argv[1], `${JSON.stringify({ cleanup: process.argv[2] })}\n`, { mode: 0o600 });
-  ' "$evidence_dir/cleanup.json" "$cleanup_status" \
+    writeFileSync(process.argv[1], `${JSON.stringify({
+      cleanup: process.argv[2], verification: process.argv[3],
+      resourcesAbsent: process.argv[3] === "VERIFIED_ABSENT",
+      originalCommandSucceeded: process.argv[4] === "0"
+    })}\n`, { mode: 0o600 });
+  ' "$evidence_dir/cleanup.json" "$cleanup_status" "$cleanup_verification" "$command_status" \
     || cleanup_status='FAILED_EVIDENCE_WRITE'
+  printf 'VNX03_CLEANUP_STATUS=%s VNX03_CLEANUP_VERIFICATION=%s\n' \
+    "$cleanup_status" "$cleanup_verification"
   if [[ "$command_status" -eq 0 && "$cleanup_status" == FAILED* ]]; then
     command_status=1
   fi

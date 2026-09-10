@@ -53,3 +53,8 @@ usano il database già marcato dal sentinel VNX03. Worker, scheduler, dispatch, 
 N15 restano spenti. Non vengono contattati sistemi reali, non si invia alcuna comunicazione e non
 si effettua alcun collaudo o attivazione di produzione. Il cleanup VNX03 rimuove container, reti,
 volumi, immagini candidate e directory runtime creati dal job, lasciando solo evidenze minimizzate.
+Il teardown richiama esplicitamente il profilo `n14` anche se la fase è fallita prima del suo avvio.
+Poi interroga per l'esatto label Compose di progetto container anche arrestati, volumi e reti, e per
+nome le sole tre immagini candidate. Solo inventari riusciti e vuoti producono `VERIFIED_ABSENT`;
+un errore di inventario o un residuo mantiene il cleanup fail-closed. `cleanup.json` e una singola
+riga di log conservano stato e verifica minimizzati senza identificativi Docker o output grezzi.

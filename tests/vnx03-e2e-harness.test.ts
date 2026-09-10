@@ -41,8 +41,15 @@ test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   assert.match(scopeGuard, /VNX03_N15_HISTORICAL_MIGRATION_CHANGED/u);
   assert.match(scopeGuard, /protected_delta/u);
   assert.match(runner, /VNX03_NONLOCAL_DOCKER_CONTEXT_FORBIDDEN/u);
-  assert.match(runner, /down --volumes --remove-orphans/u);
+  assert.match(runner, /--profile n14 down --volumes --remove-orphans/u);
   assert.match(runner, /docker image rm/u);
+  assert.match(runner, /docker ps -aq --filter "label=com\.docker\.compose\.project=/u);
+  assert.match(runner, /docker volume ls -q --filter "label=com\.docker\.compose\.project=/u);
+  assert.match(runner, /docker network ls -q --filter "label=com\.docker\.compose\.project=/u);
+  assert.match(runner, /docker image ls --quiet --no-trunc/u);
+  assert.match(runner, /cleanup_verification='VERIFIED_ABSENT'/u);
+  assert.match(runner, /VNX03_CLEANUP_STATUS=%s VNX03_CLEANUP_VERIFICATION=%s/u);
+  assert.doesNotMatch(runner, /docker (?:system|container|volume|network|image) prune/u);
   assert.match(compose, /\$\{COMPOSE_PROJECT_NAME[^\n]*\}-harness:/u);
   assert.match(compose, /127\.0\.0\.1:\$\{VNX03_WP_PORT/u);
   assert.match(compose, /internal: true/u);
