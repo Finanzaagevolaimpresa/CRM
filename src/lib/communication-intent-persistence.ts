@@ -148,6 +148,11 @@ async function findAggregates(tx: Prisma.TransactionClient, intent: Communicatio
 export async function runCommunicationPersistenceTransactionV1<T>(
   client: PrismaClient,
   action: (scope: CommunicationPersistenceTransactionV1) => Promise<T>,
+  options?: Readonly<{
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+    maxWait?: number;
+    timeout?: number;
+  }>,
 ): Promise<T> {
   if (!client || typeof client.$transaction !== 'function') {
     throw new CommunicationPersistenceError('N15_TRANSACTION_REQUIRED');
@@ -170,7 +175,7 @@ export async function runCommunicationPersistenceTransactionV1<T>(
     } finally {
       activeTransactions.delete(scope);
     }
-  });
+  }, options);
 }
 
 export async function recordCommunicationIntentHeldV1(

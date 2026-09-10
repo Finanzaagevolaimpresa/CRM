@@ -7,6 +7,7 @@ import {
   CommunicationPersistenceError,
   createCommunicationPersistenceAuthorityV1,
 } from '../src/lib/communication-intent-persistence';
+import { isN15SyntheticSelfClaimAdmitted } from '../src/lib/n15-synthetic-self-claim-admission';
 
 test('N15 migration 44 is one additive transaction with three dedicated dormant records', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
@@ -37,7 +38,7 @@ test('N15 producer and clock require an explicit internal authority object', () 
   assert.equal(createDisabledCommunicationGateSnapshotV1().decision, 'HELD');
 });
 
-test('N15 contract stays pure and persistence has no runtime producer or activation call-site', () => {
+test('N15 contract stays pure and persistence has only the synthetic self-claim call-site', () => {
   const contract = readFileSync('src/lib/communication-backbone-contract.ts', 'utf8');
   assert.doesNotMatch(contract, /@prisma\/client|communication-intent-persistence/u);
   const sources = ['src', 'scripts', 'prisma'].flatMap((directory) => {
@@ -45,13 +46,43 @@ test('N15 contract stays pure and persistence has no runtime producer or activat
   }).filter((source) => source && /\.(?:c|m)?(?:j|t)sx?$/u.test(source)
     && source !== 'src/lib/communication-intent-persistence.ts'
     && source !== 'src/lib/communication-backbone-contract.ts');
+  const allowed = new Set([
+    'src/lib/n15-synthetic-self-claim.ts',
+    'src/lib/commercial-lead-inbox.ts',
+  ]);
   for (const source of sources) {
+    if (allowed.has(source)) continue;
     assert.doesNotMatch(
       readFileSync(source, 'utf8'),
       /recordCommunicationIntentHeldV1|communication-intent-persistence/u,
       source,
     );
   }
+  assert.match(readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8'),
+    /input\.activityType === 'CLAIMED'[\s\S]*recordN15SyntheticSelfClaim/u);
+});
+
+test('N15 synthetic self-claim admission is explicit and fail-closed', () => {
+  const admitted = {
+    APP_ENV: 'test', NODE_ENV: 'test', RUN_DB_TESTS: '1',
+    AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1',
+    AI_ORCHESTRATOR_DB_TEST_SENTINEL: 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1',
+    N15_SYNTHETIC_SELF_CLAIM_OPT_IN: 'N15_SYNTHETIC_SELF_CLAIM_V1',
+    DATABASE_URL: 'postgresql://postgres:synthetic@127.0.0.1:5432/fai_crm_test?schema=n14_test',
+  };
+  assert.equal(isN15SyntheticSelfClaimAdmitted(admitted), true);
+  assert.equal(isN15SyntheticSelfClaimAdmitted({}), false);
+  for (const patch of [
+    { APP_ENV: 'production' }, { APP_ENV: 'staging' }, { APP_ENV: 'unknown' },
+    { NODE_ENV: 'production' }, { N15_SYNTHETIC_SELF_CLAIM_OPT_IN: 'true' },
+  ]) assert.equal(isN15SyntheticSelfClaimAdmitted({ ...admitted, ...patch }), false);
+  for (const patch of [
+    { AI_ORCHESTRATOR_DB_TEST_SENTINEL: 'wrong' },
+    { DATABASE_URL: 'postgresql://remote.invalid/fai_crm_test' },
+    { DATABASE_URL: 'postgresql://127.0.0.1/another_database?schema=fai_crm_test' },
+    { DATABASE_URL: undefined },
+  ]) assert.throws(() => isN15SyntheticSelfClaimAdmitted({ ...admitted, ...patch }),
+    /N15_SYNTHETIC_DATABASE_CONFIGURATION_INVALID/u);
 });
 
 test('N15 CI qualifies migration 44 without weakening historical 43 boundaries', () => {
