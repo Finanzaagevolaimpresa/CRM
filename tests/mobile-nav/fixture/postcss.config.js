@@ -1,2 +1,6 @@
-/* eslint-disable @typescript-eslint/no-require-imports */
-module.exports = require('../../../postcss.config.js');
+module.exports = {
+  plugins: {
+    tailwindcss: { config: require.resolve('./tailwind.config.js') },
+    autoprefixer: {},
+  },
+};
