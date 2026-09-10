@@ -34,8 +34,10 @@ for (const viewport of [
     await finalAdminEntry.click();
     await expect(page).toHaveURL(/\/audit-log$/);
     await expect(page.getByRole("button", { name: "Apri menu" })).toHaveAttribute("aria-expanded", "false");
+    await page.mouse.move(viewport.width / 2, viewport.height - 30);
+    const scrollBeforeWheel = await page.evaluate(() => scrollY);
     await page.mouse.wheel(0, 900);
-    expect(await page.evaluate(() => scrollY)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scrollBeforeWheel);
   });
 }
 
@@ -63,6 +65,16 @@ test("resize conserva il focus su controlli visibili", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "Apri menu" })).toBeFocused();
 
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.getByRole("link", { name: /Gestionale CRM/ })).toBeFocused();
+  await expect(page.getByRole("link", { name: /Gestionale CRM/ })).toBeVisible();
+
+  const outsideNavigation = page.getByRole("button", { name: "Fine contenuto" });
+  await outsideNavigation.focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(outsideNavigation).toBeFocused();
+
+  await page.getByRole("link", { name: /Gestionale CRM/ }).focus();
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.getByRole("link", { name: /Gestionale CRM/ })).toBeFocused();
   await expect(page.getByRole("link", { name: /Gestionale CRM/ })).toBeVisible();

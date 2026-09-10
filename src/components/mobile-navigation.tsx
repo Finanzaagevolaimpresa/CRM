@@ -31,6 +31,8 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
   const panelId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const desktopLogoRef = useRef<HTMLAnchorElement>(null);
+  const mobileLogoRef = useRef<HTMLAnchorElement>(null);
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,17 +49,27 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
 
   useEffect(() => {
     const mobileQuery = window.matchMedia("(max-width: 767px)");
+    let focusFrame = 0;
     const preserveVisibleFocus = (event: MediaQueryListEvent) => {
-      const focused = document.activeElement;
+      cancelAnimationFrame(focusFrame);
+      const active = document.activeElement;
+      // CSS may blur a control before the media-query change event is delivered.
+      const hiddenPreviousFocus = lastFocusedRef.current;
+      const focused = active === document.body && hiddenPreviousFocus?.getClientRects().length === 0
+        ? hiddenPreviousFocus
+        : active;
       if (event.matches && focused && panelRef.current?.contains(focused)) {
         setOpen(false);
-        requestAnimationFrame(() => triggerRef.current?.focus());
-      } else if (!event.matches && focused === triggerRef.current) {
-        requestAnimationFrame(() => desktopLogoRef.current?.focus());
+        focusFrame = requestAnimationFrame(() => triggerRef.current?.focus());
+      } else if (!event.matches && (focused === triggerRef.current || focused === mobileLogoRef.current)) {
+        focusFrame = requestAnimationFrame(() => desktopLogoRef.current?.focus());
       }
     };
     mobileQuery.addEventListener("change", preserveVisibleFocus);
-    return () => mobileQuery.removeEventListener("change", preserveVisibleFocus);
+    return () => {
+      mobileQuery.removeEventListener("change", preserveVisibleFocus);
+      cancelAnimationFrame(focusFrame);
+    };
   }, []);
 
   const closeAfterNavigation = () => {
@@ -68,10 +80,20 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
   };
 
   return (
-    <aside className="relative z-30 w-full shrink-0 overflow-hidden bg-fai-navy text-white shadow-xl shadow-fai-navy/20 md:flex md:h-screen md:w-72 md:flex-col md:p-4">
+    <aside
+      onFocusCapture={(event) => { lastFocusedRef.current = event.target; }}
+      onBlurCapture={(event) => {
+        // Keep only focus lost because a responsive rule hid the control.
+        if (event.relatedTarget || event.target.getClientRects().length > 0) {
+          lastFocusedRef.current = null;
+        }
+      }}
+      className="relative z-30 w-full shrink-0 overflow-hidden bg-fai-navy text-white shadow-xl shadow-fai-navy/20 md:flex md:h-screen md:w-72 md:flex-col md:p-4"
+    >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(128,204,42,.18),transparent_30%),radial-gradient(circle_at_100%_35%,rgba(61,41,116,.32),transparent_30%),linear-gradient(180deg,rgba(5,46,112,.96),rgba(3,31,75,1))]" />
       <div className="relative flex items-center gap-3 p-3 md:hidden">
         <Link
+          ref={mobileLogoRef}
           href="/dashboard"
           onClick={closeAfterNavigation}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl bg-white/95 p-2 focus:outline-none focus:ring-2 focus:ring-fai-lime"
