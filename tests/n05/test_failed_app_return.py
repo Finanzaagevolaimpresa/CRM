@@ -139,6 +139,26 @@ class Protocol(unittest.TestCase):
     with self.assertRaisesRegex(n05.Denied,'RETURN_LOCK_CONTENDED'): n05.acquire_lock(path,binding)
    finally: os.close(fd)
    with self.assertRaisesRegex(n05.Denied,'LOCK_BINDING_MISMATCH'): n05.acquire_lock(path,{'engine_id':'two','project':'fai-crm'})
+ def test_new_lock_mode_survives_restrictive_umask_and_existing_bad_mode_is_denied(self):
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-umask-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);path=private/'lock';binding={'engine_id':'one','project':'fai-crm'}
+   prior=os.umask(0o777)
+   try:fd=n05.acquire_lock(path,binding)
+   finally:os.umask(prior)
+   try:self.assertEqual(n05.stat.S_IMODE(os.fstat(fd).st_mode),0o600)
+   finally:os.close(fd)
+   os.close(n05.acquire_lock(path,binding))
+   path.chmod(0o400)
+   with self.assertRaisesRegex(n05.Denied,'PRIVATE_FILE_OWNER_MODE'):n05.acquire_lock(path,binding)
+   self.assertEqual(n05.stat.S_IMODE(path.stat().st_mode),0o400)
+ def test_opened_lock_inode_is_checked_before_binding_or_mutation(self):
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-inode-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);path=private/'lock'
+   fake=mock.Mock(st_mode=n05.stat.S_IFREG|0o600,st_nlink=2,st_uid=os.getuid())
+   with mock.patch.object(n05.os,'fstat',return_value=fake),mock.patch.object(n05.fcntl,'flock') as flock:
+    with self.assertRaisesRegex(n05.Denied,'LOCK_OPENED_INODE_INVALID'):n05.acquire_lock(path,{'engine_id':'one','project':'fai-crm'})
+    flock.assert_not_called()
+   self.assertEqual(path.read_text(),'')
  def test_global_deadline_terminates_subprocess_group(self):
   with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED'):
    n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),n05.time.time()+0.05)

@@ -110,8 +110,25 @@ def atomic_json(path: Path, value):
 
 def acquire_lock(path: Path, binding):
     private_file(path, may_create=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    created = False
     try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created = True
+    except FileExistsError:
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(fd)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_nlink == 1 and
+                opened.st_uid in {0, os.getuid()}, "LOCK_OPENED_INODE_INVALID")
+        if created:
+            # umask may remove every requested permission. Fix only the inode
+            # exclusively created by this call; never repair a preexisting lock.
+            os.fchmod(fd, 0o600)
+        current_path = path.lstat()
+        require((opened.st_dev, opened.st_ino) == (current_path.st_dev, current_path.st_ino),
+                "LOCK_PATH_INODE_CHANGED")
+        private_file(path)
+        require(stat.S_IMODE(os.fstat(fd).st_mode) == 0o600, "LOCK_OPENED_MODE_INVALID")
         try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: raise Denied("RETURN_LOCK_CONTENDED")
         expected = canonical(binding) + "\n"

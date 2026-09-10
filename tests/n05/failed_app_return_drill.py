@@ -5,7 +5,10 @@ spec=importlib.util.spec_from_file_location('n05',ROOT/'scripts/n05/failed_app_r
 
 def run(*a,input=None,ok=True):
  r=subprocess.run(['docker',*a],input=input,text=True,capture_output=True,timeout=120)
- if ok:n05.require(r.returncode==0,'DRILL_DOCKER_FAILED')
+ if ok and r.returncode!=0:
+  print('N05_SYNTHETIC_DOCKER_ERROR|operation='+str(a[0])+'|exit='+str(r.returncode),file=sys.stderr)
+  print(r.stderr[-2000:],file=sys.stderr)
+  raise n05.Denied('DRILL_DOCKER_FAILED')
  return r.stdout.strip()
 def inspect(kind,x):return json.loads(run(kind,'inspect',x))[0]
 def ref(path,kind):return {'path':str(path),'sha256':n05.sha(json.loads(path.read_text())),'kind':kind}
@@ -29,7 +32,7 @@ def scenario(reason,tags,private,registered,projects):
    'volumes':[{'type':'volume','source':'crm_documents','target':'/var/lib/fai-crm/documents'}],
    'networks':{'default':None},'environment':{'FEATURE_INTEGRATIONS_ENABLED':'false'}},
    'postgres':{'image':'postgres:16-alpine','environment':{'POSTGRES_PASSWORD':'synthetic','POSTGRES_DB':'synthetic'},
-   'healthcheck':{'test':['CMD-SHELL','pg_isready -U postgres -d synthetic'],'interval':'1s','timeout':'1s','retries':30},
+   'healthcheck':{'test':['CMD-SHELL','pg_isready -h 127.0.0.1 -U postgres -d synthetic'],'interval':'1s','timeout':'1s','retries':30},
    'volumes':[{'type':'volume','source':'postgres_data','target':'/var/lib/postgresql/data'}], 'networks':{'default':None}}},
    'volumes':{'crm_documents':{'name':project+'_crm_documents'},'postgres_data':{'name':project+'_postgres_data'}},
    'networks':{'default':{'name':project+'_default'}}}
@@ -43,6 +46,8 @@ def scenario(reason,tags,private,registered,projects):
   appids=run('ps','-aq','--filter','label=com.docker.compose.project='+project,'--filter','label=com.docker.compose.service=app').split()
   if pgids and appids and inspect('container',pgids[0])['State'].get('Health',{}).get('Status')=='healthy' and inspect('container',appids[0])['State'].get('Health',{}).get('Status')=='healthy':break
   time.sleep(1)
+ else:raise n05.Denied('DRILL_HEALTH_DEADLINE_EXPIRED')
+ print('N05_SYNTHETIC_POSTGRES_TCP_READY')
  pg=inspect('container',pgids[0]); run('exec','-i',pg['Id'],'psql','-U','postgres','-d','synthetic','-v','ON_ERROR_STOP=1',input='CREATE TABLE _prisma_migrations(id text,migration_name text,checksum text,started_at timestamptz,finished_at timestamptz,rolled_back_at timestamptz,applied_steps_count int); INSERT INTO _prisma_migrations VALUES(\'1\',\'synthetic_001\',\'checksum\',now(),now(),null,1);')
  migrator=run('create','--label','com.docker.compose.project='+project,'--label','com.docker.compose.service=migrate','alpine:3.20','true'); registered.append(('container',migrator)); run('start','-a',migrator)
  migrator_raw=inspect('container',migrator)

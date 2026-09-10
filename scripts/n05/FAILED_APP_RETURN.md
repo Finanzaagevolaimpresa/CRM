@@ -28,7 +28,10 @@ the change window. The controller neither creates this directory nor changes
 permissions. If it already exists, inspect it without replacing it or changing
 an active lock. `/run` is ephemeral: provision again after a reboot before use.
 Do not use `/run/lock`, relax ancestor checks, or delete a lock to overcome
-contention or an engine binding mismatch.
+contention or an engine binding mismatch. New locks are created exclusively and
+set to `0600` through the opened descriptor even under a restrictive umask.
+The descriptor inode, owner, link count and matching path are checked before
+flock. Preexisting locks with invalid modes are rejected, not repaired.
 
 CI exclusively creates this same directory on its isolated runner. The real
 entrypoint holds the real `flock` through forward/migrator removal and return
@@ -47,6 +50,11 @@ N05_FAILED_RETURN_SYNTHETIC_CONFIRMED=1 python3 -B tests/n05/failed_app_return_d
 ```
 
 The drill uses image-owned commands and health checks, matching the production runtime validator. A registered container name collision makes the same production adapter's candidate creation fail; there is no synthetic absence hook. The other cases produce functional failure, an unhealthy app and an exited app. A real stopped migrator is verified and removed before the forward transition. Temporary objects are inventoried even after partial Compose failures; final PASS follows cleanup verification. Native null volume metadata is retained and compared exactly, rather than replaced with an empty object.
+
+The synthetic PostgreSQL health check uses TCP so the socket-only temporary
+initialization server cannot satisfy readiness. The 40-check deadline is enforced
+before fixture SQL; command errors retain bounded synthetic diagnostics. This
+does not change the production PostgreSQL configuration.
 
 Additional Docker negatives prove that unavailable return provenance leaves source and migrator untouched, and that unlabeled volume-only or network-only consumers prevent return. The volume probes stay stopped; the network probe is actually attached. Only registered synthetic objects are removed.
 
