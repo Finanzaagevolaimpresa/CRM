@@ -7,12 +7,14 @@ import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
 import {
+  assignCommercialLeadInboxItem,
   claimCommercialLeadInboxItem,
   closeCommercialLeadInboxItem,
   convertCommercialLeadInboxItem,
   initializeCommercialLeadInboxItem,
   recordCommercialLeadFirstResponse,
   reopenCommercialLeadInboxItem,
+  unassignCommercialLeadInboxItem,
 } from '../../src/lib/commercial-lead-inbox';
 import { createWebsiteLeadPrivacyEvidence } from '../../src/lib/privacy-evidence';
 import {
@@ -118,6 +120,72 @@ test.after(async () => {
   await rootDb?.$disconnect();
 });
 
+async function withN15SyntheticProfile<T>(action: () => Promise<T>) {
+  const environment = process.env as Record<string, string | undefined>;
+  const keys = ['APP_ENV', 'NODE_ENV', 'N15_SYNTHETIC_SELF_CLAIM_OPT_IN'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, environment[key]]));
+  environment.APP_ENV = 'test';
+  environment.NODE_ENV = 'test';
+  environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN = 'N15_SYNTHETIC_SELF_CLAIM_V1';
+  try {
+    return await action();
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete environment[key];
+      else environment[key] = previous[key];
+    }
+  }
+}
+
+async function n15Counts() {
+  return Promise.all([
+    client().communicationIntentRecord.count(),
+    client().communicationHeldDecision.count(),
+    client().communicationIntentAudit.count(),
+  ]);
+}
+
+test('N15 qualified synthetic profile composes one held aggregate from the real self-claim cause', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(1502);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id,
+    actor,
+    attribution: { originKind: 'MANUAL_CRM' },
+    reasonCode: 'MANUAL_INTAKE',
+  });
+  await withN15SyntheticProfile(async () => {
+    const updated = await claimCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 1,
+    });
+    const activity = await client().commercialLeadActivity.findFirstOrThrow({
+      where: { inboxItemId: item.id, activityType: 'CLAIMED' },
+    });
+    const aggregate = await client().communicationIntentRecord.findUniqueOrThrow({
+      where: { intentId: activity.id }, include: { heldDecision: true, auditRecord: true },
+    });
+    const envelope = JSON.parse(aggregate.canonicalEnvelope) as {
+      businessCorrelationId: string;
+      occurredAt: string;
+      recipient: Record<string, string>;
+      message: { reasonCode: string; body?: unknown };
+    };
+    assert.equal(updated.version, 2);
+    assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId, actor.userId);
+    assert.equal(aggregate.state, 'RECORDED');
+    assert.equal(aggregate.heldDecision?.state, 'HELD');
+    assert.ok(aggregate.auditRecord);
+    assert.equal(envelope.businessCorrelationId, item.id);
+    assert.equal(envelope.occurredAt, activity.createdAt.toISOString());
+    assert.deepEqual(envelope.recipient, { authorityCode: 'CRM', entityType: 'USER', entityId: actor.userId });
+    assert.equal(envelope.message.reasonCode, 'CRM_LEAD_SELF_CLAIM_SYNTHETIC');
+    assert.equal('body' in envelope.message, false);
+    assert.equal(await client().communicationIntentRecord.count({ where: { intentId: activity.id } }), 1);
+  });
+});
+
 async function syntheticLead(ordinal: number) {
   return client().lead.create({ data: {
     id: `n14-synthetic-lead-${ordinal}`,
@@ -131,6 +199,207 @@ async function syntheticLead(ordinal: number) {
 
 const actor = Object.freeze({ userId: actorUserId, sessionId: actorSessionId });
 const manager = Object.freeze({ userId: managerUserId, sessionId: managerSessionId });
+
+test('N15 admitted claim rolls back every N14/N15 row at faults before, within and after the aggregate', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  for (const [ordinal, faultAt] of [
+    [1510, 'AFTER_LEAD'], [1511, 'AFTER_AUDIT'], [1512, 'N15_AFTER_INTENT'],
+    [1513, 'N15_AFTER_DECISION'], [1514, 'N15_AFTER_AGGREGATE'],
+  ] as const) {
+    const lead = await syntheticLead(ordinal);
+    const item = await initializeCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+    });
+    const before = await n15Counts();
+    await withN15SyntheticProfile(async () => assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 1, faultAt,
+    }), /N14_SYNTHETIC_FAULT/u));
+    assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId, null);
+    assert.equal((await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { id: item.id } })).version, 1);
+    assert.equal(await client().commercialLeadActivity.count({
+      where: { inboxItemId: item.id, activityType: 'CLAIMED' },
+    }), 0);
+    assert.equal(await client().auditLog.count({
+      where: { entityId: item.id, event: 'commercial_lead_inbox_claimed' },
+    }), 0);
+    assert.deepEqual(await n15Counts(), before);
+  }
+});
+
+test('N15 admitted concurrent and repeated claims leave one committed cause and aggregate', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(1515);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const before = await n15Counts();
+  await withN15SyntheticProfile(async () => {
+    const results = await Promise.allSettled(Array.from({ length: 2 }, () =>
+      claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 })));
+    assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 1,
+    }), (error: unknown) => error instanceof Error
+      && (error as Error & { code?: unknown }).code === 'N14_VERSION_CONFLICT');
+  });
+  assert.equal(await client().commercialLeadActivity.count({
+    where: { inboxItemId: item.id, activityType: 'CLAIMED' },
+  }), 1);
+  assert.deepEqual((await n15Counts()).map((count, index) => count - before[index]), [1, 1, 1]);
+});
+
+test('N15 admitted rejection paths preserve N14 state and create no aggregate', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const environment = process.env as Record<string, string | undefined>;
+  const scenarios: Array<readonly [number, () => Promise<void>]> = [];
+  for (const ordinal of [1516, 1517, 1518]) {
+    const lead = await syntheticLead(ordinal);
+    const item = await initializeCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+    });
+    scenarios.push([ordinal, async () => {
+      if (ordinal === 1516) await client().internalSession.update({ where: { id: actor.sessionId }, data: { revokedAt: new Date() } });
+      if (ordinal === 1517) await client().internalSession.update({ where: { id: actor.sessionId }, data: { expiresAt: new Date(0) } });
+      if (ordinal === 1518) await client().commercialLeadInboxItem.update({ where: { id: item.id }, data: { state: 'CLOSED', closedAt: new Date() } });
+      await assert.rejects(claimCommercialLeadInboxItem(client(), {
+        leadId: lead.id, actor, expectedInboxVersion: ordinal === 1518 ? 1 : 99,
+      }));
+      await client().internalSession.update({ where: { id: actor.sessionId }, data: {
+        revokedAt: null, expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      } });
+    }]);
+  }
+  const before = await n15Counts();
+  await withN15SyntheticProfile(async () => {
+    for (const [, scenario] of scenarios) await scenario();
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: 'n14-synthetic-lead-missing', actor, expectedInboxVersion: 1,
+    }));
+    const noItemLead = await syntheticLead(1527);
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: noItemLead.id, actor, expectedInboxVersion: 1,
+    }));
+    const deletedLead = await syntheticLead(1528);
+    await initializeCommercialLeadInboxItem(client(), {
+      leadId: deletedLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+    });
+    await client().lead.update({ where: { id: deletedLead.id }, data: { deletedAt: new Date() } });
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: deletedLead.id, actor, expectedInboxVersion: 1,
+    }));
+    const deniedUserId = 'n14-synthetic-denied-user';
+    const deniedSessionId = '00000000-0000-4000-8000-000000151800';
+    await client().user.upsert({ where: { id: deniedUserId }, update: {}, create: {
+      id: deniedUserId, email: 'denied@n14-db.invalid', name: 'Denied Synthetic User',
+      passwordHash: 'synthetic-not-a-real-password-hash', role: 'consulente', active: true,
+    } });
+    await client().internalSession.upsert({ where: { id: deniedSessionId }, update: {}, create: {
+      id: deniedSessionId, userId: deniedUserId, tokenDigest: Buffer.alloc(32, 18),
+      expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+    } });
+    const deniedLead = await syntheticLead(1524);
+    await initializeCommercialLeadInboxItem(client(), {
+      leadId: deniedLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+    });
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: deniedLead.id, actor: { userId: deniedUserId, sessionId: deniedSessionId }, expectedInboxVersion: 1,
+    }));
+  });
+  assert.deepEqual(await n15Counts(), before);
+  assert.equal(environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN, undefined);
+});
+
+test('N15 stays absent for real claims with off/non-qualified gates and for assign/unassign', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const before = await n15Counts();
+  const environment = process.env as Record<string, string | undefined>;
+  const previous = { app: environment.APP_ENV, node: environment.NODE_ENV, optIn: environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN };
+  try {
+  for (const [ordinal, appEnvironment, optIn] of [
+    [1519, 'test', undefined], [1520, 'production', 'N15_SYNTHETIC_SELF_CLAIM_V1'],
+    [1521, 'staging', 'N15_SYNTHETIC_SELF_CLAIM_V1'], [1522, 'unknown', 'N15_SYNTHETIC_SELF_CLAIM_V1'],
+  ] as const) {
+    const lead = await syntheticLead(ordinal);
+    await initializeCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+    });
+    environment.APP_ENV = appEnvironment;
+    environment.NODE_ENV = 'test';
+    if (optIn === undefined) delete environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN;
+    else environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN = optIn;
+    await claimCommercialLeadInboxItem(client(), { leadId: lead.id, actor, expectedInboxVersion: 1 });
+  }
+  const assignedLead = await syntheticLead(1523);
+  await initializeCommercialLeadInboxItem(client(), {
+    leadId: assignedLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  await withN15SyntheticProfile(async () => {
+    const disabledLead = await syntheticLead(1526);
+    process.env.COMMERCIAL_LEAD_INBOX_MODE = 'disabled';
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: disabledLead.id, actor, expectedInboxVersion: 1,
+    }), (error: unknown) => error instanceof Error
+      && (error as Error & { code?: unknown }).code === 'N14_DISABLED');
+    process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+    await assignCommercialLeadInboxItem(client(), {
+      leadId: assignedLead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
+    });
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: assignedLead.id, actor, expectedInboxVersion: 2,
+    }));
+    await unassignCommercialLeadInboxItem(client(), {
+      leadId: assignedLead.id, actor: manager, expectedInboxVersion: 2,
+    });
+  });
+  assert.deepEqual(await n15Counts(), before);
+  } finally {
+    for (const [key, value] of Object.entries({
+      APP_ENV: previous.app, NODE_ENV: previous.node, N15_SYNTHETIC_SELF_CLAIM_OPT_IN: previous.optIn,
+    })) {
+      if (value === undefined) delete environment[key]; else environment[key] = value;
+    }
+  }
+});
+
+test('N15 requested profile rejects configuration and database identity before N14 mutation', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const environment = process.env as Record<string, string | undefined>;
+  const lead = await syntheticLead(1525);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const before = await n15Counts();
+  await withN15SyntheticProfile(async () => {
+    const databaseUrl = environment.DATABASE_URL;
+    environment.DATABASE_URL = 'postgresql://remote.invalid/fai_crm_test';
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor, expectedInboxVersion: 1,
+    }), /N15_SYNTHETIC_DATABASE_CONFIGURATION_INVALID/u);
+    environment.DATABASE_URL = databaseUrl;
+    await rootClient().$executeRawUnsafe(`COMMENT ON DATABASE "fai_crm_test" IS 'N15_INCOHERENT_SYNTHETIC_IDENTITY'`);
+    try {
+      await assert.rejects(claimCommercialLeadInboxItem(client(), {
+        leadId: lead.id, actor, expectedInboxVersion: 1,
+      }), /N15_SYNTHETIC_DATABASE_IDENTITY_INVALID/u);
+    } finally {
+      await rootClient().$executeRawUnsafe(`COMMENT ON DATABASE "fai_crm_test" IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'`);
+    }
+  });
+  assert.equal((await client().lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId, null);
+  assert.equal((await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { id: item.id } })).version, 1);
+  assert.equal(await client().commercialLeadActivity.count({ where: { inboxItemId: item.id, activityType: 'CLAIMED' } }), 0);
+  assert.deepEqual(await n15Counts(), before);
+});
 
 test('N14 migration 42 is transactional, additive and business-empty by construction', () => {
   const sql = readFileSync(migrationPath, 'utf8');
