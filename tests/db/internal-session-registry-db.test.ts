@@ -72,18 +72,19 @@ async function waitForPostgresLockWait(applicationName: string) {
 }
 
 async function createSyntheticUser() {
-  const id = `n02-${crypto.randomUUID()}`;
-  syntheticUserIds.push(id);
-  return db.user.create({
+  // Use the application's cuid default. A hyphenated UUID can contain a
+  // phone-like numeric span, which the N04 audit trigger correctly redacts.
+  const user = await db.user.create({
     data: {
-      id,
-      email: `${id}@example.invalid`,
+      email: `n02-${crypto.randomUUID()}@example.invalid`,
       name: "Synthetic N02",
       passwordHash: "synthetic-not-a-login-hash",
       role: "admin",
       active: true,
     },
   });
+  syntheticUserIds.push(user.id);
+  return user;
 }
 
 async function issueSession(userId: string) {
@@ -423,6 +424,25 @@ test(
         disableClient.$disconnect(),
       ]);
     }
+  },
+);
+
+test(
+  "N02 audit fixture uses application IDs and preserves phone-like redaction",
+  { skip: !run },
+  async () => {
+    const user = await createSyntheticUser();
+    assert.match(user.id, /^c[a-z0-9]{24}$/);
+    const legacyId = "n02-c9695939-0611-4511-b921-70f584544039";
+    const rows = await db.$queryRaw<Array<{ legacy: unknown; fixture: unknown }>>`
+      SELECT
+        "audit_sanitize_json_n04_v1"(${JSON.stringify({ targetUserId: legacyId })}::jsonb) AS legacy,
+        "audit_sanitize_json_n04_v1"(${JSON.stringify({ targetUserId: user.id })}::jsonb) AS fixture
+    `;
+    assert.deepEqual(rows, [{
+      legacy: { targetUserId: "n02-c9695939-[REDACTED:PERSONAL]-b921-70f584544039" },
+      fixture: { targetUserId: user.id },
+    }]);
   },
 );
 
