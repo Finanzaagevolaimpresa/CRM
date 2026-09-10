@@ -1,4 +1,5 @@
-import copy, importlib.util, json, os, pathlib, subprocess, sys, tempfile, unittest
+import contextlib, copy, importlib.util, io, json, os, pathlib, subprocess, sys, tempfile, unittest
+from unittest import mock
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('n05',ROOT/'scripts/n05/failed_app_return.py'); n05=importlib.util.module_from_spec(spec); spec.loader.exec_module(n05)
 
@@ -42,7 +43,7 @@ class Engine:
  def start_candidate(self,i,d): pass
  def attempted(self,r): return r in self.done
  def mark_attempt(self,r): self.done.add(r)
- def recreate_return(self,p,d):
+ def recreate_return(self,p,d,expected_app):
   self.snap['app']={'id':'b'*64,'created':'new','image_id':p['return_image']['id'],'config_sha256':p['configs']['return']['sha256'],'state':'healthy'}; return 'b'*64
 
 def real_receipt(p,e,d,reason='unhealthy'):
@@ -129,6 +130,118 @@ class Protocol(unittest.TestCase):
     pathlib.Path(d).chmod(0o700); r,q=real_receipt(p,e,d,reason)
     out=pathlib.Path(p['journal_path']); got=n05.ReturnController(e,lambda:1000).return_app(p,r,q,out)
     self.assertEqual(got['result'],'PASS'); self.assertEqual(json.loads(out.read_text())['result'],'PASS')
+ def test_frozen_models_pin_the_corresponding_image_before_replay(self):
+  p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker'])
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-image-binding-') as d:
+   pathlib.Path(d).chmod(0o700)
+   for which,expected in [('previous',p['source_app']['image_id']),('candidate',p['candidate']['id']),('return',p['return_image']['id'])]:
+    path=pathlib.Path(d)/(which+'.json'); model={'services':{'app':{'image':expected}}}
+    path.write_text(n05.canonical(model)); path.chmod(0o600)
+    p['configs'][which]={'path':str(path),'sha256':n05.sha(model),'kind':'frozen-compose-'+which}
+    with mock.patch.object(n05,'run_deadline',return_value=(0,n05.canonical(model),'')):
+     self.assertEqual(engine.config_digest(which,n05.time.time()+30),n05.sha(model))
+    for wrong in ('sha256:'+'0'*64,p['candidate']['tag']):
+     model['services']['app']['image']=wrong; path.write_text(n05.canonical(model)); p['configs'][which]['sha256']=n05.sha(model)
+     with mock.patch.object(n05,'run_deadline') as command:
+      with self.assertRaisesRegex(n05.Denied,'FROZEN_APP_IMAGE_MISMATCH'):engine.config_digest(which,n05.time.time()+30)
+      command.assert_not_called()
+ def test_return_rechecks_app_at_last_mutation_boundary(self):
+  p=plan(); expected={'id':'a'*64,'created':'candidate-created','image_id':p['candidate']['id'],'config_sha256':p['configs']['candidate']['sha256'],'state':'running-unhealthy'}
+  changes=[None,*[expected|{key:value} for key,value in [('id','b'*64),('created','new'),('image_id',p['return_image']['id']),('config_sha256','0'*64),('state','healthy')]]]
+  for changed in changes:
+   engine=n05.DockerEngine(p,ROOT,command=['docker']); engine.config_digest=lambda which,deadline:p['configs'][which]['sha256']
+   engine.snapshot=lambda deadline:{'app':changed}; engine.run=mock.Mock()
+   with self.assertRaisesRegex(n05.Denied,'RETURN_APP_BOUNDARY_DRIFT'):engine.recreate_return(p,n05.time.time()+30,expected)
+   engine.run.assert_not_called()
+  engine.snapshot=lambda deadline:{'app':expected}
+  with self.assertRaisesRegex(n05.Denied,'RETURN_APP_BOUNDARY_DRIFT'):engine.recreate_return(p,n05.time.time()+30,None)
+  engine.run.assert_not_called()
+ def test_created_wrong_image_is_never_started_in_either_path(self):
+  p=plan()
+  for returning in (False,True):
+   engine=n05.DockerEngine(p,ROOT,command=['docker']); calls=[]; snapshot=Engine(p).snapshot(1500)
+   engine.config_digest=lambda which,deadline:p['configs'][which]['sha256']
+   engine.snapshot=lambda deadline:snapshot; engine.image=lambda value,deadline:True
+   engine.run=lambda *args,**kwargs:(calls.append(args) or ('2.38.2' if args==('compose','version','--short') else ''))
+   engine.ids=lambda service,deadline:['a'*64]
+   engine.inspect=lambda *args,**kwargs:{'Id':'a'*64,'Created':'created','Image':'sha256:'+'0'*64}
+   with self.assertRaisesRegex(n05.Denied,'RETURN_CREATED_IMAGE_MISMATCH' if returning else 'CANDIDATE_CREATED_IMAGE_MISMATCH'):
+    if returning:engine.recreate_return(p,n05.time.time()+30,snapshot['app'])
+    else:engine.create_candidate(p,n05.time.time()+30)
+   self.assertTrue(any('--no-start' in command for command in calls))
+   self.assertFalse(any(command[0]=='start' for command in calls))
+ def test_app_change_between_controller_and_adapter_reads_stops_mutation(self):
+  p=plan(); recorder=Engine(p)
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-last-boundary-') as d:
+   pathlib.Path(d).chmod(0o700); receipt,request=real_receipt(p,recorder,d)
+   before=recorder.snapshot(1500); changed=copy.deepcopy(before); changed['app']['id']='b'*64
+   observations=iter([before,changed]); engine=n05.DockerEngine(p,ROOT,command=['docker'])
+   engine.snapshot=lambda deadline:next(observations); engine.image=lambda image,deadline:True
+   engine.config_digest=lambda which,deadline:p['configs'][which]['sha256'];engine.run=mock.Mock()
+   with self.assertRaisesRegex(n05.Denied,'RETURN_APP_BOUNDARY_DRIFT'):
+    n05.ReturnController(engine,lambda:1000).return_app(p,receipt,request,pathlib.Path(p['journal_path']))
+   engine.run.assert_not_called();self.assertEqual(json.loads(pathlib.Path(p['journal_path']).read_text())['result'],'FAILED')
+ def test_starting_unknown_paused_and_dead_are_not_unhealthy(self):
+  p=plan(); e=Engine(p)
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-state-') as d:
+   pathlib.Path(d).chmod(0o700); receipt,request=real_receipt(p,e,d)
+   states=[{'Running':True,'Status':'running','Health':{'Status':'starting'}},
+           {'Running':True,'Status':'running'},
+           {'Running':True,'Status':'paused','Paused':True,'Health':{'Status':'unhealthy'}},
+           {'Running':True,'Status':'restarting','Restarting':True,'Health':{'Status':'unhealthy'}},
+           {'Running':False,'Status':'dead'}]
+   for state in states:
+    e.snap['app']['state']=n05.app_state({'State':state})
+    with self.assertRaisesRegex(n05.Denied,'CANDIDATE_STATE_NOT_RETURNABLE'):
+     n05.ReturnController(e,lambda:1000)._check(p,receipt,request)
+   self.assertEqual(n05.app_state({'State':{'Running':True,'Health':{'Status':'unhealthy'}}}),'running-unhealthy')
+   self.assertEqual(n05.app_state({'State':{'Running':False,'Status':'exited'}}),'exited')
+ def test_forward_finishes_the_registered_migrator_before_transition(self):
+  for invalid in (None,'running','ledger','resources'):
+   p=plan(); p['migrator']={'id':'3'*64,'created':'migrator-created','image_id':'sha256:'+'2'*64,'role':'migrate','project':p['project']}
+   e=Engine(p); e.snap['migrators']=[p['migrator']['id']]; removed=[]
+   e.migrator=lambda identity,deadline:p['migrator']|{'state':'running' if invalid=='running' else 'exited','exit_code':0} if e.snap['migrators'] else None
+   def remove(identity,deadline):removed.append(identity);e.snap['migrators']=[]
+   e.remove_migrator=remove
+   if invalid=='ledger':e.snap['ledger']['digest']='0'*64
+   if invalid=='resources':e.snap['resources']['network']['Id']='0'*64
+   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-migrator-') as d:
+    pathlib.Path(d).chmod(0o700)
+    if invalid:
+     with self.assertRaises(n05.Denied):real_receipt(p,e,d)
+     self.assertEqual(removed,[]);self.assertEqual(e.snap['app']['id'],p['source_app']['id'])
+    else:
+     receipt,request=real_receipt(p,e,d)
+     self.assertEqual(removed,[p['migrator']['id']]);self.assertEqual(e.snap['migrators'],[])
+     n05.validate_return_request(request,p,receipt)
+ def test_production_entrypoint_removes_migrator_under_lock_with_synthetic_io(self):
+  # Exercise the real dispatcher and recorder; substitute only host, daemon,
+  # Git and private qualification I/O. This never opens production inputs.
+  p=plan();p['deadline_epoch']=n05.time.time()+30
+  p['migrator']={'id':'3'*64,'created':'migrator-created','image_id':'sha256:'+'2'*64,'role':'migrate','project':p['project']}
+  engine=Engine(p);engine.snap['migrators']=[p['migrator']['id']];fds=[];events=[]
+  engine.migrator=lambda identity,deadline:p['migrator']|{'state':'exited','exit_code':0} if engine.snap['migrators'] else None
+  def remove(identity,deadline):
+   os.fstat(fds[0]);events.append('migrator-removed-under-lock');engine.snap['migrators']=[]
+  engine.remove_migrator=remove
+  def git(command,env,deadline,input_text=None):
+   if command[3]=='branch':output='main'
+   elif command[3]=='rev-parse':output=p['tools']['tree'] if command[-1]=='HEAD^{tree}' else p['tools']['commit']
+   else:output=''
+   return 0,output,''
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-entrypoint-') as d:
+   private=pathlib.Path(d);private.chmod(0o700)
+   for key,name in [('receipt_path','receipt.json'),('return_request_path','request.json'),('journal_path','journal.json')]:p[key]=str(private/name)
+   for reference in [*p['configs'].values(),*p['gates'].values(),p['compatibility']]:reference['path']=str(private/(reference['kind']+'.json'))
+   plan_path=private/'plan.json';plan_path.write_text(n05.canonical(p));plan_path.chmod(0o600)
+   def lock(path,binding):
+    fd=os.open(private/'synthetic-lock',os.O_CREAT|os.O_RDWR,0o600);fds.append(fd);return fd
+   env={'FAI_ENVIRONMENT':'production','FAI_ENVIRONMENT_SENTINEL':'FAI_CRM_PRODUCTION_V1','COMPOSE_PROJECT_NAME':'fai-crm'}
+   with mock.patch.dict(os.environ,env,clear=True),mock.patch.object(n05.socket,'gethostname',return_value='fai-crm-prod-02'),mock.patch.object(n05,'validate_evidence'),mock.patch.object(n05,'run_deadline',side_effect=git),mock.patch.object(n05,'DockerEngine',return_value=engine),mock.patch.object(n05,'acquire_lock',side_effect=lock),contextlib.redirect_stdout(io.StringIO()):
+    n05.production_main(['failed_app_return.py','forward',str(plan_path)])
+   self.assertEqual(events,['migrator-removed-under-lock']);self.assertEqual(engine.snap['migrators'],[])
+   n05.validate_receipt(json.loads(pathlib.Path(p['receipt_path']).read_text()),p)
+   with self.assertRaises(OSError):os.fstat(fds[0])
  def test_post_forward_request_is_bound_and_cannot_relabel_outcome(self):
   p=plan(); e=Engine(p,'unhealthy')
   with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-request-') as d:

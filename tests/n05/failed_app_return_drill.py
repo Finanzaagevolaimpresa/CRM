@@ -25,7 +25,7 @@ def scenario(reason,tags,private,registered,projects):
  project='fai-crm-n05-synthetic-'+uuid.uuid4().hex[:12]; projects.append(project); env=private/(project+'.env'); env.write_text('\n'); env.chmod(0o600)
  compose=private/(project+'.yml')
  def model(tag):
-  return {'name':project,'services':{'app':{'image':tag,
+  return {'name':project,'services':{'app':{'image':inspect('image',tag)['Id'],
    'volumes':[{'type':'volume','source':'crm_documents','target':'/var/lib/fai-crm/documents'}],
    'networks':{'default':None},'environment':{'FEATURE_INTEGRATIONS_ENABLED':'false'}},
    'postgres':{'image':'postgres:16-alpine','environment':{'POSTGRES_PASSWORD':'synthetic','POSTGRES_DB':'synthetic'},
@@ -76,7 +76,6 @@ def scenario(reason,tags,private,registered,projects):
  adapter=n05.DockerEngine(base,ROOT,files=[compose],env_file=env,command=['docker'],
                           created_callback=lambda identity: registered.append(('container',identity)))
  base['ledger']=adapter.ledger(pg['Id'],base['deadline_epoch'])
- n05.finish_registered_migrator(adapter,base)
  receipt=n05.ForwardRecorder(adapter).run(base,pathlib.Path(base['receipt_path']))
  request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':base['run_id'],'plan_sha256':n05.sha(base),'receipt_sha256':n05.sha(receipt),'reason':reason,'evidence':{'path':'/synthetic/functional.json','sha256':'a'*64,'kind':'functional-failure'} if reason=='functional-failure' else None}
  n05.validate_return_request(request,base,receipt)

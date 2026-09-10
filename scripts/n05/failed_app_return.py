@@ -41,6 +41,17 @@ def sha(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def app_state(raw):
+    state = raw["State"]
+    if state.get("Paused") or state.get("Restarting"):
+        return "running-unknown"
+    if state.get("Running"):
+        health = (state.get("Health") or {}).get("Status")
+        return {"healthy": "healthy", "unhealthy": "running-unhealthy",
+                "starting": "running-starting"}.get(health, "running-unknown")
+    return "exited" if state.get("Status") == "exited" else "inactive-unknown"
+
+
 def strict_json(path: Path):
     def unique(pairs):
         out = {}
@@ -312,6 +323,8 @@ class ForwardRecorder:
         require(self.engine.config_digest("candidate", plan["deadline_epoch"]) == plan["configs"]["candidate"]["sha256"],
                 "CANDIDATE_CONFIG_DRIFT")
         require(self.engine.image(plan["candidate"], plan["deadline_epoch"]), "CANDIDATE_IMAGE_UNAVAILABLE")
+        if plan["migrator"] is not None:
+            finish_registered_migrator(self.engine, plan)
         before = self.engine.snapshot(plan["deadline_epoch"])
         require(before["app"] and before["app"]["state"] == "healthy" and
                 {k:before["app"][k] for k in ("id","created","image_id")} == plan["source_app"] and
@@ -352,6 +365,7 @@ class ForwardRecorder:
                     "CANDIDATE_START_IDENTITY_DRIFT")
             events.append(event(events[-1], plan["run_id"], "candidate-start", "started-exact", {"candidate":created}))
             receipt_state = "unhealthy" if observed["state"] == "running-unhealthy" else observed["state"]
+            require(receipt_state in {"healthy", "unhealthy", "exited"}, "CANDIDATE_STATE_UNOBSERVED")
             events.append(event(events[-1], plan["run_id"], "forward-result", "candidate-observed",
                                 {"candidate":created,"state":receipt_state}))
         except (Denied, subprocess.SubprocessError):
@@ -373,6 +387,10 @@ def finish_registered_migrator(engine, plan):
             observed["exit_code"] == 0, "MIGRATOR_NOT_SUCCESSFULLY_EXITED")
     snapshot = engine.snapshot(plan["deadline_epoch"])
     require(snapshot["ledger"] == plan["ledger"], "MIGRATOR_LEDGER_INCOMPLETE")
+    require(snapshot["engine"] == plan["engine"] and snapshot["project"] == plan["project"] and
+            snapshot["postgres"] == plan["postgres"] and snapshot["resources"] == plan["resources"] and
+            snapshot["postgres_healthy"] and snapshot["migrators"] == [registered_id] and
+            not snapshot["foreign_containers"], "MIGRATOR_BOUNDARY_DRIFT")
     engine.remove_migrator(registered_id, plan["deadline_epoch"])
     require(engine.migrator(registered_id, plan["deadline_epoch"]) is None, "MIGRATOR_REMOVAL_FAILED")
     after = engine.snapshot(plan["deadline_epoch"])
@@ -428,7 +446,7 @@ class ReturnController:
                    "request_sha256":sha(request), "before_snapshot_sha256":sha(before)}
         atomic_json(journal_path, journal)
         try:
-            new_id = self.engine.recreate_return(plan, plan["deadline_epoch"])
+            new_id = self.engine.recreate_return(plan, plan["deadline_epoch"], before["app"])
             require(new_id and (before["app"] is None or new_id != before["app"]["id"]), "NEW_APP_ID_REQUIRED")
             after = self._check(plan)
             app = after["app"]
@@ -488,6 +506,12 @@ class DockerEngine:
         path = Path(reference["path"]); private_file(path)
         model = strict_json(path)
         require(sha(model) == reference["sha256"], "FROZEN_CONFIG_FILE_DRIFT")
+        expected_image = (self.plan["source_app"]["image_id"] if which == "previous" else
+                          self.plan["candidate" if which == "candidate" else "return_image"]["id"])
+        # Replay uses the content-addressed image itself. A tag, even the
+        # expected human-readable one, cannot redirect a later mutation.
+        require(model.get("services", {}).get("app", {}).get("image") == expected_image,
+                "FROZEN_APP_IMAGE_MISMATCH")
         remaining = deadline-time.time(); require(remaining > 0, "DEADLINE_EXPIRED")
         env = {k:os.environ[k] for k in ("PATH","HOME") if k in os.environ}
         command = self.command + ["compose","-p",self.project,"--project-directory",str(self.repo),
@@ -560,9 +584,7 @@ class DockerEngine:
         app = None
         if app_ids:
             raw = self.inspect("container", app_ids[0], deadline)
-            health = (raw["State"].get("Health") or {}).get("Status")
-            state = "healthy" if raw["State"].get("Running") and health == "healthy" else \
-                    "running-unhealthy" if raw["State"].get("Running") else "exited"
+            state = app_state(raw)
             tag = raw["Config"]["Image"]
             if raw["Id"] == self.plan["source_app"]["id"]: which = "previous"
             elif raw["Image"] == self.plan["candidate"]["id"]: which = "candidate"
@@ -587,15 +609,21 @@ class DockerEngine:
     def attempted(self, run): return self._attempt
     def mark_attempt(self, run): self._attempt = True
 
-    def recreate_return(self, plan, deadline):
+    def recreate_return(self, plan, deadline, expected_app):
         require(self.config_digest("return", deadline) == plan["configs"]["return"]["sha256"], "RETURN_CONFIG_DRIFT")
-        self.validate_boundary(plan, self.snapshot(deadline), deadline, returning=True)
+        current = self.snapshot(deadline)
+        require(current["app"] == expected_app, "RETURN_APP_BOUNDARY_DRIFT")
+        self.validate_boundary(plan, current, deadline, returning=True)
         frozen = plan["configs"]["return"]["path"]
         self.run("compose", "-p", self.project, "--project-directory", str(self.repo),
-          "--env-file", str(self.env_file), "-f", frozen, "up", "-d", "--no-deps",
+          "--env-file", str(self.env_file), "-f", frozen, "up", "--no-start", "--no-deps",
           "--no-build", "--pull", "never", "--force-recreate", "app", deadline=deadline)
         ids = self.ids("app", deadline); require(len(ids) == 1, "RETURN_APP_COUNT_INVALID")
         self.created_callback(ids[0])
+        created = self.inspect("container", ids[0], deadline)
+        require(created["Id"] == ids[0] and created["Image"] == plan["return_image"]["id"],
+                "RETURN_CREATED_IMAGE_MISMATCH")
+        self.run("start", ids[0], deadline=deadline)
         while time.time() < deadline:
             raw = self.inspect("container", ids[0], deadline)
             if raw["State"].get("Running") and (raw["State"].get("Health") or {}).get("Status") == "healthy":
@@ -624,6 +652,8 @@ class DockerEngine:
         ids = self.ids("app", deadline); require(len(ids) == 1, "CANDIDATE_CREATION_UNOBSERVED")
         self.created_callback(ids[0])
         raw = self.inspect("container", ids[0], deadline)
+        require(raw["Id"] == ids[0] and raw["Image"] == plan["candidate"]["id"],
+                "CANDIDATE_CREATED_IMAGE_MISMATCH")
         return {"id":raw["Id"], "created":raw["Created"], "image_id":raw["Image"]}
 
     def start_candidate(self, identity, deadline):
