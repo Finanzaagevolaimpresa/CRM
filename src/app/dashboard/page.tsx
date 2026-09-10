@@ -13,6 +13,7 @@ import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
 import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, canViewTechnicalPractice } from "@/lib/access-control";
 import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
+import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
@@ -104,17 +105,15 @@ export default async function Dashboard() {
   const accessibleAiContexts = canReadAiOutputs
     ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
     : [];
-  const pendingAiAuthorizationRequests = session.role === "admin"
-    ? await prisma.aiExecutionRequest.findMany({
-        where: { status: "PENDING_ADMIN_APPROVAL", expiresAt: { gt: now } },
-        include: {
-          requester: { select: { name: true } },
-          client: { select: { displayName: true } },
-        },
-        orderBy: { createdAt: "asc" },
-        take: 20,
-      })
-    : [];
+  const {
+    total: pendingAiAuthorizationRequestCount,
+    requests: pendingAiAuthorizationRequests,
+  } = await loadDashboardPendingAiAuthorizations({
+    isAdmin: session.role === "admin",
+    now,
+    count: (where) => prisma.aiExecutionRequest.count({ where }),
+    preview: (query) => prisma.aiExecutionRequest.findMany(query),
+  });
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
     "pre_analisi",
@@ -621,7 +620,7 @@ export default async function Dashboard() {
   const operationalCards = [
     [
       "Autorizzazioni AI in attesa",
-      pendingAiAuthorizationRequests.length,
+      pendingAiAuthorizationRequestCount,
       "Richieste da decidere con azione Admin separata",
       "/settings/ai-authorizations",
       "orange",
