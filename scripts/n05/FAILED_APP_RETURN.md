@@ -1,0 +1,23 @@
+# N05 failed-app return protocol
+
+This controller is separate from the ordinary healthy-app switch. It does not weaken that switch and it does not use the key-mount configuration gate.
+
+## Private inputs and bindings
+
+A production run uses a private `0700` directory containing `0600`, single-link regular files. The strict V2 plan binds the measured Docker engine, project, tool/CI identity, exact source/candidate/return containers and OCI images, PostgreSQL, complete volume/network snapshots, immutable frozen Compose models, complete Prisma ledger, a global deadline, return reason, receipt and durable journal. Recovery, artifact availability, reviewed plan, authorization and return-image/schema compatibility are independent, hashed evidence documents bound to the same run/tool/engine/image/ledger identities. The controller never manufactures these qualifications and never reads key material.
+
+`forward` verifies the same healthy source and project invariants at the mutation boundary, records an atomic hash chain before and after removal/create/start, and uses app-only Compose commands with no build, pull or dependency action. An absent candidate is returnable only after the closed observed sequence; an incomplete command, timeout or uncertain inventory is not authority.
+
+`return` acquires the single canonical engine/project lock and writes `ATTEMPT_STARTED` durably before mutation. Any failure is retained and every later invocation for that journal is denied. PASS follows health plus repeated runtime, ledger, image, configuration and persistence checks. No retry, down migration, ledger rewrite, `down`, prune or unregistered cleanup is performed.
+
+## Synthetic Docker drill
+
+On an isolated GitHub runner:
+
+```sh
+docker pull alpine:3.20
+docker pull postgres:16-alpine
+N05_FAILED_RETURN_SYNTHETIC_CONFIRMED=1 python3 -B tests/n05/failed_app_return_drill.py
+```
+
+Synthetic evidence proves only protocol mechanics. It does **not** qualify production recovery, real artifacts, the concrete schema compatibility proof, authorization, review, host identity or change window; those remain mandatory private inputs.

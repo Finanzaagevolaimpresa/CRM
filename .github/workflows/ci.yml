@@ -510,6 +510,27 @@ jobs:
             -f "$image_context/Dockerfile.prod.example" -t "$N05_SYNTHETIC_APP_IMAGE" "$image_context"
           python3 -B tests/n05/key_mounts_drill.py
 
+  n05-failed-app-return:
+    name: N05 failed-app controlled return
+    needs: build-context-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Protocol tests and production pre-daemon guard
+        run: python3 -B -m unittest -v tests/n05/test_failed_app_return.py
+      - name: Real Docker synthetic return and persistence drill
+        env:
+          N05_FAILED_RETURN_SYNTHETIC_CONFIRMED: "1"
+        run: |
+          docker pull alpine:3.20
+          docker pull postgres:16-alpine
+          python3 -B tests/n05/failed_app_return_drill.py
+
   vnx03-wpforms-https-e2e:
     name: VNX-03 authentic WPForms HTTPS end-to-end
     needs: build-context-guard
