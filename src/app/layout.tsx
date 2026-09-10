@@ -12,7 +12,7 @@ export default async function RootLayout({
     ? await getInternalNotificationCount(session)
     : 0;
   return (
-    <html lang="it">
+    <html lang="it" data-scroll-behavior="smooth">
       <body>
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
           <Nav effectivePermissions={session ? getEffectivePermissions(session) : []} notificationCount={notificationCount} role={session?.role} />

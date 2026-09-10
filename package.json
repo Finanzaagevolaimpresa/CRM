@@ -4,6 +4,7 @@
     "build": "next build",
     "start": "next start",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:mobile-nav": "playwright test --config tests/mobile-nav/playwright.config.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
     "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",

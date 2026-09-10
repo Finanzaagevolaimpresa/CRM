@@ -121,10 +121,12 @@ export function NavLinks({
   role,
   notificationCount = 0,
   effectivePermissions = [],
+  onNavigate,
 }: {
   role?: RoleCode | null;
   notificationCount?: number;
   effectivePermissions?: Permission[];
+  onNavigate?: () => void;
 }) {
   const pathname = usePathname();
   return (
@@ -145,6 +147,7 @@ export function NavLinks({
                   className={`group flex min-h-12 items-center justify-between rounded-xl px-3 py-3 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white text-fai-navy shadow-md shadow-fai-lime/10 ring-white/80" : "text-white/82 ring-transparent hover:bg-white/10 hover:text-white hover:ring-white/10"}`}
                   href={href}
                   key={href}
+                  onClick={onNavigate}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2.5">
                     <span
