@@ -7,11 +7,13 @@ import test from 'node:test';
 
 const root = resolve(import.meta.dirname, '..');
 const qualifiedBase = 'f48475a748315d1d8d9722412207f41b8890ad10';
+const qualifiedHead = '4f388cbdd53c74cf5b855cff1fbc5282ed957e2a';
 
-function fixture() {
+function fixture(ref?: string) {
   const parent = mkdtempSync(join(tmpdir(), 'vnx03-scope-'));
   const repository = join(parent, 'repo');
   execFileSync('git', ['clone', '--quiet', '--no-hardlinks', root, repository]);
+  if (ref) execFileSync('git', ['checkout', '--quiet', '--detach', ref], { cwd: repository });
   const guard = join(repository, 'scripts/vnx03/verify-protected-scope.sh');
   copyFileSync(join(root, 'scripts/vnx03/verify-protected-scope.sh'), guard);
   chmodSync(guard, 0o755);
@@ -47,11 +49,11 @@ function run(repository: string, guard: string, base: string) {
   });
 }
 
-test('VNX-03 co-modification guard admits N15, harness-only and runtime-only changes', () => {
+test('VNX-03 co-modification guard admits historical qualified N15, harness-only and runtime-only changes', () => {
   {
-    const value = fixture();
+    const value = fixture(qualifiedHead);
     try {
-      assert.equal(run(value.repository, value.guard, qualifiedBase).status, 0, 'qualified N15');
+      assert.equal(run(value.repository, value.guard, qualifiedBase).status, 0, 'historical qualified N15');
       const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: value.repository, encoding: 'utf8' }).trim();
       const harness = 'tests/vnx03/synthetic-scope-marker.txt';
       commit(value.repository, harness, 'synthetic harness-only change\n');
