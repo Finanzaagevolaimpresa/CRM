@@ -37,7 +37,7 @@ const rootDb = runDbTests ? new PrismaClient() : null;
 let db: PrismaClient | null = null;
 const originalInboxMode = process.env.COMMERCIAL_LEAD_INBOX_MODE;
 const originalSessionMode = process.env.INTERNAL_SESSION_MODE;
-const actorUserId = 'n14-synthetic-commercial-user';
+const actorUserId = '00000000-0000-4000-8000-000000140010';
 const actorSessionId = '00000000-0000-4000-8000-000000140001';
 const managerUserId = 'n14-synthetic-manager-user';
 const managerSessionId = '00000000-0000-4000-8000-000000140003';
@@ -144,6 +144,74 @@ async function n15Counts() {
     client().communicationIntentAudit.count(),
   ]);
 }
+
+test('N14 migration 42 is transactional, additive and business-empty by construction', () => {
+  const sql = readFileSync(migrationPath, 'utf8');
+  assert.match(sql, /^BEGIN;/u);
+  assert.match(sql, /COMMIT;\s*$/u);
+  assert.equal((sql.match(/^CREATE TABLE /gmu) ?? []).length, 4);
+  assert.equal((sql.match(/^CREATE FUNCTION /gmu) ?? []).length, 5);
+  assert.equal((sql.match(/^CREATE TRIGGER /gmu) ?? []).length, 9);
+  assert.doesNotMatch(sql, /^\s*(?:INSERT|UPDATE|DELETE)\s/imu);
+  assert.doesNotMatch(sql, /CREATE\s+(?:EXTENSION|EVENT)|\b(?:cron|scheduler|dblink|http)\b/iu);
+  assert.match(sql, /N21_UNASSIGNED/u);
+  assert.match(sql, /N14_LEAD_WRITER_BYPASS/u);
+  assert.match(sql, /N14_WEBSITE_ATTRIBUTION_INVALID/u);
+  assert.doesNotMatch(sql, /CommercialLeadInboxItem_privacyEvidenceReceiptId_fkey/u);
+  assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
+});
+
+test('current fresh44 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
+  skip: !runDbTests,
+  timeout: 240_000,
+}, async () => {
+  const [migrationRows, catalogRows, indexRows, triggerRows, functionRows, businessRows] = await Promise.all([
+    client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`,
+    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
+      SELECT table_name AS name FROM information_schema.tables
+      WHERE table_schema = ${schema} AND table_name LIKE 'CommercialLead%'
+      ORDER BY table_name
+    `),
+    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
+      SELECT indexname AS name FROM pg_indexes
+      WHERE schemaname = ${schema} AND tablename LIKE 'CommercialLead%'
+      ORDER BY indexname
+    `),
+    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
+      SELECT trigger_row.tgname AS name
+      FROM pg_trigger trigger_row
+      JOIN pg_class table_row ON table_row.oid = trigger_row.tgrelid
+      JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+      WHERE namespace_row.nspname = ${schema}
+        AND (table_row.relname LIKE 'CommercialLead%' OR table_row.relname = 'Lead')
+        AND NOT trigger_row.tgisinternal
+      ORDER BY trigger_row.tgname
+    `),
+    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
+      SELECT routine_name AS name FROM information_schema.routines
+      WHERE routine_schema = ${schema} AND routine_name LIKE 'n14_%'
+      ORDER BY routine_name
+    `),
+    client().$queryRaw<Array<{ policies: bigint; items: bigint; cycles: bigint; activities: bigint }>>`
+      SELECT
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaPolicyVersion") AS policies,
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadInboxItem") AS items,
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaCycle") AS cycles,
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
+    `,
+  ]);
+  assert.equal(Number(migrationRows[0]?.count), 44);
+  assert.deepEqual(catalogRows.map(({ name }) => name), [
+    'CommercialLeadActivity',
+    'CommercialLeadInboxItem',
+    'CommercialLeadSlaCycle',
+    'CommercialLeadSlaPolicyVersion',
+  ]);
+  assert.equal(indexRows.length, 25);
+  assert.equal(triggerRows.length, 9);
+  assert.equal(functionRows.length, 5);
+  assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
+});
 
 test('N15 qualified synthetic profile composes one held aggregate from the real self-claim cause', {
   skip: !runDbTests,
@@ -256,43 +324,87 @@ test('N15 admitted rejection paths preserve N14 state and create no aggregate', 
   skip: !runDbTests,
 }, async () => {
   await ensureActorAndPolicy();
-  const environment = process.env as Record<string, string | undefined>;
-  const scenarios: Array<readonly [number, () => Promise<void>]> = [];
-  for (const ordinal of [1516, 1517, 1518]) {
+  const beforeN15 = await n15Counts();
+  const expectedCode = (code: string) => (error: unknown) => error instanceof Error
+    && (error as Error & { code?: unknown }).code === code;
+  const snapshot = async (leadId: string, itemId: string) => Promise.all([
+    client().lead.findUnique({ where: { id: leadId }, select: { assignedToId: true, deletedAt: true } }),
+    client().commercialLeadInboxItem.findUnique({
+      where: { id: itemId }, select: { state: true, version: true, closedAt: true },
+    }),
+    client().commercialLeadActivity.count({ where: { inboxItemId: itemId } }),
+    client().auditLog.count({ where: { entityId: itemId } }),
+  ]);
+  const fixture = async (ordinal: number) => {
     const lead = await syntheticLead(ordinal);
     const item = await initializeCommercialLeadInboxItem(client(), {
       leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
     });
-    scenarios.push([ordinal, async () => {
-      if (ordinal === 1516) await client().internalSession.update({ where: { id: actor.sessionId }, data: { revokedAt: new Date() } });
-      if (ordinal === 1517) await client().internalSession.update({ where: { id: actor.sessionId }, data: { expiresAt: new Date(0) } });
-      if (ordinal === 1518) await client().commercialLeadInboxItem.update({ where: { id: item.id }, data: { state: 'CLOSED', closedAt: new Date() } });
-      await assert.rejects(claimCommercialLeadInboxItem(client(), {
-        leadId: lead.id, actor, expectedInboxVersion: ordinal === 1518 ? 1 : 99,
-      }));
-      await client().internalSession.update({ where: { id: actor.sessionId }, data: {
-        revokedAt: null, expiresAt: new Date('2099-01-01T00:00:00.000Z'),
-      } });
-    }]);
-  }
-  const before = await n15Counts();
+    return { lead, item };
+  };
   await withN15SyntheticProfile(async () => {
-    for (const [, scenario] of scenarios) await scenario();
+    for (const [ordinal, sessionData] of [
+      [1516, { revokedAt: new Date() }],
+      [1517, { expiresAt: new Date(0) }],
+    ] as const) {
+      const { lead, item } = await fixture(ordinal);
+      await client().internalSession.update({ where: { id: actor.sessionId }, data: sessionData });
+      const before = await snapshot(lead.id, item.id);
+      try {
+        await assert.rejects(claimCommercialLeadInboxItem(client(), {
+          leadId: lead.id, actor, expectedInboxVersion: 1,
+        }), expectedCode('N14_PERMISSION_DENIED'));
+        assert.deepEqual(await snapshot(lead.id, item.id), before);
+      } finally {
+        await client().internalSession.update({ where: { id: actor.sessionId }, data: {
+          revokedAt: null, expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+        } });
+      }
+    }
+    const wrongVersion = await fixture(1518);
+    const wrongVersionBefore = await snapshot(wrongVersion.lead.id, wrongVersion.item.id);
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: wrongVersion.lead.id, actor, expectedInboxVersion: 99,
+    }), expectedCode('N14_VERSION_CONFLICT'));
+    assert.deepEqual(await snapshot(wrongVersion.lead.id, wrongVersion.item.id), wrongVersionBefore);
+
+    const closed = await fixture(1529);
+    await client().commercialLeadInboxItem.update({
+      where: { id: closed.item.id }, data: { state: 'CLOSED', closedAt: new Date() },
+    });
+    const closedBefore = await snapshot(closed.lead.id, closed.item.id);
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: closed.lead.id, actor, expectedInboxVersion: 1,
+    }), expectedCode('N14_ITEM_NOT_OPEN'));
+    assert.deepEqual(await snapshot(closed.lead.id, closed.item.id), closedBefore);
+
+    const owned = await fixture(1530);
+    await assignCommercialLeadInboxItem(client(), {
+      leadId: owned.lead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
+    });
+    const ownedBefore = await snapshot(owned.lead.id, owned.item.id);
+    await assert.rejects(claimCommercialLeadInboxItem(client(), {
+      leadId: owned.lead.id, actor, expectedInboxVersion: 2,
+    }), expectedCode('N14_VERSION_CONFLICT'));
+    assert.deepEqual(await snapshot(owned.lead.id, owned.item.id), ownedBefore);
+
     await assert.rejects(claimCommercialLeadInboxItem(client(), {
       leadId: 'n14-synthetic-lead-missing', actor, expectedInboxVersion: 1,
-    }));
+    }), expectedCode('N14_LEAD_NOT_FOUND'));
     const noItemLead = await syntheticLead(1527);
     await assert.rejects(claimCommercialLeadInboxItem(client(), {
       leadId: noItemLead.id, actor, expectedInboxVersion: 1,
-    }));
+    }), expectedCode('N14_ITEM_NOT_FOUND'));
     const deletedLead = await syntheticLead(1528);
-    await initializeCommercialLeadInboxItem(client(), {
+    const deletedItem = await initializeCommercialLeadInboxItem(client(), {
       leadId: deletedLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
     });
     await client().lead.update({ where: { id: deletedLead.id }, data: { deletedAt: new Date() } });
+    const deletedBefore = await snapshot(deletedLead.id, deletedItem.id);
     await assert.rejects(claimCommercialLeadInboxItem(client(), {
       leadId: deletedLead.id, actor, expectedInboxVersion: 1,
-    }));
+    }), expectedCode('N14_LEAD_NOT_FOUND'));
+    assert.deepEqual(await snapshot(deletedLead.id, deletedItem.id), deletedBefore);
     const deniedUserId = 'n14-synthetic-denied-user';
     const deniedSessionId = '00000000-0000-4000-8000-000000151800';
     await client().user.upsert({ where: { id: deniedUserId }, update: {}, create: {
@@ -309,10 +421,9 @@ test('N15 admitted rejection paths preserve N14 state and create no aggregate', 
     });
     await assert.rejects(claimCommercialLeadInboxItem(client(), {
       leadId: deniedLead.id, actor: { userId: deniedUserId, sessionId: deniedSessionId }, expectedInboxVersion: 1,
-    }));
+    }), expectedCode('N14_PERMISSION_DENIED'));
   });
-  assert.deepEqual(await n15Counts(), before);
-  assert.equal(environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN, undefined);
+  assert.deepEqual(await n15Counts(), beforeN15);
 });
 
 test('N15 stays absent for real claims with off/non-qualified gates and for assign/unassign', {
@@ -321,7 +432,8 @@ test('N15 stays absent for real claims with off/non-qualified gates and for assi
   await ensureActorAndPolicy();
   const before = await n15Counts();
   const environment = process.env as Record<string, string | undefined>;
-  const previous = { app: environment.APP_ENV, node: environment.NODE_ENV, optIn: environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN };
+  const previous = { app: environment.APP_ENV, node: environment.NODE_ENV,
+    optIn: environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN, inbox: environment.COMMERCIAL_LEAD_INBOX_MODE };
   try {
   for (const [ordinal, appEnvironment, optIn] of [
     [1519, 'test', undefined], [1520, 'production', 'N15_SYNTHETIC_SELF_CLAIM_V1'],
@@ -343,12 +455,15 @@ test('N15 stays absent for real claims with off/non-qualified gates and for assi
   });
   await withN15SyntheticProfile(async () => {
     const disabledLead = await syntheticLead(1526);
-    process.env.COMMERCIAL_LEAD_INBOX_MODE = 'disabled';
-    await assert.rejects(claimCommercialLeadInboxItem(client(), {
-      leadId: disabledLead.id, actor, expectedInboxVersion: 1,
-    }), (error: unknown) => error instanceof Error
-      && (error as Error & { code?: unknown }).code === 'N14_DISABLED');
-    process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+    environment.COMMERCIAL_LEAD_INBOX_MODE = 'disabled';
+    try {
+      await assert.rejects(claimCommercialLeadInboxItem(client(), {
+        leadId: disabledLead.id, actor, expectedInboxVersion: 1,
+      }), (error: unknown) => error instanceof Error
+        && (error as Error & { code?: unknown }).code === 'N14_DISABLED');
+    } finally {
+      environment.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
+    }
     await assignCommercialLeadInboxItem(client(), {
       leadId: assignedLead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
     });
@@ -363,6 +478,7 @@ test('N15 stays absent for real claims with off/non-qualified gates and for assi
   } finally {
     for (const [key, value] of Object.entries({
       APP_ENV: previous.app, NODE_ENV: previous.node, N15_SYNTHETIC_SELF_CLAIM_OPT_IN: previous.optIn,
+      COMMERCIAL_LEAD_INBOX_MODE: previous.inbox,
     })) {
       if (value === undefined) delete environment[key]; else environment[key] = value;
     }
@@ -381,11 +497,14 @@ test('N15 requested profile rejects configuration and database identity before N
   const before = await n15Counts();
   await withN15SyntheticProfile(async () => {
     const databaseUrl = environment.DATABASE_URL;
-    environment.DATABASE_URL = 'postgresql://remote.invalid/fai_crm_test';
-    await assert.rejects(claimCommercialLeadInboxItem(client(), {
-      leadId: lead.id, actor, expectedInboxVersion: 1,
-    }), /N15_SYNTHETIC_DATABASE_CONFIGURATION_INVALID/u);
-    environment.DATABASE_URL = databaseUrl;
+    try {
+      environment.DATABASE_URL = 'postgresql://remote.invalid/fai_crm_test';
+      await assert.rejects(claimCommercialLeadInboxItem(client(), {
+        leadId: lead.id, actor, expectedInboxVersion: 1,
+      }), /N15_SYNTHETIC_DATABASE_CONFIGURATION_INVALID/u);
+    } finally {
+      environment.DATABASE_URL = databaseUrl;
+    }
     await rootClient().$executeRawUnsafe(`COMMENT ON DATABASE "fai_crm_test" IS 'N15_INCOHERENT_SYNTHETIC_IDENTITY'`);
     try {
       await assert.rejects(claimCommercialLeadInboxItem(client(), {
@@ -399,74 +518,6 @@ test('N15 requested profile rejects configuration and database identity before N
   assert.equal((await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { id: item.id } })).version, 1);
   assert.equal(await client().commercialLeadActivity.count({ where: { inboxItemId: item.id, activityType: 'CLAIMED' } }), 0);
   assert.deepEqual(await n15Counts(), before);
-});
-
-test('N14 migration 42 is transactional, additive and business-empty by construction', () => {
-  const sql = readFileSync(migrationPath, 'utf8');
-  assert.match(sql, /^BEGIN;/u);
-  assert.match(sql, /COMMIT;\s*$/u);
-  assert.equal((sql.match(/^CREATE TABLE /gmu) ?? []).length, 4);
-  assert.equal((sql.match(/^CREATE FUNCTION /gmu) ?? []).length, 5);
-  assert.equal((sql.match(/^CREATE TRIGGER /gmu) ?? []).length, 9);
-  assert.doesNotMatch(sql, /^\s*(?:INSERT|UPDATE|DELETE)\s/imu);
-  assert.doesNotMatch(sql, /CREATE\s+(?:EXTENSION|EVENT)|\b(?:cron|scheduler|dblink|http)\b/iu);
-  assert.match(sql, /N21_UNASSIGNED/u);
-  assert.match(sql, /N14_LEAD_WRITER_BYPASS/u);
-  assert.match(sql, /N14_WEBSITE_ATTRIBUTION_INVALID/u);
-  assert.doesNotMatch(sql, /CommercialLeadInboxItem_privacyEvidenceReceiptId_fkey/u);
-  assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
-});
-
-test('current fresh44 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
-  skip: !runDbTests,
-  timeout: 240_000,
-}, async () => {
-  const [migrationRows, catalogRows, indexRows, triggerRows, functionRows, businessRows] = await Promise.all([
-    client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`,
-    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
-      SELECT table_name AS name FROM information_schema.tables
-      WHERE table_schema = ${schema} AND table_name LIKE 'CommercialLead%'
-      ORDER BY table_name
-    `),
-    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
-      SELECT indexname AS name FROM pg_indexes
-      WHERE schemaname = ${schema} AND tablename LIKE 'CommercialLead%'
-      ORDER BY indexname
-    `),
-    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
-      SELECT trigger_row.tgname AS name
-      FROM pg_trigger trigger_row
-      JOIN pg_class table_row ON table_row.oid = trigger_row.tgrelid
-      JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
-      WHERE namespace_row.nspname = ${schema}
-        AND (table_row.relname LIKE 'CommercialLead%' OR table_row.relname = 'Lead')
-        AND NOT trigger_row.tgisinternal
-      ORDER BY trigger_row.tgname
-    `),
-    client().$queryRaw<Array<{ name: string }>>(Prisma.sql`
-      SELECT routine_name AS name FROM information_schema.routines
-      WHERE routine_schema = ${schema} AND routine_name LIKE 'n14_%'
-      ORDER BY routine_name
-    `),
-    client().$queryRaw<Array<{ policies: bigint; items: bigint; cycles: bigint; activities: bigint }>>`
-      SELECT
-        (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaPolicyVersion") AS policies,
-        (SELECT COUNT(*)::bigint FROM "CommercialLeadInboxItem") AS items,
-        (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaCycle") AS cycles,
-        (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
-    `,
-  ]);
-  assert.equal(Number(migrationRows[0]?.count), 44);
-  assert.deepEqual(catalogRows.map(({ name }) => name), [
-    'CommercialLeadActivity',
-    'CommercialLeadInboxItem',
-    'CommercialLeadSlaCycle',
-    'CommercialLeadSlaPolicyVersion',
-  ]);
-  assert.equal(indexRows.length, 25);
-  assert.equal(triggerRows.length, 9);
-  assert.equal(functionRows.length, 5);
-  assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
 });
 
 test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy Lead', {

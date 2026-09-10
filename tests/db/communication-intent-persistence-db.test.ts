@@ -370,7 +370,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
     environment.INTERNAL_SESSION_MODE = 'registry';
     environment.APP_ENV = 'test';
     environment.NODE_ENV = 'test';
-    const userId = 'n15-schema43-commercial-user';
+    const userId = '00000000-0000-4000-8000-000000154302';
     const sessionId = '00000000-0000-4000-8000-000000154300';
     try {
       await oldClient.user.create({ data: { id: userId, email: 'schema43@n15.invalid', name: 'N15 Schema43',
