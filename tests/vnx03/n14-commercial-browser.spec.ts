@@ -88,6 +88,24 @@ async function loginActive(
   return page;
 }
 
+async function serverActionName(page: Page, buttonName: string) {
+  return page.getByRole('button', { name: buttonName }).evaluate((button) => {
+    const form = button.closest('form');
+    if (!form) throw new Error('VNX03_N14_ACTION_FORM_MISSING');
+    const action = [...new FormData(form).keys()].find((name) => name.startsWith('$ACTION_ID_'));
+    if (!action) throw new Error('VNX03_N14_ACTION_ID_MISSING');
+    return action;
+  });
+}
+
+function isServerActionRequest(request: import('@playwright/test').Request, path: string, action: string) {
+  const url = new URL(request.url());
+  return request.method() === 'POST'
+    && url.origin === new URL(crmUrl).origin
+    && `${url.pathname}${url.search}` === path
+    && (request.postData() ?? '').includes(action);
+}
+
 async function submitSyntheticLead(page: Page) {
   compose(['exec', '-T', '--user', '0:0', 'wordpress', 'sh', '-c',
     'printf "normal\\n" > /run/vnx03-control/connector-scenario']);
@@ -131,6 +149,9 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
   const duplicatePage = await owner.newPage();
   await duplicatePage.goto(`${crmUrl}/leads/inbox?queue=unassigned`);
+  const claimAction = await serverActionName(ownerPage, 'Prendi in carico');
+  assert.equal(await serverActionName(duplicatePage, 'Prendi in carico'), claimAction);
+  const claimPath = '/leads/inbox?queue=unassigned';
   let releaseClaims!: () => void;
   const claimGate = new Promise<void>((resolve) => { releaseClaims = resolve; });
   const claimArrivals: Promise<void>[] = [];
@@ -139,23 +160,24 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
     claimArrivals.push(new Promise<void>((resolve) => { markArrived = resolve; }));
     await claimPage.route('**/*', async (route) => {
       const request = route.request();
-      if (request.method() !== 'POST'
-        || new URL(request.url()).pathname !== '/leads/inbox') return route.continue();
+      if (!isServerActionRequest(request, claimPath, claimAction)) return route.continue();
       markArrived();
       await claimGate;
       await route.continue();
     });
   }
   const claimResponses = [ownerPage, duplicatePage].map((claimPage) =>
-    claimPage.waitForResponse((response) => response.request().method() === 'POST'));
+    claimPage.waitForResponse((response) =>
+      isServerActionRequest(response.request(), claimPath, claimAction)));
   const clicks = [ownerPage, duplicatePage].map((claimPage) =>
     claimPage.getByRole('button', { name: 'Prendi in carico' }).click());
   await Promise.all(claimArrivals);
   releaseClaims();
   const responses = await Promise.all(claimResponses);
+  assert.deepEqual(await Promise.all(responses.map((response) => response.finished())), [null, null]);
   await Promise.allSettled(clicks);
-  assert.equal(responses.length, 2);
-  assert.ok(responses.every((response) => response.request().method() === 'POST'));
+  const claimHttpStatuses = responses.map((response) => response.status()).sort((left, right) => left - right);
+  assert.deepEqual(claimHttpStatuses, [200, 500]);
   await ownerPage.goto(`${crmUrl}/leads/inbox?queue=mine`);
   await expect(ownerPage.getByText('Owner: Commerciale Sintetico Uno', { exact: false })).toBeVisible();
   assertState('claimed');
@@ -189,7 +211,15 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   assertRejection('foreign_first_response', 'N14_PERMISSION_DENIED');
 
   await ownerPage.reload();
+  const firstResponseAction = await serverActionName(ownerPage, 'Registra prima risposta');
+  const firstResponsePath = '/leads/inbox?queue=mine';
+  const firstResponseReply = ownerPage.waitForResponse((response) =>
+    isServerActionRequest(response.request(), firstResponsePath, firstResponseAction));
   await ownerPage.getByRole('button', { name: 'Registra prima risposta' }).click();
+  const firstResponse = await firstResponseReply;
+  assert.equal(await firstResponse.finished(), null);
+  assert.equal(firstResponse.status(), 200);
+  await expect(ownerPage.getByRole('button', { name: 'Registra prima risposta' })).toHaveCount(0);
   await ownerPage.reload();
   await expect(ownerPage.getByRole('button', { name: 'Registra prima risposta' })).toHaveCount(0);
   await expect(ownerPage.locator('article').filter({ hasText: 'VNX03 N14 Browser' }))
@@ -199,9 +229,10 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
 
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({
     synthetic: true, registryLogin: true, ownerPersistedAfterReload: true,
-    claimRequestsProcessed: responses.length, staleClaimRejected: true,
+    claimResponsesCompleted: responses.length, claimHttpStatuses,
+    staleClaimCodeVerifiedSeparately: true,
     secondCommercialMutationRejected: true, rejectedMutationStatus: rejectedMutation.status,
-    firstResponseRecorded: true,
+    firstResponseHttpStatus: firstResponse.status(), firstResponseRecorded: true,
     n15Effects: 0,
   }, null, 2)}\n`, { mode: 0o600 });
   await other.close();

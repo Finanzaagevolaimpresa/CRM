@@ -12,11 +12,15 @@ collaudo e abilita N14 in un processo CRM sintetico separato con session registr
 La fase N14 usa lo stesso WordPress/WPForms, connettore, gateway TLS, database effimero e consumer
 reali già bloccati dal banco. Crea prima tre utenti inventati e una policy SLA 24x7 UTC valida,
 poi esegue un nuovo submit browser. Il consumer proietta il Lead N13 e lo iscrive nell'inbox N14.
-Playwright verifica login reale e visibilità dell'item non assegnato. Trattiene entrambi i POST di
-claim fino a quando le due richieste sono osservate, quindi attende entrambe le risposte; una sonda
+Playwright verifica login reale e visibilità dell'item non assegnato. Ricava l'identità della server
+action dai due form reali e trattiene esclusivamente i POST diretti all'esatto path/query dell'inbox
+che contengono tale comando. Dopo aver osservato entrambi gli invii, attende il completamento delle
+due risposte e richiede un HTTP 200 e un HTTP 500; il 500 prova soltanto l'esito HTTP. Una sonda
 supplementare invoca lo stesso servizio N14 con la sessione registry emessa dal login e comprova il
 conflitto del comando stale, una sola ownership/activity e stato invariato. Seguono reload,
-registrazione della prima risposta e ciclo SLA `MET`.
+registrazione della prima risposta e ciclo SLA `MET`. Anche per il primo contatto il test attende la
+risposta HTTP 200 dell'esatta server action e la scomparsa del comando dalla UI prima del reload e
+della verifica persistente.
 
 Un secondo commerciale non vede né apre il Lead assegnato. Con la sua sessione autentica il browser
 reinvia inoltre il comando ricavato dal form applicativo reale: la risposta non-success e gli assert

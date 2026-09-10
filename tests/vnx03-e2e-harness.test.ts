@@ -138,10 +138,14 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   assert.match(browser, /registryCookiePresent/u);
   assert.doesNotMatch(browser, /cookie\.value|password[^\n]*JSON\.stringify/u);
   assert.match(browser, /Prendi in carico[\s\S]*Promise\.allSettled/u);
-  assert.match(browser, /claimRequestsProcessed: responses\.length/u);
+  assert.match(browser, /isServerActionRequest[\s\S]*request\.postData\(\)[\s\S]*includes\(action\)/u);
+  assert.match(browser, /response\.finished\(\)[\s\S]*\[null, null\]/u);
+  assert.match(browser, /claimHttpStatuses, \[200, 500\]/u);
+  assert.match(browser, /staleClaimCodeVerifiedSeparately: true/u);
   assert.match(browser, /foreign_first_response[\s\S]*N14_PERMISSION_DENIED/u);
   assert.match(browser, /rejectedMutation\.status >= 400/u);
   assert.match(browser, /Registra prima risposta/u);
+  assert.match(browser, /firstResponseReply[\s\S]*firstResponse\.status\(\), 200/u);
   assert.match(browser, /commercial\.inactive@vnx03\.invalid/u);
   assert.doesNotMatch(browser, /addCookies|document\.cookie/u);
   const rejectionProbe = source('tests/vnx03/exercise-n14-rejections.ts');
