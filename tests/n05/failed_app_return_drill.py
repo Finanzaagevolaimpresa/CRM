@@ -14,11 +14,11 @@ def inspect(kind,x):return json.loads(run(kind,'inspect',x))[0]
 def ref(path,kind):return {'path':str(path),'sha256':n05.sha(json.loads(path.read_text())),'kind':kind}
 def image(tag,c,t):
  raw=inspect('image',tag); return {'tag':tag,'id':raw['Id'],'oci_commit':c,'oci_tree':t}
-def build(tag,c,t,context,command='while :; do sleep 60; done',health='true'):
+def build(tag,c,t,context,command='while :; do sleep 60; done',health='true',start_period='0s'):
  docker=(f'FROM alpine:3.20\nLABEL org.opencontainers.image.revision={c}\n'
          f'LABEL it.finanzaagevolaimpresa.source-tree={t}\n'
          f'CMD {json.dumps(["sh","-c",command])}\n'
-         f'HEALTHCHECK --interval=1s --timeout=1s --retries=2 CMD {json.dumps(["sh","-c",health])}\n')
+         f'HEALTHCHECK --interval=1s --timeout=1s --retries=2 --start-period={start_period} CMD {json.dumps(["sh","-c",health])}\n')
  run('build','-q','-t',tag,'-f','-',str(context),input=docker)
 def freeze(project,source,env,destination):
  out=run('compose','-p',project,'--env-file',str(env),'-f',str(source),'config','--format','json')
@@ -53,7 +53,7 @@ def scenario(reason,tags,private,registered,projects):
  migrator_raw=inspect('container',migrator)
  appid=run('ps','-aq','--filter','label=com.docker.compose.project='+project,'--filter','label=com.docker.compose.service=app'); run('exec',appid,'sh','-c','echo preserved >/var/lib/fai-crm/documents/sentinel')
  configs={}
- candidate_tag=tags[reason] if reason in ('unhealthy','exited') else tags['candidate']
+ candidate_tag=tags[reason] if reason in ('unhealthy','exited','starting') else tags['candidate']
  candidate_model=model(candidate_tag)
  if reason=='absent':
   # A real name collision makes Compose creation fail after source removal.
@@ -69,11 +69,14 @@ def scenario(reason,tags,private,registered,projects):
  for logical in ('crm_documents','postgres_data'):
   v=inspect('volume',project+'_'+logical); volumes[logical]={k:v[k] for k in ('Name','Driver','Mountpoint','CreatedAt','Labels','Options','Scope')}
  nw=inspect('network',project+'_default'); network={k:nw[k] for k in ('Id','Name','Created','Driver','Scope','Labels','Options','IPAM','Internal','Attachable','Ingress')}
- base={'schema':'FAI_CRM_N05_FAILED_APP_RETURN_V2','run_id':'synthetic-'+uuid.uuid4().hex[:20],'engine':engine_id,'project':project,
+ now=time.time()
+ base={'schema':'FAI_CRM_N05_FAILED_APP_RETURN_V3','run_id':'synthetic-'+uuid.uuid4().hex[:20],'engine':engine_id,'project':project,
  'tools':{'commit':'a'*40,'tree':'b'*40,'ci_sha':'a'*40,'ci_conclusion':'success'},'source_app':{'id':a['Id'],'created':a['Created'],'image_id':a['Image']},
  'candidate':image(candidate_tag,'c'*40,'d'*40),'return_image':image(tags['return'],'e'*40,'f'*40),'postgres':{'id':pg['Id'],'image':pg['Image'],'created':pg['Created']},
  'resources':{'volumes':volumes,'network':network},'configs':configs,'ledger':{'schema':'synthetic-v1','count':1,'digest':'0'*64},
- 'compatibility':{'path':'/x','sha256':'5'*64,'kind':'return-image-schema-compatibility'},'deadline_epoch':time.time()+180,
+ 'compatibility':{'path':'/x','sha256':'5'*64,'kind':'return-image-schema-compatibility'},'deadline_epoch':now+240,
+ 'phase_deadlines':{'forward_epoch':now+60,'settlement_epoch':now+90,'return_epoch':now+210,
+                    'settlement_reserve_seconds':30,'return_reserve_seconds':120,'cleanup_reserve_seconds':30},
  'gates':{x:{'path':'/x','sha256':str(i)*64,'kind':x} for x,i in [('recovery',6),('artifacts',7),('reviewed_plan',8),('authorization',9)]},
  'return_policy':{'allowed_reasons':['functional-failure','unhealthy','exited','absent']},
  'migrator':{'id':migrator_raw['Id'],'created':migrator_raw['Created'],'image_id':migrator_raw['Image'],'role':'migrate','project':project},
@@ -92,7 +95,16 @@ def scenario(reason,tags,private,registered,projects):
   n05.require(not pathlib.Path(base['receipt_path']).exists(),'DENIED_PREFLIGHT_WROTE_RECEIPT')
   print('N05_RETURN_ARTIFACT_PREFLIGHT_DENIAL_PASS')
  receipt=n05.ForwardRecorder(adapter).run(base,pathlib.Path(base['receipt_path']))
- request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':base['run_id'],'plan_sha256':n05.sha(base),'receipt_sha256':n05.sha(receipt),'reason':reason,'evidence':{'path':'/synthetic/functional.json','sha256':'a'*64,'kind':'functional-failure'} if reason=='functional-failure' else None}
+ if reason=='starting':
+  n05.require(receipt['events'][-1]['result']=='candidate-stopped-after-failure','STARTING_NOT_SETTLED')
+  candidate=receipt['events'][-1]['observation']['candidate'];raw=inspect('container',candidate['id'])
+  n05.require(raw['Id']==candidate['id'] and raw['Created']==candidate['created'] and raw['Image']==candidate['image_id']
+              and raw['State']['Status']=='exited' and raw['State']['Pid']==0 and not raw.get('ExecIDs'),
+              'STARTING_STOP_NOT_VERIFIED')
+  n05.require(time.time()<base['phase_deadlines']['return_epoch'],'RETURN_RESERVE_CONSUMED')
+  print('N05_STARTING_DEADLINE_STOP_RECEIPT_PASS')
+ request_reason='exited' if reason=='starting' else reason
+ request={'schema':'FAI_CRM_N05_RETURN_REQUEST_V1','run_id':base['run_id'],'plan_sha256':n05.sha(base),'receipt_sha256':n05.sha(receipt),'reason':request_reason,'evidence':{'path':'/synthetic/functional.json','sha256':'a'*64,'kind':'functional-failure'} if reason=='functional-failure' else None}
  n05.validate_return_request(request,base,receipt)
  # Concrete stopped foreign container must block, then exact cleanup permits return.
  foreign=run('create','--label','com.docker.compose.project='+project,'alpine:3.20','true'); registered.append(('container',foreign))
@@ -122,15 +134,16 @@ def main():
  registered=[]; projects=[]; built=[]
  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-real-drill-') as d:
   private=pathlib.Path(d); private.chmod(0o700); suffix=uuid.uuid4().hex[:10]
-  tags={name:f'n05-{name}:{suffix}' for name in ('source','candidate','unhealthy','exited','return')}
+  tags={name:f'n05-{name}:{suffix}' for name in ('source','candidate','unhealthy','exited','starting','return')}
   context=private/'empty-build-context'; context.mkdir(mode=0o700)
   try:
    for name in tags:
     n05.require(not run('image','ls','-q','--filter','reference='+tags[name]),'DRILL_IMAGE_ALREADY_EXISTS')
     c,t=('9'*40,'8'*40) if name=='source' else ('e'*40,'f'*40) if name=='return' else ('c'*40,'d'*40)
-    build(tags[name],c,t,context,command='exit 17' if name=='exited' else 'while :; do sleep 60; done',health='false' if name=='unhealthy' else 'true')
+    build(tags[name],c,t,context,command='exit 17' if name=='exited' else 'while :; do sleep 60; done',
+          health='false' if name in ('unhealthy','starting') else 'true',start_period='300s' if name=='starting' else '0s')
     built.append(tags[name])
-   for reason in ('functional-failure','unhealthy','exited','absent'):
+   for reason in ('functional-failure','unhealthy','exited','absent','starting'):
     scenario(reason,tags,private,registered,projects)
     print('N05_SCENARIO_PASS|reason='+reason)
   finally:

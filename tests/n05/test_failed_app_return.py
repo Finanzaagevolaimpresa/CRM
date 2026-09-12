@@ -6,7 +6,7 @@ spec=importlib.util.spec_from_file_location('n05',ROOT/'scripts/n05/failed_app_r
 def ref(kind,n='a'): return {'path':'/private/'+kind+'.json','sha256':n*64,'kind':kind}
 def plan(reason='unhealthy'):
  image=lambda c:{'tag':'fai-crm:pr1-'+c*12,'id':'sha256:'+c*64,'oci_commit':c*40,'oci_tree':chr(ord(c)+1)*40}
- return {'schema':'FAI_CRM_N05_FAILED_APP_RETURN_V2','run_id':'synthetic-run-0001',
+ return {'schema':'FAI_CRM_N05_FAILED_APP_RETURN_V3','run_id':'synthetic-run-0001',
   'engine':{'kind':'docker','host':'unix:///var/run/docker.sock','id':'synthetic-engine','name':'synthetic-daemon','os_type':'linux'},'project':'fai-crm',
   'tools':{'commit':'a'*40,'tree':'b'*40,'ci_sha':'a'*40,'ci_conclusion':'success'},
   'source_app':{'id':'9'*64,'created':'source-created','image_id':'sha256:'+'8'*64},
@@ -16,6 +16,8 @@ def plan(reason='unhealthy'):
   'configs':{x:ref('frozen-compose-'+x,str(i)) for x,i in [('previous',1),('candidate',2),('return',3)]},
   'ledger':{'schema':'v44','count':44,'digest':'4'*64},'compatibility':ref('return-image-schema-compatibility','5'),
   'deadline_epoch':2000,'gates':{x:ref(x,str(i)) for x,i in [('recovery',6),('artifacts',7),('reviewed_plan',8),('authorization',9)]},
+  'phase_deadlines':{'forward_epoch':1300,'settlement_epoch':1400,'return_epoch':1900,
+                     'settlement_reserve_seconds':100,'return_reserve_seconds':500,'cleanup_reserve_seconds':100},
   'return_policy':{'allowed_reasons':['functional-failure','unhealthy','exited','absent']},
   'migrator':None,
   'receipt_path':'/private/receipt.json','return_request_path':'/private/request.json','journal_path':'/private/journal.json'}
@@ -165,8 +167,17 @@ class Protocol(unittest.TestCase):
     flock.assert_not_called()
    self.assertEqual(path.read_text(),'')
  def test_global_deadline_terminates_subprocess_group(self):
+  # Admit >2s total so the fixed local-stop reserve leaves a real spawn budget.
+  now=n05.time.time()
   with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED'):
-   n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),n05.time.time()+0.05)
+   n05.run_deadline([sys.executable,'-c','import time; time.sleep(30)'],os.environ.copy(),now+0.05,stop_deadline=now+3)
+  self.assertLess(n05.time.time()-now,4)
+ def test_native_descendant_group_stop_is_bounded_even_if_reaping_is_unverified(self):
+  # The original three-second stop bound includes any unverified group reap.
+  now=n05.time.time()
+  with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED|LOCAL_COMMAND_STOP_UNVERIFIED'):
+   n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),now+0.05,stop_deadline=now+3)
+  self.assertLess(n05.time.time()-now,4)
  def test_ledger_defaults_postgres_user_without_weakening_rows(self):
   p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker']); captured=[]
   engine.run=lambda *args,**kwargs:(captured.extend(args) or 'migration_001\tchecksum\tstarted\tfinished\t\t1\n')
@@ -176,7 +187,7 @@ class Protocol(unittest.TestCase):
   with self.assertRaisesRegex(n05.Denied,'LEDGER_INCOMPLETE_FAILED_OR_ROLLED_BACK'): engine.ledger('f'*64,1500)
  def test_handwritten_two_event_absence_denied(self):
   p=plan('absent'); a=n05.event(None,p['run_id'],'healthy-source','verified',{}); b=n05.event(a,p['run_id'],'forward-result','candidate-absent-attributed',{'absence_attributed':True})
-  r={'schema':'FAI_CRM_N05_FORWARD_RECEIPT_V1','run_id':p['run_id'],'engine':p['engine'],'project':p['project'],'plan_sha256':n05.sha(p),'lock_id':p['engine']['id']+':fai-crm','events':[a,b]}
+  r={'schema':'FAI_CRM_N05_FORWARD_RECEIPT_V2','run_id':p['run_id'],'engine':p['engine'],'project':p['project'],'plan_sha256':n05.sha(p),'lock_id':p['engine']['id']+':fai-crm','events':[a,b]}
   with self.assertRaisesRegex(n05.Denied,'FORWARD_SEQUENCE_INCOMPLETE'): n05.validate_receipt(r,p)
  def test_native_null_volume_metadata_is_preserved_and_drift_denied(self):
   p=plan(); p['resources']['volumes']['crm_documents'].update(Labels=None,Options=None)
@@ -302,6 +313,9 @@ class Protocol(unittest.TestCase):
   # file checks and flock run through both dispatch paths. CI provisions the
   # fixed production lock path on its isolated runner; local tests use home.
   p=plan();p['deadline_epoch']=n05.time.time()+30
+  p['phase_deadlines']={'forward_epoch':p['deadline_epoch']-20,'settlement_epoch':p['deadline_epoch']-15,
+                       'return_epoch':p['deadline_epoch']-5,'settlement_reserve_seconds':5,
+                       'return_reserve_seconds':10,'cleanup_reserve_seconds':5}
   p['migrator']={'id':'3'*64,'created':'migrator-created','image_id':'sha256:'+'2'*64,'role':'migrate','project':p['project']}
   engine=Engine(p);engine.snap['migrators']=[p['migrator']['id']];events=[]
   engine.migrator=lambda identity,deadline:p['migrator']|{'state':'exited','exit_code':0} if engine.snap['migrators'] else None
@@ -315,7 +329,8 @@ class Protocol(unittest.TestCase):
   def recreate_locked(*args):
    assert_locked();events.append('return-under-lock');return recreate(*args)
   engine.recreate_return=recreate_locked
-  def git(command,env,deadline,input_text=None):
+  def git(command,env,deadline,input_text=None,*,stop_deadline=None):
+   self.assertEqual(stop_deadline,n05.command_stop_deadline(p,deadline))
    if command[3]=='branch':output='main'
    elif command[3]=='rev-parse':output=p['tools']['tree'] if command[-1]=='HEAD^{tree}' else p['tools']['commit']
    else:output=''
@@ -376,6 +391,32 @@ class Protocol(unittest.TestCase):
    pathlib.Path(d).chmod(0o700); path=pathlib.Path(d)/'receipt'; p['receipt_path']=str(path); p['return_request_path']=str(pathlib.Path(d)/'request'); p['journal_path']=str(pathlib.Path(d)/'journal')
    with self.assertRaises(n05.Denied): n05.ForwardRecorder(e,lambda:1000).run(p,path)
    with self.assertRaises(n05.Denied): n05.validate_receipt(json.loads(path.read_text()),p)
+ def test_native_publication_interlock_blocks_complete_json_after_write_error(self):
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-publication-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);p=plan();e=Engine(p)
+   for key in ('receipt_path','return_request_path','journal_path'):p[key]=str(private/(key+'.json'))
+   original=n05.atomic_json
+   def interrupted(path,value):
+    original(path,value)
+    if value.get('events') and value['events'][-1]['phase']=='forward-result':raise OSError('invented post-replace fsync failure')
+   with mock.patch.object(n05,'atomic_json',side_effect=interrupted):
+    with self.assertRaises(OSError):n05.ForwardRecorder(e,lambda:1000).run(p,pathlib.Path(p['receipt_path']))
+   receipt=json.loads(pathlib.Path(p['receipt_path']).read_text());n05.validate_receipt(receipt,p)
+   marker=n05.publication_path(pathlib.Path(p['receipt_path']))
+   self.assertTrue(marker.exists());self.assertEqual(n05.strict_json(marker)['plan_sha256'],n05.sha(p))
+   with self.assertRaisesRegex(n05.Denied,'PUBLICATION_INCOMPLETE'):
+    n05.ReturnController(e,lambda:1000)._check(p,receipt,{'unused':'must not be reached'})
+   self.assertFalse(pathlib.Path(p['journal_path']).exists())
+ def test_native_publication_interlock_identity_and_dangling_link_are_rejected(self):
+  with tempfile.TemporaryDirectory(dir=pathlib.Path.home(),prefix='.n05-publication-id-') as d:
+   private=pathlib.Path(d);private.chmod(0o700);p=plan();output=private/'output.json';value={'invented':True}
+   token=n05.begin_publication(output,p);n05.atomic_json(output,value)
+   marker=n05.publication_path(output);moved=private/'original-marker'
+   marker.rename(moved);marker.write_bytes(moved.read_bytes());marker.chmod(0o600)
+   with self.assertRaisesRegex(n05.Denied,'PUBLICATION_INTERLOCK_REPLACED'):
+    n05.finish_publication(output,value,token,1500,lambda:1000)
+   self.assertTrue(marker.exists());marker.unlink();marker.symlink_to(private/'absent-invented')
+   with self.assertRaisesRegex(n05.Denied,'PUBLICATION_INCOMPLETE'):n05.require_published(output)
  def test_entry_rejects_before_private_read_or_daemon(self):
   env={'PATH':os.environ['PATH'],'FAI_ENVIRONMENT':'synthetic','FAI_ENVIRONMENT_SENTINEL':'x','COMPOSE_PROJECT_NAME':'x'}
   r=subprocess.run([sys.executable,str(ROOT/'scripts/n05/failed_app_return.py'),'return','/does/not/exist'],env=env,text=True,capture_output=True)

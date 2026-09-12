@@ -1,4 +1,4 @@
 {
-  "schema": "FAI_CRM_N05_FAILED_APP_RETURN_V2",
-  "documentation": "DELIBERATELY INCOMPLETE AND NON-EXECUTABLE. The private 0600 pre-forward plan binds run, measured engine, project, tool/CI, exact source/candidate/return images, PostgreSQL, resources, frozen models, ledger, evidence, allowed return policy, deadline, receipt, post-forward request and journal. The later request selects only the state actually bound to the completed receipt. No credential belongs here."
+  "schema": "FAI_CRM_N05_FAILED_APP_RETURN_V3",
+  "documentation": "DELIBERATELY INCOMPLETE AND NON-EXECUTABLE. The private 0600 plan binds run, measured engine, project, tool/CI, exact source/candidate/return images, PostgreSQL, resources, frozen models, ledger, evidence, return policy and original absolute deadlines. phase_deadlines has forward_epoch, settlement_epoch, return_epoch, settlement_reserve_seconds, return_reserve_seconds and cleanup_reserve_seconds; deadline_epoch is the total bound. Each later phase reserves its duration before forward can mutate. Receipt and journal paths also derive exclusive .pending publication interlocks. The later request selects only the state actually bound to the completed and published receipt. No credential belongs here."
 }

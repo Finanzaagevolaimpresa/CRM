@@ -44,7 +44,7 @@ class Fixture:
                    'Driver': 'bridge', 'Scope': 'local', 'Labels': {}, 'Options': {},
                    'IPAM': {}, 'Internal': False, 'Attachable': False, 'Ingress': False}
         self.rows = 'invented-migration\tchecksum\tstarted\tfinished\t\t1\n'
-        self.plan = {'project': 'fai-crm',
+        self.plan = {'schema': 'FAI_CRM_N05_FAILED_APP_RETURN_V2', 'project': 'fai-crm',
             'engine': {'kind': 'docker', 'host': 'unix:///var/run/docker.sock',
                        'id': 'synthetic-engine', 'name': 'synthetic-host', 'os_type': 'linux'},
             'postgres': {'id': self.pg_id, 'image': image, 'created': 'synthetic-pg'},

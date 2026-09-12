@@ -108,6 +108,65 @@ def atomic_json(path: Path, value):
             os.unlink(name)
 
 
+def publication_path(path):
+    return Path(str(path) + ".pending")
+
+
+def require_published(path):
+    # lexists also rejects a dangling symlink substituted for the interlock.
+    require(not os.path.lexists(publication_path(path)), "PUBLICATION_INCOMPLETE")
+
+
+def begin_publication(path, plan):
+    """Exclusive interlock survives any partial/ambiguous forward publication.
+
+    A complete JSON left by replace followed by a failed fsync is not return
+    authority while this marker exists. Never clear an old marker to retry.
+    """
+    marker = publication_path(path)
+    private_file(marker, may_create=True)
+    body = {"schema":"FAI_CRM_N05_PUBLICATION_INTERLOCK_V1", "run_id":plan["run_id"],
+            "plan_sha256":sha(plan), "output":str(path)}
+    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        opened = os.fstat(fd)
+        data = (canonical(body)+"\n").encode()
+        with os.fdopen(os.dup(fd), "wb") as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        dfd = os.open(marker.parent, os.O_DIRECTORY)
+        try: os.fsync(dfd)
+        finally: os.close(dfd)
+        return {"identity":(opened.st_dev, opened.st_ino), "body":body}
+    finally:
+        os.close(fd)
+
+
+def finish_publication(path, value, token, deadline, clock):
+    require(clock() < deadline, "DEADLINE_EXPIRED")
+    private_file(path)
+    require(strict_json(path) == value, "PUBLICATION_READBACK_MISMATCH")
+    marker = publication_path(path)
+    private_file(marker)
+    fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(fd); current = marker.lstat()
+        require((opened.st_dev, opened.st_ino) == token["identity"] == (current.st_dev, current.st_ino) and
+                opened.st_nlink == 1, "PUBLICATION_INTERLOCK_REPLACED")
+        require(os.read(fd, 4096) == (canonical(token["body"])+"\n").encode(), "PUBLICATION_INTERLOCK_DRIFT")
+    finally:
+        os.close(fd)
+    current = marker.lstat()
+    require((current.st_dev, current.st_ino) == token["identity"] and
+            stat.S_ISREG(current.st_mode) and current.st_nlink == 1, "PUBLICATION_INTERLOCK_REPLACED")
+    require(clock() < deadline, "DEADLINE_EXPIRED")
+    # The receipt and its directory were already fsynced by atomic_json.
+    # Removing this identified interlock is the final commit point: no fallible
+    # read/close/fsync is performed after it. On a crash an unflushed marker
+    # deletion may reappear and block consumption, which is fail-closed.
+    os.unlink(marker)
+
+
 def acquire_lock(path: Path, binding):
     private_file(path, may_create=True)
     created = False
@@ -142,17 +201,41 @@ def acquire_lock(path: Path, binding):
         raise
 
 
-def run_deadline(command, env, deadline, input_text=None):
-    remaining = deadline-time.time()
+def run_deadline(command, env, deadline, input_text=None, *, stop_deadline=None):
+    # The caller may supply only a previously bound later phase for local
+    # command termination. An omitted bound reserves two seconds *inside* the
+    # supplied deadline, never time added after it has expired.
+    stop_deadline = deadline if stop_deadline is None else stop_deadline
+    require(stop_deadline >= deadline, "COMMAND_STOP_BOUND_INVALID")
+    communication_deadline = min(deadline, stop_deadline-2)
+    remaining = communication_deadline-time.time()
     require(remaining > 0, "DEADLINE_EXPIRED")
     process = subprocess.Popen(command, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
                                start_new_session=True)
     try:
         stdout, stderr = process.communicate(input_text, timeout=remaining)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, 9); process.communicate()
-        raise Denied("SUBPROCESS_DEADLINE_EXPIRED")
+    except BaseException as error:
+        try:
+            require(time.time() < stop_deadline, "LOCAL_COMMAND_STOP_UNVERIFIED")
+            try: os.killpg(process.pid, 9)
+            except ProcessLookupError: pass
+            remaining = stop_deadline-time.time()
+            require(remaining > 0, "LOCAL_COMMAND_STOP_UNVERIFIED")
+            process.communicate(timeout=remaining)
+            require(process.poll() is not None, "LOCAL_COMMAND_STOP_UNVERIFIED")
+            # Reaping the leader alone does not prove the attributed process
+            # group has ceased. No later settlement may overlap a surviving CLI.
+            while time.time() < stop_deadline:
+                try: os.killpg(process.pid, 0)
+                except ProcessLookupError: break
+                time.sleep(min(.05, max(0, stop_deadline-time.time())))
+            else: raise Denied("LOCAL_COMMAND_STOP_UNVERIFIED")
+        except BaseException:
+            raise Denied("LOCAL_COMMAND_STOP_UNVERIFIED") from None
+        if isinstance(error, subprocess.TimeoutExpired):
+            raise Denied("SUBPROCESS_DEADLINE_EXPIRED") from None
+        raise
     return process.returncode, stdout, stderr
 
 
@@ -163,6 +246,10 @@ RUN_ID = re.compile(r"^[a-z0-9][a-z0-9-]{15,79}$")
 PLAN_KEYS = {"schema", "run_id", "engine", "project", "tools", "source_app", "candidate", "return_image",
              "postgres", "resources", "configs", "ledger", "compatibility", "deadline_epoch", "gates",
              "return_policy", "migrator", "receipt_path", "return_request_path", "journal_path"}
+PLAN_V2 = "FAI_CRM_N05_FAILED_APP_RETURN_V2"
+PLAN_V3 = "FAI_CRM_N05_FAILED_APP_RETURN_V3"
+PHASE_KEYS = {"forward_epoch", "settlement_epoch", "return_epoch", "settlement_reserve_seconds",
+              "return_reserve_seconds", "cleanup_reserve_seconds"}
 IMAGE_KEYS = {"tag", "id", "oci_commit", "oci_tree"}
 REF_KEYS = {"path", "sha256", "kind"}
 VOLUME_KEYS = {"Name","Driver","Mountpoint","CreatedAt","Labels","Options","Scope"}
@@ -195,8 +282,9 @@ def validate_evidence(reference, plan, expected_binding):
 
 
 def validate_plan(plan, now=None):
-    require(type(plan) is dict and set(plan) == PLAN_KEYS, "PLAN_SCHEMA_INVALID")
-    require(plan["schema"] == "FAI_CRM_N05_FAILED_APP_RETURN_V2", "PLAN_VERSION_INVALID")
+    require(type(plan) is dict and plan.get("schema") in {PLAN_V2, PLAN_V3}, "PLAN_VERSION_INVALID")
+    require(set(plan) == PLAN_KEYS | ({"phase_deadlines"} if plan["schema"] == PLAN_V3 else set()),
+            "PLAN_SCHEMA_INVALID")
     require(isinstance(plan["run_id"], str) and RUN_ID.fullmatch(plan["run_id"]), "RUN_ID_INVALID")
     require(type(plan["engine"]) is dict and set(plan["engine"]) == {"kind", "host", "id", "name", "os_type"}
             and plan["engine"]["kind"] == "docker" and plan["engine"]["host"] == "unix:///var/run/docker.sock"
@@ -263,10 +351,46 @@ def validate_plan(plan, now=None):
     inputs = {str(Path(reference["path"])) for reference in
               [*plan["configs"].values(), *plan["gates"].values(), plan["compatibility"]]}
     require(not outputs & inputs, "PROTOCOL_OUTPUT_INPUT_ALIAS")
+    if plan["schema"] == PLAN_V3:
+        markers = {str(publication_path(Path(plan[k]))) for k in ("receipt_path", "journal_path")}
+        require(not markers & (outputs | inputs), "PUBLICATION_PATH_ALIAS")
     require(type(plan["deadline_epoch"]) in (int, float) and math.isfinite(plan["deadline_epoch"]) and
-            plan["deadline_epoch"] > (now or time.time()),
+            plan["deadline_epoch"] > (time.time() if now is None else now),
             "DEADLINE_EXPIRED")
+    if plan["schema"] == PLAN_V3:
+        phases = plan["phase_deadlines"]
+        require(type(phases) is dict and set(phases) == PHASE_KEYS and
+                all(type(v) in (int, float) and math.isfinite(v) for v in phases.values()),
+                "PHASE_DEADLINES_INVALID")
+        forward, settlement, returning = (phases[k] for k in ("forward_epoch", "settlement_epoch", "return_epoch"))
+        require(forward < settlement < returning < plan["deadline_epoch"], "PHASE_DEADLINES_ORDER")
+        require(all(phases[k] > 0 for k in PHASE_KEYS if k.endswith("reserve_seconds")) and
+                settlement-forward >= phases["settlement_reserve_seconds"] and
+                returning-settlement >= phases["return_reserve_seconds"] and
+                plan["deadline_epoch"]-returning >= phases["cleanup_reserve_seconds"],
+                "PHASE_RESERVES_UNAVAILABLE")
     return plan
+
+
+def phase_deadline(plan, phase):
+    """Return an original absolute bound, never now + a renewed duration.
+
+    V2 remains consumable for historical return only. A V3 return deliberately
+    does not test the expired forward bound. The total bound includes the
+    separate cleanup reserve and is not an application-mutation deadline.
+    """
+    require(phase in {"forward", "settlement", "return"}, "PHASE_INVALID")
+    if plan["schema"] == PLAN_V2:
+        require(phase == "return", "NEW_FORWARD_REQUIRES_V3")
+        return plan["deadline_epoch"]
+    return plan["phase_deadlines"][phase+"_epoch"]
+
+
+def command_stop_deadline(plan, deadline):
+    if plan.get("schema") == PLAN_V3:
+        if deadline == phase_deadline(plan, "forward"): return phase_deadline(plan, "settlement")
+        if deadline == phase_deadline(plan, "return"): return plan["deadline_epoch"]
+    return deadline
 
 
 def evidence_binding(plan):
@@ -289,7 +413,8 @@ def validate_return_request(request, plan, receipt):
             "RETURN_REQUEST_BINDING_INVALID")
     require(request["reason"] in plan["return_policy"]["allowed_reasons"], "RETURN_REASON_NOT_ALLOWED")
     final = validate_receipt(receipt,plan)
-    observed = final["observation"].get("state") if final["result"] == "candidate-observed" else "absent"
+    observed = final["observation"].get("state") if final["result"] in {
+        "candidate-observed", "candidate-stopped-after-failure"} else "absent"
     if request["reason"] == "functional-failure":
         require(observed == "healthy", "FUNCTIONAL_FAILURE_APP_NOT_HEALTHY")
         validate_ref(request["evidence"], "functional-failure")
@@ -308,7 +433,8 @@ def event(previous, run_id, phase, result, observation):
 
 def validate_receipt(receipt, plan):
     require(set(receipt) == {"schema", "run_id", "engine", "project", "plan_sha256", "lock_id", "events"}, "RECEIPT_SCHEMA_INVALID")
-    require(receipt["schema"] == "FAI_CRM_N05_FORWARD_RECEIPT_V1" and
+    expected_version = "FAI_CRM_N05_FORWARD_RECEIPT_V2" if plan["schema"] == PLAN_V3 else "FAI_CRM_N05_FORWARD_RECEIPT_V1"
+    require(receipt["schema"] == expected_version and
             receipt["run_id"] == plan["run_id"] and receipt["engine"] == plan["engine"] and
             receipt["project"] == plan["project"] and receipt["plan_sha256"] == sha(plan) and
             receipt["lock_id"] == plan["engine"]["id"] + ":" + plan["project"], "RECEIPT_BINDING_INVALID")
@@ -351,6 +477,33 @@ def validate_receipt(receipt, plan):
         require(phases == prefix + ["forward-result"] and receipt["events"][4]["result"] == "absence-observed"
                 and receipt["events"][4]["observation"] == {"inventory_complete": True, "app": None}
                 and final["observation"] == {"absence_proven_by_sequence": True}, "ABSENCE_SEQUENCE_UNPROVEN")
+    elif final["result"] == "candidate-stopped-after-failure":
+        require(plan["schema"] == PLAN_V3 and phases == prefix + ["forward-interrupted", "settlement-intent",
+                "candidate-settled", "forward-result"] and receipt["events"][4]["result"] == "created-exact",
+                "SETTLEMENT_SEQUENCE_INCOMPLETE")
+        created = receipt["events"][4]["observation"].get("candidate")
+        require(type(created) is dict and set(created) == {"id", "created", "image_id"} and
+                re.fullmatch(r"[0-9a-f]{64}", created["id"]) and type(created["created"]) is str and
+                created["created"] and created["image_id"] == plan["candidate"]["id"],
+                "SETTLEMENT_CANDIDATE_IDENTITY_INVALID")
+        failure, intent, settled = receipt["events"][5:8]
+        require(failure["result"] == "observed-failure" and type(failure["observation"]) is dict and
+                set(failure["observation"]) == {"code", "forward_epoch"} and
+                type(failure["observation"]["code"]) is str and
+                re.fullmatch(r"[A-Z][A-Z0-9_]{0,99}", failure["observation"]["code"]) and
+                failure["observation"]["forward_epoch"] == phase_deadline(plan, "forward"),
+                "SETTLEMENT_FAILURE_UNPROVEN")
+        require(intent["result"] == "stop-exact-only" and intent["observation"] == {
+                "candidate": created, "settlement_epoch": phase_deadline(plan, "settlement")},
+                "SETTLEMENT_INTENT_INVALID")
+        proof = settled["observation"]
+        require(settled["result"] == "stopped-exact" and type(proof) is dict and set(proof) == {
+                "candidate", "state", "stop_verified", "before_snapshot_sha256", "after_snapshot_sha256"} and
+                proof["candidate"] == created and proof["state"] == "exited" and proof["stop_verified"] is True and
+                all(type(proof[k]) is str and re.fullmatch(r"[0-9a-f]{64}", proof[k]) for k in
+                    ("before_snapshot_sha256", "after_snapshot_sha256")) and
+                final["observation"] == {"candidate": created, "state": "exited"},
+                "SETTLEMENT_STOP_UNVERIFIED")
     else:
         raise Denied("FORWARD_RESULT_INCOMPLETE")
     return final
@@ -362,64 +515,129 @@ class ForwardRecorder:
 
     def run(self, plan, receipt_path):
         validate_plan(plan, self.clock())
+        deadline = phase_deadline(plan, "forward")
+        def alive(limit=deadline): require(self.clock() < limit, "DEADLINE_EXPIRED")
+        alive()
         require(receipt_path == Path(plan["receipt_path"]), "RECEIPT_PATH_MISMATCH")
         for key in ("receipt_path", "return_request_path", "journal_path"):
             output = Path(plan[key]); private_file(output, may_create=True)
             require(not output.exists(), "PROTOCOL_OUTPUT_ALREADY_EXISTS")
+        for key in ("receipt_path", "journal_path"):
+            require_published(Path(plan[key]))
+            private_file(publication_path(Path(plan[key])), may_create=True)
         for which, image_key in (("candidate", "candidate"), ("return", "return_image")):
-            require(self.engine.config_digest(which, plan["deadline_epoch"]) == plan["configs"][which]["sha256"],
+            require(self.engine.config_digest(which, deadline) == plan["configs"][which]["sha256"],
                     which.upper()+"_CONFIG_DRIFT")
-            require(self.engine.image(plan[image_key], plan["deadline_epoch"]), which.upper()+"_IMAGE_UNAVAILABLE")
+            alive()
+            require(self.engine.image(plan[image_key], deadline), which.upper()+"_IMAGE_UNAVAILABLE")
+            alive()
         if plan["migrator"] is not None:
             finish_registered_migrator(self.engine, plan)
-        before = self.engine.snapshot(plan["deadline_epoch"])
+        alive()
+        before = self.engine.snapshot(deadline)
         require(before["app"] and before["app"]["state"] == "healthy" and
                 {k:before["app"][k] for k in ("id","created","image_id")} == plan["source_app"] and
                 before["app"]["config_sha256"] == plan["configs"]["previous"]["sha256"], "FORWARD_SOURCE_NOT_HEALTHY")
-        self.engine.validate_boundary(plan, before, plan["deadline_epoch"])
+        self.engine.validate_boundary(plan, before, deadline)
+        alive()
         events = [event(None, plan["run_id"], "healthy-source", "verified",
                         {"id": before["app"]["id"], "created": before["app"]["created"],
                          "image_id": before["app"]["image_id"]})]
-        receipt = {"schema":"FAI_CRM_N05_FORWARD_RECEIPT_V1", "run_id":plan["run_id"],
+        receipt = {"schema":"FAI_CRM_N05_FORWARD_RECEIPT_V2", "run_id":plan["run_id"],
                    "engine":plan["engine"], "project":plan["project"], "plan_sha256":sha(plan),
                    "lock_id":plan["engine"]["id"]+":"+plan["project"], "events":events}
-        atomic_json(receipt_path, receipt)
+        publication = begin_publication(receipt_path, plan)
+        io_failed = False
+        def persist(limit=deadline):
+            nonlocal io_failed
+            try:
+                alive(limit)
+                atomic_json(receipt_path, receipt)
+                alive(limit)
+            except BaseException:
+                # Never retry a failed/interrupted publication or use it as a
+                # positive completion. In particular, no settlement adoption.
+                io_failed = True
+                raise
+        def finish(limit=deadline):
+            nonlocal io_failed
+            try: finish_publication(receipt_path, receipt, publication, limit, self.clock)
+            except BaseException:
+                io_failed = True
+                raise
+        persist()
         events.append(event(events[-1], plan["run_id"], "boundary-verified", "verified", {"snapshot_sha256":sha(before)}))
-        atomic_json(receipt_path, receipt)
+        persist()
         events.append(event(events[-1], plan["run_id"], "transition-intent", "authorized", {"app_only":True,"no_deps":True}))
-        atomic_json(receipt_path, receipt)
+        persist()
+        created = None
+        created_durable = False
         try:
-            self.engine.remove_source(plan["source_app"]["id"], plan["deadline_epoch"])
-            absence = self.engine.observe_app_absence(plan["deadline_epoch"])
+            alive()
+            self.engine.remove_source(plan["source_app"]["id"], deadline)
+            alive()
+            absence = self.engine.observe_app_absence(deadline)
             require(absence is True, "SOURCE_REMOVAL_UNOBSERVED")
             events.append(event(events[-1], plan["run_id"], "old-app-removed", "observed-exact",
                                 {"id":plan["source_app"]["id"],"inventory_complete":True}))
-            atomic_json(receipt_path, receipt)
-            created = self.engine.create_candidate(plan, plan["deadline_epoch"])
+            persist()
+            created = self.engine.create_candidate(plan, deadline)
+            alive()
             if created is None:
-                require(self.engine.observe_app_absence(plan["deadline_epoch"]) is True, "CANDIDATE_ABSENCE_UNCERTAIN")
+                require(self.engine.observe_app_absence(deadline) is True, "CANDIDATE_ABSENCE_UNCERTAIN")
                 events.append(event(events[-1], plan["run_id"], "candidate-create", "absence-observed",
                                     {"inventory_complete":True,"app":None}))
                 events.append(event(events[-1], plan["run_id"], "forward-result", "candidate-absent-attributed",
                                     {"absence_proven_by_sequence":True}))
-                atomic_json(receipt_path, receipt)
+                persist()
+                finish()
                 return receipt
+            require(type(created) is dict and set(created) == {"id", "created", "image_id"} and
+                    type(created["id"]) is str and re.fullmatch(r"[0-9a-f]{64}", created["id"]) and
+                    type(created["created"]) is str and created["created"] and
+                    created["image_id"] == plan["candidate"]["id"], "CANDIDATE_CREATED_IDENTITY_INVALID")
             events.append(event(events[-1], plan["run_id"], "candidate-create", "created-exact", {"candidate":created}))
-            atomic_json(receipt_path, receipt)
-            self.engine.start_candidate(created["id"], plan["deadline_epoch"])
-            observed = self.engine.snapshot(plan["deadline_epoch"])["app"]
+            persist()
+            created_durable = True
+            self.engine.start_candidate(created["id"], deadline)
+            alive()
+            observed = self.engine.snapshot(deadline)["app"]
             require(observed and {k:observed[k] for k in ("id","created","image_id")} == created,
                     "CANDIDATE_START_IDENTITY_DRIFT")
-            events.append(event(events[-1], plan["run_id"], "candidate-start", "started-exact", {"candidate":created}))
             receipt_state = "unhealthy" if observed["state"] == "running-unhealthy" else observed["state"]
             require(receipt_state in {"healthy", "unhealthy", "exited"}, "CANDIDATE_STATE_UNOBSERVED")
+            alive()
+            events.append(event(events[-1], plan["run_id"], "candidate-start", "started-exact", {"candidate":created}))
             events.append(event(events[-1], plan["run_id"], "forward-result", "candidate-observed",
                                 {"candidate":created,"state":receipt_state}))
-        except (Denied, subprocess.SubprocessError):
-            # Persist the incomplete chain. It is evidence, never return authority.
-            atomic_json(receipt_path, receipt)
-            raise
-        atomic_json(receipt_path, receipt)
+            persist()
+            finish()
+            return receipt
+        except (Denied, subprocess.SubprocessError, KeyboardInterrupt) as error:
+            if io_failed or not created_durable or (isinstance(error, Denied) and
+                    str(error) == "LOCAL_COMMAND_STOP_UNVERIFIED"):
+                # A lost create reply or receipt never permits adoption by name,
+                # label, image or a later inventory. Preserve incomplete evidence.
+                raise
+            failure = str(error) if isinstance(error, Denied) else (
+                "FORWARD_INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FORWARD_SUBPROCESS_FAILED")
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,99}", failure): failure = "FORWARD_OPERATION_FAILED"
+        settlement = phase_deadline(plan, "settlement")
+        alive(settlement)
+        events.append(event(events[-1], plan["run_id"], "forward-interrupted", "observed-failure",
+                            {"code":failure, "forward_epoch":deadline}))
+        persist(settlement)
+        events.append(event(events[-1], plan["run_id"], "settlement-intent", "stop-exact-only",
+                            {"candidate":created, "settlement_epoch":settlement}))
+        persist(settlement)
+        proof = self.engine.settle_candidate(plan, created, settlement)
+        alive(settlement)
+        events.append(event(events[-1], plan["run_id"], "candidate-settled", "stopped-exact", proof))
+        events.append(event(events[-1], plan["run_id"], "forward-result", "candidate-stopped-after-failure",
+                            {"candidate":created, "state":"exited"}))
+        validate_receipt(receipt, plan)
+        persist(settlement)
+        finish(settlement)
         return receipt
 
 
@@ -428,19 +646,20 @@ def finish_registered_migrator(engine, plan):
     expected = plan["migrator"]
     require(expected is not None, "MIGRATOR_ID_MISSING")
     registered_id = expected["id"]
-    observed = engine.migrator(registered_id, plan["deadline_epoch"])
+    deadline = phase_deadline(plan, "forward")
+    observed = engine.migrator(registered_id, deadline)
     require(observed and {k:observed[k] for k in ("id","created","image_id","role","project")} == expected
             and observed["state"] == "exited" and
             observed["exit_code"] == 0, "MIGRATOR_NOT_SUCCESSFULLY_EXITED")
-    snapshot = engine.snapshot(plan["deadline_epoch"])
+    snapshot = engine.snapshot(deadline)
     require(snapshot["ledger"] == plan["ledger"], "MIGRATOR_LEDGER_INCOMPLETE")
     require(snapshot["engine"] == plan["engine"] and snapshot["project"] == plan["project"] and
             snapshot["postgres"] == plan["postgres"] and snapshot["resources"] == plan["resources"] and
             snapshot["postgres_healthy"] and snapshot["migrators"] == [registered_id] and
             not snapshot["foreign_containers"], "MIGRATOR_BOUNDARY_DRIFT")
-    engine.remove_migrator(registered_id, plan["deadline_epoch"])
-    require(engine.migrator(registered_id, plan["deadline_epoch"]) is None, "MIGRATOR_REMOVAL_FAILED")
-    after = engine.snapshot(plan["deadline_epoch"])
+    engine.remove_migrator(registered_id, deadline)
+    require(engine.migrator(registered_id, deadline) is None, "MIGRATOR_REMOVAL_FAILED")
+    after = engine.snapshot(deadline)
     require(after["postgres"] == plan["postgres"] and after["resources"] == plan["resources"] and
             not after["migrators"] and not after["foreign_containers"], "POST_MIGRATOR_INVENTORY_DRIFT")
 
@@ -451,8 +670,10 @@ class ReturnController:
         self.engine, self.clock = engine, clock
 
     def _check(self, plan, receipt=None, request=None):
-        require(self.clock() < plan["deadline_epoch"], "DEADLINE_EXPIRED")
-        snapshot = self.engine.snapshot(plan["deadline_epoch"])
+        deadline = phase_deadline(plan, "return")
+        require(self.clock() < deadline, "DEADLINE_EXPIRED")
+        snapshot = self.engine.snapshot(deadline)
+        require(self.clock() < deadline, "DEADLINE_EXPIRED")
         require(snapshot["engine"] == plan["engine"] and snapshot["project"] == plan["project"], "ENGINE_PROJECT_DRIFT")
         require(snapshot["postgres"] == plan["postgres"] and snapshot["resources"] == plan["resources"], "PERSISTENT_RESOURCE_DRIFT")
         require(snapshot["postgres_healthy"], "POSTGRES_NOT_HEALTHY")
@@ -460,11 +681,12 @@ class ReturnController:
         require(snapshot["foreign_containers"] == [], "FOREIGN_CONTAINER_PRESENT")
         require(snapshot["ledger"] == plan["ledger"], "LEDGER_DRIFT")
         if receipt:
+            if plan["schema"] == PLAN_V3: require_published(Path(plan["receipt_path"]))
             final = validate_receipt(receipt, plan)
             require(request is not None, "RETURN_REQUEST_MISSING")
             validate_return_request(request,plan,receipt)
             app = snapshot["app"]
-            if final["result"] == "candidate-observed":
+            if final["result"] in {"candidate-observed", "candidate-stopped-after-failure"}:
                 expected = final["observation"]["candidate"]
                 require(app is not None and {k: app[k] for k in ("id", "created", "image_id")} == expected,
                         "CANDIDATE_IDENTITY_DRIFT")
@@ -482,18 +704,24 @@ class ReturnController:
 
     def return_app(self, plan, receipt, request, journal_path):
         validate_plan(plan, self.clock())
+        deadline = phase_deadline(plan, "return")
         require(not journal_path.exists(), "RETURN_ALREADY_ATTEMPTED")
+        if plan["schema"] == PLAN_V3: require_published(journal_path)
         require(not self.engine.attempted(plan["run_id"]), "RETURN_ALREADY_ATTEMPTED")
         before = self._check(plan, receipt, request)
-        require(self.engine.image(plan["return_image"], plan["deadline_epoch"]), "RETURN_IMAGE_UNAVAILABLE")
-        require(self.engine.config_digest("return", plan["deadline_epoch"]) == plan["configs"]["return"]["sha256"], "RETURN_CONFIG_DRIFT")
+        require(self.engine.image(plan["return_image"], deadline), "RETURN_IMAGE_UNAVAILABLE")
+        require(self.clock() < deadline, "DEADLINE_EXPIRED")
+        require(self.engine.config_digest("return", deadline) == plan["configs"]["return"]["sha256"], "RETURN_CONFIG_DRIFT")
+        require(self.clock() < deadline, "DEADLINE_EXPIRED")
         self.engine.mark_attempt(plan["run_id"])
         journal = {"schema":"FAI_CRM_N05_RETURN_JOURNAL_V1", "run_id":plan["run_id"],
                    "result":"ATTEMPT_STARTED", "plan_sha256":sha(plan), "receipt_sha256":sha(receipt),
                    "request_sha256":sha(request), "before_snapshot_sha256":sha(before)}
+        publication = begin_publication(journal_path, plan) if plan["schema"] == PLAN_V3 else None
         atomic_json(journal_path, journal)
         try:
-            new_id = self.engine.recreate_return(plan, plan["deadline_epoch"], before["app"])
+            require(self.clock() < deadline, "DEADLINE_EXPIRED")
+            new_id = self.engine.recreate_return(plan, deadline, before["app"])
             require(new_id and (before["app"] is None or new_id != before["app"]["id"]), "NEW_APP_ID_REQUIRED")
             after = self._check(plan)
             app = after["app"]
@@ -508,6 +736,9 @@ class ReturnController:
             raise
         journal.update(result="PASS", new_app_id=new_id, final_snapshot_sha256=sha(after))
         atomic_json(journal_path, journal)
+        if publication is not None:
+            finish_publication(journal_path, journal, publication, deadline, self.clock)
+        else: require(self.clock() < deadline, "DEADLINE_EXPIRED")
         return journal
 
 
@@ -526,7 +757,8 @@ class DockerEngine:
         remaining = deadline - time.time()
         require(remaining > 0, "DEADLINE_EXPIRED")
         env = {k: os.environ[k] for k in ("PATH", "HOME") if k in os.environ} | {"LC_ALL": "C"}
-        status, stdout, _ = run_deadline(self.command+list(args),env,deadline,input_text)
+        status, stdout, _ = run_deadline(self.command+list(args),env,deadline,input_text,
+                                       stop_deadline=command_stop_deadline(self.plan, deadline))
         require(status == 0, "DOCKER_COMMAND_FAILED")
         return stdout
 
@@ -552,7 +784,7 @@ class DockerEngine:
         command = self.command + ["compose", "-p", self.project, "--project-directory", str(self.repo),
           "--env-file", str(self.env_file), *[x for f in self.files for x in ("-f", str(f))],
           "config", "--format", "json"]
-        status, stdout, _ = run_deadline(command,env,deadline)
+        status, stdout, _ = run_deadline(command,env,deadline,stop_deadline=command_stop_deadline(self.plan, deadline))
         require(status == 0, "COMPOSE_CONFIG_FAILED")
         return json.loads(stdout)
 
@@ -571,7 +803,7 @@ class DockerEngine:
         env = {k:os.environ[k] for k in ("PATH","HOME") if k in os.environ}
         command = self.command + ["compose","-p",self.project,"--project-directory",str(self.repo),
                                    "--env-file",str(self.env_file),"-f",str(path),"config","--format","json"]
-        status, stdout, _ = run_deadline(command,env,deadline)
+        status, stdout, _ = run_deadline(command,env,deadline,stop_deadline=command_stop_deadline(self.plan, deadline))
         require(status == 0 and json.loads(stdout) == model, "FROZEN_COMPOSE_REPLAY_MISMATCH")
         return sha(model)
 
@@ -730,6 +962,51 @@ class DockerEngine:
             time.sleep(min(0.5,max(0,deadline-time.time())))
         raise Denied("CANDIDATE_OBSERVATION_DEADLINE_EXPIRED")
 
+    def settle_candidate(self, plan, expected, deadline):
+        """Stop only the already receipted instance within its original reserve.
+
+        This is not a create-discovery/recovery loop. A missing/changed engine,
+        instance, runtime or persistence boundary denies even the stop. No
+        restart/removal occurs here and a Docker response alone is not proof.
+        """
+        before = self.snapshot(deadline)
+        self.validate_boundary(plan, before, deadline)
+        def same_app(snapshot):
+            app = snapshot["app"]
+            require(app is not None and {k:app[k] for k in ("id", "created", "image_id")} == expected and
+                    app["config_sha256"] == plan["configs"]["candidate"]["sha256"],
+                    "SETTLEMENT_CANDIDATE_DRIFT")
+        def same_raw(raw):
+            require({"id":raw["Id"], "created":raw["Created"], "image_id":raw["Image"]} == expected,
+                    "SETTLEMENT_INSTANCE_DRIFT")
+        same_app(before)
+        raw = self.inspect("container", expected["id"], deadline)
+        same_raw(raw)
+        # Paused/restarting containers need a different lifecycle, not a hidden
+        # unpause/restart here. Active exec sessions are never claimed quiescent.
+        require(not raw["State"].get("Paused") and not raw["State"].get("Restarting") and not raw.get("ExecIDs"),
+                "SETTLEMENT_RUNTIME_UNCERTAIN")
+        if raw["State"].get("Running"):
+            remaining = deadline-time.time()
+            require(remaining > 2, "SETTLEMENT_DEADLINE_EXPIRED")
+            # Leave time for the verification; no stop timeout can consume the
+            # later return or cleanup reservation. The subprocess has the same
+            # absolute settlement bound, including a stuck daemon request.
+            grace = min(10, max(0, int(remaining)-2))
+            self.run("stop", "--time", str(grace), expected["id"], deadline=deadline)
+        stopped = self.inspect("container", expected["id"], deadline)
+        same_raw(stopped)
+        state = stopped["State"]
+        require(not state.get("Running") and not state.get("Paused") and not state.get("Restarting") and
+                state.get("Status") == "exited" and state.get("Pid") == 0 and not stopped.get("ExecIDs"),
+                "SETTLEMENT_STOP_UNVERIFIED")
+        after = self.snapshot(deadline)
+        self.validate_boundary(plan, after, deadline)
+        same_app(after)
+        require(after["app"]["state"] == "exited" and time.time() < deadline, "SETTLEMENT_STOP_UNVERIFIED")
+        return {"candidate":expected, "state":"exited", "stop_verified":True,
+                "before_snapshot_sha256":sha(before), "after_snapshot_sha256":sha(after)}
+
     def remove_source(self, identity, deadline):
         raw = self.inspect("container", identity, deadline)
         require(raw["Id"] == identity, "SOURCE_IDENTITY_DRIFT")
@@ -778,6 +1055,8 @@ def production_main(argv):
     require(socket.gethostname() == "fai-crm-prod-02", "PRODUCTION_HOST_IDENTITY_MISMATCH")
     plan_path = Path(argv[2]); private_file(plan_path)
     plan = validate_plan(strict_json(plan_path))
+    command_deadline = phase_deadline(plan, argv[1])
+    require(time.time() < command_deadline, "DEADLINE_EXPIRED")
     require(plan["project"] == "fai-crm", "PRODUCTION_PROJECT_DENIED")
     receipt_path = Path(plan["receipt_path"])
     request_path = Path(plan["return_request_path"])
@@ -792,7 +1071,8 @@ def production_main(argv):
     repo = Path(__file__).resolve().parents[2]
     require(Path.cwd() == repo, "WORKING_DIRECTORY_INVALID")
     def git(*args):
-        status, stdout, _ = run_deadline(["git","-C",str(repo),*args],os.environ.copy(),plan["deadline_epoch"])
+        status, stdout, _ = run_deadline(["git","-C",str(repo),*args],os.environ.copy(),command_deadline,
+                                       stop_deadline=command_stop_deadline(plan, command_deadline))
         require(status == 0, "TOOLS_GIT_CHECK_FAILED")
         return stdout.strip()
     require(git("branch", "--show-current") == "main" and git("rev-parse", "HEAD") == plan["tools"]["commit"] and
@@ -803,7 +1083,9 @@ def production_main(argv):
         engine = DockerEngine(plan, repo)
         if argv[1] == "forward":
             require(not receipt_path.exists(), "FORWARD_RECEIPT_ALREADY_EXISTS")
-            ForwardRecorder(engine).run(plan, receipt_path)
+            produced = ForwardRecorder(engine).run(plan, receipt_path)
+            completion = ("SETTLED_FOR_RETURN" if produced["events"][-1]["result"] ==
+                          "candidate-stopped-after-failure" else "PASS")
         else:
             private_file(receipt_path)
             receipt = strict_json(receipt_path)
@@ -813,9 +1095,10 @@ def production_main(argv):
                 validate_evidence(request["evidence"],plan,binding)
             require(not journal_path.exists(), "RETURN_ALREADY_ATTEMPTED")
             ReturnController(engine).return_app(plan, receipt, request, journal_path)
+            completion = "PASS"
     finally:
         os.close(fd)
-    print("N05_FAILED_APP_" + argv[1].upper() + "_PASS|run=" + plan["run_id"] +
+    print("N05_FAILED_APP_" + argv[1].upper() + "_" + completion + "|run=" + plan["run_id"] +
           "|attempts=1|postgres=unchanged|data=unchanged")
 
 
