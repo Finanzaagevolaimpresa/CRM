@@ -81,12 +81,11 @@ function formatCount(value: number) {
 
 function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: number }> }) {
   const total = pipeline.reduce((sum, item) => sum + item.value, 0);
-  let offset = 0;
   const segments = pipeline.map((item, index) => {
     const share = total > 0 ? item.value / total * 100 : 0;
-    const segment = { ...item, share, offset, color: pipelineColors[index % pipelineColors.length] };
-    offset += share;
-    return segment;
+    const precedingTotal = pipeline.slice(0, index).reduce((sum, previous) => sum + previous.value, 0);
+    const offset = total > 0 ? precedingTotal / total * 100 : 0;
+    return { ...item, share, offset, color: pipelineColors[index % pipelineColors.length] };
   });
   return (
     <section id="pipeline-pratiche" aria-labelledby="pipeline-heading" className="min-w-0 scroll-mt-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_8px_30px_-20px_rgba(5,46,112,0.4)]">
