@@ -20,12 +20,26 @@ const commercialPermissions: Permission[] = [
 const technicalPermissions: Permission[] = ["service.read", "technical.read", "document.download", "practice_communications.read", "practice_communications.review"];
 const communicationPermissions: Permission[] = ["practice_communications.read", "practice_communications.review"];
 
-export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string }> }) {
+// The fourteen entries and their order match the dashboard caller's pipelineStatuses.
+const operationalPipelineStatuses = [
+  "nuova", "pre_analisi", "documenti_richiesti", "documenti_ricevuti",
+  "in_valutazione", "proposta_inviata", "domanda_in_preparazione", "domanda_presentata",
+  "in_istruttoria", "approvata_deliberata", "respinta_non_procedibile", "rendicontazione",
+  "chiusa", "archiviata",
+];
+
+export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string; pipeline?: string }> }) {
   const params = await searchParams;
   const profile = ["commercial", "technical", "communications", "restricted"].includes(params.profile ?? "") ? params.profile : "admin";
   const permissions = profile === "commercial" ? commercialPermissions : profile === "technical" ? technicalPermissions : profile === "communications" ? communicationPermissions : profile === "restricted" ? [] : adminPermissions;
   const can = (permission: Permission) => permissions.includes(permission);
   const count = (value: number) => params.counters === "zero" ? 0 : params.counters === "large" ? 1234567 : value;
+  const pipeline = params.pipeline === "actual-sparse" || params.pipeline === "actual-all"
+    ? operationalPipelineStatuses.map((status, index) => ({
+      label: status.replaceAll("_", " "),
+      value: count(params.pipeline === "actual-all" ? index + 1 : index === 0 ? 4 : index === 6 ? 3 : index === 12 ? 2 : 0),
+    }))
+    : [{ label: "in valutazione", value: count(4) }, { label: "documenti richiesti", value: count(3) }, { label: "in istruttoria", value: count(2) }];
   const counterGroups = buildDashboardCounterGroups({
     canReadLeads: can("lead.read"), canReadTechnical: can("technical.read"),
     canReadPracticeCommunications: can("practice_communications.read"),
@@ -64,7 +78,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
             ]}
             counterGroups={counterGroups}
             priorities={priorities}
-            pipeline={[{ label: "in valutazione", value: count(4) }, { label: "documenti richiesti", value: count(3) }, { label: "in istruttoria", value: count(2) }]}
+            pipeline={pipeline}
             shortcuts={profile === "commercial" ? [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }] : [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }, { label: "Ufficio Tecnico", description: "Pratiche e comunicazioni", href: "/technical-office" }]}
           />
           <Link className="underline" href="/external">Destinazione esterna al menu</Link>

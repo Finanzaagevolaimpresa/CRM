@@ -49,7 +49,11 @@ const toneStyles = {
   },
 };
 
-const pipelineColors = ["#043E8B", "#00693F", "#81CC2A", "#F68712", "#3D2974", "#62778f"];
+// One distinct swatch for each of the fourteen service states, including zero states.
+const pipelineColors = [
+  "#043E8B", "#00693F", "#81CC2A", "#F68712", "#3D2974", "#62778F", "#C2416B",
+  "#0891B2", "#A16207", "#7C3AED", "#DC2626", "#0F766E", "#B45309", "#475569",
+];
 
 function KpiIcon({ tone, className = "h-6 w-6" }: { tone: DashboardKpi["tone"]; className?: string }) {
   return (
@@ -85,19 +89,24 @@ function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: n
     const share = total > 0 ? item.value / total * 100 : 0;
     const precedingTotal = pipeline.slice(0, index).reduce((sum, previous) => sum + previous.value, 0);
     const offset = total > 0 ? precedingTotal / total * 100 : 0;
-    return { ...item, share, offset, color: pipelineColors[index % pipelineColors.length] };
+    return { ...item, share, offset, color: pipelineColors[index] ?? `hsl(${index * 137.508} 60% 40%)` };
   });
+  const visibleSegments = segments.filter((item) => item.value > 0);
   return (
     <section id="pipeline-pratiche" aria-labelledby="pipeline-heading" className="min-w-0 scroll-mt-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_8px_30px_-20px_rgba(5,46,112,0.4)]">
       <div><p className="text-[0.65rem] font-black uppercase tracking-[0.2em] text-fai-green">Stato dei servizi</p><h2 id="pipeline-heading" className="mt-1 text-xl font-black text-fai-navy">Pipeline pratiche</h2><p className="mt-1 text-xs leading-5 text-slate-500">Distribuzione corrente dei servizi accessibili.</p></div>
       <div className="relative mx-auto my-4 h-44 w-44 max-w-full">
         <svg role="img" aria-label="Distribuzione dei servizi per stato" data-pipeline-total={total} viewBox="0 0 200 200" className="h-full w-full">
           <circle cx="100" cy="100" r="78" fill="none" stroke="#e9eef4" strokeWidth="23" />
-          {segments.filter((item) => item.value > 0).map((item) => <circle key={item.label} data-pipeline-value={item.value} data-pipeline-share={item.share} cx="100" cy="100" r="78" pathLength="100" fill="none" stroke={item.color} strokeWidth="23" strokeDasharray={`${item.share} ${100 - item.share}`} strokeDashoffset={-item.offset} transform="rotate(-90 100 100)" />)}
+          {visibleSegments.map((item) => <circle key={item.label} data-pipeline-label={item.label} data-pipeline-value={item.value} data-pipeline-share={item.share} cx="100" cy="100" r="78" pathLength="100" fill="none" stroke={item.color} strokeWidth="23" strokeDasharray={`${item.share} ${100 - item.share}`} strokeDashoffset={-item.offset} transform="rotate(-90 100 100)"><title>{item.label}: {formatCount(item.value)} servizi</title></circle>)}
+          {visibleSegments.length > 1 && visibleSegments.map((item) => {
+            const angle = (item.offset / 100 * 360 - 90) * Math.PI / 180;
+            return <line key={item.label} aria-hidden="true" data-pipeline-boundary={item.label} x1={100 + 90.5 * Math.cos(angle)} y1={100 + 90.5 * Math.sin(angle)} x2={100 + 95 * Math.cos(angle)} y2={100 + 95 * Math.sin(angle)} stroke="#475569" strokeWidth="1.25" />;
+          })}
         </svg>
         <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className={`max-w-full break-all font-black leading-none tracking-tight tabular-nums text-fai-navy ${formatCount(total).length > 7 ? "text-xl" : formatCount(total).length > 5 ? "text-2xl" : "text-4xl"}`}>{formatCount(total)}</span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
       </div>
-      {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="space-y-2">{segments.filter((item) => item.value > 0).map((item) => <li key={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
+      {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="space-y-2">{visibleSegments.map((item) => <li key={item.label} data-pipeline-legend-label={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" data-pipeline-legend-color={item.color} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
     </section>
   );
 }

@@ -305,3 +305,88 @@ test("i contatori delle comunicazioni restano leggibili senza autorizzare destin
   await expect(technical.locator("a, button, [role='link'], [role='button']")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
+
+test("la pipeline distingue i quattordici stati reali e mantiene legenda e proporzioni", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  const statusLabels = [
+    "nuova", "pre analisi", "documenti richiesti", "documenti ricevuti",
+    "in valutazione", "proposta inviata", "domanda in preparazione", "domanda presentata",
+    "in istruttoria", "approvata deliberata", "respinta non procedibile", "rendicontazione",
+    "chiusa", "archiviata",
+  ];
+  const observedColors = new Map<string, string>();
+  for (const scenario of [
+    { query: "actual-sparse", labels: [statusLabels[0], statusLabels[6], statusLabels[12]], values: [4, 3, 2] },
+    { query: "actual-all", labels: statusLabels, values: statusLabels.map((_, index) => index + 1) },
+  ]) {
+    await test.step(scenario.query, async () => {
+      await page.goto(`/?profile=admin&pipeline=${scenario.query}`);
+      const total = scenario.values.reduce((sum, value) => sum + value, 0);
+      const distribution = page.getByRole("img", { name: "Distribuzione dei servizi per stato", exact: true });
+      await expect(distribution).toHaveAttribute("data-pipeline-total", String(total));
+      const segments = distribution.locator("circle[data-pipeline-value]");
+      await expect(segments).toHaveCount(scenario.values.length);
+      const renderedSegments = await segments.evaluateAll((circles) => circles.map((circle) => ({
+        label: circle.getAttribute("data-pipeline-label"),
+        value: Number(circle.getAttribute("data-pipeline-value")),
+        stroke: getComputedStyle(circle).stroke,
+        pathLength: Number(circle.getAttribute("pathLength")),
+        arc: Number.parseFloat(circle.getAttribute("stroke-dasharray") ?? ""),
+        offset: Number(circle.getAttribute("stroke-dashoffset")),
+        title: circle.querySelector("title")?.textContent ?? "",
+      })));
+      expect(renderedSegments.map((segment) => segment.label)).toEqual(scenario.labels);
+      expect(renderedSegments.map((segment) => segment.value)).toEqual(scenario.values);
+      expect(new Set(renderedSegments.map((segment) => segment.stroke)).size).toBe(scenario.values.length);
+      let expectedOffset = 0;
+      for (const [index, segment] of renderedSegments.entries()) {
+        expect(segment.stroke).not.toBe("none");
+        expect(segment.stroke).not.toBe("rgba(0, 0, 0, 0)");
+        expect(segment.pathLength).toBe(100);
+        expect(segment.arc).toBeCloseTo(scenario.values[index] / total * 100, 6);
+        expect(segment.offset).toBeCloseTo(-expectedOffset, 6);
+        expect(segment.title).toContain(scenario.labels[index]);
+        const previousColor = observedColors.get(scenario.labels[index]);
+        if (previousColor) expect(segment.stroke).toBe(previousColor);
+        observedColors.set(scenario.labels[index], segment.stroke);
+        expectedOffset += scenario.values[index] / total * 100;
+      }
+      const boundaries = distribution.locator("line[data-pipeline-boundary]");
+      await expect(boundaries).toHaveCount(scenario.values.length);
+      const renderedBoundaries = await boundaries.evaluateAll((lines) => lines.map((line) => {
+        const style = getComputedStyle(line);
+        return {
+          label: line.getAttribute("data-pipeline-boundary"),
+          length: (line as SVGLineElement).getTotalLength(),
+          stroke: style.stroke,
+          strokeWidth: Number.parseFloat(style.strokeWidth),
+          visibility: style.visibility,
+          display: style.display,
+        };
+      }));
+      expect(renderedBoundaries.map((boundary) => boundary.label)).toEqual(scenario.labels);
+      for (const boundary of renderedBoundaries) {
+        expect(boundary.length).toBeGreaterThan(0);
+        expect(boundary.strokeWidth).toBeGreaterThan(0);
+        expect(boundary.stroke).not.toBe("none");
+        expect(boundary.stroke).not.toBe("rgba(0, 0, 0, 0)");
+        expect(boundary.visibility).toBe("visible");
+        expect(boundary.display).not.toBe("none");
+      }
+      const legend = page.locator("#pipeline-pratiche [data-pipeline-legend-label]");
+      await expect(legend).toHaveCount(scenario.values.length);
+      const renderedLegend = await legend.evaluateAll((entries) => entries.map((entry) => {
+        const marker = entry.querySelector("[data-pipeline-legend-color]");
+        return {
+          label: entry.getAttribute("data-pipeline-legend-label"),
+          color: marker ? getComputedStyle(marker).backgroundColor : null,
+        };
+      }));
+      expect(renderedLegend.map((entry) => entry.label)).toEqual(scenario.labels);
+      for (const [index, entry] of renderedLegend.entries()) expect(entry.color).toBe(renderedSegments[index].stroke);
+      await legend.last().scrollIntoViewIfNeeded();
+      await expect(legend.last()).toBeInViewport();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    });
+  }
+});
