@@ -1,6 +1,7 @@
 import type { Dossier, Prisma } from '@prisma/client';
 import { canViewClient, canViewCommercialOffer, canViewProject } from './access-control';
 import type { AuthSession } from './auth';
+import { canViewPaymentListRecord, canViewPreAnalysisListRecord } from './business-list-access';
 import { prisma } from './prisma';
 
 const batchSize = 100;
@@ -116,21 +117,20 @@ export async function countAccessibleDashboardPayments(session: AuthSession): Pr
       if (!payments.length) break;
       const contracts = await tx.contract.findMany({
         where: { id: { in: [...new Set(payments.map((payment) => payment.contractId))] } },
-        select: { id: true, clientId: true },
+        select: { id: true, clientId: true, projectId: true },
       });
       const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
-      const clients = await tx.client.findMany({
-        where: { id: { in: [...new Set(payments.map((payment) => payment.clientId))] }, deletedAt: null },
-        select: clientSelect,
-      });
-      const clientById = new Map(clients.map((client) => [client.id, client]));
+      const contexts = await loadClientProjectContexts(tx, payments.map((payment) => ({
+        clientId: payment.clientId,
+        projectId: contractById.get(payment.contractId)?.projectId ?? null,
+      })));
       for (const payment of payments) {
         const contract = contractById.get(payment.contractId);
-        if (!contract || contract.clientId !== payment.clientId) continue;
-        // Match /payments: the list requires a visible active client and a
-        // matching contract. It does not filter on the contract's project.
-        const client = clientById.get(payment.clientId);
-        if (client && canViewClient(session, client)) count += 1;
+        if (canViewPaymentListRecord(session, {
+          payment, contract: contract ?? null,
+          client: contexts.clientById.get(payment.clientId) ?? null,
+          project: contract?.projectId ? contexts.projectById.get(contract.projectId) ?? null : null,
+        })) count += 1;
       }
       afterId = payments[payments.length - 1].id;
       if (payments.length < batchSize) break;
@@ -138,7 +138,6 @@ export async function countAccessibleDashboardPayments(session: AuthSession): Pr
     return count;
   }, transactionOptions);
 }
-
 export type DashboardAccessibleDossierCounts = { preReview: number; draftDossiers: number };
 
 export async function countAccessibleDashboardDossiers(session: AuthSession): Promise<DashboardAccessibleDossierCounts> {
@@ -164,8 +163,11 @@ export async function countAccessibleDashboardDossiers(session: AuthSession): Pr
       });
       const companyById = new Map(companies.map((company) => [company.id, company]));
       for (const preAnalysis of preAnalyses) {
-        if (!canAccessClientProjectRecord(session, preAnalysis, contexts)) continue;
-        if (preAnalysis.companyId && companyById.get(preAnalysis.companyId)?.clientId !== preAnalysis.clientId) continue;
+        if (!canViewPreAnalysisListRecord(session, {
+          preAnalysis, client: contexts.clientById.get(preAnalysis.clientId) ?? null,
+          project: contexts.projectById.get(preAnalysis.projectId) ?? null,
+          company: preAnalysis.companyId ? companyById.get(preAnalysis.companyId) ?? null : null,
+        })) continue;
         counts.preReview += 1;
       }
       afterId = preAnalyses[preAnalyses.length - 1].id;

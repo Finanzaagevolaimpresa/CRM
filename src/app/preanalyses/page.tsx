@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { PrimaryButton } from '@/components/actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table } from '@/components/ui';
 import { canViewClient, canViewProject } from '@/lib/access-control';
+import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { createPreAnalysisAndRedirect } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
@@ -26,8 +27,10 @@ export default async function Page() {
   const companyById = new Map(companyRows.map((company) => [company.id, company]));
   const visibleItems = items.filter((item) => {
     const project = projectById.get(item.projectId);
-    return clientById.has(item.clientId) && !!project && project.clientId === item.clientId
-      && (!item.companyId || companyById.get(item.companyId)?.clientId === item.clientId);
+    return canViewPreAnalysisListRecord(session, {
+      preAnalysis: item, client: clientById.get(item.clientId) ?? null, project: project ?? null,
+      company: item.companyId ? companyById.get(item.companyId) ?? null : null,
+    });
   });
   const canWrite = hasPermission(session, 'project.write');
 
@@ -37,4 +40,3 @@ export default async function Page() {
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pre-analisi disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Progetto', 'Stato', 'Sintesi', 'Tracciabilità', 'Azione']} rows={visibleItems.map((item) => [clientById.get(item.clientId)?.displayName ?? '—', projectById.get(item.projectId)?.title ?? '—', <StatusBadge status={item.status} key="s" />, item.internalSummary ?? 'Bozza interna', <MetaCell key="m" createdAt={item.createdAt} updatedAt={item.updatedAt} />, <Link className="font-bold text-fai-blue underline" href={`/preanalyses/${item.id}`} key="a">Apri</Link>])} />}</Card>
   </div>;
 }
-

@@ -3,24 +3,30 @@ export const dynamic = 'force-dynamic';
 import { PrimaryButton } from '@/components/actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import { canViewClient } from '@/lib/access-control';
+import { canViewPaymentListRecord } from '@/lib/business-list-access';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { registerPaymentAndRefresh } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 
 export default async function Page() {
   const session = await requirePermission('payment.read');
-  const [items, clientRows, contracts] = await Promise.all([
+  const [items, clientRows, contracts, projects] = await Promise.all([
     prisma.payment.findMany({ orderBy: { dueDate: 'asc' } }),
     prisma.client.findMany({ where: { deletedAt: null } }),
     prisma.contract.findMany(),
+    prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, consultantId: true } }),
   ]);
   const visibleClients = clientRows.filter((client) => canViewClient(session, client));
   const clientById = new Map(visibleClients.map((client) => [client.id, client]));
   const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
   const visibleContracts = contracts.filter((contract) => clientById.has(contract.clientId));
+  const projectById = new Map(projects.map((project) => [project.id, project]));
   const visibleItems = items.filter((payment) => {
     const contract = contractById.get(payment.contractId);
-    return clientById.has(payment.clientId) && !!contract && contract.clientId === payment.clientId;
+    return canViewPaymentListRecord(session, {
+      payment, contract: contract ?? null, client: clientById.get(payment.clientId) ?? null,
+      project: contract?.projectId ? projectById.get(contract.projectId) ?? null : null,
+    });
   });
   const canWrite = hasPermission(session, 'payment.write');
 

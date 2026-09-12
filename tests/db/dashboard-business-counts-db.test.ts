@@ -113,7 +113,7 @@ test('dashboard offers scan multiple pages and reject dangling or inconsistent l
   }
 });
 
-test('dashboard payment totals match the destination list independently of contract project links', { skip: !runDbTests }, async () => {
+test('dashboard payment totals require consistent contract projects and preserve the destination list perimeter', { skip: !runDbTests }, async () => {
   const prefix = `${runPrefix}payments-`;
   const owner = actor(`${prefix}owner`, 'consulente');
   const admin = actor(`${prefix}admin`, 'admin');
@@ -158,9 +158,9 @@ test('dashboard payment totals match the destination list independently of contr
       { ...base, id: `${prefix}missing-client`, clientId: `${prefix}absent-client` },
       { ...base, id: `${prefix}deleted-client-payment`, clientId: deletedClient, contractId: `${prefix}contract-deleted-client` },
     ];
-    // These rows are in /payments because their contracts match the visible
-    // client. The contract project is outside that list's filtering contract.
-    const includedDespiteProject = [
+    // Matching payment/contract client IDs do not make a missing, deleted or
+    // different-client project valid, including for an Admin.
+    const invalidProjects = [
       { ...base, id: `${prefix}mismatched-project`, contractId: `${prefix}contract-project-mismatch` },
       { ...base, id: `${prefix}missing-project`, contractId: `${prefix}contract-project-missing` },
       { ...base, id: `${prefix}deleted-project-payment`, contractId: `${prefix}contract-project-deleted` },
@@ -172,23 +172,22 @@ test('dashboard payment totals match the destination list independently of contr
         ...base, id: rowId(`${prefix}valid-`, index), status: outstanding[index % outstanding.length],
       })),
       ...invalid.map((row) => ({ ...row, status: 'da_incassare' as const })),
-      ...includedDespiteProject.map((row) => ({ ...row, status: 'da_incassare' as const })),
+      ...invalidProjects.map((row) => ({ ...row, status: 'da_incassare' as const })),
       { ...base, id: `${prefix}project-only-payment`, clientId: projectOnlyClient, contractId: `${prefix}contract-project-only` },
       { ...base, id: `${prefix}foreign`, clientId: foreignClient, contractId: `${prefix}contract-foreign` },
       { ...base, id: `${prefix}collected`, status: 'incassato' },
       { ...base, id: `${prefix}reversed`, status: 'stornato' },
       { ...base, id: `${prefix}refunded`, status: 'rimborsato' },
     ] });
-    assert.equal(await countAccessibleDashboardPayments(owner), 125);
-    assert.equal(await countAccessibleDashboardPayments(admin), beforeAdmin + 127);
+    assert.equal(await countAccessibleDashboardPayments(owner), 121);
+    assert.equal(await countAccessibleDashboardPayments(admin), beforeAdmin + 123);
     assert.equal(await countAccessibleDashboardPayments(actor(`${prefix}unrelated`, 'consulente')), 0);
     // Detail access permits the assigned project, but the payment list requires
     // client visibility. Its counter must not expose a row absent from that list.
     assert.ok(await getPaymentReadAccess(owner, `${prefix}project-only-payment`));
     for (const row of invalid) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
-    // Detail access is deliberately stricter; it must not be substituted for
-    // the destination list's predicate when computing its counter.
-    for (const row of includedDespiteProject) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
+    // The list and its counter preserve the canonical detail consistency guard.
+    for (const row of invalidProjects) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
   } finally {
     await prisma.payment.deleteMany({ where: { id: { startsWith: prefix } } });
     await prisma.contract.deleteMany({ where: { id: { startsWith: prefix } } });
