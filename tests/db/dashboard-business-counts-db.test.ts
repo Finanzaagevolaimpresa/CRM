@@ -113,7 +113,7 @@ test('dashboard offers scan multiple pages and reject dangling or inconsistent l
   }
 });
 
-test('dashboard payment totals require matching readable contracts and include every outstanding row', { skip: !runDbTests }, async () => {
+test('dashboard payment totals match the destination list independently of contract project links', { skip: !runDbTests }, async () => {
   const prefix = `${runPrefix}payments-`;
   const owner = actor(`${prefix}owner`, 'consulente');
   const admin = actor(`${prefix}admin`, 'admin');
@@ -135,6 +135,7 @@ test('dashboard payment totals require matching readable contracts and include e
       { id: `${prefix}project-b`, clientId: clientB, title: 'Synthetic project B', consultantId: owner.userId },
       { id: `${prefix}project-only`, clientId: projectOnlyClient, title: 'Synthetic assigned-only project', consultantId: owner.userId },
       { id: `${prefix}deleted-project`, clientId: clientA, title: 'Synthetic deleted project', consultantId: owner.userId, deletedAt: new Date() },
+      { id: `${prefix}foreign-project`, clientId: foreignClient, title: 'Synthetic nonvisible project', consultantId: `${prefix}other` },
     ] });
     const contracts = [
       { id: `${prefix}contract-a`, clientId: clientA },
@@ -144,6 +145,7 @@ test('dashboard payment totals require matching readable contracts and include e
       { id: `${prefix}contract-project-mismatch`, clientId: clientA, projectId: `${prefix}project-b` },
       { id: `${prefix}contract-project-missing`, clientId: clientA, projectId: `${prefix}absent-project` },
       { id: `${prefix}contract-project-deleted`, clientId: clientA, projectId: `${prefix}deleted-project` },
+      { id: `${prefix}contract-project-foreign`, clientId: clientA, projectId: `${prefix}foreign-project` },
       { id: `${prefix}contract-project-only`, clientId: projectOnlyClient, projectId: `${prefix}project-only` },
     ];
     await prisma.contract.createMany({ data: contracts.map((row) => ({
@@ -155,9 +157,14 @@ test('dashboard payment totals require matching readable contracts and include e
       { ...base, id: `${prefix}mismatched-contract`, contractId: `${prefix}contract-b` },
       { ...base, id: `${prefix}missing-client`, clientId: `${prefix}absent-client` },
       { ...base, id: `${prefix}deleted-client-payment`, clientId: deletedClient, contractId: `${prefix}contract-deleted-client` },
+    ];
+    // These rows are in /payments because their contracts match the visible
+    // client. The contract project is outside that list's filtering contract.
+    const includedDespiteProject = [
       { ...base, id: `${prefix}mismatched-project`, contractId: `${prefix}contract-project-mismatch` },
       { ...base, id: `${prefix}missing-project`, contractId: `${prefix}contract-project-missing` },
       { ...base, id: `${prefix}deleted-project-payment`, contractId: `${prefix}contract-project-deleted` },
+      { ...base, id: `${prefix}nonvisible-project-payment`, contractId: `${prefix}contract-project-foreign` },
     ];
     const outstanding = ['da_incassare', 'parziale', 'scaduto'] as const;
     await prisma.payment.createMany({ data: [
@@ -165,19 +172,23 @@ test('dashboard payment totals require matching readable contracts and include e
         ...base, id: rowId(`${prefix}valid-`, index), status: outstanding[index % outstanding.length],
       })),
       ...invalid.map((row) => ({ ...row, status: 'da_incassare' as const })),
+      ...includedDespiteProject.map((row) => ({ ...row, status: 'da_incassare' as const })),
       { ...base, id: `${prefix}project-only-payment`, clientId: projectOnlyClient, contractId: `${prefix}contract-project-only` },
       { ...base, id: `${prefix}foreign`, clientId: foreignClient, contractId: `${prefix}contract-foreign` },
       { ...base, id: `${prefix}collected`, status: 'incassato' },
       { ...base, id: `${prefix}reversed`, status: 'stornato' },
       { ...base, id: `${prefix}refunded`, status: 'rimborsato' },
     ] });
-    assert.equal(await countAccessibleDashboardPayments(owner), 121);
-    assert.equal(await countAccessibleDashboardPayments(admin), beforeAdmin + 123);
+    assert.equal(await countAccessibleDashboardPayments(owner), 125);
+    assert.equal(await countAccessibleDashboardPayments(admin), beforeAdmin + 127);
     assert.equal(await countAccessibleDashboardPayments(actor(`${prefix}unrelated`, 'consulente')), 0);
     // Detail access permits the assigned project, but the payment list requires
     // client visibility. Its counter must not expose a row absent from that list.
     assert.ok(await getPaymentReadAccess(owner, `${prefix}project-only-payment`));
     for (const row of invalid) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
+    // Detail access is deliberately stricter; it must not be substituted for
+    // the destination list's predicate when computing its counter.
+    for (const row of includedDespiteProject) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
   } finally {
     await prisma.payment.deleteMany({ where: { id: { startsWith: prefix } } });
     await prisma.contract.deleteMany({ where: { id: { startsWith: prefix } } });
@@ -216,6 +227,7 @@ test('dashboard pre-analysis and dossier totals require consistent client, proje
       { id: `${prefix}project-only`, clientId: projectOnlyClient, title: 'Synthetic assigned-only project', consultantId: owner.userId },
     ] });
     await prisma.company.createMany({ data: [
+      { id: `${prefix}company-a`, clientId: clientA, name: 'Synthetic same-client company' },
       { id: `${prefix}company-b`, clientId: clientB, name: 'Synthetic other-client company' },
       { id: `${prefix}deleted-company`, clientId: clientA, name: 'Synthetic deleted company', deletedAt: new Date() },
     ] });
@@ -236,6 +248,7 @@ test('dashboard pre-analysis and dossier totals require consistent client, proje
     await prisma.preAnalysis.createMany({ data: [
       ...Array.from({ length: 121 }, (_, index) => ({
         ...baseContext, id: rowId(`${prefix}valid-pre-`, index),
+        companyId: index === 0 ? `${prefix}company-a` : null,
         status: index % 2 === 0 ? 'bozza_generata' as const : 'da_revisionare' as const,
       })),
       ...invalidPre.map((row) => ({ ...row, status: 'da_revisionare' as const })),
@@ -273,6 +286,7 @@ test('dashboard pre-analysis and dossier totals require consistent client, proje
     // These details are individually readable, but the destination lists also
     // require the parent client to be visible. They do not increase list counters.
     assert.ok(await getPreAnalysisReadAccess(owner, `${prefix}project-only-pre`));
+    assert.ok(await getPreAnalysisReadAccess(owner, rowId(`${prefix}valid-pre-`, 0)));
     assert.ok(await getLegacyDossierReadAccess(owner, `${prefix}project-only-dossier`));
     for (const row of invalidPre) assert.equal(await getPreAnalysisReadAccess(admin, row.id), null, row.id);
     for (const row of invalidDossiers) assert.equal(await getLegacyDossierReadAccess(admin, row.id), null, row.id);

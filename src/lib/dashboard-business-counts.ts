@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Dossier, Prisma } from '@prisma/client';
 import { canViewClient, canViewCommercialOffer, canViewProject } from './access-control';
 import type { AuthSession } from './auth';
 import { prisma } from './prisma';
@@ -116,20 +116,21 @@ export async function countAccessibleDashboardPayments(session: AuthSession): Pr
       if (!payments.length) break;
       const contracts = await tx.contract.findMany({
         where: { id: { in: [...new Set(payments.map((payment) => payment.contractId))] } },
-        select: { id: true, clientId: true, projectId: true },
+        select: { id: true, clientId: true },
       });
       const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
-      const contexts = await loadClientProjectContexts(tx, payments.map((payment) => ({
-        clientId: payment.clientId,
-        projectId: contractById.get(payment.contractId)?.projectId ?? null,
-      })));
+      const clients = await tx.client.findMany({
+        where: { id: { in: [...new Set(payments.map((payment) => payment.clientId))] }, deletedAt: null },
+        select: clientSelect,
+      });
+      const clientById = new Map(clients.map((client) => [client.id, client]));
       for (const payment of payments) {
         const contract = contractById.get(payment.contractId);
         if (!contract || contract.clientId !== payment.clientId) continue;
-        if (canAccessClientProjectRecord(session, {
-          clientId: payment.clientId,
-          projectId: contract.projectId,
-        }, contexts, false)) count += 1;
+        // Match /payments: the list requires a visible active client and a
+        // matching contract. It does not filter on the contract's project.
+        const client = clientById.get(payment.clientId);
+        if (client && canViewClient(session, client)) count += 1;
       }
       afterId = payments[payments.length - 1].id;
       if (payments.length < batchSize) break;
@@ -173,7 +174,7 @@ export async function countAccessibleDashboardDossiers(session: AuthSession): Pr
 
     afterId = undefined;
     while (true) {
-      const dossiers = await tx.dossier.findMany({
+      const dossiers: Pick<Dossier, 'id' | 'clientId' | 'projectId' | 'preAnalysisId'>[] = await tx.dossier.findMany({
         where: {
           status: { in: ['bozza_ai', 'bozza_consulente', 'in_revisione'] },
           ...(afterId === undefined ? {} : { id: { gt: afterId } }),

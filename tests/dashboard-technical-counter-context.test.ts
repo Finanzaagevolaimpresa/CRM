@@ -82,7 +82,7 @@ test('optional project and service links may both be absent or the service may l
 
 test('assigned practice access is independent from ownership of its client', () => {
   for (const assignment of [{ commercialOwnerId: commerciale.userId }, { technicalOwnerId: commerciale.userId }]) {
-    const result = buildDashboardTechnicalCounterContext({ ...input, session: commerciale, practices: [{ ...practice, ...assignment }] });
+    const result: ReturnType<typeof buildDashboardTechnicalCounterContext> = buildDashboardTechnicalCounterContext({ ...input, session: commerciale, practices: [{ ...practice, ...assignment }] });
     assert.equal(result.visiblePractices.length, 1);
     assert.equal(result.commsToReview, 1);
   }
