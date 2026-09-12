@@ -91,10 +91,11 @@ export function DashboardOverview({
             </div>
             <p className="mt-2 text-xs leading-5 text-slate-500">{group.description}</p>
             <div className="mt-2 divide-y divide-slate-100">
-              {group.counters.map((counter) => <Link key={counter.label} href={counter.href} className="flex min-h-11 items-center justify-between gap-3 rounded-lg py-2 focus:outline-none focus:ring-2 focus:ring-fai-lime hover:bg-slate-50">
-                <span className="min-w-0 text-xs font-semibold leading-5 text-slate-600">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
-                <span className="shrink-0 text-2xl font-black tabular-nums text-fai-navy">{counter.value.toLocaleString("it-IT")}</span>
-              </Link>)}
+              {group.counters.map((counter) => {
+                const content = <><span className="min-w-0 break-words text-xs font-semibold leading-5 text-slate-600">{counter.label}<span className="sr-only"> — {counter.description}</span></span><span className="shrink-0 text-2xl font-black tabular-nums text-fai-navy">{counter.value.toLocaleString("it-IT")}</span></>;
+                const rowClass = "flex min-h-11 items-center justify-between gap-3 rounded-lg py-2";
+                return counter.href ? <Link key={counter.label} href={counter.href} className={`${rowClass} focus:outline-none focus:ring-2 focus:ring-fai-lime hover:bg-slate-50`}>{content}</Link> : <div key={counter.label} className={rowClass}>{content}</div>;
+              })}
             </div>
           </section>)}
         </div>

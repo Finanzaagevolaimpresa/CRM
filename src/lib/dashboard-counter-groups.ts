@@ -39,7 +39,7 @@ export type DashboardCounter = {
   label: string;
   value: number;
   description: string;
-  href: string;
+  href: string | null;
 };
 
 export type DashboardCounterGroup = {
@@ -53,6 +53,7 @@ export type DashboardCounterGroup = {
 type CounterDefinition = Omit<DashboardCounter, "value"> & {
   count: keyof DashboardCounterCounts;
   permission: keyof DashboardCounterAccess;
+  destinationPermission?: keyof DashboardCounterAccess;
 };
 
 type GroupDefinition = Omit<DashboardCounterGroup, "counters"> & {
@@ -80,8 +81,8 @@ const groups: GroupDefinition[] = [
     counters: [
       { count: "activeTechnicalPracticesCount", permission: "canReadTechnical", label: "Pratiche tecniche attive", description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices" },
       { count: "overdueClientUpdates", permission: "canReadTechnical", label: "Aggiornamenti cliente scaduti", description: "Pratiche visibili con aggiornamento oltre data", href: "/technical-office/practices" },
-      { count: "commsToReview", permission: "canReviewPracticeCommunications", label: "Comunicazioni da revisionare", description: "Bozze in attesa di revisione", href: "/technical-office/practices" },
-      { count: "approvedUnusedComms", permission: "canReadPracticeCommunications", label: "Approvate non utilizzate", description: "Comunicazioni approvate, senza utilizzo registrato", href: "/technical-office/practices" },
+      { count: "commsToReview", permission: "canReviewPracticeCommunications", destinationPermission: "canReadTechnical", label: "Comunicazioni da revisionare", description: "Bozze in attesa di revisione", href: "/technical-office/practices" },
+      { count: "approvedUnusedComms", permission: "canReadPracticeCommunications", destinationPermission: "canReadTechnical", label: "Approvate non utilizzate", description: "Comunicazioni approvate, senza utilizzo registrato", href: "/technical-office/practices" },
     ],
   },
   {
@@ -140,7 +141,9 @@ export function buildDashboardCounterGroups(
       .map((counter) => ({
         label: counter.label,
         description: counter.description,
-        href: counter.href,
+        href: counter.destinationPermission && !access[counter.destinationPermission]
+          ? null
+          : counter.href,
         value: counts[counter.count],
       }));
     return visibleCounters.length > 0 ? [{ ...group, counters: visibleCounters }] : [];

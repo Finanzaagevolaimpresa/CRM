@@ -66,8 +66,24 @@ test("technical read does not expose communication counts without their permissi
 test("communication review and read are independent, with no implied technical access", () => {
   const reviewOnly = buildDashboardCounterGroups({ ...noAccess, canReviewPracticeCommunications: true }, counts);
   const readOnly = buildDashboardCounterGroups({ ...noAccess, canReadPracticeCommunications: true }, counts);
-  assert.deepEqual(reviewOnly.map(({ counters }) => counters.map(({ value }) => value)), [[23]]);
-  assert.deepEqual(readOnly.map(({ counters }) => counters.map(({ value }) => value)), [[24]]);
+  assert.deepEqual(reviewOnly.map(({ counters }) => counters.map(({ value, href }) => [value, href])), [[[23, null]]]);
+  assert.deepEqual(readOnly.map(({ counters }) => counters.map(({ value, href }) => [value, href])), [[[24, null]]]);
+});
+
+test("technical access permits communication destinations without changing their counts", () => {
+  const result = buildDashboardCounterGroups({
+    ...noAccess,
+    canReadTechnical: true,
+    canReviewPracticeCommunications: true,
+    canReadPracticeCommunications: true,
+  }, counts);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].counters.map(({ value, href }) => [value, href]), [
+    [21, "/technical-office/practices"],
+    [22, "/technical-office/practices"],
+    [23, "/technical-office/practices"],
+    [24, "/technical-office/practices"],
+  ]);
 });
 
 test("client, project and service counters require their individual permission", () => {
