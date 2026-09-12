@@ -6,10 +6,13 @@ import {
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
-import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, canViewTechnicalPractice } from "@/lib/access-control";
-import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
+import { canViewClient, canViewCommercialOffer, canViewProject, canViewService } from "@/lib/access-control";
+import { getAccessibleDashboardAiReviewCount, getAccessibleDashboardTaskCounts, listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
+import { countAccessibleDashboardDossiers, countAccessibleDashboardOffers, countAccessibleDashboardPayments } from "@/lib/dashboard-business-counts";
+import { buildDashboardTechnicalCounterContext } from "@/lib/dashboard-technical-counter-context";
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
+import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
@@ -39,15 +42,27 @@ export default async function Dashboard() {
   const canReadProjects = hasPermission(session, "project.read");
   const canReadDossiers = hasPermission(session, "dossier.read");
   const canReadPayments = hasPermission(session, "payment.read");
-  const canReadAiOutputs = hasPermission(session, "ai.review") || hasPermission(session, "ai.approve");
+  const canReviewAiOutputs = hasPermission(session, "ai.review");
+  const canReadAiOutputs = canReviewAiOutputs || hasPermission(session, "ai.approve");
   const canReadAudit = hasPermission(session, "audit.read");
-  const [accessClients, accessProjects, accessServices, accessTechnicalPractices] = await Promise.all([
-    canReadClients || canReadProjects || canReadServices || canReadTechnical
+  const needsCommunicationCounts = canReadPracticeCommunications || canReviewPracticeCommunications;
+  const needsTechnicalContext = canReadTechnical || needsCommunicationCounts;
+  const [offerCounts, paymentCount, dossierCounts] = await Promise.all([
+    canReadLeads ? countAccessibleDashboardOffers(session) : { sent: 0, accepted: 0 },
+    canReadPayments ? countAccessibleDashboardPayments(session) : 0,
+    canReadDossiers ? countAccessibleDashboardDossiers(session) : { preReview: 0, draftDossiers: 0 },
+  ]);
+  const [accessClients, accessProjects, accessServices, accessTechnicalPractices, accessCommunications] = await Promise.all([
+    canReadClients || canReadProjects || canReadServices || needsTechnicalContext
       ? prisma.client.findMany({ where: { deletedAt: null } })
       : Promise.resolve([]),
-    canReadProjects ? prisma.project.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
-    canReadServices ? prisma.clientService.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
-    canReadTechnical ? prisma.technicalPractice.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    canReadProjects || canReadServices || needsTechnicalContext ? prisma.project.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    canReadServices || needsTechnicalContext ? prisma.clientService.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    needsTechnicalContext ? prisma.technicalPractice.findMany({ where: { deletedAt: null } }) : Promise.resolve([]),
+    needsCommunicationCounts ? prisma.practiceCommunication.findMany({
+      where: { deletedAt: null, status: { in: ["da_revisionare", "approvata"] } },
+      select: { id: true, technicalPracticeId: true, clientId: true, projectId: true, clientServiceId: true, status: true, usedAt: true, deletedAt: true },
+    }) : Promise.resolve([]),
   ]);
   const accessClientById = new Map(accessClients.map((client) => [client.id, client]));
   const visibleClients = accessClients.filter((client) => canViewClient(session, client));
@@ -70,15 +85,16 @@ export default async function Dashboard() {
         orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
       })
     : [];
-  const accessibleOverdueTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt < now);
-  const accessibleDueSoonTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= now && task.dueAt <= next7);
-  const accessibleMyTasks = accessibleOpenTasks.filter((task) => task.assignedToId === session.userId);
-  const accessibleTodayTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= startOfToday && task.dueAt <= endOfToday);
+  // The bounded list is a preview; totals scan all authorized rows independently.
+  const taskCounts = canReadServices
+    ? await getAccessibleDashboardTaskCounts(session, { now, startOfToday, endOfToday, next7 })
+    : { open: 0, today: 0, overdue: 0, dueSoon: 0, mine: 0 };
   const accessibleOperationalTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt <= endOfToday).slice(0, 20);
-  const visibleTechnicalPractices = accessTechnicalPractices.filter((practice) => canViewTechnicalPractice(session, {
-    ...practice,
-    client: accessClientById.get(practice.clientId) ?? null,
-  }));
+  const technicalCounterContext = buildDashboardTechnicalCounterContext({
+    session, practices: accessTechnicalPractices, clients: accessClients,
+    projects: accessProjects, services: accessServices, communications: accessCommunications,
+  });
+  const visibleTechnicalPractices = canReadTechnical ? technicalCounterContext.visiblePractices : [];
   const accessibleOverdueClientUpdates = visibleTechnicalPractices.filter((practice) => practice.nextClientUpdateAt && practice.nextClientUpdateAt < now);
   const accessibleActiveTechnicalPractices = visibleTechnicalPractices.filter((practice) => !["approvata", "respinta", "archiviata"].includes(practice.status));
   const accessibleOperationalPractices = [...accessibleActiveTechnicalPractices]
@@ -105,6 +121,7 @@ export default async function Dashboard() {
   const accessibleAiContexts = canReadAiOutputs
     ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
     : [];
+  const aiReview = canReadAiOutputs ? await getAccessibleDashboardAiReviewCount(session) : 0;
   const {
     total: pendingAiAuthorizationRequestCount,
     requests: pendingAiAuthorizationRequests,
@@ -249,16 +266,8 @@ export default async function Dashboard() {
           },
         })
       : 0,
-    canReadLeads
-      ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "inviata", ...offerAccessWhere },
-        })
-      : 0,
-    canReadLeads
-      ? prisma.commercialOffer.count({
-          where: { deletedAt: null, status: "accettata", ...offerAccessWhere },
-        })
-      : 0,
+    offerCounts.sent,
+    offerCounts.accepted,
     canReadLeads
       ? prisma.commercialOffer.count({
           where: { deletedAt: null, status: "rifiutata", ...offerAccessWhere },
@@ -289,19 +298,13 @@ export default async function Dashboard() {
       where: { id: { in: visibleProjectIds }, deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
     }) : 0,
     canReadServices ? prisma.clientService.count({ where: { id: { in: visibleServiceIds }, deletedAt: null } }) : 0,
-    canReadDossiers ? prisma.preAnalysis.count({
-      where: { clientId: { in: visibleClientIds }, projectId: { in: visibleProjectIds }, status: { in: ["bozza_generata", "da_revisionare"] } },
-    }) : 0,
-    canReadDossiers ? prisma.dossier.count({
-      where: { clientId: { in: visibleClientIds }, projectId: { in: visibleProjectIds }, status: { in: ["bozza_ai", "bozza_consulente", "in_revisione"] } },
-    }) : 0,
-    canReadPayments ? prisma.payment.count({
-      where: { clientId: { in: visibleClientIds }, status: { notIn: ["incassato", "stornato", "rimborsato"] } },
-    }) : 0,
-    accessibleOpenTasks.length,
-    accessibleOverdueTasks.length,
-    accessibleDueSoonTasks.length,
-    accessibleMyTasks.length,
+    dossierCounts.preReview,
+    dossierCounts.draftDossiers,
+    paymentCount,
+    taskCounts.open,
+    taskCounts.overdue,
+    taskCounts.dueSoon,
+    taskCounts.mine,
     0,
     canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
     null,
@@ -314,23 +317,15 @@ export default async function Dashboard() {
           _count: { _all: true },
         })
       : [],
-    canReviewPracticeCommunications
-      ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "da_revisionare" },
-        })
-      : 0,
+    canReviewPracticeCommunications ? technicalCounterContext.commsToReview : 0,
     accessibleOverdueClientUpdates.length,
-    canReadPracticeCommunications
-      ? prisma.practiceCommunication.count({
-          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "approvata", usedAt: null },
-        })
-      : 0,
-    accessibleTodayTasks.length,
+    canReadPracticeCommunications ? technicalCounterContext.approvedUnusedComms : 0,
+    taskCounts.today,
     accessibleActiveTechnicalPractices.length,
     accessibleOperationalTasks,
-    canReviewPracticeCommunications
+    canReviewPracticeCommunications && canReadTechnical
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "da_revisionare" },
+          where: { id: { in: technicalCounterContext.visibleCommunications.map((communication) => communication.id) }, deletedAt: null, status: "da_revisionare" },
           orderBy: { createdAt: "asc" },
           take: 20,
         })
@@ -369,7 +364,6 @@ export default async function Dashboard() {
   ]);
   void _aiReview;
   void _lastAiOutput;
-  const aiReview = accessibleAiContexts.length;
   const lastAiOutput = accessibleAiContexts[0]?.output ?? null;
   const operationalOfferLeads = operationalOfferFollowUps.some((offer) => offer.leadId)
     ? await prisma.lead.findMany({ where: { id: { in: operationalOfferFollowUps.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)) }, deletedAt: null } })
@@ -767,6 +761,18 @@ export default async function Dashboard() {
     canReadTechnical && { label: "Ufficio Tecnico", description: "Pratiche, scadenze e comunicazioni accessibili", href: "/technical-office" },
     canReadClients && { label: "Clienti e pratiche", description: "Anagrafiche e fascicoli nel tuo perimetro", href: "/clients" },
   ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
+  const dashboardCounterGroups = buildDashboardCounterGroups({
+    canReadLeads, canReadTechnical, canReviewPracticeCommunications,
+    canReadPracticeCommunications, canReadClients, canReadProjects,
+    canReadServices, canReadPayments, canReadDossiers, canReadAiOutputs, canReviewAiOutputs,
+    isAdmin: session.role === "admin",
+  }, {
+    leadDaContattare, trattativeAperte, offerteInviate, offerteAccettate,
+    activeTechnicalPracticesCount, overdueClientUpdates, commsToReview,
+    approvedUnusedComms, clientiAttivi, progettiAttivi, serviziAcquistati,
+    tasks, todayTasksCount, overdueTasks, dueSoonTasks, payments,
+    preReview, dossierBozza, aiReview, pendingAiAuthorizationRequestCount,
+  });
   return (
     <div className="space-y-6">
       <DashboardOverview
@@ -776,6 +782,7 @@ export default async function Dashboard() {
         priorities={priorityItems.map((item) => ({ ...item, related: item.related ?? "Nessun cliente collegato", date: formatDateTime(item.date) }))}
         pipeline={pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) }))}
         shortcuts={dashboardShortcuts}
+        counterGroups={dashboardCounterGroups}
       />
       <details className="group rounded-2xl border border-slate-200 bg-white shadow-sm">
         <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>

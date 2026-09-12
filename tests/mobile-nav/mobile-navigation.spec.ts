@@ -196,3 +196,60 @@ test("le priorità oltre la quinta restano consultabili", async ({ page }) => {
   await expect(lastPriority).toHaveAttribute("href", "/tasks");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
+
+
+test("contatori per area mostrano i totali completi e le destinazioni", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?profile=admin");
+  const areas = page.getByRole("region", { name: "Contatori per area" });
+  await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
+  const commercial = areas.getByRole("region", { name: "Commerciale", exact: true });
+  await expect(commercial.getByRole("link", { name: /Lead da contattare/ })).toContainText("24");
+  await expect(commercial.getByRole("link", { name: /Offerte inviate/ })).toHaveAttribute("href", "/commercial-offers");
+  const reviews = areas.getByRole("region", { name: "Revisioni e autorizzazioni", exact: true });
+  await expect(reviews.getByRole("link", { name: /Autorizzazioni AI in attesa/ })).toContainText("47");
+  await expect(reviews.getByRole("link", { name: /Autorizzazioni AI in attesa/ })).toHaveAttribute("href", "/settings/ai-authorizations");
+  const administration = areas.getByRole("region", { name: "Amministrazione", exact: true });
+  await expect(administration.getByRole("link", { name: /Pagamenti aperti/ })).toContainText("7");
+  await expect(administration).not.toContainText("€");
+});
+
+for (const profile of ["commercial", "technical", "restricted"]) {
+  test(`contatori filtrati dal builder reale per profilo ${profile}`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/?profile=${profile}`);
+    const areas = page.getByRole("region", { name: "Contatori per area" });
+    if (profile === "restricted") {
+      await expect(areas).toHaveCount(0);
+      return;
+    }
+    await expect(areas.getByRole("region", { name: "Revisioni e autorizzazioni", exact: true })).toHaveCount(0);
+    await expect(areas.getByRole("link", { name: /Clienti attivi|Progetti attivi/ })).toHaveCount(0);
+    await expect(areas.getByRole("region", { name: "Ufficio Tecnico", exact: true })).toHaveCount(profile === "technical" ? 1 : 0);
+    await expect(areas.getByRole("region", { name: "Commerciale", exact: true })).toHaveCount(profile === "commercial" ? 1 : 0);
+    await expect(areas.getByRole("region", { name: "Amministrazione", exact: true })).toHaveCount(profile === "commercial" ? 1 : 0);
+    const services = areas.getByRole("link", { name: /Servizi acquistati/ });
+    await expect(services).toHaveAttribute("href", "/dashboard#pipeline-pratiche");
+    await services.click();
+    await expect(page).toHaveURL(/\/dashboard#pipeline-pratiche$/);
+    await expect(page.locator("#pipeline-pratiche")).toBeInViewport();
+  });
+}
+
+test("contatori zero restano visibili e numeri grandi non causano overflow mobile", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/?profile=admin&counters=zero");
+  const areas = page.getByRole("region", { name: "Contatori per area" });
+  await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(6);
+  const counters = areas.getByRole("link");
+  expect(await counters.count()).toBe(20);
+  for (const link of await counters.all()) await expect(link).toHaveText(/0$/);
+  await page.goto("/?profile=admin&counters=large");
+  await expect(areas.getByRole("link").first()).toContainText("1.234.567");
+  const lastCounter = areas.getByRole("link").last();
+  await lastCounter.scrollIntoViewIfNeeded();
+  await expect(lastCounter).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await page.getByRole("heading", { name: "Buongiorno, Operatore." }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("dashboard-counters-mobile-320.png"), fullPage: true });
+});
