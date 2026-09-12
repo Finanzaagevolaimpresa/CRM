@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
 import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, canViewTechnicalPractice } from "@/lib/access-control";
-import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
+import { getAccessibleDashboardAiReviewCount, getAccessibleDashboardTaskCounts, listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
 import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
@@ -40,7 +40,8 @@ export default async function Dashboard() {
   const canReadProjects = hasPermission(session, "project.read");
   const canReadDossiers = hasPermission(session, "dossier.read");
   const canReadPayments = hasPermission(session, "payment.read");
-  const canReadAiOutputs = hasPermission(session, "ai.review") || hasPermission(session, "ai.approve");
+  const canReviewAiOutputs = hasPermission(session, "ai.review");
+  const canReadAiOutputs = canReviewAiOutputs || hasPermission(session, "ai.approve");
   const canReadAudit = hasPermission(session, "audit.read");
   const [accessClients, accessProjects, accessServices, accessTechnicalPractices] = await Promise.all([
     canReadClients || canReadProjects || canReadServices || canReadTechnical
@@ -71,10 +72,10 @@ export default async function Dashboard() {
         orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
       })
     : [];
-  const accessibleOverdueTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt < now);
-  const accessibleDueSoonTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= now && task.dueAt <= next7);
-  const accessibleMyTasks = accessibleOpenTasks.filter((task) => task.assignedToId === session.userId);
-  const accessibleTodayTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt >= startOfToday && task.dueAt <= endOfToday);
+  // The bounded list is a preview; totals scan all authorized rows independently.
+  const taskCounts = canReadServices
+    ? await getAccessibleDashboardTaskCounts(session, { now, startOfToday, endOfToday, next7 })
+    : { open: 0, today: 0, overdue: 0, dueSoon: 0, mine: 0 };
   const accessibleOperationalTasks = accessibleOpenTasks.filter((task) => task.dueAt && task.dueAt <= endOfToday).slice(0, 20);
   const visibleTechnicalPractices = accessTechnicalPractices.filter((practice) => canViewTechnicalPractice(session, {
     ...practice,
@@ -106,6 +107,7 @@ export default async function Dashboard() {
   const accessibleAiContexts = canReadAiOutputs
     ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
     : [];
+  const aiReview = canReadAiOutputs ? await getAccessibleDashboardAiReviewCount(session) : 0;
   const {
     total: pendingAiAuthorizationRequestCount,
     requests: pendingAiAuthorizationRequests,
@@ -299,10 +301,10 @@ export default async function Dashboard() {
     canReadPayments ? prisma.payment.count({
       where: { clientId: { in: visibleClientIds }, status: { notIn: ["incassato", "stornato", "rimborsato"] } },
     }) : 0,
-    accessibleOpenTasks.length,
-    accessibleOverdueTasks.length,
-    accessibleDueSoonTasks.length,
-    accessibleMyTasks.length,
+    taskCounts.open,
+    taskCounts.overdue,
+    taskCounts.dueSoon,
+    taskCounts.mine,
     0,
     canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
     null,
@@ -326,7 +328,7 @@ export default async function Dashboard() {
           where: { deletedAt: null, clientId: { in: visibleClientIds }, status: "approvata", usedAt: null },
         })
       : 0,
-    accessibleTodayTasks.length,
+    taskCounts.today,
     accessibleActiveTechnicalPractices.length,
     accessibleOperationalTasks,
     canReviewPracticeCommunications
@@ -370,7 +372,6 @@ export default async function Dashboard() {
   ]);
   void _aiReview;
   void _lastAiOutput;
-  const aiReview = accessibleAiContexts.length;
   const lastAiOutput = accessibleAiContexts[0]?.output ?? null;
   const operationalOfferLeads = operationalOfferFollowUps.some((offer) => offer.leadId)
     ? await prisma.lead.findMany({ where: { id: { in: operationalOfferFollowUps.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)) }, deletedAt: null } })
@@ -771,7 +772,7 @@ export default async function Dashboard() {
   const dashboardCounterGroups = buildDashboardCounterGroups({
     canReadLeads, canReadTechnical, canReviewPracticeCommunications,
     canReadPracticeCommunications, canReadClients, canReadProjects,
-    canReadServices, canReadPayments, canReadDossiers, canReadAiOutputs,
+    canReadServices, canReadPayments, canReadDossiers, canReadAiOutputs, canReviewAiOutputs,
     isAdmin: session.role === "admin",
   }, {
     leadDaContattare, trattativeAperte, offerteInviate, offerteAccettate,

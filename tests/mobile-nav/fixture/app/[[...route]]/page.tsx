@@ -32,6 +32,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
     canReadClients: can("client.read"), canReadProjects: can("project.read"),
     canReadServices: can("service.read"), canReadPayments: can("payment.read"),
     canReadDossiers: can("dossier.read"), canReadAiOutputs: can("ai.review") || can("ai.approve"),
+    canReviewAiOutputs: can("ai.review"),
     isAdmin: profile === "admin",
   }, {
     leadDaContattare: count(24), trattativeAperte: count(8), offerteInviate: count(6), offerteAccettate: count(3),

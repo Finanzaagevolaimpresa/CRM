@@ -17,6 +17,7 @@ const noAccess: DashboardCounterAccess = {
   canReadPayments: false,
   canReadDossiers: false,
   canReadAiOutputs: false,
+  canReviewAiOutputs: false,
   isAdmin: false,
 };
 
@@ -98,9 +99,22 @@ test("client, project and service counters require their individual permission",
 });
 
 test("ordinary AI review cannot expose admin authorization totals", () => {
-  const result = buildDashboardCounterGroups({ ...noAccess, canReadAiOutputs: true }, counts);
+  const result = buildDashboardCounterGroups({ ...noAccess, canReadAiOutputs: true, canReviewAiOutputs: true }, counts);
   assert.equal(result.length, 1);
   assert.deepEqual(result[0].counters.map(({ value, href }) => [value, href]), [[63, "/ai/outputs-to-review"]]);
+});
+
+test("AI approval-only visibility retains the counter without the review-only destination", () => {
+  const result = buildDashboardCounterGroups({ ...noAccess, canReadAiOutputs: true }, counts);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].counters.map(({ label, value, href }) => [label, value, href]), [
+    ["Output AI da revisionare", 63, null],
+  ]);
+});
+
+test("a destination permission does not itself expose a denied AI counter", () => {
+  const result = buildDashboardCounterGroups({ ...noAccess, canReviewAiOutputs: true }, counts);
+  assert.deepEqual(result, []);
 });
 
 test("admin authorization total remains complete above the 20-row preview limit", () => {

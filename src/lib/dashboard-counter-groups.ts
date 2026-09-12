@@ -9,6 +9,7 @@ export type DashboardCounterAccess = {
   canReadPayments: boolean;
   canReadDossiers: boolean;
   canReadAiOutputs: boolean;
+  canReviewAiOutputs: boolean;
   isAdmin: boolean;
 };
 
@@ -125,7 +126,7 @@ const groups: GroupDefinition[] = [
     counters: [
       { count: "preReview", permission: "canReadDossiers", label: "Pre-analisi da revisionare", description: "Pre-analisi in bozza o da revisionare", href: "/preanalyses" },
       { count: "dossierBozza", permission: "canReadDossiers", label: "Dossier in bozza", description: "Dossier in bozza o in revisione", href: "/dossiers" },
-      { count: "aiReview", permission: "canReadAiOutputs", label: "Output AI da revisionare", description: "Output accessibili con revisione umana richiesta", href: "/ai/outputs-to-review" },
+      { count: "aiReview", permission: "canReadAiOutputs", destinationPermission: "canReviewAiOutputs", label: "Output AI da revisionare", description: "Output accessibili con revisione umana richiesta", href: "/ai/outputs-to-review" },
       { count: "pendingAiAuthorizationRequestCount", permission: "isAdmin", label: "Autorizzazioni AI in attesa", description: "Totale richieste pendenti e non scadute", href: "/settings/ai-authorizations" },
     ],
   },
