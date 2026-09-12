@@ -307,6 +307,8 @@ test("i contatori delle comunicazioni restano leggibili senza autorizzare destin
 });
 
 test("la pipeline distingue i quattordici stati reali e mantiene legenda e proporzioni", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 320, height: 568 });
   const statusLabels = [
     "nuova", "pre analisi", "documenti richiesti", "documenti ricevuti",
@@ -389,4 +391,5 @@ test("la pipeline distingue i quattordici stati reali e mantiene legenda e propo
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     });
   }
+  expect(pageErrors).toEqual([]);
 });

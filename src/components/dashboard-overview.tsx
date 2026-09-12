@@ -98,7 +98,7 @@ function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: n
       <div className="relative mx-auto my-4 h-44 w-44 max-w-full">
         <svg role="img" aria-label="Distribuzione dei servizi per stato" data-pipeline-total={total} viewBox="0 0 200 200" className="h-full w-full">
           <circle cx="100" cy="100" r="78" fill="none" stroke="#e9eef4" strokeWidth="23" />
-          {visibleSegments.map((item) => <circle key={item.label} data-pipeline-label={item.label} data-pipeline-value={item.value} data-pipeline-share={item.share} cx="100" cy="100" r="78" pathLength="100" fill="none" stroke={item.color} strokeWidth="23" strokeDasharray={`${item.share} ${100 - item.share}`} strokeDashoffset={-item.offset} transform="rotate(-90 100 100)"><title>{item.label}: {formatCount(item.value)} servizi</title></circle>)}
+          {visibleSegments.map((item) => <circle key={item.label} data-pipeline-label={item.label} data-pipeline-value={item.value} data-pipeline-share={item.share} cx="100" cy="100" r="78" pathLength="100" fill="none" stroke={item.color} strokeWidth="23" strokeDasharray={`${item.share} ${100 - item.share}`} strokeDashoffset={-item.offset} transform="rotate(-90 100 100)"><title>{`${item.label}: ${formatCount(item.value)} servizi`}</title></circle>)}
           {visibleSegments.length > 1 && visibleSegments.map((item) => {
             const angle = (item.offset / 100 * 360 - 90) * Math.PI / 180;
             return <line key={item.label} aria-hidden="true" data-pipeline-boundary={item.label} x1={100 + 90.5 * Math.cos(angle)} y1={100 + 90.5 * Math.sin(angle)} x2={100 + 95 * Math.cos(angle)} y2={100 + 95 * Math.sin(angle)} stroke="#475569" strokeWidth="1.25" />;
