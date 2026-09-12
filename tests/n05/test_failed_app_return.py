@@ -167,15 +167,17 @@ class Protocol(unittest.TestCase):
     flock.assert_not_called()
    self.assertEqual(path.read_text(),'')
  def test_global_deadline_terminates_subprocess_group(self):
+  # Admit >2s total so the fixed local-stop reserve leaves a real spawn budget.
   now=n05.time.time()
   with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED'):
-   n05.run_deadline([sys.executable,'-c','import time; time.sleep(30)'],os.environ.copy(),now+0.05,stop_deadline=now+2)
-  self.assertLess(n05.time.time()-now,3)
+   n05.run_deadline([sys.executable,'-c','import time; time.sleep(30)'],os.environ.copy(),now+0.05,stop_deadline=now+3)
+  self.assertLess(n05.time.time()-now,4)
  def test_native_descendant_group_stop_is_bounded_even_if_reaping_is_unverified(self):
+  # The original three-second stop bound includes any unverified group reap.
   now=n05.time.time()
   with self.assertRaisesRegex(n05.Denied,'SUBPROCESS_DEADLINE_EXPIRED|LOCAL_COMMAND_STOP_UNVERIFIED'):
-   n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),now+0.05,stop_deadline=now+2)
-  self.assertLess(n05.time.time()-now,3)
+   n05.run_deadline(['bash','-c','sleep 30 & wait'],os.environ.copy(),now+0.05,stop_deadline=now+3)
+  self.assertLess(n05.time.time()-now,4)
  def test_ledger_defaults_postgres_user_without_weakening_rows(self):
   p=plan(); engine=n05.DockerEngine(p,ROOT,command=['docker']); captured=[]
   engine.run=lambda *args,**kwargs:(captured.extend(args) or 'migration_001\tchecksum\tstarted\tfinished\t\t1\n')
