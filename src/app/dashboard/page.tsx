@@ -1,22 +1,22 @@
-import Link from "next/link";
 import {
-  Badge,
   Card,
-  EmptyState,
   Stat,
-  PageHeader,
   formatDateTime,
 } from "@/components/ui";
-import { legalDisclaimer } from "@/lib/compliance";
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
 import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, canViewTechnicalPractice } from "@/lib/access-control";
 import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
+import { DashboardOverview } from "@/components/dashboard-overview";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
+  const dashboardUser = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { name: true },
+  });
   const now = new Date();
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
@@ -756,82 +756,38 @@ export default async function Dashboard() {
   const pipelineCount = (status: OperationalServiceStatus) =>
     pipelineCounts.find((row) => row.operationalStatus === status)?._count
       ._all ?? 0;
+  const dashboardKpis = [
+    canReadLeads && { label: "Lead nuovi", value: leadNuovi, description: "Nuovi contatti visibili da qualificare", href: "/leads", tone: "blue" as const },
+    canReadTechnical && { label: "Pratiche tecniche attive", value: activeTechnicalPracticesCount, description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices", tone: "green" as const },
+    canReadServices && { label: "Task scaduti", value: overdueTasks, description: "Attività aperte oltre la scadenza", href: "/tasks", tone: "orange" as const },
+    session.role === "admin" && { label: "Autorizzazioni AI in attesa", value: pendingAiAuthorizationRequestCount, description: "Richieste complete da decidere separatamente", href: "/settings/ai-authorizations", tone: "purple" as const },
+  ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
+  const dashboardShortcuts = [
+    canReadLeads && { label: "Commerciale", description: "Lead, offerte e prossime azioni autorizzate", href: "/leads" },
+    canReadTechnical && { label: "Ufficio Tecnico", description: "Pratiche, scadenze e comunicazioni accessibili", href: "/technical-office" },
+    canReadClients && { label: "Clienti e pratiche", description: "Anagrafiche e fascicoli nel tuo perimetro", href: "/clients" },
+  ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
   return (
     <div className="space-y-6">
-      <PageHeader title="Dashboard operativa" description={legalDisclaimer} />
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        {priorityStats.map(([l, v, d, h, t]) => (
-          <Stat
-            key={String(l)}
-            label={String(l)}
-            value={Number(v)}
-            description={String(d)}
-            href={String(h)}
-            tone={t}
-          />
-        ))}
-      </section>
-      <Card title="Operatività di oggi">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          {operationalCards.map(([l, v, d, h, t]) => (
-            <Stat
-              key={String(l)}
-              label={String(l)}
-              value={Number(v)}
-              description={String(d)}
-              href={String(h)}
-              tone={t}
-            />
-          ))}
-        </div>
-      </Card>
-      <Card title="Priorità operative">
-        {priorityItems.length === 0 ? (
-          <EmptyState title="Nessuna priorità operativa">
-            Non ci sono attività, comunicazioni, pratiche o follow-up da
-            lavorare subito.
-          </EmptyState>
-        ) : (
-          <div className="space-y-3">
-            {priorityItems.map((item) => (
-              <div
-                key={item.id}
-                className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm md:grid-cols-[1.4fr_1fr_0.9fr_0.8fr_auto] md:items-center"
-              >
-                <div>
-                  <p className="font-extrabold text-fai-navy">{item.title}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {item.related ?? "Nessun cliente collegato"}
-                  </p>
-                </div>
-                <Badge
-                  tone={
-                    item.rank === 0
-                      ? "orange"
-                      : item.rank === 2
-                        ? "purple"
-                        : "blue"
-                  }
-                >
-                  {item.type}
-                </Badge>
-                <span className="text-xs font-bold text-slate-600">
-                  {formatDateTime(item.date)}
-                </span>
-                <span className="text-xs text-slate-500">
-                  Priorità #{priorityItems.indexOf(item) + 1}
-                </span>
-                <Link
-                  className="text-xs font-black uppercase tracking-wide text-fai-green underline"
-                  href={item.href}
-                >
-                  Apri
-                </Link>
-              </div>
-            ))}
+      <DashboardOverview
+        greeting={`Buongiorno${dashboardUser?.name ? `, ${dashboardUser.name.split(" ")[0]}` : ""}.`}
+        summary={`${priorityItems.length} priorità operative nel tuo perimetro. Conteggi aggiornati dai dati CRM correnti.`}
+        kpis={dashboardKpis}
+        priorities={priorityItems.map((item) => ({ ...item, related: item.related ?? "Nessun cliente collegato", date: formatDateTime(item.date) }))}
+        pipeline={pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) }))}
+        shortcuts={dashboardShortcuts}
+      />
+      <details className="group rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
+        <div className="space-y-6 border-t border-slate-100 p-5">
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {priorityStats.map(([l, v, d, h, t]) => <Stat key={String(l)} label={String(l)} value={Number(v)} description={String(d)} href={String(h)} tone={t} />)}
+          </section>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {operationalCards.map(([l, v, d, h, t]) => <Stat key={String(l)} label={String(l)} value={Number(v)} description={String(d)} href={String(h)} tone={t} />)}
           </div>
-        )}
-      </Card>
+        </div>
+      </details>
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         {businessStats.map(([l, v, d, h, t]) => (
           <Stat

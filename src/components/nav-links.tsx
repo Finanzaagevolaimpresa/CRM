@@ -15,6 +15,16 @@ export type NavItem = {
   requiredAnyPermissions?: Permission[];
 };
 
+function NavIcon({ href }: { href: string }) {
+  const isSearch = href === "/search";
+  const isNotification = href === "/notifications";
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5 shrink-0">
+      {isSearch ? <><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></> : isNotification ? <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></> : <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h8M8 17h5" /></>}
+    </svg>
+  );
+}
+
 type NavSection = {
   title: string;
   items: NavItem[];
@@ -135,7 +145,7 @@ export function NavLinks({
         const visibleItems = section.items;
         return (
           <div key={section.title} className="space-y-1.5">
-            <p className="px-3 text-[0.65rem] font-black uppercase tracking-[0.18em] text-white/45">
+            <p className="px-3 text-[0.62rem] font-black uppercase tracking-[0.16em] text-white/45">
               {section.title}
             </p>
             {visibleItems.map(({ label, href }) => {
@@ -144,15 +154,13 @@ export function NavLinks({
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
-                  className={`group flex min-h-12 items-center justify-between rounded-xl px-3 py-3 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white text-fai-navy shadow-md shadow-fai-lime/10 ring-white/80" : "text-white/82 ring-transparent hover:bg-white/10 hover:text-white hover:ring-white/10"}`}
+                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
                   href={href}
                   key={href}
                   onClick={onNavigate}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${active ? "bg-fai-orange shadow-sm shadow-fai-orange/40" : "bg-white/18 group-hover:bg-fai-lime"}`}
-                    />
+                    <NavIcon href={href} />
                     <span className="line-clamp-2 whitespace-normal break-words leading-snug">
                       {label}
                     </span>
