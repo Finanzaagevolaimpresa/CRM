@@ -10,6 +10,7 @@ import { canViewClient, canViewCommercialOffer, canViewProject, canViewService, 
 import { listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
+import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
 export const dynamic = "force-dynamic";
 export default async function Dashboard() {
   const session = await requireSession();
@@ -767,6 +768,18 @@ export default async function Dashboard() {
     canReadTechnical && { label: "Ufficio Tecnico", description: "Pratiche, scadenze e comunicazioni accessibili", href: "/technical-office" },
     canReadClients && { label: "Clienti e pratiche", description: "Anagrafiche e fascicoli nel tuo perimetro", href: "/clients" },
   ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
+  const dashboardCounterGroups = buildDashboardCounterGroups({
+    canReadLeads, canReadTechnical, canReviewPracticeCommunications,
+    canReadPracticeCommunications, canReadClients, canReadProjects,
+    canReadServices, canReadPayments, canReadDossiers, canReadAiOutputs,
+    isAdmin: session.role === "admin",
+  }, {
+    leadDaContattare, trattativeAperte, offerteInviate, offerteAccettate,
+    activeTechnicalPracticesCount, overdueClientUpdates, commsToReview,
+    approvedUnusedComms, clientiAttivi, progettiAttivi, serviziAcquistati,
+    tasks, todayTasksCount, overdueTasks, dueSoonTasks, payments,
+    preReview, dossierBozza, aiReview, pendingAiAuthorizationRequestCount,
+  });
   return (
     <div className="space-y-6">
       <DashboardOverview
@@ -776,6 +789,7 @@ export default async function Dashboard() {
         priorities={priorityItems.map((item) => ({ ...item, related: item.related ?? "Nessun cliente collegato", date: formatDateTime(item.date) }))}
         pipeline={pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) }))}
         shortcuts={dashboardShortcuts}
+        counterGroups={dashboardCounterGroups}
       />
       <details className="group rounded-2xl border border-slate-200 bg-white shadow-sm">
         <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Nav } from "@/components/ui";
 import { DashboardOverview } from "@/components/dashboard-overview";
+import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
 import type { Permission } from "@/lib/permissions";
 
 const adminPermissions: Permission[] = [
@@ -9,16 +10,36 @@ const adminPermissions: Permission[] = [
   "technical.read", "ai.review", "ai.execution.request", "ai.execution.audit",
   "ai_agents.read", "legal.read", "privacy.evidence.read", "user.read",
   "settings.manage", "ai.orchestrator.read", "audit.read",
+  "practice_communications.read", "practice_communications.review",
 ];
 
 const commercialPermissions: Permission[] = [
   "service.read", "document.download", "lead.read", "contract.read", "payment.read",
 ];
 
-export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string }> }) {
+const technicalPermissions: Permission[] = ["service.read", "technical.read", "document.download", "practice_communications.read", "practice_communications.review"];
+
+export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string }> }) {
   const params = await searchParams;
-  const profile = params.profile === "commercial" ? "commercial" : "admin";
-  const permissions = profile === "commercial" ? commercialPermissions : adminPermissions;
+  const profile = ["commercial", "technical", "restricted"].includes(params.profile ?? "") ? params.profile : "admin";
+  const permissions = profile === "commercial" ? commercialPermissions : profile === "technical" ? technicalPermissions : profile === "restricted" ? [] : adminPermissions;
+  const can = (permission: Permission) => permissions.includes(permission);
+  const count = (value: number) => params.counters === "zero" ? 0 : params.counters === "large" ? 1234567 : value;
+  const counterGroups = buildDashboardCounterGroups({
+    canReadLeads: can("lead.read"), canReadTechnical: can("technical.read"),
+    canReadPracticeCommunications: can("practice_communications.read"),
+    canReviewPracticeCommunications: can("practice_communications.review"),
+    canReadClients: can("client.read"), canReadProjects: can("project.read"),
+    canReadServices: can("service.read"), canReadPayments: can("payment.read"),
+    canReadDossiers: can("dossier.read"), canReadAiOutputs: can("ai.review") || can("ai.approve"),
+    isAdmin: profile === "admin",
+  }, {
+    leadDaContattare: count(24), trattativeAperte: count(8), offerteInviate: count(6), offerteAccettate: count(3),
+    activeTechnicalPracticesCount: count(11), overdueClientUpdates: count(2), commsToReview: count(5), approvedUnusedComms: count(4),
+    clientiAttivi: count(38), progettiAttivi: count(16), serviziAcquistati: count(52),
+    tasks: count(19), todayTasksCount: count(6), overdueTasks: count(2), dueSoonTasks: count(9), payments: count(7),
+    preReview: count(3), dossierBozza: count(4), aiReview: count(5), pendingAiAuthorizationRequestCount: count(47),
+  });
   const priorities = Array.from({ length: params.priorities === "many" ? 8 : 3 }, (_, index) => ({
     id: `synthetic-${index + 1}`, title: `Attività sintetica ${index + 1}`, related: "Azienda di prova",
     type: "Task oggi", date: "Oggi, 10:30", href: "/tasks",
@@ -34,11 +55,12 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
             greeting="Buongiorno, Operatore."
             summary={`${priorities.length} priorità operative sintetiche nel perimetro della fixture.`}
             kpis={[
-              { label: "Lead nuovi", value: 7, description: "Nuovi contatti visibili da qualificare", href: "/leads", tone: "blue" },
-              ...(profile === "admin" ? [{ label: "Pratiche tecniche attive", value: 11, description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices", tone: "green" as const }] : []),
-              { label: "Task scaduti", value: 2, description: "Attività aperte oltre la scadenza", href: "/tasks", tone: "orange" },
-              ...(profile === "admin" ? [{ label: "Autorizzazioni AI in attesa", value: 1, description: "Richieste complete da decidere separatamente", href: "/settings/ai-authorizations", tone: "purple" as const }] : []),
+              ...(can("lead.read") ? [{ label: "Lead nuovi", value: count(7), description: "Nuovi contatti visibili da qualificare", href: "/leads", tone: "blue" as const }] : []),
+              ...(can("technical.read") ? [{ label: "Pratiche tecniche attive", value: count(11), description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices", tone: "green" as const }] : []),
+              ...(can("service.read") ? [{ label: "Task scaduti", value: count(2), description: "Attività aperte oltre la scadenza", href: "/tasks", tone: "orange" as const }] : []),
+              ...(profile === "admin" ? [{ label: "Autorizzazioni AI in attesa", value: count(47), description: "Richieste complete da decidere separatamente", href: "/settings/ai-authorizations", tone: "purple" as const }] : []),
             ]}
+            counterGroups={counterGroups}
             priorities={priorities}
             pipeline={[{ label: "in valutazione", value: 4 }, { label: "documenti richiesti", value: 3 }, { label: "in istruttoria", value: 2 }]}
             shortcuts={profile === "commercial" ? [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }] : [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }, { label: "Ufficio Tecnico", description: "Pratiche e comunicazioni", href: "/technical-office" }]}

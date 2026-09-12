@@ -55,6 +55,7 @@ jobs:
           cp -R tests/mobile-nav/fixture "$baseline_root/tests/mobile-nav/fixture"
           # Shared synthetic content; the historical navigation shell stays unchanged.
           cp src/components/dashboard-overview.tsx "$baseline_root/src/components/dashboard-overview.tsx"
+          cp src/lib/dashboard-counter-groups.ts "$baseline_root/src/lib/dashboard-counter-groups.ts"
           cp -a "$PWD/node_modules" "$baseline_root/node_modules"
           node tests/mobile-nav/measure-navigation.mjs "$baseline_root" baseline "$MOBILE_NAV_EVIDENCE_DIR" 3418
           node tests/mobile-nav/measure-navigation.mjs "$PWD" candidate "$MOBILE_NAV_EVIDENCE_DIR" 3419

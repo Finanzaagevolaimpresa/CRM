@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { DashboardCounterGroup } from "@/lib/dashboard-counter-groups";
 
 export type DashboardKpi = {
   label: string;
@@ -42,6 +43,7 @@ export function DashboardOverview({
   priorities,
   pipeline,
   shortcuts,
+  counterGroups = [],
 }: {
   greeting: string;
   summary: string;
@@ -49,6 +51,7 @@ export function DashboardOverview({
   priorities: DashboardPriority[];
   pipeline: Array<{ label: string; value: number }>;
   shortcuts: Array<{ label: string; description: string; href: string }>;
+  counterGroups?: DashboardCounterGroup[];
 }) {
   const pipelineTotal = pipeline.reduce((total, item) => total + item.value, 0);
   return (
@@ -67,17 +70,38 @@ export function DashboardOverview({
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {kpis.map((kpi) => (
-          <Link key={kpi.label} href={kpi.href} className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-fai-green/30 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-fai-lime">
-            <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ring-1 ${toneStyles[kpi.tone]}`}><KpiIcon tone={kpi.tone} /></div>
+          <Link key={kpi.label} href={kpi.href} className="group flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-fai-green/30 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-fai-lime">
+            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ${toneStyles[kpi.tone]}`}><KpiIcon tone={kpi.tone} /></div>
+            <div className="min-w-0">
             <p className="text-sm font-bold text-slate-600">{kpi.label}</p>
-            <p className="mt-1 text-3xl font-black text-fai-navy">{kpi.value}</p>
+            <p className="mt-1 text-3xl font-black tabular-nums text-fai-navy">{kpi.value.toLocaleString("it-IT")}</p>
             <p className="mt-1 text-xs leading-5 text-slate-500">{kpi.description}</p>
+            </div>
           </Link>
         ))}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.85fr)]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      {counterGroups.length > 0 && <section aria-labelledby="counter-areas-heading" className="space-y-3">
+        <h2 id="counter-areas-heading" className="text-xl font-black text-fai-navy">Contatori per area</h2>
+        <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {counterGroups.map((group) => <section key={group.id} aria-labelledby={`counter-area-${group.id}`} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 ${toneStyles[group.tone]}`}><KpiIcon tone={group.tone} /></span>
+              <h3 id={`counter-area-${group.id}`} className="text-base font-black text-fai-navy">{group.title}</h3>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500">{group.description}</p>
+            <div className="mt-2 divide-y divide-slate-100">
+              {group.counters.map((counter) => <Link key={counter.label} href={counter.href} className="flex min-h-11 items-center justify-between gap-3 rounded-lg py-2 focus:outline-none focus:ring-2 focus:ring-fai-lime hover:bg-slate-50">
+                <span className="min-w-0 text-xs font-semibold leading-5 text-slate-600">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
+                <span className="shrink-0 text-2xl font-black tabular-nums text-fai-navy">{counter.value.toLocaleString("it-IT")}</span>
+              </Link>)}
+            </div>
+          </section>)}
+        </div>
+      </section>}
+
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.85fr)]">
+        <div id="pipeline-pratiche" className="scroll-mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div><h2 className="text-xl font-black text-fai-navy">Pipeline pratiche</h2><p className="mt-1 text-sm text-slate-500">Distribuzione corrente dei servizi accessibili.</p></div>
             <span className="rounded-full bg-fai-green/10 px-3 py-1 text-xs font-black text-fai-green">{pipelineTotal} totali</span>
