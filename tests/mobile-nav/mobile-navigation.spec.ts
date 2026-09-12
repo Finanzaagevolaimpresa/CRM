@@ -94,7 +94,7 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await page.goto("/?profile=commercial");
   await page.getByRole("button", { name: "Apri menu" }).click();
   await expect(page.getByRole("link", { name: "Checklist documentale" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Lead e offerte" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead e offerte" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Utenti" })).toHaveCount(0);
   await page.getByRole("button", { name: "Chiudi menu" }).click();
   await page.getByRole("button", { name: "Apri menu" }).click();
@@ -103,7 +103,7 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.getByRole("button", { name: /menu/i })).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Navigazione principale" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Lead e offerte" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead e offerte" })).toBeVisible();
 });
 
 test("resize conserva il focus su controlli visibili", async ({ page }) => {
