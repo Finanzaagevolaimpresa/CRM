@@ -183,13 +183,24 @@ test("dashboard responsive usa logo e azioni reali senza intrappolare lo scroll"
   await expect(page.getByRole("heading", { name: "Buongiorno, Operatore." })).toBeVisible();
   await expect(page.getByRole("img", { name: "Finanza Agevola Impresa" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
-  await page.screenshot({ path: testInfo.outputPath("dashboard-desktop-1440x900.png"), fullPage: true });
+  // A fullPage capture alone cannot expose content inside the desktop scrollport.
+  // Enlarge only the viewport for the artifact, preserving the application CSS.
+  const overview = page.locator('[aria-labelledby="dashboard-heading"]');
+  const overviewBox = await overview.boundingBox();
+  if (!overviewBox) throw new Error("Dashboard overview has no measurable bounds");
+  await page.setViewportSize({ width: 1440, height: Math.ceil(overviewBox.y + overviewBox.height + 24) });
+  await expect.poll(() => overview.evaluate((element) => element.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
+  await testInfo.attach("dashboard-desktop-capture-viewport", {
+    body: JSON.stringify({ checkedViewport: { width: 1440, height: 900 }, captureViewport: page.viewportSize() }),
+    contentType: "application/json",
+  });
+  await page.screenshot({ path: testInfo.outputPath("dashboard-desktop-1440.png"), fullPage: true });
 });
 
 test("le priorità oltre la quinta restano consultabili", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto("/?profile=admin&priorities=many");
-  await expect(page.getByRole("listitem")).toHaveCount(8);
+  await expect(page.getByRole("region", { name: "Priorità", exact: true }).getByRole("listitem")).toHaveCount(8);
   const lastPriority = page.getByRole("link", { name: /Attività sintetica 8/ });
   await lastPriority.scrollIntoViewIfNeeded();
   await expect(lastPriority).toBeInViewport();
@@ -212,6 +223,11 @@ test("contatori per area mostrano i totali completi e le destinazioni", async ({
   const administration = areas.getByRole("region", { name: "Amministrazione", exact: true });
   await expect(administration.getByRole("link", { name: /Pagamenti aperti/ })).toContainText("7");
   await expect(administration).not.toContainText("€");
+  const distribution = page.getByRole("img", { name: "Distribuzione dei servizi per stato", exact: true });
+  await expect(distribution).toHaveAttribute("data-pipeline-total", "9");
+  const shares = await distribution.locator("[data-pipeline-value]").evaluateAll((segments) => segments.map((segment) => Number(segment.getAttribute("data-pipeline-share"))));
+  expect(shares).toHaveLength(3);
+  for (const [index, count] of [4, 3, 2].entries()) expect(shares[index]).toBeCloseTo(count / 9 * 100, 6);
 });
 
 for (const profile of ["commercial", "technical", "restricted"]) {
@@ -244,12 +260,48 @@ test("contatori zero restano visibili e numeri grandi non causano overflow mobil
   const counters = areas.getByRole("link");
   expect(await counters.count()).toBe(20);
   for (const link of await counters.all()) await expect(link).toHaveText(/0$/);
+  const distribution = page.getByRole("img", { name: "Distribuzione dei servizi per stato", exact: true });
+  await expect(distribution).toHaveAttribute("data-pipeline-total", "0");
+  await expect(distribution.locator("[data-pipeline-value]")).toHaveCount(0);
+  const emptyBars = await areas.locator("[data-counter-value]").evaluateAll((bars) => bars.map((bar) => ({
+    value: bar.getAttribute("data-counter-value"),
+    width: bar.getBoundingClientRect().width,
+  })));
+  expect(emptyBars.length).toBeGreaterThan(0);
+  expect(emptyBars.every((bar) => bar.value === "0" && bar.width === 0)).toBe(true);
   await page.goto("/?profile=admin&counters=large");
   await expect(areas.getByRole("link").first()).toContainText("1.234.567");
+  await expect(distribution).toHaveAttribute("data-pipeline-total", "3703701");
+  const segments = distribution.locator("[data-pipeline-value]");
+  await expect(segments).toHaveCount(3);
+  const shares = await segments.evaluateAll((items) => items.map((item) => Number(item.getAttribute("data-pipeline-share"))));
+  expect(shares.every((share) => Number.isFinite(share) && share > 0)).toBe(true);
+  expect(shares[0]).toBeCloseTo(shares[1], 6);
+  expect(shares[1]).toBeCloseTo(shares[2], 6);
+  const barWidths = await areas.locator("[data-counter-value]").evaluateAll((bars) => bars.map((bar) => ({
+    fill: bar.getBoundingClientRect().width,
+    track: bar.parentElement?.getBoundingClientRect().width ?? 0,
+  })));
+  expect(barWidths.every((width) => Number.isFinite(width.fill) && width.fill > 0 && width.fill <= width.track + 0.5)).toBe(true);
   const lastCounter = areas.getByRole("link").last();
   await lastCounter.scrollIntoViewIfNeeded();
   await expect(lastCounter).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await page.getByRole("heading", { name: "Buongiorno, Operatore." }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("dashboard-counters-mobile-320.png"), fullPage: true });
+});
+
+test("i contatori delle comunicazioni restano leggibili senza autorizzare destinazioni", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/?profile=communications");
+  const areas = page.getByRole("region", { name: "Contatori per area" });
+  const technical = areas.getByRole("region", { name: "Ufficio Tecnico", exact: true });
+  await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(1);
+  await expect(technical).toContainText("Comunicazioni da revisionare");
+  await expect(technical).toContainText("Approvate non utilizzate");
+  await expect(technical.getByText("5", { exact: true })).toBeVisible();
+  await expect(technical.getByText("4", { exact: true })).toBeVisible();
+  await expect(technical.getByText("Pratiche tecniche attive", { exact: true })).toHaveCount(0);
+  await expect(technical.locator("a, button, [role='link'], [role='button']")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });

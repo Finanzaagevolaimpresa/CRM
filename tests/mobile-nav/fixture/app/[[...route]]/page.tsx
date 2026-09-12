@@ -18,11 +18,12 @@ const commercialPermissions: Permission[] = [
 ];
 
 const technicalPermissions: Permission[] = ["service.read", "technical.read", "document.download", "practice_communications.read", "practice_communications.review"];
+const communicationPermissions: Permission[] = ["practice_communications.read", "practice_communications.review"];
 
 export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string }> }) {
   const params = await searchParams;
-  const profile = ["commercial", "technical", "restricted"].includes(params.profile ?? "") ? params.profile : "admin";
-  const permissions = profile === "commercial" ? commercialPermissions : profile === "technical" ? technicalPermissions : profile === "restricted" ? [] : adminPermissions;
+  const profile = ["commercial", "technical", "communications", "restricted"].includes(params.profile ?? "") ? params.profile : "admin";
+  const permissions = profile === "commercial" ? commercialPermissions : profile === "technical" ? technicalPermissions : profile === "communications" ? communicationPermissions : profile === "restricted" ? [] : adminPermissions;
   const can = (permission: Permission) => permissions.includes(permission);
   const count = (value: number) => params.counters === "zero" ? 0 : params.counters === "large" ? 1234567 : value;
   const counterGroups = buildDashboardCounterGroups({
@@ -63,7 +64,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
             ]}
             counterGroups={counterGroups}
             priorities={priorities}
-            pipeline={[{ label: "in valutazione", value: 4 }, { label: "documenti richiesti", value: 3 }, { label: "in istruttoria", value: 2 }]}
+            pipeline={[{ label: "in valutazione", value: count(4) }, { label: "documenti richiesti", value: count(3) }, { label: "in istruttoria", value: count(2) }]}
             shortcuts={profile === "commercial" ? [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }] : [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }, { label: "Ufficio Tecnico", description: "Pratiche e comunicazioni", href: "/technical-office" }]}
           />
           <Link className="underline" href="/external">Destinazione esterna al menu</Link>
