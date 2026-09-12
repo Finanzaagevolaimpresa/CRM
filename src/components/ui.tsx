@@ -202,7 +202,7 @@ export function Card({
   return (
     <section
       id={id}
-      className="scroll-mt-28 rounded-3xl border border-slate-200/75 bg-white/92 p-5 shadow-sm shadow-slate-200/70 ring-1 ring-slate-900/5 backdrop-blur"
+      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5"
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
@@ -296,8 +296,8 @@ export function Table({
   rows: Array<Array<React.ReactNode>>;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
-      <table className="w-full text-sm">
+    <div className="max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm" tabIndex={0} aria-label="Tabella scorrevole orizzontalmente">
+      <table className="min-w-[42rem] w-full text-sm">
         <thead className="bg-gradient-to-r from-slate-50 to-fai-bg text-left text-xs uppercase tracking-wider text-slate-500">
           <tr>
             {headers.map((h, index) => (

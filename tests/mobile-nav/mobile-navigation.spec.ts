@@ -62,7 +62,7 @@ for (const viewport of [
     await trigger.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("button", { name: "Chiudi menu" })).toHaveAttribute("aria-expanded", "true");
-    const logout = page.getByRole("button", { name: "Logout" });
+    const logout = page.getByRole("button", { name: "Esci dal CRM" });
     await logout.scrollIntoViewIfNeeded();
     await expect(logout).toBeVisible();
     await expect(logout).toBeInViewport();
@@ -84,6 +84,8 @@ for (const viewport of [
     const scrollBeforeWheel = await page.evaluate(() => scrollY);
     await page.mouse.wheel(0, 900);
     await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(scrollBeforeWheel);
+    await page.mouse.wheel(0, -1600);
+    await expect.poll(() => page.evaluate(() => scrollY)).toBe(0);
   });
 }
 
@@ -96,7 +98,7 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await expect(page.getByRole("link", { name: "Utenti" })).toHaveCount(0);
   await page.getByRole("button", { name: "Chiudi menu" }).click();
   await page.getByRole("button", { name: "Apri menu" }).click();
-  await expect(page.getByRole("button", { name: "Logout" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Esci dal CRM" })).toBeVisible();
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.getByRole("button", { name: /menu/i })).toBeHidden();
@@ -146,4 +148,51 @@ test("una route esterna e back non riaprono il menu", async ({ page }) => {
     const focused = document.activeElement;
     return !focused || focused === document.body || focused.getClientRects().length > 0;
   })).toBe(true);
+});
+
+test("dashboard responsive usa logo e azioni reali senza intrappolare lo scroll", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?profile=commercial");
+  const logo = page.getByRole("img", { name: "Finanza Agevola Impresa" });
+  await expect(logo).toBeVisible();
+  const logoImage = await logo.evaluate((image: HTMLImageElement) => ({ complete: image.complete, width: image.naturalWidth, height: image.naturalHeight }));
+  expect(logoImage.complete).toBe(true);
+  expect(logoImage.width).toBeGreaterThan(0);
+  expect(logoImage.height).toBeGreaterThan(0);
+  expect(logoImage.width / logoImage.height).toBeCloseTo(971 / 567, 1);
+  await expect(page.getByRole("link", { name: "Cerca nel CRM" })).toHaveAttribute("href", "/search");
+  await expect(page.getByRole("link", { name: "Notifiche" })).toHaveAttribute("href", "/notifications");
+  await expect(page.getByText("Autorizzazioni AI in attesa")).toHaveCount(0);
+  await expect(page.getByText("Pratiche tecniche attive")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("dashboard-mobile-390x844.png"), fullPage: true });
+
+  await page.mouse.wheel(0, 1200);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(0);
+  await page.mouse.wheel(0, -1600);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(0);
+  await page.getByRole("button", { name: "Apri menu" }).click();
+  await page.getByRole("button", { name: "Chiudi menu" }).click();
+  await page.mouse.wheel(0, 1000);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(0);
+  await page.mouse.wheel(0, -1600);
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(0);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?profile=admin");
+  await expect(page.getByRole("heading", { name: "Buongiorno, Operatore." })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Finanza Agevola Impresa" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
+  await page.screenshot({ path: testInfo.outputPath("dashboard-desktop-1440x900.png"), fullPage: true });
+});
+
+test("le priorità oltre la quinta restano consultabili", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/?profile=admin&priorities=many");
+  await expect(page.getByRole("listitem")).toHaveCount(8);
+  const lastPriority = page.getByRole("link", { name: /Attività sintetica 8/ });
+  await lastPriority.scrollIntoViewIfNeeded();
+  await expect(lastPriority).toBeInViewport();
+  await expect(lastPriority).toHaveAttribute("href", "/tasks");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
