@@ -91,7 +91,7 @@ test('N15 assignment consultation remains server-authorized and explains termina
   assert.match(browser, /managerVisible: true, assigneeVisible: true[\s\S]*foreignDirectAccessDenied: true/u);
   assert.match(browser, /n15-manager-assignment-held\.png[\s\S]*n15-assignee-held\.png/u);
   assert.match(ci, /N15 synthetic assignment and authorized consultation[\s\S]*n15-assignment-browser-/u);
-  assert.match(provision, /revokedReason: 'N15_SYNTHETIC_PROVISION_COMPLETE'[\s\S]*revokedAt: null/u);
+  assert.match(provision, /logoutInternalSession\(tx, commercialSession\.token\)[\s\S]*revokedAt: null/u);
   assert.match(ci, /::add-mask::\$PRIVILEGED_STEP_UP_SECRET[\s\S]*::add-mask::\$N15_BROWSER_PASSWORD/u);
   assert.match(ci, /kill -0 "\$app_pid"[\s\S]*EARLY_EXIT[\s\S]*HEALTH_TIMEOUT/u);
 });

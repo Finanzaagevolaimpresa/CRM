@@ -3,6 +3,9 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { initializeCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
+import { logoutInternalSession } from '../../src/lib/internal-session-registry';
+import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
+import { writeProvisionFailureReceipt } from './provision-diagnostic';
 
 const db = new PrismaClient();
 const password = process.env.N15_BROWSER_PASSWORD;
@@ -27,8 +30,10 @@ async function main() {
     keyDigest: privilegedStepUpKeyDigest(stepUpSecret), status: 'ACTIVE', activatedAt: new Date(),
     createdById: 'n15-browser-manager',
   } });
+  const commercialSession = createRegistrySessionToken();
   await db.internalSession.create({ data: {
-    id: commercialSessionId, userId: 'n15-browser-commercial-one', tokenDigest: Buffer.alloc(32, 15),
+    id: commercialSessionId, userId: 'n15-browser-commercial-one',
+    tokenDigest: Buffer.from(await digestRegistrySessionToken(commercialSession.bytes)),
     expiresAt: new Date('2099-01-01T00:00:00.000Z'),
   } });
   const lead = await db.lead.create({ data: {
@@ -40,20 +45,23 @@ async function main() {
     actor: { userId: 'n15-browser-commercial-one', sessionId: commercialSessionId },
     attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
   });
-  await db.internalSession.update({
-    where: { id: commercialSessionId },
-    data: {
-      revokedAt: new Date(), revokedReason: 'N15_SYNTHETIC_PROVISION_COMPLETE',
-      revokedByUserId: 'n15-browser-commercial-one',
+  const loggedOut = await db.$transaction((tx) =>
+    logoutInternalSession(tx, commercialSession.token));
+  assert.equal(loggedOut?.id, commercialSessionId);
+  assert.equal(await db.auditLog.count({
+    where: {
+      actorId: 'n15-browser-commercial-one', event: 'logout',
+      entityType: 'User', entityId: 'n15-browser-commercial-one',
     },
-  });
+  }), 1);
   assert.equal(await db.internalSession.count({
     where: { revokedAt: null, expiresAt: { gt: new Date() } },
   }), 0);
   process.stdout.write('{"n15BrowserProvision":"ready"}\n');
 }
 
-void main().catch(() => {
+void main().catch((error: unknown) => {
+  writeProvisionFailureReceipt(process.env.N15_BROWSER_EVIDENCE_DIR, error);
   process.stderr.write('N15_BROWSER_PROVISION_FAILED\n');
   process.exitCode = 1;
 }).finally(async () => db.$disconnect());

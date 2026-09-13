@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { classifyProvisionFailure, writeProvisionFailureReceipt } from './n15-browser/provision-diagnostic';
 
 test('N15 browser startup diagnostic emits only finite minimized markers', () => {
   const root = mkdtempSync(join(tmpdir(), 'n15-browser-diagnostic-'));
@@ -34,4 +35,22 @@ test('N15 browser startup diagnostic rejects arbitrary reason and status fields'
     'tests/n15-browser/write-startup-diagnostic.mjs', '/missing', '/tmp/forbidden',
     'ARBITRARY_REASON', 'PRIVATE_STATUS',
   ], { stdio: 'pipe' }));
+});
+
+test('N15 browser provision failures produce a finite minimized receipt', () => {
+  const root = mkdtempSync(join(tmpdir(), 'n15-browser-provision-'));
+  try {
+    const privateValue = 'PRIVATE_DATABASE_DETAIL_MUST_NOT_APPEAR';
+    const error = Object.assign(new Error(privateValue), { code: 'P2004', meta: { detail: privateValue } });
+    assert.equal(classifyProvisionFailure(error), 'PRISMA_P2004');
+    assert.equal(classifyProvisionFailure({ code: 'P2999' }), 'PRISMA_OTHER');
+    writeProvisionFailureReceipt(root, error);
+    const raw = readFileSync(join(root, 'provision.json'), 'utf8');
+    assert.deepEqual(JSON.parse(raw), {
+      phase: 'provision', status: 'FAILED', code: 'PRISMA_P2004',
+    });
+    assert.doesNotMatch(raw, new RegExp(privateValue, 'u'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
