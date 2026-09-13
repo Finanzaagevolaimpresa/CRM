@@ -123,6 +123,28 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await waitForPreAnalysisForm(page);
   await page.screenshot({ path: join(evidence, 'preanalysis-narrow.png'), fullPage: true });
 
+  const protectedRecord = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
+  const protectedAuditCount = await db.auditLog.count({ where: { entityId: recordId } });
+  for (const identity of [
+    { email: 'preanalysis-read-only@invalid.test', label: 'read-only' },
+    { email: 'preanalysis-override-denied@invalid.test', label: 'override-denied' },
+  ]) {
+    const context = await browser.newContext(); const restricted = await context.newPage();
+    await login(restricted, identity.email);
+    await restricted.goto(`${app}/preanalyses/new?clientId=preanalysis-browser-client&projectId=preanalysis-browser-project`);
+    await expect(restricted.getByRole('heading', { name: 'Creazione non disponibile' })).toBeVisible();
+    await expect(restricted.locator('textarea')).toHaveCount(0);
+    await expect(restricted.getByRole('button', { name: 'Crea bozza interna' })).toHaveCount(0);
+    await restricted.goto(`${app}/preanalyses/${recordId}`);
+    await expect(restricted.getByRole('heading', { name: 'Contenuto in sola lettura' })).toBeVisible();
+    await expect(restricted.getByText(protectedRecord.internalSummary!, { exact: true })).toBeVisible();
+    await expect(restricted.locator('textarea')).toHaveCount(0);
+    await expect(restricted.getByRole('button', { name: 'Salva modifiche' })).toHaveCount(0);
+    await context.close();
+  }
+  expect(await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } })).toEqual(protectedRecord);
+  expect(await db.auditLog.count({ where: { entityId: recordId } })).toBe(protectedAuditCount);
+
   const foreignContext = await browser.newContext(); const foreign = await foreignContext.newPage();
   await login(foreign, 'preanalysis-foreign@invalid.test');
   await foreign.goto(`${app}/preanalyses/${recordId}`);
@@ -136,6 +158,6 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(noRead).toHaveURL(`${app}/dashboard`);
 
   const persisted = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
-  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, readOnlyUiDenied: true, writeOverrideAbacUiDenied: true, restrictedReadPreserved: true, restrictedUiAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
   await Promise.all([owner.close(), foreignContext.close(), noReadContext.close()]);
 });

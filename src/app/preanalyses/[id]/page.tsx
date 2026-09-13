@@ -8,6 +8,7 @@ import { updateManualPreAnalysis } from '@/lib/form-actions';
 import { prisma } from '@/lib/prisma';
 import { getPreAnalysisReadAccess } from '@/lib/read-access';
 import { isEditableManualPreAnalysis } from '@/lib/preanalysis-policy';
+import { canEditProject } from '@/lib/access-control';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('dossier.read');
@@ -15,7 +16,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const context = await getPreAnalysisReadAccess(session, id);
   if (!context) return <PageHeader title="Pre-analisi non trovata" description="Il record richiesto non esiste o non è accessibile." />;
   const { preAnalysis: pre } = context;
-  const editable = hasPermission(session, 'project.write') && isEditableManualPreAnalysis(pre);
+  const editable = hasPermission(session, 'project.write') && Boolean(context.project) && canEditProject(session, { ...context.project!, client: context.client }) && isEditableManualPreAnalysis(pre);
   const [client, project, reviewer, approver] = await Promise.all([
     prisma.client.findFirst({ where: { id: pre.clientId, deletedAt: null } }),
     prisma.project.findFirst({ where: { id: pre.projectId, deletedAt: null } }),

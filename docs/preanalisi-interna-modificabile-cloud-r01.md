@@ -39,3 +39,7 @@ Il lock parametrizzato della sessione registry applica il cast PostgreSQL `::uui
 ## Correzione R05
 
 Il form espone `data-preanalysis-form-ready=true` soltanto dopo il mount client e mantiene l'intero fieldset disabilitato fino a quel momento. Il browser attende questa prontezza locale dopo navigazioni, redirect, reload ed errori, e verifica il valore DOM esatto immediatamente prima di ogni submit di modifica. Questo impedisce che un `fill` iniziato durante l'idratazione venga riconciliato con il valore server, causa della concatenazione osservata su `scenarioA`.
+
+## Allineamento UI permessi R06
+
+Le pagine di creazione e dettaglio mostrano il form soltanto se coesistono `project.write` e il predicato canonico `canEditProject` sul progetto con cliente idratato. Revisori in sola lettura e backoffice con override del solo permission bit conservano la consultazione, ma vedono un messaggio chiaro e nessuna textarea o azione di salvataggio. Il browser verifica entrambe le pagine per i due profili, insieme all'invarianza di record e audit.
