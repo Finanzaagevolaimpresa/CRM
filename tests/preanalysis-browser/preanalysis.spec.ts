@@ -141,7 +141,8 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
     await expect(restricted.getByRole('button', { name: 'Crea bozza interna' })).toHaveCount(0);
     await restricted.goto(`${app}/preanalyses/${recordId}`);
     await expect(restricted.getByRole('heading', { name: 'Contenuto in sola lettura' })).toBeVisible();
-    await expect(restricted.getByText(protectedRecord.internalSummary!, { exact: true })).toBeVisible();
+    await expect(restricted.getByText('Puoi consultare questa bozza, ma il tuo profilo non è autorizzato a modificarla per il progetto.', { exact: true })).toBeVisible();
+    await expect(restricted.locator('[data-preanalysis-field="internalSummary"]')).toHaveText(protectedRecord.internalSummary!);
     await expect(restricted.locator('textarea')).toHaveCount(0);
     await expect(restricted.getByRole('button', { name: 'Salva modifiche' })).toHaveCount(0);
     await context.close();
