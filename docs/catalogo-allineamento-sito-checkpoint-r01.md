@@ -5,5 +5,6 @@
 - Schema: invariato; migrazioni: 44.
 - Default operativi: checkout, delivery ed azioni esterne automatiche disabilitati.
 - CI richiesta: unità catalogo, PostgreSQL effimero, Chromium desktop/mobile, lint, typecheck e build.
+- Ricevuta browser: storico v1 verifica versione, `TERMS-v1`, importo EUR 1490 con resa italiana equivalente, IVA e stato; la selezione verifica insieme servizio e tipologia. In errore vengono conservati screenshot, fase, path e solo testo visibile sintetico, mai cookie o credenziali.
 - Residui: integrazione degli ingressi e ciclo commerciale completo restano futuri.
 - Stato esterno: `REAL_KEY_ACCESS=NO`, `Q04=APERTA`, `P4=SOSPESA`, `PILOTA=BLOCCATO`.
