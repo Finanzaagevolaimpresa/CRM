@@ -12,4 +12,3 @@ export const N15_BROWSER_IDENTITIES = Object.freeze({
     email: 'foreign@n15-browser.invalid',
   }),
 } as const);
-

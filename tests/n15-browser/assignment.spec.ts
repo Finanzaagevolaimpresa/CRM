@@ -233,15 +233,22 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
 
   const leadUrl = `${appUrl}/leads/n15-browser-assignment-lead`;
   await managerPage.goto(leadUrl);
-  await expect(managerPage.getByText('HELD significa trattenuta', { exact: false })).toBeVisible();
-  await expect(managerPage.getByText('destinatario interno Commerciale Assegnatario N15', { exact: false })).toBeVisible();
-  await managerPage.screenshot({ path: join(evidenceDirectory, 'n15-manager-assignment-held.png'), fullPage: true });
+  const managerN15Card = managerPage.getByRole('heading', { name: 'Comunicazioni assegnazione N15' })
+    .locator('..').locator('..').locator('..');
+  await managerN15Card.scrollIntoViewIfNeeded();
+  await expect(managerN15Card.getByText('HELD significa trattenuta', { exact: false })).toBeVisible();
+  await expect(managerN15Card.getByText('destinatario interno Commerciale Assegnatario N15', { exact: false })).toBeVisible();
+  await managerN15Card.screenshot({ path: join(evidenceDirectory, 'n15-manager-assignment-held.png') });
 
   const assignee = await browser.newContext();
   const assigneePage = await login(assignee, N15_BROWSER_IDENTITIES.assignee.email, 'assignee');
   await assigneePage.goto(leadUrl);
-  await expect(assigneePage.getByText('HELD significa trattenuta', { exact: false })).toBeVisible();
-  await assigneePage.screenshot({ path: join(evidenceDirectory, 'n15-assignee-held.png'), fullPage: true });
+  const assigneeN15Card = assigneePage.getByRole('heading', { name: 'Comunicazioni assegnazione N15' })
+    .locator('..').locator('..').locator('..');
+  await assigneeN15Card.scrollIntoViewIfNeeded();
+  await expect(assigneeN15Card.getByText('HELD significa trattenuta', { exact: false })).toBeVisible();
+  await expect(assigneeN15Card.getByText('destinatario interno Commerciale Assegnatario N15', { exact: false })).toBeVisible();
+  await assigneeN15Card.screenshot({ path: join(evidenceDirectory, 'n15-assignee-held.png') });
 
   const foreign = await browser.newContext();
   const foreignPage = await login(foreign, N15_BROWSER_IDENTITIES.foreign.email, 'foreign');
