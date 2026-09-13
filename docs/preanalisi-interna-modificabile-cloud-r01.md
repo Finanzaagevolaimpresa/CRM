@@ -13,7 +13,8 @@ Sono modificabili solo record manuali negli stati `da_avviare` o `raccolta_dati`
 - Nessuna transizione, revisione, approvazione, archiviazione o cancellazione.
 - Nessuna migrazione: lo schema e le 44 migrazioni restano invariati.
 - Nessun provider, run AI, worker, invio, deploy o dato reale.
-- `deploy_required=false`, `migration_required=false`, `production_change_required=false`.
+- `deploy_required=YES`, `migration_required=NO`, `production_change_required=YES` al futuro deploy e `runtime_revalidation_required=YES`.
+- Questi valori sono requisiti del lifecycle: in questa milestone non è stata eseguita alcuna operazione produttiva, pubblicazione o deploy.
 - P4 resta sospesa, Q04 aperta, pilota bloccato e accesso a chiavi reali assente.
 
 ## Qualifica R02
@@ -43,3 +44,7 @@ Il form espone `data-preanalysis-form-ready=true` soltanto dopo il mount client 
 ## Allineamento UI permessi R06
 
 Le pagine di creazione e dettaglio mostrano il form soltanto se coesistono `project.write` e il predicato canonico `canEditProject` sul progetto con cliente idratato. Revisori in sola lettura e backoffice con override del solo permission bit conservano la consultazione, ma vedono un messaggio chiaro e nessuna textarea o azione di salvataggio. Il browser verifica entrambe le pagine per i due profili, insieme all'invarianza di record e audit.
+
+## Chiusura consolidata R07
+
+Anche i collegamenti di ingresso da fascicolo e progetto richiedono `dossier.read`, `project.write` e `canEditProject`. Per le sessioni legacy il servizio applica la stessa soglia temporale canonica del cookie (`expiresAt <= floor(Date.now()/1000)`) sia all'ingresso transazionale sia, nuovamente, dopo tutti i lock di attore e contesto e immediatamente prima della creazione o dell'eventuale update/no-op. Le sessioni registry conservano inoltre la rilettura persistente di identità, revoca e scadenza.

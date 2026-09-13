@@ -114,6 +114,30 @@ test('PostgreSQL: permission/context revocation and linked deletion are rechecke
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId, deletedAt: null } });
 });
 
+test('PostgreSQL: legacy expiry crossed during locks denies create and update atomically', { skip: !enabled }, async () => {
+  const expiresAt = Math.floor(Date.now() / 1000) + 300;
+  const legacy = { ...actor(ownerId), expiresAt };
+  const crossingClock = () => {
+    let reads = 0;
+    return { runtime: { nowSeconds: () => (++reads === 1 ? expiresAt - 1 : expiresAt) }, reads: () => reads };
+  };
+  const createClock = crossingClock();
+  const recordsBefore = await prisma.preAnalysis.count({ where: { clientId } });
+  const createAuditsBefore = await prisma.auditLog.count({ where: { actorId: ownerId, event: 'preanalysis_create' } });
+  await expectDenied(createManualPreAnalysisRecord(prisma, legacy, { clientId, projectId, internalSummary: 'Non deve esistere' }, createClock.runtime));
+  assert.equal(createClock.reads(), 2);
+  assert.equal(await prisma.preAnalysis.count({ where: { clientId } }), recordsBefore);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: ownerId, event: 'preanalysis_create' } }), createAuditsBefore);
+
+  const valid = await createManualPreAnalysisRecord(prisma, legacy, { clientId, projectId, internalSummary: 'Legacy valida' }, { nowSeconds: () => expiresAt - 1 });
+  const updateAuditsBefore = await prisma.auditLog.count({ where: { entityId: valid.id } });
+  const updateClock = crossingClock();
+  await expectDenied(updateManualPreAnalysisRecord(prisma, legacy, { id: valid.id, version: valid.updatedAt, internalSummary: 'Non deve essere salvata' }, updateClock.runtime));
+  assert.equal(updateClock.reads(), 2);
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: valid.id } })).internalSummary, 'Legacy valida');
+  assert.equal(await prisma.auditLog.count({ where: { entityId: valid.id } }), updateAuditsBefore);
+});
+
 test('PostgreSQL: audit faults roll back create and update completely', { skip: !enabled }, async () => {
   const marker = `${prefix}-audit-fault`;
   await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION "${marker}"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event IN ('preanalysis_create','preanalysis_manual_update') AND NEW."actorId" = '${ownerId}' THEN RAISE EXCEPTION 'synthetic audit fault'; END IF; RETURN NEW; END $$`);

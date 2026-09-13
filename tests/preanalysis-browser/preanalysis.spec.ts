@@ -131,6 +131,10 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   ]) {
     const context = await browser.newContext(); const restricted = await context.newPage();
     await login(restricted, identity.email);
+    await restricted.goto(`${app}/projects/preanalysis-browser-project`);
+    await expect(restricted.getByRole('link', { name: 'Crea pre-analisi' })).toHaveCount(0);
+    await restricted.goto(`${app}/clients/preanalysis-browser-client#pre-analisi`);
+    await expect(restricted.getByRole('link', { name: /Crea per Progetto Sintetico Preanalisi/u })).toHaveCount(0);
     await restricted.goto(`${app}/preanalyses/new?clientId=preanalysis-browser-client&projectId=preanalysis-browser-project`);
     await expect(restricted.getByRole('heading', { name: 'Creazione non disponibile' })).toBeVisible();
     await expect(restricted.locator('textarea')).toHaveCount(0);

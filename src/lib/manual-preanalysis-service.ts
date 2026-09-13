@@ -10,6 +10,12 @@ export class ManualPreAnalysisError extends Error {
 
 type Db = Pick<PrismaClient, '$transaction'>;
 type Narratives = Partial<Record<(typeof manualPreAnalysisFields)[number], string | null>>;
+type Runtime = { nowSeconds?: () => number };
+
+function requireFreshClaim(claimed: AuthSession, runtime: Runtime) {
+  const nowSeconds = runtime.nowSeconds?.() ?? Math.floor(Date.now() / 1000);
+  if (!Number.isInteger(claimed.expiresAt) || claimed.expiresAt <= nowSeconds) throw new ManualPreAnalysisError('DENIED');
+}
 
 async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${claimed.userId} FOR UPDATE`;
@@ -51,10 +57,12 @@ function values(input: Narratives) {
   return Object.fromEntries(manualPreAnalysisFields.map((field) => [field, input[field] ?? null])) as Record<(typeof manualPreAnalysisFields)[number], string | null>;
 }
 
-export function createManualPreAnalysisRecord(db: Db, actor: AuthSession, input: Narratives & { clientId: string; projectId: string; companyId?: string }) {
+export function createManualPreAnalysisRecord(db: Db, actor: AuthSession, input: Narratives & { clientId: string; projectId: string; companyId?: string }, runtime: Runtime = {}) {
   return db.$transaction(async (tx) => {
+    requireFreshClaim(actor, runtime);
     const current = await currentActor(tx, actor);
     await writableContext(tx, current, input.clientId, input.projectId, input.companyId);
+    requireFreshClaim(actor, runtime);
     const narratives = values(input);
     const record = await tx.preAnalysis.create({ data: { clientId: input.clientId, projectId: input.projectId, companyId: input.companyId, ...narratives } });
     await tx.auditLog.create({ data: { actorId: current.userId, event: 'preanalysis_create', entityType: 'PreAnalysis', entityId: record.id, after: { recordId: record.id, changedFields: manualPreAnalysisFields.filter((field) => Boolean(record[field])) } } });
@@ -62,8 +70,9 @@ export function createManualPreAnalysisRecord(db: Db, actor: AuthSession, input:
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export function updateManualPreAnalysisRecord(db: Db, actor: AuthSession, input: Narratives & { id: string; version: Date }) {
+export function updateManualPreAnalysisRecord(db: Db, actor: AuthSession, input: Narratives & { id: string; version: Date }, runtime: Runtime = {}) {
   return db.$transaction(async (tx) => {
+    requireFreshClaim(actor, runtime);
     const current = await currentActor(tx, actor);
     await tx.$queryRaw`SELECT id FROM "PreAnalysis" WHERE id = ${input.id} FOR UPDATE`;
     const before = await tx.preAnalysis.findUnique({ where: { id: input.id } });
@@ -71,6 +80,7 @@ export function updateManualPreAnalysisRecord(db: Db, actor: AuthSession, input:
     await writableContext(tx, current, before.clientId, before.projectId, before.companyId);
     const editable = (before.status === 'da_avviare' || before.status === 'raccolta_dati') && !before.aiRunId && !before.reviewedById && !before.approvedById && !before.approvedAt;
     if (!editable || before.updatedAt.getTime() !== input.version.getTime()) throw new ManualPreAnalysisError('CONFLICT');
+    requireFreshClaim(actor, runtime);
     const narratives = values(input);
     const changedFields = manualPreAnalysisFields.filter((field) => before[field] !== narratives[field]);
     if (!changedFields.length) return { record: before, changed: false as const };

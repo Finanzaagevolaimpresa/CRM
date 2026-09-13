@@ -8,6 +8,7 @@ import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorizat
 import { prisma } from '@/lib/prisma';
 import { getProjectReadAccess } from '@/lib/read-access';
 import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
+import { canEditProject } from '@/lib/access-control';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('project.read');
@@ -52,7 +53,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       {expenses.length === 0 ? <EmptyState title="Nessun dato presente">Nessuna voce di spesa progetto registrata.</EmptyState> : <Table headers={['Categoria', 'Descrizione', 'Importo', 'Ammissibilità']} rows={expenses.map((expense) => [expense.category, expense.description, `€ ${Number(expense.amount).toLocaleString('it-IT')}`, expense.potentiallyEligible ? 'Potenzialmente' : 'Da verificare'])} />}
     </Card>
     <Card title="Pre-analisi interne">
-      {canReadPreAnalyses && hasPermission(session, 'project.write') ? <Link className="mb-4 inline-block rounded-xl bg-fai-blue px-4 py-2 font-bold text-white" href={`/preanalyses/new?clientId=${project.clientId}&projectId=${project.id}`}>Crea pre-analisi</Link> : null}
+      {canReadPreAnalyses && hasPermission(session, 'project.write') && canEditProject(session, project) ? <Link className="mb-4 inline-block rounded-xl bg-fai-blue px-4 py-2 font-bold text-white" href={`/preanalyses/new?clientId=${project.clientId}&projectId=${project.id}`}>Crea pre-analisi</Link> : null}
       {!canReadPreAnalyses ? <EmptyState title="Pre-analisi non disponibili">Il tuo profilo non dispone del permesso di lettura pertinente.</EmptyState> : preAnalyses.length === 0 ? <EmptyState title="Nessuna pre-analisi">Non sono ancora presenti bozze per questo progetto.</EmptyState> : <Table headers={['Stato', 'Sintesi', 'Aggiornata', 'Azione']} rows={preAnalyses.map((pre) => [<StatusBadge key="status" status={pre.status} />, pre.internalSummary ?? 'Bozza interna senza sintesi', formatDateTime(pre.updatedAt), <Link key="open" className="font-bold text-fai-blue underline" href={`/preanalyses/${pre.id}`}>Apri</Link>])} />}
     </Card>
     <Card title="Autorizzazioni AI collegate">
