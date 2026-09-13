@@ -540,6 +540,7 @@ jobs:
           sudo chown "$(id -u):$(id -g)" /run/fai-crm-n05
           trap 'rm -f /run/fai-crm-n05/n05-failed-app-return.lock; sudo rmdir /run/fai-crm-n05' EXIT
           python3 -B -m unittest -v tests/n05/test_failed_app_return.py
+          python3 -B tests/n05/test_failed_app_deadlines.py
           python3 -B tests/n05/test_postgres_user_metadata.py
       - name: Real Docker synthetic return and persistence drill
         env:
