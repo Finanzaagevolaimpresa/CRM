@@ -14,6 +14,171 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  n15-assignment-browser:
+    name: N15 synthetic assignment and authorized consultation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-n15-browser
+          POSTGRES_DB: fai_crm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-n15-browser@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-n15-browser-auth-secret
+      AUTH_COOKIE_NAME: fai_n15_browser_session
+      INTERNAL_SESSION_MODE: registry
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: "1"
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3000
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+      N15_SYNTHETIC_ASSIGNMENT_OPT_IN: N15_SYNTHETIC_ASSIGNMENT_V1
+      RUN_DB_TESTS: "1"
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: "1"
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      N15_BROWSER_SYNTHETIC_CONFIRMED: "1"
+      N15_BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/n15-browser-evidence
+      FEATURE_INTEGRATIONS_ENABLED: "false"
+      FEATURE_CUSTOMER_PORTAL_ENABLED: "false"
+      FEATURE_PAYMENTS_ENABLED: "false"
+      FEATURE_AI_WORKER_ENABLED: "false"
+      FEATURE_AI_DISPATCH_ENABLED: "false"
+      FEATURE_AI_EGRESS_ENABLED: "false"
+      AI_PROVIDER: mock
+      AI_ORCHESTRATOR_WORKER_ENABLED: "0"
+      AI_EXTERNAL_PROVIDERS_ENABLED: "false"
+      AI_ALLOWED_MODELS: ""
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source head and unchanged migration chain
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
+          test -z "$(git diff --name-only 67013279e1b80ce41fe2849f636f603d5b0dac04...HEAD -- prisma/schema.prisma prisma/migrations)"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare ephemeral PostgreSQL and synthetic authorities
+        run: |
+          PRIVILEGED_STEP_UP_SECRET="$(openssl rand -base64 36 | tr -d '\n')"
+          N15_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+          export PRIVILEGED_STEP_UP_SECRET N15_BROWSER_PASSWORD
+          printf 'PRIVILEGED_STEP_UP_SECRET=%s\n' "$PRIVILEGED_STEP_UP_SECRET" >> "$GITHUB_ENV"
+          printf 'N15_BROWSER_PASSWORD=%s\n' "$N15_BROWSER_PASSWORD" >> "$GITHUB_ENV"
+          psql 'postgresql://postgres:synthetic-n15-browser@127.0.0.1:5432/fai_crm_test' \
+            -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx tests/n15-browser/provision.ts
+      - name: Run real assignment and consultation browser path
+        run: |
+          mkdir -p "$N15_BROWSER_EVIDENCE_DIR"
+          npm run dev > "${RUNNER_TEMP}/n15-browser-app.log" 2>&1 &
+          app_pid=$!
+          cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break
+            test "$attempt" -lt 60 || { echo N15_BROWSER_APP_UNAVAILABLE >&2; exit 1; }
+            sleep 1
+          done
+          npx playwright test --config tests/n15-browser/playwright.config.ts
+      - name: Upload minimized N15 browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n15-assignment-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/n15-browser-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+  mobile-navigation:
+    name: Mobile navigation browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source head
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Measure baseline and candidate navigation shells
+        env:
+          MOBILE_NAV_BASELINE_SHA: 75d6fd42d16aa9edd3655d37bd1af4d9e1d80b07
+          MOBILE_NAV_BASELINE_TREE: a66c2588972bf39fad8ed32e25597de06822bf87
+          MOBILE_NAV_EVIDENCE_DIR: ${{ runner.temp }}/mobile-nav-evidence
+        run: |
+          baseline_root="$(mktemp -d /tmp/fai-crm-mobile-baseline.XXXXXX)"
+          cleanup() {
+            git worktree remove --force "$baseline_root" 2>/dev/null || true
+            test ! -e "$baseline_root" || rm -rf "$baseline_root"
+          }
+          trap cleanup EXIT
+          git worktree add --detach "$baseline_root" "$MOBILE_NAV_BASELINE_SHA"
+          test "$(git -C "$baseline_root" rev-parse HEAD)" = "$MOBILE_NAV_BASELINE_SHA"
+          test "$(git -C "$baseline_root" rev-parse HEAD^{tree})" = "$MOBILE_NAV_BASELINE_TREE"
+          mkdir -p "$baseline_root/tests/mobile-nav"
+          cp -R tests/mobile-nav/fixture "$baseline_root/tests/mobile-nav/fixture"
+          # Shared synthetic content; the historical navigation shell stays unchanged.
+          cp src/components/dashboard-overview.tsx "$baseline_root/src/components/dashboard-overview.tsx"
+          cp src/lib/dashboard-counter-groups.ts "$baseline_root/src/lib/dashboard-counter-groups.ts"
+          cp -a "$PWD/node_modules" "$baseline_root/node_modules"
+          node tests/mobile-nav/measure-navigation.mjs "$baseline_root" baseline "$MOBILE_NAV_EVIDENCE_DIR" 3418
+          node tests/mobile-nav/measure-navigation.mjs "$PWD" candidate "$MOBILE_NAV_EVIDENCE_DIR" 3419
+          printf '%s\n' \
+            "baseline_commit=$MOBILE_NAV_BASELINE_SHA" \
+            "baseline_tree=$MOBILE_NAV_BASELINE_TREE" \
+            "candidate_commit=$(git rev-parse HEAD)" \
+            "candidate_tree=$(git rev-parse HEAD^{tree})" \
+            > "$MOBILE_NAV_EVIDENCE_DIR/source-identities.txt"
+      - name: Run mobile navigation browser checks
+        run: npm run test:mobile-nav
+      - name: Upload synthetic navigation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-navigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mobile-nav-evidence
+            test-results/mobile-nav
+          if-no-files-found: error
+          retention-days: 14
+
   build-context-guard:
     name: Protect tracked-only Docker build context
     runs-on: ubuntu-latest
@@ -148,8 +313,30 @@ jobs:
         run: node --import tsx --test tests/npm-audit-gate.test.ts
 
       - name: Verify dependency audits
+        id: dependency-audit
         timeout-minutes: 12
         run: node --import tsx scripts/npm-audit-gate.ts
+
+      - name: Report minimal public npm advisory diagnostics
+        if: ${{ always() && steps.dependency-audit.outcome == 'failure' }}
+        timeout-minutes: 3
+        run: |
+          reports="$(mktemp -d)"
+          trap 'rm -rf "$reports"' EXIT
+          for scope in runtime complete; do
+            scope_args=(--include=prod --include=optional --include=peer)
+            if [[ "$scope" == runtime ]]; then
+              scope_args+=(--omit=dev)
+            else
+              scope_args+=(--include=dev)
+            fi
+            npm audit "${scope_args[@]}" \
+              --audit-level=low --json --registry=https://registry.npmjs.org/ \
+              --offline=false --prefer-online=true --fetch-retries=0 --fetch-timeout=30000 \
+              > "$reports/$scope.json" || true
+            node --import tsx scripts/npm-audit-public-diagnostics.ts \
+              "$reports/$scope.json" package-lock.json "$scope"
+          done
 
       - name: Verify patch and shell syntax
         env:
@@ -160,7 +347,7 @@ jobs:
             git diff --check "$BASE_SHA"...HEAD
           fi
           bash -n scripts/smoke-docker-prod.sh
-          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh
+          bash -n scripts/backup-docker-prod.sh scripts/n05/*.sh scripts/vnx03/*.sh
 
       - name: Verify legacy production resources resolve as external
         env:
@@ -263,9 +450,9 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 43 database migrations
+      - name: Apply exactly 44 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel
@@ -318,7 +505,7 @@ jobs:
           VNX05_SYNTHETIC_TESTS_CONFIRMED: "1"
         run: |
           bash -n scripts/vnx05/packaging-smoke.sh
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           bash scripts/vnx05/packaging-smoke.sh
 
       - name: Run isolated staging read-only preflight
@@ -370,9 +557,11 @@ jobs:
             rollback_commit="$(git rev-parse HEAD^1)"
           fi
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
+          rollback_migration_count="$(git ls-tree -d --name-only "$rollback_commit:prisma/migrations" | wc -l | tr -d ' ')"
           ROLLBACK_COMMIT="$rollback_commit" \
           ROLLBACK_TREE="$rollback_tree" \
-          EXPECTED_MIGRATION_COUNT=43 \
+          EXPECTED_MIGRATION_COUNT=44 \
+          EXPECTED_ROLLBACK_MIGRATION_COUNT="$rollback_migration_count" \
           N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
             npm run test:n05:restore
 
@@ -397,7 +586,7 @@ jobs:
       - name: Verify N05 source and synthetic validators
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
           python3 -B tests/n05/test_key_mounts.py
           bash -n scripts/n05/reconfigure-production-keys.sh
 
@@ -425,6 +614,41 @@ jobs:
             -f "$image_context/Dockerfile.prod.example" -t "$N05_SYNTHETIC_APP_IMAGE" "$image_context"
           python3 -B tests/n05/key_mounts_drill.py
 
+  n05-failed-app-return:
+    name: N05 failed-app controlled return
+    needs: build-context-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact N05 source head and Compose app-only flags
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          docker compose up --help | grep -F -- '--no-start'
+          docker compose up --help | grep -F -- '--no-deps'
+          docker compose up --help | grep -F -- '--no-build'
+          docker compose up --help | grep -F -- '--pull'
+      - name: Protocol tests, canonical lock and production pre-daemon guard
+        env:
+          N05_TEST_CANONICAL_LOCK: "1"
+        run: |
+          test ! -e /run/fai-crm-n05
+          sudo mkdir -m 0700 /run/fai-crm-n05
+          sudo chown "$(id -u):$(id -g)" /run/fai-crm-n05
+          trap 'rm -f /run/fai-crm-n05/n05-failed-app-return.lock; sudo rmdir /run/fai-crm-n05' EXIT
+          python3 -B -m unittest -v tests/n05/test_failed_app_return.py
+      - name: Real Docker synthetic return and persistence drill
+        env:
+          N05_FAILED_RETURN_SYNTHETIC_CONFIRMED: "1"
+        run: |
+          docker pull alpine:3.20
+          docker pull postgres:16-alpine
+          python3 -B tests/n05/failed_app_return_drill.py
+
   vnx03-wpforms-https-e2e:
     name: VNX-03 authentic WPForms HTTPS end-to-end
     needs: build-context-guard
@@ -443,22 +667,7 @@ jobs:
       - name: Verify exact source head and protected scope
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "43"
-          if [[ -n "$VNX03_BASE_SHA" ]] \
-            && git cat-file -e "$VNX03_BASE_SHA^{commit}" 2>/dev/null \
-            && git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              tests/vnx03 tests/vnx03-e2e-harness.test.ts scripts/vnx03 \
-              docs/vnx03-wpforms-https-end-to-end-qualification-r01.md \
-              | grep -q .; then
-            if git diff --name-only "$VNX03_BASE_SHA"...HEAD -- \
-              prisma/schema.prisma prisma/migrations src \
-              Dockerfile.prod.example docker-compose.prod.example.yml \
-              .env.example .env.production.example .env.staging.example \
-              | grep -q .; then
-              echo "VNX-03 must not change CRM runtime, Prisma, migrations, or production configuration" >&2
-              exit 1
-            fi
-          fi
+          bash scripts/vnx03/verify-protected-scope.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

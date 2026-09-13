@@ -17,13 +17,36 @@ SOURCE_TREE="${SOURCE_TREE:-$(git -C "$REPO_ROOT" rev-parse HEAD^{tree})}"
 ROLLBACK_COMMIT="${ROLLBACK_COMMIT:?ROLLBACK_COMMIT is required and must be the authorized N-1 commit}"
 ROLLBACK_TREE="${ROLLBACK_TREE:?ROLLBACK_TREE is required}"
 EXPECTED_MIGRATION_COUNT="${EXPECTED_MIGRATION_COUNT:-43}"
+EXPECTED_ROLLBACK_MIGRATION_COUNT="${EXPECTED_ROLLBACK_MIGRATION_COUNT:-43}"
 n05_assert_git_oid "$SOURCE_COMMIT" SOURCE_COMMIT
 n05_assert_git_oid "$SOURCE_TREE" SOURCE_TREE
 n05_assert_git_oid "$ROLLBACK_COMMIT" ROLLBACK_COMMIT
 n05_assert_git_oid "$ROLLBACK_TREE" ROLLBACK_TREE
 [[ "$(git -C "$REPO_ROOT" rev-parse "$SOURCE_COMMIT^{tree}")" == "$SOURCE_TREE" ]] || n05_fail SOURCE_TREE_MISMATCH
 [[ "$(git -C "$REPO_ROOT" rev-parse "$ROLLBACK_COMMIT^{tree}")" == "$ROLLBACK_TREE" ]] || n05_fail ROLLBACK_TREE_MISMATCH
-[[ "$EXPECTED_MIGRATION_COUNT" == "43" ]] || n05_fail RESTORE_DRILL_MIGRATION_COUNT_MUST_BE_43
+[[ "$EXPECTED_MIGRATION_COUNT" == "43" || "$EXPECTED_MIGRATION_COUNT" == "44" ]] \
+  || n05_fail RESTORE_DRILL_MIGRATION_COUNT_UNQUALIFIED
+[[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "43" || "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "44" ]] \
+  || n05_fail RESTORE_DRILL_ROLLBACK_MIGRATION_COUNT_UNQUALIFIED
+[[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" -le "$EXPECTED_MIGRATION_COUNT" ]] \
+  || n05_fail ROLLBACK_SCHEMA_AHEAD_OF_SOURCE
+rollback_migration_count="$(git -C "$REPO_ROOT" ls-tree -d --name-only "$ROLLBACK_COMMIT:prisma/migrations" | wc -l | tr -d ' ')"
+[[ "$rollback_migration_count" == "$EXPECTED_ROLLBACK_MIGRATION_COUNT" ]] \
+  || n05_fail ROLLBACK_SOURCE_MIGRATION_COUNT_MISMATCH
+N15_SCHEMA_STATE=schema-absent-at-43
+if [[ "$EXPECTED_MIGRATION_COUNT" == "44" ]]; then
+  N15_SCHEMA_STATE=dormant-at-44
+  if [[ "$EXPECTED_ROLLBACK_MIGRATION_COUNT" == "43" ]]; then
+    n15_migration="prisma/migrations/20260909120000_n15_dedicated_communication_persistence_v1/migration.sql"
+    [[ "$(git -C "$REPO_ROOT" diff --diff-filter=A --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" == "$n15_migration" ]] \
+      || n05_fail N15_MIGRATION_DELTA_INVALID
+    [[ -z "$(git -C "$REPO_ROOT" diff --diff-filter=DMRTUXB --name-only "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations)" ]] \
+      || n05_fail HISTORICAL_MIGRATION_CHANGED
+  else
+    git -C "$REPO_ROOT" diff --quiet "$ROLLBACK_COMMIT" "$SOURCE_COMMIT" -- prisma/migrations \
+      || n05_fail ROLLBACK_MIGRATIONS_CHANGED
+  fi
+fi
 
 raw_run_id="${N05_RUN_ID:-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${BASHPID}}"
 RUN_ID="$(printf '%s' "$raw_run_id" | tr '[:upper:]_.' '[:lower:]--' | tr -cd 'a-z0-9-' | cut -c1-64)"
@@ -326,6 +349,11 @@ SELECT (SELECT COUNT(*) FROM "AiRun") || '\''|'\'' || (SELECT COUNT(*) FROM "AiO
 SELECT (SELECT COUNT(*) FROM "AiWorkflowInstance") || '\''|'\'' || (SELECT COUNT(*) FROM "AiWorkflowJob");
 ')"
 [[ "$dormant_snapshot" == $'0|0\n0\n6|0\n0\n0\n0|0\n0|0' ]] || n05_fail RESTORED_DORMANT_INVARIANTS_CHANGED
+if [[ "$EXPECTED_MIGRATION_COUNT" == "44" ]]; then
+  [[ "$(compose_target exec -T postgres psql -X -v ON_ERROR_STOP=1 -U fai_crm_n05_target -d fai_crm_n05_target -Atqc \
+    'SELECT COUNT(*) FROM "CommunicationIntentRecord"; SELECT COUNT(*) FROM "CommunicationHeldDecision"; SELECT COUNT(*) FROM "CommunicationIntentAudit"')" == $'0\n0\n0' ]] \
+    || n05_fail RESTORED_N15_DORMANT_INVARIANTS_CHANGED
+fi
 
 TARGET_DOCUMENT_HASHES="$(compose_target run --rm -T --no-deps --entrypoint sh app -c \
   'cd /var/lib/fai-crm/documents && sha256sum n05/alpha.txt n05/beta.txt')"
@@ -342,6 +370,11 @@ target_app_id="$(compose_target ps -q app)"
 [[ "$(docker inspect -f '{{.Image}}' "$target_app_id")" == "$CURRENT_IMAGE_ID" ]] || n05_fail RESTORED_APP_IMAGE_ID_MISMATCH
 compose_target exec -T app sh -c \
   'test "$FAI_ENVIRONMENT" = restore-target && test "$FAI_ENVIRONMENT_SENTINEL" = FAI_CRM_N05_RESTORE_TARGET_V1'
+if [[ "$EXPECTED_MIGRATION_COUNT" == "44" ]]; then
+  [[ "$(compose_target exec -T postgres psql -X -v ON_ERROR_STOP=1 -U fai_crm_n05_target -d fai_crm_n05_target -Atqc \
+    'SELECT COUNT(*) FROM "CommunicationIntentRecord"; SELECT COUNT(*) FROM "CommunicationHeldDecision"; SELECT COUNT(*) FROM "CommunicationIntentAudit"')" == $'0\n0\n0' ]] \
+    || n05_fail N15_NOT_DORMANT_BEFORE_ROLLBACK
+fi
 
 git -C "$REPO_ROOT" archive "$ROLLBACK_COMMIT" | tar -x -C "$ROLLBACK_SOURCE"
 docker build --pull=false \
@@ -359,11 +392,18 @@ compose_target up -d --no-deps --force-recreate app
 wait_for_app target
 target_app_id="$(compose_target ps -q app)"
 [[ "$(docker inspect -f '{{.Image}}' "$target_app_id")" == "$ROLLBACK_IMAGE_ID" ]] || n05_fail ROLLBACK_IMAGE_NOT_ACTIVE
-printf 'ROLLBACK_PASS|commit=%s|image_id=%s|down_migration=none\n' "$ROLLBACK_COMMIT" "$ROLLBACK_IMAGE_ID"
+if [[ "$EXPECTED_MIGRATION_COUNT" == "44" ]]; then
+  [[ "$(compose_target exec -T postgres psql -X -v ON_ERROR_STOP=1 -U fai_crm_n05_target -d fai_crm_n05_target -Atqc \
+    'SELECT COUNT(*) FROM "CommunicationIntentRecord"; SELECT COUNT(*) FROM "CommunicationHeldDecision"; SELECT COUNT(*) FROM "CommunicationIntentAudit"')" == $'0\n0\n0' ]] \
+    || n05_fail N15_NOT_DORMANT_AFTER_ROLLBACK
+fi
+printf 'ROLLBACK_PASS|commit=%s|tree=%s|image_id=%s|schema_migrations=%s|rollback_source_migrations=%s|n15=%s|database_reachable=true|down_migration=none\n' \
+  "$ROLLBACK_COMMIT" "$ROLLBACK_TREE" "$ROLLBACK_IMAGE_ID" "$target_migrations" "$rollback_migration_count" "$N15_SCHEMA_STATE"
 
 if ! cleanup_resources; then
   trap - EXIT
   n05_fail RESTORE_CLEANUP_INCOMPLETE
 fi
 trap - EXIT
-printf 'N05_RESTORE_DRILL_PASS|migrations=%s|database=verified|documents=verified|rollback=verified\n' "$target_migrations"
+printf 'N05_RESTORE_DRILL_PASS|source_commit=%s|source_tree=%s|current_image_id=%s|migrations=%s|database=verified|documents=verified|n15=%s|rollback=verified\n' \
+  "$SOURCE_COMMIT" "$SOURCE_TREE" "$CURRENT_IMAGE_ID" "$target_migrations" "$N15_SCHEMA_STATE"

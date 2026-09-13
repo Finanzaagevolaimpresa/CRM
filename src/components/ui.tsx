@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { logoutAction } from "@/lib/login-actions";
-import { NavLinks } from "@/components/nav-links";
-import { SidebarLogo } from "@/components/sidebar-logo";
+import { MobileNavigation } from "@/components/mobile-navigation";
 
 export function Badge({
   children,
@@ -204,7 +202,7 @@ export function Card({
   return (
     <section
       id={id}
-      className="scroll-mt-28 rounded-3xl border border-slate-200/75 bg-white/92 p-5 shadow-sm shadow-slate-200/70 ring-1 ring-slate-900/5 backdrop-blur"
+      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5"
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
@@ -298,8 +296,8 @@ export function Table({
   rows: Array<Array<React.ReactNode>>;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
-      <table className="w-full text-sm">
+    <div className="max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm" tabIndex={0} aria-label="Tabella scorrevole orizzontalmente">
+      <table className="min-w-[42rem] w-full text-sm">
         <thead className="bg-gradient-to-r from-slate-50 to-fai-bg text-left text-xs uppercase tracking-wider text-slate-500">
           <tr>
             {headers.map((h, index) => (
@@ -367,46 +365,5 @@ export function Nav({
   notificationCount?: number;
   effectivePermissions?: import("@/lib/permissions").Permission[];
 }) {
-  return (
-    <aside className="relative z-30 flex w-full shrink-0 flex-col overflow-hidden bg-fai-navy p-4 text-white shadow-xl shadow-fai-navy/20 md:h-screen md:w-72">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(128,204,42,.18),transparent_30%),radial-gradient(circle_at_100%_35%,rgba(61,41,116,.32),transparent_30%),linear-gradient(180deg,rgba(5,46,112,.96),rgba(3,31,75,1))]" />
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <Link
-          href="/dashboard"
-          className="mb-4 flex shrink-0 items-center gap-3 rounded-3xl border border-white/12 bg-white/95 p-3 shadow-lg shadow-fai-navy/20 ring-1 ring-fai-lime/15"
-        >
-          <SidebarLogo />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-black leading-tight text-fai-navy">
-              Gestionale CRM
-            </span>
-            <span className="block whitespace-normal break-words text-xs font-bold leading-snug text-slate-500">
-              Finanza Agevola Impresa
-            </span>
-          </span>
-        </Link>
-        <div className="mb-4 shrink-0 rounded-2xl border border-white/10 bg-white/8 p-3 text-xs leading-5 text-white/72">
-          <span className="font-black uppercase tracking-wide text-fai-lime">
-            Control center
-          </span>
-          <br />
-          Pratiche, clienti, AI e compliance in ambiente protetto.
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-          <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} />
-        </div>
-        <form
-          action={logoutAction}
-          className="mt-4 shrink-0 border-t border-white/15 pt-4"
-        >
-          <button
-            className="w-full rounded-xl bg-white/10 px-4 py-3 text-left text-sm font-bold text-white transition hover:bg-fai-orange focus:outline-none focus:ring-2 focus:ring-fai-lime"
-            type="submit"
-          >
-            Logout
-          </button>
-        </form>
-      </div>
-    </aside>
-  );
+  return <MobileNavigation role={role} notificationCount={notificationCount} effectivePermissions={effectivePermissions} />;
 }

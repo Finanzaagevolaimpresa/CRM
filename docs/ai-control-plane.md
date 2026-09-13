@@ -97,6 +97,17 @@ La migrazione mantiene nullable `reliabilityVersion` per non attribuire garanzie
 
 ## Output, revisione e invii
 
+### KPI autorizzazioni nella dashboard
+
+Il totale e le richieste sono letti solo per gli Admin; per gli altri ruoli non
+vengono eseguite query e la card mantiene il valore zero del comportamento
+precedente. Il totale usa lo stato `PENDING_ADMIN_APPROVAL` e include esclusivamente richieste con
+`expiresAt` strettamente successivo a un unico istante applicativo di riferimento.
+Lo stesso filtro e lo stesso istante alimentano l'anteprima, ordinata dalla meno
+recente e limitata a 20 elementi; tale limite non viene applicato al conteggio.
+Le verifiche sintetiche coprono più di 20 richieste valide, stati e scadenze
+esclusi, la soglia esatta di scadenza e l'assenza di query per ruoli non Admin.
+
 Ogni output nasce come bozza interna e richiede revisione umana. Generatore, revisore e approvatore restano separati secondo i permessi applicativi. L'AI non promette contributi, finanziamenti, ammissibilità o approvazioni e le informazioni normative o di bando devono essere verificate sulle fonti ufficiali.
 
 Il Control Plane **non invia automaticamente** email, messaggi, documenti, domande o comunicazioni ai clienti o a soggetti esterni. L'eventuale uso di un output approvato resta un'azione umana separata.

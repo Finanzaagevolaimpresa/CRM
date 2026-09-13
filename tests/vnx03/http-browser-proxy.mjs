@@ -4,6 +4,11 @@ if (process.env.VNX03_BROWSER_PROXY_CONFIRMED !== '1') {
   throw new Error('VNX03_BROWSER_PROXY_CONFIRMATION_MISSING');
 }
 
+const upstreams = Object.freeze({ wordpress: 80, 'crm-n14': 3000 });
+const upstreamHost = process.env.VNX03_BROWSER_UPSTREAM ?? 'wordpress';
+const upstreamPort = upstreams[upstreamHost];
+if (!upstreamPort) throw new Error('VNX03_BROWSER_UPSTREAM_INVALID');
+
 const allowedMethods = new Set(['GET', 'HEAD', 'POST']);
 const hopByHopHeaders = new Set([
   'connection',
@@ -36,8 +41,8 @@ const server = http.createServer((request, response) => {
   }
 
   const upstream = http.request({
-    hostname: 'wordpress',
-    port: 80,
+    hostname: upstreamHost,
+    port: upstreamPort,
     method: request.method,
     path: request.url,
     headers: filteredHeaders(request.headers),

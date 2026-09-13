@@ -14,6 +14,18 @@ import { prisma } from './prisma';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
 const clientSelect = { id: true, salesOwnerId: true, consultantId: true } as const;
+const aiOutputAccessSelect = {
+  id: true,
+  aiRunId: true,
+  clientId: true,
+  clientServiceId: true,
+  projectId: true,
+  status: true,
+  requiresHumanReview: true,
+  forbiddenPhrases: true,
+  reviewedById: true,
+  reviewedAt: true,
+} as const;
 const aiRunAccessSelect = {
   id: true,
   agentId: true,
@@ -265,18 +277,7 @@ export async function listAccessibleAiOutputs(
     const candidates = await tx.aiOutput.findMany({
       ...candidateArgs,
       take: candidateLimit,
-      select: {
-        id: true,
-        aiRunId: true,
-        clientId: true,
-        clientServiceId: true,
-        projectId: true,
-        status: true,
-        requiresHumanReview: true,
-        forbiddenPhrases: true,
-        reviewedById: true,
-        reviewedAt: true,
-      },
+      select: aiOutputAccessSelect,
     });
     const visibleContexts = (await hydrateAiOutputs(candidates, tx))
       .filter((context) => canAccessHydratedAiOutput(session, context))
@@ -333,28 +334,36 @@ export async function listAccessibleAiRuns(session: AuthSession, take = 100) {
   }, { isolationLevel: 'RepeatableRead' });
 }
 
-export async function listAccessibleTasks(
+type TaskAccessRecord = Pick<Task,
+  'clientId' | 'projectId' | 'clientServiceId' | 'assignedToId' | 'createdById'
+>;
+
+async function filterAccessibleTasks<TTask extends TaskAccessRecord>(
   session: AuthSession,
-  args: Pick<Prisma.TaskFindManyArgs, 'where' | 'orderBy' | 'take'> = {},
-): Promise<Task[]> {
-  const { take, ...candidateArgs } = args;
-  const limit = normalizeCoreQueryLimit(take);
-  const candidateLimit = coreQueryCandidateLimit(limit);
-  const tasks = await prisma.task.findMany({ ...candidateArgs, take: candidateLimit });
+  tasks: TTask[],
+  db: Prisma.TransactionClient = prisma,
+): Promise<TTask[]> {
   if (!tasks.length) return [];
 
-  const projectIds = [...new Set(tasks.map((task) => task.projectId).filter((id): id is string => Boolean(id)))];
   const serviceIds = [...new Set(tasks.map((task) => task.clientServiceId).filter((id): id is string => Boolean(id)))];
-  const [projects, services] = await Promise.all([
-    prisma.project.findMany({ where: { id: { in: projectIds }, deletedAt: null } }),
-    prisma.clientService.findMany({ where: { id: { in: serviceIds }, deletedAt: null } }),
-  ]);
+  const services = await db.clientService.findMany({
+    where: { id: { in: serviceIds }, deletedAt: null },
+    select: { id: true, clientId: true, projectId: true, assignedToId: true },
+  });
+  const projectIds = [...new Set([
+    ...tasks.map((task) => task.projectId),
+    ...services.map((service) => service.projectId),
+  ].filter((id): id is string => Boolean(id)))];
+  const projects = await db.project.findMany({
+    where: { id: { in: projectIds }, deletedAt: null },
+    select: { id: true, clientId: true, consultantId: true },
+  });
   const clientIds = [...new Set([
     ...tasks.map((task) => task.clientId),
     ...projects.map((project) => project.clientId),
     ...services.map((service) => service.clientId),
   ].filter((id): id is string => Boolean(id)))];
-  const clients = await prisma.client.findMany({ where: { id: { in: clientIds }, deletedAt: null }, select: clientSelect });
+  const clients = await db.client.findMany({ where: { id: { in: clientIds }, deletedAt: null }, select: clientSelect });
   const clientById = new Map(clients.map((client) => [client.id, client]));
   const projectById = new Map(projects.map((project) => [project.id, {
     ...project,
@@ -371,5 +380,109 @@ export async function listAccessibleTasks(
     client: task.clientId ? clientById.get(task.clientId) ?? null : null,
     project: task.projectId ? projectById.get(task.projectId) ?? null : null,
     clientService: task.clientServiceId ? serviceById.get(task.clientServiceId) ?? null : null,
-  })).slice(0, limit);
+  }));
+}
+
+export async function listAccessibleTasks(
+  session: AuthSession,
+  args: Pick<Prisma.TaskFindManyArgs, 'where' | 'orderBy' | 'take'> = {},
+): Promise<Task[]> {
+  const { take, ...candidateArgs } = args;
+  const limit = normalizeCoreQueryLimit(take);
+  const candidateLimit = coreQueryCandidateLimit(limit);
+  const tasks = await prisma.task.findMany({ ...candidateArgs, take: candidateLimit });
+  return (await filterAccessibleTasks(session, tasks)).slice(0, limit);
+}
+
+export type DashboardTaskCountWindow = {
+  now: Date;
+  startOfToday: Date;
+  endOfToday: Date;
+  next7: Date;
+};
+
+export type DashboardAccessibleTaskCounts = {
+  open: number;
+  today: number;
+  overdue: number;
+  dueSoon: number;
+  mine: number;
+};
+
+const dashboardCountBatchSize = 100;
+const dashboardCountTransaction = {
+  isolationLevel: 'RepeatableRead',
+  maxWait: 5_000,
+  timeout: 30_000,
+} as const;
+
+// Lists intentionally remain bounded. Dashboard totals scan every candidate in
+// one snapshot and propagate failures, so an interrupted scan is never a total.
+export async function getAccessibleDashboardTaskCounts(
+  session: AuthSession,
+  window: DashboardTaskCountWindow,
+): Promise<DashboardAccessibleTaskCounts> {
+  return prisma.$transaction(async (tx) => {
+    const counts: DashboardAccessibleTaskCounts = { open: 0, today: 0, overdue: 0, dueSoon: 0, mine: 0 };
+    let afterId: string | undefined;
+    while (true) {
+      const candidates = await tx.task.findMany({
+        where: {
+          deletedAt: null,
+          status: { in: ['aperta', 'in_lavorazione'] },
+          ...(afterId === undefined ? {} : { id: { gt: afterId } }),
+        },
+        orderBy: { id: 'asc' },
+        take: dashboardCountBatchSize,
+        select: {
+          id: true,
+          clientId: true,
+          projectId: true,
+          clientServiceId: true,
+          assignedToId: true,
+          createdById: true,
+          dueAt: true,
+        },
+      });
+      if (!candidates.length) break;
+      const visible = await filterAccessibleTasks(session, candidates, tx);
+      for (const task of visible) {
+        counts.open += 1;
+        if (task.assignedToId === session.userId) counts.mine += 1;
+        if (task.dueAt) {
+          if (task.dueAt >= window.startOfToday && task.dueAt <= window.endOfToday) counts.today += 1;
+          if (task.dueAt < window.now) counts.overdue += 1;
+          if (task.dueAt >= window.now && task.dueAt <= window.next7) counts.dueSoon += 1;
+        }
+      }
+      afterId = candidates[candidates.length - 1].id;
+      if (candidates.length < dashboardCountBatchSize) break;
+    }
+    return counts;
+  }, dashboardCountTransaction);
+}
+
+export async function getAccessibleDashboardAiReviewCount(session: AuthSession): Promise<number> {
+  return prisma.$transaction(async (tx) => {
+    let count = 0;
+    let afterId: string | undefined;
+    while (true) {
+      const candidates = await tx.aiOutput.findMany({
+        where: {
+          status: { in: ['needs_review', 'flagged'] },
+          requiresHumanReview: true,
+          ...(afterId === undefined ? {} : { id: { gt: afterId } }),
+        },
+        orderBy: { id: 'asc' },
+        take: dashboardCountBatchSize,
+        select: aiOutputAccessSelect,
+      });
+      if (!candidates.length) break;
+      const contexts = await hydrateAiOutputs(candidates, tx);
+      count += contexts.filter((context) => canAccessHydratedAiOutput(session, context)).length;
+      afterId = candidates[candidates.length - 1].id;
+      if (candidates.length < dashboardCountBatchSize) break;
+    }
+    return count;
+  }, dashboardCountTransaction);
 }

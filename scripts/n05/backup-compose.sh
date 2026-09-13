@@ -85,7 +85,7 @@ case "$FAI_ENVIRONMENT" in
   *) n05_fail BACKUP_ENVIRONMENT_NOT_SUPPORTED ;;
 esac
 [[ "$(printf '%s\n' "${compose_volumes[@]}")" == "$expected_volumes" ]] || n05_fail BACKUP_COMPOSE_VOLUMES_INVALID
-compose config --images | grep -Fxq "$APP_IMAGE" || n05_fail BACKUP_COMPOSE_IMAGE_MISMATCH
+compose config --images | grep -Fx -- "$APP_IMAGE" >/dev/null || n05_fail BACKUP_COMPOSE_IMAGE_MISMATCH
 app_image_id="$(docker image inspect -f '{{.Id}}' "$APP_IMAGE")"
 app_image_commit="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$APP_IMAGE")"
 app_image_tree="$(docker image inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.source-tree"}}' "$APP_IMAGE")"

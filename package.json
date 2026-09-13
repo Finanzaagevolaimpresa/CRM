@@ -4,6 +4,7 @@
     "build": "next build",
     "start": "next start",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:mobile-nav": "playwright test --config tests/mobile-nav/playwright.config.ts",
     "test:build-context-guard": "node --test tests/vnx00a-build-context-guard.test.mjs",
     "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
@@ -28,7 +29,7 @@
   "dependencies": {
     "@prisma/client": "5.22.0",
     "bcryptjs": "^2.4.3",
-    "next": "16.3.0",
+    "next": "16.3.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.23.8",
@@ -43,7 +44,7 @@
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.0.0",
-    "eslint-config-next": "16.3.0",
+    "eslint-config-next": "16.3.4",
     "postcss": "^8.5.23",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3"

@@ -48,7 +48,7 @@ async function main() {
     FROM "_prisma_migrations"
     WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL
   `);
-  assert.equal(Number(migrations[0]?.count), 43);
+  assert.equal(Number(migrations[0]?.count), 44);
 
   await db.$executeRawUnsafe(
     `COMMENT ON DATABASE "${DATABASE_NAME}" IS '${DATABASE_SENTINEL}'`,
@@ -141,7 +141,7 @@ async function main() {
 
   gatewaySecret.fill(0);
   identityKey.secret.fill(0);
-  process.stdout.write('{"provision":"ready","migrations":43,"synthetic":true}\n');
+  process.stdout.write('{"provision":"ready","migrations":44,"synthetic":true}\n');
 }
 
 void main()

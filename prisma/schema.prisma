@@ -2457,3 +2457,42 @@ model SecureLeadGatewayRequest {
   @@index([receiptId, createdAt, id], map: "SecureLeadGatewayRequest_receipt_idx")
   @@index([retentionPolicyVersion, retentionEligibleAt, id], map: "SecureLeadGatewayRequest_retention_idx")
 }
+
+// N15 is a dormant, single-organization-per-database persistence boundary.
+// It deliberately has no recipient endpoint, message body, dispatch or provider fields.
+model CommunicationIntentRecord {
+  id                      String                    @id @default(uuid()) @db.Uuid
+  intentId                String                    @unique(map: "CommunicationIntentRecord_intentId_key") @db.Uuid
+  producerCode            String                    @db.VarChar(120)
+  keyDigest               String                    @unique(map: "CommunicationIntentRecord_keyDigest_key") @db.Char(64)
+  semanticHash            String                    @db.Char(64)
+  envelopeHash            String                    @db.Char(64)
+  canonicalEnvelope       String                    @db.Text
+  state                   String                    @default("RECORDED") @db.VarChar(16)
+  occurredAt              DateTime                  @db.Timestamptz(3)
+  createdAt               DateTime                  @default(now()) @db.Timestamptz(3)
+  heldDecision            CommunicationHeldDecision?
+  auditRecord             CommunicationIntentAudit?
+
+  @@index([producerCode, createdAt, id], map: "CommunicationIntentRecord_producer_idx")
+}
+
+model CommunicationHeldDecision {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  intentRecordId        String                    @unique(map: "CommunicationHeldDecision_intentRecordId_key") @db.Uuid
+  decisionHash          String                    @db.Char(64)
+  canonicalDecision     String                    @db.Text
+  state                 String                    @default("HELD") @db.VarChar(16)
+  evaluatedAt           DateTime                  @db.Timestamptz(3)
+  createdAt             DateTime                  @default(now()) @db.Timestamptz(3)
+  intentRecord          CommunicationIntentRecord @relation(fields: [intentRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model CommunicationIntentAudit {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  intentRecordId        String                    @unique(map: "CommunicationIntentAudit_intentRecordId_key") @db.Uuid
+  recordHash            String                    @db.Char(64)
+  canonicalAudit        String                    @db.Text
+  createdAt             DateTime                  @default(now()) @db.Timestamptz(3)
+  intentRecord          CommunicationIntentRecord @relation(fields: [intentRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}

@@ -117,7 +117,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
 test('VNX-02 keeps migration count at 43 and makes the pre-N04 guide unusable', () => {
   const migrations = readdirSync(resolve(root, 'prisma/migrations'))
     .filter((name) => statSync(resolve(root, 'prisma/migrations', name)).isDirectory());
-  assert.equal(migrations.length, 43);
+  assert.equal(migrations.length, 44);
   const legacy = readFileSync(resolve(root, 'docs/wordpress-wpforms-crm-integration.md'), 'utf8');
   assert.match(legacy, /percorso storico è revocato/u);
   assert.match(legacy, /non devono essere copiati, distribuiti, configurati/u);
