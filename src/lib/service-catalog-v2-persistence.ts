@@ -45,6 +45,15 @@ export function storedRevisionMatches(service: CatalogV2Revision, row: StoredRev
     && sameJson(row.checklist, storage.checklist) && row.contentHash === catalogV2RevisionHash(service);
 }
 
+export function catalogRevisionIsSelectable(
+  service: CatalogV2Revision,
+  row: StoredRevision & { validUntil: Date | null; serviceCatalog: { active: boolean } },
+  now: Date,
+) {
+  return row.serviceCatalog.active && row.status === 'PUBLISHED' && row.validFrom <= now
+    && (row.validUntil === null || now < row.validUntil) && storedRevisionMatches(service, row);
+}
+
 export async function prepareServiceCatalogV2(db: Db, actorId: string | null = null) {
   await assertSyntheticCatalogDatabase(db);
   return db.$transaction(async (tx) => {

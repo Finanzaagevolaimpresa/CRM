@@ -1,6 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
+import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 
 const app = 'http://127.0.0.1:3000';
 const password = process.env.CATALOG_BROWSER_PASSWORD!;
@@ -27,7 +29,7 @@ test('current and historical catalog remain readable and selectable', async ({ b
     await expect(page.getByRole('heading', { name: 'Catalogo servizi' })).toBeVisible();
 
     const optimization = page.getByRole('heading', { name: 'Ottimizzazione Aziendale AI' }).locator('xpath=ancestor::section[1]');
-    await expect(optimization.getByText('Revisione disponibile nel CRM', { exact: true })).toBeVisible();
+    await expect(optimization.getByText('Revisione disponibile per nuove selezioni', { exact: true })).toBeVisible();
     await expect(optimization.getByText('Su preventivo', { exact: true })).toBeVisible();
     await expect(optimization.getByText(/^Versione 1 · TERMS-v1 · € (?:1\.490|1490)(?:,00)? \+ IVA · storica$/u)).toBeVisible();
 
@@ -56,6 +58,22 @@ test('current and historical catalog remain readable and selectable', async ({ b
     await page.screenshot({ path: join(evidence, 'catalog-desktop.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: join(evidence, 'catalog-mobile.png'), fullPage: true });
+
+    phase = 'inactive-direct-selection';
+    const db = new PrismaClient();
+    await assertSyntheticCatalogDatabase(db);
+    try {
+      await db.serviceCatalog.update({ where: { code: 'ottimizzazione_aziendale_ai' }, data: { active: false } });
+      await page.goto(`${app}/service-catalog?serviceCode=ottimizzazione_aziendale_ai`);
+      await expect(page.getByRole('alert')).toHaveText('La selezione non è valida, non è ancora disponibile oppure la tipologia digitale non è compatibile con il servizio.');
+      const inactiveOptimization = page.getByRole('heading', { name: 'Ottimizzazione Aziendale AI' }).locator('xpath=ancestor::section[1]');
+      await expect(inactiveOptimization.getByText('Revisione non disponibile per nuove selezioni', { exact: true })).toBeVisible();
+      await expect(inactiveOptimization.getByText('Versione 2 · TERMS-v2 · Su preventivo · pubblicata, non selezionabile', { exact: true })).toBeVisible();
+      await expect(inactiveOptimization.getByText(/^Versione 1 · TERMS-v1 · € (?:1\.490|1490)(?:,00)? \+ IVA · storica$/u)).toBeVisible();
+    } finally {
+      await db.serviceCatalog.update({ where: { code: 'ottimizzazione_aziendale_ai' }, data: { active: true } });
+      await db.$disconnect();
+    }
 
     phase = 'authorization';
     deniedContext = await browser.newContext();

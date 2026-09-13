@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PrismaClient } from '@prisma/client';
-import { prepareServiceCatalogV2, CatalogV2PreparationError, storedRevisionMatches } from '../src/lib/service-catalog-v2-persistence';
+import { catalogRevisionIsSelectable, prepareServiceCatalogV2, CatalogV2PreparationError, storedRevisionMatches } from '../src/lib/service-catalog-v2-persistence';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from '../src/lib/service-catalog';
 import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash } from '../src/lib/service-catalog-v2';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './db/ai-orchestrator-db-test-guard';
@@ -42,6 +42,12 @@ test('PostgreSQL prepares v2 atomically and idempotently without changing v1 or 
   const current = await db.serviceCatalogRevision.findMany({ where: { status: 'PUBLISHED' }, include: { serviceCatalog: true } });
   assert.equal(current.length, 13);
   assert.equal(FAI_SERVICE_CATALOG_V2.filter((definition) => current.some((row) => row.serviceCatalog.code === definition.code && storedRevisionMatches(definition, row))).length, 13);
+  const currentOptimization = current.find(({ serviceCatalog }) => serviceCatalog.code === 'ottimizzazione_aziendale_ai')!;
+  const currentDefinition = FAI_SERVICE_CATALOG_V2.find(({ code }) => code === 'ottimizzazione_aziendale_ai')!;
+  const atStart = new Date(currentDefinition.validFrom);
+  assert.equal(catalogRevisionIsSelectable(currentDefinition, currentOptimization, atStart), true);
+  assert.equal(catalogRevisionIsSelectable(currentDefinition, { ...currentOptimization, validUntil: atStart }, atStart), false);
+  assert.equal(catalogRevisionIsSelectable(currentDefinition, { ...currentOptimization, validFrom: new Date(atStart.getTime() + 1) }, atStart), false);
   const legacyCodes = new Set(FAI_SERVICE_CATALOG.map(({ code }) => code));
   for (const definition of FAI_SERVICE_CATALOG_V2.filter((service) => service.revisionVersion > 1 || !legacyCodes.has(service.code))) {
     const row = current.find(({ serviceCatalog }) => serviceCatalog.code === definition.code)!;

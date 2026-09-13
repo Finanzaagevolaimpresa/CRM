@@ -6,5 +6,6 @@
 - Default operativi: checkout, delivery ed azioni esterne automatiche disabilitati.
 - CI richiesta: unità catalogo, PostgreSQL effimero, Chromium desktop/mobile, lint, typecheck e build.
 - Ricevuta browser: storico v1 verifica versione, `TERMS-v1`, importo EUR 1490 con resa italiana equivalente, IVA e stato; la selezione verifica insieme servizio e tipologia. In errore vengono conservati screenshot, fase, path e solo testo visibile sintetico, mai cookie o credenziali.
+- Chiusura F01/F02 R05: il provisioning riusa il guard di configurazione e identità fisica prima di ogni fixture; una nuova selezione richiede master attivo, revisione canonica `PUBLISHED` e intervallo `validFrom <= now < validUntil` (estremo finale esclusivo), mentre lo storico resta consultabile.
 - Residui: integrazione degli ingressi e ciclo commerciale completo restano futuri.
 - Stato esterno: `REAL_KEY_ACCESS=NO`, `Q04=APERTA`, `P4=SOSPESA`, `PILOTA=BLOCCATO`.
