@@ -14,6 +14,91 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  preanalysis-manual-r02:
+    name: Preanalysis PostgreSQL and browser qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-preanalysis-browser
+          POSTGRES_DB: fai_crm_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-preanalysis-browser@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-preanalysis-browser-auth-secret
+      AUTH_COOKIE_NAME: fai_preanalysis_browser_session
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3000
+      RUN_DB_TESTS: "1"
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: "1"
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      PREANALYSIS_BROWSER_SYNTHETIC_CONFIRMED: "1"
+      FEATURE_INTEGRATIONS_ENABLED: "false"
+      FEATURE_CUSTOMER_PORTAL_ENABLED: "false"
+      FEATURE_PAYMENTS_ENABLED: "false"
+      FEATURE_AI_WORKER_ENABLED: "false"
+      FEATURE_AI_DISPATCH_ENABLED: "false"
+      FEATURE_AI_EGRESS_ENABLED: "false"
+      AI_PROVIDER: mock
+      AI_ORCHESTRATOR_WORKER_ENABLED: "0"
+      AI_EXTERNAL_PROVIDERS_ENABLED: "false"
+      AI_ALLOWED_MODELS: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate and unchanged migration chain
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
+          test -z "$(git diff --name-only 23ebaf44bd8c207432fcc37f7a29087172d4aa6d...HEAD -- prisma/schema.prisma prisma/migrations)"
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - name: Install locked dependencies and Chromium
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Prepare synthetic PostgreSQL
+        run: |
+          export PREANALYSIS_BROWSER_EVIDENCE_DIR="$RUNNER_TEMP/preanalysis-browser-evidence"
+          printf 'PREANALYSIS_BROWSER_EVIDENCE_DIR=%s\n' "$PREANALYSIS_BROWSER_EVIDENCE_DIR" >> "$GITHUB_ENV"
+          PREANALYSIS_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+          echo "::add-mask::$PREANALYSIS_BROWSER_PASSWORD"
+          printf 'PREANALYSIS_BROWSER_PASSWORD=%s\n' "$PREANALYSIS_BROWSER_PASSWORD" >> "$GITHUB_ENV"
+          mkdir -p "$PREANALYSIS_BROWSER_EVIDENCE_DIR"
+          printf '{"phase":"PREPARE","status":"STARTED","synthetic":true}\n' > "$PREANALYSIS_BROWSER_EVIDENCE_DIR/preanalysis-qualification-status.json"
+          export PREANALYSIS_BROWSER_PASSWORD
+          psql 'postgresql://postgres:synthetic-preanalysis-browser@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx --test --test-concurrency=1 tests/db/manual-preanalysis-db.test.ts
+          node --import tsx tests/preanalysis-browser/provision.ts
+      - name: Run real browser path
+        run: |
+          npm run dev > "$RUNNER_TEMP/preanalysis-browser-app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break; kill -0 "$app_pid"; sleep 1; done
+          curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null
+          npx playwright test --config tests/preanalysis-browser/playwright.config.ts
+      - name: Upload minimized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preanalysis-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/preanalysis-browser-evidence
+          if-no-files-found: error
+          retention-days: 14
+
   n15-assignment-browser:
     name: N15 synthetic assignment and authorized consultation
     runs-on: ubuntu-latest

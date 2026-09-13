@@ -1,7 +1,7 @@
 'use server';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -67,6 +67,7 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
+import { createManualPreAnalysisRecord, ManualPreAnalysisError, updateManualPreAnalysisRecord } from './manual-preanalysis-service';
 import {
   assignCommercialLeadInboxItem,
   claimCommercialLeadInboxItem,
@@ -1302,11 +1303,21 @@ export async function registerDocument(form: FormData) {
 }
 export async function createPreAnalysis(form: FormData) {
   const s = await requirePermission('project.write');
+  if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   const data = preAnalysisSchema.parse(clean(form));
-  await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId, projectId: data.projectId });
-  const pre = await prisma.preAnalysis.create({ data: data as never });
-  await audit(s.userId, 'preanalysis_create', 'PreAnalysis', pre.id, pre);
-  return pre;
+  try { return await createManualPreAnalysisRecord(prisma, s, data); }
+  catch (error) { if (error instanceof ManualPreAnalysisError || isSerializableConflict(error)) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.'); throw error; }
+}
+
+export async function updatePreAnalysis(form: FormData) {
+  const s = await requirePermission('project.write');
+  if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
+  const data = preAnalysisUpdateSchema.parse(clean(form));
+  try { return (await updateManualPreAnalysisRecord(prisma, s, { ...data, version: new Date(data.version) })).record; }
+  catch (error) {
+    if (error instanceof ManualPreAnalysisError || isSerializableConflict(error)) throw new UserFacingActionError(error instanceof ManualPreAnalysisError && error.code === 'DENIED' ? 'Risorsa non disponibile o non accessibile.' : 'La bozza è cambiata, non è più modificabile oppure il contesto non è più valido. Il testo inserito è conservato: ricarica e confronta prima di riprovare.');
+    throw error;
+  }
 }
 
 export async function createDossier(form: FormData) {

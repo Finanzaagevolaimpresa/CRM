@@ -11,7 +11,7 @@ import { DocumentUploadForm } from '@/components/document-upload-form';
 import { assignServiceAndRefresh, createChecklistItemAndRefresh, createStandardChecklistAndRefresh, deactivateChecklistItemAndRefresh, linkChecklistItemDocumentAndRefresh, unlinkChecklistItemDocumentAndRefresh, updateChecklistItemStatusAndRefresh, updateServiceStatusAndRefresh, updateServicePipelineAndRefresh, uploadDocumentAndRefresh, createClientTaskAndRefresh, updateClientTaskAndRefresh, completeTask, generateClientDossierAndRedirect, runClientAiAgentAndRedirect } from '@/lib/form-actions';
 import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
+import { canEditProject, canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
 import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
@@ -340,7 +340,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         ];
       })} />}
     </Card>
-    <Card id="pre-analisi" title="Pre-analisi">{preAnalyses.length === 0 ? <EmptyState title="Nessuna pre-analisi" /> : <Table headers={['Stato','Sintesi','Creato il','Aggiornato il']} rows={preAnalyses.map((p) => [<StatusBadge status={p.status} key='s' />, p.internalSummary ?? '—', formatDateTime(p.createdAt), formatDateTime(p.updatedAt)])} />}</Card>
+    <Card id="pre-analisi" title="Pre-analisi"><div className="mb-4 flex flex-wrap gap-2">{hasPermission(session, 'dossier.read') && hasPermission(session, 'project.write') ? projects.filter((project) => canEditProject(session, { ...project, client })).map((project) => <Link key={project.id} className="rounded-xl border border-fai-blue px-3 py-2 text-sm font-bold text-fai-blue" href={`/preanalyses/new?clientId=${client.id}&projectId=${project.id}`}>Crea per {project.title}</Link>) : null}</div>{projects.length === 0 ? <p className="mb-4 text-sm text-slate-600">Per creare una pre-analisi occorre prima un progetto accessibile.</p> : null}{preAnalyses.length === 0 ? <EmptyState title="Nessuna pre-analisi" /> : <Table headers={['Stato','Sintesi','Creato il','Aggiornato il','Azione']} rows={preAnalyses.map((p) => [<StatusBadge status={p.status} key='s' />, p.internalSummary ?? '—', formatDateTime(p.createdAt), formatDateTime(p.updatedAt), <Link className="font-bold text-fai-blue underline" href={`/preanalyses/${p.id}`} key="open">Apri</Link>])} />}</Card>
     <Card id="dossier" title="Dossier / Pre-analisi">
       {canManageDossiers ? <form action={generateClientDossierAndRedirect} className="mb-5 grid gap-3 rounded-2xl bg-fai-blue/5 p-4 ring-1 ring-fai-blue/10 md:grid-cols-4">
         <input type="hidden" name="clientId" value={client.id}/>
