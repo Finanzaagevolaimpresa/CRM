@@ -17,6 +17,7 @@ import {
   unassignCommercialLeadInboxItem,
 } from '../../src/lib/commercial-lead-inbox';
 import { createWebsiteLeadPrivacyEvidence } from '../../src/lib/privacy-evidence';
+import { listN15SyntheticAssignmentsForLead } from '../../src/lib/n15-assignment-consultation';
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
@@ -130,6 +131,21 @@ async function withN15SyntheticProfile<T>(action: () => Promise<T>) {
   try {
     return await action();
   } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete environment[key];
+      else environment[key] = previous[key];
+    }
+  }
+}
+
+async function withN15AssignmentProfile<T>(action: () => Promise<T>) {
+  const environment = process.env as Record<string, string | undefined>;
+  const keys = ['APP_ENV', 'NODE_ENV', 'N15_SYNTHETIC_ASSIGNMENT_OPT_IN'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, environment[key]]));
+  environment.APP_ENV = 'test';
+  environment.NODE_ENV = 'test';
+  environment.N15_SYNTHETIC_ASSIGNMENT_OPT_IN = 'N15_SYNTHETIC_ASSIGNMENT_V1';
+  try { return await action(); } finally {
     for (const key of keys) {
       if (previous[key] === undefined) delete environment[key];
       else environment[key] = previous[key];
@@ -252,6 +268,108 @@ test('N15 qualified synthetic profile composes one held aggregate from the real 
     assert.equal('body' in envelope.message, false);
     assert.equal(await client().communicationIntentRecord.count({ where: { intentId: activity.id } }), 1);
   });
+});
+
+test('N15 manager assignment derives its recipient atomically and consultation repeats lead ABAC', {
+  skip: !runDbTests,
+}, async () => {
+  await ensureActorAndPolicy();
+  const lead = await syntheticLead(1503);
+  const item = await initializeCommercialLeadInboxItem(client(), {
+    leadId: lead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const before = await n15Counts();
+  await withN15AssignmentProfile(async () => {
+    await assignCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
+    });
+    const activity = await client().commercialLeadActivity.findFirstOrThrow({
+      where: { inboxItemId: item.id, activityType: 'ASSIGNED' },
+    });
+    const aggregate = await client().communicationIntentRecord.findUniqueOrThrow({
+      where: { intentId: activity.id }, include: { heldDecision: true, auditRecord: true },
+    });
+    const envelope = JSON.parse(aggregate.canonicalEnvelope) as {
+      recipient: { entityId: string }; businessCorrelationId: string; message: { reasonCode: string };
+    };
+    assert.equal(envelope.recipient.entityId, actor.userId);
+    assert.equal(envelope.businessCorrelationId, item.id);
+    assert.equal(envelope.message.reasonCode, 'CRM_LEAD_MANAGER_ASSIGNMENT_SYNTHETIC');
+    assert.equal(aggregate.state, 'RECORDED');
+    assert.equal(aggregate.heldDecision?.state, 'HELD');
+    assert.ok(aggregate.auditRecord);
+    const currentLead = await client().lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const managerView = await listN15SyntheticAssignmentsForLead(client(), {
+      userId: manager.userId, sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+      role: 'direzione', active: true, permissionOverrides: [],
+    }, currentLead);
+    assert.deepEqual(managerView.map(({ recipientUserId, state }) => ({ recipientUserId, state })), [
+      { recipientUserId: actor.userId, state: 'HELD' },
+    ]);
+    const assigneeView = await listN15SyntheticAssignmentsForLead(client(), {
+      userId: actor.userId, sessionId: actor.sessionId, expiresAt: 4_070_908_800,
+      role: 'commerciale', active: true, permissionOverrides: [],
+    }, currentLead);
+    assert.equal(assigneeView.length, 1);
+    assert.equal(assigneeView[0]?.recipientUserId, actor.userId);
+    await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+      userId: 'another-commercial', sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+      role: 'commerciale', active: true, permissionOverrides: [],
+    }, currentLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+      userId: actor.userId, sessionId: actor.sessionId, expiresAt: 4_070_908_800,
+      role: 'commerciale', active: true,
+      permissionOverrides: [{ permission: 'lead.read', allowed: false }],
+    }, currentLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    await unassignCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor: manager, expectedInboxVersion: 2,
+    });
+    const unassignedLead = await client().lead.findUniqueOrThrow({ where: { id: lead.id } });
+    assert.equal(unassignedLead.assignedToId, null);
+    assert.equal((await listN15SyntheticAssignmentsForLead(client(), {
+      userId: manager.userId, sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+      role: 'direzione', active: true, permissionOverrides: [],
+    }, unassignedLead)).length, 1);
+    for (const userId of [actor.userId, 'another-commercial']) {
+      await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+        userId, sessionId: actor.sessionId, expiresAt: 4_070_908_800,
+        role: 'commerciale', active: true, permissionOverrides: [],
+      }, unassignedLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    }
+  });
+  await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+    userId: manager.userId, sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+    role: 'direzione', active: true, permissionOverrides: [],
+  }, await client().lead.findUniqueOrThrow({ where: { id: lead.id } })), /N15_ASSIGNMENT_CONSULTATION_DISABLED/u);
+  assert.deepEqual((await n15Counts()).map((count, index) => count - before[index]), [1, 1, 1]);
+
+  const rollbackLead = await syntheticLead(1504);
+  const rollbackItem = await initializeCommercialLeadInboxItem(client(), {
+    leadId: rollbackLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const rollbackBefore = await n15Counts();
+  await withN15AssignmentProfile(async () => assert.rejects(assignCommercialLeadInboxItem(client(), {
+    leadId: rollbackLead.id, actor: manager, targetUserId: actor.userId,
+    expectedInboxVersion: 1, faultAt: 'N15_AFTER_DECISION',
+  }), /N14_SYNTHETIC_FAULT_AFTER_DECISION/u));
+  assert.equal((await client().lead.findUniqueOrThrow({ where: { id: rollbackLead.id } })).assignedToId, null);
+  assert.equal(await client().commercialLeadActivity.count({ where: { inboxItemId: rollbackItem.id, activityType: 'ASSIGNED' } }), 0);
+  assert.deepEqual(await n15Counts(), rollbackBefore);
+
+  const concurrentLead = await syntheticLead(1505);
+  const concurrentItem = await initializeCommercialLeadInboxItem(client(), {
+    leadId: concurrentLead.id, actor, attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
+  });
+  const concurrentBefore = await n15Counts();
+  const results = await withN15AssignmentProfile(() => Promise.allSettled(Array.from({ length: 2 }, () =>
+    assignCommercialLeadInboxItem(client(), {
+      leadId: concurrentLead.id, actor: manager, targetUserId: actor.userId, expectedInboxVersion: 1,
+    }))));
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1);
+  assert.equal(await client().commercialLeadActivity.count({
+    where: { inboxItemId: concurrentItem.id, activityType: 'ASSIGNED' },
+  }), 1);
+  assert.deepEqual((await n15Counts()).map((count, index) => count - concurrentBefore[index]), [1, 1, 1]);
 });
 
 async function syntheticLead(ordinal: number) {

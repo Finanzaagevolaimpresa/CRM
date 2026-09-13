@@ -1,6 +1,7 @@
 import "./globals.css";
 import Link from "next/link";
 import { Nav } from "@/components/ui";
+import { InteractiveReadyMarker } from "@/components/interactive-ready-marker";
 import { getEffectivePermissions, getSession } from "@/lib/auth";
 import { getInternalNotificationCount } from "@/lib/internal-notifications";
 export default async function RootLayout({
@@ -16,6 +17,7 @@ export default async function RootLayout({
   return (
     <html lang="it" data-scroll-behavior="smooth">
       <body>
+        <InteractiveReadyMarker />
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
           <Nav effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={session?.role} />
           <div className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">

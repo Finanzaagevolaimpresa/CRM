@@ -2,6 +2,10 @@ import type { NextConfig } from 'next';
 import { applicationSecurityHeaders } from './src/lib/application-security-policy';
 
 const nextConfig: NextConfig = {
+  // CORS-mode bootstrap requests retain their concrete origin even with the
+  // product's no-referrer policy. The exact loopback host is dev-only.
+  crossOrigin: 'anonymous',
+  allowedDevOrigins: ['127.0.0.1'],
   async headers() {
     return [{ source: '/:path*', headers: [...applicationSecurityHeaders()] }];
   },

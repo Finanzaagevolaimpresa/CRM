@@ -2,12 +2,51 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
-import { createDisabledCommunicationGateSnapshotV1 } from '../src/lib/communication-backbone-contract';
+import {
+  createCommunicationIntentV1,
+  createDisabledCommunicationGateSnapshotV1,
+} from '../src/lib/communication-backbone-contract';
 import {
   CommunicationPersistenceError,
   createCommunicationPersistenceAuthorityV1,
 } from '../src/lib/communication-intent-persistence';
-import { isN15SyntheticSelfClaimAdmitted } from '../src/lib/n15-synthetic-self-claim-admission';
+import { isN15SyntheticAssignmentAdmitted, isN15SyntheticSelfClaimAdmitted } from '../src/lib/n15-synthetic-self-claim-admission';
+import { canConsultN15Assignments } from '../src/lib/n15-assignment-consultation';
+import { SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1 } from './fixtures/n15-communication-intent-v1';
+import { N15_BROWSER_IDENTITIES } from './n15-browser/fixture-identities';
+
+test('N15 browser fixture recipients pass the real communication intent contract', () => {
+  for (const identity of Object.values(N15_BROWSER_IDENTITIES)) {
+    const intent = createCommunicationIntentV1({
+      ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1,
+      source: { ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.source },
+      recipient: {
+        ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.recipient,
+        entityId: identity.userId,
+      },
+      message: {
+        ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.message,
+        templateReference: { ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.message.templateReference },
+      },
+    });
+    assert.equal(intent.recipient.entityId, identity.userId);
+  }
+});
+
+test('N15 assignment consultation requires lead.read plus global or current-assignee access', () => {
+  const session = (overrides: Record<string, unknown> = {}) => ({
+    userId: '00000000-0000-4000-8000-000000150312', sessionId: 'session',
+    expiresAt: 4_070_908_800, role: 'commerciale' as const, active: true,
+    permissionOverrides: [], ...overrides,
+  });
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: session().userId }), true);
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: null }), false);
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: '00000000-0000-4000-8000-000000150313' }), false);
+  assert.equal(canConsultN15Assignments(session({ role: 'direzione' }), { assignedToId: null }), true);
+  assert.equal(canConsultN15Assignments(session({
+    permissionOverrides: [{ permission: 'lead.read', allowed: false }],
+  }), { assignedToId: session().userId }), false);
+});
 
 test('N15 migration 44 is one additive transaction with three dedicated dormant records', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
@@ -38,7 +77,7 @@ test('N15 producer and clock require an explicit internal authority object', () 
   assert.equal(createDisabledCommunicationGateSnapshotV1().decision, 'HELD');
 });
 
-test('N15 contract stays pure and persistence has only the synthetic self-claim call-site', () => {
+test('N15 contract stays pure and persistence has only qualified synthetic assignment call-sites', () => {
   const contract = readFileSync('src/lib/communication-backbone-contract.ts', 'utf8');
   assert.doesNotMatch(contract, /@prisma\/client|communication-intent-persistence/u);
   const sources = ['src', 'scripts', 'prisma'].flatMap((directory) => {
@@ -48,6 +87,8 @@ test('N15 contract stays pure and persistence has only the synthetic self-claim 
     && source !== 'src/lib/communication-backbone-contract.ts');
   const allowed = new Set([
     'src/lib/n15-synthetic-self-claim.ts',
+    'src/lib/n15-synthetic-assignment.ts',
+    'src/lib/n15-assignment-consultation.ts',
     'src/lib/commercial-lead-inbox.ts',
   ]);
   for (const source of sources) {
@@ -59,7 +100,53 @@ test('N15 contract stays pure and persistence has only the synthetic self-claim 
     );
   }
   assert.match(readFileSync('src/lib/commercial-lead-inbox.ts', 'utf8'),
-    /input\.activityType === 'CLAIMED'[\s\S]*recordN15SyntheticSelfClaim/u);
+    /input\.activityType === 'CLAIMED'[\s\S]*isN15SyntheticAssignmentAdmitted[\s\S]*recordN15SyntheticAssignment/u);
+});
+
+test('N15 manager-assignment admission is separate and default-off', () => {
+  const admitted = {
+    APP_ENV: 'test', NODE_ENV: 'test', RUN_DB_TESTS: '1',
+    AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1',
+    AI_ORCHESTRATOR_DB_TEST_SENTINEL: 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1',
+    N15_SYNTHETIC_ASSIGNMENT_OPT_IN: 'N15_SYNTHETIC_ASSIGNMENT_V1',
+    DATABASE_URL: 'postgresql://postgres:synthetic@127.0.0.1:5432/fai_crm_test?schema=n15_assignment',
+  };
+  assert.equal(isN15SyntheticAssignmentAdmitted({}), false);
+  assert.equal(isN15SyntheticAssignmentAdmitted(admitted), true);
+  assert.equal(isN15SyntheticAssignmentAdmitted({ ...admitted, APP_ENV: 'production' }), false);
+  assert.equal(isN15SyntheticAssignmentAdmitted({ ...admitted, N15_SYNTHETIC_ASSIGNMENT_OPT_IN: 'true' }), false);
+});
+
+test('N15 assignment consultation remains server-authorized and explains terminal HELD', () => {
+  const source = readFileSync('src/lib/n15-assignment-consultation.ts', 'utf8');
+  const page = readFileSync('src/app/leads/[id]/page.tsx', 'utf8');
+  const browser = readFileSync('tests/n15-browser/assignment.spec.ts', 'utf8');
+  const provision = readFileSync('tests/n15-browser/provision.ts', 'utf8');
+  const layout = readFileSync('src/app/layout.tsx', 'utf8');
+  const readyMarker = readFileSync('src/components/interactive-ready-marker.tsx', 'utf8');
+  const nextConfig = readFileSync('next.config.ts', 'utf8');
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  assert.match(source, /hasPermission\(session, 'lead\.read'\)[\s\S]*hasGlobalAccess\(session\)[\s\S]*lead\.assignedToId !== null/u);
+  assert.match(source, /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+  assert.match(source, /parseCommunicationPersistenceAggregateV1/u);
+  assert.match(page, /isN15SyntheticAssignmentAdmitted\(\) && canConsultN15Assignments\(session, lead\)/u);
+  assert.match(page, /HELD significa trattenuta: nessuna comunicazione è stata inviata o accodata/u);
+  assert.match(browser, /managerVisible: true, assigneeVisible: true[\s\S]*foreignDirectAccessDenied: true/u);
+  assert.match(browser, /n15-manager-assignment-held\.png[\s\S]*n15-assignee-held\.png/u);
+  assert.match(browser, /ACTION_TIMEOUT[\s\S]*DASHBOARD_TIMEOUT[\s\S]*INVALID_LOGIN[\s\S]*SERVER_ERROR/u);
+  assert.match(browser, /sessionCookiePresent:[\s\S]*liveSessionCount:[\s\S]*loginAuditCount:/u);
+  assert.match(browser, /responseBody[\s\S]*originOrHostMismatch[\s\S]*missingOrUnknownAction[\s\S]*prismaError/u);
+  assert.match(browser, /data-interactive-ready="true"[\s\S]*waitFor\(\{ state: 'attached', timeout: 15_000 \}\)/u);
+  assert.match(layout, /InteractiveReadyMarker/u);
+  assert.match(readyMarker, /useEffect[\s\S]*data-interactive-ready'[\s\S]*'true'/u);
+  assert.match(nextConfig, /crossOrigin: 'anonymous'[\s\S]*allowedDevOrigins: \['127\.0\.0\.1'\]/u);
+  assert.match(browser, /collectClientLoadEvents[\s\S]*SCRIPT_HTTP_ERROR[\s\S]*REQUEST_FAILED[\s\S]*PAGE_ERROR[\s\S]*DEV_ORIGIN_BLOCKED/u);
+  assert.match(browser, /getByLabel\('Email'\)\.fill\(''\)[\s\S]*getByLabel\('Password'\)\.fill\(''\)[\s\S]*n15-login-failure-/u);
+  assert.match(ci, /N15 synthetic assignment and authorized consultation[\s\S]*n15-assignment-browser-/u);
+  assert.match(provision, /logoutInternalSession\(tx, commercialSession\.token\)[\s\S]*revokedAt: null/u);
+  assert.match(ci, /::add-mask::\$PRIVILEGED_STEP_UP_SECRET[\s\S]*::add-mask::\$N15_BROWSER_PASSWORD/u);
+  assert.match(ci, /kill -0 "\$app_pid"[\s\S]*EARLY_EXIT[\s\S]*HEALTH_TIMEOUT/u);
+  assert.match(ci, /write-runtime-diagnostic\.mjs[\s\S]*runtime-diagnostic\.json/u);
 });
 
 test('N15 synthetic self-claim admission is explicit and fail-closed', () => {

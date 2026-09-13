@@ -14,6 +14,7 @@ import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
 import {
   isN15SyntheticSelfClaimAdmitted,
+  isN15SyntheticAssignmentAdmitted,
   N15_SYNTHETIC_DATABASE_NAME,
   N15_SYNTHETIC_DATABASE_SENTINEL,
 } from './n15-synthetic-self-claim-admission';
@@ -470,7 +471,9 @@ async function mutateOwner(
   }>,
 ) {
   requireEnforcedMode();
-  const n15Synthetic = input.activityType === 'CLAIMED' && isN15SyntheticSelfClaimAdmitted();
+  const n15SelfClaim = input.activityType === 'CLAIMED' && isN15SyntheticSelfClaimAdmitted();
+  const n15Assignment = input.activityType === 'ASSIGNED' && isN15SyntheticAssignmentAdmitted();
+  const n15Synthetic = n15SelfClaim || n15Assignment;
   return transaction(db, async (tx, commandNow, n15Scope) => {
     if (n15Synthetic) {
       const rows = await tx.$queryRaw<Array<{
@@ -524,8 +527,10 @@ async function mutateOwner(
     inject(input.faultAt, 'AFTER_AUDIT');
     if (n15Synthetic) {
       if (!n15Scope) throw new Error('N15_SYNTHETIC_SELF_CLAIM_TRANSACTION_REQUIRED');
-      const { recordN15SyntheticSelfClaim } = await import('./n15-synthetic-self-claim');
-      await recordN15SyntheticSelfClaim(n15Scope, activity, (point) => {
+      const record = n15Assignment
+        ? (await import('./n15-synthetic-assignment')).recordN15SyntheticAssignment
+        : (await import('./n15-synthetic-self-claim')).recordN15SyntheticSelfClaim;
+      await record(n15Scope, activity, (point) => {
         if ((point === 'AFTER_INTENT' && input.faultAt === 'N15_AFTER_INTENT')
           || (point === 'AFTER_DECISION' && input.faultAt === 'N15_AFTER_DECISION')) {
           throw new Error(`N14_SYNTHETIC_FAULT_${point}`);

@@ -137,6 +137,11 @@ function parseStored(row: StoredAggregate): Omit<CommunicationPersistenceAggrega
   }
 }
 
+/** Read-side integrity check shared by authorized internal projections. */
+export function parseCommunicationPersistenceAggregateV1(row: StoredAggregate) {
+  return parseStored(row);
+}
+
 async function findAggregates(tx: Prisma.TransactionClient, intent: CommunicationIntentV1) {
   return tx.communicationIntentRecord.findMany({
     where: { OR: [{ keyDigest: intent.idempotency.keyDigest }, { intentId: intent.intentId }] },

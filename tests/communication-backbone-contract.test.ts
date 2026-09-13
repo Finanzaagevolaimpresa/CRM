@@ -783,6 +783,8 @@ test('N15 pure-contract dependency closure has zero I/O and no runtime activatio
   ].filter((path) => ![
     'src/lib/communication-intent-persistence.ts',
     'src/lib/n15-synthetic-self-claim.ts',
+    'src/lib/n15-synthetic-assignment.ts',
+    'src/lib/n15-assignment-consultation.ts',
   ].includes(path)).filter(existsSync);
   for (const path of runtimeFiles) {
     assert.doesNotMatch(readFileSync(path, 'utf8'), /communication-backbone-contract/u, path);

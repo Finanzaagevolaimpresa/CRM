@@ -1,4 +1,5 @@
 export const N15_SELF_CLAIM_SYNTHETIC_OPT_IN = 'N15_SYNTHETIC_SELF_CLAIM_V1' as const;
+export const N15_ASSIGNMENT_SYNTHETIC_OPT_IN = 'N15_SYNTHETIC_ASSIGNMENT_V1' as const;
 export const N15_SYNTHETIC_DATABASE_NAME = 'fai_crm_test' as const;
 export const N15_SYNTHETIC_DATABASE_SENTINEL = 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1' as const;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -27,4 +28,15 @@ export function isN15SyntheticSelfClaimAdmitted(
   } catch {
     throw new Error('N15_SYNTHETIC_DATABASE_CONFIGURATION_INVALID');
   }
+}
+
+/** Separate, default-off admission for the manager-assignment fixture. */
+export function isN15SyntheticAssignmentAdmitted(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  if (environment.N15_SYNTHETIC_ASSIGNMENT_OPT_IN !== N15_ASSIGNMENT_SYNTHETIC_OPT_IN) return false;
+  return isN15SyntheticSelfClaimAdmitted({
+    ...environment,
+    N15_SYNTHETIC_SELF_CLAIM_OPT_IN: N15_SELF_CLAIM_SYNTHETIC_OPT_IN,
+  });
 }
