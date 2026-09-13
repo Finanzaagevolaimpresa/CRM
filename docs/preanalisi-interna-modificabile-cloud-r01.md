@@ -31,3 +31,7 @@ Il job usa due URI distinti: `DATABASE_URL` conserva il parametro Prisma `schema
 La qualifica transazionale dimostra entrambe le autorità previste da `canEditProject`: cambiare il solo consulente del progetto conserva l'accesso derivato dal cliente; soltanto la revoca di entrambe nega la scrittura senza mutazione o audit. Copre inoltre azienda del progetto cancellata o appartenente a un altro cliente, anche senza `companyId` nell'input, e sessione registry revocata con motivo canonico `INTERNAL_SINGLE`.
 
 Il browser invia anche una creazione con campo hidden alterato e tenta un aggiornamento dopo la revoca di `dossier.read` successiva all'apertura del form. Entrambi sono negati server-side con record e audit invariati; i testi restano disponibili nel form.
+
+## Correzione R04
+
+Il lock parametrizzato della sessione registry applica il cast PostgreSQL `::uuid` già usato dal servizio canonico delle sessioni. Gli altri lock introdotti dal percorso operano su identificativi testuali (`User`, `UserPermissionOverride`, `Client`, `Project`, `Company` e `PreAnalysis`) e non richiedono il cast UUID.

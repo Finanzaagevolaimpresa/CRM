@@ -14,7 +14,7 @@ type Narratives = Partial<Record<(typeof manualPreAnalysisFields)[number], strin
 async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${claimed.userId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM "UserPermissionOverride" WHERE "userId" = ${claimed.userId} FOR UPDATE`;
-  if (claimed.sessionId) await tx.$queryRaw`SELECT id FROM "InternalSession" WHERE id = ${claimed.sessionId} FOR UPDATE`;
+  if (claimed.sessionId) await tx.$queryRaw`SELECT id FROM "InternalSession" WHERE id = ${claimed.sessionId}::uuid FOR UPDATE`;
   const user = await tx.user.findFirst({
     where: { id: claimed.userId, active: true, deletedAt: null },
     include: { permissionOverrides: { select: { permission: true, allowed: true } } },
