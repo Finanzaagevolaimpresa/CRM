@@ -54,3 +54,26 @@ test('N15 browser provision failures produce a finite minimized receipt', () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('N15 browser post-test server diagnostic redacts known synthetic secrets', () => {
+  const root = mkdtempSync(join(tmpdir(), 'n15-browser-runtime-'));
+  try {
+    const log = join(root, 'server.log');
+    const output = join(root, 'runtime.json');
+    const password = 'SYNTHETIC_PASSWORD_PRIVATE';
+    writeFileSync(log, `Error: Failed to find Server Action ${password}\n    at synthetic stack\n`);
+    execFileSync(process.execPath, [
+      'tests/n15-browser/write-runtime-diagnostic.mjs', log, output,
+    ], { env: { ...process.env, N15_BROWSER_PASSWORD: password } });
+    const raw = readFileSync(output, 'utf8');
+    const diagnostic = JSON.parse(raw) as {
+      phase: string; classifications: { missingOrUnknownAction: boolean }; frameworkExcerpt: string;
+    };
+    assert.equal(diagnostic.phase, 'POST_BROWSER_SERVER');
+    assert.equal(diagnostic.classifications.missingOrUnknownAction, true);
+    assert.match(diagnostic.frameworkExcerpt, /\[REDACTED\]/u);
+    assert.doesNotMatch(raw, new RegExp(password, 'u'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

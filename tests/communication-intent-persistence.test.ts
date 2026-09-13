@@ -92,11 +92,13 @@ test('N15 assignment consultation remains server-authorized and explains termina
   assert.match(browser, /n15-manager-assignment-held\.png[\s\S]*n15-assignee-held\.png/u);
   assert.match(browser, /ACTION_TIMEOUT[\s\S]*DASHBOARD_TIMEOUT[\s\S]*INVALID_LOGIN[\s\S]*SERVER_ERROR/u);
   assert.match(browser, /sessionCookiePresent:[\s\S]*liveSessionCount:[\s\S]*loginAuditCount:/u);
+  assert.match(browser, /responseBody[\s\S]*originOrHostMismatch[\s\S]*missingOrUnknownAction[\s\S]*prismaError/u);
   assert.match(browser, /getByLabel\('Email'\)\.fill\(''\)[\s\S]*getByLabel\('Password'\)\.fill\(''\)[\s\S]*n15-login-failure-/u);
   assert.match(ci, /N15 synthetic assignment and authorized consultation[\s\S]*n15-assignment-browser-/u);
   assert.match(provision, /logoutInternalSession\(tx, commercialSession\.token\)[\s\S]*revokedAt: null/u);
   assert.match(ci, /::add-mask::\$PRIVILEGED_STEP_UP_SECRET[\s\S]*::add-mask::\$N15_BROWSER_PASSWORD/u);
   assert.match(ci, /kill -0 "\$app_pid"[\s\S]*EARLY_EXIT[\s\S]*HEALTH_TIMEOUT/u);
+  assert.match(ci, /write-runtime-diagnostic\.mjs[\s\S]*runtime-diagnostic\.json/u);
 });
 
 test('N15 synthetic self-claim admission is explicit and fail-closed', () => {

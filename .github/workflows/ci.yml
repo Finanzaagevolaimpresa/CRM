@@ -105,7 +105,17 @@ jobs:
           mkdir -p "$N15_BROWSER_EVIDENCE_DIR"
           npm run dev > "${RUNNER_TEMP}/n15-browser-app.log" 2>&1 &
           app_pid=$!
-          cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }
+          cleanup() {
+            status=$?
+            trap - EXIT
+            set +e
+            node tests/n15-browser/write-runtime-diagnostic.mjs \
+              "${RUNNER_TEMP}/n15-browser-app.log" \
+              "$N15_BROWSER_EVIDENCE_DIR/runtime-diagnostic.json"
+            kill "$app_pid" 2>/dev/null || true
+            wait "$app_pid" 2>/dev/null || true
+            exit "$status"
+          }
           trap cleanup EXIT
           server_ready=0
           for attempt in $(seq 1 60); do

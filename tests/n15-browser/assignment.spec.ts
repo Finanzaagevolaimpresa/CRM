@@ -32,6 +32,35 @@ function loginPathClassification(page: Page) {
   return 'UNEXPECTED_PATH';
 }
 
+async function responseBodyClassification(response: Response | null) {
+  if (!response) return { kind: 'UNAVAILABLE', markers: {} };
+  let body = '';
+  try {
+    body = await Promise.race([
+      response.text(),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 2_000)),
+    ]);
+  } catch { /* the finite classification is sufficient */ }
+  const sample = body.slice(0, 64 * 1024);
+  return {
+    kind: sample.length === 0
+      ? 'EMPTY'
+      : /^\s*</u.test(sample)
+        ? 'HTML'
+        : /(?:^|\n)[0-9]+:/u.test(sample)
+          ? 'RSC'
+          : 'OTHER',
+    markers: {
+      originOrHostMismatch: /origin|host.*mismatch|does not match/iu.test(sample),
+      missingOrUnknownAction: /failed to find server action|unknown server action|missing.*action/iu.test(sample),
+      invalidActionRequest: /invalid.*server action|invalid action request/iu.test(sample),
+      compilationOrModuleError: /module not found|failed to compile|compilation error/iu.test(sample),
+      registryError: /internal_session|registry/iu.test(sample),
+      prismaError: /prisma/iu.test(sample),
+    },
+  };
+}
+
 async function writeLoginFailureDiagnostic(
   page: Page,
   context: BrowserContext,
@@ -43,10 +72,12 @@ async function writeLoginFailureDiagnostic(
   await page.getByLabel('Password').fill('').catch(() => undefined);
   const cookies = await context.cookies(appUrl);
   const userId = identityUserIds[identity];
+  const responseBody = await responseBodyClassification(response);
   writeFileSync(join(evidenceDirectory, `n15-login-failure-${identity}.json`), `${JSON.stringify({
     phase: 'LOGIN', status: 'FAILED', code,
     identity, path: loginPathClassification(page),
     httpStatus: response?.status() ?? null,
+    responseBody,
     sessionCookiePresent: cookies.some((cookie) => cookie.name === 'fai_n15_browser_session'),
     liveSessionCount: await db.internalSession.count({
       where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
