@@ -14,6 +14,68 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  catalog-alignment:
+    name: Catalog v2 PostgreSQL and browser qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-catalog, POSTGRES_DB: fai_crm_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-catalog@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-catalog-browser-secret
+      AUTH_COOKIE_NAME: fai_catalog_browser_session
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3000
+      RUN_DB_TESTS: "1"
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: "1"
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      CATALOG_BROWSER_SYNTHETIC_CONFIRMED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", fetch-depth: 0, persist-credentials: false }
+      - name: Verify exact candidate and unchanged schema chain
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 44
+          test -z "$(git diff --name-only 71d238b27efde1afb708e25d0fe035c0c69dc303...HEAD -- prisma/schema.prisma prisma/migrations)"
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Prepare and test synthetic catalog
+        run: |
+          CATALOG_BROWSER_EVIDENCE_DIR="$RUNNER_TEMP/catalog-browser-evidence"
+          CATALOG_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+          export CATALOG_BROWSER_EVIDENCE_DIR CATALOG_BROWSER_PASSWORD
+          echo "::add-mask::$CATALOG_BROWSER_PASSWORD"
+          printf 'CATALOG_BROWSER_EVIDENCE_DIR=%s\nCATALOG_BROWSER_PASSWORD=%s\n' "$CATALOG_BROWSER_EVIDENCE_DIR" "$CATALOG_BROWSER_PASSWORD" >> "$GITHUB_ENV"
+          mkdir -p "$CATALOG_BROWSER_EVIDENCE_DIR"
+          printf '{"phase":"PREPARE","synthetic":true}\n' > "$CATALOG_BROWSER_EVIDENCE_DIR/catalog-status.json"
+          psql 'postgresql://postgres:synthetic-catalog@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx --test tests/catalog-v2-db.test.ts
+          node --import tsx tests/catalog-browser/provision.ts
+      - name: Run catalog browser path
+        run: |
+          npm run dev > "$RUNNER_TEMP/catalog-browser-app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break; kill -0 "$app_pid"; sleep 1; done
+          curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null
+          npx playwright test --config tests/catalog-browser/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: "catalog-v2-${{ github.run_id }}-${{ github.run_attempt }}", path: "${{ runner.temp }}/catalog-browser-evidence", if-no-files-found: error, retention-days: 14 }
+
   preanalysis-manual-r02:
     name: Preanalysis PostgreSQL and browser qualification
     runs-on: ubuntu-latest
