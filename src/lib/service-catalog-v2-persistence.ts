@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
+import { canonicalJson } from './canonical-json';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from './service-catalog';
 import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash, catalogV2Storage, type CatalogV2Revision } from './service-catalog-v2';
 
@@ -32,7 +33,7 @@ export async function assertSyntheticCatalogDatabase(db: Db) {
 }
 
 type StoredRevision = { version: number; publicName: string; shortDescription: string; priceMode: string; netPrice: Prisma.Decimal | null; currency: string; vatRateBps: number; validFrom: Date; termsVersion: string; checkoutEnabled: boolean; autoClientDeliveryAllowed: boolean; autoExternalActionAllowed: boolean; operationalConditions: Prisma.JsonValue; checklist: Prisma.JsonValue; contentHash: string; status: string };
-const sameJson = (left: Prisma.JsonValue, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+const sameJson = (left: Prisma.JsonValue, right: unknown) => canonicalJson(left) === canonicalJson(right);
 export function storedRevisionMatches(service: CatalogV2Revision, row: StoredRevision) {
   const storage = catalogV2Storage(service);
   return row.version === service.revisionVersion && row.publicName === service.name

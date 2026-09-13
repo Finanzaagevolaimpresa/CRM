@@ -1,7 +1,7 @@
 # Checkpoint catalogo sito R01
 
 - Base logica: merge PR136, tree `71950b6486c3350b5e1734fcc0499ca1b676017c`.
-- Incremento: composizione catalogo v2 con provenienza per revisione, sette dettagli digitali e preparazione sintetica fail-closed e idempotente.
+- Incremento: composizione catalogo v2 con provenienza per revisione, sette dettagli digitali e preparazione sintetica fail-closed e idempotente; il confronto JSON canonico ignora l'ordine delle chiavi oggetto ma conserva ordine e valori degli array.
 - Schema: invariato; migrazioni: 44.
 - Default operativi: checkout, delivery ed azioni esterne automatiche disabilitati.
 - CI richiesta: unità catalogo, PostgreSQL effimero, Chromium desktop/mobile, lint, typecheck e build.

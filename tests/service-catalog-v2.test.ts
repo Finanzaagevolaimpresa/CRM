@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from '../src/lib/service-catalog';
-import { DIGITAL_PROJECT_TYPES, FAI_SERVICE_CATALOG_V2, buildCatalogV2Snapshot, catalogV2RevisionHash, validateCatalogSelection } from '../src/lib/service-catalog-v2';
-import { prepareServiceCatalogV2 } from '../src/lib/service-catalog-v2-persistence';
+import { DIGITAL_PROJECT_TYPES, FAI_SERVICE_CATALOG_V2, buildCatalogV2Snapshot, catalogV2RevisionHash, catalogV2Storage, validateCatalogSelection } from '../src/lib/service-catalog-v2';
+import { prepareServiceCatalogV2, storedRevisionMatches } from '../src/lib/service-catalog-v2-persistence';
 
 const V1_HASHES = ['b65caabbfbe3254a3b9c1e6ec15fe46f0ac933ea0d5bdf04e5b6422a9b3162ba','3cc766f8e183f303c3a41de46c74b60476378b19c0a5b060aaff5ab0e1b80414','f24ef3716ea79137514aee77fd9c10b7b961ddf672c2fcac28db5f8370b4e421','5417a3d79118131b4ad48971aaa20ed9eadd6534dc8ff4c29e84a29311e6b48f','cca3176f5ce832bcc6c963fd9a5c562643ae1d75c82249240fea0f756c75f8a5','ca4e3ed7d3febf3fda7df6b9d60bd9de37cd8ebf1b5955f006df6d1cf1b2858f','48d041d1b5310147d4849fd87aed1adfb80808d04bf2813053610603ee91e73b','f14463d36dd6d383cf18c0a42d41e378158f38d65284303293511b513a1cbff8','bcef5084ed8eb1dadb81c675bffcd10a6532a913f3ef8df292418c7a78200343','ad5f581363adc8c32d375523f3a6fa9eacc519e6d5622d9681ad3a2c875d766d','7d681ccd1532cc7fa580f7cd273535d369eca884e2a1518b61859e864f8b1db1'];
 
@@ -55,4 +55,31 @@ test('writer fails closed before opening a transaction outside the confirmed syn
     await assert.rejects(prepareServiceCatalogV2({ $queryRaw: async () => [{ databaseName: 'fai_crm_test', schemaName: 'public', serverAddress: '127.0.0.1', sentinel: null }], $transaction: async () => { transactions += 1; } } as never), /SYNTHETIC_DATABASE_DENIED/u);
     assert.equal(transactions, 0);
   } finally { for (const key of keys) { const value = previous[key]; if (value === undefined) Reflect.deleteProperty(process.env, key); else Reflect.set(process.env, key, value); } }
+});
+
+test('persisted JSON comparison ignores object-key order but preserves values and array order', () => {
+  const service = FAI_SERVICE_CATALOG_V2.find(({ code }) => code === 'ottimizzazione_aziendale_ai')!;
+  const storage = catalogV2Storage(service);
+  const detail = service.detail;
+  const reorderedDetail = {
+    subsequentEngagements: detail.subsequentEngagements,
+    deliverables: detail.deliverables,
+    timing: detail.timing,
+    phaseDocuments: detail.phaseDocuments,
+    exclusions: detail.exclusions,
+    inclusions: detail.inclusions,
+  };
+  const operationalConditions = storage.operationalConditions.map((item) => typeof item === 'object'
+    ? { detail: reorderedDetail, catalogVersion: service.sourceCatalogVersion }
+    : item);
+  const row = {
+    version: service.revisionVersion, publicName: service.name, shortDescription: service.description,
+    priceMode: service.priceMode, netPrice: null, currency: 'EUR', vatRateBps: 2200,
+    validFrom: new Date(service.validFrom), termsVersion: service.termsVersion, checkoutEnabled: false,
+    autoClientDeliveryAllowed: false, autoExternalActionAllowed: false, operationalConditions,
+    checklist: storage.checklist, contentHash: catalogV2RevisionHash(service), status: 'PUBLISHED',
+  };
+  assert.equal(storedRevisionMatches(service, row as never), true);
+  assert.equal(storedRevisionMatches(service, { ...row, operationalConditions: [...operationalConditions].reverse() } as never), false);
+  assert.equal(storedRevisionMatches(service, { ...row, operationalConditions: operationalConditions.map((item) => typeof item === 'object' ? { ...item, catalogVersion: 'altered' } : item) } as never), false);
 });
