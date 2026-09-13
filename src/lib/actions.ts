@@ -1,7 +1,7 @@
 'use server';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
-import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema } from './validation';
+import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -67,6 +67,7 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
+import { manualPreAnalysisFields } from './preanalysis-policy';
 import {
   assignCommercialLeadInboxItem,
   claimCommercialLeadInboxItem,
@@ -1304,9 +1305,40 @@ export async function createPreAnalysis(form: FormData) {
   const s = await requirePermission('project.write');
   const data = preAnalysisSchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId, projectId: data.projectId });
-  const pre = await prisma.preAnalysis.create({ data: data as never });
-  await audit(s.userId, 'preanalysis_create', 'PreAnalysis', pre.id, pre);
-  return pre;
+  return prisma.$transaction(async (tx) => {
+    // Re-check the untrusted client/project/company tuple inside the write transaction.
+    const project = await tx.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true, companyId: true } });
+    const company = data.companyId ? await tx.company.findFirst({ where: { id: data.companyId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null;
+    if (!project || (data.companyId && !company) || (data.companyId && project.companyId && project.companyId !== data.companyId)) denyWriteAccess();
+    const pre = await tx.preAnalysis.create({ data: data as never });
+    await tx.auditLog.create({ data: { actorId: s.userId, event: 'preanalysis_create', entityType: 'PreAnalysis', entityId: pre.id, after: { recordId: pre.id, changedFields: manualPreAnalysisFields.filter((field) => Boolean(pre[field])) } } });
+    return pre;
+  });
+}
+
+export async function updatePreAnalysis(form: FormData) {
+  const s = await requirePermission('project.write');
+  const data = preAnalysisUpdateSchema.parse(clean(form));
+  const before = await prisma.preAnalysis.findUnique({ where: { id: data.id } });
+  if (!before) denyWriteAccess();
+  await requireClientContextWriteAccess(s, { clientId: before.clientId, companyId: before.companyId ?? undefined, projectId: before.projectId });
+  const fields = manualPreAnalysisFields;
+  const values = Object.fromEntries(fields.map((field) => [field, data[field] ?? null]));
+  const changedFields = fields.filter((field) => before[field] !== values[field]);
+  if (!changedFields.length) return before;
+  const expectedVersion = new Date(data.version);
+  const now = nextConcurrencyTimestamp(before.updatedAt);
+  return prisma.$transaction(async (tx) => {
+    // Context, manual-draft invariants and optimistic version are all part of the CAS.
+    const result = await tx.preAnalysis.updateMany({
+      where: { id: data.id, clientId: before.clientId, projectId: before.projectId, companyId: before.companyId, status: { in: ['da_avviare', 'raccolta_dati'] }, aiRunId: null, reviewedById: null, approvedById: null, approvedAt: null, updatedAt: expectedVersion },
+      data: { ...values, updatedAt: now },
+    });
+    if (result.count !== 1) throw new UserFacingActionError('La bozza è cambiata, non è più modificabile oppure il contesto non è più valido. Il testo inserito è conservato: ricarica e confronta prima di riprovare.');
+    const updated = await tx.preAnalysis.findUniqueOrThrow({ where: { id: data.id } });
+    await tx.auditLog.create({ data: { actorId: s.userId, event: 'preanalysis_manual_update', entityType: 'PreAnalysis', entityId: updated.id, after: { recordId: updated.id, changedFields } } });
+    return updated;
+  });
 }
 
 export async function createDossier(form: FormData) {

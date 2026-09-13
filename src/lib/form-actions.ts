@@ -2,7 +2,7 @@
 import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { createLead, updateLeadCommercial, convertLeadToClient, resolveLeadDuplicateCaseAction, initializeCommercialLeadInboxAction, claimCommercialLeadInboxAction, assignCommercialLeadInboxAction, unassignCommercialLeadInboxAction, recordCommercialLeadFirstResponseAction, closeCommercialLeadInboxAction, reopenCommercialLeadInboxAction, createCommercialOffer, updateCommercialOffer, createProject, registerDocument, createPreAnalysis, createDossier, createContract, registerPayment, runMockAgent, reviewAiOutput, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline, generateClientDossier, updateClientDossier, approveClientDossier, archiveClientDossier, runClientAiAgent, createClientDossierFromAiOutput, createTechnicalPractice, updateTechnicalPractice, updateTechnicalPracticeStatus, assignTechnicalPractice, archiveTechnicalPractice, createPracticeCommunicationDraft, updatePracticeCommunicationDraft, approvePracticeCommunicationDraft, markPracticeCommunicationAsUsed, archivePracticeCommunication } from './actions';
+import { createLead, updateLeadCommercial, convertLeadToClient, resolveLeadDuplicateCaseAction, initializeCommercialLeadInboxAction, claimCommercialLeadInboxAction, assignCommercialLeadInboxAction, unassignCommercialLeadInboxAction, recordCommercialLeadFirstResponseAction, closeCommercialLeadInboxAction, reopenCommercialLeadInboxAction, createCommercialOffer, updateCommercialOffer, createProject, registerDocument, createPreAnalysis, updatePreAnalysis, createDossier, createContract, registerPayment, runMockAgent, reviewAiOutput, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline, generateClientDossier, updateClientDossier, approveClientDossier, archiveClientDossier, runClientAiAgent, createClientDossierFromAiOutput, createTechnicalPractice, updateTechnicalPractice, updateTechnicalPracticeStatus, assignTechnicalPractice, archiveTechnicalPractice, createPracticeCommunicationDraft, updatePracticeCommunicationDraft, approvePracticeCommunicationDraft, markPracticeCommunicationAsUsed, archivePracticeCommunication } from './actions';
 import { UserFacingActionError } from './action-errors';
 export async function createLeadAndRedirect(form: FormData) { const lead = await createLead(form); revalidatePath('/leads'); redirect(`/leads/${lead.id}`); }
 export async function updateLeadStatus(form: FormData) { await updateLeadCommercial(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard'); }
@@ -39,6 +39,28 @@ export async function uploadDocumentAndRefresh(form: FormData) {
 }
 export async function linkDocumentAndRefresh(form: FormData) { await linkDocumentToService(form); revalidatePath('/documents'); }
 export async function createPreAnalysisAndRedirect(form: FormData) { const pre = await createPreAnalysis(form); revalidatePath('/preanalyses'); redirect(`/preanalyses/${pre.id}`); }
+export type PreAnalysisFormState = { status: 'idle' | 'success' | 'error'; message?: string; version?: string };
+function actionMessage(error: unknown) {
+  if (error instanceof UserFacingActionError) return error.message;
+  if (error && typeof error === 'object' && 'issues' in error) return 'Controlla i campi: ogni testo deve essere valido e non superare la lunghezza consentita.';
+  throw error;
+}
+export async function createManualPreAnalysis(_state: PreAnalysisFormState, form: FormData): Promise<PreAnalysisFormState> {
+  let pre;
+  try { pre = await createPreAnalysis(form); }
+  catch (error) { return { status: 'error', message: actionMessage(error) }; }
+  revalidatePath('/preanalyses');
+  revalidatePath(`/clients/${pre.clientId}`);
+  revalidatePath(`/projects/${pre.projectId}`);
+  redirect(`/preanalyses/${pre.id}?saved=created`);
+}
+export async function updateManualPreAnalysis(_state: PreAnalysisFormState, form: FormData): Promise<PreAnalysisFormState> {
+  try {
+    const pre = await updatePreAnalysis(form);
+    revalidatePath('/preanalyses'); revalidatePath(`/preanalyses/${pre.id}`); revalidatePath(`/clients/${pre.clientId}`); revalidatePath(`/projects/${pre.projectId}`);
+    return { status: 'success', message: 'Bozza interna salvata.', version: pre.updatedAt.toISOString() };
+  } catch (error) { return { status: 'error', message: actionMessage(error) }; }
+}
 export async function createDossierAndRedirect(form: FormData) { const dossier = await createDossier(form); revalidatePath('/dossiers'); redirect(`/dossiers/${dossier.id}`); }
 export async function createContractAndRefresh(form: FormData) { await createContract(form); revalidatePath('/contracts'); }
 export async function registerPaymentAndRefresh(form: FormData) { await registerPayment(form); revalidatePath('/payments'); }

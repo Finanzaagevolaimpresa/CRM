@@ -15,7 +15,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   if (!project) return <PageHeader title="Progetto non trovato" description="Il record richiesto non esiste o non è accessibile." />;
   const canAuditAiRequests = session.role === 'admin' && hasPermission(session, 'ai.execution.audit');
   const canRequestAi = hasPermission(session, 'ai.execution.request');
-  const [expenses, client, consultant, aiExecutionRequests] = await Promise.all([
+  const [expenses, client, consultant, aiExecutionRequests, preAnalyses] = await Promise.all([
     prisma.projectExpense.findMany({ where: { projectId: id } }),
     prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null } }),
     project.consultantId ? prisma.user.findUnique({ where: { id: project.consultantId } }) : null,
@@ -27,6 +27,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           take: 15,
         })
       : Promise.resolve([]),
+    prisma.preAnalysis.findMany({ where: { projectId: id, clientId: project.clientId }, orderBy: { updatedAt: 'desc' } }),
   ]);
 
   return <div className="space-y-6">
@@ -42,6 +43,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
     <Card title="Spese progetto">
       {expenses.length === 0 ? <EmptyState title="Nessun dato presente">Nessuna voce di spesa progetto registrata.</EmptyState> : <Table headers={['Categoria', 'Descrizione', 'Importo', 'Ammissibilità']} rows={expenses.map((expense) => [expense.category, expense.description, `€ ${Number(expense.amount).toLocaleString('it-IT')}`, expense.potentiallyEligible ? 'Potenzialmente' : 'Da verificare'])} />}
+    </Card>
+    <Card title="Pre-analisi interne">
+      {hasPermission(session, 'project.write') ? <Link className="mb-4 inline-block rounded-xl bg-fai-blue px-4 py-2 font-bold text-white" href={`/preanalyses/new?clientId=${project.clientId}&projectId=${project.id}`}>Crea pre-analisi</Link> : null}
+      {preAnalyses.length === 0 ? <EmptyState title="Nessuna pre-analisi">Non sono ancora presenti bozze per questo progetto.</EmptyState> : <Table headers={['Stato', 'Sintesi', 'Aggiornata', 'Azione']} rows={preAnalyses.map((pre) => [<StatusBadge key="status" status={pre.status} />, pre.internalSummary ?? 'Bozza interna senza sintesi', formatDateTime(pre.updatedAt), <Link key="open" className="font-bold text-fai-blue underline" href={`/preanalyses/${pre.id}`}>Apri</Link>])} />}
     </Card>
     <Card title="Autorizzazioni AI collegate">
       {aiExecutionRequests.length === 0 ? <EmptyState title="Nessuna richiesta AI collegata" /> : <Table headers={['Richiedente', 'Funzione', 'Stato', 'Creata', 'Dettaglio']} rows={aiExecutionRequests.map((request) => [
