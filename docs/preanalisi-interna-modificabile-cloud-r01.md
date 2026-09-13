@@ -35,3 +35,7 @@ Il browser invia anche una creazione con campo hidden alterato e tenta un aggior
 ## Correzione R04
 
 Il lock parametrizzato della sessione registry applica il cast PostgreSQL `::uuid` già usato dal servizio canonico delle sessioni. Gli altri lock introdotti dal percorso operano su identificativi testuali (`User`, `UserPermissionOverride`, `Client`, `Project`, `Company` e `PreAnalysis`) e non richiedono il cast UUID.
+
+## Correzione R05
+
+Il form espone `data-preanalysis-form-ready=true` soltanto dopo il mount client e mantiene l'intero fieldset disabilitato fino a quel momento. Il browser attende questa prontezza locale dopo navigazioni, redirect, reload ed errori, e verifica il valore DOM esatto immediatamente prima di ogni submit di modifica. Questo impedisce che un `fill` iniziato durante l'idratazione venga riconciliato con il valore server, causa della concatenazione osservata su `scenarioA`.
