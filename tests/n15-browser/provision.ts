@@ -40,6 +40,16 @@ async function main() {
     actor: { userId: 'n15-browser-commercial-one', sessionId: commercialSessionId },
     attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
   });
+  await db.internalSession.update({
+    where: { id: commercialSessionId },
+    data: {
+      revokedAt: new Date(), revokedReason: 'N15_SYNTHETIC_PROVISION_COMPLETE',
+      revokedByUserId: 'n15-browser-commercial-one',
+    },
+  });
+  assert.equal(await db.internalSession.count({
+    where: { revokedAt: null, expiresAt: { gt: new Date() } },
+  }), 0);
   process.stdout.write('{"n15BrowserProvision":"ready"}\n');
 }
 

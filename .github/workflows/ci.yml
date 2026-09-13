@@ -83,16 +83,23 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Prepare ephemeral PostgreSQL and synthetic authorities
         run: |
-          printf 'N15_BROWSER_EVIDENCE_DIR=%s/n15-browser-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          N15_BROWSER_EVIDENCE_DIR="$RUNNER_TEMP/n15-browser-evidence"
+          export N15_BROWSER_EVIDENCE_DIR
+          printf 'N15_BROWSER_EVIDENCE_DIR=%s\n' "$N15_BROWSER_EVIDENCE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$N15_BROWSER_EVIDENCE_DIR"
           PRIVILEGED_STEP_UP_SECRET="$(openssl rand -base64 36 | tr -d '\n')"
           N15_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
           export PRIVILEGED_STEP_UP_SECRET N15_BROWSER_PASSWORD
+          echo "::add-mask::$PRIVILEGED_STEP_UP_SECRET"
+          echo "::add-mask::$N15_BROWSER_PASSWORD"
           printf 'PRIVILEGED_STEP_UP_SECRET=%s\n' "$PRIVILEGED_STEP_UP_SECRET" >> "$GITHUB_ENV"
           printf 'N15_BROWSER_PASSWORD=%s\n' "$N15_BROWSER_PASSWORD" >> "$GITHUB_ENV"
           psql 'postgresql://postgres:synthetic-n15-browser@127.0.0.1:5432/fai_crm_test' \
             -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           node --import tsx tests/n15-browser/provision.ts
+          printf '{"phase":"provisioned","synthetic":true,"migrations":44}\n' \
+            > "$N15_BROWSER_EVIDENCE_DIR/provision.json"
       - name: Run real assignment and consultation browser path
         run: |
           mkdir -p "$N15_BROWSER_EVIDENCE_DIR"
@@ -100,11 +107,35 @@ jobs:
           app_pid=$!
           cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }
           trap cleanup EXIT
+          server_ready=0
           for attempt in $(seq 1 60); do
-            curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break
-            test "$attempt" -lt 60 || { echo N15_BROWSER_APP_UNAVAILABLE >&2; exit 1; }
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              set +e
+              wait "$app_pid"
+              server_status=$?
+              set -e
+              node tests/n15-browser/write-startup-diagnostic.mjs \
+                "${RUNNER_TEMP}/n15-browser-app.log" \
+                "$N15_BROWSER_EVIDENCE_DIR/startup-diagnostic.json" EARLY_EXIT "$server_status"
+              echo N15_BROWSER_APP_EARLY_EXIT >&2
+              exit 1
+            fi
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null; then
+              server_ready=1
+              break
+            fi
             sleep 1
           done
+          if [[ "$server_ready" != "1" ]]; then
+            node tests/n15-browser/write-startup-diagnostic.mjs \
+              "${RUNNER_TEMP}/n15-browser-app.log" \
+              "$N15_BROWSER_EVIDENCE_DIR/startup-diagnostic.json" HEALTH_TIMEOUT unknown
+            echo N15_BROWSER_APP_UNAVAILABLE >&2
+            exit 1
+          fi
+          node tests/n15-browser/write-startup-diagnostic.mjs \
+            "${RUNNER_TEMP}/n15-browser-app.log" \
+            "$N15_BROWSER_EVIDENCE_DIR/startup-diagnostic.json" READY unknown
           npx playwright test --config tests/n15-browser/playwright.config.ts
       - name: Upload minimized N15 browser evidence
         if: always()

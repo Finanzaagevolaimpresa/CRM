@@ -82,6 +82,7 @@ test('N15 assignment consultation remains server-authorized and explains termina
   const source = readFileSync('src/lib/n15-assignment-consultation.ts', 'utf8');
   const page = readFileSync('src/app/leads/[id]/page.tsx', 'utf8');
   const browser = readFileSync('tests/n15-browser/assignment.spec.ts', 'utf8');
+  const provision = readFileSync('tests/n15-browser/provision.ts', 'utf8');
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
   assert.match(source, /hasPermission\(session, 'lead\.read'\)[\s\S]*canViewLead\(session, lead\)/u);
   assert.match(source, /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
@@ -90,6 +91,9 @@ test('N15 assignment consultation remains server-authorized and explains termina
   assert.match(browser, /managerVisible: true, assigneeVisible: true[\s\S]*foreignDirectAccessDenied: true/u);
   assert.match(browser, /n15-manager-assignment-held\.png[\s\S]*n15-assignee-held\.png/u);
   assert.match(ci, /N15 synthetic assignment and authorized consultation[\s\S]*n15-assignment-browser-/u);
+  assert.match(provision, /revokedReason: 'N15_SYNTHETIC_PROVISION_COMPLETE'[\s\S]*revokedAt: null/u);
+  assert.match(ci, /::add-mask::\$PRIVILEGED_STEP_UP_SECRET[\s\S]*::add-mask::\$N15_BROWSER_PASSWORD/u);
+  assert.match(ci, /kill -0 "\$app_pid"[\s\S]*EARLY_EXIT[\s\S]*HEALTH_TIMEOUT/u);
 });
 
 test('N15 synthetic self-claim admission is explicit and fail-closed', () => {

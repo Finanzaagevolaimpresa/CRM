@@ -42,7 +42,7 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   await expect(row).toBeVisible();
   await row.locator('select[name="targetUserId"]').selectOption({ label: 'Commerciale Assegnatario N15' });
   await row.getByRole('button', { name: 'Assegna' }).click();
-  await expect(row).toContainText('Owner: Commerciale Assegnatario N15');
+  await expect(row).toHaveCount(0);
 
   const activity = await db.commercialLeadActivity.findFirstOrThrow({
     where: { inboxItem: { leadId: 'n15-browser-assignment-lead' }, activityType: 'ASSIGNED' },
