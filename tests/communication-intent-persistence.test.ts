@@ -83,6 +83,8 @@ test('N15 assignment consultation remains server-authorized and explains termina
   const page = readFileSync('src/app/leads/[id]/page.tsx', 'utf8');
   const browser = readFileSync('tests/n15-browser/assignment.spec.ts', 'utf8');
   const provision = readFileSync('tests/n15-browser/provision.ts', 'utf8');
+  const layout = readFileSync('src/app/layout.tsx', 'utf8');
+  const readyMarker = readFileSync('src/components/interactive-ready-marker.tsx', 'utf8');
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
   assert.match(source, /hasPermission\(session, 'lead\.read'\)[\s\S]*canViewLead\(session, lead\)/u);
   assert.match(source, /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
@@ -93,6 +95,9 @@ test('N15 assignment consultation remains server-authorized and explains termina
   assert.match(browser, /ACTION_TIMEOUT[\s\S]*DASHBOARD_TIMEOUT[\s\S]*INVALID_LOGIN[\s\S]*SERVER_ERROR/u);
   assert.match(browser, /sessionCookiePresent:[\s\S]*liveSessionCount:[\s\S]*loginAuditCount:/u);
   assert.match(browser, /responseBody[\s\S]*originOrHostMismatch[\s\S]*missingOrUnknownAction[\s\S]*prismaError/u);
+  assert.match(browser, /data-interactive-ready="true"[\s\S]*waitFor\(\{ state: 'attached', timeout: 15_000 \}\)/u);
+  assert.match(layout, /InteractiveReadyMarker/u);
+  assert.match(readyMarker, /useEffect[\s\S]*data-interactive-ready'[\s\S]*'true'/u);
   assert.match(browser, /getByLabel\('Email'\)\.fill\(''\)[\s\S]*getByLabel\('Password'\)\.fill\(''\)[\s\S]*n15-login-failure-/u);
   assert.match(ci, /N15 synthetic assignment and authorized consultation[\s\S]*n15-assignment-browser-/u);
   assert.match(provision, /logoutInternalSession\(tx, commercialSession\.token\)[\s\S]*revokedAt: null/u);

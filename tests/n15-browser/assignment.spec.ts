@@ -32,6 +32,10 @@ function loginPathClassification(page: Page) {
   return 'UNEXPECTED_PATH';
 }
 
+async function waitForInteractiveReady(page: Page) {
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached', timeout: 15_000 });
+}
+
 async function responseBodyClassification(response: Response | null) {
   if (!response) return { kind: 'UNAVAILABLE', markers: {} };
   let body = '';
@@ -94,6 +98,7 @@ async function writeLoginFailureDiagnostic(
 async function login(context: BrowserContext, email: string, identity: SyntheticIdentity) {
   const page = await context.newPage();
   await page.goto(`${appUrl}/login`);
+  await waitForInteractiveReady(page);
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   const responseHolder: { current: Response | null } = { current: null };
@@ -143,11 +148,13 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   const manager = await browser.newContext();
   const managerPage = await login(manager, 'manager@n15-browser.invalid', 'manager');
   await managerPage.goto(`${appUrl}/settings/security`);
+  await waitForInteractiveReady(managerPage);
   await managerPage.getByLabel('Password corrente').fill(password);
   await managerPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
   await managerPage.waitForURL(/\/settings\/security\?status=active$/u);
 
   await managerPage.goto(`${appUrl}/leads/inbox?queue=unassigned`);
+  await waitForInteractiveReady(managerPage);
   const row = managerPage.locator('article').filter({ hasText: 'Lead sintetico assegnazione N15' });
   await expect(row).toBeVisible();
   await row.locator('select[name="targetUserId"]').selectOption({ label: 'Commerciale Assegnatario N15' });
