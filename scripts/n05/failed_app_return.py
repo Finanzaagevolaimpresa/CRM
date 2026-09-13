@@ -629,8 +629,15 @@ class DockerEngine:
         def env_map(values): return dict(x.split("=",1) for x in values or [])
         expected_env = env_map(pg_image["Config"].get("Env"))
         expected_env.update({k:str(v).replace("$$","$") for k,v in pg_service.get("environment",{}).items()})
+        pg_user, image_user = pg["Config"].get("User"), pg_image["Config"].get("User")
+        require(all(value is None or type(value) is str for value in (pg_user, image_user)),
+                "POSTGRES_USER_METADATA_TYPE_INVALID")
+        # OCI User is optional (null is also unspecified). Docker can expose
+        # an unspecified image User as an empty string in container inspect.
+        # Compare all explicit values literally; this is not a process-UID check.
         require(env_map(pg["Config"].get("Env")) == expected_env and
-                all(pg["Config"].get(k) == pg_image["Config"].get(k) for k in ("Cmd","Entrypoint","User")),
+                all(pg["Config"].get(k) == pg_image["Config"].get(k) for k in ("Cmd","Entrypoint")) and
+                ("" if pg_user is None else pg_user) == ("" if image_user is None else image_user),
                 "POSTGRES_CONFIGURATION_DRIFT")
         volumes = {}
         for logical in ("crm_documents", "postgres_data"):
