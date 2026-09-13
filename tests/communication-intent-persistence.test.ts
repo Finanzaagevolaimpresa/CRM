@@ -2,12 +2,35 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
-import { createDisabledCommunicationGateSnapshotV1 } from '../src/lib/communication-backbone-contract';
+import {
+  createCommunicationIntentV1,
+  createDisabledCommunicationGateSnapshotV1,
+} from '../src/lib/communication-backbone-contract';
 import {
   CommunicationPersistenceError,
   createCommunicationPersistenceAuthorityV1,
 } from '../src/lib/communication-intent-persistence';
 import { isN15SyntheticAssignmentAdmitted, isN15SyntheticSelfClaimAdmitted } from '../src/lib/n15-synthetic-self-claim-admission';
+import { SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1 } from './fixtures/n15-communication-intent-v1';
+import { N15_BROWSER_IDENTITIES } from './n15-browser/fixture-identities';
+
+test('N15 browser fixture recipients pass the real communication intent contract', () => {
+  for (const identity of Object.values(N15_BROWSER_IDENTITIES)) {
+    const intent = createCommunicationIntentV1({
+      ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1,
+      source: { ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.source },
+      recipient: {
+        ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.recipient,
+        entityId: identity.userId,
+      },
+      message: {
+        ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.message,
+        templateReference: { ...SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1.message.templateReference },
+      },
+    });
+    assert.equal(intent.recipient.entityId, identity.userId);
+  }
+});
 
 test('N15 migration 44 is one additive transaction with three dedicated dormant records', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();

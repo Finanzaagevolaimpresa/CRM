@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Page, type Response } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { parseCommunicationPersistenceAggregateV1 } from '../../src/lib/communication-intent-persistence';
+import { N15_BROWSER_IDENTITIES } from './fixture-identities';
 
 const appUrl = 'http://127.0.0.1:3000';
 const password = required('N15_BROWSER_PASSWORD');
@@ -23,9 +24,9 @@ type ClientLoadEvent = Readonly<{
   status: number | null;
 }>;
 const identityUserIds: Record<SyntheticIdentity, string> = {
-  manager: 'n15-browser-manager',
-  assignee: 'n15-browser-commercial-one',
-  foreign: 'n15-browser-commercial-two',
+  manager: N15_BROWSER_IDENTITIES.manager.userId,
+  assignee: N15_BROWSER_IDENTITIES.assignee.userId,
+  foreign: N15_BROWSER_IDENTITIES.foreign.userId,
 };
 
 function loginPathClassification(page: Page) {
@@ -193,7 +194,7 @@ test.afterAll(async () => db.$disconnect());
 test('authorized manager assigns and manager/assignee consult the terminal HELD aggregate', async ({ browser }) => {
   mkdirSync(evidenceDirectory, { recursive: true });
   const manager = await browser.newContext();
-  const managerPage = await login(manager, 'manager@n15-browser.invalid', 'manager');
+  const managerPage = await login(manager, N15_BROWSER_IDENTITIES.manager.email, 'manager');
   await managerPage.goto(`${appUrl}/settings/security`);
   await waitForInteractiveReady(managerPage);
   await managerPage.getByLabel('Password corrente').fill(password);
@@ -205,14 +206,23 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   const row = managerPage.locator('article').filter({ hasText: 'Lead sintetico assegnazione N15' });
   await expect(row).toBeVisible();
   await row.locator('select[name="targetUserId"]').selectOption({ label: 'Commerciale Assegnatario N15' });
-  await row.getByRole('button', { name: 'Assegna' }).click();
+  const [assignmentResponse] = await Promise.all([
+    managerPage.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return candidate.request().method() === 'POST' && url.origin === appUrl && url.pathname === '/leads/inbox';
+    }),
+    row.getByRole('button', { name: 'Assegna' }).click(),
+  ]);
+  expect(assignmentResponse.status()).toBeLessThan(400);
   await expect(row).toHaveCount(0);
 
+  const assignedLead = await db.lead.findUniqueOrThrow({ where: { id: 'n15-browser-assignment-lead' } });
+  assert.equal(assignedLead.assignedToId, N15_BROWSER_IDENTITIES.assignee.userId);
   const activity = await db.commercialLeadActivity.findFirstOrThrow({
     where: { inboxItem: { leadId: 'n15-browser-assignment-lead' }, activityType: 'ASSIGNED' },
   });
-  assert.equal(activity.actorUserId, 'n15-browser-manager');
-  assert.equal(activity.assigneeAfterId, 'n15-browser-commercial-one');
+  assert.equal(activity.actorUserId, N15_BROWSER_IDENTITIES.manager.userId);
+  assert.equal(activity.assigneeAfterId, N15_BROWSER_IDENTITIES.assignee.userId);
   const records = await db.communicationIntentRecord.findMany({
     where: { intentId: activity.id }, include: { heldDecision: true, auditRecord: true },
   });
@@ -228,13 +238,13 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   await managerPage.screenshot({ path: join(evidenceDirectory, 'n15-manager-assignment-held.png'), fullPage: true });
 
   const assignee = await browser.newContext();
-  const assigneePage = await login(assignee, 'assigned@n15-browser.invalid', 'assignee');
+  const assigneePage = await login(assignee, N15_BROWSER_IDENTITIES.assignee.email, 'assignee');
   await assigneePage.goto(leadUrl);
   await expect(assigneePage.getByText('HELD significa trattenuta', { exact: false })).toBeVisible();
   await assigneePage.screenshot({ path: join(evidenceDirectory, 'n15-assignee-held.png'), fullPage: true });
 
   const foreign = await browser.newContext();
-  const foreignPage = await login(foreign, 'foreign@n15-browser.invalid', 'foreign');
+  const foreignPage = await login(foreign, N15_BROWSER_IDENTITIES.foreign.email, 'foreign');
   await foreignPage.goto(leadUrl);
   await expect(foreignPage.getByRole('heading', { name: 'Lead non trovato' })).toBeVisible();
   writeFileSync(join(evidenceDirectory, 'n15-assignment-browser.json'), `${JSON.stringify({

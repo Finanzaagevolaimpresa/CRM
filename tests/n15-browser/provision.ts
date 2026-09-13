@@ -5,12 +5,14 @@ import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-toke
 import { initializeCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
 import { logoutInternalSession } from '../../src/lib/internal-session-registry';
 import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
+import { N15_BROWSER_IDENTITIES } from './fixture-identities';
 import { writeProvisionFailureReceipt } from './provision-diagnostic';
 
 const db = new PrismaClient();
 const password = process.env.N15_BROWSER_PASSWORD;
 const stepUpSecret = process.env.PRIVILEGED_STEP_UP_SECRET;
 const commercialSessionId = '00000000-0000-4000-8000-000000150301';
+const { manager, assignee, foreign } = N15_BROWSER_IDENTITIES;
 
 async function main() {
   assert.equal(process.env.N15_BROWSER_SYNTHETIC_CONFIRMED, '1');
@@ -18,9 +20,9 @@ async function main() {
   assert.ok(stepUpSecret && stepUpSecret.length >= 32);
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({ data: [
-    { id: 'n15-browser-manager', email: 'manager@n15-browser.invalid', name: 'Responsabile Sintetico N15', passwordHash, role: 'admin', active: true },
-    { id: 'n15-browser-commercial-one', email: 'assigned@n15-browser.invalid', name: 'Commerciale Assegnatario N15', passwordHash, role: 'commerciale', active: true },
-    { id: 'n15-browser-commercial-two', email: 'foreign@n15-browser.invalid', name: 'Commerciale Non Assegnato N15', passwordHash, role: 'commerciale', active: true },
+    { id: manager.userId, email: manager.email, name: 'Responsabile Sintetico N15', passwordHash, role: 'admin', active: true },
+    { id: assignee.userId, email: assignee.email, name: 'Commerciale Assegnatario N15', passwordHash, role: 'commerciale', active: true },
+    { id: foreign.userId, email: foreign.email, name: 'Commerciale Non Assegnato N15', passwordHash, role: 'commerciale', active: true },
   ] });
   await db.commercialLeadSlaPolicyVersion.create({ data: {
     id: '00000000-0000-4000-8000-000000150302', version: 1, status: 'ACTIVE', responseTargetSeconds: 86_400,
@@ -28,11 +30,11 @@ async function main() {
   await db.applicationKeyVersion.create({ data: {
     id: '00000000-0000-4000-8000-000000150303', purpose: 'PRIVILEGED_STEP_UP', version: 1,
     keyDigest: privilegedStepUpKeyDigest(stepUpSecret), status: 'ACTIVE', activatedAt: new Date(),
-    createdById: 'n15-browser-manager',
+    createdById: manager.userId,
   } });
   const commercialSession = createRegistrySessionToken();
   await db.internalSession.create({ data: {
-    id: commercialSessionId, userId: 'n15-browser-commercial-one',
+    id: commercialSessionId, userId: assignee.userId,
     tokenDigest: Buffer.from(await digestRegistrySessionToken(commercialSession.bytes)),
     expiresAt: new Date('2099-01-01T00:00:00.000Z'),
   } });
@@ -42,7 +44,7 @@ async function main() {
   } });
   await initializeCommercialLeadInboxItem(db, {
     leadId: lead.id,
-    actor: { userId: 'n15-browser-commercial-one', sessionId: commercialSessionId },
+    actor: { userId: assignee.userId, sessionId: commercialSessionId },
     attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE',
   });
   const loggedOut = await db.$transaction((tx) =>
@@ -50,8 +52,8 @@ async function main() {
   assert.equal(loggedOut?.id, commercialSessionId);
   assert.equal(await db.auditLog.count({
     where: {
-      actorId: 'n15-browser-commercial-one', event: 'logout',
-      entityType: 'User', entityId: 'n15-browser-commercial-one',
+      actorId: assignee.userId, event: 'logout',
+      entityType: 'User', entityId: assignee.userId,
     },
   }), 1);
   assert.equal(await db.internalSession.count({
