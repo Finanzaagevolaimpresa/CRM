@@ -17,6 +17,11 @@ function required(name: string) {
 }
 
 type SyntheticIdentity = 'manager' | 'assignee' | 'foreign';
+type ClientLoadEvent = Readonly<{
+  type: 'SCRIPT_HTTP_ERROR' | 'REQUEST_FAILED' | 'PAGE_ERROR' | 'DEV_ORIGIN_BLOCKED';
+  scope: 'STATIC_NEXT' | 'LOGIN' | 'OTHER';
+  status: number | null;
+}>;
 const identityUserIds: Record<SyntheticIdentity, string> = {
   manager: 'n15-browser-manager',
   assignee: 'n15-browser-commercial-one',
@@ -30,6 +35,42 @@ function loginPathClassification(page: Page) {
   if (current.pathname === '/login' && current.searchParams.get('error') === 'invalid') return 'INVALID_LOGIN';
   if (current.pathname === '/login') return 'LOGIN';
   return 'UNEXPECTED_PATH';
+}
+
+function resourceScope(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.origin === appUrl && url.pathname.startsWith('/_next/')) return 'STATIC_NEXT' as const;
+    if (url.origin === appUrl && url.pathname === '/login') return 'LOGIN' as const;
+  } catch { /* retain the finite OTHER classification */ }
+  return 'OTHER' as const;
+}
+
+function collectClientLoadEvents(page: Page) {
+  const events: ClientLoadEvent[] = [];
+  const append = (event: ClientLoadEvent) => { if (events.length < 40) events.push(event); };
+  page.on('response', (response) => {
+    if (response.request().resourceType() === 'script' && response.status() >= 400) {
+      append({ type: 'SCRIPT_HTTP_ERROR', scope: resourceScope(response.url()), status: response.status() });
+    }
+  });
+  page.on('requestfailed', (request) => {
+    append({ type: 'REQUEST_FAILED', scope: resourceScope(request.url()), status: null });
+  });
+  page.on('pageerror', () => append({ type: 'PAGE_ERROR', scope: 'OTHER', status: null }));
+  page.on('console', (message) => {
+    if (message.type() === 'warning' && /Blocked cross-origin request to Next\.js dev resource/iu.test(message.text())) {
+      append({ type: 'DEV_ORIGIN_BLOCKED', scope: 'STATIC_NEXT', status: null });
+    }
+  });
+  return events;
+}
+
+function writeClientLoadFailure(identity: SyntheticIdentity, events: readonly ClientLoadEvent[]) {
+  writeFileSync(join(evidenceDirectory, `n15-client-load-failure-${identity}.json`), `${JSON.stringify({
+    phase: 'CLIENT_LOAD', status: 'FAILED', code: 'HYDRATION_UNAVAILABLE',
+    identity, eventCount: events.length, events,
+  })}\n`, { mode: 0o600 });
 }
 
 async function waitForInteractiveReady(page: Page) {
@@ -97,8 +138,14 @@ async function writeLoginFailureDiagnostic(
 
 async function login(context: BrowserContext, email: string, identity: SyntheticIdentity) {
   const page = await context.newPage();
+  const clientLoadEvents = collectClientLoadEvents(page);
   await page.goto(`${appUrl}/login`);
-  await waitForInteractiveReady(page);
+  try {
+    await waitForInteractiveReady(page);
+  } catch {
+    writeClientLoadFailure(identity, clientLoadEvents);
+    throw new Error(`N15_BROWSER_CLIENT_LOAD_FAILED_${identity.toUpperCase()}`);
+  }
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   const responseHolder: { current: Response | null } = { current: null };

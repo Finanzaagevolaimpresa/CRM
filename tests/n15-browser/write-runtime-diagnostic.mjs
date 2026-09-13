@@ -18,7 +18,7 @@ log = log
   .replaceAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, '[REDACTED_EMAIL]');
 
 const relevant = log.split(/\r?\n/u)
-  .filter((line) => /error|server action|failed|exception|POST \/login|at\s+[^ ]+/iu.test(line))
+  .filter((line) => /error|server action|failed|exception|POST \/login|at\s+[^ ]+|Blocked cross-origin request to Next\.js dev resource/iu.test(line))
   .slice(-80)
   .join('\n')
   .slice(0, 8 * 1024);
@@ -27,6 +27,7 @@ const diagnostic = {
   logAvailable: log.length > 0,
   classifications: {
     originOrHostMismatch: /origin|host.*mismatch|does not match/iu.test(log),
+    devResourceBlocked: /Blocked cross-origin request to Next\.js dev resource/iu.test(log),
     missingOrUnknownAction: /failed to find server action|unknown server action|missing.*action/iu.test(log),
     invalidActionRequest: /invalid.*server action|invalid action request/iu.test(log),
     compilationOrModuleError: /module not found|failed to compile|compilation error/iu.test(log),

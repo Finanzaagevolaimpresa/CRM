@@ -77,3 +77,20 @@ test('N15 browser post-test server diagnostic redacts known synthetic secrets', 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('N15 server diagnostic retains the exact blocked dev-resource warning', () => {
+  const root = mkdtempSync(join(tmpdir(), 'n15-browser-dev-origin-'));
+  try {
+    const log = join(root, 'server.log');
+    const output = join(root, 'runtime.json');
+    writeFileSync(log, 'Blocked cross-origin request to Next.js dev resource /_next/static/chunks/app.js\n');
+    execFileSync(process.execPath, ['tests/n15-browser/write-runtime-diagnostic.mjs', log, output]);
+    const diagnostic = JSON.parse(readFileSync(output, 'utf8')) as {
+      classifications: { devResourceBlocked: boolean }; frameworkExcerpt: string;
+    };
+    assert.equal(diagnostic.classifications.devResourceBlocked, true);
+    assert.match(diagnostic.frameworkExcerpt, /Blocked cross-origin request to Next\.js dev resource/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

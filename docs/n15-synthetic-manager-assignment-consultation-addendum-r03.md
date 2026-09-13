@@ -38,3 +38,14 @@ Il job GitHub Actions dedicato riusa PostgreSQL effimero e Playwright dei runner
 solo sintetici, esegue l'assegnazione dalla UI reale e verifica il medesimo aggregate dal database. Lo screenshot
 mostra la scheda al responsabile; una seconda sessione prova la vista dell'assegnatario e una terza prova il
 rifiuto dell'accesso diretto. La ricevuta dichiara esplicitamente assenza di invio e accodamento. Il processo applicativo viene terminato dal trap e il service PostgreSQL è eliminato dal runner; vengono conservate soltanto le evidenze minimizzate per 14 giorni.
+
+### Bootstrap client nel banco development
+
+Il router development di Next 16.3.4 blocca le risorse interne `/_next` richieste in modalità `no-cors` da
+un sito cross-site quando non dispone di un `Referer` ammissibile; la policy `no-referrer` del CRM non viene
+indebolita. `crossOrigin: 'anonymous'` fa caricare gli script bootstrap in modalità CORS senza credenziali,
+così il browser conserva l'origine concreta. L'allowlist development aggiunge esclusivamente il loopback
+`127.0.0.1`, usato dal banco, e non ammette `null`, wildcard o host esterni. `crossOrigin` determina
+l'attributo standard degli script anche nei build applicativi; l'allowlist opera soltanto nel server dev.
+Non sono state cambiate dipendenze. Il test attende inoltre un marker React post-idratazione prima di ogni
+Server Action del percorso, senza iniettare header, cookie o sessioni.
