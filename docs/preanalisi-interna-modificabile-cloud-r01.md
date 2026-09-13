@@ -16,6 +16,10 @@ Sono modificabili solo record manuali negli stati `da_avviare` o `raccolta_dati`
 - `deploy_required=false`, `migration_required=false`, `production_change_required=false`.
 - P4 resta sospesa, Q04 aperta, pilota bloccato e accesso a chiavi reali assente.
 
-## Qualifica
+## Qualifica R02
 
-I controlli locali coprono policy e validazione, lint, tipi, test e build. Il percorso browser e PostgreSQL effimero è demandato alla CI sintetica del candidato pubblicato; eventuali prove non eseguite devono essere dichiarate come tali e non sono sostituite da qualifiche fisiche Q04.
+La CI contiene un job dedicato con PostgreSQL 16 effimero identificato dal sentinel canonico e Chromium. I test DB esercitano persistenza, contesto incoerente, lettura/scrittura estranea, revoca del permesso, cambio assegnazione, cancellazione logica del progetto, stato/versione non validi, no-op valido, concorrenza e rollback su fault dell'audit.
+
+Il percorso browser autentica esclusivamente identità inventate e attraversa progetto, creazione, compilazione dei cinque campi, salvataggio, ricarica e seconda modifica. Due schede producono un conflitto recuperabile conservando i testi. Verifica inoltre utente estraneo e utente con `dossier.read` negato, producendo receipt JSON e screenshot desktop/stretto come artifact.
+
+La qualifica fisica Q04 non viene eseguita né modificata.

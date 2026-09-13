@@ -67,7 +67,7 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
-import { manualPreAnalysisFields } from './preanalysis-policy';
+import { createManualPreAnalysisRecord, ManualPreAnalysisError, updateManualPreAnalysisRecord } from './manual-preanalysis-service';
 import {
   assignCommercialLeadInboxItem,
   claimCommercialLeadInboxItem,
@@ -1303,42 +1303,21 @@ export async function registerDocument(form: FormData) {
 }
 export async function createPreAnalysis(form: FormData) {
   const s = await requirePermission('project.write');
+  if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   const data = preAnalysisSchema.parse(clean(form));
-  await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId, projectId: data.projectId });
-  return prisma.$transaction(async (tx) => {
-    // Re-check the untrusted client/project/company tuple inside the write transaction.
-    const project = await tx.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true, companyId: true } });
-    const company = data.companyId ? await tx.company.findFirst({ where: { id: data.companyId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null;
-    if (!project || (data.companyId && !company) || (data.companyId && project.companyId && project.companyId !== data.companyId)) denyWriteAccess();
-    const pre = await tx.preAnalysis.create({ data: data as never });
-    await tx.auditLog.create({ data: { actorId: s.userId, event: 'preanalysis_create', entityType: 'PreAnalysis', entityId: pre.id, after: { recordId: pre.id, changedFields: manualPreAnalysisFields.filter((field) => Boolean(pre[field])) } } });
-    return pre;
-  });
+  try { return await createManualPreAnalysisRecord(prisma, s, data); }
+  catch (error) { if (error instanceof ManualPreAnalysisError || isSerializableConflict(error)) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.'); throw error; }
 }
 
 export async function updatePreAnalysis(form: FormData) {
   const s = await requirePermission('project.write');
+  if (!hasPermission(s, 'dossier.read')) throw new UserFacingActionError('Risorsa non disponibile o non accessibile.');
   const data = preAnalysisUpdateSchema.parse(clean(form));
-  const before = await prisma.preAnalysis.findUnique({ where: { id: data.id } });
-  if (!before) denyWriteAccess();
-  await requireClientContextWriteAccess(s, { clientId: before.clientId, companyId: before.companyId ?? undefined, projectId: before.projectId });
-  const fields = manualPreAnalysisFields;
-  const values = Object.fromEntries(fields.map((field) => [field, data[field] ?? null]));
-  const changedFields = fields.filter((field) => before[field] !== values[field]);
-  if (!changedFields.length) return before;
-  const expectedVersion = new Date(data.version);
-  const now = nextConcurrencyTimestamp(before.updatedAt);
-  return prisma.$transaction(async (tx) => {
-    // Context, manual-draft invariants and optimistic version are all part of the CAS.
-    const result = await tx.preAnalysis.updateMany({
-      where: { id: data.id, clientId: before.clientId, projectId: before.projectId, companyId: before.companyId, status: { in: ['da_avviare', 'raccolta_dati'] }, aiRunId: null, reviewedById: null, approvedById: null, approvedAt: null, updatedAt: expectedVersion },
-      data: { ...values, updatedAt: now },
-    });
-    if (result.count !== 1) throw new UserFacingActionError('La bozza è cambiata, non è più modificabile oppure il contesto non è più valido. Il testo inserito è conservato: ricarica e confronta prima di riprovare.');
-    const updated = await tx.preAnalysis.findUniqueOrThrow({ where: { id: data.id } });
-    await tx.auditLog.create({ data: { actorId: s.userId, event: 'preanalysis_manual_update', entityType: 'PreAnalysis', entityId: updated.id, after: { recordId: updated.id, changedFields } } });
-    return updated;
-  });
+  try { return (await updateManualPreAnalysisRecord(prisma, s, { ...data, version: new Date(data.version) })).record; }
+  catch (error) {
+    if (error instanceof ManualPreAnalysisError || isSerializableConflict(error)) throw new UserFacingActionError(error instanceof ManualPreAnalysisError && error.code === 'DENIED' ? 'Risorsa non disponibile o non accessibile.' : 'La bozza è cambiata, non è più modificabile oppure il contesto non è più valido. Il testo inserito è conservato: ricarica e confronta prima di riprovare.');
+    throw error;
+  }
 }
 
 export async function createDossier(form: FormData) {

@@ -39,7 +39,7 @@ export async function uploadDocumentAndRefresh(form: FormData) {
 }
 export async function linkDocumentAndRefresh(form: FormData) { await linkDocumentToService(form); revalidatePath('/documents'); }
 export async function createPreAnalysisAndRedirect(form: FormData) { const pre = await createPreAnalysis(form); revalidatePath('/preanalyses'); redirect(`/preanalyses/${pre.id}`); }
-export type PreAnalysisFormState = { status: 'idle' | 'success' | 'error'; message?: string; version?: string };
+export type PreAnalysisFormState = { status: 'idle' | 'success' | 'error'; message?: string; version?: string; values?: Record<string, string> };
 function actionMessage(error: unknown) {
   if (error instanceof UserFacingActionError) return error.message;
   if (error && typeof error === 'object' && 'issues' in error) return 'Controlla i campi: ogni testo deve essere valido e non superare la lunghezza consentita.';
@@ -59,7 +59,7 @@ export async function updateManualPreAnalysis(_state: PreAnalysisFormState, form
     const pre = await updatePreAnalysis(form);
     revalidatePath('/preanalyses'); revalidatePath(`/preanalyses/${pre.id}`); revalidatePath(`/clients/${pre.clientId}`); revalidatePath(`/projects/${pre.projectId}`);
     return { status: 'success', message: 'Bozza interna salvata.', version: pre.updatedAt.toISOString() };
-  } catch (error) { return { status: 'error', message: actionMessage(error) }; }
+  } catch (error) { return { status: 'error', message: actionMessage(error), values: Object.fromEntries(['internalSummary', 'scenarioA', 'scenarioB', 'blockingConditions', 'requiredDocuments'].map((field) => [field, String(form.get(field) ?? '')])), version: String(form.get('version') ?? '') }; }
 }
 export async function createDossierAndRedirect(form: FormData) { const dossier = await createDossier(form); revalidatePath('/dossiers'); redirect(`/dossiers/${dossier.id}`); }
 export async function createContractAndRefresh(form: FormData) { await createContract(form); revalidatePath('/contracts'); }
