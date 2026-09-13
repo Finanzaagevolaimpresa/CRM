@@ -316,7 +316,31 @@ test('N15 manager assignment derives its recipient atomically and consultation r
       userId: 'another-commercial', sessionId: manager.sessionId, expiresAt: 4_070_908_800,
       role: 'commerciale', active: true, permissionOverrides: [],
     }, currentLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+      userId: actor.userId, sessionId: actor.sessionId, expiresAt: 4_070_908_800,
+      role: 'commerciale', active: true,
+      permissionOverrides: [{ permission: 'lead.read', allowed: false }],
+    }, currentLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    await unassignCommercialLeadInboxItem(client(), {
+      leadId: lead.id, actor: manager, expectedInboxVersion: 2,
+    });
+    const unassignedLead = await client().lead.findUniqueOrThrow({ where: { id: lead.id } });
+    assert.equal(unassignedLead.assignedToId, null);
+    assert.equal((await listN15SyntheticAssignmentsForLead(client(), {
+      userId: manager.userId, sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+      role: 'direzione', active: true, permissionOverrides: [],
+    }, unassignedLead)).length, 1);
+    for (const userId of [actor.userId, 'another-commercial']) {
+      await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+        userId, sessionId: actor.sessionId, expiresAt: 4_070_908_800,
+        role: 'commerciale', active: true, permissionOverrides: [],
+      }, unassignedLead), /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
+    }
   });
+  await assert.rejects(listN15SyntheticAssignmentsForLead(client(), {
+    userId: manager.userId, sessionId: manager.sessionId, expiresAt: 4_070_908_800,
+    role: 'direzione', active: true, permissionOverrides: [],
+  }, await client().lead.findUniqueOrThrow({ where: { id: lead.id } })), /N15_ASSIGNMENT_CONSULTATION_DISABLED/u);
   assert.deepEqual((await n15Counts()).map((count, index) => count - before[index]), [1, 1, 1]);
 
   const rollbackLead = await syntheticLead(1504);

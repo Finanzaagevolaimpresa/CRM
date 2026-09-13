@@ -49,3 +49,8 @@ così il browser conserva l'origine concreta. L'allowlist development aggiunge e
 l'attributo standard degli script anche nei build applicativi; l'allowlist opera soltanto nel server dev.
 Non sono state cambiate dipendenze. Il test attende inoltre un marker React post-idratazione prima di ogni
 Server Action del percorso, senza iniettare header, cookie o sessioni.
+
+La consultazione dello storico N15 applica un confine più stretto della normale lettura lead: richiede sempre
+`lead.read` e consente i ruoli con accesso globale oppure l'utente attualmente assegnato. Dopo un rilascio il
+lead ordinario resta consultabile secondo l'ABAC generale, ma lo storico N15 viene omesso per ex assegnatario
+e altri utenti non globali; il responsabile globale conserva la vista. Il confine server ripete la verifica.

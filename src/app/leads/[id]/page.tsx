@@ -5,7 +5,7 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { canEditLead, canViewLead } from '@/lib/access-control';
 import { updateLeadCommercialAndRedirect, convertLeadToClientAndRedirect, createCommercialOfferAndRedirect, claimCommercialLeadInbox, recordCommercialLeadFirstResponse, closeCommercialLeadInbox } from '@/lib/form-actions';
 import { commercialLeadInboxMode } from '@/lib/commercial-lead-inbox-contract';
-import { listN15SyntheticAssignmentsForLead } from '@/lib/n15-assignment-consultation';
+import { canConsultN15Assignments, listN15SyntheticAssignmentsForLead } from '@/lib/n15-assignment-consultation';
 import { isN15SyntheticAssignmentAdmitted } from '@/lib/n15-synthetic-self-claim-admission';
 import type { LeadPriority, LeadStatus, LeadSource, CommercialOfferStatus } from '@prisma/client';
 
@@ -38,7 +38,7 @@ export default async function Page({params}:{params:Promise<{id:string}>}){
   const requestedService = noteValue(lead.notes, 'Servizio richiesto');
   const inboxCycle = inboxItem?.slaCycles[0];
   const inboxEnabled = commercialLeadInboxMode() === 'enforced';
-  const n15Assignments = isN15SyntheticAssignmentAdmitted()
+  const n15Assignments = isN15SyntheticAssignmentAdmitted() && canConsultN15Assignments(session, lead)
     ? await listN15SyntheticAssignmentsForLead(prisma, session, lead)
     : [];
   return <div className="space-y-6"><PageHeader title={`Lead — ${lead.companyName || `${lead.firstName} ${lead.lastName}`}`} description="Scheda commerciale con stato vendita, assegnazione, prossima azione, note, offerte e collegamento al cliente."/><SecondaryLink href="/leads">← Torna alla lista</SecondaryLink>

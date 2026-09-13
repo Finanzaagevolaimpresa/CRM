@@ -11,6 +11,7 @@ import {
   createCommunicationPersistenceAuthorityV1,
 } from '../src/lib/communication-intent-persistence';
 import { isN15SyntheticAssignmentAdmitted, isN15SyntheticSelfClaimAdmitted } from '../src/lib/n15-synthetic-self-claim-admission';
+import { canConsultN15Assignments } from '../src/lib/n15-assignment-consultation';
 import { SYNTHETIC_COMMUNICATION_INTENT_INPUT_V1 } from './fixtures/n15-communication-intent-v1';
 import { N15_BROWSER_IDENTITIES } from './n15-browser/fixture-identities';
 
@@ -30,6 +31,21 @@ test('N15 browser fixture recipients pass the real communication intent contract
     });
     assert.equal(intent.recipient.entityId, identity.userId);
   }
+});
+
+test('N15 assignment consultation requires lead.read plus global or current-assignee access', () => {
+  const session = (overrides: Record<string, unknown> = {}) => ({
+    userId: '00000000-0000-4000-8000-000000150312', sessionId: 'session',
+    expiresAt: 4_070_908_800, role: 'commerciale' as const, active: true,
+    permissionOverrides: [], ...overrides,
+  });
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: session().userId }), true);
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: null }), false);
+  assert.equal(canConsultN15Assignments(session(), { assignedToId: '00000000-0000-4000-8000-000000150313' }), false);
+  assert.equal(canConsultN15Assignments(session({ role: 'direzione' }), { assignedToId: null }), true);
+  assert.equal(canConsultN15Assignments(session({
+    permissionOverrides: [{ permission: 'lead.read', allowed: false }],
+  }), { assignedToId: session().userId }), false);
 });
 
 test('N15 migration 44 is one additive transaction with three dedicated dormant records', () => {
@@ -110,9 +126,10 @@ test('N15 assignment consultation remains server-authorized and explains termina
   const readyMarker = readFileSync('src/components/interactive-ready-marker.tsx', 'utf8');
   const nextConfig = readFileSync('next.config.ts', 'utf8');
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  assert.match(source, /hasPermission\(session, 'lead\.read'\)[\s\S]*canViewLead\(session, lead\)/u);
+  assert.match(source, /hasPermission\(session, 'lead\.read'\)[\s\S]*hasGlobalAccess\(session\)[\s\S]*lead\.assignedToId !== null/u);
   assert.match(source, /N15_ASSIGNMENT_CONSULTATION_DENIED/u);
   assert.match(source, /parseCommunicationPersistenceAggregateV1/u);
+  assert.match(page, /isN15SyntheticAssignmentAdmitted\(\) && canConsultN15Assignments\(session, lead\)/u);
   assert.match(page, /HELD significa trattenuta: nessuna comunicazione è stata inviata o accodata/u);
   assert.match(browser, /managerVisible: true, assigneeVisible: true[\s\S]*foreignDirectAccessDenied: true/u);
   assert.match(browser, /n15-manager-assignment-held\.png[\s\S]*n15-assignee-held\.png/u);

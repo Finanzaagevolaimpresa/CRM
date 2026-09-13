@@ -254,10 +254,37 @@ test('authorized manager assigns and manager/assignee consult the terminal HELD 
   const foreignPage = await login(foreign, N15_BROWSER_IDENTITIES.foreign.email, 'foreign');
   await foreignPage.goto(leadUrl);
   await expect(foreignPage.getByRole('heading', { name: 'Lead non trovato' })).toBeVisible();
+
+  await managerPage.goto(`${appUrl}/leads/inbox?queue=open`);
+  await waitForInteractiveReady(managerPage);
+  const assignedRow = managerPage.locator('article').filter({ hasText: 'Lead sintetico assegnazione N15' });
+  const [unassignmentResponse] = await Promise.all([
+    managerPage.waitForResponse((candidate) => {
+      const url = new URL(candidate.url());
+      return candidate.request().method() === 'POST' && url.origin === appUrl && url.pathname === '/leads/inbox';
+    }),
+    assignedRow.getByRole('button', { name: 'Rilascia' }).click(),
+  ]);
+  expect(unassignmentResponse.status()).toBeLessThan(400);
+  await expect(assignedRow.getByText('Owner: Da assegnare', { exact: false })).toBeVisible();
+
+  await managerPage.goto(leadUrl);
+  await expect(managerPage.getByRole('heading', { name: 'Comunicazioni assegnazione N15' })).toBeVisible();
+  for (const page of [assigneePage, foreignPage]) {
+    await page.goto(leadUrl);
+    await expect(page.getByRole('heading', { name: /Lead — Lead sintetico assegnazione N15/u })).toBeVisible();
+    await expect(page.getByText('Consulente assegnato: Da assegnare', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Comunicazioni assegnazione N15' })).toHaveCount(0);
+  }
+  const unassignedLead = await db.lead.findUniqueOrThrow({ where: { id: 'n15-browser-assignment-lead' } });
+  assert.equal(unassignedLead.assignedToId, null);
+  assert.equal(await db.communicationIntentRecord.count({ where: { intentId: activity.id } }), 1);
   writeFileSync(join(evidenceDirectory, 'n15-assignment-browser.json'), `${JSON.stringify({
     synthetic: true, managerAssigned: true, recipientDerived: true, aggregateComplete: true,
     aggregateState: 'HELD', managerVisible: true, assigneeVisible: true,
     foreignDirectAccessDenied: true, duplicateCount: records.length,
+    managerHistoryAfterUnassignVisible: true, formerAssigneeHistoryAfterUnassignHidden: true,
+    foreignHistoryAfterUnassignHidden: true, ordinaryUnassignedLeadVisible: true,
     communicationSent: false, communicationQueued: false,
   }, null, 2)}\n`, { mode: 0o600 });
   await Promise.all([foreign.close(), assignee.close(), manager.close()]);

@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
-import { canViewLead } from './access-control';
+import { getActorId, hasGlobalAccess } from './access-control';
 import { parseCommunicationPersistenceAggregateV1 } from './communication-intent-persistence';
 import { hasPermission } from './permission-evaluator';
 import { isN15SyntheticAssignmentAdmitted } from './n15-synthetic-self-claim-admission';
@@ -20,7 +20,16 @@ export class N15AssignmentConsultationError extends Error {
   }
 }
 
-/** Server-only read boundary: it repeats lead ABAC and never exposes canonical payloads. */
+export function canConsultN15Assignments(
+  session: AuthSession,
+  lead: Readonly<{ assignedToId: string | null }>,
+) {
+  return hasPermission(session, 'lead.read')
+    && (hasGlobalAccess(session)
+      || (lead.assignedToId !== null && lead.assignedToId === getActorId(session)));
+}
+
+/** Server-only read boundary: it repeats the stricter N15 ABAC and never exposes canonical payloads. */
 export async function listN15SyntheticAssignmentsForLead(
   db: PrismaClient,
   session: AuthSession,
@@ -29,7 +38,7 @@ export async function listN15SyntheticAssignmentsForLead(
   if (!isN15SyntheticAssignmentAdmitted()) {
     throw new N15AssignmentConsultationError('N15_ASSIGNMENT_CONSULTATION_DISABLED');
   }
-  if (!hasPermission(session, 'lead.read') || !canViewLead(session, lead)) {
+  if (!canConsultN15Assignments(session, lead)) {
     throw new N15AssignmentConsultationError('N15_ASSIGNMENT_CONSULTATION_DENIED');
   }
   const activities = await db.commercialLeadActivity.findMany({
