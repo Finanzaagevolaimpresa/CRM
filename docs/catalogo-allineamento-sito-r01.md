@@ -16,7 +16,11 @@ La revisione storica `2026-07-12-v1` / `TERMS-v1` resta byte-caratterizzata con 
 
 ## Persistenza e compatibilità
 
-`prepareServiceCatalogV2` verifica gli hash v1 prima di scrivere, opera in una transazione serializzabile, non sovrascrive conflitti e registra un audit minimizzato. Gli incarichi esistenti non vengono migrati: contratto, prezzo e riferimento storico restano invariati. Tutti i flag `checkoutEnabled`, `autoClientDeliveryAllowed` e `autoExternalActionAllowed` restano `false`.
+`prepareServiceCatalogV2` è fail-closed e ammesso esclusivamente sul PostgreSQL effimero confermato da configurazione, destinazione loopback e sentinel fisico. Verifica contenuto, identità e hash v1 prima di scrivere, opera in una transazione serializzabile, non sovrascrive conflitti o revisioni future e registra un audit minimizzato. Gli incarichi esistenti non vengono migrati: contratto, prezzo e riferimento storico restano invariati. Tutti i flag `checkoutEnabled`, `autoClientDeliveryAllowed` e `autoExternalActionAllowed` restano `false`.
+
+La versione della composizione non rinomina le revisioni dei singoli servizi: le nove schede invariate restano `2026-07-12-v1`, `TERMS-v1` e data luglio; soltanto le quattro revisioni nuove o cambiate hanno provenienza `2026-09-13-v2`. La UI consente la selezione solo quando la revisione canonica risulta effettivamente `PUBLISHED` nel database e segnala separatamente definizioni non ancora preparate.
+
+Le sette tipologie digitali conservano un unico codice/prezzo di servizio e dettagliano separatamente inclusioni, esclusioni, materiali, deliverable e incarichi successivi. La provenienza è la ricognizione delle pagine 2644/2648/2646/2650/2652/2654/2656 ricevuta dalla Cabina il 13 settembre 2026 (pagine modificate il 9 settembre), non un'osservazione diretta dell'esecutore.
 
 ## Raccordo ingressi successivo
 

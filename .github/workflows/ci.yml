@@ -66,7 +66,7 @@ jobs:
           node --import tsx tests/catalog-browser/provision.ts
       - name: Run catalog browser path
         run: |
-          npm run dev > "$RUNNER_TEMP/catalog-browser-app.log" 2>&1 &
+          npm run dev > "$CATALOG_BROWSER_EVIDENCE_DIR/catalog-browser-app.log" 2>&1 &
           app_pid=$!
           trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break; kill -0 "$app_pid"; sleep 1; done
