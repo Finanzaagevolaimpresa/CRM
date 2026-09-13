@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import type { AuthSession } from '../../src/lib/auth';
 import { createManualPreAnalysisRecord, ManualPreAnalysisError, updateManualPreAnalysisRecord } from '../../src/lib/manual-preanalysis-service';
+import { revokeInternalSession } from '../../src/lib/internal-session-registry';
 import { getPreAnalysisReadAccess } from '../../src/lib/read-access';
 import { prisma } from '../../src/lib/prisma';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './ai-orchestrator-db-test-guard';
@@ -15,6 +16,8 @@ const clientId = `${prefix}-client`;
 const otherClientId = `${prefix}-other-client`;
 const projectId = `${prefix}-project`;
 const otherProjectId = `${prefix}-other-project`;
+const companyId = `${prefix}-company`;
+const otherCompanyId = `${prefix}-other-company`;
 
 function actor(userId: string): AuthSession { return { userId, role: 'consulente', active: true, permissionOverrides: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 }; }
 async function expectDenied(operation: Promise<unknown>) { await assert.rejects(operation, (error: unknown) => error instanceof ManualPreAnalysisError && error.code === 'DENIED'); }
@@ -40,7 +43,9 @@ test.after(async () => {
   if (enabled) {
     await prisma.auditLog.deleteMany({ where: { OR: [{ actorId: { startsWith: prefix } }, { entityId: { startsWith: prefix } }] } });
     await prisma.userPermissionOverride.deleteMany({ where: { userId: { startsWith: prefix } } });
-    await prisma.preAnalysis.deleteMany({ where: { id: { startsWith: prefix } } });
+    await prisma.preAnalysis.deleteMany({ where: { clientId: { in: [clientId, otherClientId] } } });
+    assert.equal(await prisma.preAnalysis.count({ where: { clientId: { in: [clientId, otherClientId] } } }), 0);
+    await prisma.company.deleteMany({ where: { id: { in: [companyId, otherCompanyId] } } });
     await prisma.project.deleteMany({ where: { id: { startsWith: prefix } } });
     await prisma.client.deleteMany({ where: { id: { startsWith: prefix } } });
     await prisma.user.deleteMany({ where: { id: { startsWith: prefix } } });
@@ -79,10 +84,34 @@ test('PostgreSQL: permission/context revocation and linked deletion are rechecke
   await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
   await prisma.userPermissionOverride.deleteMany({ where: { userId: ownerId, permission: 'dossier.read' } });
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: foreignId } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
-  await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId, deletedAt: new Date() } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
-  await prisma.project.update({ where: { id: projectId }, data: { deletedAt: null } });
+  const stillAuthorized = await updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Autorità cliente valida' });
+  assert.equal(stillAuthorized.record.internalSummary, 'Autorità cliente valida');
+  await prisma.client.update({ where: { id: clientId }, data: { consultantId: foreignId } });
+  const auditBeforeDenied = await prisma.auditLog.count({ where: { entityId: record.id } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Negato' }));
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Autorità cliente valida');
+  assert.equal(await prisma.auditLog.count({ where: { entityId: record.id } }), auditBeforeDenied);
+  await prisma.client.update({ where: { id: clientId }, data: { consultantId: ownerId } });
+  await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId } });
+  await prisma.company.createMany({ data: [{ id: companyId, clientId, name: 'Società sintetica' }, { id: otherCompanyId, clientId: otherClientId, name: 'Società incoerente sintetica' }] });
+  await prisma.project.update({ where: { id: projectId }, data: { companyId } });
+  await prisma.company.update({ where: { id: companyId }, data: { deletedAt: new Date() } });
+  await expectDenied(createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Company cancellata' }));
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Autorità cliente valida' }));
+  await prisma.project.update({ where: { id: projectId }, data: { companyId: otherCompanyId } });
+  await expectDenied(createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Company incoerente' }));
+  await prisma.project.update({ where: { id: projectId }, data: { companyId: null } });
+  await prisma.company.update({ where: { id: companyId }, data: { deletedAt: null } });
+  const sessionId = randomUUID();
+  await prisma.internalSession.create({ data: { id: sessionId, userId: ownerId, tokenDigest: randomBytes(32), expiresAt: new Date('2099-01-01T00:00:00.000Z') } });
+  const sessionActor = { ...actor(ownerId), sessionId };
+  const sessionRecord = await createManualPreAnalysisRecord(prisma, sessionActor, { clientId, projectId, internalSummary: 'Sessione viva' });
+  await prisma.$transaction((tx) => revokeInternalSession(tx, sessionId, 'INTERNAL_SINGLE', ownerId));
+  await expectDenied(updateManualPreAnalysisRecord(prisma, sessionActor, { id: sessionRecord.id, version: sessionRecord.updatedAt, internalSummary: 'Sessione revocata' }));
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: sessionRecord.id } })).internalSummary, 'Sessione viva');
+  await prisma.project.update({ where: { id: projectId }, data: { deletedAt: new Date() } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Negato' }));
+  await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId, deletedAt: null } });
 });
 
 test('PostgreSQL: audit faults roll back create and update completely', { skip: !enabled }, async () => {

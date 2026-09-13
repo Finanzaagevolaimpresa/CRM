@@ -11,12 +11,17 @@ const fields = { internalSummary: 'Sintesi inventata', scenarioA: 'Scenario A in
 
 async function login(page: import('@playwright/test').Page, email: string) {
   await page.goto(`${app}/login`);
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached', timeout: 15_000 });
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click();
   await expect(page).toHaveURL(`${app}/dashboard`);
 }
 
+test.afterEach(({}, testInfo) => {
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, 'preanalysis-browser-status.json'), `${JSON.stringify({ phase: 'BROWSER', status: testInfo.status === testInfo.expectedStatus ? 'PASS' : 'FAIL', synthetic: true })}\n`, { mode: 0o600 });
+});
 test.afterAll(() => db.$disconnect());
 test('real manual pre-analysis path, conflict retention and access denials', async ({ browser }) => {
   mkdirSync(evidence, { recursive: true });
@@ -24,6 +29,7 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   const page = await owner.newPage();
   await login(page, 'preanalysis-owner@invalid.test');
   await page.goto(`${app}/projects/preanalysis-browser-project`);
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await expect(page.getByText('Sintesi inventata')).toHaveCount(0);
   await page.getByRole('link', { name: 'Crea pre-analisi' }).click();
   for (const [name, value] of Object.entries(fields)) await page.locator(`textarea[name="${name}"]`).fill(value);
@@ -51,6 +57,16 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await page.reload();
   await expect(page.locator('textarea[name="scenarioA"]')).toHaveValue('Scenario A seconda modifica');
 
+  await page.goto(`${app}/preanalyses/new?clientId=preanalysis-browser-client&projectId=preanalysis-browser-project`);
+  await page.locator('textarea[name="internalSummary"]').fill('Richiesta alterata');
+  await page.locator('input[name="clientId"]').evaluate((element) => { (element as HTMLInputElement).value = 'preanalysis-browser-foreign-client'; });
+  const countBeforeTamper = await db.preAnalysis.count({ where: { clientId: 'preanalysis-browser-client' } });
+  const auditBeforeTamper = await db.auditLog.count({ where: { actorId: 'preanalysis-browser-owner', event: 'preanalysis_create' } });
+  await page.getByRole('button', { name: 'Crea bozza interna' }).click();
+  await expect(page.getByRole('status')).toContainText('non disponibile');
+  expect(await db.preAnalysis.count({ where: { clientId: 'preanalysis-browser-client' } })).toBe(countBeforeTamper);
+  expect(await db.auditLog.count({ where: { actorId: 'preanalysis-browser-owner', event: 'preanalysis_create' } })).toBe(auditBeforeTamper);
+
   const secondTab = await owner.newPage();
   await secondTab.goto(`${app}/preanalyses/${recordId}`);
   await page.goto(`${app}/preanalyses/${recordId}`);
@@ -63,6 +79,18 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(secondTab.getByRole('status')).toContainText('testo inserito è conservato');
   await expect(secondTab.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO CONFLITTO DA CONSERVARE');
   await expect(secondTab.locator('textarea[name="requiredDocuments"]')).toHaveValue('DOCUMENTI CONFLITTO DA CONSERVARE');
+
+  await page.reload();
+  const beforeRevocation = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
+  const auditBeforeRevocation = await db.auditLog.count({ where: { entityId: recordId } });
+  await db.userPermissionOverride.create({ data: { userId: 'preanalysis-browser-owner', permission: 'dossier.read', allowed: false } });
+  await page.locator('textarea[name="internalSummary"]').fill('TESTO DOPO REVOCA');
+  await page.getByRole('button', { name: 'Salva modifiche' }).click();
+  await expect(page.getByRole('status')).toContainText('non disponibile');
+  await expect(page.locator('textarea[name="internalSummary"]')).toHaveValue('TESTO DOPO REVOCA');
+  expect((await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } })).internalSummary).toBe(beforeRevocation.internalSummary);
+  expect(await db.auditLog.count({ where: { entityId: recordId } })).toBe(auditBeforeRevocation);
+  await db.userPermissionOverride.delete({ where: { userId_permission: { userId: 'preanalysis-browser-owner', permission: 'dossier.read' } } });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -81,6 +109,6 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(noRead).toHaveURL(`${app}/dashboard`);
 
   const persisted = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
-  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
   await Promise.all([owner.close(), foreignContext.close(), noReadContext.close()]);
 });

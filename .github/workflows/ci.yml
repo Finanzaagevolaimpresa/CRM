@@ -76,7 +76,9 @@ jobs:
           echo "::add-mask::$PREANALYSIS_BROWSER_PASSWORD"
           printf 'PREANALYSIS_BROWSER_PASSWORD=%s\n' "$PREANALYSIS_BROWSER_PASSWORD" >> "$GITHUB_ENV"
           mkdir -p "$PREANALYSIS_BROWSER_EVIDENCE_DIR"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          printf '{"phase":"PREPARE","status":"STARTED","synthetic":true}\n' > "$PREANALYSIS_BROWSER_EVIDENCE_DIR/preanalysis-qualification-status.json"
+          export PREANALYSIS_BROWSER_PASSWORD
+          psql 'postgresql://postgres:synthetic-preanalysis-browser@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           node --import tsx --test --test-concurrency=1 tests/db/manual-preanalysis-db.test.ts
           node --import tsx tests/preanalysis-browser/provision.ts

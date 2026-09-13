@@ -23,3 +23,11 @@ La CI contiene un job dedicato con PostgreSQL 16 effimero identificato dal senti
 Il percorso browser autentica esclusivamente identità inventate e attraversa progetto, creazione, compilazione dei cinque campi, salvataggio, ricarica e seconda modifica. Due schede producono un conflitto recuperabile conservando i testi. Verifica inoltre utente estraneo e utente con `dossier.read` negato, producendo receipt JSON e screenshot desktop/stretto come artifact.
 
 La qualifica fisica Q04 non viene eseguita né modificata.
+
+## Correzione consolidata R03
+
+Il job usa due URI distinti: `DATABASE_URL` conserva il parametro Prisma `schema=public`, mentre `psql` usa una URI PostgreSQL nativa. La password browser sintetica viene mascherata ed esportata nello step che esegue il provision. Una ricevuta minimizzata esiste prima di migrazioni e browser, così anche un arresto anticipato produce solo fase, esito e indicatore sintetico.
+
+La qualifica transazionale dimostra entrambe le autorità previste da `canEditProject`: cambiare il solo consulente del progetto conserva l'accesso derivato dal cliente; soltanto la revoca di entrambe nega la scrittura senza mutazione o audit. Copre inoltre azienda del progetto cancellata o appartenente a un altro cliente, anche senza `companyId` nell'input, e sessione registry revocata con motivo canonico `INTERNAL_SINGLE`.
+
+Il browser invia anche una creazione con campo hidden alterato e tenta un aggiornamento dopo la revoca di `dossier.read` successiva all'apertura del form. Entrambi sono negati server-side con record e audit invariati; i testi restano disponibili nel form.

@@ -32,12 +32,16 @@ async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) 
 async function writableContext(tx: Prisma.TransactionClient, actor: AuthSession, clientId: string, projectId: string, companyId?: string | null) {
   await tx.$queryRaw`SELECT id FROM "Client" WHERE id = ${clientId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${projectId} FOR UPDATE`;
-  const [client, project, company] = await Promise.all([
+  const [client, project] = await Promise.all([
     tx.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }),
     tx.project.findFirst({ where: { id: projectId, clientId, deletedAt: null } }),
-    companyId ? tx.company.findFirst({ where: { id: companyId, clientId, deletedAt: null }, select: { id: true } }) : null,
   ]);
-  if (!client || !project || (companyId && !company) || (companyId && project.companyId && project.companyId !== companyId) || !canEditProject(actor, { ...project, client })) {
+  if (!client || !project) throw new ManualPreAnalysisError('DENIED');
+  const companyIds = [...new Set([companyId, project.companyId].filter((id): id is string => Boolean(id)))];
+  if (companyIds.length) await tx.$queryRaw`SELECT id FROM "Company" WHERE id IN (${Prisma.join(companyIds)}) FOR UPDATE`;
+  const companies = companyIds.length ? await tx.company.findMany({ where: { id: { in: companyIds }, clientId, deletedAt: null }, select: { id: true } }) : [];
+  const validCompanyIds = new Set(companies.map((company) => company.id));
+  if ((companyId && !validCompanyIds.has(companyId)) || (project.companyId && !validCompanyIds.has(project.companyId)) || (companyId && project.companyId && project.companyId !== companyId) || !canEditProject(actor, { ...project, client })) {
     throw new ManualPreAnalysisError('DENIED');
   }
   return { client, project };
