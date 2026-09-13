@@ -50,7 +50,6 @@ jobs:
       AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: "1"
       AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
       N15_BROWSER_SYNTHETIC_CONFIRMED: "1"
-      N15_BROWSER_EVIDENCE_DIR: ${{ runner.temp }}/n15-browser-evidence
       FEATURE_INTEGRATIONS_ENABLED: "false"
       FEATURE_CUSTOMER_PORTAL_ENABLED: "false"
       FEATURE_PAYMENTS_ENABLED: "false"
@@ -84,6 +83,7 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Prepare ephemeral PostgreSQL and synthetic authorities
         run: |
+          printf 'N15_BROWSER_EVIDENCE_DIR=%s/n15-browser-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           PRIVILEGED_STEP_UP_SECRET="$(openssl rand -base64 36 | tr -d '\n')"
           N15_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
           export PRIVILEGED_STEP_UP_SECRET N15_BROWSER_PASSWORD
