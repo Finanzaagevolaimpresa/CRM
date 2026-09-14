@@ -1,6 +1,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, type APIResponse, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIResponse,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
@@ -15,6 +21,44 @@ type CapturedAction = {
   contentType: string;
   body: string;
 };
+let currentPhase = "INITIAL";
+
+async function submitAction(
+  page: Page,
+  button: Locator,
+  phase: string,
+  expected: "SUCCESS" | "NOT_READY" | "CONFLICT" = "SUCCESS",
+) {
+  currentPhase = phase;
+  const responsePromise = page.waitForResponse((response) => {
+    const request = response.request();
+    return (
+      request.method() === "POST" && Boolean(request.headers()["next-action"])
+    );
+  });
+  await button.click();
+  const response = await responsePromise;
+  expect(response.status(), `${phase}: HTTP Next action`).toBe(200);
+  const redirect = response.headers()["x-action-redirect"];
+  expect(redirect, `${phase}: x-action-redirect`).toBeTruthy();
+  const destination = new URL(redirect!.split(";", 1)[0], app);
+  expect(destination.pathname, `${phase}: destinazione`).toBe(
+    "/practice-readiness",
+  );
+  if (expected === "SUCCESS")
+    expect(
+      destination.searchParams.get("updated"),
+      `${phase}: receipt`,
+    ).toBeTruthy();
+  else
+    expect(destination.searchParams.get("error"), `${phase}: errore`).toBe(
+      expected,
+    );
+  await expect(page, `${phase}: navigazione corrente`).toHaveURL(
+    destination.href,
+  );
+  return response;
+}
 
 async function login(page: Page, email: string) {
   await page.goto(`${app}/login`);
@@ -46,6 +90,25 @@ async function expectDenied(response: APIResponse) {
   );
 }
 
+async function readinessFootprint() {
+  const where = { clientId: { startsWith: "readiness-browser-client-" } };
+  const practices = await db.practiceReadiness.findMany({
+    where,
+    include: {
+      funding: { orderBy: [{ reference: "asc" }, { sequence: "asc" }] },
+      materials: { orderBy: [{ checklistItemId: "asc" }, { sequence: "asc" }] },
+      materialAttestations: { orderBy: { decidedAt: "asc" } },
+      formalizations: { orderBy: { formalizedAt: "asc" } },
+    },
+    orderBy: { clientId: "asc" },
+  });
+  const services = await db.clientService.findMany({
+    where: { clientId: { startsWith: "readiness-browser-client-" } },
+    orderBy: { clientId: "asc" },
+  });
+  return { practices, services };
+}
+
 test.beforeAll(async () => {
   mkdirSync(evidenceDir, { recursive: true });
   await assertSyntheticCatalogDatabase(db);
@@ -55,10 +118,11 @@ test.afterEach(async ({}, info) => {
   writeFileSync(
     join(evidenceDir, `browser-${info.status}.json`),
     JSON.stringify({
-      phase: "browser",
+      stage: "browser",
       status: info.status,
       expectedStatus: info.expectedStatus,
       synthetic: true,
+      phase: currentPhase,
     }) + "\n",
     { mode: 0o600 },
   );
@@ -124,10 +188,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .locator('[name="startupConditions"]')
       .fill("Avvio dopo incarico, accredito e materiali verificati");
     await open.locator('[name="requiredInitialAmount"]').fill("50.00");
-    await open
-      .getByRole("button", { name: "Crea revisione preventivo" })
-      .click();
-    await expect(page).toHaveURL(/\/practice-readiness\?updated=/u);
+    await submitAction(
+      page,
+      open.getByRole("button", { name: "Crea revisione preventivo" }),
+      `${item.key}:proposta`,
+    );
 
     const proposal = await db.practiceOfferRevision.findFirstOrThrow({
       where: { commercialOfferId: `readiness-browser-offer-${item.key}` },
@@ -136,12 +201,15 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     const proposalCard = page
       .getByText(scope, { exact: false })
       .locator("xpath=ancestor::article[1]");
-    await proposalCard
-      .getByRole("button", { name: "Accetta questa revisione" })
-      .click();
+    await submitAction(
+      page,
+      proposalCard.getByRole("button", { name: "Accetta questa revisione" }),
+      `${item.key}:accettazione`,
+    );
     const practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { controlledIntakeId: proposal.controlledIntakeId },
     });
+    await expect(page.locator(`#practice-${practice.id}`)).toBeVisible();
 
     let article = await reloadPractice(page, practice.id);
     await article
@@ -157,17 +225,25 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await article
       .locator('[name="signedDocumentVersionId"]')
       .selectOption(documentVersion.id);
-    await article
-      .getByRole("button", { name: "Conferma incarico formalizzato" })
-      .click();
+    await submitAction(
+      page,
+      article.getByRole("button", { name: "Conferma incarico formalizzato" }),
+      `${item.key}:formalizzazione`,
+    );
+    await expect(page.locator(`#practice-${practice.id}`).getByText(documentVersion.id, { exact: false })).toBeVisible();
 
     article = await reloadPractice(page, practice.id);
     await article
       .locator('[name="clientServiceId"]')
       .selectOption(`readiness-browser-service-${item.key}`);
-    await article
-      .getByRole("button", { name: "Collega pratica operativa in attesa" })
-      .click();
+    await submitAction(
+      page,
+      article.getByRole("button", {
+        name: "Collega pratica operativa in attesa",
+      }),
+      `${item.key}:collegamento-servizio`,
+    );
+    await expect(page.locator(`#practice-${practice.id}`).getByText(`readiness-browser-service-${item.key}`, { exact: false })).toBeVisible();
     expect(
       (
         await db.clientService.findUniqueOrThrow({
@@ -188,17 +264,30 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       const reference = `ACC-${item.key}-${part}`;
       await article.locator('[name="reference"]').fill(reference);
       await article.locator('[name="amount"]').fill(amount);
-      await article.getByRole("button", { name: "Dichiara accredito" }).click();
+      await submitAction(
+        page,
+        article.getByRole("button", { name: "Dichiara accredito" }),
+        `${item.key}:accredito-${part}-dichiarato`,
+      );
+      await expect(page.locator(`#practice-${practice.id}`).getByText(reference, { exact: false })).toBeVisible();
       article = await reloadPractice(page, practice.id);
       const funding = article
         .getByText(reference, { exact: false })
         .locator("xpath=ancestor::div[1]");
-      await funding.getByRole("button", { name: "Conferma accredito" }).click();
+      await submitAction(
+        page,
+        funding.getByRole("button", { name: "Conferma accredito" }),
+        `${item.key}:accredito-${part}-confermato`,
+      );
+      await expect(page.locator(`#practice-${practice.id}`).getByText("CONFIRMED", { exact: false })).toBeVisible();
       if (item.partial && part === "prima") {
         article = await reloadPractice(page, practice.id);
-        await article
-          .getByRole("button", { name: "Avvia esplicitamente" })
-          .click();
+        await submitAction(
+          page,
+          article.getByRole("button", { name: "Avvia esplicitamente" }),
+          `${item.key}:avvio-parziale-negato`,
+          "NOT_READY",
+        );
         await expect(page.getByRole("alert")).toContainText("NOT_READY");
         expect(
           (
@@ -216,9 +305,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
           .locator('[name="reference"]')
           .fill("ACC-standard-obsoleto");
         await staleArticle.locator('[name="amount"]').fill("1.00");
-        await staleArticle
-          .getByRole("button", { name: "Dichiara accredito" })
-          .click();
+        await submitAction(
+          stalePage,
+          staleArticle.getByRole("button", { name: "Dichiara accredito" }),
+          `${item.key}:modulo-obsoleto`,
+          "CONFLICT",
+        );
         await expect(stalePage.getByRole("alert")).toContainText("CONFLICT");
         await expect(
           stalePage.locator(`#practice-${practice.id} [name="reference"]`),
@@ -253,13 +345,18 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .locator('[name="documentVersionId"]')
       .selectOption(documentVersion.id);
     await article.locator('[name="status"]').selectOption("VALIDATED");
-    await article
-      .getByRole("button", { name: "Registra decisione materiale" })
-      .click();
+    await submitAction(
+      page,
+      article.getByRole("button", { name: "Registra decisione materiale" }),
+      `${item.key}:materiale-validato`,
+    );
+    await expect(page.locator(`#practice-${practice.id}`).getByText("VALIDATED", { exact: false })).toBeVisible();
     article = await reloadPractice(page, practice.id);
-    await article
-      .getByRole("button", { name: "Attesta materiali completi" })
-      .click();
+    await submitAction(
+      page,
+      article.getByRole("button", { name: "Attesta materiali completi" }),
+      `${item.key}:completezza`,
+    );
 
     if (item.key === "standard") {
       article = await reloadPractice(page, practice.id);
@@ -270,25 +367,28 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       await article
         .locator('[name="reason"]')
         .fill("Versione sostituita durante la verifica browser");
-      await article
-        .getByRole("button", { name: "Registra decisione materiale" })
-        .click();
+      await submitAction(
+        page,
+        article.getByRole("button", { name: "Registra decisione materiale" }),
+        `${item.key}:materiale-invalidato`,
+      );
       article = await reloadPractice(page, practice.id);
-      await article
-        .getByRole("button", { name: "Avvia esplicitamente" })
-        .click();
+      await submitAction(
+        page,
+        article.getByRole("button", { name: "Avvia esplicitamente" }),
+        `${item.key}:avvio-materiale-negato`,
+        "NOT_READY",
+      );
       await expect(page.getByRole("alert")).toContainText("NOT_READY");
       article = await reloadPractice(page, practice.id);
       await article
         .locator('[name="checklistItemId"]')
         .selectOption(`readiness-browser-checklist-${item.key}`);
-      const materialForm = article
-        .locator("form")
-        .filter({
-          has: article.getByRole("button", {
-            name: "Registra decisione materiale",
-          }),
-        });
+      const materialForm = article.locator("form").filter({
+        has: article.getByRole("button", {
+          name: "Registra decisione materiale",
+        }),
+      });
       await materialForm
         .locator('[name="documentId"]')
         .selectOption(`readiness-browser-document-${item.key}`);
@@ -296,13 +396,17 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         .locator('[name="documentVersionId"]')
         .selectOption(documentVersion.id);
       await materialForm.locator('[name="status"]').selectOption("VALIDATED");
-      await article
-        .getByRole("button", { name: "Registra decisione materiale" })
-        .click();
+      await submitAction(
+        page,
+        article.getByRole("button", { name: "Registra decisione materiale" }),
+        `${item.key}:materiale-rivalidato`,
+      );
       article = await reloadPractice(page, practice.id);
-      await article
-        .getByRole("button", { name: "Attesta materiali completi" })
-        .click();
+      await submitAction(
+        page,
+        article.getByRole("button", { name: "Attesta materiali completi" }),
+        `${item.key}:completezza-rinnovata`,
+      );
     }
 
     article = await reloadPractice(page, practice.id);
@@ -322,7 +426,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         };
       }
     });
-    await article.getByRole("button", { name: "Avvia esplicitamente" }).click();
+    await submitAction(
+      page,
+      article.getByRole("button", { name: "Avvia esplicitamente" }),
+      `${item.key}:avvio`,
+    );
     article = await reloadPractice(page, practice.id);
     await expect(article.getByText("avviata")).toBeVisible();
 
@@ -355,15 +463,63 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         })
       ).status,
     ).toBe("in_lavorazione");
+
+    if (item.key === "standard") {
+      const historicalStart = {
+        startedAt: persisted.startedAt?.toISOString(),
+        startedById: persisted.startedById,
+        startEvidence: persisted.startEvidence,
+      };
+      article = await reloadPractice(page, practice.id);
+      const confirmedFunding = article
+        .getByText("ACC-standard-prima", { exact: false })
+        .locator("xpath=ancestor::div[1]");
+      await submitAction(
+        page,
+        confirmedFunding.getByRole("button", { name: "Rettifica / storna" }),
+        "standard:storno-post-avvio",
+      );
+      article = await reloadPractice(page, practice.id);
+      await expect(
+        article.getByText("accredito_iniziale", { exact: false }),
+      ).toBeVisible();
+      const incoherent = await db.practiceReadiness.findUniqueOrThrow({
+        where: { id: practice.id },
+      });
+      expect(incoherent.startedAt?.toISOString()).toBe(
+        historicalStart.startedAt,
+      );
+      expect(incoherent.startedById).toBe(historicalStart.startedById);
+      expect(incoherent.startEvidence).toEqual(historicalStart.startEvidence);
+      await expect(article.getByText("avviata")).toBeVisible();
+    }
   }
 
   expect(capturedStart).not.toBeNull();
+  const foreign = await browser.newContext();
+  const foreignPage = await foreign.newPage();
+  await login(foreignPage, "readiness-foreign@invalid.test");
+  await foreignPage.goto(`${app}/practice-readiness`);
+  await foreignPage
+    .locator('[data-interactive-ready="true"]')
+    .waitFor({ state: "attached" });
+  await expect(foreignPage.getByText("Nessuna pratica")).toBeVisible();
+  for (const item of cases) {
+    await expect(
+      foreignPage.getByText(`Cliente ${item.label}`, { exact: false }),
+    ).toHaveCount(0);
+    await expect(
+      foreignPage.getByText(`Perimetro browser ${item.label}`, {
+        exact: false,
+      }),
+    ).toHaveCount(0);
+  }
+  await foreign.close();
+
   const reader = await browser.newContext();
   const readerPage = await reader.newPage();
   await login(readerPage, "readiness-reader@invalid.test");
-  const before = await db.auditLog.count({
-    where: { event: "practice_started" },
-  });
+  const before = await readinessFootprint();
   const action = capturedStart!;
   const denied = await readerPage.request.fetch(action.url, {
     method: "POST",
@@ -377,9 +533,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     maxRedirects: 0,
   });
   await expectDenied(denied);
-  expect(
-    await db.auditLog.count({ where: { event: "practice_started" } }),
-  ).toBe(before);
+  expect(await readinessFootprint()).toEqual(before);
 
   await page.screenshot({
     path: join(evidenceDir, "practice-readiness-complete.png"),
