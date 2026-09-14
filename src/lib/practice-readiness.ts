@@ -56,12 +56,17 @@ const fundingTransitionSchema = z.object({
   evidenceId: z.string().uuid(),
   expectedVersion: z.coerce.number().int().positive(),
 });
+const optionalMaterialReferenceSchema = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? null : value,
+  z.string().trim().min(1).max(191).optional().nullable(),
+);
 const materialSchema = z
   .object({
     practiceId: z.string().uuid(),
     checklistItemId: z.string().min(1),
-    documentId: z.string().optional().nullable(),
-    documentVersionId: z.string().optional().nullable(),
+    documentId: optionalMaterialReferenceSchema,
+    documentVersionId: optionalMaterialReferenceSchema,
     status: z.enum(["VALIDATED", "NOT_NEEDED", "INVALIDATED"]),
     reason: z.string().trim().max(500).optional().nullable(),
     expectedVersion: z.coerce.number().int().positive(),
@@ -70,6 +75,11 @@ const materialSchema = z
     if (v.status === "NOT_NEEDED" && !v.reason)
       c.addIssue({ code: "custom", message: "Motivazione obbligatoria." });
   });
+export function parsePracticeMaterialInput(raw: unknown) {
+  const parsed = materialSchema.safeParse(raw);
+  if (!parsed.success) throw new PracticeReadinessError("DENIED");
+  return parsed.data;
+}
 const startSchema = z.object({
   practiceId: z.string().uuid(),
   expectedVersion: z.coerce.number().int().positive(),
@@ -615,7 +625,7 @@ export async function decidePracticeMaterial(
   raw: unknown,
 ) {
   enabled();
-  const input = materialSchema.parse(raw);
+  const input = parsePracticeMaterialInput(raw);
   await assertSyntheticCatalogDatabase(db);
   return db.$transaction(
     async (tx) => {
@@ -1012,8 +1022,17 @@ const formalizeSchema = z.object({
 const completenessSchema = z.object({
   practiceId: z.string().uuid(),
   expectedVersion: z.coerce.number().int().positive(),
-  emptyChecklistReason: z.string().trim().min(1).max(500).optional().nullable(),
+  emptyChecklistReason: z.preprocess(
+    (value) =>
+      typeof value === "string" && value.trim() === "" ? null : value,
+    z.string().trim().min(1).max(500).optional().nullable(),
+  ),
 });
+export function parsePracticeMaterialsCompletenessInput(raw: unknown) {
+  const parsed = completenessSchema.safeParse(raw);
+  if (!parsed.success) throw new PracticeReadinessError("DENIED");
+  return parsed.data;
+}
 export async function formalizePractice(
   db: Db,
   claimed: AuthSession,
@@ -1185,7 +1204,7 @@ export async function attestPracticeMaterialsComplete(
   raw: unknown,
 ) {
   enabled();
-  const input = completenessSchema.parse(raw);
+  const input = parsePracticeMaterialsCompletenessInput(raw);
   await assertSyntheticCatalogDatabase(db);
   return db.$transaction(
     async (tx) => {

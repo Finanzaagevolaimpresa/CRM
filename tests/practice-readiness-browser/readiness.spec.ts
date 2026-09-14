@@ -425,6 +425,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     );
     await expect(materialRow).toContainText(documentVersion.id);
     article = await reloadPractice(page, practice.id);
+    await expect(
+      article.locator('[name="emptyChecklistReason"]'),
+    ).toHaveValue("");
     await submitAction(
       page,
       article.getByRole("button", { name: "Attesta materiali completi" }),
@@ -528,6 +531,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       );
       await expect(materialRow).toContainText(documentVersion.id);
       article = await reloadPractice(page, practice.id);
+      await expect(
+        article.locator('[name="emptyChecklistReason"]'),
+      ).toHaveValue("");
       await submitAction(
         page,
         article.getByRole("button", { name: "Attesta materiali completi" }),

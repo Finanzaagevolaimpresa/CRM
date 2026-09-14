@@ -1009,14 +1009,22 @@ test(
       where: { id: b.checklist.id },
       data: { active: false },
     });
-    await assert.rejects(
-      attestPracticeMaterialsComplete(db, actorB, {
-        practiceId: practice.id,
-        expectedVersion: practice.version,
-      }),
-      (error) =>
-        error instanceof PracticeReadinessError && error.code === "NOT_READY",
-    );
+    for (const emptyChecklistReason of [undefined, "", "   "]) {
+      const beforeDeniedAttestation = await footprint(practice.id);
+      await assert.rejects(
+        attestPracticeMaterialsComplete(db, actorB, {
+          practiceId: practice.id,
+          expectedVersion: practice.version,
+          emptyChecklistReason,
+        }),
+        (error) =>
+          error instanceof PracticeReadinessError && error.code === "NOT_READY",
+      );
+      assert.deepEqual(
+        await footprint(practice.id),
+        beforeDeniedAttestation,
+      );
+    }
     await attestPracticeMaterialsComplete(db, actorB, {
       practiceId: practice.id,
       expectedVersion: practice.version,
@@ -1129,8 +1137,9 @@ test(
     await decidePracticeMaterial(db, actorA, {
       practiceId: practice.id,
       checklistItemId: a.checklist.id,
-      status: "NOT_NEEDED",
-      reason: "Materiale non pertinente alla fixture",
+      documentId: a.document.id,
+      documentVersionId: a.documentVersion.id,
+      status: "VALIDATED",
       expectedVersion: afterFunding.version,
     });
     const v2 = await db.practiceReadiness.findUniqueOrThrow({
@@ -1174,8 +1183,59 @@ test(
     await attestPracticeMaterialsComplete(db, actorA, {
       practiceId: practice.id,
       expectedVersion: v3.version,
+      emptyChecklistReason: "",
     });
     let v4 = await db.practiceReadiness.findUniqueOrThrow({
+      where: { id: practice.id },
+    });
+    const invalidated = await decidePracticeMaterial(db, actorA, {
+      practiceId: practice.id,
+      checklistItemId: a.checklist.id,
+      documentId: "",
+      documentVersionId: "   ",
+      status: "INVALIDATED",
+      reason: "Versione sostituita nella fixture",
+      expectedVersion: v4.version,
+    });
+    assert.equal(invalidated.documentId, null);
+    assert.equal(invalidated.documentVersionId, null);
+    assert.equal(invalidated.reason, "Versione sostituita nella fixture");
+    v4 = await db.practiceReadiness.findUniqueOrThrow({
+      where: { id: practice.id },
+    });
+    assert.equal(v4.materialsCompleteAt, null);
+    assert.equal(v4.materialsCompleteEvidenceId, null);
+    for (const references of [
+      { documentId: "", documentVersionId: "" },
+      { documentId: b.document.id, documentVersionId: b.documentVersion.id },
+    ]) {
+      await expectDeniedWithoutEffects(practice.id, () =>
+        decidePracticeMaterial(db, actorA, {
+          practiceId: practice.id,
+          checklistItemId: a.checklist.id,
+          ...references,
+          status: "VALIDATED",
+          expectedVersion: v4.version,
+        }),
+      );
+    }
+    await decidePracticeMaterial(db, actorA, {
+      practiceId: practice.id,
+      checklistItemId: a.checklist.id,
+      documentId: a.document.id,
+      documentVersionId: a.documentVersion.id,
+      status: "VALIDATED",
+      expectedVersion: v4.version,
+    });
+    v4 = await db.practiceReadiness.findUniqueOrThrow({
+      where: { id: practice.id },
+    });
+    await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: v4.version,
+      emptyChecklistReason: "",
+    });
+    v4 = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
     await db.documentChecklistItem.update({
@@ -1193,6 +1253,7 @@ test(
     await attestPracticeMaterialsComplete(db, actorA, {
       practiceId: practice.id,
       expectedVersion: v4.version,
+      emptyChecklistReason: "   ",
     });
     v4 = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
