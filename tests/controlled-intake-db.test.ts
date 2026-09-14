@@ -15,6 +15,7 @@ import {
 import { createLeadSubmittedEventV1 } from '../src/lib/lead-event-contract';
 import { calculateLeadIdentityKeyDigest, LEAD_NORMALIZATION_VERSION } from '../src/lib/lead-identity';
 import { projectClaimedLeadInboxEvent } from '../src/lib/lead-projection';
+import { assignCommercialLeadInboxItem } from '../src/lib/commercial-lead-inbox';
 import { prepareServiceCatalogV2 } from '../src/lib/service-catalog-v2-persistence';
 import { syntheticLeadEventInputV1 } from './fixtures/n10-lead-event-v1';
 import { N13_SYNTHETIC_KEY_SECRET, N13_SYNTHETIC_KEY_VERSION } from './fixtures/n13-lead-projection-v1';
@@ -34,14 +35,17 @@ const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({
 const db = new PrismaClient();
 const userId = 'controlled-intake-db-owner';
 const otherUserId = 'controlled-intake-db-other';
+const managerUserId = 'controlled-intake-db-manager';
 const deniedUserId = 'controlled-intake-db-denied';
 const sessionId = randomUUID();
 const otherSessionId = randomUUID();
 const deniedSessionId = randomUUID();
+const managerSessionId = randomUUID();
 const secretRoot = mkdtempSync(join(tmpdir(), 'controlled-intake-n13-'));
 const secretPath = join(secretRoot, 'synthetic-lead-identity.json');
 const actor = { userId, sessionId, expiresAt: Math.floor(Date.now() / 1000) + 3600, role: 'commerciale' as const, active: true, permissionOverrides: [] };
 const otherActor = { ...actor, userId: otherUserId, sessionId: otherSessionId };
+const managerActor = { userId: managerUserId, sessionId: managerSessionId };
 const base = {
   sourceOccurredAt: '2026-09-14T09:00:00.000Z', firstName: 'Ada', lastName: 'Sintetica',
   subjectName: null, email: 'same@intake.invalid', phone: null, effectiveCategory: 'digitale',
@@ -61,11 +65,13 @@ test.before(async () => {
   await db.user.createMany({ data: [
     { id: userId, email: 'controlled-intake-db@invalid.test', name: 'Operatore sintetico', passwordHash: 'synthetic', role: 'commerciale' },
     { id: otherUserId, email: 'controlled-intake-other@invalid.test', name: 'Altro operatore', passwordHash: 'synthetic', role: 'commerciale' },
+    { id: managerUserId, email: 'controlled-intake-manager@invalid.test', name: 'Responsabile sintetico', passwordHash: 'synthetic', role: 'direzione' },
     { id: deniedUserId, email: 'controlled-intake-denied@invalid.test', name: 'Lettore sintetico', passwordHash: 'synthetic', role: 'revisore' },
   ] });
   await db.internalSession.createMany({ data: [
     { id: sessionId, userId, tokenDigest: Buffer.alloc(32, 7), expiresAt: new Date(Date.now() + 3_600_000) },
     { id: otherSessionId, userId: otherUserId, tokenDigest: Buffer.alloc(32, 9), expiresAt: new Date(Date.now() + 3_600_000) },
+    { id: managerSessionId, userId: managerUserId, tokenDigest: Buffer.alloc(32, 10), expiresAt: new Date(Date.now() + 3_600_000) },
     { id: deniedSessionId, userId: deniedUserId, tokenDigest: Buffer.alloc(32, 8), expiresAt: new Date(Date.now() + 3_600_000) },
   ] });
   writeFileSync(secretPath, JSON.stringify({ version: N13_SYNTHETIC_KEY_VERSION, secretBase64: N13_SYNTHETIC_KEY_SECRET.toString('base64') }), { mode: 0o600 });
@@ -84,7 +90,7 @@ test.before(async () => {
 
 test.after(async () => {
   if (enabled) await db.internalSession.updateMany({
-    where: { id: { in: [sessionId, otherSessionId, deniedSessionId] } },
+    where: { id: { in: [sessionId, otherSessionId, managerSessionId, deniedSessionId] } },
     data: { revokedAt: new Date(), revokedReason: 'LOGOUT' },
   });
   await db.$disconnect();
@@ -112,10 +118,10 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
   assert.equal(digital.subjectType, 'SOGGETTO_DA_COSTITUIRE');
   assert.ok(digital.serviceRevisionId);
   assert.equal(digital.duplicateCandidates.some(({ leadId }) => leadId === rows[0]!.leadId), true);
-  await db.lead.update({ where: { id: rows[0]!.leadId }, data: { assignedToId: otherUserId } });
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 1 });
   const sanitizedReplay = await createControlledIntake(db, actor, inputs[1]);
   assert.equal(sanitizedReplay.duplicateCandidates.some(({ leadId }) => leadId === rows[0]!.leadId), false);
-  await db.lead.update({ where: { id: rows[0]!.leadId }, data: { assignedToId: userId } });
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: userId, expectedInboxVersion: 2 });
 
   const decision = await decideControlledIntakeDuplicate(db, actor, {
     intakeId: digital.id, candidateLeadId: rows[0]!.leadId,
@@ -132,7 +138,7 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
   assert.equal((await createControlledIntake(db, actor, inputs[0])).id, rows[0]!.id);
   await assert.rejects(createControlledIntake(db, actor, { ...inputs[0], need: 'Contenuto diverso' }), isCode('CONFLICT'));
 
-  await db.lead.update({ where: { id: rows[0]!.leadId }, data: { assignedToId: otherUserId } });
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 3 });
   await assert.rejects(createControlledIntake(db, actor, inputs[0]), isCode('DENIED'));
   assert.equal((await createControlledIntake(db, otherActor, inputs[0])).id, rows[0]!.id);
 
@@ -239,7 +245,11 @@ test('an authenticated 1265 projection is produced by N13/N14, linked and replay
     eventId: randomUUID(),
     businessCorrelationId: randomUUID(),
     source: { ...seed.source, formCode: '1265', submissionId: 'INTAKE-1265-BROWSER-UNLINKED' },
-    payload: { ...seed.payload, firstName: 'Browser', lastName: 'Da classificare', email: 'automatic-browser@intake.invalid' },
+    payload: {
+      ...seed.payload,
+      firstName: 'Browser', lastName: 'Da classificare', companyName: 'Browser Distinct Synthetic',
+      email: 'automatic-browser@intake.invalid', phone: '+39 333 999 8888',
+    },
   });
   const browserAdmission = await admitBusinessInboxEvent(db, browserEvent);
   const browserLease = await claimBusinessQueueEvent(db, { queueKind: 'INBOX', leaseOwnerId: randomUUID() });

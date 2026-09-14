@@ -52,38 +52,18 @@ function fixture() {
   }
 }
 
-test('N15 CI selects the actual rollback count for PR bases and later main pushes', () => {
-  const f = fixture();
-  try {
-    f.git('checkout', '--quiet', '--detach', f.steady44);
-    writeFileSync(join(f.bin, 'npm'), '#!/usr/bin/env bash\nset -euo pipefail\n[[ "$*" == "run test:n05:restore" ]]\nprintf "SELECTED|%s|%s|%s\\n" "$ROLLBACK_COMMIT" "$ROLLBACK_TREE" "$EXPECTED_ROLLBACK_MIGRATION_COUNT"\n', { mode: 0o755 });
-    const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-    const step = ci.match(/      - name: N05 synthetic backup, full restore and N-1 rollback drill\n[\s\S]*?        run: \|\n([\s\S]*?)(?=\n      - name:)/u)?.[1];
-    assert.ok(step, 'execute the actual CI selection block');
-    const command = step.replace(/^          /gmu, '')
-      .replaceAll('$' + '{{ github.run_id }}', 'synthetic')
-      .replaceAll('$' + '{{ github.run_attempt }}', '1');
-    for (const [base, expectedCommit, count] of [
-      [f.source43, f.source43, '43'],
-      [f.source44, f.source44, '44'],
-      ['', f.source44, '44'],
-    ]) {
-      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', command], {
-        cwd: f.root, env: { ...f.env, PATH: f.bin + ':' + process.env.PATH, PR_BASE_SHA: base },
-        encoding: 'utf8', timeout: 10_000,
-      });
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), 'SELECTED|' + expectedCommit + '|' + f.git('rev-parse', expectedCommit + '^{tree}') + '|' + count);
-    }
-    const missing = spawnSync('bash', ['-euo', 'pipefail', '-c', command], {
-      cwd: f.root, env: { ...f.env, PATH: f.bin + ':' + process.env.PATH, PR_BASE_SHA: '0'.repeat(40) },
-      encoding: 'utf8', timeout: 10_000,
-    });
-    assert.notEqual(missing.status, 0);
-    assert.doesNotMatch(missing.stdout, /SELECTED/u);
-  } finally {
-    rmSync(f.root, { recursive: true, force: true });
-  }
+test('N15 CI pins the historical PR137 source and C136 rollback for schema-44 recovery', () => {
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const start = ci.indexOf('      - name: N05 synthetic backup, full restore and N-1 rollback drill');
+  const end = ci.indexOf('\n      - name: Remove tracked-only source worktree', start);
+  const step = start >= 0 && end > start ? ci.slice(start, end) : '';
+  assert.ok(step, 'inspect the actual historical N05 CI block');
+  assert.match(step, /git worktree add --detach "\$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317/u);
+  assert.match(step, /rev-parse HEAD\^\{tree\}.*064415e3dbb4a7d4ac1498c24808a01342de2359/u);
+  assert.match(step, /rollback_commit=71d238b27efde1afb708e25d0fe035c0c69dc303/u);
+  assert.match(step, /EXPECTED_MIGRATION_COUNT=44/u);
+  assert.match(step, /EXPECTED_ROLLBACK_MIGRATION_COUNT="\$rollback_migration_count"/u);
+  assert.doesNotMatch(step, /PR_BASE_SHA|mv prisma\/migrations|intake-migration-45/u);
 });
 
 test('N15 restore preflight qualifies 43 to 44 and unchanged 44 to 44 without allocating resources', () => {

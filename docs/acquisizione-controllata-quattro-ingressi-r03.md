@@ -40,3 +40,9 @@ La CI verifica i blob delle 44 migrazioni PR137, applica prima il ledger 44 e po
 Il checkout candidato schema 45 non viene più alterato per eseguire qualifiche storiche. La CI prepara un worktree detached dell'esatto commit PR137 `c49b18ccc4df713e212e8e4f2f05100638aee317`, tree `064415e3dbb4a7d4ac1498c24808a01342de2359`, per applicare e misurare il ledger 44; applica poi la migrazione 45 dal checkout candidato integro. N15, smoke/VNX05 e restore N05 usano sorgenti storiche esatte e mantengono la provenienza schema 44.
 
 La fixture 1265 passa dal ciclo applicativo `admitBusinessInboxEvent` → `claimBusinessQueueEvent` → `projectClaimedLeadInboxEvent`, con chiave N13 esclusivamente sintetica in directory temporanea. Il browser riceve una seconda proiezione non ancora collegata e crea dalla UI il nuovo `ControlledIntake`; il replay resta verificato separatamente. Le prove HTTP catturano la server action dalla richiesta autorizzata e ripetono lo stesso POST con una sessione priva di autorità, verificando l'assenza di mutazioni.
+
+## Correzione CI R07
+
+Le riassegnazioni delle fixture N14 usano `assignCommercialLeadInboxItem` con responsabile, sessione registry e versione inbox correnti; le sole sessioni preparatorie sono revocate con il motivo canonico `LOGOUT`. La seconda richiesta 1265 usa segnali forti integralmente distinti ed è proiettata dal ciclo N13/N14 come `PROJECTED_NEW` prima della classificazione UI.
+
+VNX03 è eseguito sulle sorgenti storiche esatte PR137 contro C136. Le attese statiche che descrivono il totale corrente riconoscono 45 migrazioni, mentre i test delle milestone storiche continuano a verificare puntualmente le rispettive migrazioni e il checker condiviso conserva l'immutabilità dei 44 blob originali. I binari Prisma/Node dei worktree vengono risolti dal banco effettivo prima del cambio directory.

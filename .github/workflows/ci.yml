@@ -62,11 +62,12 @@ jobs:
           mkdir -p "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR"
           printf '{"phase":"PREPARE","synthetic":true}\n' > "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR/status.json"
           psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          candidate_prisma="$PWD/node_modules/.bin/prisma"
           historical_source="$RUNNER_TEMP/pr137-schema44"
           git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
           test "$(git -C "$historical_source" rev-parse HEAD)" = c49b18ccc4df713e212e8e4f2f05100638aee317
           test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
-          (cd "$historical_source" && "$GITHUB_WORKSPACE/node_modules/.bin/prisma" migrate deploy --schema prisma/schema.prisma)
+          (cd "$historical_source" && "$candidate_prisma" migrate deploy --schema prisma/schema.prisma)
           test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 44
           git worktree remove --force "$historical_source"
           npm run prisma:migrate:deploy
@@ -709,10 +710,11 @@ jobs:
 
       - name: Apply exactly 44 database migrations
         run: |
+          current_prisma="$PWD/node_modules/.bin/prisma"
           historical_source="$RUNNER_TEMP/pr137-general-schema44"
           git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
           test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
-          (cd "$historical_source" && "$GITHUB_WORKSPACE/node_modules/.bin/prisma" migrate deploy --schema prisma/schema.prisma)
+          (cd "$historical_source" && "$current_prisma" migrate deploy --schema prisma/schema.prisma)
           git worktree remove --force "$historical_source"
 
       - name: Bind ephemeral database sentinel
@@ -757,7 +759,7 @@ jobs:
             echo "systemd-analyze not available; skipping unit verification"
           fi
 
-      - name: Historical schema-44 Docker application and worker packaging smoke test
+      - name: Docker production application and worker packaging smoke test — historical schema44
         run: |
           historical_source="$RUNNER_TEMP/pr137-smoke-schema44"
           git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
@@ -816,9 +818,8 @@ jobs:
             ./scripts/n05/staging-preflight.sh
 
       - name: N05 synthetic backup, full restore and N-1 rollback drill
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          current_node_bin="$PWD/node_modules/.bin"
           historical_source="$RUNNER_TEMP/pr137-n05-schema44"
           git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
           test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
@@ -826,7 +827,7 @@ jobs:
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
           rollback_migration_count="$(git ls-tree -d --name-only "$rollback_commit:prisma/migrations" | wc -l | tr -d ' ')"
           (cd "$historical_source" && \
-            PATH="$GITHUB_WORKSPACE/node_modules/.bin:$PATH" \
+            PATH="$current_node_bin:$PATH" \
             ROLLBACK_COMMIT="$rollback_commit" \
             ROLLBACK_TREE="$rollback_tree" \
             EXPECTED_MIGRATION_COUNT=44 \
@@ -927,18 +928,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      VNX03_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      VNX03_BASE_SHA: 71d238b27efde1afb708e25d0fe035c0c69dc303
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: c49b18ccc4df713e212e8e4f2f05100638aee317
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact source head and protected scope
         run: |
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "c49b18ccc4df713e212e8e4f2f05100638aee317"
+          test "$(git rev-parse HEAD^{tree})" = "064415e3dbb4a7d4ac1498c24808a01342de2359"
           bash scripts/vnx03/verify-protected-scope.sh
 
       - name: Setup Node.js

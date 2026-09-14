@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { ControlledIntakeError, createControlledIntake } from '../../src/lib/controlled-intake';
+import { assignCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 
 const app = 'http://127.0.0.1:3000';
@@ -111,7 +112,17 @@ test('four controlled channels, decisions, current assignment and direct denial'
   expect(capturedDecision).not.toBeNull();
 
   const browserIntake = await db.controlledIntake.findUniqueOrThrow({ where: { channel_sourceId: { channel: 'WPFORMS_1098', sourceId: 'B-1098' } } });
-  await db.lead.update({ where: { id: browserIntake.leadId }, data: { notes: 'Nota browser indipendente', assignedToId: 'controlled-intake-browser-other' } });
+  await db.lead.update({ where: { id: browserIntake.leadId }, data: { notes: 'Nota browser indipendente' } });
+  const managerPage = await browser.newPage();
+  await login(managerPage, 'intake-manager@invalid.test');
+  const managerSession = await db.internalSession.findFirstOrThrow({ where: { userId: 'controlled-intake-browser-manager', revokedAt: null }, orderBy: { createdAt: 'desc' } });
+  const browserInbox = await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: browserIntake.leadId } });
+  await assignCommercialLeadInboxItem(db, {
+    leadId: browserIntake.leadId,
+    actor: { userId: 'controlled-intake-browser-manager', sessionId: managerSession.id },
+    targetUserId: 'controlled-intake-browser-other',
+    expectedInboxVersion: browserInbox.version,
+  });
   const reassigned = await browser.newPage();
   await login(reassigned, 'intake-other@invalid.test');
   await reassigned.goto(`${app}/controlled-intakes`);
@@ -154,6 +165,7 @@ test('four controlled channels, decisions, current assignment and direct denial'
     httpDecisionDenied: true, desktop: true, mobile390: true,
   }), { mode: 0o600 });
   await anonymous.close();
+  await managerPage.close();
   await reassigned.close();
   await context.close();
 });

@@ -12,3 +12,4 @@
 - R05: default OFF uniforme; input nullable/limiti DB; replay e decisioni ricalcolati su ABAC corrente; raccordo UI del 1265 autenticato; pertinenza riferimenti 1485; prova CI esplicita ledger 44→45.
 - Qualifiche separate: controlled-intake sul nuovo schema 45; N15/N05 storici sul tree di 44 migrazioni, senza attestazione di restore 45.
 - R06: nessuna mutazione del checkout candidato; worktree PR137 esatto per schema44/N15/N05/VNX05, transizione 44→45 nel solo job ingressi, fixture 1265 prodotta da N13/N14 e POST reali delle server action con sessioni negative.
+- R07: fixture N14 riassegnate solo tramite servizio canonico, seconda identità 1265 realmente nuova, VNX03 storico PR137→C136, contratti test riallineati al totale corrente45 e binari risolti dal banco effettivo.
