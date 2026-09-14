@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import bcrypt from "bcryptjs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -11,6 +13,19 @@ import { cases } from "./fixtures";
 
 const db = new PrismaClient();
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD;
+const evidenceDir = process.env.PRACTICE_READINESS_BROWSER_EVIDENCE_DIR;
+type ProvisionPhase = "ENVIRONMENT" | "IDENTITY" | "CATALOG" | "ACTORS" | "CASES" | "COMPLETE";
+let phase: ProvisionPhase = "ENVIRONMENT";
+
+function writeDiagnostic(status: "PASS" | "FAIL", code: string) {
+  if (!evidenceDir) return;
+  writeFileSync(
+    join(evidenceDir, "provision-status.json"),
+    `${JSON.stringify({ phase, status, code, synthetic: true })}\n`,
+    { mode: 0o600 },
+  );
+}
+
 async function main() {
   assert.equal(process.env.PRACTICE_READINESS_BROWSER_CONFIRMED, "1");
   assert.ok(password && password.length >= 24);
@@ -26,9 +41,12 @@ async function main() {
     }),
     true,
   );
+  phase = "IDENTITY";
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  phase = "CATALOG";
   await prepareServiceCatalogV2(db);
 
+  phase = "ACTORS";
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({
     data: [
@@ -56,6 +74,7 @@ async function main() {
     ],
   });
 
+  phase = "CASES";
   for (const item of cases) {
     const catalogRevision = await db.serviceCatalogRevision.findFirstOrThrow({
       where: {
@@ -200,6 +219,8 @@ async function main() {
     assert.equal(await db.company.count({ where: { clientId: client.id } }), 0);
     assert.ok(intake.id && offer.id);
   }
+  phase = "COMPLETE";
+  writeDiagnostic("PASS", "PROVISION_COMPLETE");
   process.stdout.write(
     JSON.stringify({
       practiceReadinessBrowserProvision: "ready",
@@ -210,7 +231,9 @@ async function main() {
 
 void main()
   .catch(() => {
-    process.stderr.write("PRACTICE_READINESS_BROWSER_PROVISION_FAILED\n");
+    const code = `${phase}_FAILED`;
+    writeDiagnostic("FAIL", code);
+    process.stderr.write(`PRACTICE_READINESS_BROWSER_PROVISION_FAILED:${code}\n`);
     process.exitCode = 1;
   })
   .finally(() => db.$disconnect());

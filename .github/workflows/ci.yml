@@ -143,6 +143,8 @@ jobs:
           evidence="$RUNNER_TEMP/practice-readiness-browser-evidence"
           password="$(openssl rand -base64 36 | tr -d '\n')"
           echo "::add-mask::$password"
+          export PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence"
+          export PRACTICE_READINESS_BROWSER_PASSWORD="$password"
           printf 'PRACTICE_READINESS_BROWSER_EVIDENCE_DIR=%s\nPRACTICE_READINESS_BROWSER_PASSWORD=%s\n' "$evidence" "$password" >> "$GITHUB_ENV"
           mkdir -p "$evidence"
           printf '{"phase":"prepare","synthetic":true}\n' > "$evidence/status.json"
