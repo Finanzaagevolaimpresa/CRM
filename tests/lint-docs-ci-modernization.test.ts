@@ -34,7 +34,7 @@ test('N08 CI resolves Node from the repository and preserves the full release ga
 test('N08 remains migration-free, dependency-free and documented', () => {
   const migrations = readdirSync('prisma/migrations', { withFileTypes: true })
     .filter((entry) => entry.isDirectory());
-  assert.equal(migrations.length, 45);
+  assert.equal(migrations.length, 46);
 
   const documentation = read('docs/n08-lint-debt-documentation-ci-modernization-v1.md');
   assert.match(documentation, /nessuna modifica a `prisma\/schema\.prisma`/);

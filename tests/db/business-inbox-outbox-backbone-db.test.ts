@@ -785,8 +785,8 @@ async function qualifyMigrationChain(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 45);
-  assert.equal(allNames.at(-1), '20260914090000_controlled_intake_four_channels_v1');
+  assert.equal(allNames.length, 46);
+  assert.equal(allNames.at(-1), '20260914130000_practice_engagement_readiness_v1');
   const names = allNames.slice(0, 38);
   const url = new URL(sourceUrl);
   url.searchParams.set('schema', schema);

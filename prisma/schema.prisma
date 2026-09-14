@@ -2570,3 +2570,61 @@ model CommunicationIntentAudit {
   createdAt             DateTime                  @default(now()) @db.Timestamptz(3)
   intentRecord          CommunicationIntentRecord @relation(fields: [intentRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }
+
+model PracticeReadiness {
+  id                    String @id @default(uuid()) @db.Uuid
+  controlledIntakeId    String @unique @db.Uuid
+  commercialOfferId     String
+  offerSnapshotHash     String @db.Char(64)
+  offerRevision         Int
+  serviceRevisionId     String @db.Uuid
+  clientId              String
+  projectId             String?
+  contractId            String? @unique
+  clientServiceId       String? @unique
+  requiredInitialAmount Decimal @db.Decimal(18, 2)
+  currency              String @default("EUR") @db.VarChar(3)
+  formalizedAt          DateTime? @db.Timestamptz(3)
+  formalizedById        String?
+  signedDocumentId      String?
+  materialsCompleteAt   DateTime? @db.Timestamptz(3)
+  materialsCompleteById String?
+  startedAt             DateTime? @db.Timestamptz(3)
+  startedById           String?
+  startEvidence         Json?
+  version               Int @default(1)
+  createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @db.Timestamptz(3)
+  funding               PracticeFundingEvidence[]
+  materials             PracticeMaterialEvidence[]
+  @@index([clientId, projectId, createdAt], map: "PracticeReadiness_context_idx")
+}
+model PracticeFundingEvidence {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  reference String @db.VarChar(120)
+  amount Decimal @db.Decimal(18, 2)
+  currency String @db.VarChar(3)
+  status String @db.VarChar(20)
+  payloadHash String @db.Char(64)
+  verifiedAt DateTime? @db.Timestamptz(3)
+  verifiedById String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  @@unique([practiceId, reference])
+  @@index([practiceId, status], map: "PracticeFundingEvidence_practice_idx")
+}
+model PracticeMaterialEvidence {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  checklistItemId String
+  documentId String?
+  status String @db.VarChar(20)
+  reason String? @db.VarChar(500)
+  payloadHash String @db.Char(64)
+  decidedAt DateTime @db.Timestamptz(3)
+  decidedById String
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  @@unique([practiceId, checklistItemId])
+  @@index([practiceId, status], map: "PracticeMaterialEvidence_practice_idx")
+}
