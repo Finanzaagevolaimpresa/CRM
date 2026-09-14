@@ -98,16 +98,47 @@ test('four controlled channels, decisions, current assignment and direct denial'
   await automaticForm.locator('[name="need"]').fill('Classificazione umana');
   await automaticForm.locator('[name="serviceCode"]').selectOption('progetti_digitali');
   await automaticForm.locator('[name="digitalProjectType"]').selectOption('software_crm_workflow');
-  await automaticForm.getByRole('button', { name: 'Collega e classifica 1265 autenticato' }).click();
-  await expect(page.getByText('AUTHENTICATED_AUTOMATIC', { exact: false })).toBeVisible();
+  const before1265Url = page.url();
+  const previousCreatedId = new URL(before1265Url).searchParams.get('created');
+  await Promise.all([
+    page.waitForURL((url) => {
+      const createdId = url.searchParams.get('created');
+      return Boolean(
+        createdId
+        && createdId !== previousCreatedId
+        && url.href !== before1265Url
+        && url.hash === `#intake-${createdId}`,
+      );
+    }),
+    automaticForm.getByRole('button', { name: 'Collega e classifica 1265 autenticato' }).click(),
+  ]);
+  const created1265Id = new URL(page.url()).searchParams.get('created');
+  expect(created1265Id).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(page.url()).toContain(`#intake-${created1265Id}`);
+  await expect.poll(async () => db.controlledIntake.findUnique({ where: { sourceProjectionLedgerId: projectionLedgerId } }), {
+    message: `Attesa persistenza intake sintetico per ledger ${projectionLedgerId}`,
+    timeout: 10_000,
+  }).not.toBeNull();
   const linked1265 = await db.controlledIntake.findUniqueOrThrow({ where: { sourceProjectionLedgerId: projectionLedgerId } });
+  expect(linked1265.id).toBe(created1265Id);
+  expect(linked1265.leadId).toBe((await db.leadProjectionLedger.findUniqueOrThrow({ where: { id: projectionLedgerId } })).leadId);
   expect(linked1265.subjectType).toBe('SOGGETTO_DA_COSTITUIRE');
+  expect(linked1265.effectiveCategory).toBe('digitale');
   expect(linked1265.serviceRevisionId).not.toBeNull();
+  const linkedCard = page.locator(`#intake-${linked1265.id}`);
+  await expect(linkedCard.getByText(/AUTHENTICATED_AUTOMATIC/u)).toBeVisible();
+  await expect(linkedCard.getByText(/Classificazione: digitale · software_crm_workflow/u)).toBeVisible();
 
   const decisionActionCapture = captureNextAction(page);
-  const decisionButton = page.getByRole('button', { name: 'Registra decisione' }).first();
+  const decisionForm = page.getByRole('button', { name: 'Registra decisione' }).first().locator('xpath=ancestor::form[1]');
+  const decisionIntakeId = await decisionForm.locator('[name="intakeId"]').inputValue();
+  const decisionButton = decisionForm.getByRole('button', { name: 'Registra decisione' });
   await decisionButton.click();
-  await expect(page.getByText('Decisione duplicato: KEEP_DISTINCT')).toBeVisible();
+  await expect.poll(() => db.controlledIntakeDuplicateDecision.findUnique({ where: { intakeId: decisionIntakeId } }), {
+    message: `Attesa decisione duplicato sintetica per intake ${decisionIntakeId}`,
+    timeout: 10_000,
+  }).not.toBeNull();
+  await expect(page.locator(`#intake-${decisionIntakeId}`).getByText('Decisione duplicato: KEEP_DISTINCT')).toBeVisible();
   const capturedDecision = decisionActionCapture();
   expect(capturedDecision).not.toBeNull();
 

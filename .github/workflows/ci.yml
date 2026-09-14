@@ -84,7 +84,13 @@ jobs:
           npx playwright test --config tests/controlled-intake-browser/playwright.config.ts
       - if: always()
         uses: actions/upload-artifact@v4
-        with: { name: "controlled-intake-${{ github.run_id }}-${{ github.run_attempt }}", path: "${{ runner.temp }}/controlled-intake-evidence", if-no-files-found: error, retention-days: 14 }
+        with:
+          name: "controlled-intake-${{ github.run_id }}-${{ github.run_attempt }}"
+          path: |
+            ${{ runner.temp }}/controlled-intake-evidence
+            test-results
+          if-no-files-found: error
+          retention-days: 14
 
   catalog-alignment:
     name: Catalog v2 PostgreSQL and browser qualification
