@@ -144,7 +144,11 @@ export default async function Page({
             action={proposePracticeOfferRevisionAction}
             className="grid gap-3 md:grid-cols-2"
           >
-            <select name="controlledIntakeId" className={field}>
+            <select
+              name="controlledIntakeId"
+              aria-label="Richiesta controllata"
+              className={field}
+            >
               {intakes.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.sourceId}
@@ -153,6 +157,7 @@ export default async function Page({
             </select>
             <select
               name="commercialOfferSelection"
+              aria-label="Preventivo sorgente"
               className={field}
               defaultValue={feedback.commercialOfferSelection}
             >
@@ -165,21 +170,25 @@ export default async function Page({
                 </option>
               ))}
             </select>
-            <select name="serviceRevisionId" className={field}>
+            <select
+              name="serviceRevisionId"
+              aria-label="Servizio e revisione catalogo"
+              className={field}
+            >
               {revisions.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.serviceCatalog.code} · rev. {x.version}
                 </option>
               ))}
             </select>
-            <select name="clientId" className={field}>
+            <select name="clientId" aria-label="Cliente" className={field}>
               {clients.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.displayName}
                 </option>
               ))}
             </select>
-            <select name="projectId" className={field}>
+            <select name="projectId" aria-label="Progetto" className={field}>
               <option value="">Nessun progetto</option>
               {projects.map((x) => (
                 <option key={x.id} value={x.id}>
@@ -187,25 +196,33 @@ export default async function Page({
                 </option>
               ))}
             </select>
-            <select name="digitalProjectType" className={field}>
+            <select
+              name="digitalProjectType"
+              aria-label="Tipologia digitale"
+              className={field}
+            >
+              <option value="">Non applicabile</option>
               <option value="software_crm_workflow">
                 Software, CRM e workflow
               </option>
             </select>
             <textarea
               name="scope"
+              aria-label="Perimetro concordato"
               className={field}
               placeholder="Perimetro concordato"
               defaultValue={feedback.scope}
             />
             <textarea
               name="startupConditions"
+              aria-label="Condizioni di avvio"
               className={field}
               placeholder="Condizioni esplicite di avvio"
               defaultValue={feedback.startupConditions}
             />
             <input
               name="requiredInitialAmount"
+              aria-label="Acconto iniziale concordato"
               type="text"
               inputMode="decimal"
               className={field}
@@ -296,7 +313,11 @@ export default async function Page({
                         name="expectedVersion"
                         value={p.version}
                       />
-                      <select name="contractId" className={field}>
+                      <select
+                        name="contractId"
+                        aria-label="Contratto firmato"
+                        className={field}
+                      >
                         {contracts
                           .filter((x) => x.clientId === p.clientId)
                           .map((x) => (
@@ -305,7 +326,11 @@ export default async function Page({
                             </option>
                           ))}
                       </select>
-                      <select name="signedDocumentId" className={field}>
+                      <select
+                        name="signedDocumentId"
+                        aria-label="Documento incarico"
+                        className={field}
+                      >
                         {documents
                           .filter((x) => x.clientId === p.clientId)
                           .map((x) => (
@@ -314,7 +339,11 @@ export default async function Page({
                             </option>
                           ))}
                       </select>
-                      <select name="signedDocumentVersionId" className={field}>
+                      <select
+                        name="signedDocumentVersionId"
+                        aria-label="Versione documento incarico"
+                        className={field}
+                      >
                         {documentVersions
                           .filter((v) =>
                             documents.some(
@@ -344,7 +373,11 @@ export default async function Page({
                         name="expectedVersion"
                         value={p.version}
                       />
-                      <select name="clientServiceId" className={field}>
+                      <select
+                        name="clientServiceId"
+                        aria-label="Pratica operativa"
+                        className={field}
+                      >
                         {services
                           .filter(
                             (x) =>
@@ -373,6 +406,7 @@ export default async function Page({
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
                         name="reference"
+                        aria-label="Riferimento accredito"
                         className={field}
                         placeholder="Riferimento univoco"
                         defaultValue={
@@ -383,6 +417,7 @@ export default async function Page({
                       />
                       <input
                         name="amount"
+                        aria-label="Importo accredito"
                         type="text"
                         inputMode="decimal"
                         className={field}
@@ -468,7 +503,11 @@ export default async function Page({
                         name="expectedVersion"
                         value={p.version}
                       />
-                      <select name="checklistItemId" className={field}>
+                      <select
+                        name="checklistItemId"
+                        aria-label="Requisito materiale"
+                        className={field}
+                      >
                         {items
                           .filter((x) => x.clientId === p.clientId)
                           .map((x) => (
@@ -477,7 +516,11 @@ export default async function Page({
                             </option>
                           ))}
                       </select>
-                      <select name="documentId" className={field}>
+                      <select
+                        name="documentId"
+                        aria-label="Documento materiale"
+                        className={field}
+                      >
                         <option value="">Nessun documento</option>
                         {documents
                           .filter((x) => x.clientId === p.clientId)
@@ -487,7 +530,11 @@ export default async function Page({
                             </option>
                           ))}
                       </select>
-                      <select name="documentVersionId" className={field}>
+                      <select
+                        name="documentVersionId"
+                        aria-label="Versione documento materiale"
+                        className={field}
+                      >
                         <option value="">Nessuna versione</option>
                         {documentVersions
                           .filter((v) =>
@@ -504,13 +551,18 @@ export default async function Page({
                             </option>
                           ))}
                       </select>
-                      <select name="status" className={field}>
+                      <select
+                        name="status"
+                        aria-label="Decisione materiale"
+                        className={field}
+                      >
                         <option>VALIDATED</option>
                         <option>NOT_NEEDED</option>
                         <option>INVALIDATED</option>
                       </select>
                       <input
                         name="reason"
+                        aria-label="Motivazione decisione"
                         className={field}
                         placeholder="Motivazione"
                       />
@@ -537,6 +589,7 @@ export default async function Page({
                       />
                       <input
                         name="emptyChecklistReason"
+                        aria-label="Motivazione checklist non applicabile"
                         className={field}
                         placeholder="Motivazione se la checklist non è applicabile"
                       />
