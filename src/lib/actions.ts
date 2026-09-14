@@ -745,6 +745,8 @@ export async function updateCommercialOffer(form: FormData) {
   const s = await requirePermission('lead.write');
   const data = commercialOfferUpdateSchema.parse(clean(form));
   const { offer: before } = await requireCommercialOfferEditAccess(s, data.id);
+  const managedAcceptance = await prisma.practiceOfferAcceptance.findFirst({ where: { offerRevision: { commercialOfferId: data.id } }, select: { id: true } });
+  if (managedAcceptance) throw new Error('PRACTICE_OFFER_REVISION_IMMUTABLE');
   await requireCommercialOfferTargetAccess(s, data);
   const now = new Date();
   const updateData: Prisma.CommercialOfferUpdateInput = {

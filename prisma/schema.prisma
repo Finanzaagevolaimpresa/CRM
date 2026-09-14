@@ -2577,6 +2577,7 @@ model PracticeReadiness {
   commercialOfferId     String
   offerSnapshotHash     String @db.Char(64)
   offerRevision         Int
+  acceptedOfferRevisionId String @db.Uuid
   serviceRevisionId     String @db.Uuid
   clientId              String
   projectId             String?
@@ -2587,8 +2588,10 @@ model PracticeReadiness {
   formalizedAt          DateTime? @db.Timestamptz(3)
   formalizedById        String?
   signedDocumentId      String?
+  signedDocumentVersionId String?
   materialsCompleteAt   DateTime? @db.Timestamptz(3)
   materialsCompleteById String?
+  materialsCompleteEvidenceId String? @db.Uuid
   startedAt             DateTime? @db.Timestamptz(3)
   startedById           String?
   startEvidence         Json?
@@ -2597,7 +2600,43 @@ model PracticeReadiness {
   updatedAt             DateTime @updatedAt @db.Timestamptz(3)
   funding               PracticeFundingEvidence[]
   materials             PracticeMaterialEvidence[]
+  materialAttestations  PracticeMaterialAttestation[]
   @@index([clientId, projectId, createdAt], map: "PracticeReadiness_context_idx")
+}
+model PracticeOfferRevision {
+  id String @id @default(uuid()) @db.Uuid
+  controlledIntakeId String @db.Uuid
+  commercialOfferId String
+  revision Int
+  serviceRevisionId String @db.Uuid
+  clientId String
+  projectId String?
+  digitalProjectType String? @db.VarChar(80)
+  scope String @db.Text
+  inclusions Json
+  exclusions Json
+  deliverables Json
+  taxableAmount Decimal @db.Decimal(18, 2)
+  vatAmount Decimal @db.Decimal(18, 2)
+  totalAmount Decimal @db.Decimal(18, 2)
+  requiredInitialAmount Decimal @db.Decimal(18, 2)
+  currency String @db.VarChar(3)
+  validUntil DateTime @db.Timestamptz(3)
+  startupConditions String @db.Text
+  payloadHash String @unique @db.Char(64)
+  proposedAt DateTime @default(now()) @db.Timestamptz(3)
+  proposedById String
+  acceptance PracticeOfferAcceptance?
+  @@unique([commercialOfferId, revision])
+  @@index([clientId, projectId, proposedAt])
+}
+model PracticeOfferAcceptance {
+  id String @id @default(uuid()) @db.Uuid
+  offerRevisionId String @unique @db.Uuid
+  acceptedAt DateTime @db.Timestamptz(3)
+  acceptedById String
+  evidenceHash String @unique @db.Char(64)
+  offerRevision PracticeOfferRevision @relation(fields:[offerRevisionId], references:[id], onDelete: Restrict)
 }
 model PracticeFundingEvidence {
   id String @id @default(uuid()) @db.Uuid
@@ -2623,12 +2662,28 @@ model PracticeMaterialEvidence {
   practiceId String @db.Uuid
   checklistItemId String
   documentId String?
+  documentVersionId String?
+  documentChecksum String?
+  sequence Int
+  predecessorId String? @unique @db.Uuid
   status String @db.VarChar(20)
   reason String? @db.VarChar(500)
   payloadHash String @db.Char(64)
   decidedAt DateTime @db.Timestamptz(3)
   decidedById String
   practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
-  @@unique([practiceId, checklistItemId])
+  predecessor PracticeMaterialEvidence? @relation("PracticeMaterialHistory", fields:[predecessorId], references:[id], onDelete: Restrict)
+  successor PracticeMaterialEvidence? @relation("PracticeMaterialHistory")
+  @@unique([practiceId, checklistItemId, sequence])
   @@index([practiceId, status], map: "PracticeMaterialEvidence_practice_idx")
+}
+model PracticeMaterialAttestation {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  snapshotHash String @unique @db.Char(64)
+  snapshot Json
+  decidedAt DateTime @db.Timestamptz(3)
+  decidedById String
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  @@index([practiceId, decidedAt])
 }

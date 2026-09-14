@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import {
   attestPracticeMaterialsComplete,
   createPracticeReadiness,
+  proposePracticeOfferRevision,
   decidePracticeMaterial,
   formalizePractice,
   listAccessiblePracticeReadiness,
@@ -49,6 +50,7 @@ type Context = Awaited<ReturnType<typeof createContext>>;
 let a: Context;
 let b: Context;
 let revisionId: string;
+let offerAmounts = { taxable: '100.00', vat: '22.00', total: '122.00' };
 
 function denied(error: unknown) {
   return error instanceof PracticeReadinessError && error.code === 'DENIED';
@@ -71,35 +73,34 @@ async function createContext(label: string, consultantId: string) {
     classificationState: 'VERIFIED', effectiveCategory: 'digitale', need: 'Fixture sintetica di ambito', operatorId: consultantId,
   } });
   const offer = await db.commercialOffer.create({ data: {
-    leadId: lead.id, clientId: client.id, title: `Preventivo ${label}`, taxableAmount: '100.00', vatAmount: '22.00',
-    totalAmount: '122.00', status: 'accettata', acceptedAt: new Date(), createdById: consultantId,
+    leadId: lead.id, clientId: client.id, title: `Preventivo ${label}`, taxableAmount: offerAmounts.taxable, vatAmount: offerAmounts.vat,
+    totalAmount: offerAmounts.total, status: 'accettata', acceptedAt: new Date(), validUntil: new Date(Date.now()+86_400_000), createdById: consultantId,
   } });
   const document = await db.document.create({ data: {
     clientId: client.id, projectId: project.id, type: 'incarico', title: `Incarico ${label}`,
     fileName: `${label}.pdf`, mimeType: 'application/pdf', sizeBytes: 10, storagePath: `synthetic/${suffix}/${label}.pdf`,
     uploadedById: consultantId, status: 'verificato', checksum: randomBytes(32).toString('hex'),
   } });
+  const documentVersion = await db.documentVersion.create({ data: { documentId: document.id, version: 1, storagePath: document.storagePath, checksum: document.checksum } });
   const contract = await db.contract.create({ data: {
     clientId: client.id, projectId: project.id, contractNumber: `SCOPE-${label}-${suffix}`, serviceName: 'Servizio sintetico',
-    taxableAmount: '100.00', vatAmount: '22.00', totalAmount: '122.00', status: 'firmato', signedAt: new Date(),
+    taxableAmount: offerAmounts.taxable, vatAmount: offerAmounts.vat, totalAmount: offerAmounts.total, status: 'firmato', signedAt: new Date(),
     signedDocumentId: document.id,
   } });
   const checklist = await db.documentChecklistItem.create({ data: {
     clientId: client.id, projectId: project.id, title: `Materiale ${label}`, createdById: consultantId,
   } });
-  return { client, project, lead, intake, offer, document, contract, checklist };
+  return { client, project, lead, intake, offer, document, documentVersion, contract, checklist };
 }
 
 async function createPractice(context: Context, actor: typeof actorA) {
-  return createPracticeReadiness(db, actor, {
-    controlledIntakeId: context.intake.id,
-    commercialOfferId: context.offer.id,
-    serviceRevisionId: revisionId,
-    clientId: context.client.id,
-    projectId: context.project.id,
-    requiredInitialAmount: '50.00',
-    expectedOfferUpdatedAt: context.offer.updatedAt,
+  const revision = await proposePracticeOfferRevision(db, actor, {
+    controlledIntakeId: context.intake.id, commercialOfferId: context.offer.id, serviceRevisionId: revisionId,
+    clientId: context.client.id, projectId: context.project.id, digitalProjectType: 'software_crm_workflow',
+    scope: 'Perimetro sintetico verificabile', startupConditions: 'Acconto e materiali verificati',
+    requiredInitialAmount: '50.00', expectedOfferUpdatedAt: context.offer.updatedAt,
   });
+  return createPracticeReadiness(db, actor, { offerRevisionId: revision.id });
 }
 
 async function ensurePractice(context: Context, actor: typeof actorA) {
@@ -153,6 +154,9 @@ test.before(async () => {
     where: { serviceCatalog: { code: 'progetti_digitali' }, status: 'PUBLISHED' }, orderBy: { version: 'desc' },
   });
   revisionId = revision.id;
+  const taxable = revision.netPrice ?? new Prisma.Decimal('100.00');
+  const vat = taxable.mul(revision.vatRateBps).div(10_000).toDecimalPlaces(2);
+  offerAmounts = { taxable: taxable.toFixed(2), vat: vat.toFixed(2), total: taxable.add(vat).toFixed(2) };
   a = await createContext('A', ids.userA);
   b = await createContext('B', ids.userB);
 });
@@ -161,9 +165,15 @@ test.after(async () => {
   if (enabled) {
     await db.practiceMaterialEvidence.deleteMany({ where: { practice: { clientId: { in: [a.client.id, b.client.id] } } } });
     await db.practiceFundingEvidence.deleteMany({ where: { practice: { clientId: { in: [a.client.id, b.client.id] } } } });
+    await db.practiceReadiness.updateMany({ where: { clientId: { in: [a.client.id, b.client.id] } }, data: { materialsCompleteEvidenceId: null } });
+    await db.practiceMaterialAttestation.deleteMany({ where: { practice: { clientId: { in: [a.client.id, b.client.id] } } } });
     await db.practiceReadiness.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
+    const revisionRows = await db.practiceOfferRevision.findMany({ where: { clientId: { in: [a.client.id, b.client.id] } }, select: { id: true } });
+    await db.practiceOfferAcceptance.deleteMany({ where: { offerRevisionId: { in: revisionRows.map(row => row.id) } } });
+    await db.practiceOfferRevision.deleteMany({ where: { id: { in: revisionRows.map(row => row.id) } } });
     await db.documentChecklistItem.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
     await db.contract.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
+    await db.documentVersion.deleteMany({ where: { documentId: { in: [a.document.id, b.document.id] } } });
     await db.document.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
     await db.controlledIntake.deleteMany({ where: { id: { in: [a.intake.id, b.intake.id] } } });
     await db.commercialOffer.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
@@ -187,6 +197,68 @@ test('scope read model exposes A and omits B for a service.write operator', { sk
   assert.equal(visible.some(({ id }) => id === practiceB.id), false);
 });
 
+
+test('accepted offer revision stays immutable when a later proposal is created', { skip: !enabled }, async () => {
+  const practice = await ensurePractice(a, actorA);
+  const accepted = await db.practiceOfferRevision.findUniqueOrThrow({ where: { id: practice.acceptedOfferRevisionId }, include: { acceptance: true } });
+  assert.ok(accepted.acceptance);
+  await db.commercialOffer.update({ where: { id: a.offer.id }, data: { description: 'Seconda proposta sintetica distinta' } });
+  const currentOffer = await db.commercialOffer.findUniqueOrThrow({ where: { id: a.offer.id } });
+  const second = await proposePracticeOfferRevision(db, actorA, {
+    controlledIntakeId: a.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
+    clientId: a.client.id, projectId: a.project.id, digitalProjectType: 'software_crm_workflow',
+    scope: 'Secondo perimetro sintetico', startupConditions: 'Nuove condizioni da accettare', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: currentOffer.updatedAt,
+  });
+  assert.equal(second.revision, accepted.revision + 1);
+  assert.notEqual(second.payloadHash, accepted.payloadHash);
+  assert.equal(await db.practiceOfferAcceptance.count({ where: { offerRevisionId: second.id } }), 0);
+  const revisedPractice = await createPracticeReadiness(db, actorA, { offerRevisionId: second.id });
+  assert.equal(revisedPractice.id, practice.id);
+  assert.equal(revisedPractice.acceptedOfferRevisionId, second.id);
+  const unchanged = await db.practiceOfferRevision.findUniqueOrThrow({ where: { id: accepted.id }, include: { acceptance: true } });
+  assert.equal(unchanged.payloadHash, accepted.payloadHash);
+  assert.equal(unchanged.acceptance?.evidenceHash, accepted.acceptance?.evidenceHash);
+  assert.ok(await db.practiceOfferAcceptance.findUnique({ where: { offerRevisionId: second.id } }));
+
+  await db.commercialOffer.update({ where: { id: a.offer.id }, data: { description: 'Terza proposta sintetica' } });
+  const thirdOffer = await db.commercialOffer.findUniqueOrThrow({ where: { id: a.offer.id } });
+  const third = await proposePracticeOfferRevision(db, actorA, {
+    controlledIntakeId: a.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
+    clientId: a.client.id, projectId: a.project.id, digitalProjectType: 'software_crm_workflow', scope: 'Terzo perimetro', startupConditions: 'Da accettare', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: thirdOffer.updatedAt,
+  });
+  await db.serviceCatalogRevision.update({ where: { id: revisionId }, data: { status: 'RETIRED', retiredAt: new Date() } });
+  try {
+    await assert.rejects(createPracticeReadiness(db, actorA, { offerRevisionId: third.id }), denied);
+  } finally {
+    await db.serviceCatalogRevision.update({ where: { id: revisionId }, data: { status: 'PUBLISHED', retiredAt: null } });
+  }
+  assert.equal(await db.practiceOfferAcceptance.count({ where: { offerRevisionId: third.id } }), 0);
+});
+
+test('expired offer cannot produce a revision and leaves no audit or proposal', { skip: !enabled }, async () => {
+  const before = await globalFootprint();
+  const current = await db.commercialOffer.update({ where: { id: b.offer.id }, data: { validUntil: new Date(Date.now() - 1_000) } });
+  await assert.rejects(proposePracticeOfferRevision(db, actorB, {
+    controlledIntakeId: b.intake.id, commercialOfferId: b.offer.id, serviceRevisionId: revisionId,
+    clientId: b.client.id, projectId: b.project.id, digitalProjectType: 'software_crm_workflow',
+    scope: 'Offerta scaduta', startupConditions: 'Non applicabili', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: current.updatedAt,
+  }), denied);
+  assert.deepEqual(await globalFootprint(), before);
+  b.offer = await db.commercialOffer.update({ where: { id: b.offer.id }, data: { validUntil: new Date(Date.now() + 86_400_000) } });
+  const proposalsBefore = await db.practiceOfferRevision.count({ where: { commercialOfferId: b.offer.id } });
+  process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = '1';
+  try {
+    await assert.rejects(proposePracticeOfferRevision(db, actorB, {
+      controlledIntakeId: b.intake.id, commercialOfferId: b.offer.id, serviceRevisionId: revisionId,
+      clientId: b.client.id, projectId: b.project.id, digitalProjectType: 'software_crm_workflow',
+      scope: 'Rollback proposta', startupConditions: 'Rollback audit', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: b.offer.updatedAt,
+    }), (error) => error instanceof PracticeReadinessError && error.code === 'CONFLICT');
+  } finally {
+    delete process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT;
+  }
+  assert.equal(await db.practiceOfferRevision.count({ where: { commercialOfferId: b.offer.id } }), proposalsBefore);
+});
+
 test('every command and create replay deny a known out-of-scope B id without effects', { skip: !enabled }, async () => {
   const practiceB = await ensurePractice(b, actorB);
   const commands = [
@@ -194,7 +266,7 @@ test('every command and create replay deny a known out-of-scope B id without eff
     () => confirmPracticeFunding(db, actorA, { practiceId: practiceB.id, evidenceId: randomUUID(), expectedVersion: practiceB.version }),
     () => reversePracticeFunding(db, actorA, { practiceId: practiceB.id, evidenceId: randomUUID(), expectedVersion: practiceB.version }),
     () => decidePracticeMaterial(db, actorA, { practiceId: practiceB.id, checklistItemId: b.checklist.id, status: 'NOT_NEEDED', reason: 'Non pertinente', expectedVersion: practiceB.version }),
-    () => formalizePractice(db, actorA, { practiceId: practiceB.id, contractId: b.contract.id, signedDocumentId: b.document.id, expectedVersion: practiceB.version }),
+    () => formalizePractice(db, actorA, { practiceId: practiceB.id, contractId: b.contract.id, signedDocumentId: b.document.id, signedDocumentVersionId: b.documentVersion.id, expectedVersion: practiceB.version }),
     () => attestPracticeMaterialsComplete(db, actorA, { practiceId: practiceB.id, expectedVersion: practiceB.version }),
     () => startPractice(db, actorA, { practiceId: practiceB.id, expectedVersion: practiceB.version }),
     () => createPractice(b, actorA),
@@ -204,13 +276,13 @@ test('every command and create replay deny a known out-of-scope B id without eff
 
 test('create rejects nonexistent/cross-client references before persistence', { skip: !enabled }, async () => {
   const before = await globalFootprint();
-  await assert.rejects(createPracticeReadiness(db, actorA, {
+  await assert.rejects(proposePracticeOfferRevision(db, actorA, {
     controlledIntakeId: b.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
-    clientId: a.client.id, projectId: a.project.id, requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
+    clientId: a.client.id, projectId: a.project.id, digitalProjectType: 'software_crm_workflow', scope: 'Scope', startupConditions: 'Condizioni', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
   }), denied);
-  await assert.rejects(createPracticeReadiness(db, actorA, {
+  await assert.rejects(proposePracticeOfferRevision(db, actorA, {
     controlledIntakeId: a.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
-    clientId: a.client.id, projectId: `missing-${suffix}`, requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
+    clientId: a.client.id, projectId: `missing-${suffix}`, digitalProjectType: 'software_crm_workflow', scope: 'Scope', startupConditions: 'Condizioni', requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
   }), denied);
   assert.deepEqual(await globalFootprint(), before);
 });
@@ -223,10 +295,10 @@ test('revocation and changed assignment deny commands and replay with zero effec
   }));
   await expectDeniedWithoutEffects(practiceA.id, () => createPractice(a, actorA));
   await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userA } });
-  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: new Date(), revokedReason: 'TEST' } });
+  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: ids.userA } });
   await expectDeniedWithoutEffects(practiceA.id, () => startPractice(db, actorA, { practiceId: practiceA.id, expectedVersion: practiceA.version }));
   await expectDeniedWithoutEffects(practiceA.id, () => createPractice(a, actorA));
-  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null } });
+  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } });
 });
 
 test('archived client, lead, and project independently hide reads and deny writes', { skip: !enabled }, async () => {
@@ -287,7 +359,13 @@ test('funding history is exact, idempotent, concurrent-safe, reversible, and ato
   assert.equal(currentAvailableFunding(history).toFixed(2), '30.00');
 
   practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
-  await formalizePractice(db, actorB, { practiceId: practice.id, contractId: b.contract.id, signedDocumentId: b.document.id, expectedVersion: practice.version });
+  await db.documentChecklistItem.update({ where: { id: b.checklist.id }, data: { active: false } });
+  await assert.rejects(attestPracticeMaterialsComplete(db, actorB, { practiceId: practice.id, expectedVersion: practice.version }), (error) => error instanceof PracticeReadinessError && error.code === 'NOT_READY');
+  await attestPracticeMaterialsComplete(db, actorB, { practiceId: practice.id, expectedVersion: practice.version, emptyChecklistReason: 'Nessun materiale applicabile alla fase sintetica' });
+  await db.documentChecklistItem.update({ where: { id: b.checklist.id }, data: { active: true } });
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await expectDeniedWithoutEffects(practice.id, () => formalizePractice(db, actorB, { practiceId: practice.id, contractId: b.contract.id, signedDocumentId: b.document.id, signedDocumentVersionId: a.documentVersion.id, expectedVersion: practice.version }));
+  await formalizePractice(db, actorB, { practiceId: practice.id, contractId: b.contract.id, signedDocumentId: b.document.id, signedDocumentVersionId: b.documentVersion.id, expectedVersion: practice.version });
   practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
   await decidePracticeMaterial(db, actorB, { practiceId: practice.id, checklistItemId: b.checklist.id, status: 'NOT_NEEDED', reason: 'Fixture di accredito', expectedVersion: practice.version });
   practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
@@ -313,10 +391,14 @@ test('positive A path reaches every scoped transition', { skip: !enabled }, asyn
   const afterFunding = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
   await decidePracticeMaterial(db, actorA, { practiceId: practice.id, checklistItemId: a.checklist.id, status: 'NOT_NEEDED', reason: 'Materiale non pertinente alla fixture', expectedVersion: afterFunding.version });
   const v2 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
-  await formalizePractice(db, actorA, { practiceId: practice.id, contractId: a.contract.id, signedDocumentId: a.document.id, expectedVersion: v2.version });
+  await formalizePractice(db, actorA, { practiceId: practice.id, contractId: a.contract.id, signedDocumentId: a.document.id, signedDocumentVersionId: a.documentVersion.id, expectedVersion: v2.version });
   const v3 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
   await attestPracticeMaterialsComplete(db, actorA, { practiceId: practice.id, expectedVersion: v3.version });
-  const v4 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  let v4 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await db.documentChecklistItem.update({ where: { id: a.checklist.id }, data: { title: 'Materiale A aggiornato dopo attestazione' } });
+  await assert.rejects(startPractice(db, actorA, { practiceId: practice.id, expectedVersion: v4.version }), (error) => error instanceof PracticeReadinessError && error.code === 'NOT_READY');
+  await attestPracticeMaterialsComplete(db, actorA, { practiceId: practice.id, expectedVersion: v4.version });
+  v4 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
   const started = await startPractice(db, actorA, { practiceId: practice.id, expectedVersion: v4.version });
   assert.ok(started.startedAt);
   assert.equal(started.startedById, ids.userA);
@@ -328,6 +410,6 @@ test('positive A path reaches every scoped transition', { skip: !enabled }, asyn
   assert.equal(afterReversal.startedAt?.toISOString(), started.startedAt?.toISOString());
   const afterHistory = await db.practiceFundingEvidence.findMany({ where: { practiceId: practice.id }, include: { successor: true } });
   assert.equal(currentAvailableFunding(afterHistory).toFixed(2), '0.00');
-  assert.equal((await footprint(practice.id)).audits, 7);
+  assert.equal((await footprint(practice.id)).audits, 8);
   assert.equal((await listAccessiblePracticeReadiness(db, manager)).some(({ id }) => id === practice.id), true);
 });

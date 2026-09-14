@@ -9,6 +9,7 @@ import {
   decidePracticeMaterial,
   formalizePractice,
   PracticeReadinessError,
+  proposePracticeOfferRevision,
   recordPracticeFunding,
   reversePracticeFunding,
   startPractice,
@@ -22,13 +23,19 @@ async function run(form: FormData, fn: (db: typeof prisma, actor: Awaited<Return
   } catch (error) {
     if (!(error instanceof PracticeReadinessError)) throw error;
     const query = new URLSearchParams({ error: error.code });
-    for (const field of ['practiceId', 'reference', 'amount']) {
+    for (const field of ['practiceId', 'reference', 'amount', 'commercialOfferSelection', 'controlledIntakeId', 'serviceRevisionId', 'clientId', 'projectId', 'digitalProjectType', 'scope', 'startupConditions', 'requiredInitialAmount']) {
       const value = form.get(field);
       if (typeof value === 'string') query.set(field, value.slice(0, 120));
     }
     redirect(`/practice-readiness?${query}`);
   }
   redirect(`/practice-readiness?updated=${result.id ?? result.practiceId}`);
+}
+export async function proposePracticeOfferRevisionAction(form: FormData) {
+  const selection = String(form.get('commercialOfferSelection') ?? '');
+  const separator = selection.lastIndexOf('|');
+  if (separator > 0) { form.set('commercialOfferId', selection.slice(0, separator)); form.set('expectedOfferUpdatedAt', selection.slice(separator + 1)); }
+  return run(form, proposePracticeOfferRevision);
 }
 export async function createPracticeReadinessAction(form: FormData) { return run(form, createPracticeReadiness); }
 export async function formalizePracticeAction(form: FormData) { return run(form, formalizePractice); }
