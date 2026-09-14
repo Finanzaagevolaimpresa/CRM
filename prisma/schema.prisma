@@ -2606,12 +2606,16 @@ model PracticeFundingEvidence {
   amount Decimal @db.Decimal(18, 2)
   currency String @db.VarChar(3)
   status String @db.VarChar(20)
+  sequence Int
+  predecessorId String? @unique @db.Uuid
   payloadHash String @db.Char(64)
   verifiedAt DateTime? @db.Timestamptz(3)
   verifiedById String?
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
-  @@unique([practiceId, reference])
+  predecessor PracticeFundingEvidence? @relation("PracticeFundingHistory", fields:[predecessorId], references:[id], onDelete: Restrict)
+  successor PracticeFundingEvidence? @relation("PracticeFundingHistory")
+  @@unique([practiceId, reference, sequence])
   @@index([practiceId, status], map: "PracticeFundingEvidence_practice_idx")
 }
 model PracticeMaterialEvidence {

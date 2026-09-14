@@ -50,7 +50,9 @@ jobs:
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
       - name: Qualify exact 45 to 46 migration and scope behavior
+        shell: bash
         run: |
+          set -euo pipefail
           evidence="$RUNNER_TEMP/practice-readiness-db-evidence"
           mkdir -p "$evidence"
           printf '{"phase":"started","synthetic":true}\n' > "$evidence/status.json"
@@ -67,8 +69,25 @@ jobs:
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 46
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY finished_at DESC LIMIT 1')" = 20260914130000_practice_engagement_readiness_v1
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '\''20260914130000_practice_engagement_readiness_v1'\'' AND finished_at IS NOT NULL AND rolled_back_at IS NULL')" = "$(sha256sum prisma/migrations/20260914130000_practice_engagement_readiness_v1/migration.sql | cut -d ' ' -f1)"
+          if bash -o pipefail -c 'false | tee /dev/null'; then
+            echo "pipefail self-test did not propagate failure" >&2
+            exit 1
+          fi
+          set +e
           node --import tsx --test tests/practice-readiness-db.test.ts | tee "$evidence/test.tap"
-          printf '{"phase":"complete","synthetic":true,"ledgerBefore":45,"ledgerAfter":46,"tests":6}\n' > "$evidence/status.json"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          tests=$(sed -n 's/^# tests //p' "$evidence/test.tap" | tail -1)
+          pass=$(sed -n 's/^# pass //p' "$evidence/test.tap" | tail -1)
+          fail=$(sed -n 's/^# fail //p' "$evidence/test.tap" | tail -1)
+          skipped=$(sed -n 's/^# skipped //p' "$evidence/test.tap" | tail -1)
+          printf '{"phase":"tested","synthetic":true,"testExit":%s,"tests":%s,"pass":%s,"fail":%s,"skipped":%s}\n' "$test_status" "${tests:-null}" "${pass:-null}" "${fail:-null}" "${skipped:-null}" > "$evidence/status.json"
+          test "$test_status" = 0
+          test -n "$tests" && test "$tests" -gt 0
+          test "$pass" = "$tests"
+          test "$fail" = 0
+          test "$skipped" = 0
+          printf '{"phase":"complete","synthetic":true,"ledgerBefore":45,"ledgerAfter":46,"tests":%s,"pass":%s,"fail":0,"skipped":0}\n' "$tests" "$pass" > "$evidence/status.json"
       - if: always()
         uses: actions/upload-artifact@v4
         with:

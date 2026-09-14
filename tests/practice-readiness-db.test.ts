@@ -10,6 +10,9 @@ import {
   listAccessiblePracticeReadiness,
   PracticeReadinessError,
   recordPracticeFunding,
+  confirmPracticeFunding,
+  reversePracticeFunding,
+  currentAvailableFunding,
   startPractice,
 } from '../src/lib/practice-readiness';
 import { prepareServiceCatalogV2 } from '../src/lib/service-catalog-v2-persistence';
@@ -94,9 +97,13 @@ async function createPractice(context: Context, actor: typeof actorA) {
     serviceRevisionId: revisionId,
     clientId: context.client.id,
     projectId: context.project.id,
-    requiredInitialAmount: 50,
+    requiredInitialAmount: '50.00',
     expectedOfferUpdatedAt: context.offer.updatedAt,
   });
+}
+
+async function ensurePractice(context: Context, actor: typeof actorA) {
+  return (await db.practiceReadiness.findUnique({ where: { controlledIntakeId: context.intake.id } })) ?? createPractice(context, actor);
 }
 
 async function footprint(practiceId: string) {
@@ -173,17 +180,19 @@ test.after(async () => {
 });
 
 test('scope read model exposes A and omits B for a service.write operator', { skip: !enabled }, async () => {
-  const practiceA = await createPractice(a, actorA);
-  const practiceB = await createPractice(b, actorB);
+  const practiceA = await ensurePractice(a, actorA);
+  const practiceB = await ensurePractice(b, actorB);
   const visible = await listAccessiblePracticeReadiness(db, actorA);
   assert.equal(visible.some(({ id }) => id === practiceA.id), true);
   assert.equal(visible.some(({ id }) => id === practiceB.id), false);
 });
 
 test('every command and create replay deny a known out-of-scope B id without effects', { skip: !enabled }, async () => {
-  const practiceB = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: b.intake.id } });
+  const practiceB = await ensurePractice(b, actorB);
   const commands = [
-    () => recordPracticeFunding(db, actorA, { practiceId: practiceB.id, reference: `B-${suffix}`, amount: '10.00', currency: 'EUR', status: 'DECLARED' }),
+    () => recordPracticeFunding(db, actorA, { practiceId: practiceB.id, reference: `B-${suffix}`, amount: '10.00', currency: 'EUR', expectedVersion: practiceB.version }),
+    () => confirmPracticeFunding(db, actorA, { practiceId: practiceB.id, evidenceId: randomUUID(), expectedVersion: practiceB.version }),
+    () => reversePracticeFunding(db, actorA, { practiceId: practiceB.id, evidenceId: randomUUID(), expectedVersion: practiceB.version }),
     () => decidePracticeMaterial(db, actorA, { practiceId: practiceB.id, checklistItemId: b.checklist.id, status: 'NOT_NEEDED', reason: 'Non pertinente', expectedVersion: practiceB.version }),
     () => formalizePractice(db, actorA, { practiceId: practiceB.id, contractId: b.contract.id, signedDocumentId: b.document.id, expectedVersion: practiceB.version }),
     () => attestPracticeMaterialsComplete(db, actorA, { practiceId: practiceB.id, expectedVersion: practiceB.version }),
@@ -197,20 +206,20 @@ test('create rejects nonexistent/cross-client references before persistence', { 
   const before = await globalFootprint();
   await assert.rejects(createPracticeReadiness(db, actorA, {
     controlledIntakeId: b.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
-    clientId: a.client.id, projectId: a.project.id, requiredInitialAmount: 50, expectedOfferUpdatedAt: a.offer.updatedAt,
+    clientId: a.client.id, projectId: a.project.id, requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
   }), denied);
   await assert.rejects(createPracticeReadiness(db, actorA, {
     controlledIntakeId: a.intake.id, commercialOfferId: a.offer.id, serviceRevisionId: revisionId,
-    clientId: a.client.id, projectId: `missing-${suffix}`, requiredInitialAmount: 50, expectedOfferUpdatedAt: a.offer.updatedAt,
+    clientId: a.client.id, projectId: `missing-${suffix}`, requiredInitialAmount: '50.00', expectedOfferUpdatedAt: a.offer.updatedAt,
   }), denied);
   assert.deepEqual(await globalFootprint(), before);
 });
 
 test('revocation and changed assignment deny commands and replay with zero effects', { skip: !enabled }, async () => {
-  const practiceA = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id } });
+  const practiceA = await ensurePractice(a, actorA);
   await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userB } });
   await expectDeniedWithoutEffects(practiceA.id, () => recordPracticeFunding(db, actorA, {
-    practiceId: practiceA.id, reference: `REASSIGNED-${suffix}`, amount: '1.00', currency: 'EUR', status: 'DECLARED',
+    practiceId: practiceA.id, reference: `REASSIGNED-${suffix}`, amount: '1.00', currency: 'EUR', expectedVersion: practiceA.version,
   }));
   await expectDeniedWithoutEffects(practiceA.id, () => createPractice(a, actorA));
   await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userA } });
@@ -221,7 +230,7 @@ test('revocation and changed assignment deny commands and replay with zero effec
 });
 
 test('archived client, lead, and project independently hide reads and deny writes', { skip: !enabled }, async () => {
-  const practiceA = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id } });
+  const practiceA = await ensurePractice(a, actorA);
   const cases = [
     { archive: () => db.client.update({ where: { id: a.client.id }, data: { deletedAt: new Date() } }), restore: () => db.client.update({ where: { id: a.client.id }, data: { deletedAt: null } }) },
     { archive: () => db.lead.update({ where: { id: a.lead.id }, data: { deletedAt: new Date() } }), restore: () => db.lead.update({ where: { id: a.lead.id }, data: { deletedAt: null } }) },
@@ -232,7 +241,7 @@ test('archived client, lead, and project independently hide reads and deny write
     try {
       assert.equal((await listAccessiblePracticeReadiness(db, actorA)).some(({ id }) => id === practiceA.id), false);
       await expectDeniedWithoutEffects(practiceA.id, () => recordPracticeFunding(db, actorA, {
-        practiceId: practiceA.id, reference: `ARCHIVED-${suffix}`, amount: '1.00', currency: 'EUR', status: 'DECLARED',
+        practiceId: practiceA.id, reference: `ARCHIVED-${suffix}`, amount: '1.00', currency: 'EUR', expectedVersion: practiceA.version,
       }));
       await expectDeniedWithoutEffects(practiceA.id, () => createPractice(a, actorA));
     } finally {
@@ -241,10 +250,68 @@ test('archived client, lead, and project independently hide reads and deny write
   }
 });
 
+test('funding history is exact, idempotent, concurrent-safe, reversible, and atomic', { skip: !enabled }, async () => {
+  let practice = await ensurePractice(b, actorB);
+  const firstInput = { practiceId: practice.id, reference: `PARTIAL-1-${suffix}`, amount: '20.00', currency: 'EUR', expectedVersion: practice.version } as const;
+  const declared = await recordPracticeFunding(db, actorB, firstInput);
+  const replay = await recordPracticeFunding(db, actorB, firstInput);
+  assert.equal(replay.id, declared.id);
+  assert.equal((await db.practiceFundingEvidence.count({ where: { practiceId: practice.id } })), 1);
+  await assert.rejects(recordPracticeFunding(db, actorB, { ...firstInput, amount: '21.00' }), (error) => error instanceof PracticeReadinessError && error.code === 'CONFLICT');
+  await assert.rejects(recordPracticeFunding(db, actorB, { ...firstInput, reference: `STALE-${suffix}` }), (error) => error instanceof PracticeReadinessError && error.code === 'CONFLICT');
+
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  const confirmationInput = { practiceId: practice.id, evidenceId: declared.id, expectedVersion: practice.version };
+  const confirmations = await Promise.all([
+    confirmPracticeFunding(db, actorB, confirmationInput),
+    confirmPracticeFunding(db, actorB, confirmationInput),
+  ]);
+  assert.equal(confirmations[0].id, confirmations[1].id);
+  let history = await db.practiceFundingEvidence.findMany({ where: { practiceId: practice.id }, include: { successor: true } });
+  assert.equal(history.length, 2);
+  assert.equal(currentAvailableFunding(history).toFixed(2), '20.00');
+
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  const supplement = await recordPracticeFunding(db, actorB, { practiceId: practice.id, reference: `PARTIAL-2-${suffix}`, amount: '30.00', currency: 'EUR', expectedVersion: practice.version });
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await confirmPracticeFunding(db, actorB, { practiceId: practice.id, evidenceId: supplement.id, expectedVersion: practice.version });
+  history = await db.practiceFundingEvidence.findMany({ where: { practiceId: practice.id }, include: { successor: true } });
+  assert.equal(currentAvailableFunding(history).toFixed(2), '50.00');
+
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  const reversed = await reversePracticeFunding(db, actorB, { practiceId: practice.id, evidenceId: confirmations[0].id, expectedVersion: practice.version });
+  const reversedReplay = await reversePracticeFunding(db, actorB, { practiceId: practice.id, evidenceId: confirmations[0].id, expectedVersion: practice.version });
+  assert.equal(reversedReplay.id, reversed.id);
+  history = await db.practiceFundingEvidence.findMany({ where: { practiceId: practice.id }, include: { successor: true }, orderBy: [{ reference: 'asc' }, { sequence: 'asc' }] });
+  assert.deepEqual(history.map(({ status }) => status).sort(), ['CONFIRMED', 'CONFIRMED', 'DECLARED', 'DECLARED', 'REVERSED']);
+  assert.equal(currentAvailableFunding(history).toFixed(2), '30.00');
+
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await formalizePractice(db, actorB, { practiceId: practice.id, contractId: b.contract.id, signedDocumentId: b.document.id, expectedVersion: practice.version });
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await decidePracticeMaterial(db, actorB, { practiceId: practice.id, checklistItemId: b.checklist.id, status: 'NOT_NEEDED', reason: 'Fixture di accredito', expectedVersion: practice.version });
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await attestPracticeMaterialsComplete(db, actorB, { practiceId: practice.id, expectedVersion: practice.version });
+  practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await assert.rejects(startPractice(db, actorB, { practiceId: practice.id, expectedVersion: practice.version }), (error) => error instanceof PracticeReadinessError && error.code === 'NOT_READY');
+
+  const beforeFault = await footprint(practice.id);
+  process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = '1';
+  try {
+    await assert.rejects(recordPracticeFunding(db, actorB, { practiceId: practice.id, reference: `FAULT-${suffix}`, amount: '1.00', currency: 'EUR', expectedVersion: practice.version }), (error) => error instanceof PracticeReadinessError && error.code === 'CONFLICT');
+  } finally {
+    delete process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT;
+  }
+  assert.deepEqual(await footprint(practice.id), beforeFault);
+});
+
 test('positive A path reaches every scoped transition', { skip: !enabled }, async () => {
-  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id } });
-  await recordPracticeFunding(db, actorA, { practiceId: practice.id, reference: `A-${suffix}`, amount: '50.00', currency: 'EUR', status: 'CONFIRMED' });
-  await decidePracticeMaterial(db, actorA, { practiceId: practice.id, checklistItemId: a.checklist.id, status: 'NOT_NEEDED', reason: 'Materiale non pertinente alla fixture', expectedVersion: practice.version });
+  const practice = await ensurePractice(a, actorA);
+  const declared = await recordPracticeFunding(db, actorA, { practiceId: practice.id, reference: `A-${suffix}`, amount: '50.00', currency: 'EUR', expectedVersion: practice.version });
+  const funded = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  const confirmed = await confirmPracticeFunding(db, actorA, { practiceId: practice.id, evidenceId: declared.id, expectedVersion: funded.version });
+  const afterFunding = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  await decidePracticeMaterial(db, actorA, { practiceId: practice.id, checklistItemId: a.checklist.id, status: 'NOT_NEEDED', reason: 'Materiale non pertinente alla fixture', expectedVersion: afterFunding.version });
   const v2 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
   await formalizePractice(db, actorA, { practiceId: practice.id, contractId: a.contract.id, signedDocumentId: a.document.id, expectedVersion: v2.version });
   const v3 = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
@@ -253,6 +320,14 @@ test('positive A path reaches every scoped transition', { skip: !enabled }, asyn
   const started = await startPractice(db, actorA, { practiceId: practice.id, expectedVersion: v4.version });
   assert.ok(started.startedAt);
   assert.equal(started.startedById, ids.userA);
-  assert.equal((await footprint(practice.id)).audits, 5);
+  const historicalEvidence = started.startEvidence;
+  const reversal = await reversePracticeFunding(db, actorA, { practiceId: practice.id, evidenceId: confirmed.id, expectedVersion: started.version });
+  assert.equal(reversal.status, 'REVERSED');
+  const afterReversal = await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } });
+  assert.deepEqual(afterReversal.startEvidence, historicalEvidence);
+  assert.equal(afterReversal.startedAt?.toISOString(), started.startedAt?.toISOString());
+  const afterHistory = await db.practiceFundingEvidence.findMany({ where: { practiceId: practice.id }, include: { successor: true } });
+  assert.equal(currentAvailableFunding(afterHistory).toFixed(2), '0.00');
+  assert.equal((await footprint(practice.id)).audits, 7);
   assert.equal((await listAccessiblePracticeReadiness(db, manager)).some(({ id }) => id === practice.id), true);
 });
