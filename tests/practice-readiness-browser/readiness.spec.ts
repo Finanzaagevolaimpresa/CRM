@@ -269,17 +269,65 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         article.getByRole("button", { name: "Dichiara accredito" }),
         `${item.key}:accredito-${part}-dichiarato`,
       );
-      await expect(page.locator(`#practice-${practice.id}`).getByText(reference, { exact: false })).toBeVisible();
+      const declared = await db.practiceFundingEvidence.findFirstOrThrow({
+        where: {
+          practiceId: practice.id,
+          reference,
+          amount,
+          currency: "EUR",
+          status: "DECLARED",
+          successor: null,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      const declaredRow = page.locator(
+        `[data-funding-evidence-id="${declared.id}"]`,
+      );
+      await expect(declaredRow).toHaveAttribute(
+        "data-funding-reference",
+        reference,
+      );
+      await expect(declaredRow).toHaveAttribute(
+        "data-funding-status",
+        "DECLARED",
+      );
+      await expect(declaredRow).toContainText(
+        `${reference} · € ${amount} · DECLARED`,
+      );
       article = await reloadPractice(page, practice.id);
-      const funding = article
-        .getByText(reference, { exact: false })
-        .locator("xpath=ancestor::div[1]");
+      const funding = article.locator(
+        `[data-funding-evidence-id="${declared.id}"]`,
+      );
       await submitAction(
         page,
         funding.getByRole("button", { name: "Conferma accredito" }),
         `${item.key}:accredito-${part}-confermato`,
       );
-      await expect(page.locator(`#practice-${practice.id}`).getByText("CONFIRMED", { exact: false })).toBeVisible();
+      const confirmed = await db.practiceFundingEvidence.findFirstOrThrow({
+        where: {
+          practiceId: practice.id,
+          predecessorId: declared.id,
+          reference,
+          amount,
+          currency: "EUR",
+          status: "CONFIRMED",
+          successor: null,
+        },
+      });
+      const confirmedRow = page.locator(
+        `[data-funding-evidence-id="${confirmed.id}"]`,
+      );
+      await expect(confirmedRow).toHaveAttribute(
+        "data-funding-reference",
+        reference,
+      );
+      await expect(confirmedRow).toHaveAttribute(
+        "data-funding-status",
+        "CONFIRMED",
+      );
+      await expect(confirmedRow).toContainText(
+        `${reference} · € ${amount} · CONFIRMED`,
+      );
       if (item.partial && part === "prima") {
         article = await reloadPractice(page, practice.id);
         await submitAction(
@@ -350,7 +398,33 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       article.getByRole("button", { name: "Registra decisione materiale" }),
       `${item.key}:materiale-validato`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText("VALIDATED", { exact: false })).toBeVisible();
+    let materialDecision =
+      await db.practiceMaterialEvidence.findFirstOrThrow({
+        where: {
+          practiceId: practice.id,
+          checklistItemId: `readiness-browser-checklist-${item.key}`,
+          documentVersionId: documentVersion.id,
+          status: "VALIDATED",
+          successor: null,
+        },
+        orderBy: { sequence: "desc" },
+      });
+    let materialRow = page.locator(
+      `[data-material-evidence-id="${materialDecision.id}"]`,
+    );
+    await expect(materialRow).toHaveAttribute(
+      "data-material-checklist-item-id",
+      `readiness-browser-checklist-${item.key}`,
+    );
+    await expect(materialRow).toHaveAttribute(
+      "data-material-status",
+      "VALIDATED",
+    );
+    await expect(materialRow).toHaveAttribute(
+      "data-material-sequence",
+      String(materialDecision.sequence),
+    );
+    await expect(materialRow).toContainText(documentVersion.id);
     article = await reloadPractice(page, practice.id);
     await submitAction(
       page,
@@ -371,6 +445,26 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         page,
         article.getByRole("button", { name: "Registra decisione materiale" }),
         `${item.key}:materiale-invalidato`,
+      );
+      materialDecision =
+        await db.practiceMaterialEvidence.findFirstOrThrow({
+          where: {
+            practiceId: practice.id,
+            checklistItemId: `readiness-browser-checklist-${item.key}`,
+            status: "INVALIDATED",
+            successor: null,
+          },
+          orderBy: { sequence: "desc" },
+        });
+      materialRow = page.locator(
+        `[data-material-evidence-id="${materialDecision.id}"]`,
+      );
+      await expect(materialRow).toHaveAttribute(
+        "data-material-status",
+        "INVALIDATED",
+      );
+      await expect(materialRow).toContainText(
+        "Versione sostituita durante la verifica browser",
       );
       article = await reloadPractice(page, practice.id);
       await submitAction(
@@ -401,6 +495,29 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         article.getByRole("button", { name: "Registra decisione materiale" }),
         `${item.key}:materiale-rivalidato`,
       );
+      materialDecision =
+        await db.practiceMaterialEvidence.findFirstOrThrow({
+          where: {
+            practiceId: practice.id,
+            checklistItemId: `readiness-browser-checklist-${item.key}`,
+            documentVersionId: documentVersion.id,
+            status: "VALIDATED",
+            successor: null,
+          },
+          orderBy: { sequence: "desc" },
+        });
+      materialRow = page.locator(
+        `[data-material-evidence-id="${materialDecision.id}"]`,
+      );
+      await expect(materialRow).toHaveAttribute(
+        "data-material-status",
+        "VALIDATED",
+      );
+      await expect(materialRow).toHaveAttribute(
+        "data-material-sequence",
+        String(materialDecision.sequence),
+      );
+      await expect(materialRow).toContainText(documentVersion.id);
       article = await reloadPractice(page, practice.id);
       await submitAction(
         page,
@@ -471,9 +588,22 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         startEvidence: persisted.startEvidence,
       };
       article = await reloadPractice(page, practice.id);
-      const confirmedFunding = article
-        .getByText("ACC-standard-prima", { exact: false })
-        .locator("xpath=ancestor::div[1]");
+      const confirmedFundingEvidence =
+        await db.practiceFundingEvidence.findFirstOrThrow({
+          where: {
+            practiceId: practice.id,
+            reference: "ACC-standard-prima",
+            status: "CONFIRMED",
+            successor: null,
+          },
+        });
+      const confirmedFunding = article.locator(
+        `[data-funding-evidence-id="${confirmedFundingEvidence.id}"]`,
+      );
+      await expect(confirmedFunding).toHaveAttribute(
+        "data-funding-status",
+        "CONFIRMED",
+      );
       await submitAction(
         page,
         confirmedFunding.getByRole("button", { name: "Rettifica / storna" }),

@@ -443,7 +443,13 @@ export default async function Page({
                           (next) => next.predecessorId === e.id,
                         );
                         return (
-                          <div key={e.id} className="rounded border p-2">
+                          <div
+                            key={e.id}
+                            className="rounded border p-2"
+                            data-funding-evidence-id={e.id}
+                            data-funding-reference={e.reference}
+                            data-funding-status={e.status}
+                          >
                             <p>
                               {e.reference} · € {e.amount.toFixed(2)} ·{" "}
                               {e.status}
@@ -573,7 +579,13 @@ export default async function Page({
                     <div className="space-y-1">
                       <strong>Storico materiali</strong>
                       {p.materials.map((m) => (
-                        <p key={m.id}>
+                        <p
+                          key={m.id}
+                          data-material-evidence-id={m.id}
+                          data-material-checklist-item-id={m.checklistItemId}
+                          data-material-status={m.status}
+                          data-material-sequence={m.sequence}
+                        >
                           {m.checklistItemId} · decisione {m.sequence} ·{" "}
                           {m.status} ·{" "}
                           {m.documentVersionId ?? m.reason ?? "senza documento"}
