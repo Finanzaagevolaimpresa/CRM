@@ -345,12 +345,13 @@ test('migration 43 source is one forward-only F1+F2 transaction with exact fail-
   assert.doesNotMatch(executableSql, /\b(?:backfill|seed|activation)\b/iu);
 });
 
-test('fresh44 preserves exact N13/N14 provenance types, validated CHECK, corrected guard and zero business rows', {
+test('fresh45 preserves exact N13/N14 provenance types, validated CHECK, corrected guard and zero business rows', {
   skip: !runDbTests,
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 44);
+  assert.equal(names.length, 45);
+  assert.equal(names.at(-1), '20260914090000_controlled_intake_four_channels_v1');
   assert.equal(names[41], migration42Name);
   assert.equal(names[42], migration43Name);
   const fixture = await createFixture('fresh', names);
@@ -364,7 +365,7 @@ test('fresh44 preserves exact N13/N14 provenance types, validated CHECK, correct
       readMigrationRecord(client, migration43Name),
       readBusinessRows(client),
     ]);
-    assert.equal(await readFinishedMigrationCount(client), 44);
+    assert.equal(await readFinishedMigrationCount(client), 45);
     assert.deepEqual(physical.columns, [
       { name: 'formCode', type: 'character varying(120)', notNull: true },
       { name: 'formVersion', type: 'character varying(80)', notNull: true },
@@ -410,7 +411,8 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 44);
+  assert.equal(names.length, 45);
+  assert.equal(names.at(-1), '20260914090000_controlled_intake_four_channels_v1');
   const fixture = await createFixture('upgrade', names.slice(0, 42));
   const leadId = 'n13-n14-upgrade-sentinel-lead';
   const itemId = '00000000-0000-4000-8000-000000430001';

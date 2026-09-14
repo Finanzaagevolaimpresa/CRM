@@ -177,7 +177,7 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
 });
 
-test('current fresh44 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
+test('current fresh45 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
   skip: !runDbTests,
   timeout: 240_000,
 }, async () => {
@@ -216,7 +216,7 @@ test('current fresh44 catalog preserves N14 and contains zero policy, item, cycl
         (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
     `,
   ]);
-  assert.equal(Number(migrationRows[0]?.count), 44);
+  assert.equal(Number(migrationRows[0]?.count), 45);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
     'CommercialLeadInboxItem',
@@ -658,7 +658,8 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 44);
+  assert.equal(names.length, 45);
+  assert.equal(names.at(-1), '20260914090000_controlled_intake_four_channels_v1');
   assert.equal(names[41], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set('schema', upgradeSchema);

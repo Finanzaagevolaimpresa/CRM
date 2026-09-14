@@ -144,7 +144,12 @@ test.before(async () => {
   schemaUrl = url.toString();
   await root!.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
   schemaCreated = true;
-  assert.equal(readdirSync('prisma/migrations', { withFileTypes: true }).filter((item) => item.isDirectory()).length, 44);
+  const migrationNames = readdirSync('prisma/migrations', { withFileTypes: true })
+    .filter((item) => item.isDirectory() && /^\d/u.test(item.name))
+    .map((item) => item.name)
+    .sort();
+  assert.equal(migrationNames.length, 45);
+  assert.equal(migrationNames.at(-1), '20260914090000_controlled_intake_four_channels_v1');
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
     env: { ...process.env, DATABASE_URL: schemaUrl }, stdio: 'pipe', timeout: 180_000,
   });

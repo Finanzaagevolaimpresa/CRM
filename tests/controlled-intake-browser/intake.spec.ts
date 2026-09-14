@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIResponse, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { ControlledIntakeError, createControlledIntake } from '../../src/lib/controlled-intake';
 import { assignCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
@@ -27,9 +27,25 @@ function captureNextAction(page: Page) {
 async function postCapturedAction(page: Page, action: CapturedAction) {
   return page.request.fetch(action.url, {
     method: 'POST',
-    headers: { 'next-action': action.nextAction, 'content-type': action.contentType },
+    headers: {
+      'next-action': action.nextAction,
+      'content-type': action.contentType,
+      origin: app,
+      referer: `${app}/controlled-intakes`,
+    },
     data: action.body,
+    maxRedirects: 0,
   });
+}
+
+function expectDashboardActionDenial(response: APIResponse) {
+  expect(response.status()).toBe(200);
+  const actionRedirect = response.headers()['x-action-redirect'];
+  expect(actionRedirect).toBeTruthy();
+  const destination = actionRedirect!.split(';', 1)[0];
+  expect(new URL(destination, app).href).toBe(`${app}/dashboard`);
+  expect(actionRedirect).not.toContain('created=');
+  expect(actionRedirect).not.toContain('#intake-');
 }
 
 async function login(page: Page, email: string) {
@@ -181,12 +197,16 @@ test('four controlled channels, decisions, current assignment and direct denial'
   const capturedCreate = createdActionCapture();
   expect(capturedCreate).not.toBeNull();
   const deniedCreateResponse = await postCapturedAction(denied, capturedCreate!);
-  expect(deniedCreateResponse.ok()).toBe(false);
+  expectDashboardActionDenial(deniedCreateResponse);
   expect(await db.controlledIntake.count()).toBe(before);
   const decisionCount = await db.controlledIntakeDuplicateDecision.count();
+  const decisionBeforeDenial = await db.controlledIntakeDuplicateDecision.findUniqueOrThrow({ where: { intakeId: decisionIntakeId } });
+  const decisionIntakeVersion = (await db.controlledIntake.findUniqueOrThrow({ where: { id: decisionIntakeId } })).version;
   const deniedDecisionResponse = await postCapturedAction(denied, capturedDecision!);
-  expect(deniedDecisionResponse.ok()).toBe(false);
+  expectDashboardActionDenial(deniedDecisionResponse);
   expect(await db.controlledIntakeDuplicateDecision.count()).toBe(decisionCount);
+  expect(await db.controlledIntakeDuplicateDecision.findUniqueOrThrow({ where: { intakeId: decisionIntakeId } })).toEqual(decisionBeforeDenial);
+  expect((await db.controlledIntake.findUniqueOrThrow({ where: { id: decisionIntakeId } })).version).toBe(decisionIntakeVersion);
 
   writeFileSync(join(evidence, 'controlled-intake-receipt.json'), JSON.stringify({
     synthetic: true, anonymousDenied: true, channels: 4, persisted: true,
