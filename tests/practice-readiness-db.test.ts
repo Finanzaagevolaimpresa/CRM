@@ -175,6 +175,7 @@ async function createContext(label: string, consultantId: string) {
     data: {
       clientId: client.id,
       projectId: project.id,
+      documentId: document.id,
       title: `Materiale ${label}`,
       createdById: consultantId,
     },

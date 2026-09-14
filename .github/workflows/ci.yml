@@ -173,7 +173,7 @@ jobs:
           set -e
           printf '{"phase":"tested","synthetic":true,"exit":%s}\n' "$browser_status" > "$evidence/status.json"
           test "$browser_status" = 0
-          read -r expected unexpected skipped < <(node -e 'const r=require(process.argv[1]); process.stdout.write([r.stats.expected,r.stats.unexpected,r.stats.skipped].join(" "))' "$evidence/playwright.json")
+          read -r expected unexpected skipped < <(node -e 'const r=require(process.argv[1]); process.stdout.write(`${[r.stats.expected,r.stats.unexpected,r.stats.skipped].join(" ")}\n`)' "$evidence/playwright.json")
           test "$expected" -gt 0
           test "$unexpected" = 0
           test "$skipped" = 0
