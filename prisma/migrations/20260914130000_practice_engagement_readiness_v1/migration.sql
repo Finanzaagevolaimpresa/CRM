@@ -28,6 +28,19 @@ CREATE TABLE "PracticeReadiness" (
 CREATE TABLE "PracticeFundingEvidence" ("id" UUID PRIMARY KEY, "practiceId" UUID NOT NULL REFERENCES "PracticeReadiness"("id") ON DELETE RESTRICT, "reference" VARCHAR(120) NOT NULL, "amount" DECIMAL(18,2) NOT NULL CHECK("amount">0), "currency" VARCHAR(3) NOT NULL CHECK("currency"='EUR'), "status" VARCHAR(20) NOT NULL CHECK("status" IN ('DECLARED','CONFIRMED','REVERSED')), "sequence" INTEGER NOT NULL CHECK("sequence">0), "predecessorId" UUID UNIQUE REFERENCES "PracticeFundingEvidence"("id") ON DELETE RESTRICT, "payloadHash" CHAR(64) NOT NULL, "verifiedAt" TIMESTAMPTZ(3), "verifiedById" TEXT REFERENCES "User"("id") ON DELETE RESTRICT, "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE("practiceId","reference","sequence"));
 CREATE TABLE "PracticeMaterialEvidence" ("id" UUID PRIMARY KEY, "practiceId" UUID NOT NULL REFERENCES "PracticeReadiness"("id") ON DELETE RESTRICT, "checklistItemId" TEXT NOT NULL REFERENCES "DocumentChecklistItem"("id") ON DELETE RESTRICT, "documentId" TEXT REFERENCES "Document"("id") ON DELETE RESTRICT, "documentVersionId" TEXT REFERENCES "DocumentVersion"("id") ON DELETE RESTRICT, "documentChecksum" TEXT, "sequence" INTEGER NOT NULL CHECK("sequence">0), "predecessorId" UUID UNIQUE REFERENCES "PracticeMaterialEvidence"("id") ON DELETE RESTRICT, "status" VARCHAR(20) NOT NULL CHECK("status" IN ('VALIDATED','NOT_NEEDED','INVALIDATED')), "reason" VARCHAR(500), "payloadHash" CHAR(64) NOT NULL, "decidedAt" TIMESTAMPTZ(3) NOT NULL, "decidedById" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT, UNIQUE("practiceId","checklistItemId","sequence"));
 CREATE TABLE "PracticeMaterialAttestation" ("id" UUID PRIMARY KEY, "practiceId" UUID NOT NULL REFERENCES "PracticeReadiness"("id") ON DELETE RESTRICT, "snapshotHash" CHAR(64) NOT NULL UNIQUE, "snapshot" JSONB NOT NULL, "decidedAt" TIMESTAMPTZ(3) NOT NULL, "decidedById" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT);
+CREATE TABLE "PracticeFormalization" (
+  "id" UUID PRIMARY KEY, "practiceId" UUID NOT NULL REFERENCES "PracticeReadiness"("id") ON DELETE RESTRICT,
+  "offerRevisionId" UUID NOT NULL REFERENCES "PracticeOfferRevision"("id") ON DELETE RESTRICT,
+  "offerAcceptanceId" UUID NOT NULL REFERENCES "PracticeOfferAcceptance"("id") ON DELETE RESTRICT,
+  "contractId" TEXT NOT NULL REFERENCES "Contract"("id") ON DELETE RESTRICT,
+  "signedDocumentId" TEXT NOT NULL REFERENCES "Document"("id") ON DELETE RESTRICT,
+  "signedDocumentVersionId" TEXT NOT NULL REFERENCES "DocumentVersion"("id") ON DELETE RESTRICT,
+  "formalizedAt" TIMESTAMPTZ(3) NOT NULL, "formalizedById" TEXT NOT NULL REFERENCES "User"("id") ON DELETE RESTRICT,
+  "payloadHash" CHAR(64) NOT NULL UNIQUE, UNIQUE("practiceId","offerRevisionId")
+);
+ALTER TABLE "PracticeReadiness" ADD COLUMN "currentFormalizationId" UUID UNIQUE;
+ALTER TABLE "PracticeReadiness" ADD CONSTRAINT "PracticeReadiness_currentFormalizationId_fkey" FOREIGN KEY ("currentFormalizationId") REFERENCES "PracticeFormalization"("id") ON DELETE RESTRICT;
+CREATE INDEX "PracticeFormalization_practice_idx" ON "PracticeFormalization"("practiceId","formalizedAt");
 ALTER TABLE "PracticeReadiness" ADD CONSTRAINT "PracticeReadiness_materialsCompleteEvidenceId_fkey" FOREIGN KEY ("materialsCompleteEvidenceId") REFERENCES "PracticeMaterialAttestation"("id") ON DELETE RESTRICT;
 CREATE INDEX "PracticeMaterialAttestation_practice_idx" ON "PracticeMaterialAttestation"("practiceId","decidedAt");
 CREATE INDEX "PracticeReadiness_context_idx" ON "PracticeReadiness"("clientId","projectId","createdAt");

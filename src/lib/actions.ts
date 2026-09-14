@@ -1380,14 +1380,54 @@ export async function createClientService(form: FormData) {
 }
 
 export async function updateClientServiceStatus(id: string, status: string) {
-  const s = await requirePermission('service.write');
+  const s = await requirePermission("service.write");
   const next = serviceStatusSchema.parse(status);
   const before = await requireServiceEditAccess(s, id);
-  const finalStatuses = ['chiuso', 'archiviato', 'consegnato'];
-  if (before.status !== next && (finalStatuses.includes(before.status) || finalStatuses.includes(next)) && !hasPermission(s, 'service.close')) denyWriteAccess();
-  const service = await prisma.clientService.update({ where: { id }, data: { status: next, completedAt: ['chiuso','archiviato','consegnato'].includes(next) ? new Date() : undefined } });
-  await audit(s.userId, 'client_service_status_change', 'ClientService', id, { before, after: service });
-  return service;
+  const finalStatuses = ["chiuso", "archiviato", "consegnato"];
+  if (
+    before.status !== next &&
+    (finalStatuses.includes(before.status) || finalStatuses.includes(next)) &&
+    !hasPermission(s, "service.close")
+  )
+    denyWriteAccess();
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${id} FOR UPDATE`;
+      if (
+        await tx.practiceReadiness.findUnique({
+          where: { clientServiceId: id },
+          select: { id: true },
+        })
+      ) {
+        throw new UserFacingActionError(
+          "Questa pratica è gestita dal percorso preventivo-avvio: usa il comando esplicito nella pratica.",
+        );
+      }
+      const service = await tx.clientService.update({
+        where: { id },
+        data: {
+          status: next,
+          completedAt: ["chiuso", "archiviato", "consegnato"].includes(next)
+            ? new Date()
+            : undefined,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: s.userId,
+          event: "client_service_status_change",
+          entityType: "ClientService",
+          entityId: id,
+          after: redactAuditPayload({
+            before,
+            after: service,
+          }) as Prisma.InputJsonValue,
+        },
+      });
+      return service;
+    },
+    { isolationLevel: "Serializable" },
+  );
 }
 
 export async function assignClientService(id: string, assignedToId: string) {
@@ -1399,34 +1439,79 @@ export async function assignClientService(id: string, assignedToId: string) {
   return service;
 }
 export async function updateClientServicePipeline(form: FormData) {
-  const s = await requirePermission('service.write');
-  const assignmentSubmitted = form.has('assignedToId');
+  const s = await requirePermission("service.write");
+  const assignmentSubmitted = form.has("assignedToId");
   const data = clientServicePipelineSchema.parse(clean(form));
   const before = await requireServiceEditAccess(s, data.id);
-  const nextAssignedToId = assignmentSubmitted ? (data.assignedToId ?? null) : before.assignedToId;
+  const nextAssignedToId = assignmentSubmitted
+    ? (data.assignedToId ?? null)
+    : before.assignedToId;
   const assigneeChanged = before.assignedToId !== nextAssignedToId;
-  const finalOperationalStatuses = ['chiusa', 'archiviata'];
-  if (before.operationalStatus !== data.operationalStatus && (finalOperationalStatuses.includes(before.operationalStatus) || finalOperationalStatuses.includes(data.operationalStatus)) && !hasPermission(s, 'service.close')) denyWriteAccess();
-  if (assigneeChanged && !hasPermission(s, 'service.assign')) denyWriteAccess();
+  const finalOperationalStatuses = ["chiusa", "archiviata"];
+  if (
+    before.operationalStatus !== data.operationalStatus &&
+    (finalOperationalStatuses.includes(before.operationalStatus) ||
+      finalOperationalStatuses.includes(data.operationalStatus)) &&
+    !hasPermission(s, "service.close")
+  )
+    denyWriteAccess();
+  if (assigneeChanged && !hasPermission(s, "service.assign")) denyWriteAccess();
   if (assigneeChanged) await requireActiveUser(nextAssignedToId);
-  const service = await prisma.clientService.update({
-    where: { id: data.id },
-    data: {
-      operationalStatus: data.operationalStatus,
-      statusUpdatedAt: before.operationalStatus === data.operationalStatus ? before.statusUpdatedAt : new Date(),
-      practiceType: data.practiceType ?? null,
-      requestedAmount: data.requestedAmount ?? null,
-      plannedInvestment: data.plannedInvestment ?? null,
-      assignedToId: nextAssignedToId,
-      operationalNotes: data.operationalNotes ?? null,
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${data.id} FOR UPDATE`;
+      if (
+        await tx.practiceReadiness.findUnique({
+          where: { clientServiceId: data.id },
+          select: { id: true },
+        })
+      ) {
+        throw new UserFacingActionError(
+          "Questa pratica è gestita dal percorso preventivo-avvio: usa il comando esplicito nella pratica.",
+        );
+      }
+      const service = await tx.clientService.update({
+        where: { id: data.id },
+        data: {
+          operationalStatus: data.operationalStatus,
+          statusUpdatedAt:
+            before.operationalStatus === data.operationalStatus
+              ? before.statusUpdatedAt
+              : new Date(),
+          practiceType: data.practiceType ?? null,
+          requestedAmount: data.requestedAmount ?? null,
+          plannedInvestment: data.plannedInvestment ?? null,
+          assignedToId: nextAssignedToId,
+          operationalNotes: data.operationalNotes ?? null,
+        },
+      });
+      const events = ["client_service_pipeline_update"];
+      if (before.operationalStatus !== service.operationalStatus)
+        events.push("client_service_operational_status_change");
+      if (
+        String(before.requestedAmount ?? "") !==
+          String(service.requestedAmount ?? "") ||
+        String(before.plannedInvestment ?? "") !==
+          String(service.plannedInvestment ?? "")
+      )
+        events.push("client_service_amounts_change");
+      if (assigneeChanged) events.push("client_service_assign");
+      await tx.auditLog.createMany({
+        data: events.map((event) => ({
+          actorId: s.userId,
+          event,
+          entityType: "ClientService",
+          entityId: service.id,
+          after: redactAuditPayload({
+            before,
+            after: service,
+          }) as Prisma.InputJsonValue,
+        })),
+      });
+      return service;
     },
-  });
-  const events = ['client_service_pipeline_update'];
-  if (before.operationalStatus !== service.operationalStatus) events.push('client_service_operational_status_change');
-  if (String(before.requestedAmount ?? '') !== String(service.requestedAmount ?? '') || String(before.plannedInvestment ?? '') !== String(service.plannedInvestment ?? '')) events.push('client_service_amounts_change');
-  if (assigneeChanged) events.push('client_service_assign');
-  await Promise.all(events.map((event) => audit(s.userId, event, 'ClientService', service.id, { before, after: service })));
-  return service;
+    { isolationLevel: "Serializable" },
+  );
 }
 export async function linkDocumentToService(form: FormData) {
   const s = await requirePermission('service.write');
