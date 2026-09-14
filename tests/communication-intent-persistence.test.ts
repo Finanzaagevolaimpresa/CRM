@@ -49,9 +49,11 @@ test('N15 assignment consultation requires lead.read plus global or current-assi
 });
 
 test('N15 migration 44 is one additive transaction with three dedicated dormant records', () => {
-  const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
+  const names = allNames.filter((name) => name !== '20260914090000_controlled_intake_four_channels_v1');
   assert.equal(names.length, 44);
   assert.equal(names.at(-1), '20260909120000_n15_dedicated_communication_persistence_v1');
+  assert.equal(allNames.at(-1), '20260914090000_controlled_intake_four_channels_v1');
   const sql = readFileSync(`prisma/migrations/${names.at(-1)}/migration.sql`, 'utf8');
   assert.match(sql, /^--[^\n]*\nBEGIN;/u);
   assert.match(sql, /CREATE TABLE "CommunicationIntentRecord"/u);
