@@ -448,6 +448,41 @@ test(
 );
 
 test(
+  "N02 audit sanitizer distinguishes session references from personal numbers",
+  { skip: !run },
+  async () => {
+    const sessionId = "07944786-0611-4511-b921-333331032500";
+    const legacySessionReference = `internal_session_${sessionId}`;
+    const sessionReference =
+      "internal_session_uuid_0794478606114511b921333331032500";
+    const rows = await db.$queryRaw<Array<{
+      legacy: unknown;
+      sanitized: unknown;
+    }>>`
+      SELECT
+        "audit_sanitize_json_n04_v1"(${JSON.stringify({
+          sessionId: legacySessionReference,
+        })}::jsonb) AS legacy,
+        "audit_sanitize_json_n04_v1"(${JSON.stringify({
+          sessionId: sessionReference,
+          reason: "Contatto 3333310325",
+        })}::jsonb) AS sanitized
+    `;
+    assert.deepEqual(rows, [{
+      legacy: {
+        sessionId:
+          "internal_session_07944786-[REDACTED:PERSONAL]-b921-333331032500",
+      },
+      sanitized: {
+        sessionId:
+          "internal_session_uuid_0794478606114511b921333331032500",
+        reason: "Contatto [REDACTED:PERSONAL]",
+      },
+    }]);
+  },
+);
+
+test(
   "N02 current single global revocation and privacy audits are exact",
   { skip: !run },
   async () => {
@@ -489,7 +524,7 @@ test(
     assert.equal(loginAudit.before, null);
     assert.equal(loginAudit.ipAddress, null);
     assert.deepEqual(loginAudit.after, {
-      sessionId: global.row.id,
+      sessionId: `internal_session_uuid_${global.row.id.replaceAll("-", "")}`,
       expiresAt: global.row.expiresAt.toISOString(),
     });
 
@@ -501,7 +536,7 @@ test(
     assert.equal(logoutAudit.before, null);
     assert.equal(logoutAudit.ipAddress, null);
     assert.deepEqual(logoutAudit.after, {
-      sessionId: current.row.id,
+      sessionId: `internal_session_uuid_${current.row.id.replaceAll("-", "")}`,
       reason: "LOGOUT",
     });
     assert.equal(

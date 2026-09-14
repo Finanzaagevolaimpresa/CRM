@@ -288,7 +288,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
           `${item.key}:avvio-parziale-negato`,
           "NOT_READY",
         );
-        await expect(page.getByRole("alert")).toContainText("NOT_READY");
+        await expect(page.locator('p[role="alert"]')).toContainText("NOT_READY");
         expect(
           (
             await db.practiceReadiness.findUniqueOrThrow({
@@ -311,7 +311,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
           `${item.key}:modulo-obsoleto`,
           "CONFLICT",
         );
-        await expect(stalePage.getByRole("alert")).toContainText("CONFLICT");
+        await expect(stalePage.locator('p[role="alert"]')).toContainText("CONFLICT");
         await expect(
           stalePage.locator(`#practice-${practice.id} [name="reference"]`),
         ).toHaveValue("ACC-standard-obsoleto");
@@ -379,7 +379,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         `${item.key}:avvio-materiale-negato`,
         "NOT_READY",
       );
-      await expect(page.getByRole("alert")).toContainText("NOT_READY");
+      await expect(page.locator('p[role="alert"]')).toContainText("NOT_READY");
       article = await reloadPractice(page, practice.id);
       await article
         .locator('[name="checklistItemId"]')

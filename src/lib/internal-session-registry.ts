@@ -7,6 +7,14 @@ import {
 } from "./session";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+function auditSessionReference(sessionId: string) {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)) {
+    throw new Error("INTERNAL_SESSION_ID_INVALID");
+  }
+  // The typed prefix and delimiter-free canonical hex preserve the complete
+  // UUID without exposing phone-like word boundaries to the legacy sanitizer.
+  return `internal_session_uuid_${sessionId.replaceAll("-", "")}`;
+}
 export type RegistryLoginSessionInput = {
   userId: string;
   tokenDigest: Uint8Array;
@@ -65,7 +73,7 @@ export async function createRegistryLoginSession(
         entityType: "User",
         entityId: user.id,
         after: {
-          sessionId: session.id,
+          sessionId: auditSessionReference(session.id),
           expiresAt: session.expiresAt.toISOString(),
         },
       },
@@ -231,7 +239,10 @@ export async function logoutInternalSession(
       event: "logout",
       entityType: "User",
       entityId: session.userId,
-      after: { sessionId: session.id, reason: "LOGOUT" },
+      after: {
+        sessionId: auditSessionReference(session.id),
+        reason: "LOGOUT",
+      },
     },
   });
   return session;
