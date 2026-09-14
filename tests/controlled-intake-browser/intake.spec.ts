@@ -59,6 +59,7 @@ async function login(page: Page, email: string) {
 
 async function record(page: Page, data: {
   channel: string; sourceId: string; subjectType: string; category: string; need: string;
+  firstName?: string; lastName?: string;
   email?: string; service?: string; digital?: string; objective?: string; functions?: string;
   administrative?: string; engagementReference?: string; commercialOfferId?: string;
 }) {
@@ -68,8 +69,8 @@ async function record(page: Page, data: {
   await form.locator('[name="sourceId"]').fill(data.sourceId);
   await form.locator('[name="sourceOccurredAt"]').fill('2026-09-14T10:00');
   await form.locator('[name="subjectType"]').selectOption(data.subjectType);
-  await form.locator('[name="firstName"]').fill('Mario');
-  await form.locator('[name="lastName"]').fill('Inventato');
+  await form.locator('[name="firstName"]').fill(data.firstName ?? 'Mario');
+  await form.locator('[name="lastName"]').fill(data.lastName ?? 'Inventato');
   await form.locator('[name="email"]').fill(data.email ?? 'same@browser.invalid');
   await form.locator('[name="effectiveCategory"]').fill(data.category);
   await form.locator('[name="need"]').fill(data.need);
@@ -98,8 +99,8 @@ test('four controlled channels, decisions, current assignment and direct denial'
   const page = await context.newPage();
   await login(page, 'intake-owner@invalid.test');
   const createdActionCapture = captureNextAction(page);
-  await record(page, { channel: 'WPFORMS_1265', sourceId: 'B-1265', subjectType: 'IMPRESA', category: 'da_classificare', need: 'Continuità manuale' });
-  await record(page, { channel: 'WPFORMS_1098', sourceId: 'B-1098', subjectType: 'SOGGETTO_DA_COSTITUIRE', service: 'progetti_digitali', digital: 'software_crm_workflow', category: 'digitale', need: 'Brief digitale', objective: 'Workflow', functions: 'Ruoli' });
+  await record(page, { channel: 'WPFORMS_1265', sourceId: 'B-1265', subjectType: 'IMPRESA', firstName: 'Ada', lastName: 'Prima', category: 'da_classificare', need: 'Continuità manuale' });
+  await record(page, { channel: 'WPFORMS_1098', sourceId: 'B-1098', subjectType: 'SOGGETTO_DA_COSTITUIRE', firstName: 'Bruno', lastName: 'Secondo', service: 'progetti_digitali', digital: 'software_crm_workflow', category: 'digitale', need: 'Brief digitale', objective: 'Workflow', functions: 'Ruoli' });
   await record(page, { channel: 'EMAIL', sourceId: 'B-EMAIL', subjectType: 'PROFESSIONISTA', service: 'consulenza_fiscale', category: 'fiscale', need: 'Richiesta fiscale' });
 
   const offer = await db.commercialOffer.findFirstOrThrow({ where: { title: 'Preventivo pertinente' } });
@@ -107,6 +108,7 @@ test('four controlled channels, decisions, current assignment and direct denial'
   await expect(page.getByText(/Amministrazione: riferimento verificato · dichiarato: PREV-DICHIARATO/u)).toBeVisible();
 
   const automaticForm = page.getByRole('button', { name: 'Collega e classifica 1265 autenticato' }).first().locator('xpath=ancestor::form[1]');
+  await expect(page.getByText(/Richiesta: Archived 1265 · Lead/u)).toHaveCount(0);
   const projectionLedgerId = await automaticForm.locator('[name="projectionLedgerId"]').inputValue();
   expect(await db.controlledIntake.count({ where: { sourceProjectionLedgerId: projectionLedgerId } })).toBe(0);
   await automaticForm.locator('[name="subjectType"]').selectOption('SOGGETTO_DA_COSTITUIRE');
@@ -146,14 +148,21 @@ test('four controlled channels, decisions, current assignment and direct denial'
   await expect(linkedCard.getByText(/Classificazione: digitale · software_crm_workflow/u)).toBeVisible();
 
   const decisionActionCapture = captureNextAction(page);
-  const decisionForm = page.getByRole('button', { name: 'Registra decisione' }).first().locator('xpath=ancestor::form[1]');
+  const decisionIntakeCard = page.locator('article').filter({ hasText: 'ID B-EMAIL' });
+  await expect(decisionIntakeCard.getByText(/Candidato: Ada Prima/u)).toBeVisible();
+  await expect(decisionIntakeCard.getByText(/Candidato: Bruno Secondo/u)).toBeVisible();
+  await expect(decisionIntakeCard.getByRole('link', { name: 'Apri candidato' })).toHaveCount(2);
+  const decisionForm = decisionIntakeCard.locator('form').filter({ hasText: 'Candidato: Bruno Secondo' });
   const decisionIntakeId = await decisionForm.locator('[name="intakeId"]').inputValue();
-  const decisionButton = decisionForm.getByRole('button', { name: 'Registra decisione' });
+  const selectedCandidateLeadId = await decisionForm.locator('[name="candidateLeadId"]').inputValue();
+  const expectedCandidateLead = await db.lead.findFirstOrThrow({ where: { firstName: 'Bruno', lastName: 'Secondo', source: 'INTAKE:WPFORMS_1098:B-1098' } });
+  expect(selectedCandidateLeadId).toBe(expectedCandidateLead.id);
+  const decisionButton = decisionForm.getByRole('button', { name: 'Registra decisione per Bruno Secondo' });
   await decisionButton.click();
   await expect.poll(() => db.controlledIntakeDuplicateDecision.findUnique({ where: { intakeId: decisionIntakeId } }), {
     message: `Attesa decisione duplicato sintetica per intake ${decisionIntakeId}`,
     timeout: 10_000,
-  }).not.toBeNull();
+  }).toMatchObject({ candidateLeadId: selectedCandidateLeadId });
   await expect(page.locator(`#intake-${decisionIntakeId}`).getByText('Decisione duplicato: KEEP_DISTINCT')).toBeVisible();
   const capturedDecision = decisionActionCapture();
   expect(capturedDecision).not.toBeNull();

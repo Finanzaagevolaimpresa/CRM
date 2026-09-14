@@ -90,7 +90,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
     if (existing) {
       if (existing.payloadHash !== payloadHash) throw new ControlledIntakeError('CONFLICT');
       const lead = await tx.lead.findUnique({ where: { id: existing.leadId } });
-      if (!lead || !canEditLead(actor, lead)) throw new ControlledIntakeError('DENIED');
+      if (!lead || lead.deletedAt || !canEditLead(actor, lead)) throw new ControlledIntakeError('DENIED');
       const candidateLeads = await tx.lead.findMany({ where: { id: { in: existing.duplicateCandidates.map(({ leadId }) => leadId) }, deletedAt: null } });
       const visibleIds = new Set(candidateLeads.filter((candidate) => canEditLead(actor, candidate)).map(({ id }) => id));
       return { ...existing, duplicateCandidates: existing.duplicateCandidates.filter(({ leadId }) => visibleIds.has(leadId)), duplicateDecision: existing.duplicateDecision && visibleIds.has(existing.duplicateDecision.candidateLeadId) ? existing.duplicateDecision : null };
@@ -144,7 +144,8 @@ export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSessi
         tx.lead.findUnique({ where: { id: input.candidateLeadId } }),
         tx.controlledIntakeDuplicateCandidate.findUnique({ where: { intakeId_leadId: { intakeId: intake.id, leadId: input.candidateLeadId } } }),
       ]);
-      if (!sourceLead || !candidate || !candidateLink || !canEditLead(actor, sourceLead) || !canEditLead(actor, candidate)) {
+      if (!sourceLead || sourceLead.deletedAt || !candidate || candidate.deletedAt || !candidateLink
+        || !canEditLead(actor, sourceLead) || !canEditLead(actor, candidate)) {
         throw new ControlledIntakeError('DENIED');
       }
       const claimedVersion = await tx.controlledIntake.updateMany({
@@ -187,6 +188,7 @@ export async function linkAuthenticated1265Projection(db: Db, claimed: AuthSessi
       || projection.commercialInboxItem.originKind !== 'BUSINESS_PROJECTION_N13'
       || projection.commercialInboxItem.formCode !== '1265'
       || projection.commercialInboxItem.projectionLedgerId !== projection.id
+      || projection.lead.deletedAt
       || !canEditLead(actor, projection.lead)) throw new ControlledIntakeError('DENIED');
     const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`)[0]?.now ?? new Date(0);
     const revision = await selectableRevision(tx, input.serviceCode, input.digitalProjectType, now);

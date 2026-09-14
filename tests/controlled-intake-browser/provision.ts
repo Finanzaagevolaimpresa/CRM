@@ -20,7 +20,7 @@ async function main() {
     { id: 'controlled-intake-browser-reader', email: 'intake-reader@invalid.test', name: 'Lettore Ingressi', passwordHash, role: 'revisore' },
   ] });
   const linkedProjectionIds = (await db.controlledIntake.findMany({ where: { sourceProjectionLedgerId: { not: null } }, select: { sourceProjectionLedgerId: true } })).flatMap(({ sourceProjectionLedgerId }) => sourceProjectionLedgerId ? [sourceProjectionLedgerId] : []);
-  const automatic = await db.commercialLeadInboxItem.findFirst({ where: { originKind: 'BUSINESS_PROJECTION_N13', formCode: '1265', projectionLedgerId: { notIn: linkedProjectionIds } } });
+  const automatic = await db.commercialLeadInboxItem.findFirst({ where: { originKind: 'BUSINESS_PROJECTION_N13', formCode: '1265', projectionLedgerId: { notIn: linkedProjectionIds }, lead: { deletedAt: null } } });
   if (!automatic?.projectionLedgerId) throw new Error('CONTROLLED_INTAKE_UNLINKED_AUTHENTICATED_FIXTURE_MISSING');
   const managerSessionId = randomUUID();
   await db.internalSession.create({ data: { id: managerSessionId, userId: 'controlled-intake-browser-manager', tokenDigest: Buffer.alloc(32, 11), expiresAt: new Date(Date.now() + 3_600_000) } });

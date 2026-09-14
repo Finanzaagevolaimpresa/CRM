@@ -161,6 +161,61 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
   }, before);
 });
 
+test('archived source and candidate leads deny replay and duplicate decisions without effects', { skip: !enabled }, async () => {
+  const sourceCandidate = await createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-SOURCE-CANDIDATE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-source@intake.invalid', firstName: 'Candidato', lastName: 'Fonte',
+  });
+  const archivedSource = await createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-SOURCE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-source@intake.invalid', firstName: 'Fonte', lastName: 'Archiviata',
+  });
+  await db.lead.update({ where: { id: archivedSource.leadId }, data: { deletedAt: new Date() } });
+  const sourceBefore = {
+    intake: await db.controlledIntake.findUniqueOrThrow({ where: { id: archivedSource.id } }),
+    decisions: await db.controlledIntakeDuplicateDecision.count(),
+    audits: await db.auditLog.count(),
+  };
+  await assert.rejects(createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-SOURCE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-source@intake.invalid', firstName: 'Fonte', lastName: 'Archiviata',
+  }), isCode('DENIED'));
+  await assert.rejects(decideControlledIntakeDuplicate(db, actor, {
+    intakeId: archivedSource.id, candidateLeadId: sourceCandidate.leadId,
+    outcome: 'KEEP_DISTINCT', expectedVersion: archivedSource.version,
+  }), isCode('DENIED'));
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: archivedSource.id } }), sourceBefore.intake);
+  assert.equal(await db.controlledIntakeDuplicateDecision.count(), sourceBefore.decisions);
+  assert.equal(await db.auditLog.count(), sourceBefore.audits);
+
+  const archivedCandidate = await createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-CANDIDATE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Candidato', lastName: 'Archiviato',
+  });
+  const activeSource = await createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ACTIVE-SOURCE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Fonte', lastName: 'Attiva',
+  });
+  await db.lead.update({ where: { id: archivedCandidate.leadId }, data: { deletedAt: new Date() } });
+  const candidateBefore = {
+    intake: await db.controlledIntake.findUniqueOrThrow({ where: { id: activeSource.id } }),
+    decisions: await db.controlledIntakeDuplicateDecision.count(),
+    audits: await db.auditLog.count(),
+  };
+  const activeReplay = await createControlledIntake(db, actor, {
+    ...base, channel: 'EMAIL', sourceId: 'ACTIVE-SOURCE', subjectType: 'PERSONA',
+    serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Fonte', lastName: 'Attiva',
+  });
+  assert.equal(activeReplay.duplicateCandidates.some(({ leadId }) => leadId === archivedCandidate.leadId), false);
+  await assert.rejects(decideControlledIntakeDuplicate(db, actor, {
+    intakeId: activeSource.id, candidateLeadId: archivedCandidate.leadId,
+    outcome: 'LINK_RELATED', expectedVersion: activeSource.version,
+  }), isCode('DENIED'));
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: activeSource.id } }), candidateBefore.intake);
+  assert.equal(await db.controlledIntakeDuplicateDecision.count(), candidateBefore.decisions);
+  assert.equal(await db.auditLog.count(), candidateBefore.audits);
+});
+
 test('administrative references require visibility and subject pertinence', { skip: !enabled }, async () => {
   const relatedLead = await db.lead.create({ data: {
     firstName: 'Rina', lastName: 'Riferimento', email: 'admin@intake.invalid',
@@ -239,6 +294,42 @@ test('an authenticated 1265 projection is produced by N13/N14, linked and replay
   assert.equal((await linkAuthenticated1265Projection(db, actor, command)).id, linked.id);
   await assert.rejects(linkAuthenticated1265Projection(db, actor, { ...command, need: 'Conflitto' }), isCode('CONFLICT'));
   await assert.rejects(linkAuthenticated1265Projection(db, actor, { ...command, projectionLedgerId: randomUUID() }), isCode('DENIED'));
+
+  await db.lead.update({ where: { id: linked.leadId }, data: { deletedAt: new Date() } });
+  const archivedReplayBefore = {
+    intakes: await db.controlledIntake.count(),
+    audits: await db.auditLog.count(),
+    record: await db.controlledIntake.findUniqueOrThrow({ where: { id: linked.id } }),
+  };
+  await assert.rejects(linkAuthenticated1265Projection(db, actor, command), isCode('DENIED'));
+  assert.equal(await db.controlledIntake.count(), archivedReplayBefore.intakes);
+  assert.equal(await db.auditLog.count(), archivedReplayBefore.audits);
+  assert.deepEqual(await db.controlledIntake.findUniqueOrThrow({ where: { id: linked.id } }), archivedReplayBefore.record);
+
+  const archivedEvent = createLeadSubmittedEventV1({
+    ...seed,
+    eventId: randomUUID(),
+    businessCorrelationId: randomUUID(),
+    source: { ...seed.source, formCode: '1265', submissionId: 'INTAKE-1265-ARCHIVED' },
+    payload: {
+      ...seed.payload,
+      firstName: 'Archived', lastName: '1265', companyName: 'Archived 1265 Synthetic',
+      email: 'automatic-archived@intake.invalid', phone: '+39 333 777 6666',
+    },
+  });
+  const archivedAdmission = await admitBusinessInboxEvent(db, archivedEvent);
+  const archivedLease = await claimBusinessQueueEvent(db, { queueKind: 'INBOX', leaseOwnerId: randomUUID() });
+  assert.ok(archivedLease);
+  assert.equal(archivedLease.eventRowId, archivedAdmission.inboxEventId);
+  const archivedProjectionResult = await projectClaimedLeadInboxEvent(db, archivedLease, { keyFilePath: secretPath, allowedSecretRoot: secretRoot });
+  assert.equal(archivedProjectionResult.result.state, 'PROJECTED_NEW');
+  const archivedProjection = await db.leadProjectionLedger.findUniqueOrThrow({ where: { id: archivedProjectionResult.result.ledgerId } });
+  assert.ok(archivedProjection.leadId, 'PROJECTED_NEW deve riferire un Lead prima della prova di archiviazione');
+  await db.lead.update({ where: { id: archivedProjection.leadId }, data: { deletedAt: new Date() } });
+  const archivedNewBefore = { intakes: await db.controlledIntake.count(), audits: await db.auditLog.count() };
+  await assert.rejects(linkAuthenticated1265Projection(db, actor, { ...command, projectionLedgerId: archivedProjection.id }), isCode('DENIED'));
+  assert.equal(await db.controlledIntake.count(), archivedNewBefore.intakes);
+  assert.equal(await db.auditLog.count(), archivedNewBefore.audits);
 
   const browserEvent = createLeadSubmittedEventV1({
     ...seed,

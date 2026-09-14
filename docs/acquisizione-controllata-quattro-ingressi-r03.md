@@ -4,7 +4,7 @@
 
 Percorso applicativo esclusivamente sintetico e disattivato per default (`CONTROLLED_INTAKE_MODE=synthetic` nel solo banco). Registra richieste manuali provenienti da WPForms 1265, WPForms 1098, WPForms 1485 ed email senza connettersi al sito o a caselle reali. Il flusso automatico autenticato 1265 esistente non viene modificato: una registrazione 1265 da questa UI dichiara `MANUAL_CONTINUITY`.
 
-L'identità è il digest canonico di canale e ID sorgente. Un replay uguale restituisce lo stesso Lead; contenuto differente confligge; receipt, Lead e audit sono atomici. Il receipt e il Lead condividono l'UUID tecnico per una correlazione non ambigua senza schema nuovo. L'envelope `controlled-intake-v1` è validato, canonicalizzato e riletto dalla UI; non è testo libero.
+L'identità è il digest canonico di canale e ID sorgente. Un replay uguale restituisce la stessa acquisizione quando il Lead collegato è ancora attivo e accessibile; contenuto differente confligge. Receipt, Lead, registrazione tipizzata e audit sono atomici. Dalla R04 la migrazione additiva 45 conserva l'envelope validato e canonicalizzato in `ControlledIntake`, con relazioni dedicate al Lead, alla receipt, alla proiezione 1265, al catalogo e agli eventuali riferimenti amministrativi; candidati e decisione umana hanno record vincolati propri. Le note libere del Lead restano indipendenti e non sono l'archivio del dominio di acquisizione.
 
 ## Semantica
 
