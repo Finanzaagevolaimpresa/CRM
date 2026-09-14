@@ -374,22 +374,21 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await article
       .locator('[name="checklistItemId"]')
       .selectOption(`readiness-browser-checklist-${item.key}`);
-    await article
-      .locator("form")
-      .filter({
-        has: article.getByRole("button", {
-          name: "Registra decisione materiale",
-        }),
+    const materialForm = article
+      .getByRole("button", {
+        name: "Registra decisione materiale",
+        exact: true,
       })
+      .locator("xpath=ancestor::form[1]");
+    await expect(materialForm).toBeVisible();
+    await expect(materialForm.locator('[name="documentId"]')).toHaveCount(1);
+    await expect(
+      materialForm.locator('[name="documentVersionId"]'),
+    ).toHaveCount(1);
+    await materialForm
       .locator('[name="documentId"]')
       .selectOption(`readiness-browser-document-${item.key}`);
-    await article
-      .locator("form")
-      .filter({
-        has: article.getByRole("button", {
-          name: "Registra decisione materiale",
-        }),
-      })
+    await materialForm
       .locator('[name="documentVersionId"]')
       .selectOption(documentVersion.id);
     await article.locator('[name="status"]').selectOption("VALIDATED");
@@ -478,18 +477,28 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       await article
         .locator('[name="checklistItemId"]')
         .selectOption(`readiness-browser-checklist-${item.key}`);
-      const materialForm = article.locator("form").filter({
-        has: article.getByRole("button", {
+      const replacementMaterialForm = article
+        .getByRole("button", {
           name: "Registra decisione materiale",
-        }),
-      });
-      await materialForm
+          exact: true,
+        })
+        .locator("xpath=ancestor::form[1]");
+      await expect(replacementMaterialForm).toBeVisible();
+      await expect(
+        replacementMaterialForm.locator('[name="documentId"]'),
+      ).toHaveCount(1);
+      await expect(
+        replacementMaterialForm.locator('[name="documentVersionId"]'),
+      ).toHaveCount(1);
+      await replacementMaterialForm
         .locator('[name="documentId"]')
         .selectOption(`readiness-browser-document-${item.key}`);
-      await materialForm
+      await replacementMaterialForm
         .locator('[name="documentVersionId"]')
         .selectOption(documentVersion.id);
-      await materialForm.locator('[name="status"]').selectOption("VALIDATED");
+      await replacementMaterialForm
+        .locator('[name="status"]')
+        .selectOption("VALIDATED");
       await submitAction(
         page,
         article.getByRole("button", { name: "Registra decisione materiale" }),
