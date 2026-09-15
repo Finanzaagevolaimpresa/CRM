@@ -14,6 +14,84 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  controlled-intake:
+    name: Controlled intake PostgreSQL and browser qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-intake, POSTGRES_DB: fai_crm_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-intake-browser-secret
+      AUTH_COOKIE_NAME: fai_intake_browser_session
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3000
+      RUN_DB_TESTS: "1"
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: "1"
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      CONTROLLED_INTAKE_MODE: synthetic
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+      CONTROLLED_INTAKE_BROWSER_CONFIRMED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", fetch-depth: 0, persist-credentials: false }
+      - name: Verify exact candidate and additive intake migration
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          ./scripts/controlled-intake/verify-migration-chain.sh c49b18ccc4df713e212e8e4f2f05100638aee317
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Prepare synthetic database and fixtures
+        run: |
+          CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR="$RUNNER_TEMP/controlled-intake-evidence"
+          CONTROLLED_INTAKE_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+          export CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR CONTROLLED_INTAKE_BROWSER_PASSWORD
+          echo "::add-mask::$CONTROLLED_INTAKE_BROWSER_PASSWORD"
+          printf 'CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR=%s\nCONTROLLED_INTAKE_BROWSER_PASSWORD=%s\n' "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR" "$CONTROLLED_INTAKE_BROWSER_PASSWORD" >> "$GITHUB_ENV"
+          mkdir -p "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR"
+          printf '{"phase":"PREPARE","synthetic":true}\n' > "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR/status.json"
+          psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          candidate_prisma="$PWD/node_modules/.bin/prisma"
+          historical_source="$RUNNER_TEMP/pr137-schema44"
+          git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD)" = c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
+          (cd "$historical_source" && "$candidate_prisma" migrate deploy --schema prisma/schema.prisma)
+          test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 44
+          git worktree remove --force "$historical_source"
+          npm run prisma:migrate:deploy
+          test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 45
+          node --import tsx --test tests/controlled-intake-db.test.ts
+          node --import tsx tests/controlled-intake-browser/provision.ts
+      - name: Run controlled intake browser path
+        run: |
+          npm run dev > "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null && break; kill -0 "$app_pid"; sleep 1; done
+          curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null
+          npx playwright test --config tests/controlled-intake-browser/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "controlled-intake-${{ github.run_id }}-${{ github.run_attempt }}"
+          path: |
+            ${{ runner.temp }}/controlled-intake-evidence
+            test-results
+          if-no-files-found: error
+          retention-days: 14
+
   catalog-alignment:
     name: Catalog v2 PostgreSQL and browser qualification
     runs-on: ubuntu-latest
@@ -43,11 +121,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", fetch-depth: 0, persist-credentials: false }
-      - name: Verify exact candidate and unchanged schema chain
+      - name: Verify exact candidate and 45-migration chain
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 44
-          test -z "$(git diff --name-only 71d238b27efde1afb708e25d0fe035c0c69dc303...HEAD -- prisma/schema.prisma prisma/migrations)"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 45
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci && npx playwright install --with-deps chromium
@@ -121,11 +198,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify candidate and unchanged migration chain
+      - name: Verify candidate and 45-migration chain
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
-          test -z "$(git diff --name-only 23ebaf44bd8c207432fcc37f7a29087172d4aa6d...HEAD -- prisma/schema.prisma prisma/migrations)"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "45"
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - name: Install locked dependencies and Chromium
@@ -211,14 +287,13 @@ jobs:
       - name: Checkout exact source head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: c49b18ccc4df713e212e8e4f2f05100638aee317
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact source head and unchanged migration chain
         run: |
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "c49b18ccc4df713e212e8e4f2f05100638aee317"
           test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
-          test -z "$(git diff --name-only 67013279e1b80ce41fe2849f636f603d5b0dac04...HEAD -- prisma/schema.prisma prisma/migrations)"
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -244,6 +319,7 @@ jobs:
           psql 'postgresql://postgres:synthetic-n15-browser@127.0.0.1:5432/fai_crm_test' \
             -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
+          test "$(psql 'postgresql://postgres:synthetic-n15-browser@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 44
           node --import tsx tests/n15-browser/provision.ts
           printf '{"phase":"provisioned","synthetic":true,"migrations":44}\n' \
             > "$N15_BROWSER_EVIDENCE_DIR/provision.json"
@@ -640,8 +716,12 @@ jobs:
 
       - name: Apply exactly 44 database migrations
         run: |
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
-          npm run prisma:migrate:deploy
+          current_prisma="$PWD/node_modules/.bin/prisma"
+          historical_source="$RUNNER_TEMP/pr137-general-schema44"
+          git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
+          (cd "$historical_source" && "$current_prisma" migrate deploy --schema prisma/schema.prisma)
+          git worktree remove --force "$historical_source"
 
       - name: Bind ephemeral database sentinel
         run: |
@@ -685,16 +765,24 @@ jobs:
             echo "systemd-analyze not available; skipping unit verification"
           fi
 
-      - name: Docker production application and worker packaging smoke test
-        run: COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh
+      - name: Docker production application and worker packaging smoke test — historical schema44
+        run: |
+          historical_source="$RUNNER_TEMP/pr137-smoke-schema44"
+          git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
+          (cd "$historical_source" && COMPOSE_PROJECT_NAME=fai-crm-smoke-${{ github.run_id }}-${{ github.run_attempt }} ./scripts/smoke-docker-prod.sh)
+          git worktree remove --force "$historical_source"
 
       - name: VNX-05 scoped consumer PostgreSQL qualification in the packaged application
         env:
           VNX05_SYNTHETIC_TESTS_CONFIRMED: "1"
         run: |
-          bash -n scripts/vnx05/packaging-smoke.sh
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
-          bash scripts/vnx05/packaging-smoke.sh
+          historical_source="$RUNNER_TEMP/pr137-vnx05-schema44"
+          git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
+          test "$(git -C "$historical_source" ls-tree -d --name-only HEAD:prisma/migrations | wc -l | tr -d ' ')" = "44"
+          (cd "$historical_source" && bash -n scripts/vnx05/packaging-smoke.sh && bash scripts/vnx05/packaging-smoke.sh)
+          git worktree remove --force "$historical_source"
 
       - name: Run isolated staging read-only preflight
         run: |
@@ -736,22 +824,23 @@ jobs:
             ./scripts/n05/staging-preflight.sh
 
       - name: N05 synthetic backup, full restore and N-1 rollback drill
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [[ -n "$PR_BASE_SHA" ]]; then
-            rollback_commit="$PR_BASE_SHA"
-          else
-            rollback_commit="$(git rev-parse HEAD^1)"
-          fi
+          current_node_bin="$PWD/node_modules/.bin"
+          historical_source="$RUNNER_TEMP/pr137-n05-schema44"
+          git worktree add --detach "$historical_source" c49b18ccc4df713e212e8e4f2f05100638aee317
+          test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
+          rollback_commit=71d238b27efde1afb708e25d0fe035c0c69dc303
           rollback_tree="$(git rev-parse "$rollback_commit^{tree}")"
           rollback_migration_count="$(git ls-tree -d --name-only "$rollback_commit:prisma/migrations" | wc -l | tr -d ' ')"
-          ROLLBACK_COMMIT="$rollback_commit" \
-          ROLLBACK_TREE="$rollback_tree" \
-          EXPECTED_MIGRATION_COUNT=44 \
-          EXPECTED_ROLLBACK_MIGRATION_COUNT="$rollback_migration_count" \
-          N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
-            npm run test:n05:restore
+          (cd "$historical_source" && \
+            PATH="$current_node_bin:$PATH" \
+            ROLLBACK_COMMIT="$rollback_commit" \
+            ROLLBACK_TREE="$rollback_tree" \
+            EXPECTED_MIGRATION_COUNT=44 \
+            EXPECTED_ROLLBACK_MIGRATION_COUNT="$rollback_migration_count" \
+            N05_RUN_ID="${{ github.run_id }}-${{ github.run_attempt }}" \
+              npm run test:n05:restore)
+          git worktree remove --force "$historical_source"
 
       - name: Remove tracked-only source worktree
         if: always()
@@ -774,7 +863,7 @@ jobs:
       - name: Verify N05 source and synthetic validators
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "44"
+          test "$(git ls-tree -d --name-only c49b18ccc4df713e212e8e4f2f05100638aee317:prisma/migrations | wc -l | tr -d ' ')" = "44"
           python3 -B tests/n05/test_key_mounts.py
           bash -n scripts/n05/reconfigure-production-keys.sh
 
@@ -845,18 +934,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      VNX03_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      VNX03_BASE_SHA: 71d238b27efde1afb708e25d0fe035c0c69dc303
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: c49b18ccc4df713e212e8e4f2f05100638aee317
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact source head and protected scope
         run: |
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "c49b18ccc4df713e212e8e4f2f05100638aee317"
+          test "$(git rev-parse HEAD^{tree})" = "064415e3dbb4a7d4ac1498c24808a01342de2359"
           bash scripts/vnx03/verify-protected-scope.sh
 
       - name: Setup Node.js

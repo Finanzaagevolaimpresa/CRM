@@ -2010,6 +2010,80 @@ model WebsiteLeadReceipt {
   @@index([createdAt])
 }
 
+model ControlledIntake {
+  id                          String   @id @default(uuid()) @db.Uuid
+  channel                     String   @db.VarChar(32)
+  sourceId                    String   @db.VarChar(120)
+  sourceOccurredAt            DateTime @db.Timestamptz(3)
+  acquisitionMode             String   @db.VarChar(32)
+  mappingVersion              String   @db.VarChar(64)
+  payloadHash                 String   @db.Char(64)
+  leadId                      String   @unique
+  websiteLeadReceiptId        String?  @unique @db.Uuid
+  sourceProjectionLedgerId    String?  @unique @db.Uuid
+  subjectType                 String   @db.VarChar(40)
+  subjectName                 String?  @db.VarChar(200)
+  firstName                   String   @db.VarChar(100)
+  lastName                    String   @db.VarChar(100)
+  email                       String?  @db.VarChar(320)
+  phone                       String?  @db.VarChar(80)
+  classificationState         String   @db.VarChar(24)
+  effectiveCategory           String   @db.VarChar(120)
+  serviceCatalogId            String?
+  serviceRevisionId           String?  @db.Uuid
+  digitalProjectType          String?  @db.VarChar(80)
+  need                        String   @db.VarChar(2000)
+  objective                   String?  @db.VarChar(2000)
+  functions                   String?  @db.VarChar(2000)
+  indicativeBudget            Decimal?
+  timing                      String?  @db.VarChar(2000)
+  declaredMaterials           String?  @db.VarChar(2000)
+  materialsVerifiedComplete   Boolean  @default(false)
+  declaredEngagementReference String?  @db.VarChar(2000)
+  commercialOfferId           String?
+  contractId                  String?
+  administrativeState         String   @default("NOT_APPLICABLE") @db.VarChar(32)
+  administrativeRequest       String?  @db.VarChar(2000)
+  paymentRecorded             Boolean  @default(false)
+  creditVerified              Boolean  @default(false)
+  engagementFormalized        Boolean  @default(false)
+  started                     Boolean  @default(false)
+  operatorId                  String
+  status                      String   @default("RECORDED") @db.VarChar(24)
+  version                     Int      @default(1)
+  createdAt                   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt                   DateTime @updatedAt @db.Timestamptz(3)
+  duplicateCandidates         ControlledIntakeDuplicateCandidate[]
+  duplicateDecision           ControlledIntakeDuplicateDecision?
+
+  @@unique([channel, sourceId], map: "ControlledIntake_source_identity_key")
+  @@index([operatorId, createdAt, id])
+}
+
+model ControlledIntakeDuplicateCandidate {
+  id        String           @id @default(uuid()) @db.Uuid
+  intakeId  String           @db.Uuid
+  leadId    String
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+  intake    ControlledIntake @relation(fields: [intakeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([intakeId, leadId], map: "ControlledIntakeDuplicateCandidate_identity_key")
+  @@index([leadId, createdAt, id])
+}
+
+model ControlledIntakeDuplicateDecision {
+  id                String           @id @default(uuid()) @db.Uuid
+  intakeId          String           @unique @db.Uuid
+  candidateLeadId   String
+  outcome           String           @db.VarChar(32)
+  actorUserId       String
+  actorSessionId    String           @db.Uuid
+  expectedVersion   Int
+  decisionHash      String           @db.Char(64)
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  intake            ControlledIntake @relation(fields: [intakeId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
 model WebsiteLeadRateLimitBucket {
   namespace       String   @id
   callerDigest    String

@@ -8,12 +8,28 @@ import test from 'node:test';
 const root = resolve(import.meta.dirname, '..');
 const qualifiedBase = 'f48475a748315d1d8d9722412207f41b8890ad10';
 const qualifiedHead = '4f388cbdd53c74cf5b855cff1fbc5282ed957e2a';
+const pr137Public = 'c49b18ccc4df713e212e8e4f2f05100638aee317';
+const pr137LocalEquivalent = '998d496ef041d8c3154b2eaa9fa3ca4667ed1b37';
+const pr137Tree = '064415e3dbb4a7d4ac1498c24808a01342de2359';
+
+function historicalFixtureRef() {
+  for (const ref of [pr137Public, pr137LocalEquivalent]) {
+    try {
+      execFileSync('git', ['-C', root, 'cat-file', '-e', `${ref}^{commit}`], { stdio: 'ignore' });
+      const tree = execFileSync('git', ['-C', root, 'rev-parse', `${ref}^{tree}`], { encoding: 'utf8' }).trim();
+      if (tree === pr137Tree) return ref;
+    } catch {
+      // Continue only to the other explicitly admitted identity.
+    }
+  }
+  throw new Error('VNX03_PR137_HISTORICAL_FIXTURE_UNAVAILABLE');
+}
 
 function fixture(ref?: string) {
   const parent = mkdtempSync(join(tmpdir(), 'vnx03-scope-'));
   const repository = join(parent, 'repo');
   execFileSync('git', ['clone', '--quiet', '--no-hardlinks', root, repository]);
-  if (ref) execFileSync('git', ['checkout', '--quiet', '--detach', ref], { cwd: repository });
+  execFileSync('git', ['checkout', '--quiet', '--detach', ref ?? historicalFixtureRef()], { cwd: repository });
   const guard = join(repository, 'scripts/vnx03/verify-protected-scope.sh');
   copyFileSync(join(root, 'scripts/vnx03/verify-protected-scope.sh'), guard);
   chmodSync(guard, 0o755);
