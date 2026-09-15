@@ -2570,3 +2570,143 @@ model CommunicationIntentAudit {
   createdAt             DateTime                  @default(now()) @db.Timestamptz(3)
   intentRecord          CommunicationIntentRecord @relation(fields: [intentRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }
+
+model PracticeReadiness {
+  id                    String @id @default(uuid()) @db.Uuid
+  controlledIntakeId    String @unique @db.Uuid
+  commercialOfferId     String
+  offerSnapshotHash     String @db.Char(64)
+  offerRevision         Int
+  acceptedOfferRevisionId String @db.Uuid
+  serviceRevisionId     String @db.Uuid
+  clientId              String
+  projectId             String?
+  contractId            String? @unique
+  clientServiceId       String? @unique
+  currentFormalizationId String? @unique @db.Uuid
+  requiredInitialAmount Decimal @db.Decimal(18, 2)
+  currency              String @default("EUR") @db.VarChar(3)
+  formalizedAt          DateTime? @db.Timestamptz(3)
+  formalizedById        String?
+  signedDocumentId      String?
+  signedDocumentVersionId String?
+  materialsCompleteAt   DateTime? @db.Timestamptz(3)
+  materialsCompleteById String?
+  materialsCompleteEvidenceId String? @db.Uuid
+  startedAt             DateTime? @db.Timestamptz(3)
+  startedById           String?
+  startEvidence         Json?
+  version               Int @default(1)
+  createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @db.Timestamptz(3)
+  funding               PracticeFundingEvidence[]
+  materials             PracticeMaterialEvidence[]
+  materialAttestations  PracticeMaterialAttestation[]
+  formalizations        PracticeFormalization[] @relation("PracticeFormalizationHistory")
+  currentFormalization  PracticeFormalization? @relation("CurrentPracticeFormalization", fields: [currentFormalizationId], references: [id], onDelete: Restrict)
+  @@index([clientId, projectId, createdAt], map: "PracticeReadiness_context_idx")
+}
+model PracticeFormalization {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  offerRevisionId String @db.Uuid
+  offerAcceptanceId String @db.Uuid
+  contractId String
+  signedDocumentId String
+  signedDocumentVersionId String
+  formalizedAt DateTime @db.Timestamptz(3)
+  formalizedById String
+  payloadHash String @unique @db.Char(64)
+  practice PracticeReadiness @relation("PracticeFormalizationHistory", fields:[practiceId], references:[id], onDelete: Restrict)
+  currentFor PracticeReadiness? @relation("CurrentPracticeFormalization")
+  offerRevision PracticeOfferRevision @relation(fields:[offerRevisionId], references:[id], onDelete: Restrict)
+  offerAcceptance PracticeOfferAcceptance @relation(fields:[offerAcceptanceId], references:[id], onDelete: Restrict)
+  @@unique([practiceId, offerRevisionId])
+  @@index([practiceId, formalizedAt])
+}
+model PracticeOfferRevision {
+  id String @id @default(uuid()) @db.Uuid
+  controlledIntakeId String @db.Uuid
+  commercialOfferId String
+  revision Int
+  serviceRevisionId String @db.Uuid
+  clientId String
+  projectId String?
+  digitalProjectType String? @db.VarChar(80)
+  scope String @db.Text
+  inclusions Json
+  exclusions Json
+  deliverables Json
+  taxableAmount Decimal @db.Decimal(18, 2)
+  vatAmount Decimal @db.Decimal(18, 2)
+  totalAmount Decimal @db.Decimal(18, 2)
+  requiredInitialAmount Decimal @db.Decimal(18, 2)
+  currency String @db.VarChar(3)
+  validUntil DateTime @db.Timestamptz(3)
+  startupConditions String @db.Text
+  payloadHash String @unique @db.Char(64)
+  proposedAt DateTime @default(now()) @db.Timestamptz(3)
+  proposedById String
+  acceptance PracticeOfferAcceptance?
+  formalizations PracticeFormalization[]
+  @@unique([commercialOfferId, revision])
+  @@index([clientId, projectId, proposedAt])
+}
+model PracticeOfferAcceptance {
+  id String @id @default(uuid()) @db.Uuid
+  offerRevisionId String @unique @db.Uuid
+  acceptedAt DateTime @db.Timestamptz(3)
+  acceptedById String
+  evidenceHash String @unique @db.Char(64)
+  offerRevision PracticeOfferRevision @relation(fields:[offerRevisionId], references:[id], onDelete: Restrict)
+  formalizations PracticeFormalization[]
+}
+model PracticeFundingEvidence {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  reference String @db.VarChar(120)
+  amount Decimal @db.Decimal(18, 2)
+  currency String @db.VarChar(3)
+  status String @db.VarChar(20)
+  sequence Int
+  predecessorId String? @unique @db.Uuid
+  payloadHash String @db.Char(64)
+  verifiedAt DateTime? @db.Timestamptz(3)
+  verifiedById String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  predecessor PracticeFundingEvidence? @relation("PracticeFundingHistory", fields:[predecessorId], references:[id], onDelete: Restrict)
+  successor PracticeFundingEvidence? @relation("PracticeFundingHistory")
+  @@unique([practiceId, reference, sequence])
+  @@index([practiceId, status], map: "PracticeFundingEvidence_practice_idx")
+}
+model PracticeMaterialEvidence {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  checklistItemId String
+  documentId String?
+  documentVersionId String?
+  documentChecksum String?
+  sequence Int
+  predecessorId String? @unique @db.Uuid
+  status String @db.VarChar(20)
+  reason String? @db.VarChar(500)
+  payloadHash String @db.Char(64)
+  decidedAt DateTime @db.Timestamptz(3)
+  decidedById String
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  predecessor PracticeMaterialEvidence? @relation("PracticeMaterialHistory", fields:[predecessorId], references:[id], onDelete: Restrict)
+  successor PracticeMaterialEvidence? @relation("PracticeMaterialHistory")
+  @@unique([practiceId, checklistItemId, sequence])
+  @@index([practiceId, status], map: "PracticeMaterialEvidence_practice_idx")
+}
+model PracticeMaterialAttestation {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String @db.Uuid
+  snapshotHash String @unique @db.Char(64)
+  snapshot Json
+  decidedAt DateTime @db.Timestamptz(3)
+  decidedById String
+  practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
+  @@index([practiceId, decidedAt])
+}

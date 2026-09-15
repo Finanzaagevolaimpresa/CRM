@@ -100,7 +100,7 @@ const actionsPath = resolve(process.cwd(), 'src/lib/actions.ts');
 const actionsSourceText = readFileSync(actionsPath, 'utf8');
 const actionsSource = ts.createSourceFile(actionsPath, actionsSourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
-function functionBody(name: string, source = actionsSource) {
+function functionDeclaration(name: string, source = actionsSource) {
   let declaration: ts.FunctionDeclaration | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
@@ -108,15 +108,36 @@ function functionBody(name: string, source = actionsSource) {
   };
   visit(source);
   assert.ok(declaration?.body, `Funzione ${name} non trovata`);
-  return declaration.body.getText(source);
+  return declaration;
 }
 
-function assertGuardsBeforeMutation(action: string, guards: readonly string[], mutation: string) {
-  const body = functionBody(action);
-  const mutationIndex = body.indexOf(mutation);
+function functionBody(name: string, source = actionsSource) {
+  return functionDeclaration(name, source).body!.getText(source);
+}
+
+function callIndex(action: string, callee: string, source = actionsSource) {
+  const body = functionDeclaration(action, source).body!;
+  let position = -1;
+  const visit = (node: ts.Node) => {
+    if (position === -1 && ts.isCallExpression(node) && node.expression.getText(source) === callee) {
+      position = node.getStart(source);
+    }
+    if (position === -1) ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return position;
+}
+
+function assertGuardsBeforeMutation(
+  action: string,
+  guards: readonly string[],
+  mutation: string,
+  source = actionsSource,
+) {
+  const mutationIndex = callIndex(action, mutation, source);
   assert.notEqual(mutationIndex, -1, `${action}: mutazione ${mutation} non trovata`);
   for (const guard of guards) {
-    const guardIndex = body.indexOf(guard);
+    const guardIndex = callIndex(action, guard, source);
     assert.notEqual(guardIndex, -1, `${action}: guardia ${guard} assente`);
     assert.ok(guardIndex < mutationIndex, `${action}: guardia ${guard} invocata dopo la mutazione`);
   }
@@ -172,20 +193,41 @@ test('task e servizi invocano le guardie ABAC prima delle scritture', () => {
   assert.match(functionBody('assertTaskContext'), /requireClientContextWriteAccess/);
 
   assertGuardsBeforeMutation('createClientService', ['requireClientContextWriteAccess'], 'prisma.clientService.create');
-  assertGuardsBeforeMutation('updateClientServiceStatus', ['requireServiceEditAccess'], 'prisma.clientService.update');
+  assertGuardsBeforeMutation('updateClientServiceStatus', ['requireServiceEditAccess'], 'tx.clientService.update');
   assertGuardsBeforeMutation('assignClientService', ['requireServiceAssignAccess'], 'prisma.clientService.update');
-  assertGuardsBeforeMutation('updateClientServicePipeline', ['requireServiceEditAccess'], 'prisma.clientService.update');
+  assertGuardsBeforeMutation('updateClientServicePipeline', ['requireServiceEditAccess'], 'tx.clientService.update');
+});
+
+test('la verifica ABAC rileva guardie mancanti o successive alla mutazione', () => {
+  const fixture = ts.createSourceFile(
+    'abac-negative.ts',
+    'function missing(){ tx.clientService.update({}); } function late(){ tx.clientService.update({}); requireServiceEditAccess(); }',
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  assert.throws(() => assertGuardsBeforeMutation('missing', ['requireServiceEditAccess'], 'tx.clientService.update', fixture));
+  assert.throws(() => assertGuardsBeforeMutation('late', ['requireServiceEditAccess'], 'tx.clientService.update', fixture));
 });
 
 test('gli stati finali dei servizi richiedono service.close prima della mutazione', () => {
   for (const [action, mutation] of [
     ['createClientService', 'prisma.clientService.create'],
-    ['updateClientServiceStatus', 'prisma.clientService.update'],
-    ['updateClientServicePipeline', 'prisma.clientService.update'],
+    ['updateClientServiceStatus', 'tx.clientService.update'],
+    ['updateClientServicePipeline', 'tx.clientService.update'],
   ] as const) {
-    const body = functionBody(action);
-    const permissionIndex = body.indexOf("hasPermission(s, 'service.close')");
-    const mutationIndex = body.indexOf(mutation);
+    const declaration = functionDeclaration(action);
+    let permissionIndex = -1;
+    const visit = (node: ts.Node) => {
+      if (
+        permissionIndex === -1 && ts.isCallExpression(node) &&
+        node.expression.getText(actionsSource) === 'hasPermission' &&
+        node.arguments[1] && ts.isStringLiteral(node.arguments[1]) && node.arguments[1].text === 'service.close'
+      ) permissionIndex = node.getStart(actionsSource);
+      if (permissionIndex === -1) ts.forEachChild(node, visit);
+    };
+    visit(declaration.body!);
+    const mutationIndex = callIndex(action, mutation);
     assert.notEqual(permissionIndex, -1, `${action}: controllo service.close assente`);
     assert.ok(permissionIndex < mutationIndex, `${action}: service.close verificato dopo la mutazione`);
   }
