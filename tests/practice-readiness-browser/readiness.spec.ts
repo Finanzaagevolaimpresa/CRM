@@ -147,9 +147,13 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   expect(await page.content()).not.toContain(
     "readiness-browser-sensitive-history-checklist",
   );
+  expect(await page.content()).not.toContain(
+    "readiness-browser-sensitive-history-version",
+  );
   for (const reservedValue of [
     "Requisito storico strettamente riservato",
     "Motivazione storica strettamente riservata",
+    "Motivazione con versione sensibile da non esporre",
   ])
     await expect(page.getByText(reservedValue, { exact: false })).toHaveCount(0);
   await expect(

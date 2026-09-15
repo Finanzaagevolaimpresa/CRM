@@ -249,6 +249,45 @@ async function canUseChecklist(
   return !item.documentId || (!!document && (await canUseDocument(tx, a, document)));
 }
 
+async function resolveMaterialDocumentReferences(
+  tx: Prisma.TransactionClient,
+  a: Awaited<ReturnType<typeof actor>>,
+  practice: { clientId: string; projectId: string | null },
+  item: Prisma.DocumentChecklistItemGetPayload<object>,
+  documentId: string | null,
+  documentVersionId: string | null,
+) {
+  if (!documentId && !documentVersionId)
+    return { document: null, version: null, latest: null };
+  const version = documentVersionId
+    ? await tx.documentVersion.findUnique({ where: { id: documentVersionId } })
+    : null;
+  if (documentVersionId && !version) return null;
+  const resolvedDocumentId = documentId ?? version?.documentId;
+  if (!resolvedDocumentId) return null;
+  const document = await tx.document.findUnique({
+    where: { id: resolvedDocumentId },
+  });
+  if (
+    !document ||
+    document.deletedAt ||
+    document.clientId !== practice.clientId ||
+    document.projectId !== practice.projectId ||
+    item.documentId !== document.id ||
+    (documentId && document.id !== documentId) ||
+    (version && version.documentId !== document.id) ||
+    !(await canUseDocument(tx, a, document))
+  )
+    return null;
+  const latest = version
+    ? await tx.documentVersion.findFirst({
+        where: { documentId: document.id },
+        orderBy: { version: "desc" },
+      })
+    : null;
+  return { document, version, latest };
+}
+
 export function practiceOfferSnapshotHash(input: {
   offerId: string;
   updatedAt: Date;
@@ -739,6 +778,15 @@ export async function decidePracticeMaterial(
         throw new PracticeReadinessError("DENIED");
       if (!(await canUseChecklist(tx, a, item)))
         throw new PracticeReadinessError("DENIED");
+      const references = await resolveMaterialDocumentReferences(
+        tx,
+        a,
+        practice,
+        item,
+        input.documentId ?? null,
+        input.documentVersionId ?? null,
+      );
+      if (!references) throw new PracticeReadinessError("DENIED");
       let documentChecksum: string | null = null;
       if (input.status === "VALIDATED") {
         if (
@@ -747,16 +795,7 @@ export async function decidePracticeMaterial(
           item.documentId !== input.documentId
         )
           throw new PracticeReadinessError("DENIED");
-        const [document, version, latest] = await Promise.all([
-          tx.document.findUnique({ where: { id: input.documentId } }),
-          tx.documentVersion.findUnique({
-            where: { id: input.documentVersionId },
-          }),
-          tx.documentVersion.findFirst({
-            where: { documentId: input.documentId },
-            orderBy: { version: "desc" },
-          }),
-        ]);
+        const { document, version, latest } = references;
         if (
           !document ||
           document.deletedAt ||
@@ -914,6 +953,18 @@ async function resolvePrerequisites(
       missing.push(`materiale:${item.id}`);
       continue;
     }
+    const references = await resolveMaterialDocumentReferences(
+      tx,
+      a,
+      practice,
+      item,
+      evidence.documentId,
+      evidence.documentVersionId,
+    );
+    if (!references) {
+      missing.push("materiale_riservato");
+      continue;
+    }
     if (evidence.status === "NOT_NEEDED") {
       if (!evidence.reason) missing.push(`motivazione:${item.id}`);
       else
@@ -933,16 +984,7 @@ async function resolvePrerequisites(
       missing.push(`materiale:${item.id}`);
       continue;
     }
-    const [doc, version, latest] = await Promise.all([
-      tx.document.findUnique({ where: { id: evidence.documentId } }),
-      tx.documentVersion.findUnique({
-        where: { id: evidence.documentVersionId },
-      }),
-      tx.documentVersion.findFirst({
-        where: { documentId: evidence.documentId },
-        orderBy: { version: "desc" },
-      }),
-    ]);
+    const { document: doc, version, latest } = references;
     if (
       !doc ||
       doc.deletedAt ||
@@ -1424,19 +1466,23 @@ export async function listAccessiblePracticeReadiness(
           const prerequisites = await resolvePrerequisites(tx, row.id, a);
           const materials = [];
           for (const material of row.materials) {
-            const [item, document] = await Promise.all([
-              tx.documentChecklistItem.findUnique({
-                where: { id: material.checklistItemId },
-              }),
-              material.documentId
-                ? tx.document.findUnique({ where: { id: material.documentId } })
-                : null,
-            ]);
+            const item = await tx.documentChecklistItem.findUnique({
+              where: { id: material.checklistItemId },
+            });
+            const references = item
+              ? await resolveMaterialDocumentReferences(
+                  tx,
+                  a,
+                  row,
+                  item,
+                  material.documentId,
+                  material.documentVersionId,
+                )
+              : null;
             if (
               item &&
               (await canUseChecklist(tx, a, item)) &&
-              (!material.documentId ||
-                (document && (await canUseDocument(tx, a, document))))
+              references
             )
               materials.push(material);
           }

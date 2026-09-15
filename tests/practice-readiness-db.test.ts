@@ -403,8 +403,12 @@ test.after(async () => {
     await db.contract.deleteMany({
       where: { clientId: { in: [a.client.id, b.client.id] } },
     });
+    const cleanupDocuments = await db.document.findMany({
+      where: { clientId: { in: [a.client.id, b.client.id] } },
+      select: { id: true },
+    });
     await db.documentVersion.deleteMany({
-      where: { documentId: { in: [a.document.id, b.document.id] } },
+      where: { documentId: { in: cleanupDocuments.map((row) => row.id) } },
     });
     await db.document.deleteMany({
       where: { clientId: { in: [a.client.id, b.client.id] } },
@@ -751,6 +755,79 @@ test(
       where: { id: a.document.id },
       data: { containsSensitiveData: true },
     });
+    const ordinaryHistoryDocument = await db.document.create({
+      data: {
+        clientId: a.client.id,
+        projectId: a.project.id,
+        type: "documento_operativo",
+        title: `Documento storico ordinario ${suffix}`,
+        fileName: `ordinary-history-${suffix}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: `synthetic/${suffix}/ordinary-history.pdf`,
+        uploadedById: ids.manager,
+        status: "verificato",
+        checksum: randomBytes(32).toString("hex"),
+      },
+    });
+    const ordinaryHistoryVersion = await db.documentVersion.create({
+      data: {
+        documentId: ordinaryHistoryDocument.id,
+        version: 1,
+        storagePath: ordinaryHistoryDocument.storagePath,
+        checksum: ordinaryHistoryDocument.checksum,
+      },
+    });
+    const mismatchedHistoryChecklist = await db.documentChecklistItem.create({
+      data: {
+        clientId: a.client.id,
+        projectId: a.project.id,
+        documentId: ordinaryHistoryDocument.id,
+        title: `Requisito storico ordinario discordante ${suffix}`,
+        createdById: ids.manager,
+      },
+    });
+    const coherentHistoryChecklist = await db.documentChecklistItem.create({
+      data: {
+        clientId: a.client.id,
+        projectId: a.project.id,
+        documentId: ordinaryHistoryDocument.id,
+        title: `Requisito storico ordinario coerente ${suffix}`,
+        createdById: ids.manager,
+      },
+    });
+    const mismatchedHistoryReason =
+      "Motivazione storica con sola versione sensibile";
+    const mismatchedHistory = await db.practiceMaterialEvidence.create({
+      data: {
+        practiceId: practice.id,
+        checklistItemId: mismatchedHistoryChecklist.id,
+        documentId: null,
+        documentVersionId: a.documentVersion.id,
+        documentChecksum: null,
+        status: "NOT_NEEDED",
+        reason: mismatchedHistoryReason,
+        payloadHash: randomBytes(32).toString("hex"),
+        sequence: 1,
+        decidedAt: new Date(),
+        decidedById: ids.manager,
+      },
+    });
+    const coherentHistory = await db.practiceMaterialEvidence.create({
+      data: {
+        practiceId: practice.id,
+        checklistItemId: coherentHistoryChecklist.id,
+        documentId: null,
+        documentVersionId: ordinaryHistoryVersion.id,
+        documentChecksum: null,
+        status: "NOT_NEEDED",
+        reason: "Motivazione storica coerente",
+        payloadHash: randomBytes(32).toString("hex"),
+        sequence: 1,
+        decidedAt: new Date(),
+        decidedById: ids.manager,
+      },
+    });
     try {
       for (const status of ["NOT_NEEDED", "INVALIDATED"] as const)
         await expectDeniedWithoutEffects(practice.id, () =>
@@ -810,11 +887,39 @@ test(
         ),
         false,
       );
+      assert.equal(
+        deniedRead.materials.some((row) => row.id === mismatchedHistory.id),
+        false,
+      );
+      assert.equal(
+        deniedRead.materials.some((row) => row.id === coherentHistory.id),
+        true,
+      );
+      assert.equal(
+        JSON.stringify(deniedRead).includes(mismatchedHistoryReason),
+        false,
+      );
+      assert.equal(
+        deniedRead.prerequisites.missing.some((value) =>
+          value.includes(mismatchedHistoryChecklist.id),
+        ),
+        false,
+      );
       const authorizedRead = (
         await listAccessiblePracticeReadiness(db, manager)
       ).find((row) => row.id === practice.id);
       assert.equal(
         authorizedRead?.materials.some((row) => row.id === authorized.id),
+        true,
+      );
+      assert.equal(
+        authorizedRead?.materials.some(
+          (row) => row.id === mismatchedHistory.id,
+        ),
+        false,
+      );
+      assert.equal(
+        authorizedRead?.materials.some((row) => row.id === coherentHistory.id),
         true,
       );
     } finally {
@@ -832,8 +937,13 @@ test(
       await db.practiceMaterialEvidence.deleteMany({
         where: {
           practiceId: practice.id,
-          checklistItemId: a.checklist.id,
-          decidedById: ids.manager,
+          checklistItemId: {
+            in: [
+              a.checklist.id,
+              mismatchedHistoryChecklist.id,
+              coherentHistoryChecklist.id,
+            ],
+          },
         },
       });
       await db.auditLog.deleteMany({
@@ -848,6 +958,15 @@ test(
         where: { id: a.document.id },
         data: { containsSensitiveData: false },
       });
+      await db.documentChecklistItem.deleteMany({
+        where: {
+          id: { in: [mismatchedHistoryChecklist.id, coherentHistoryChecklist.id] },
+        },
+      });
+      await db.documentVersion.delete({
+        where: { id: ordinaryHistoryVersion.id },
+      });
+      await db.document.delete({ where: { id: ordinaryHistoryDocument.id } });
     }
     assert.deepEqual(await footprint(practice.id), before);
   },
@@ -1378,6 +1497,59 @@ test(
     let v4 = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
+    const sensitiveReferenceDocument = await db.document.create({
+      data: {
+        clientId: a.client.id,
+        projectId: a.project.id,
+        type: "documento_riservato",
+        title: `Riferimento sensibile ${suffix}`,
+        fileName: `sensitive-reference-${suffix}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: `synthetic/${suffix}/sensitive-reference.pdf`,
+        uploadedById: ids.manager,
+        status: "verificato",
+        containsSensitiveData: true,
+        checksum: randomBytes(32).toString("hex"),
+      },
+    });
+    const sensitiveReferenceVersion = await db.documentVersion.create({
+      data: {
+        documentId: sensitiveReferenceDocument.id,
+        version: 1,
+        storagePath: sensitiveReferenceDocument.storagePath,
+        checksum: sensitiveReferenceDocument.checksum,
+      },
+    });
+    for (const status of ["NOT_NEEDED", "INVALIDATED"] as const)
+      for (const references of [
+        {
+          documentId: sensitiveReferenceDocument.id,
+          documentVersionId: sensitiveReferenceVersion.id,
+        },
+        {
+          documentId: null,
+          documentVersionId: sensitiveReferenceVersion.id,
+        },
+        {
+          documentId: a.document.id,
+          documentVersionId: sensitiveReferenceVersion.id,
+        },
+        {
+          documentId: b.document.id,
+          documentVersionId: b.documentVersion.id,
+        },
+      ])
+        await expectDeniedWithoutEffects(practice.id, () =>
+          decidePracticeMaterial(db, actorA, {
+            practiceId: practice.id,
+            checklistItemId: a.checklist.id,
+            ...references,
+            status,
+            reason: "Riferimento facoltativo non autorizzato",
+            expectedVersion: v4.version,
+          }),
+        );
     const invalidated = await decidePracticeMaterial(db, actorA, {
       practiceId: practice.id,
       checklistItemId: a.checklist.id,

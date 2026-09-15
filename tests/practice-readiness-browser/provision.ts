@@ -392,6 +392,15 @@ async function main() {
         .digest("hex"),
     },
   });
+  const historicalSensitiveVersion = await db.documentVersion.create({
+    data: {
+      id: "readiness-browser-sensitive-history-version",
+      documentId: historicalSensitiveDocument.id,
+      version: 1,
+      storagePath: historicalSensitiveDocument.storagePath,
+      checksum: historicalSensitiveDocument.checksum,
+    },
+  });
   const historicalChecklist = await db.documentChecklistItem.create({
     data: {
       id: "readiness-browser-sensitive-history-checklist",
@@ -414,6 +423,51 @@ async function main() {
       reason: "Motivazione storica strettamente riservata",
       payloadHash: createHash("sha256")
         .update("sensitive-history-material")
+        .digest("hex"),
+      decidedAt: new Date(),
+      decidedById: "readiness-browser-owner",
+    },
+  });
+  const historicalOrdinaryDocument = await db.document.create({
+    data: {
+      id: "readiness-browser-ordinary-history-document",
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      type: "documento_operativo",
+      title: "Documento storico ordinario",
+      fileName: "ordinary-history.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 10,
+      storagePath: "synthetic/readiness/ordinary-history.pdf",
+      uploadedById: "readiness-browser-owner",
+      status: "verificato",
+      checksum: createHash("sha256")
+        .update("ordinary-history-document")
+        .digest("hex"),
+    },
+  });
+  const historicalOrdinaryChecklist = await db.documentChecklistItem.create({
+    data: {
+      id: "readiness-browser-ordinary-history-checklist",
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      title: "Requisito storico ordinario",
+      documentId: historicalOrdinaryDocument.id,
+      createdById: "readiness-browser-owner",
+    },
+  });
+  await db.practiceMaterialEvidence.create({
+    data: {
+      practiceId: historicalPractice.id,
+      checklistItemId: historicalOrdinaryChecklist.id,
+      documentId: null,
+      documentVersionId: historicalSensitiveVersion.id,
+      documentChecksum: null,
+      sequence: 1,
+      status: "NOT_NEEDED",
+      reason: "Motivazione con versione sensibile da non esporre",
+      payloadHash: createHash("sha256")
+        .update("ordinary-history-sensitive-version-material")
         .digest("hex"),
       decidedAt: new Date(),
       decidedById: "readiness-browser-owner",
