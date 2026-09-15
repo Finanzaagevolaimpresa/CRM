@@ -73,6 +73,13 @@ async function main() {
       },
     ],
   });
+  await db.userPermissionOverride.create({
+    data: {
+      userId: "readiness-browser-owner",
+      permission: "document.sensitive.read",
+      allowed: false,
+    },
+  });
 
   phase = "CASES";
   for (const item of cases) {
@@ -159,7 +166,7 @@ async function main() {
         id: `readiness-browser-document-${item.key}`,
         clientId: client.id,
         projectId: project.id,
-        type: "incarico",
+        type: "documento_operativo",
         title: `Incarico ${item.label}`,
         fileName: `${item.key}.pdf`,
         mimeType: "application/pdf",
@@ -178,6 +185,33 @@ async function main() {
         version: 1,
         storagePath: document.storagePath,
         checksum: document.checksum,
+      },
+    });
+    const sensitiveDocument = await db.document.create({
+      data: {
+        id: `readiness-browser-sensitive-document-${item.key}`,
+        clientId: client.id,
+        projectId: project.id,
+        type: "incarico",
+        title: `Documento sensibile ${item.label}`,
+        fileName: `sensitive-${item.key}.pdf`,
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: `synthetic/readiness/sensitive-${item.key}.pdf`,
+        uploadedById: "readiness-browser-owner",
+        status: "verificato",
+        containsSensitiveData: true,
+        checksum: createHash("sha256")
+          .update(`sensitive-document-${item.key}`)
+          .digest("hex"),
+      },
+    });
+    await db.documentVersion.create({
+      data: {
+        documentId: sensitiveDocument.id,
+        version: 1,
+        storagePath: sensitiveDocument.storagePath,
+        checksum: sensitiveDocument.checksum,
       },
     });
     const contract = await db.contract.create({

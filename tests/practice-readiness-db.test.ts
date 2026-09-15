@@ -73,6 +73,7 @@ let a: Context;
 let b: Context;
 let revisionId: string;
 let serviceCatalogId: string;
+let emptyAttestationAHash: string;
 let offerAmounts = { taxable: "100.00", vat: "22.00", total: "122.00" };
 
 function denied(error: unknown) {
@@ -138,7 +139,7 @@ async function createContext(label: string, consultantId: string) {
     data: {
       clientId: client.id,
       projectId: project.id,
-      type: "incarico",
+      type: "documento_operativo",
       title: `Incarico ${label}`,
       fileName: `${label}.pdf`,
       mimeType: "application/pdf",
@@ -458,12 +459,59 @@ test(
   "accepted offer revision stays immutable when a later proposal is created",
   { skip: !enabled },
   async () => {
-    const practice = await ensurePractice(a, actorA);
+    let practice = await ensurePractice(a, actorA);
     const accepted = await db.practiceOfferRevision.findUniqueOrThrow({
       where: { id: practice.acceptedOfferRevisionId },
       include: { acceptance: true },
     });
     assert.ok(accepted.acceptance);
+    const emptyReason = "Nessun materiale applicabile alla fase sintetica";
+    await db.documentChecklistItem.update({
+      where: { id: a.checklist.id },
+      data: { active: false },
+    });
+    const firstAttested = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: practice.version,
+      emptyChecklistReason: emptyReason,
+    });
+    const firstEvidenceId = firstAttested.materialsCompleteEvidenceId;
+    assert.ok(firstEvidenceId);
+    emptyAttestationAHash = (
+      await db.practiceMaterialAttestation.findUniqueOrThrow({
+        where: { id: firstEvidenceId },
+      })
+    ).snapshotHash;
+    const attestationCount = await db.practiceMaterialAttestation.count({
+      where: { practiceId: practice.id },
+    });
+    const auditCount = await db.auditLog.count({
+      where: { entityType: "PracticeReadiness", entityId: practice.id },
+    });
+    const replayed = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: firstAttested.version,
+      emptyChecklistReason: emptyReason,
+    });
+    assert.equal(replayed.version, firstAttested.version);
+    assert.equal(replayed.materialsCompleteEvidenceId, firstEvidenceId);
+    assert.equal(
+      await db.practiceMaterialAttestation.count({
+        where: { practiceId: practice.id },
+      }),
+      attestationCount,
+    );
+    assert.equal(
+      await db.auditLog.count({
+        where: { entityType: "PracticeReadiness", entityId: practice.id },
+      }),
+      auditCount,
+    );
+    await db.documentChecklistItem.update({
+      where: { id: a.checklist.id },
+      data: { active: true },
+    });
+    practice = replayed;
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
@@ -522,7 +570,7 @@ test(
       }),
       0,
     );
-    const revisedPractice = await createPracticeReadiness(db, actorA, {
+    let revisedPractice = await createPracticeReadiness(db, actorA, {
       offerRevisionId: second.id,
     });
     assert.equal(revisedPractice.id, practice.id);
@@ -542,6 +590,26 @@ test(
       }),
     );
     assert.equal(revisedPractice.currentFormalizationId, null);
+    await db.documentChecklistItem.update({
+      where: { id: a.checklist.id },
+      data: { active: false },
+    });
+    revisedPractice = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: revisedPractice.version,
+      emptyChecklistReason: emptyReason,
+    });
+    assert.notEqual(revisedPractice.materialsCompleteEvidenceId, firstEvidenceId);
+    assert.equal(
+      await db.practiceMaterialAttestation.count({
+        where: { practiceId: practice.id },
+      }),
+      attestationCount + 1,
+    );
+    await db.documentChecklistItem.update({
+      where: { id: a.checklist.id },
+      data: { active: true },
+    });
     assert.ok(
       await db.practiceFormalization.findUnique({
         where: { id: firstFormalizationId },
@@ -669,6 +737,88 @@ test(
       }),
       proposalsBefore,
     );
+  },
+);
+
+test(
+  "sensitive material documents require canonical document access",
+  { skip: !enabled },
+  async () => {
+    const practice = await ensurePractice(a, actorA);
+    const before = await footprint(practice.id);
+    assert.ok(before.practice);
+    await db.document.update({
+      where: { id: a.document.id },
+      data: { containsSensitiveData: true },
+    });
+    try {
+      await expectDeniedWithoutEffects(practice.id, () =>
+        decidePracticeMaterial(db, actorA, {
+          practiceId: practice.id,
+          checklistItemId: a.checklist.id,
+          documentId: a.document.id,
+          documentVersionId: a.documentVersion.id,
+          status: "VALIDATED",
+          expectedVersion: practice.version,
+        }),
+      );
+      const authorized = await decidePracticeMaterial(db, manager, {
+        practiceId: practice.id,
+        checklistItemId: a.checklist.id,
+        documentId: a.document.id,
+        documentVersionId: a.documentVersion.id,
+        status: "VALIDATED",
+        expectedVersion: practice.version,
+      });
+      assert.equal(authorized.documentId, a.document.id);
+      assert.equal(authorized.documentVersionId, a.documentVersion.id);
+      const deniedRead = (
+        await listAccessiblePracticeReadiness(db, actorA)
+      ).find((row) => row.id === practice.id);
+      assert.ok(deniedRead);
+      assert.equal(
+        deniedRead.materials.some((row) => row.id === authorized.id),
+        false,
+      );
+      const authorizedRead = (
+        await listAccessiblePracticeReadiness(db, manager)
+      ).find((row) => row.id === practice.id);
+      assert.equal(
+        authorizedRead?.materials.some((row) => row.id === authorized.id),
+        true,
+      );
+    } finally {
+      await db.practiceReadiness.update({
+        where: { id: practice.id },
+        data: {
+          version: before.practice.version,
+          materialsCompleteAt: before.practice.materialsCompleteAt,
+          materialsCompleteById: before.practice.materialsCompleteById,
+          materialsCompleteEvidenceId:
+            before.practice.materialsCompleteEvidenceId,
+        },
+      });
+      await db.practiceMaterialEvidence.deleteMany({
+        where: {
+          practiceId: practice.id,
+          checklistItemId: a.checklist.id,
+          decidedById: ids.manager,
+        },
+      });
+      await db.auditLog.deleteMany({
+        where: {
+          actorId: ids.manager,
+          entityType: "PracticeReadiness",
+          entityId: practice.id,
+          event: "practice_material_decided",
+        },
+      });
+      await db.document.update({
+        where: { id: a.document.id },
+        data: { containsSensitiveData: false },
+      });
+    }
+    assert.deepEqual(await footprint(practice.id), before);
   },
 );
 
@@ -1026,11 +1176,19 @@ test(
         beforeDeniedAttestation,
       );
     }
-    await attestPracticeMaterialsComplete(db, actorB, {
+    const emptyAttestedB = await attestPracticeMaterialsComplete(db, actorB, {
       practiceId: practice.id,
       expectedVersion: practice.version,
       emptyChecklistReason: "Nessun materiale applicabile alla fase sintetica",
     });
+    assert.notEqual(
+      (
+        await db.practiceMaterialAttestation.findUniqueOrThrow({
+          where: { id: emptyAttestedB.materialsCompleteEvidenceId! },
+        })
+      ).snapshotHash,
+      emptyAttestationAHash,
+    );
     await db.documentChecklistItem.update({
       where: { id: b.checklist.id },
       data: { active: true },
@@ -1328,6 +1486,44 @@ test(
         ({ id }) => id === practice.id,
       ),
       true,
+    );
+    const updatedOffer = await db.commercialOffer.update({
+      where: { id: a.offer.id },
+      data: { description: "Proposta successiva ad avvio da negare" },
+    });
+    const postStartRevision = await proposePracticeOfferRevision(db, actorA, {
+      controlledIntakeId: a.intake.id,
+      commercialOfferId: a.offer.id,
+      serviceRevisionId: revisionId,
+      clientId: a.client.id,
+      projectId: a.project.id,
+      digitalProjectType: "software_crm_workflow",
+      scope: "Perimetro successivo ad avvio",
+      startupConditions: "Non deve sostituire la pratica avviata",
+      requiredInitialAmount: "50.00",
+      expectedOfferUpdatedAt: updatedOffer.updatedAt,
+    });
+    const beforePostStartAcceptance = await footprint(practice.id);
+    const postStartAttempts = await Promise.allSettled([
+      createPracticeReadiness(db, actorA, {
+        offerRevisionId: postStartRevision.id,
+      }),
+      createPracticeReadiness(db, actorA, {
+        offerRevisionId: postStartRevision.id,
+      }),
+    ]);
+    assert.equal(
+      postStartAttempts.every(
+        (result) => result.status === "rejected" && denied(result.reason),
+      ),
+      true,
+    );
+    assert.deepEqual(await footprint(practice.id), beforePostStartAcceptance);
+    assert.equal(
+      await db.practiceOfferAcceptance.count({
+        where: { offerRevisionId: postStartRevision.id },
+      }),
+      0,
     );
   },
 );

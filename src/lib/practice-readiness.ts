@@ -2,7 +2,11 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import type { AuthSession } from "./auth";
 import { canonicalSha256 } from "./canonical-json";
-import { canEditClient, canViewClient } from "./access-control";
+import {
+  canEditClient,
+  canViewClient,
+  canViewDocument,
+} from "./access-control";
 import { hasPermission } from "./permission-evaluator";
 import { lockAuthoritativeInternalSession } from "./internal-session-registry";
 import {
@@ -156,6 +160,45 @@ async function practiceScope(
   )
     throw new PracticeReadinessError("DENIED");
   return { practice, client, project, intake, lead };
+}
+
+async function canUseDocument(
+  tx: Prisma.TransactionClient,
+  a: Awaited<ReturnType<typeof actor>>,
+  document: Prisma.DocumentGetPayload<object>,
+) {
+  if (!hasPermission(a, "document.download")) return false;
+  const [client, project, clientService] = await Promise.all([
+    document.clientId
+      ? tx.client.findUnique({ where: { id: document.clientId } })
+      : null,
+    document.projectId
+      ? tx.project.findUnique({ where: { id: document.projectId } })
+      : null,
+    document.clientServiceId
+      ? tx.clientService.findUnique({ where: { id: document.clientServiceId } })
+      : null,
+  ]);
+  const serviceProject =
+    clientService?.projectId && clientService.projectId !== project?.id
+      ? await tx.project.findUnique({ where: { id: clientService.projectId } })
+      : project;
+  return canViewDocument(
+    a,
+    {
+      ...document,
+      client,
+      project: project ? { ...project, client } : null,
+      clientService: clientService
+        ? {
+            ...clientService,
+            client,
+            project: serviceProject ? { ...serviceProject, client } : null,
+          }
+        : null,
+    },
+    hasPermission(a, "document.sensitive.read"),
+  );
 }
 
 export function practiceOfferSnapshotHash(input: {
@@ -329,6 +372,11 @@ export async function createPracticeReadiness(
         await practiceScope(tx, a, same.id);
         return same;
       }
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE "controlledIntakeId"=${revision.controlledIntakeId} FOR UPDATE`;
+      const current = await tx.practiceReadiness.findUnique({
+        where: { controlledIntakeId: revision.controlledIntakeId },
+      });
+      if (current?.startedAt) throw new PracticeReadinessError("DENIED");
       const [client, intake, project, catalogRevision] = await Promise.all([
         tx.client.findUnique({ where: { id: revision.clientId } }),
         tx.controlledIntake.findUnique({
@@ -376,9 +424,6 @@ export async function createPracticeReadiness(
           acceptedById: a.userId,
           evidenceHash,
         },
-      });
-      const current = await tx.practiceReadiness.findUnique({
-        where: { controlledIntakeId: revision.controlledIntakeId },
       });
       const data = {
         commercialOfferId: revision.commercialOfferId,
@@ -674,6 +719,8 @@ export async function decidePracticeMaterial(
           latest?.id !== version.id
         )
           throw new PracticeReadinessError("DENIED");
+        if (!(await canUseDocument(tx, a, document)))
+          throw new PracticeReadinessError("DENIED");
         documentChecksum = version.checksum ?? document.checksum;
       }
       const previous = await tx.practiceMaterialEvidence.findFirst({
@@ -739,13 +786,14 @@ export async function decidePracticeMaterial(
 async function resolvePrerequisites(
   tx: Prisma.TransactionClient,
   practiceId: string,
+  a: Awaited<ReturnType<typeof actor>>,
 ) {
   const practice = await tx.practiceReadiness.findUnique({
     where: { id: practiceId },
     include: {
       funding: { include: { successor: true } },
       materials: { include: { successor: true } },
-      materialAttestations: true,
+      materialAttestations: { orderBy: { decidedAt: "asc" } },
     },
   });
   if (!practice) throw new PracticeReadinessError("DENIED");
@@ -850,6 +898,7 @@ async function resolvePrerequisites(
       !version ||
       version.documentId !== doc.id ||
       latest?.id !== version.id ||
+      !(await canUseDocument(tx, a, doc)) ||
       (version.checksum ?? doc.checksum) !== evidence.documentChecksum
     )
       missing.push(`materiale:${item.id}`);
@@ -861,7 +910,7 @@ async function resolvePrerequisites(
         documentVersionId: version.id,
       });
   }
-  const materialSnapshot = {
+  const legacyMaterialSnapshot = {
     items: materialRows,
     emptyChecklistReason: items.length
       ? null
@@ -871,13 +920,31 @@ async function resolvePrerequisites(
             | undefined
         )?.emptyChecklistReason ?? null),
   };
-  const materialHash = canonicalSha256(materialSnapshot);
+  const materialSnapshot = {
+    practiceId: practice.id,
+    acceptedOfferRevisionId: practice.acceptedOfferRevisionId,
+    ...legacyMaterialSnapshot,
+  };
+  const currentMaterialHash = canonicalSha256(materialSnapshot);
   const complete = practice.materialsCompleteEvidenceId
     ? practice.materialAttestations.find(
         (row) => row.id === practice.materialsCompleteEvidenceId,
       )
     : null;
-  if (!complete || complete.snapshotHash !== materialHash)
+  const completeSnapshot = complete?.snapshot as
+    | { practiceId?: unknown }
+    | undefined;
+  const legacyMaterialHash = canonicalSha256(legacyMaterialSnapshot);
+  const completeHashValid = Boolean(
+    complete &&
+      (complete.snapshotHash === currentMaterialHash ||
+        (completeSnapshot?.practiceId === undefined &&
+          complete.snapshotHash === legacyMaterialHash)),
+  );
+  const materialHash = completeHashValid
+    ? complete!.snapshotHash
+    : currentMaterialHash;
+  if (!completeHashValid)
     missing.push("completezza_materiali");
   const paid = currentAvailableFunding(practice.funding);
   if (paid.lt(practice.requiredInitialAmount))
@@ -898,6 +965,7 @@ async function resolvePrerequisites(
     contract.projectId !== practice.projectId ||
     !document ||
     document.deletedAt ||
+    !(await canUseDocument(tx, a, document)) ||
     !documentVersion ||
     documentVersion.documentId !== document.id
   )
@@ -943,7 +1011,8 @@ export async function startPractice(
     async (tx) => {
       const a = await actor(tx, claimed);
       await practiceScope(tx, a, input.practiceId);
-      const state = await resolvePrerequisites(tx, input.practiceId);
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId} FOR UPDATE`;
+      const state = await resolvePrerequisites(tx, input.practiceId, a);
       if (
         state.practice.version !== input.expectedVersion ||
         state.practice.startedAt
@@ -1079,6 +1148,7 @@ export async function formalizePractice(
         !documentVersion ||
         documentVersion.documentId !== document.id ||
         document.deletedAt ||
+        !(await canUseDocument(tx, a, document)) ||
         document.clientId !== p.clientId ||
         (p.projectId && document.projectId !== p.projectId)
       )
@@ -1210,7 +1280,8 @@ export async function attestPracticeMaterialsComplete(
     async (tx) => {
       const a = await actor(tx, claimed);
       await practiceScope(tx, a, input.practiceId);
-      const state = await resolvePrerequisites(tx, input.practiceId);
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId} FOR UPDATE`;
+      const state = await resolvePrerequisites(tx, input.practiceId, a);
       if (state.practice.version !== input.expectedVersion)
         throw new PracticeReadinessError("CONFLICT");
       if (
@@ -1222,21 +1293,34 @@ export async function attestPracticeMaterialsComplete(
       )
         throw new PracticeReadinessError("NOT_READY");
       const snapshot = {
+        practiceId: state.practice.id,
+        acceptedOfferRevisionId: state.practice.acceptedOfferRevisionId,
         items: state.materialRows,
         emptyChecklistReason: state.materialRows.length
           ? null
           : input.emptyChecklistReason,
       };
       const snapshotHash = canonicalSha256(snapshot);
-      const attestation = await tx.practiceMaterialAttestation.create({
-        data: {
-          practiceId: state.practice.id,
-          snapshot,
-          snapshotHash,
-          decidedAt: new Date(),
-          decidedById: a.userId,
-        },
+      const existing = await tx.practiceMaterialAttestation.findUnique({
+        where: { snapshotHash },
       });
+      if (existing) {
+        if (existing.practiceId !== state.practice.id)
+          throw new PracticeReadinessError("CONFLICT");
+        if (state.practice.materialsCompleteEvidenceId === existing.id)
+          return state.practice;
+      }
+      const attestation =
+        existing ??
+        (await tx.practiceMaterialAttestation.create({
+          data: {
+            practiceId: state.practice.id,
+            snapshot,
+            snapshotHash,
+            decidedAt: new Date(),
+            decidedById: a.userId,
+          },
+        }));
       const row = await tx.practiceReadiness.update({
         where: { id: state.practice.id, version: input.expectedVersion },
         data: {
@@ -1283,9 +1367,31 @@ export async function listAccessiblePracticeReadiness(
       for (const row of rows) {
         try {
           await practiceScope(tx, a, row.id, false);
-          const prerequisites = await resolvePrerequisites(tx, row.id);
+          const prerequisites = await resolvePrerequisites(tx, row.id, a);
+          const materials = [];
+          for (const material of row.materials) {
+            if (!material.documentId) {
+              materials.push(material);
+              continue;
+            }
+            const document = await tx.document.findUnique({
+              where: { id: material.documentId },
+            });
+            if (document && (await canUseDocument(tx, a, document)))
+              materials.push(material);
+          }
+          const formalizations = [];
+          for (const formalization of row.formalizations) {
+            const document = await tx.document.findUnique({
+              where: { id: formalization.signedDocumentId },
+            });
+            if (document && (await canUseDocument(tx, a, document)))
+              formalizations.push(formalization);
+          }
           visible.push({
             ...row,
+            materials,
+            formalizations,
             prerequisites: {
               missing: prerequisites.missing,
               availableFunding: prerequisites.paid.toFixed(2),

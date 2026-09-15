@@ -1,5 +1,10 @@
 export const dynamic = "force-dynamic";
 import { requirePermission, hasPermission } from "@/lib/auth";
+import {
+  canViewChecklistItem,
+  canViewDocument,
+  isSensitiveDocument,
+} from "@/lib/access-control";
 import { prisma } from "@/lib/prisma";
 import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
@@ -82,10 +87,11 @@ export default async function Page({
     revisions,
     projects,
     contracts,
-    documents,
-    items,
+    documentRows,
+    itemRows,
     proposals,
     services,
+    documentServiceRows,
   ] = await Promise.all([
     listAccessiblePracticeReadiness(prisma, session),
     prisma.controlledIntake.findMany({
@@ -127,7 +133,78 @@ export default async function Page({
         operationalStatus: "nuova",
       },
     }),
+    prisma.clientService.findMany({
+      where: { deletedAt: null, clientId: { in: clientIds } },
+    }),
   ]);
+  const clientById = new Map(clients.map((client) => [client.id, client]));
+  const projectById = new Map(
+    projects.map((project) => [
+      project.id,
+      { ...project, client: clientById.get(project.clientId) ?? null },
+    ]),
+  );
+  const documentServiceById = new Map(
+    documentServiceRows.map((service) => [
+      service.id,
+      {
+        ...service,
+        client: clientById.get(service.clientId) ?? null,
+        project: service.projectId
+          ? projectById.get(service.projectId) ?? null
+          : null,
+      },
+    ]),
+  );
+  const canReadDocuments = hasPermission(session, "document.download");
+  const canReadSensitiveDocuments = hasPermission(
+    session,
+    "document.sensitive.read",
+  );
+  const documents = canReadDocuments
+    ? documentRows.filter((document) =>
+        canViewDocument(
+          session,
+          {
+            ...document,
+            client: document.clientId
+              ? clientById.get(document.clientId) ?? null
+              : null,
+            project: document.projectId
+              ? projectById.get(document.projectId) ?? null
+              : null,
+            clientService: document.clientServiceId
+              ? documentServiceById.get(document.clientServiceId) ?? null
+              : null,
+          },
+          canReadSensitiveDocuments,
+        ),
+      )
+    : [];
+  const visibleDocumentIds = new Set(documents.map((document) => document.id));
+  const items = itemRows
+    .filter(
+      (item) => !item.documentId || visibleDocumentIds.has(item.documentId),
+    )
+    .filter(
+      (item) =>
+        (!isSensitiveDocument({
+          containsSensitiveData: false,
+          documentCategory: item.title,
+          type: item.title,
+        }) ||
+          canReadSensitiveDocuments) &&
+        canViewChecklistItem(session, {
+          ...item,
+          client: clientById.get(item.clientId) ?? null,
+          project: item.projectId
+            ? projectById.get(item.projectId) ?? null
+            : null,
+          clientService: item.clientServiceId
+            ? documentServiceById.get(item.clientServiceId) ?? null
+            : null,
+        }),
+    );
   const documentVersions = await prisma.documentVersion.findMany({
     where: { documentId: { in: documents.map((x) => x.id) } },
     orderBy: { version: "desc" },

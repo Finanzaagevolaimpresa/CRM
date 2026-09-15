@@ -212,6 +212,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await expect(page.locator(`#practice-${practice.id}`)).toBeVisible();
 
     let article = await reloadPractice(page, practice.id);
+    await expect(
+      article.locator(
+        `option[value="readiness-browser-sensitive-document-${item.key}"]`,
+      ),
+    ).toHaveCount(0);
+    await expect(
+      article.getByText(`Documento sensibile ${item.label}`, { exact: false }),
+    ).toHaveCount(0);
     await article
       .locator('[name="contractId"]')
       .selectOption(`readiness-browser-contract-${item.key}`);
