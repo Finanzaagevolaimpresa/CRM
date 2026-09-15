@@ -792,6 +792,7 @@ test(
         where: { id: practice.id },
         data: {
           version: before.practice.version,
+          updatedAt: before.practice.updatedAt,
           materialsCompleteAt: before.practice.materialsCompleteAt,
           materialsCompleteById: before.practice.materialsCompleteById,
           materialsCompleteEvidenceId:
