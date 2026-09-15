@@ -372,7 +372,7 @@ export async function createPracticeReadiness(
         await practiceScope(tx, a, same.id);
         return same;
       }
-      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE "controlledIntakeId"=${revision.controlledIntakeId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE "controlledIntakeId"=${revision.controlledIntakeId}::uuid FOR UPDATE`;
       const current = await tx.practiceReadiness.findUnique({
         where: { controlledIntakeId: revision.controlledIntakeId },
       });
@@ -1011,7 +1011,7 @@ export async function startPractice(
     async (tx) => {
       const a = await actor(tx, claimed);
       await practiceScope(tx, a, input.practiceId);
-      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId}::uuid FOR UPDATE`;
       const state = await resolvePrerequisites(tx, input.practiceId, a);
       if (
         state.practice.version !== input.expectedVersion ||
@@ -1280,7 +1280,7 @@ export async function attestPracticeMaterialsComplete(
     async (tx) => {
       const a = await actor(tx, claimed);
       await practiceScope(tx, a, input.practiceId);
-      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceId}::uuid FOR UPDATE`;
       const state = await resolvePrerequisites(tx, input.practiceId, a);
       if (state.practice.version !== input.expectedVersion)
         throw new PracticeReadinessError("CONFLICT");
