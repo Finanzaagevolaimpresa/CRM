@@ -4,8 +4,10 @@ import type { AuthSession } from "./auth";
 import { canonicalSha256 } from "./canonical-json";
 import {
   canEditClient,
+  canViewChecklistItem,
   canViewClient,
   canViewDocument,
+  isSensitiveDocument,
 } from "./access-control";
 import { hasPermission } from "./permission-evaluator";
 import { lockAuthoritativeInternalSession } from "./internal-session-registry";
@@ -199,6 +201,52 @@ async function canUseDocument(
     },
     hasPermission(a, "document.sensitive.read"),
   );
+}
+
+async function canUseChecklist(
+  tx: Prisma.TransactionClient,
+  a: Awaited<ReturnType<typeof actor>>,
+  item: Prisma.DocumentChecklistItemGetPayload<object>,
+) {
+  const [client, project, clientService, document] = await Promise.all([
+    tx.client.findUnique({ where: { id: item.clientId } }),
+    item.projectId
+      ? tx.project.findUnique({ where: { id: item.projectId } })
+      : null,
+    item.clientServiceId
+      ? tx.clientService.findUnique({ where: { id: item.clientServiceId } })
+      : null,
+    item.documentId
+      ? tx.document.findUnique({ where: { id: item.documentId } })
+      : null,
+  ]);
+  const hydratedProject = project ? { ...project, client } : null;
+  const serviceProject =
+    clientService?.projectId && clientService.projectId !== project?.id
+      ? await tx.project.findUnique({ where: { id: clientService.projectId } })
+      : project;
+  if (
+    (isSensitiveDocument({
+      containsSensitiveData: false,
+      documentCategory: item.title,
+      type: item.title,
+    }) &&
+      !hasPermission(a, "document.sensitive.read")) ||
+    !canViewChecklistItem(a, {
+      ...item,
+      client,
+      project: hydratedProject,
+      clientService: clientService
+        ? {
+            ...clientService,
+            client,
+            project: serviceProject ? { ...serviceProject, client } : null,
+          }
+        : null,
+    })
+  )
+    return false;
+  return !item.documentId || (!!document && (await canUseDocument(tx, a, document)));
 }
 
 export function practiceOfferSnapshotHash(input: {
@@ -689,6 +737,8 @@ export async function decidePracticeMaterial(
         !item.active
       )
         throw new PracticeReadinessError("DENIED");
+      if (!(await canUseChecklist(tx, a, item)))
+        throw new PracticeReadinessError("DENIED");
       let documentChecksum: string | null = null;
       if (input.status === "VALIDATED") {
         if (
@@ -855,6 +905,10 @@ async function resolvePrerequisites(
   }>;
   const missing: string[] = [];
   for (const item of items) {
+    if (!(await canUseChecklist(tx, a, item))) {
+      missing.push("materiale_riservato");
+      continue;
+    }
     const evidence = terminal.find((row) => row.checklistItemId === item.id);
     if (!evidence) {
       missing.push(`materiale:${item.id}`);
@@ -910,15 +964,21 @@ async function resolvePrerequisites(
         documentVersionId: version.id,
       });
   }
+  const complete = practice.materialsCompleteEvidenceId
+    ? practice.materialAttestations.find(
+        (row) =>
+          row.id === practice.materialsCompleteEvidenceId &&
+          row.practiceId === practice.id,
+      )
+    : null;
+  const selectedCompleteSnapshot = complete?.snapshot as
+    | { emptyChecklistReason?: string; practiceId?: unknown }
+    | undefined;
   const legacyMaterialSnapshot = {
     items: materialRows,
     emptyChecklistReason: items.length
       ? null
-      : ((
-          practice.materialAttestations.at(-1)?.snapshot as
-            | { emptyChecklistReason?: string }
-            | undefined
-        )?.emptyChecklistReason ?? null),
+      : (selectedCompleteSnapshot?.emptyChecklistReason ?? null),
   };
   const materialSnapshot = {
     practiceId: practice.id,
@@ -926,19 +986,11 @@ async function resolvePrerequisites(
     ...legacyMaterialSnapshot,
   };
   const currentMaterialHash = canonicalSha256(materialSnapshot);
-  const complete = practice.materialsCompleteEvidenceId
-    ? practice.materialAttestations.find(
-        (row) => row.id === practice.materialsCompleteEvidenceId,
-      )
-    : null;
-  const completeSnapshot = complete?.snapshot as
-    | { practiceId?: unknown }
-    | undefined;
   const legacyMaterialHash = canonicalSha256(legacyMaterialSnapshot);
   const completeHashValid = Boolean(
     complete &&
       (complete.snapshotHash === currentMaterialHash ||
-        (completeSnapshot?.practiceId === undefined &&
+        (selectedCompleteSnapshot?.practiceId === undefined &&
           complete.snapshotHash === legacyMaterialHash)),
   );
   const materialHash = completeHashValid
@@ -1288,7 +1340,9 @@ export async function attestPracticeMaterialsComplete(
         (state.materialRows.length === 0 && !input.emptyChecklistReason) ||
         state.missing.some(
           (item) =>
-            item.startsWith("materiale:") || item.startsWith("motivazione:"),
+            item === "materiale_riservato" ||
+            item.startsWith("materiale:") ||
+            item.startsWith("motivazione:"),
         )
       )
         throw new PracticeReadinessError("NOT_READY");
@@ -1370,14 +1424,20 @@ export async function listAccessiblePracticeReadiness(
           const prerequisites = await resolvePrerequisites(tx, row.id, a);
           const materials = [];
           for (const material of row.materials) {
-            if (!material.documentId) {
-              materials.push(material);
-              continue;
-            }
-            const document = await tx.document.findUnique({
-              where: { id: material.documentId },
-            });
-            if (document && (await canUseDocument(tx, a, document)))
+            const [item, document] = await Promise.all([
+              tx.documentChecklistItem.findUnique({
+                where: { id: material.checklistItemId },
+              }),
+              material.documentId
+                ? tx.document.findUnique({ where: { id: material.documentId } })
+                : null,
+            ]);
+            if (
+              item &&
+              (await canUseChecklist(tx, a, item)) &&
+              (!material.documentId ||
+                (document && (await canUseDocument(tx, a, document))))
+            )
               materials.push(material);
           }
           const formalizations = [];

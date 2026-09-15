@@ -752,32 +752,62 @@ test(
       data: { containsSensitiveData: true },
     });
     try {
-      await expectDeniedWithoutEffects(practice.id, () =>
-        decidePracticeMaterial(db, actorA, {
+      for (const status of ["NOT_NEEDED", "INVALIDATED"] as const)
+        await expectDeniedWithoutEffects(practice.id, () =>
+          decidePracticeMaterial(db, actorA, {
+            practiceId: practice.id,
+            checklistItemId: a.checklist.id,
+            documentId: null,
+            documentVersionId: null,
+            status,
+            reason: "Motivazione riservata da non esporre",
+            expectedVersion: practice.version,
+          }),
+        );
+      const beforeDeniedCompleteness = await footprint(practice.id);
+      await assert.rejects(
+        attestPracticeMaterialsComplete(db, actorA, {
           practiceId: practice.id,
-          checklistItemId: a.checklist.id,
-          documentId: a.document.id,
-          documentVersionId: a.documentVersion.id,
-          status: "VALIDATED",
           expectedVersion: practice.version,
         }),
+        (error) =>
+          error instanceof PracticeReadinessError && error.code === "NOT_READY",
       );
+      assert.deepEqual(await footprint(practice.id), beforeDeniedCompleteness);
       const authorized = await decidePracticeMaterial(db, manager, {
         practiceId: practice.id,
         checklistItemId: a.checklist.id,
-        documentId: a.document.id,
-        documentVersionId: a.documentVersion.id,
-        status: "VALIDATED",
+        documentId: null,
+        documentVersionId: null,
+        status: "NOT_NEEDED",
+        reason: "Motivazione riservata da non esporre",
         expectedVersion: practice.version,
       });
-      assert.equal(authorized.documentId, a.document.id);
-      assert.equal(authorized.documentVersionId, a.documentVersion.id);
+      assert.equal(authorized.documentId, null);
+      assert.equal(authorized.documentVersionId, null);
       const deniedRead = (
         await listAccessiblePracticeReadiness(db, actorA)
       ).find((row) => row.id === practice.id);
       assert.ok(deniedRead);
       assert.equal(
         deniedRead.materials.some((row) => row.id === authorized.id),
+        false,
+      );
+      assert.equal(
+        deniedRead.prerequisites.missing.includes("materiale_riservato"),
+        true,
+      );
+      assert.equal(
+        deniedRead.prerequisites.missing.some((value) =>
+          value.includes(a.checklist.id),
+        ),
+        false,
+      );
+      assert.equal(JSON.stringify(deniedRead).includes(a.checklist.id), false);
+      assert.equal(
+        JSON.stringify(deniedRead).includes(
+          "Motivazione riservata da non esporre",
+        ),
         false,
       );
       const authorizedRead = (
@@ -1418,6 +1448,68 @@ test(
     v4 = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
+    await db.documentChecklistItem.update({
+      where: { id: a.checklist.id },
+      data: { active: false },
+    });
+    const emptyReasonA = "Nessun materiale applicabile alla fase sintetica";
+    const selectedA = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: v4.version,
+      emptyChecklistReason: emptyReasonA,
+    });
+    const selectedB = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: selectedA.version,
+      emptyChecklistReason: "Motivazione alternativa verificabile",
+    });
+    const selectedAgainA = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: selectedB.version,
+      emptyChecklistReason: emptyReasonA,
+    });
+    assert.equal(
+      selectedAgainA.materialsCompleteEvidenceId,
+      selectedA.materialsCompleteEvidenceId,
+    );
+    const attestationsAfterSelection =
+      await db.practiceMaterialAttestation.count({
+        where: { practiceId: practice.id },
+      });
+    const auditsAfterSelection = await db.auditLog.count({
+      where: {
+        entityType: "PracticeReadiness",
+        entityId: practice.id,
+        event: "practice_materials_complete",
+      },
+    });
+    const replayedA = await attestPracticeMaterialsComplete(db, actorA, {
+      practiceId: practice.id,
+      expectedVersion: selectedAgainA.version,
+      emptyChecklistReason: emptyReasonA,
+    });
+    assert.equal(replayedA.version, selectedAgainA.version);
+    assert.equal(
+      replayedA.materialsCompleteEvidenceId,
+      selectedA.materialsCompleteEvidenceId,
+    );
+    assert.equal(
+      await db.practiceMaterialAttestation.count({
+        where: { practiceId: practice.id },
+      }),
+      attestationsAfterSelection,
+    );
+    assert.equal(
+      await db.auditLog.count({
+        where: {
+          entityType: "PracticeReadiness",
+          entityId: practice.id,
+          event: "practice_materials_complete",
+        },
+      }),
+      auditsAfterSelection,
+    );
+    v4 = replayedA;
     const beforeStart = await footprint(practice.id);
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
@@ -1449,9 +1541,18 @@ test(
     const startEvidence = started.startEvidence as {
       formalizationId?: string;
       clientServiceId?: string;
+      materialSnapshotHash?: string;
     };
     assert.equal(startEvidence.formalizationId, started.currentFormalizationId);
     assert.equal(startEvidence.clientServiceId, a.clientService.id);
+    assert.equal(
+      startEvidence.materialSnapshotHash,
+      (
+        await db.practiceMaterialAttestation.findUniqueOrThrow({
+          where: { id: selectedA.materialsCompleteEvidenceId! },
+        })
+      ).snapshotHash,
+    );
     assert.equal(
       (
         await db.clientService.findUniqueOrThrow({

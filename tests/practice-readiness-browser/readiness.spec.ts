@@ -140,6 +140,21 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   });
   const page = await context.newPage();
   await login(page, "readiness-owner@invalid.test");
+  await page.goto(`${app}/practice-readiness`);
+  await page
+    .locator('[data-interactive-ready="true"]')
+    .waitFor({ state: "attached" });
+  expect(await page.content()).not.toContain(
+    "readiness-browser-sensitive-history-checklist",
+  );
+  for (const reservedValue of [
+    "Requisito storico strettamente riservato",
+    "Motivazione storica strettamente riservata",
+  ])
+    await expect(page.getByText(reservedValue, { exact: false })).toHaveCount(0);
+  await expect(
+    page.getByText("materiale_riservato", { exact: false }),
+  ).toBeVisible();
   let capturedStart: CapturedAction | null = null;
 
   for (const item of cases) {

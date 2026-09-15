@@ -253,6 +253,172 @@ async function main() {
     assert.equal(await db.company.count({ where: { clientId: client.id } }), 0);
     assert.ok(intake.id && offer.id);
   }
+  const historicalCatalogRevision =
+    await db.serviceCatalogRevision.findFirstOrThrow({
+      where: {
+        serviceCatalog: { code: cases[0].serviceCode },
+        status: "PUBLISHED",
+      },
+      orderBy: { version: "desc" },
+    });
+  const historicalClient = await db.client.create({
+    data: {
+      id: "readiness-browser-client-sensitive-history",
+      type: "persona_fisica",
+      displayName: "Cliente storico riservato",
+      consultantId: "readiness-browser-owner",
+    },
+  });
+  const historicalProject = await db.project.create({
+    data: {
+      id: "readiness-browser-project-sensitive-history",
+      clientId: historicalClient.id,
+      title: "Pratica storica riservata",
+      consultantId: "readiness-browser-owner",
+    },
+  });
+  const historicalLead = await db.lead.create({
+    data: {
+      id: "readiness-browser-lead-sensitive-history",
+      firstName: "Test",
+      lastName: "Storico riservato",
+      clientId: historicalClient.id,
+      assignedToId: "readiness-browser-owner",
+    },
+  });
+  const historicalIntake = await db.controlledIntake.create({
+    data: {
+      id: randomUUID(),
+      channel: "EMAIL",
+      sourceId: "browser-sensitive-history",
+      sourceOccurredAt: new Date(),
+      acquisitionMode: "MANUAL_CONTROLLED",
+      mappingVersion: "readiness-browser-v1",
+      payloadHash: createHash("sha256")
+        .update("sensitive-history-intake")
+        .digest("hex"),
+      leadId: historicalLead.id,
+      subjectType: "PERSONA",
+      firstName: "Test",
+      lastName: "Storico riservato",
+      classificationState: "VERIFIED",
+      effectiveCategory: "consulenza",
+      need: "Richiesta storica riservata",
+      operatorId: "readiness-browser-owner",
+    },
+  });
+  const historicalOffer = await db.commercialOffer.create({
+    data: {
+      id: "readiness-browser-sensitive-history-offer",
+      leadId: historicalLead.id,
+      clientId: historicalClient.id,
+      title: "Preventivo storico riservato",
+      taxableAmount: "100.00",
+      vatAmount: "22.00",
+      totalAmount: "122.00",
+      status: "accettata",
+      acceptedAt: new Date(),
+      validUntil: new Date(Date.now() + 86_400_000),
+      createdById: "readiness-browser-owner",
+    },
+  });
+  const historicalRevisionId = randomUUID();
+  const historicalRevision = await db.practiceOfferRevision.create({
+    data: {
+      id: historicalRevisionId,
+      controlledIntakeId: historicalIntake.id,
+      commercialOfferId: historicalOffer.id,
+      revision: 1,
+      serviceRevisionId: historicalCatalogRevision.id,
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      scope: "Perimetro storico riservato",
+      inclusions: [],
+      exclusions: [],
+      deliverables: [],
+      taxableAmount: "100.00",
+      vatAmount: "22.00",
+      totalAmount: "122.00",
+      requiredInitialAmount: "50.00",
+      currency: "EUR",
+      validUntil: historicalOffer.validUntil!,
+      startupConditions: "Storico riservato",
+      payloadHash: createHash("sha256")
+        .update("sensitive-history-revision")
+        .digest("hex"),
+      proposedById: "readiness-browser-owner",
+    },
+  });
+  await db.practiceOfferAcceptance.create({
+    data: {
+      offerRevisionId: historicalRevision.id,
+      acceptedAt: new Date(),
+      acceptedById: "readiness-browser-owner",
+      evidenceHash: createHash("sha256")
+        .update("sensitive-history-acceptance")
+        .digest("hex"),
+    },
+  });
+  const historicalPractice = await db.practiceReadiness.create({
+    data: {
+      id: randomUUID(),
+      controlledIntakeId: historicalIntake.id,
+      commercialOfferId: historicalOffer.id,
+      offerSnapshotHash: historicalRevision.payloadHash,
+      offerRevision: historicalRevision.revision,
+      acceptedOfferRevisionId: historicalRevision.id,
+      serviceRevisionId: historicalCatalogRevision.id,
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      requiredInitialAmount: "50.00",
+    },
+  });
+  const historicalSensitiveDocument = await db.document.create({
+    data: {
+      id: "readiness-browser-sensitive-history-document",
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      type: "incarico",
+      title: "Documento storico strettamente riservato",
+      fileName: "sensitive-history.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 10,
+      storagePath: "synthetic/readiness/sensitive-history.pdf",
+      uploadedById: "readiness-browser-owner",
+      status: "verificato",
+      containsSensitiveData: true,
+      checksum: createHash("sha256")
+        .update("sensitive-history-document")
+        .digest("hex"),
+    },
+  });
+  const historicalChecklist = await db.documentChecklistItem.create({
+    data: {
+      id: "readiness-browser-sensitive-history-checklist",
+      clientId: historicalClient.id,
+      projectId: historicalProject.id,
+      title: "Requisito storico strettamente riservato",
+      documentId: historicalSensitiveDocument.id,
+      createdById: "readiness-browser-owner",
+    },
+  });
+  await db.practiceMaterialEvidence.create({
+    data: {
+      practiceId: historicalPractice.id,
+      checklistItemId: historicalChecklist.id,
+      documentId: null,
+      documentVersionId: null,
+      documentChecksum: null,
+      sequence: 1,
+      status: "NOT_NEEDED",
+      reason: "Motivazione storica strettamente riservata",
+      payloadHash: createHash("sha256")
+        .update("sensitive-history-material")
+        .digest("hex"),
+      decidedAt: new Date(),
+      decidedById: "readiness-browser-owner",
+    },
+  });
   phase = "COMPLETE";
   writeDiagnostic("PASS", "PROVISION_COMPLETE");
   process.stdout.write(
