@@ -60,6 +60,7 @@ const sections: NavSection[] = [
       { label: "Progetti", href: "/projects", requiredPermission: "project.read" },
       { label: "Pre-analisi", href: "/preanalyses", requiredPermission: "dossier.read" },
       { label: "Dossier", href: "/dossiers", requiredPermission: "dossier.read" },
+      { label: "Catalogo servizi", href: "/service-catalog", requiredPermission: "service.read" },
     ],
   },
   {
