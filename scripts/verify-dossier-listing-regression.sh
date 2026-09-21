@@ -23,7 +23,7 @@ set +e
 PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence" \
   PLAYWRIGHT_JSON_OUTPUT_NAME="$evidence/playwright.json" \
   npx playwright test --config tests/practice-readiness-browser/playwright.config.ts \
-  --grep '^versioned dossier listings follow current detail access$' --reporter=line,json \
+  --grep 'versioned dossier listings follow current detail access' --reporter=line,json \
   --output "$evidence/test-results" > "$evidence/playwright.log" 2>&1
 probe_status=$?
 set -e
@@ -33,6 +33,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const [file, marker, candidateHead, oldHead, sourcePath] = process.argv.slice(2);
 const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+console.log(JSON.stringify({ sourcePath, observedStats: report.stats, runnerErrors: report.errors }));
 assert.equal(report.stats.expected, 0);
 assert.equal(report.stats.unexpected, 1);
 assert.equal(report.stats.skipped, 0);
