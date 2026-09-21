@@ -767,7 +767,13 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await form.getByRole("button", { name: buttonName }).click();
     const response = await responsePromise;
     await response.finished();
-    expect(response.status()).toBe(500);
+    // A streamed RSC response can carry the server error after HTTP 200 headers.
+    // Assert the manipulated target and explicit denial, not only transport status.
+    expect([200, 500]).toContain(response.status());
+    expect(response.request().postData()).toContain(protectedDossier.id);
+    expect(await response.text()).toContain(buttonName === "Salva modifiche"
+      ? "Usa le azioni della versione esatta del dossier."
+      : "Usa la revisione della versione esatta del dossier.");
     expect(await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } })).toEqual(before);
     expect(await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: protectedDossier.id } })).toBe(auditCount);
   }
