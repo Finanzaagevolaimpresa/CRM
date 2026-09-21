@@ -1951,15 +1951,22 @@ test("dossier access, export and delivery recheck current authority and roll bac
     assert.equal((await getVisibleEngagementDossierIds(db, actorA, [dossier.id])).size, 0);
     assert.deepEqual(await snapshot(), before);
   } finally { await db.document.update({ where: { id: document.id }, data: { deletedAt: document.deletedAt } }); }
-  const revokedDownload = await db.userPermissionOverride.create({ data: {
-    userId: ids.userA, permission: "document.download", allowed: false,
+  const sensitivePermission = await db.userPermissionOverride.create({ data: {
+    userId: ids.userA, permission: "document.sensitive.read", allowed: true,
   } });
+  await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: true } });
   try {
+    assert.ok(await getEngagementDossierReadAccess(db, actorA, dossier.id));
+    assert.deepEqual([...await getVisibleEngagementDossierIds(db, actorA, [dossier.id])], [dossier.id]);
+    await db.userPermissionOverride.update({ where: { id: sensitivePermission.id }, data: { allowed: false } });
     before = await snapshot();
     assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
     assert.equal((await getVisibleEngagementDossierIds(db, actorA, [dossier.id])).size, 0);
     assert.deepEqual(await snapshot(), before);
-  } finally { await db.userPermissionOverride.delete({ where: { id: revokedDownload.id } }); }
+  } finally {
+    await db.userPermissionOverride.delete({ where: { id: sensitivePermission.id } });
+    await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: document.containsSensitiveData } });
+  }
   assert.deepEqual([...await getVisibleEngagementDossierIds(db, actorA, [dossier.id])], [dossier.id]);
   const service = await db.clientService.findUniqueOrThrow({ where: { id: dossier.clientServiceId! } });
   await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userB } });

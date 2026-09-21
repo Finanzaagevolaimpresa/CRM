@@ -979,7 +979,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   await reader.close();
   await context.close();
 });
-+
+
 // The preceding full flow creates the synthetic dossier. CI also reruns only
 // this test against each pre-fix reader after that flow, using the same guarded DB.
 test("versioned dossier listings follow current detail access", async ({ page, browser }) => {
@@ -1036,7 +1036,7 @@ test("versioned dossier listings follow current detail access", async ({ page, b
     }
     await page.goto(detailUrl);
     await expect(visible
-      ? page.getByRole("heading", { name: title, exact: true })
+      ? page.getByRole("heading", { name: `Dossier / Pre-analisi — ${title}`, exact: true })
       : page.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
 
     const response = await page.request.get(searchUrl);
@@ -1082,11 +1082,19 @@ test("versioned dossier listings follow current detail access", async ({ page, b
     try { await assertVisibility(false, phase); }
     finally { await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: material.containsSensitiveData, deletedAt: material.deletedAt } }); }
   }
-  const override = await db.userPermissionOverride.create({ data: {
-    userId: "readiness-browser-owner", permission: "document.download", allowed: false,
+  const override = await db.userPermissionOverride.findFirstOrThrow({ where: {
+    userId: "readiness-browser-owner", permission: "document.sensitive.read",
   } });
-  try { await assertVisibility(false, "permission_revoked"); }
-  finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: true } });
+  try {
+    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
+    await assertVisibility(true, "permission_granted");
+    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: false } });
+    await assertVisibility(false, "permission_revoked");
+  } finally {
+    await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: override.allowed } });
+    await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: material.containsSensitiveData } });
+  }
   await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "archiviata" } });
   try { await assertVisibility(false, "archived"); }
   finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: dossier.status } }); }
