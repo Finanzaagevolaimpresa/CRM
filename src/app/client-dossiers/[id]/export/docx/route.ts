@@ -4,7 +4,7 @@ import { requirePermission } from '@/lib/auth';
 import { buildClientDossierDocx } from '@/lib/docx-export';
 import { prisma } from '@/lib/prisma';
 import { getClientDossierReadAccess } from '@/lib/read-access';
-import { exportApprovedEngagementDossier } from '@/lib/engagement-dossier';
+import { EngagementDossierError, exportApprovedEngagementDossier } from '@/lib/engagement-dossier';
 
 export const runtime = 'nodejs';
 
@@ -28,14 +28,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const docx = buildClientDossierDocx({
     title: approvedVersion?.title ?? dossier.title,
-    client: { displayName: client.displayName, type: client.type, status: client.status, notes: client.notes },
+    client: { displayName: client.displayName, type: client.type, status: client.status, notes: approvedVersion ? null : client.notes },
     dossierType: dossier.type,
     dossierStatus: dossier.status,
     exportedAt: new Date(),
     content: approvedVersion?.content ?? dossier.content,
   });
 
-  if (approvedVersion) await exportApprovedEngagementDossier(prisma, session, { dossierId: dossier.id, versionId: approvedVersion.id, format: 'docx' }, docx);
+  if (approvedVersion) {
+    try {
+      await exportApprovedEngagementDossier(prisma, session, { dossierId: dossier.id, versionId: approvedVersion.id, format: 'docx' }, docx);
+    } catch (error) {
+      if (error instanceof EngagementDossierError) return new NextResponse('Non autorizzato', { status: 403 });
+      throw error;
+    }
+  }
   else await auditClientDossierExport(id, 'docx');
-  return new NextResponse(docx, { headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'Content-Disposition': `attachment; filename="${safeFileName(approvedVersion?.title ?? dossier.title)}${approvedVersion ? `-v${approvedVersion.version}` : ''}.docx"`, ...(approvedVersion ? { 'X-Dossier-Version': String(approvedVersion.version), 'X-Dossier-Content-Hash': approvedVersion.contentHash } : {}) } });
+  return new NextResponse(docx, { headers: { 'Cache-Control': 'private, no-store', 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'Content-Disposition': `attachment; filename="${safeFileName(approvedVersion?.title ?? dossier.title)}${approvedVersion ? `-v${approvedVersion.version}` : ''}.docx"`, ...(approvedVersion ? { 'X-Dossier-Version': String(approvedVersion.version), 'X-Dossier-Content-Hash': approvedVersion.contentHash } : {}) } });
 }

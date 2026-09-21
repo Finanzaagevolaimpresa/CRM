@@ -1,6 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { Prisma } from '@prisma/client';
 import { requirePermission } from './auth';
 import { prisma } from './prisma';
 import { authorizeEngagementDossierDelivery, createEngagementDossier, EngagementDossierError, recordEngagementDossierDelivery, reviewEngagementDossierVersion, reviseEngagementDossier } from './engagement-dossier';
@@ -10,11 +11,13 @@ async function execute(form: FormData, operation: (actor: Awaited<ReturnType<typ
   const value = Object.fromEntries(form.entries()) as Record<string, unknown>;
   try { return await operation(actor, value); }
   catch (error) {
-    if (!(error instanceof EngagementDossierError)) throw error;
+    const code = error instanceof EngagementDossierError ? error.code
+      : error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034' ? 'CONFLICT' : null;
+    if (!code) throw error;
     const dossierId = String(value.dossierId ?? '');
     const practiceId = String(value.practiceReadinessId ?? '');
     const destination = dossierId ? `/client-dossiers/${dossierId}` : practiceId ? `/engagement-dossiers/new/${practiceId}` : '/practice-readiness';
-    redirect(`${destination}?dossierError=${error.code}`);
+    redirect(`${destination}?dossierError=${code}`);
   }
 }
 export async function createEngagementDossierAction(form: FormData) {

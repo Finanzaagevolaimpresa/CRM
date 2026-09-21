@@ -479,7 +479,8 @@ async function qualifyMigration(upgrade: boolean) {
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
   assert.equal(allNames.length, 47);
-  assert.equal(allNames.at(-1), '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(allNames.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
   const names = allNames.slice(0, 40);
   assert.equal(names[39], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -605,7 +606,8 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
   assert.equal(names.length, 47);
-  assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
   assert.equal(names[39], migrationName);
   assert.equal(names[40], correctiveMigrationName);
   const url = new URL(process.env.DATABASE_URL!);
@@ -767,7 +769,8 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
   assert.equal(names.length, 47);
-  assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
   assert.equal(names[40], correctiveMigrationName);
   for (const name of names.slice(0, 40)) {
     cpSync(join('prisma/migrations', name), join(migrationsDir, name), { recursive: true });

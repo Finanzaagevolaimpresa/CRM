@@ -16,16 +16,13 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const context = await getClientDossierReadAccess(session, id);
   if (!context) return <PageHeader title="Bozza dossier non trovata" description="Il record richiesto non esiste o non è accessibile." />;
   const { dossier, clientService: service, project } = context;
-  const [client, creator, updater, reviewer, versions, reviews, authorizations] = await Promise.all([
+  const [client, creator, updater, reviewer] = await Promise.all([
     prisma.client.findFirst({ where: { id: dossier.clientId, deletedAt: null } }),
     prisma.user.findUnique({ where: { id: dossier.createdById } }),
     dossier.updatedById ? prisma.user.findUnique({ where: { id: dossier.updatedById } }) : null,
     dossier.reviewedById ? prisma.user.findUnique({ where: { id: dossier.reviewedById } }) : null,
-    prisma.engagementDossierVersion.findMany({ where: { dossierId: dossier.id }, orderBy: { version: 'desc' } }),
-    prisma.engagementDossierReview.findMany({ where: { dossierId: dossier.id }, orderBy: { decidedAt: 'desc' } }),
-    prisma.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId: dossier.id }, orderBy: { authorizedAt: 'desc' } }),
   ]);
-  const receipts = authorizations.length ? await prisma.engagementDossierDeliveryReceipt.findMany({ where: { authorizationId: { in: authorizations.map((row) => row.id) } } }) : [];
+  const { versions, reviews, authorizations, receipts } = context.engagementHistory ?? { versions: [], reviews: [], authorizations: [], receipts: [] };
   const currentVersion = versions.find((row) => row.id === dossier.currentVersionId);
   const approvedVersion = versions.find((row) => row.id === dossier.approvedVersionId);
   const serviceCatalog = service ? await prisma.serviceCatalog.findUnique({ where: { id: service.serviceCatalogId } }) : null;

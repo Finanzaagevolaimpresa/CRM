@@ -23,6 +23,7 @@ import {
   createEngagementDossier,
   EngagementDossierError,
   exportApprovedEngagementDossier,
+  getEngagementDossierReadAccess,
   recordEngagementDossierDelivery,
   reviewEngagementDossierVersion,
   reviseEngagementDossier,
@@ -1783,6 +1784,15 @@ test(
     );
     const preAnalysis = await db.preAnalysis.create({ data: { clientId: a.client.id, projectId: a.project.id, internalSummary: "Preanalisi sintetica dossier" } });
     const dossierCountBeforeFault = await db.clientDossier.count({ where: { practiceReadinessId: practice.id } });
+    const material = await db.practiceMaterialEvidence.findFirstOrThrow({ where: { practiceId: practice.id, checklistItemId: a.checklist.id, successor: null } });
+    await db.practiceMaterialEvidence.update({ where: { id: material.id }, data: { documentId: null, documentVersionId: b.documentVersion.id, documentChecksum: null } });
+    try {
+      await assert.rejects(createEngagementDossier(db, actorA, { practiceReadinessId: practice.id, preAnalysisId: preAnalysis.id, title: "Riferimento esterno", content: "Una sola versione documentale esterna" }),
+        (error) => error instanceof EngagementDossierError && error.code === "DENIED");
+      assert.equal(await db.clientDossier.count({ where: { practiceReadinessId: practice.id } }), dossierCountBeforeFault);
+    } finally {
+      await db.practiceMaterialEvidence.update({ where: { id: material.id }, data: { documentId: material.documentId, documentVersionId: material.documentVersionId, documentChecksum: material.documentChecksum } });
+    }
     await assert.rejects(
       createEngagementDossier(db, actorA, { practiceReadinessId: practice.id, preAnalysisId: preAnalysis.id, title: "Dossier sintetico v1", content: "Contenuto sintetico iniziale" }, { failAudit: true }),
       (error) => error instanceof EngagementDossierError && error.code === "CONFLICT",
@@ -1870,3 +1880,85 @@ test(
     );
   },
 );
+
+
+test("dossier access, export and delivery recheck current authority and roll back audit faults", { skip: !enabled }, async () => {
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { clientId: a.client.id, practiceReadinessId: { not: null } } });
+  const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: dossier.currentVersionId! } });
+  const deniedDossier = (error: unknown) => error instanceof EngagementDossierError && error.code === "DENIED";
+  const conflictDossier = (error: unknown) => error instanceof EngagementDossierError && error.code === "CONFLICT";
+  const snapshot = async () => ({
+    dossier: await db.clientDossier.findUnique({ where: { id: dossier.id } }),
+    versions: await db.engagementDossierVersion.findMany({ where: { dossierId: dossier.id }, orderBy: { version: "asc" } }),
+    reviews: await db.engagementDossierReview.count({ where: { dossierId: dossier.id } }),
+    exports: await db.engagementDossierExport.count({ where: { dossierId: dossier.id } }),
+    authorizations: await db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: dossier.id } }),
+    receipts: await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: { in: (await db.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId: dossier.id }, select: { id: true } })).map((row) => row.id) } } }),
+    audits: await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: dossier.id } }),
+  });
+  assert.equal((await getEngagementDossierReadAccess(db, actorA, dossier.id))?.engagementHistory.versions.length, 3);
+  assert.equal(await getEngagementDossierReadAccess(db, { ...actorA, sessionId: undefined }, dossier.id), null);
+  assert.equal(await getEngagementDossierReadAccess(db, actorB, dossier.id), null);
+  const review = { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, decision: "APPROVED", note: "Verifica finale sintetica" };
+  let before = await snapshot();
+  await assert.rejects(reviewEngagementDossierVersion(db, manager, review, { failAudit: true }), conflictDossier);
+  assert.deepEqual(await snapshot(), before);
+  await reviewEngagementDossierVersion(db, manager, review);
+  const delivery = { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, recipients: [{ kind: "CLIENT", name: "Destinatario finale sintetico", address: "finale@invalid.test", synthetic: true }] };
+  before = await snapshot();
+  await assert.rejects(authorizeEngagementDossierDelivery(db, manager, delivery, { failAudit: true }), conflictDossier);
+  await assert.rejects(exportApprovedEngagementDossier(db, actorA, { dossierId: dossier.id, versionId: version.id, format: "markdown" }, version.content, { failAudit: true }), conflictDossier);
+  await assert.rejects(reviseEngagementDossier(db, actorA, { dossierId: dossier.id, expectedVersionId: version.id, title: "Modifica annullata", content: "Audit non disponibile" }, { failAudit: true }), conflictDossier);
+  assert.deepEqual(await snapshot(), before);
+  const authorization = await authorizeEngagementDossierDelivery(db, manager, delivery);
+  assert.equal((await authorizeEngagementDossierDelivery(db, manager, delivery)).id, authorization.id);
+  const receiptInput = { authorizationId: authorization.id, outcome: "DELIVERED", evidence: { reference: "FINAL-SYNTHETIC", deliveredAt: new Date(), synthetic: true } };
+  before = await snapshot();
+  await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput, { failAudit: true }), conflictDossier);
+  assert.deepEqual(await snapshot(), before);
+  const document = await db.document.findUniqueOrThrow({ where: { id: a.document.id } });
+  await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: true } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    await assert.rejects(exportApprovedEngagementDossier(db, actorA, { dossierId: dossier.id, versionId: version.id, format: "markdown" }, version.content), deniedDossier);
+    await assert.rejects(reviseEngagementDossier(db, actorA, { dossierId: dossier.id, expectedVersionId: version.id, title: "Vietato", content: "Materiale divenuto riservato" }), deniedDossier);
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+    assert.deepEqual(await snapshot(), before);
+  } finally { await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: document.containsSensitiveData } }); }
+  const service = await db.clientService.findUniqueOrThrow({ where: { id: dossier.clientServiceId! } });
+  await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userB } });
+  await db.project.update({ where: { id: a.project.id }, data: { consultantId: ids.userB } });
+  await db.clientService.update({ where: { id: service.id }, data: { assignedToId: ids.userB } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+    assert.deepEqual(await snapshot(), before);
+  } finally {
+    await db.client.update({ where: { id: a.client.id }, data: { consultantId: a.client.consultantId } });
+    await db.project.update({ where: { id: a.project.id }, data: { consultantId: a.project.consultantId } });
+    await db.clientService.update({ where: { id: service.id }, data: { assignedToId: service.assignedToId } });
+  }
+  await db.preAnalysis.update({ where: { id: dossier.preAnalysisId! }, data: { clientId: b.client.id } });
+  try { assert.equal(await getEngagementDossierReadAccess(db, manager, dossier.id), null); }
+  finally { await db.preAnalysis.update({ where: { id: dossier.preAnalysisId! }, data: { clientId: a.client.id } }); }
+  await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "archiviata" } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, manager, dossier.id), null);
+    await assert.rejects(authorizeEngagementDossierDelivery(db, manager, delivery), deniedDossier);
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+    await assert.rejects(exportApprovedEngagementDossier(db, manager, { dossierId: dossier.id, versionId: version.id, format: "markdown" }, version.content), deniedDossier);
+    assert.deepEqual(await snapshot(), before);
+  } finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "revisionata" } }); }
+  await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { revokedAt: new Date() } });
+  try { await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier); }
+  finally { await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { revokedAt: null } }); }
+  const concurrent = await Promise.allSettled([recordEngagementDossierDelivery(db, actorA, receiptInput), recordEngagementDossierDelivery(db, actorA, receiptInput)]);
+  assert.ok(concurrent.some((result) => result.status === "fulfilled"));
+  assert.equal(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } }), 1);
+  const receipt = await recordEngagementDossierDelivery(db, actorA, receiptInput);
+  await assert.rejects(recordEngagementDossierDelivery(db, actorA, { ...receiptInput, evidence: { ...receiptInput.evidence, reference: "CONFLICT" } }), conflictDossier);
+  assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+});

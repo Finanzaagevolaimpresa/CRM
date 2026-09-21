@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canEditProject, canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
-import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
+import { getClientDossierReadAccess, listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
 
 const serviceSections = [
@@ -172,7 +172,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     }
     return canViewClientContext(session, { clientId: dossier.clientId, client, project });
   });
+  const visibleEngagementIds = new Set((await Promise.all(clientDossierRows.filter((row) => row.practiceReadinessId)
+    .map(async (row) => (await getClientDossierReadAccess(session, row.id))?.dossier.id))).filter(Boolean));
   const clientDossiers = clientDossierRows.filter((dossier) => {
+    if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
     const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
     const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
     if (dossier.projectId && !project) return false;

@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
   expect,
@@ -22,6 +23,16 @@ type CapturedAction = {
   body: string;
 };
 let currentPhase = "INITIAL";
+
+async function submitDossierAction(page: Page, button: Locator, phase: string) {
+  currentPhase = phase;
+  const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
+  await button.click();
+  const response = await responsePromise;
+  await response.finished();
+  expect(response.status(), phase).toBe(200);
+  expect(response.headers()["x-action-redirect"] ?? "", phase).not.toContain("dossierError=");
+}
 
 async function submitAction(
   page: Page,
@@ -676,11 +687,16 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await page.locator('[name="preAnalysisId"]').selectOption(`readiness-browser-preanalysis-${item.key}`);
     await page.locator('[name="title"]').fill(`Dossier browser ${item.label}`);
     await page.locator('[name="content"]').fill(`Versione iniziale browser ${item.label}`);
-    await page.getByRole("button", { name: "Crea dossier versionato" }).click();
+    await submitDossierAction(page, page.getByRole("button", { name: "Crea dossier versionato" }), `DOSSIER_CREATE_${item.key}`);
     await expect(page).toHaveURL(/\/client-dossiers\//);
     const dossier = await db.clientDossier.findUniqueOrThrow({ where: { practiceReadinessId: practice.id } });
     dossierIds.push(dossier.id);
     await expect(page.getByText("Versione 1", { exact: false })).toBeVisible();
+    for (const format of ["", "/docx"]) {
+      const draftExport = await page.request.get(`${app}/client-dossiers/${dossier.id}/export${format}?versionId=${dossier.currentVersionId}`);
+      expect(draftExport.status()).toBe(403);
+      expect(await draftExport.text()).not.toContain(`Versione iniziale browser ${item.label}`);
+    }
   }
 
   expect(capturedStart).not.toBeNull();
@@ -690,38 +706,83 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   for (const [index, dossierId] of dossierIds.entries()) {
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await reviewerPage.getByPlaceholder("Motivazione della decisione").fill(index === 0 ? "Correggere la prima versione" : "Versione verificata");
-    await reviewerPage.getByRole("button", { name: index === 0 ? "Richiedi modifiche" : "Approva questa versione" }).click();
+    await submitDossierAction(reviewerPage, reviewerPage.getByRole("button", { name: index === 0 ? "Richiedi modifiche" : "Approva questa versione" }), `DOSSIER_REVIEW_${index}`);
   }
   await page.goto(`${app}/client-dossiers/${dossierIds[0]}`);
   await page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva come nuova versione' }) }).locator('[name="content"]').fill("Versione corretta dopo richiesta modifiche");
-  await page.getByRole("button", { name: "Salva come nuova versione" }).click();
+  await submitDossierAction(page, page.getByRole("button", { name: "Salva come nuova versione" }), "DOSSIER_CORRECTION");
   const corrected = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierIds[0] } });
   await reviewerPage.goto(`${app}/client-dossiers/${dossierIds[0]}`);
   await reviewerPage.getByPlaceholder("Motivazione della decisione").fill("Versione corretta approvata");
-  await reviewerPage.getByRole("button", { name: "Approva questa versione" }).click();
+  await submitDossierAction(reviewerPage, reviewerPage.getByRole("button", { name: "Approva questa versione" }), "DOSSIER_APPROVE_CORRECTION");
   expect((await db.clientDossier.findUniqueOrThrow({ where: { id: corrected.id } })).approvedVersionId).toBeTruthy();
-  await reviewerContext.close();
 
   for (const [index, dossierId] of dossierIds.entries()) {
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('link', { name: 'Esporta approvato .md' }).click();
     expect((await downloadPromise).suggestedFilename()).toContain('.md');
+    const approved = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
+    const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: approved.approvedVersionId! } });
+    for (const [suffix, format] of [["", "markdown"], ["/docx", "docx"]] as const) {
+      const exported = await page.request.get(`${app}/client-dossiers/${dossierId}/export${suffix}?versionId=${version.id}`);
+      expect(exported.status()).toBe(200);
+      const bytes = await exported.body();
+      expect(exported.headers()["x-dossier-content-hash"]).toBe(version.contentHash);
+      if (format === "markdown") expect(bytes.toString("utf8")).toBe(version.content);
+      else expect(bytes.subarray(0, 2).toString()).toBe("PK");
+      const record = await db.engagementDossierExport.findFirstOrThrow({ where: { dossierId, versionId: version.id, format }, orderBy: { exportedAt: "desc" } });
+      expect(record.versionHash).toBe(version.contentHash);
+      expect(record.artifactHash).toBe(createHash("sha256").update(bytes).digest("hex"));
+    }
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const authorizationForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Autorizza consegna manuale' }) });
     await authorizationForm.locator('[name="recipientName"]').fill(`Destinatario sintetico ${index + 1}`);
     await authorizationForm.locator('[name="recipientAddress"]').fill(`destinatario-${index + 1}@invalid.test`);
     await authorizationForm.locator('[name="recipientSynthetic"]').check();
-    await page.getByRole('button', { name: 'Autorizza consegna manuale' }).click();
+    await submitDossierAction(page, page.getByRole('button', { name: 'Autorizza consegna manuale' }), `DOSSIER_AUTHORIZE_${index}`);
     const authorization = await db.engagementDossierDeliveryAuthorization.findFirstOrThrow({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } });
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const receiptForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Registra esito manuale' }) });
     await receiptForm.locator('[name="reference"]').fill(`RICEVUTA-BROWSER-${index + 1}`);
     await receiptForm.locator('[name="deliveredAt"]').fill('2026-09-20T12:00');
     await receiptForm.locator('[name="evidenceSynthetic"]').check();
-    await page.getByRole('button', { name: 'Registra esito manuale' }).click();
+    await submitDossierAction(page, page.getByRole('button', { name: 'Registra esito manuale' }), `DOSSIER_RECEIPT_${index}`);
     expect((await db.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }))?.outcome).toBe('DELIVERED');
   }
+
+  const protectedDossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierIds[0] } });
+  const legacy = await db.clientDossier.create({ data: {
+    clientId: protectedDossier.clientId, projectId: protectedDossier.projectId,
+    clientServiceId: protectedDossier.clientServiceId, type: "dossier_cliente",
+    title: "Fixture legacy sintetica", content: "Contenuto legacy sintetico", createdById: "readiness-browser-owner",
+  } });
+  for (const [actorPage, buttonName] of [[page, "Salva modifiche"], [reviewerPage, "Conferma revisione dossier"]] as const) {
+    await actorPage.goto(`${app}/client-dossiers/${legacy.id}`);
+    const form = actorPage.locator("form").filter({ has: actorPage.getByRole("button", { name: buttonName }) });
+    await form.locator('[name="id"]').evaluate((node, id) => { (node as HTMLInputElement).value = id; }, protectedDossier.id);
+    const before = await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } });
+    const auditCount = await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: protectedDossier.id } });
+    const responsePromise = actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
+    await form.getByRole("button", { name: buttonName }).click();
+    const response = await responsePromise;
+    await response.finished();
+    expect(response.status()).toBe(500);
+    expect(await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } })).toEqual(before);
+    expect(await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: protectedDossier.id } })).toBe(auditCount);
+  }
+  await reviewerContext.close();
+
+  const protectedVersion = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: protectedDossier.approvedVersionId! } });
+  const materialId = (protectedVersion.materialSnapshot as Array<{ documentId: string | null }>).find((row) => row.documentId)?.documentId;
+  expect(materialId).toBeTruthy();
+  await db.document.update({ where: { id: materialId! }, data: { containsSensitiveData: true } });
+  try {
+    await page.goto(`${app}/client-dossiers/${protectedDossier.id}`);
+    await expect(page.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
+    expect(await page.content()).not.toContain(protectedVersion.content);
+    for (const format of ["", "/docx"]) expect((await page.request.get(`${app}/client-dossiers/${protectedDossier.id}/export${format}?versionId=${protectedVersion.id}`)).status()).toBe(404);
+  } finally { await db.document.update({ where: { id: materialId! }, data: { containsSensitiveData: false } }); }
 
   const foreign = await browser.newContext();
   const foreignPage = await foreign.newPage();
@@ -740,6 +801,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         exact: false,
       }),
     ).toHaveCount(0);
+  }
+  for (const dossierId of dossierIds) {
+    await foreignPage.goto(`${app}/client-dossiers/${dossierId}`);
+    await expect(foreignPage.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
+    const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
+    expect((await foreignPage.request.get(`${app}/client-dossiers/${dossierId}/export?versionId=${dossier.approvedVersionId}`)).status()).toBe(404);
   }
   await foreign.close();
 
