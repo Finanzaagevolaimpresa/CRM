@@ -1827,9 +1827,16 @@ test(
     assert.equal(exported.version.contentHash, version2.contentHash);
     await assert.rejects(authorizeEngagementDossierDelivery(db, actorA, { dossierId: createdDossier.dossier.id, versionId: version2.id, versionHash: version2.contentHash, recipients: [{ kind: "CLIENT", name: "Destinatario non autorizzato", address: "synthetic.invalid", synthetic: true }] }), (error) => error instanceof EngagementDossierError && error.code === "DENIED");
     const authorization = await authorizeEngagementDossierDelivery(db, manager, { dossierId: createdDossier.dossier.id, versionId: version2.id, versionHash: version2.contentHash, recipients: [{ kind: "CLIENT", name: "Cliente sintetico", address: "cliente@invalid.test", synthetic: true }] });
-    const receiptInput = { authorizationId: authorization.id, outcome: "DELIVERED" as const, evidence: { reference: "RICEVUTA-SINTETICA-001", deliveredAt: new Date(), synthetic: true, note: "Consegna manuale sintetica" } };
+    const receiptInput = { authorizationId: authorization.id, outcome: "DELIVERED" as const, evidence: { reference: "RICEVUTA-SINTETICA-001", deliveredAt: "2026-09-20T12:00:00+02:00", synthetic: true, note: "Consegna manuale sintetica" } };
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, {
+      ...receiptInput, evidence: { ...receiptInput.evidence, deliveredAt: "2026-09-20T12:00" },
+    }), (error) => error instanceof EngagementDossierError && error.code === "INVALID");
+    assert.equal(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } }), 0);
     const receipt = await recordEngagementDossierDelivery(db, actorA, receiptInput);
-    assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+    assert.equal((receipt.evidence as { deliveredAt: string }).deliveredAt, "2026-09-20T10:00:00.000Z");
+    assert.equal((await recordEngagementDossierDelivery(db, actorA, {
+      ...receiptInput, evidence: { ...receiptInput.evidence, deliveredAt: "2026-09-20T10:00:00Z" },
+    })).id, receipt.id);
     const concurrentRevisions = await Promise.allSettled([
       reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: version2.id, title: "Dossier sintetico v3 A", content: "Prima revisione concorrente" }),
       reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: version2.id, title: "Dossier sintetico v3 B", content: "Seconda revisione concorrente" }),

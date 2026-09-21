@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auditClientDossierExport } from '@/lib/actions';
 import { requirePermission } from '@/lib/auth';
-import { buildClientDossierDocx } from '@/lib/docx-export';
+import { buildClientDossierDocx, buildMarkdownDocx } from '@/lib/docx-export';
 import { prisma } from '@/lib/prisma';
 import { getClientDossierReadAccess } from '@/lib/read-access';
 import { EngagementDossierError, exportApprovedEngagementDossier } from '@/lib/engagement-dossier';
@@ -26,13 +26,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     : null;
   if (dossier.practiceReadinessId && (!approvedVersion || approvedVersion.dossierId !== dossier.id)) return new NextResponse('Not found', { status: 404 });
 
-  const docx = buildClientDossierDocx({
-    title: approvedVersion?.title ?? dossier.title,
-    client: { displayName: client.displayName, type: client.type, status: client.status, notes: approvedVersion ? null : client.notes },
+  const docx = approvedVersion ? buildMarkdownDocx({
+    title: approvedVersion.title,
+    content: approvedVersion.content,
+    exportedAt: new Date(),
+  }) : buildClientDossierDocx({
+    title: dossier.title,
+    client: { displayName: client.displayName, type: client.type, status: client.status, notes: client.notes },
     dossierType: dossier.type,
     dossierStatus: dossier.status,
     exportedAt: new Date(),
-    content: approvedVersion?.content ?? dossier.content,
+    content: dossier.content,
   });
 
   if (approvedVersion) {

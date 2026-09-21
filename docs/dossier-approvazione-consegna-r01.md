@@ -11,7 +11,7 @@ L'incremento F07 collega una `PracticeReadiness` già avviata, la revisione di s
 3. Un operatore distinto con `dossier.approve` richiede modifiche oppure approva ID e hash della versione corrente. Una nuova versione azzera l'approvazione.
 4. Solo la versione approvata è esportabile in Markdown o DOCX. L'export registra formato, hash del contenuto approvato e hash dell'artefatto, ma **non** autorizza né registra una consegna.
 5. L'approvatore crea un'autorizzazione separata con versione/hash e destinatari espliciti. Non viene effettuato alcun invio.
-6. Un operatore autorizzato registra manualmente `DELIVERED` o `FAILED` con data e riferimento della ricevuta. Replay identici sono idempotenti; evidenze differenti sulla stessa autorizzazione producono conflitto.
+6. Un operatore autorizzato registra manualmente `DELIVERED` o `FAILED` con data e riferimento della ricevuta. Il modulo mostra il fuso del browser e trasmette l’istante UTC; il server rifiuta date testuali senza offset. Replay identici sono idempotenti; evidenze differenti sulla stessa autorizzazione producono conflitto.
 
 ## Matrice requisito → evidenza
 
@@ -22,7 +22,8 @@ L'incremento F07 collega una `PracticeReadiness` già avviata, la revisione di s
 | Export coerente e separato | route Markdown/DOCX sulla sola versione approvata e `EngagementDossierExport` |
 | Autorizzazione e ricevuta manuale | `EngagementDossierDeliveryAuthorization` e `EngagementDossierDeliveryReceipt`; nessun provider/worker |
 | ABAC/sessione/revoca/conflitto/replay/atomicità | sessione canonica obbligatoria e lockata, contesto e documenti correnti anche per storico e riferimenti alla sola versione; test PostgreSQL di revoca, riassegnazione, archiviazione, fault audit e ricevute concorrenti |
-| Percorsi legacy e contenuto esportato | POST browser con ID manipolato verso le azioni generiche rifiutati senza effetti; hash dei byte Markdown/DOCX confrontato con il record di export; nessuna nota cliente corrente aggiunta al DOCX approvato |
+| Percorsi legacy e contenuto esportato | POST browser con ID manipolato verso le azioni generiche rifiutati senza effetti; hash dei byte Markdown/DOCX confrontato con il record di export; XML DOCX verificato dopo modifica anagrafica: solo titolo e contenuto approvati, senza dati cliente correnti |
+| Indice e orario della ricevuta | indice privo di titolo/link dopo riservatezza, archivio o sessione non canonica; browser Europe/Rome contro server UTC con verifica dell’istante e replay |
 | UI desktop/mobile | griglie responsive e form nel percorso pratica/dossier esistente |
 
 ## Migrazione e lifecycle

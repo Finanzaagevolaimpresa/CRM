@@ -124,6 +124,7 @@ jobs:
       NODE_ENV: development
       AUTH_SECRET: synthetic-readiness-browser-secret
       AUTH_COOKIE_NAME: fai_readiness_browser_session
+      TZ: UTC
       INTERNAL_SESSION_MODE: registry
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only

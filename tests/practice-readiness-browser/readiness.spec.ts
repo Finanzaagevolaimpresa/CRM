@@ -1,5 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { inflateRawSync } from "node:zlib";
+import { signSessionCookie } from "../../src/lib/session";
 import { join } from "node:path";
 import {
   expect,
@@ -23,6 +25,36 @@ type CapturedAction = {
   body: string;
 };
 let currentPhase = "INITIAL";
+
+function docxDocumentXml(bytes: Buffer) {
+  // Read the actual document entry, including compressed ZIP entries.
+  for (let offset = 0; offset + 30 <= bytes.length && bytes.readUInt32LE(offset) === 0x04034b50;) {
+    const flags = bytes.readUInt16LE(offset + 6);
+    const method = bytes.readUInt16LE(offset + 8);
+    const length = bytes.readUInt32LE(offset + 18);
+    const nameLength = bytes.readUInt16LE(offset + 26);
+    const extraLength = bytes.readUInt16LE(offset + 28);
+    const start = offset + 30 + nameLength + extraLength;
+    if (flags & 8) throw new Error("Unexpected ZIP data descriptor");
+    if (bytes.subarray(offset + 30, offset + 30 + nameLength).toString() === "word/document.xml") {
+      const entry = bytes.subarray(start, start + length);
+      if (method === 0) return entry.toString("utf8");
+      if (method === 8) return inflateRawSync(entry).toString("utf8");
+      throw new Error("Unsupported DOCX compression");
+    }
+    offset = start + length;
+  }
+  throw new Error("DOCX document XML missing");
+}
+
+async function expectDossierAbsentFromIndex(page: Page, dossier: { id: string; title: string }) {
+  const response = await page.goto(`${app}/client-dossiers`);
+  expect(response?.status()).toBe(200);
+  const html = await response!.text();
+  expect(html).not.toContain(dossier.title);
+  expect(html).not.toContain(`/client-dossiers/${dossier.id}`);
+  await expect(page.locator(`a[href="/client-dossiers/${dossier.id}"]`)).toHaveCount(0);
+}
 
 async function submitDossierAction(page: Page, button: Locator, phase: string) {
   currentPhase = phase;
@@ -148,8 +180,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   await anonymous.close();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
+    timezoneId: "Europe/Rome",
   });
+  expect(process.env.TZ).toBe("UTC");
   const page = await context.newPage();
+  expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("Europe/Rome");
   await login(page, "readiness-owner@invalid.test");
   await page.goto(`${app}/practice-readiness`);
   await page
@@ -724,16 +759,30 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     expect((await downloadPromise).suggestedFilename()).toContain('.md');
     const approved = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: approved.approvedVersionId! } });
-    for (const [suffix, format] of [["", "markdown"], ["/docx", "docx"]] as const) {
-      const exported = await page.request.get(`${app}/client-dossiers/${dossierId}/export${suffix}?versionId=${version.id}`);
-      expect(exported.status()).toBe(200);
-      const bytes = await exported.body();
-      expect(exported.headers()["x-dossier-content-hash"]).toBe(version.contentHash);
-      if (format === "markdown") expect(bytes.toString("utf8")).toBe(version.content);
-      else expect(bytes.subarray(0, 2).toString()).toBe("PK");
-      const record = await db.engagementDossierExport.findFirstOrThrow({ where: { dossierId, versionId: version.id, format }, orderBy: { exportedAt: "desc" } });
-      expect(record.versionHash).toBe(version.contentHash);
-      expect(record.artifactHash).toBe(createHash("sha256").update(bytes).digest("hex"));
+    const clientBeforeExport = await db.client.findUniqueOrThrow({ where: { id: approved.clientId } });
+    const unapprovedName = `ANAGRAFICA NON APPROVATA ${index}`;
+    const unapprovedNote = `NOTA NON APPROVATA ${index}`;
+    await db.client.update({ where: { id: approved.clientId }, data: { displayName: unapprovedName, notes: unapprovedNote } });
+    try {
+      for (const [suffix, format] of [["", "markdown"], ["/docx", "docx"]] as const) {
+        const exported = await page.request.get(`${app}/client-dossiers/${dossierId}/export${suffix}?versionId=${version.id}`);
+        expect(exported.status()).toBe(200);
+        const bytes = await exported.body();
+        expect(exported.headers()["x-dossier-content-hash"]).toBe(version.contentHash);
+        if (format === "markdown") expect(bytes.toString("utf8")).toBe(version.content);
+        else {
+          const xml = docxDocumentXml(bytes);
+          expect(xml).toContain(version.title);
+          expect(xml).toContain(version.content);
+          for (const excluded of [unapprovedName, unapprovedNote, "Dati cliente", "Tipologia cliente:", "Stato cliente:", "Stato bozza:"])
+            expect(xml).not.toContain(excluded);
+        }
+        const record = await db.engagementDossierExport.findFirstOrThrow({ where: { dossierId, versionId: version.id, format }, orderBy: { exportedAt: "desc" } });
+        expect(record.versionHash).toBe(version.contentHash);
+        expect(record.artifactHash).toBe(createHash("sha256").update(bytes).digest("hex"));
+      }
+    } finally {
+      await db.client.update({ where: { id: approved.clientId }, data: { displayName: clientBeforeExport.displayName, notes: clientBeforeExport.notes } });
     }
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const authorizationForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Autorizza consegna manuale' }) });
@@ -745,10 +794,26 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await page.goto(`${app}/client-dossiers/${dossierId}`);
     const receiptForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Registra esito manuale' }) });
     await receiptForm.locator('[name="reference"]').fill(`RICEVUTA-BROWSER-${index + 1}`);
-    await receiptForm.locator('[name="deliveredAt"]').fill('2026-09-20T12:00');
+    await expect(receiptForm.getByText("Data e ora della consegna (Europe/Rome)")).toBeVisible();
+    await receiptForm.locator('[name="deliveredAtLocal"]').fill('2026-09-20T12:00');
+    await expect(receiptForm.locator('[name="deliveredAt"]')).toHaveValue('2026-09-20T10:00:00.000Z');
     await receiptForm.locator('[name="evidenceSynthetic"]').check();
+    const receiptRequestPromise = page.waitForRequest((request) => request.method() === "POST" && Boolean(request.headers()["next-action"]));
     await submitDossierAction(page, page.getByRole('button', { name: 'Registra esito manuale' }), `DOSSIER_RECEIPT_${index}`);
-    expect((await db.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }))?.outcome).toBe('DELIVERED');
+    const receiptRequest = await receiptRequestPromise;
+    const recorded = await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { authorizationId: authorization.id } });
+    expect(recorded.outcome).toBe('DELIVERED');
+    expect((recorded.evidence as { deliveredAt: string }).deliveredAt).toBe('2026-09-20T10:00:00.000Z');
+    const auditCount = await db.auditLog.count({ where: { entityId: dossierId, event: "engagement_dossier_delivery_record" } });
+    const replay = await page.request.fetch(receiptRequest.url(), {
+      method: "POST", headers: { "next-action": receiptRequest.headers()["next-action"], "content-type": receiptRequest.headers()["content-type"], origin: app, referer: `${app}/client-dossiers/${dossierId}` },
+      data: receiptRequest.postDataBuffer()!, maxRedirects: 0,
+    });
+    expect(replay.status()).toBe(200);
+    expect(replay.headers()["x-action-redirect"] ?? "").not.toContain("dossierError=");
+    expect(await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { authorizationId: authorization.id } })).toEqual(recorded);
+    expect(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } })).toBe(1);
+    expect(await db.auditLog.count({ where: { entityId: dossierId, event: "engagement_dossier_delivery_record" } })).toBe(auditCount);
   }
 
   const protectedDossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierIds[0] } });
@@ -784,11 +849,34 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   expect(materialId).toBeTruthy();
   await db.document.update({ where: { id: materialId! }, data: { containsSensitiveData: true } });
   try {
+    await expectDossierAbsentFromIndex(page, protectedDossier);
     await page.goto(`${app}/client-dossiers/${protectedDossier.id}`);
     await expect(page.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
     expect(await page.content()).not.toContain(protectedVersion.content);
     for (const format of ["", "/docx"]) expect((await page.request.get(`${app}/client-dossiers/${protectedDossier.id}/export${format}?versionId=${protectedVersion.id}`)).status()).toBe(404);
   } finally { await db.document.update({ where: { id: materialId! }, data: { containsSensitiveData: false } }); }
+
+  await db.clientDossier.update({ where: { id: protectedDossier.id }, data: { status: "archiviata" } });
+  try { await expectDossierAbsentFromIndex(page, protectedDossier); }
+  finally { await db.clientDossier.update({ where: { id: protectedDossier.id }, data: { status: protectedDossier.status } }); }
+  await page.goto(`${app}/client-dossiers`);
+  await expect(page.locator(`a[href="/client-dossiers/${protectedDossier.id}"]`)).toBeVisible();
+
+  const nonCanonical = await browser.newContext();
+  await nonCanonical.addCookies([{
+    name: process.env.AUTH_COOKIE_NAME!, url: app,
+    value: await signSessionCookie({ userId: "readiness-browser-owner", expiresAt: Math.floor(Date.now() / 1000) + 3600 }),
+  }]);
+  const nonCanonicalPage = await nonCanonical.newPage();
+  const deniedIndex = await nonCanonicalPage.request.get(`${app}/client-dossiers`, { maxRedirects: 0 });
+  expect([303, 307]).toContain(deniedIndex.status());
+  expect(new URL(deniedIndex.headers().location, app).pathname).toBe("/login");
+  expect(await deniedIndex.text()).not.toContain(protectedDossier.title);
+  expect(await deniedIndex.text()).not.toContain(`/client-dossiers/${protectedDossier.id}`);
+  await nonCanonicalPage.goto(`${app}/client-dossiers`);
+  await expect(nonCanonicalPage).toHaveURL(`${app}/login`);
+  expect(await nonCanonicalPage.content()).not.toContain(protectedDossier.title);
+  await nonCanonical.close();
 
   const foreign = await browser.newContext();
   const foreignPage = await foreign.newPage();
@@ -846,6 +934,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       synthetic: true,
       cases: cases.map((item) => item.key),
       directPostDenied: true,
+      reviewRegressions: { indexSensitiveAndArchived: true, nonCanonicalSession: true, approvedDocxXmlOnly: true, browserTimeZone: "Europe/Rome", serverTimeZone: process.env.TZ, deliveryInstant: "2026-09-20T10:00:00.000Z", deliveryReplayIdempotent: true },
     }) + "\n",
     { mode: 0o600 },
   );
