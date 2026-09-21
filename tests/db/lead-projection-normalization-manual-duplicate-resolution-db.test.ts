@@ -478,7 +478,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 46);
+  assert.equal(allNames.length, 47);
   assert.equal(allNames.at(-1), '20260914130000_practice_engagement_readiness_v1');
   const names = allNames.slice(0, 40);
   assert.equal(names[39], migrationName);
@@ -604,7 +604,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 46);
+  assert.equal(names.length, 47);
   assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[39], migrationName);
   assert.equal(names[40], correctiveMigrationName);
@@ -766,7 +766,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 46);
+  assert.equal(names.length, 47);
   assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[40], correctiveMigrationName);
   for (const name of names.slice(0, 40)) {

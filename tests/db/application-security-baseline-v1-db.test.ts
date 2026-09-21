@@ -77,7 +77,7 @@ async function migrationQualification(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(allNames.length, 46);
+  assert.equal(allNames.length, 47);
   assert.equal(allNames.at(-1), '20260914130000_practice_engagement_readiness_v1');
   const names = allNames.slice(0, 34);
   const databaseUrl = new URL(process.env.DATABASE_URL!);

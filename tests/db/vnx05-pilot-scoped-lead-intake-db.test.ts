@@ -148,7 +148,7 @@ test.before(async () => {
     .filter((item) => item.isDirectory() && /^\d/u.test(item.name))
     .map((item) => item.name)
     .sort();
-  assert.equal(migrationNames.length, 46);
+  assert.equal(migrationNames.length, 47);
   assert.equal(migrationNames.at(-1), '20260914130000_practice_engagement_readiness_v1');
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
     env: { ...process.env, DATABASE_URL: schemaUrl }, stdio: 'pipe', timeout: 180_000,

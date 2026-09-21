@@ -928,11 +928,87 @@ model ClientDossier {
   archivedAt       DateTime?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
+  practiceReadinessId String?           @unique @db.Uuid
+  preAnalysisId      String?
+  serviceRevisionId  String?           @db.Uuid
+  currentVersionId   String?           @unique @db.Uuid
+  approvedVersionId  String?           @db.Uuid
 
   @@index([clientId])
   @@index([clientServiceId])
   @@index([projectId])
   @@index([status])
+}
+
+
+model EngagementDossierVersion {
+  id                    String   @id @default(uuid()) @db.Uuid
+  dossierId             String
+  version               Int
+  title                 String
+  content               String   @db.Text
+  contentHash           String   @db.Char(64)
+  practiceReadinessId   String   @db.Uuid
+  acceptedOfferRevisionId String @db.Uuid
+  serviceRevisionId     String   @db.Uuid
+  preAnalysisId         String
+  materialSnapshot      Json
+  createdById           String
+  createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([dossierId, version])
+  @@index([practiceReadinessId, createdAt])
+  @@index([contentHash])
+}
+
+model EngagementDossierReview {
+  id          String   @id @default(uuid()) @db.Uuid
+  dossierId   String
+  versionId   String   @db.Uuid
+  versionHash String   @db.Char(64)
+  decision    String   @db.VarChar(32)
+  note        String   @db.VarChar(2000)
+  decidedById String
+  decidedAt   DateTime @default(now()) @db.Timestamptz(3)
+  @@unique([versionId, decision])
+  @@index([dossierId, decidedAt])
+}
+
+model EngagementDossierExport {
+  id           String   @id @default(uuid()) @db.Uuid
+  dossierId    String
+  versionId    String   @db.Uuid
+  versionHash  String   @db.Char(64)
+  format       String   @db.VarChar(16)
+  artifactHash String   @db.Char(64)
+  exportedById String
+  exportedAt   DateTime @default(now()) @db.Timestamptz(3)
+  @@index([dossierId, exportedAt])
+  @@index([versionId, format])
+}
+
+model EngagementDossierDeliveryAuthorization {
+  id              String   @id @default(uuid()) @db.Uuid
+  dossierId       String
+  versionId       String   @db.Uuid
+  versionHash     String   @db.Char(64)
+  recipients      Json
+  recipientsHash  String   @db.Char(64)
+  idempotencyHash String   @unique @db.Char(64)
+  authorizedById  String
+  authorizedAt    DateTime @default(now()) @db.Timestamptz(3)
+  revokedAt       DateTime? @db.Timestamptz(3)
+  @@index([dossierId, authorizedAt])
+}
+
+model EngagementDossierDeliveryReceipt {
+  id               String   @id @default(uuid()) @db.Uuid
+  authorizationId  String   @unique @db.Uuid
+  outcome           String   @db.VarChar(24)
+  evidence          Json
+  evidenceHash      String   @db.Char(64)
+  idempotencyHash   String   @unique @db.Char(64)
+  recordedById      String
+  recordedAt        DateTime @default(now()) @db.Timestamptz(3)
 }
 
 model Contract {

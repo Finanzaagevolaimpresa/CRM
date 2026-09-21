@@ -19,6 +19,15 @@ import {
 } from "../src/lib/practice-readiness";
 import { prepareServiceCatalogV2 } from "../src/lib/service-catalog-v2-persistence";
 import {
+  authorizeEngagementDossierDelivery,
+  createEngagementDossier,
+  EngagementDossierError,
+  exportApprovedEngagementDossier,
+  recordEngagementDossierDelivery,
+  reviewEngagementDossierVersion,
+  reviseEngagementDossier,
+} from "../src/lib/engagement-dossier";
+import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration,
 } from "./db/ai-orchestrator-db-test-guard";
@@ -365,6 +374,17 @@ test.before(async () => {
 
 test.after(async () => {
   if (enabled) {
+    const engagementDossiers = await db.clientDossier.findMany({ where: { clientId: { in: [a.client.id, b.client.id] } }, select: { id: true } });
+    const engagementDossierIds = engagementDossiers.map((row) => row.id);
+    const authorizations = await db.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId: { in: engagementDossierIds } }, select: { id: true } });
+    await db.engagementDossierDeliveryReceipt.deleteMany({ where: { authorizationId: { in: authorizations.map((row) => row.id) } } });
+    await db.engagementDossierDeliveryAuthorization.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
+    await db.engagementDossierExport.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
+    await db.engagementDossierReview.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
+    await db.clientDossier.updateMany({ where: { id: { in: engagementDossierIds } }, data: { currentVersionId: null, approvedVersionId: null } });
+    await db.engagementDossierVersion.deleteMany({ where: { dossierId: { in: engagementDossierIds } } });
+    await db.clientDossier.deleteMany({ where: { id: { in: engagementDossierIds } } });
+    await db.preAnalysis.deleteMany({ where: { clientId: { in: [a.client.id, b.client.id] } } });
     await db.practiceMaterialEvidence.deleteMany({
       where: { practice: { clientId: { in: [a.client.id, b.client.id] } } },
     });
@@ -1761,6 +1781,55 @@ test(
       ),
       true,
     );
+    const preAnalysis = await db.preAnalysis.create({ data: { clientId: a.client.id, projectId: a.project.id, internalSummary: "Preanalisi sintetica dossier" } });
+    const dossierCountBeforeFault = await db.clientDossier.count({ where: { practiceReadinessId: practice.id } });
+    await assert.rejects(
+      createEngagementDossier(db, actorA, { practiceReadinessId: practice.id, preAnalysisId: preAnalysis.id, title: "Dossier sintetico v1", content: "Contenuto sintetico iniziale" }, { failAudit: true }),
+      (error) => error instanceof EngagementDossierError && error.code === "CONFLICT",
+    );
+    assert.equal(await db.clientDossier.count({ where: { practiceReadinessId: practice.id } }), dossierCountBeforeFault);
+    const createdDossier = await createEngagementDossier(db, actorA, { practiceReadinessId: practice.id, preAnalysisId: preAnalysis.id, title: "Dossier sintetico v1", content: "Contenuto sintetico iniziale" });
+    const dossierFootprintBeforeRevocation = {
+      versions: await db.engagementDossierVersion.count({ where: { dossierId: createdDossier.dossier.id } }),
+      audits: await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: createdDossier.dossier.id } }),
+    };
+    await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: new Date(), revokedReason: "INTERNAL_SINGLE", revokedByUserId: ids.manager } });
+    try {
+      await assert.rejects(
+        reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: createdDossier.version.id, title: "Versione vietata", content: "Sessione revocata" }),
+        (error) => error instanceof EngagementDossierError && error.code === "DENIED",
+      );
+      assert.deepEqual({
+        versions: await db.engagementDossierVersion.count({ where: { dossierId: createdDossier.dossier.id } }),
+        audits: await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: createdDossier.dossier.id } }),
+      }, dossierFootprintBeforeRevocation);
+    } finally {
+      await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } });
+    }
+    await reviewEngagementDossierVersion(db, manager, { dossierId: createdDossier.dossier.id, versionId: createdDossier.version.id, versionHash: createdDossier.version.contentHash, decision: "REQUEST_CHANGES", note: "Integrare il contenuto sintetico" });
+    await assert.rejects(
+      reviewEngagementDossierVersion(db, manager, { dossierId: createdDossier.dossier.id, versionId: createdDossier.version.id, versionHash: createdDossier.version.contentHash, decision: "APPROVED", note: "Non approvabile senza nuova versione" }),
+      (error) => error instanceof EngagementDossierError && error.code === "CONFLICT",
+    );
+    const version2 = await reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: createdDossier.version.id, title: "Dossier sintetico v2", content: "Contenuto sintetico corretto" });
+    await reviewEngagementDossierVersion(db, manager, { dossierId: createdDossier.dossier.id, versionId: version2.id, versionHash: version2.contentHash, decision: "APPROVED", note: "Versione verificata" });
+    const exported = await exportApprovedEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, versionId: version2.id, format: "markdown" }, version2.content);
+    assert.equal(exported.version.contentHash, version2.contentHash);
+    await assert.rejects(authorizeEngagementDossierDelivery(db, actorA, { dossierId: createdDossier.dossier.id, versionId: version2.id, versionHash: version2.contentHash, recipients: [{ kind: "CLIENT", name: "Destinatario non autorizzato", address: "synthetic.invalid", synthetic: true }] }), (error) => error instanceof EngagementDossierError && error.code === "DENIED");
+    const authorization = await authorizeEngagementDossierDelivery(db, manager, { dossierId: createdDossier.dossier.id, versionId: version2.id, versionHash: version2.contentHash, recipients: [{ kind: "CLIENT", name: "Cliente sintetico", address: "cliente@invalid.test", synthetic: true }] });
+    const receiptInput = { authorizationId: authorization.id, outcome: "DELIVERED" as const, evidence: { reference: "RICEVUTA-SINTETICA-001", deliveredAt: new Date(), synthetic: true, note: "Consegna manuale sintetica" } };
+    const receipt = await recordEngagementDossierDelivery(db, actorA, receiptInput);
+    assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+    const concurrentRevisions = await Promise.allSettled([
+      reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: version2.id, title: "Dossier sintetico v3 A", content: "Prima revisione concorrente" }),
+      reviseEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, expectedVersionId: version2.id, title: "Dossier sintetico v3 B", content: "Seconda revisione concorrente" }),
+    ]);
+    assert.equal(concurrentRevisions.filter(({ status }) => status === "fulfilled").length, 1);
+    assert.equal(concurrentRevisions.filter(({ status }) => status === "rejected").length, 1);
+    const version3 = concurrentRevisions.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof reviseEngagementDossier>> > => result.status === "fulfilled")!.value;
+    const afterRevision = await db.clientDossier.findUniqueOrThrow({ where: { id: createdDossier.dossier.id } });
+    assert.equal(afterRevision.approvedVersionId, null);
+    await assert.rejects(exportApprovedEngagementDossier(db, actorA, { dossierId: createdDossier.dossier.id, versionId: version3.id, format: "markdown" }, version3.content), (error) => error instanceof EngagementDossierError && error.code === "NOT_READY");
     const updatedOffer = await db.commercialOffer.update({
       where: { id: a.offer.id },
       data: { description: "Proposta successiva ad avvio da negare" },

@@ -79,9 +79,9 @@ test.after(async () => {
   await root?.$disconnect();
 });
 
-test('current fresh install applies 46 migrations, preserves N15 storage and leaves N11 untouched', { skip: !run }, async () => {
+test('current fresh install applies 47 migrations, preserves N15 storage and leaves N11 untouched', { skip: !run }, async () => {
   const migrations = await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(Number(migrations[0]?.count), 46);
+  assert.equal(Number(migrations[0]?.count), 47);
   assert.deepEqual(await Promise.all([
     client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
   ]), [0, 0, 0]);
@@ -352,7 +352,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 46);
+  assert.equal(names.length, 47);
   assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
   for (const name of names.slice(0, 43)) cpSync(join('prisma/migrations', name), join(migrationsDirectory, name), { recursive: true });
   const oldSchema = `${schema}_old`;

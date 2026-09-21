@@ -793,7 +793,7 @@ test('N15 pure-contract dependency closure has zero I/O and no runtime activatio
   assert.match(readFileSync('tests/fixtures/n15-communication-mock.ts', 'utf8'), /outcome: 'HELD'/u);
   assert.doesNotMatch(readFileSync('Dockerfile.prod.example', 'utf8'), /COPY[^\n]*\/app\/tests/u);
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name));
-  assert.equal(migrations.length, 46);
+  assert.equal(migrations.length, 47);
   const persistence = readFileSync('src/lib/communication-intent-persistence.ts', 'utf8');
   assert.match(persistence, /Prisma\.TransactionClient/u);
   assert.doesNotMatch(persistence, /Business(?:InboxEvent|OutboxEvent|QueueAttempt)|PracticeCommunication|AuditLog/u);
