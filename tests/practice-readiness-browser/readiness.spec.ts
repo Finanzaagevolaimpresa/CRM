@@ -825,17 +825,27 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   for (const [actorPage, buttonName] of [[page, "Salva modifiche"], [reviewerPage, "Conferma revisione dossier"]] as const) {
     await actorPage.goto(`${app}/client-dossiers/${legacy.id}`);
     const form = actorPage.locator("form").filter({ has: actorPage.getByRole("button", { name: buttonName }) });
-    await form.locator('[name="id"]').evaluate((node, id) => { (node as HTMLInputElement).value = id; }, protectedDossier.id);
     const before = await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } });
     const auditCount = await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: protectedDossier.id } });
     const responsePromise = actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
     await form.getByRole("button", { name: buttonName }).click();
-    const response = await responsePromise;
-    await response.finished();
+    const legitimateResponse = await responsePromise;
+    await legitimateResponse.finished();
+    expect(legitimateResponse.status()).toBe(200);
+    const request = legitimateResponse.request();
+    expect(request.postData()).toContain(legacy.id);
+    // Replay the captured request with an explicit target replacement. DOM edits
+    // can be restored by hydration before submission and would not test the guard.
+    const forgedBody = request.postData()!.replaceAll(legacy.id, protectedDossier.id);
+    expect(forgedBody).toContain(protectedDossier.id);
+    expect(forgedBody).not.toContain(legacy.id);
+    const response = await actorPage.request.fetch(request.url(), {
+      method: "POST", headers: { "next-action": request.headers()["next-action"], "content-type": request.headers()["content-type"], origin: app, referer: request.url() },
+      data: forgedBody, maxRedirects: 0,
+    });
     // A streamed RSC response can carry the server error after HTTP 200 headers.
     // Assert the manipulated target and explicit denial, not only transport status.
     expect([200, 500]).toContain(response.status());
-    expect(response.request().postData()).toContain(protectedDossier.id);
     expect(await response.text()).toContain(buttonName === "Salva modifiche"
       ? "Usa le azioni della versione esatta del dossier."
       : "Usa la revisione della versione esatta del dossier.");
