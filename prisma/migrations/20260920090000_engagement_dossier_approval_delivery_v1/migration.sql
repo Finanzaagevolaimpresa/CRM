@@ -1,3 +1,5 @@
+BEGIN;
+
 ALTER TABLE "ClientDossier"
   ADD COLUMN "practiceReadinessId" UUID,
   ADD COLUMN "preAnalysisId" TEXT,
@@ -82,3 +84,5 @@ ALTER TABLE "EngagementDossierDeliveryAuthorization" ADD CONSTRAINT "EngagementD
 ALTER TABLE "EngagementDossierDeliveryReceipt" ADD CONSTRAINT "EngagementDossierDeliveryReceipt_authorizationId_fkey" FOREIGN KEY ("authorizationId") REFERENCES "EngagementDossierDeliveryAuthorization"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE "ClientDossier" ADD CONSTRAINT "ClientDossier_currentVersionId_fkey" FOREIGN KEY ("currentVersionId") REFERENCES "EngagementDossierVersion"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 ALTER TABLE "ClientDossier" ADD CONSTRAINT "ClientDossier_approvedVersionId_fkey" FOREIGN KEY ("approvedVersionId") REFERENCES "EngagementDossierVersion"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+COMMIT;

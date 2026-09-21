@@ -64,6 +64,17 @@ jobs:
           (cd "$historical_source" && "$candidate_prisma" migrate deploy --schema prisma/schema.prisma)
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 46
           git worktree remove --force "$historical_source"
+          migration_file=prisma/migrations/20260920090000_engagement_dossier_approval_delivery_v1/migration.sql
+          test "$(head -1 "$migration_file")" = 'BEGIN;'
+          test "$(tail -1 "$migration_file")" = 'COMMIT;'
+          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$migration_file" > "$evidence/migration-fault.sql"
+          if psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -f "$evidence/migration-fault.sql" > "$evidence/migration-fault.log" 2>&1; then
+            echo "The injected migration failure did not fail" >&2
+            exit 1
+          fi
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'EngagementDossier%'")" = 0
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ClientDossier' AND column_name IN ('practiceReadinessId','preAnalysisId','serviceRevisionId','currentVersionId','approvedVersionId')")" = 0
+          printf '{"synthetic":true,"schemaBefore":46,"injectedFailureRolledBack":true}\n' > "$evidence/migration-atomicity.json"
           npm run prisma:migrate:deploy
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY finished_at DESC LIMIT 1')" = 20260920090000_engagement_dossier_approval_delivery_v1

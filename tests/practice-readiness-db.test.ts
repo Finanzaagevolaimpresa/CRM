@@ -1913,6 +1913,13 @@ test("dossier access, export and delivery recheck current authority and roll bac
   const authorization = await authorizeEngagementDossierDelivery(db, manager, delivery);
   assert.equal((await authorizeEngagementDossierDelivery(db, manager, delivery)).id, authorization.id);
   const receiptInput = { authorizationId: authorization.id, outcome: "DELIVERED", evidence: { reference: "FINAL-SYNTHETIC", deliveredAt: new Date(), synthetic: true } };
+  await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { recipients: [{ kind: "CLIENT", name: "Destinatario alterato", address: "non-autorizzato@invalid.test", synthetic: true }] } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, manager, dossier.id), null);
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+    assert.deepEqual(await snapshot(), before);
+  } finally { await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { recipients: authorization.recipients as Prisma.InputJsonValue } }); }
   before = await snapshot();
   await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput, { failAudit: true }), conflictDossier);
   assert.deepEqual(await snapshot(), before);
@@ -1953,7 +1960,10 @@ test("dossier access, export and delivery recheck current authority and roll bac
     assert.deepEqual(await snapshot(), before);
   } finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "revisionata" } }); }
   await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { revokedAt: new Date() } });
-  try { await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier); }
+  try {
+    await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+    await assert.rejects(authorizeEngagementDossierDelivery(db, manager, delivery), deniedDossier);
+  }
   finally { await db.engagementDossierDeliveryAuthorization.update({ where: { id: authorization.id }, data: { revokedAt: null } }); }
   const concurrent = await Promise.allSettled([recordEngagementDossierDelivery(db, actorA, receiptInput), recordEngagementDossierDelivery(db, actorA, receiptInput)]);
   assert.ok(concurrent.some((result) => result.status === "fulfilled"));
