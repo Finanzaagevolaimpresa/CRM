@@ -9,6 +9,7 @@ import { listAccessiblePracticeReadiness } from '@/lib/practice-readiness';
 
 export default async function Page({ params, searchParams }: { params: Promise<{ practiceId: string }>; searchParams: Promise<{ dossierError?: string }> }) {
   const { practiceId } = await params; const session = await requirePermission('dossier.write');
+  await requirePermission('dossier.read');
   const { dossierError } = await searchParams;
   const practice = (await listAccessiblePracticeReadiness(prisma, session)).find((row) => row.id === practiceId);
   if (!practice?.startedAt || !practice.projectId || !practice.clientServiceId) notFound();

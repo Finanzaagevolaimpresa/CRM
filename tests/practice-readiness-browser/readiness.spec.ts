@@ -742,6 +742,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await reviewerPage.getByPlaceholder("Motivazione della decisione").fill(index === 0 ? "Correggere la prima versione" : "Versione verificata");
     await submitDossierAction(reviewerPage, reviewerPage.getByRole("button", { name: index === 0 ? "Richiedi modifiche" : "Approva questa versione" }), `DOSSIER_REVIEW_${index}`);
+    await expect(reviewerPage.getByRole("button", { name: "Approva questa versione" })).toHaveCount(0);
+    await expect(reviewerPage.getByRole("button", { name: "Richiedi modifiche" })).toHaveCount(0);
   }
   await page.goto(`${app}/client-dossiers/${dossierIds[0]}`);
   await page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva come nuova versione' }) }).locator('[name="content"]').fill("Versione corretta dopo richiesta modifiche");
@@ -817,6 +819,31 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   }
 
   const protectedDossier = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierIds[0] } });
+  const protectedPreanalysis = await db.preAnalysis.findUniqueOrThrow({ where: { id: protectedDossier.preAnalysisId! } });
+  const creationUrl = `${app}/engagement-dossiers/new/${protectedDossier.practiceReadinessId}`;
+  const readWriteOverrides = await Promise.all([
+    db.userPermissionOverride.create({ data: { userId: "readiness-browser-owner", permission: "dossier.write", allowed: true } }),
+    db.userPermissionOverride.create({ data: { userId: "readiness-browser-owner", permission: "dossier.read", allowed: false } }),
+  ]);
+  try {
+    expect(protectedPreanalysis.internalSummary).toBeTruthy();
+    const deniedCreation = await page.request.get(creationUrl, { maxRedirects: 0 });
+    const deniedBody = await deniedCreation.text();
+    if (deniedCreation.status() === 200) expect(deniedBody).toMatch(/NEXT_REDIRECT;[^;]+;\/dashboard;30[37];/);
+    else {
+      expect([303, 307]).toContain(deniedCreation.status());
+      expect(new URL(deniedCreation.headers().location, app).pathname).toBe("/dashboard");
+    }
+    expect(deniedBody).not.toContain(protectedPreanalysis.id);
+    expect(deniedBody).not.toContain(protectedPreanalysis.internalSummary!.slice(0, 80));
+    await page.goto(creationUrl);
+    await expect(page).toHaveURL(`${app}/dashboard`);
+  } finally {
+    await db.userPermissionOverride.deleteMany({ where: { id: { in: readWriteOverrides.map((row) => row.id) } } });
+  }
+  await page.goto(creationUrl);
+  await expect(page.locator(`[name="preAnalysisId"] option[value="${protectedPreanalysis.id}"]`)).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Crea dossier versionato" })).toBeVisible();
   const legacy = await db.clientDossier.create({ data: {
     clientId: protectedDossier.clientId, projectId: protectedDossier.projectId,
     clientServiceId: protectedDossier.clientServiceId, type: "dossier_cliente",
@@ -944,7 +971,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       synthetic: true,
       cases: cases.map((item) => item.key),
       directPostDenied: true,
-      reviewRegressions: { indexSensitiveAndArchived: true, nonCanonicalSession: true, approvedDocxXmlOnly: true, browserTimeZone: "Europe/Rome", serverTimeZone: process.env.TZ, deliveryInstant: "2026-09-20T10:00:00.000Z", deliveryReplayIdempotent: true },
+      reviewRegressions: { indexSensitiveAndArchived: true, nonCanonicalSession: true, approvedDocxXmlOnly: true, creationReadPermissionDenied: true, decidedReviewControlsHidden: true, browserTimeZone: "Europe/Rome", serverTimeZone: process.env.TZ, deliveryInstant: "2026-09-20T10:00:00.000Z", deliveryReplayIdempotent: true },
     }) + "\n",
     { mode: 0o600 },
   );

@@ -79,6 +79,8 @@ jobs:
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY finished_at DESC LIMIT 1')" = 20260920090000_engagement_dossier_approval_delivery_v1
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '\''20260920090000_engagement_dossier_approval_delivery_v1'\'' AND finished_at IS NOT NULL AND rolled_back_at IS NULL')" = "$(sha256sum prisma/migrations/20260920090000_engagement_dossier_approval_delivery_v1/migration.sql | cut -d ' ' -f1)"
+          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema-diff.sql"
+          node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema-diff.sql" | tee "$evidence/schema-foreign-keys.json"
           if bash -o pipefail -c 'false | tee /dev/null'; then
             echo "pipefail self-test did not propagate failure" >&2
             exit 1

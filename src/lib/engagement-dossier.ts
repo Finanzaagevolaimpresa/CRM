@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization } from '@prisma/client';
+import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
 import { z } from 'zod';
 import { canViewChecklistItem, canViewClientContext, canViewDocument } from './access-control';
 import type { AuthSession } from './auth';
@@ -37,6 +37,18 @@ function deliveryRecipients(authorization: EngagementDossierDeliveryAuthorizatio
     || engagementDossierHash(parsed.data) !== authorization.recipientsHash
     || engagementDossierHash({ dossierId: authorization.dossierId, versionId: authorization.versionId, versionHash: authorization.versionHash, recipientsHash: authorization.recipientsHash }) !== authorization.idempotencyHash) throw new EngagementDossierError('DENIED');
   return parsed.data;
+}
+
+const storedDeliveryEvidence = z.object({
+  reference: z.string().min(1).max(500), deliveredAt: z.string().datetime({ offset: true }),
+  synthetic: z.boolean(), note: z.string().max(2000).optional(),
+}).strict();
+
+function assertDeliveryReceiptIntegrity(receipt: EngagementDossierDeliveryReceipt) {
+  if (!z.enum(['DELIVERED', 'FAILED']).safeParse(receipt.outcome).success
+    || !storedDeliveryEvidence.safeParse(receipt.evidence).success
+    || engagementDossierHash(receipt.evidence) !== receipt.evidenceHash
+    || engagementDossierHash({ authorizationId: receipt.authorizationId, outcome: receipt.outcome, evidenceHash: receipt.evidenceHash }) !== receipt.idempotencyHash) throw new EngagementDossierError('DENIED');
 }
 
 async function actor(tx: Prisma.TransactionClient, claimed: AuthSession, permission: 'dossier.read' | 'dossier.write' | 'dossier.approve', now: Date) {
@@ -126,22 +138,48 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
   return { dossier, client, project: hydratedProject, service: hydratedService, versions };
 }
 
+async function readContext(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string) {
+  const context = await scope(tx, current, dossierId);
+  const [reviews, authorizations] = await Promise.all([
+    tx.engagementDossierReview.findMany({ where: { dossierId }, orderBy: { decidedAt: 'desc' } }),
+    tx.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } }),
+  ]);
+  const receipts = await tx.engagementDossierDeliveryReceipt.findMany({ where: { authorizationId: { in: authorizations.map((row) => row.id) } } });
+  if (reviews.some((review) => !context.versions.some((version) => version.id === review.versionId && version.contentHash === review.versionHash))) throw new EngagementDossierError('DENIED');
+  receipts.forEach(assertDeliveryReceiptIntegrity);
+  return { dossier: context.dossier, clientId: context.client.id, client: context.client, project: context.project, clientService: context.service,
+    engagementHistory: { versions: context.versions, reviews, authorizations: authorizations.map((authorization) => ({ ...authorization, recipients: deliveryRecipients(authorization, context.versions) })), receipts } };
+}
+
 export async function getEngagementDossierReadAccess(db: Db, claimed: AuthSession, dossierId: string, runtime: Runtime = {}) {
   try {
     return await db.$transaction(async (tx) => {
       const current = await actor(tx, claimed, 'dossier.read', runtime.now?.() ?? new Date());
-      const context = await scope(tx, current, dossierId);
-      const [reviews, authorizations] = await Promise.all([
-        tx.engagementDossierReview.findMany({ where: { dossierId }, orderBy: { decidedAt: 'desc' } }),
-        tx.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } }),
-      ]);
-      const receipts = await tx.engagementDossierDeliveryReceipt.findMany({ where: { authorizationId: { in: authorizations.map((row) => row.id) } } });
-      if (reviews.some((review) => !context.versions.some((version) => version.id === review.versionId && version.contentHash === review.versionHash))) throw new EngagementDossierError('DENIED');
-      return { dossier: context.dossier, clientId: context.client.id, client: context.client, project: context.project, clientService: context.service,
-        engagementHistory: { versions: context.versions, reviews, authorizations: authorizations.map((authorization) => ({ ...authorization, recipients: deliveryRecipients(authorization, context.versions) })), receipts } };
+      return readContext(tx, current, dossierId);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
     if (error instanceof EngagementDossierError) return null;
+    throw error;
+  }
+}
+
+export async function getVisibleEngagementDossierIds(db: Db, claimed: AuthSession, dossierIds: string[], runtime: Runtime = {}) {
+  if (!dossierIds.length) return new Set<string>();
+  try {
+    const ids = await db.$transaction(async (tx) => {
+      // One canonical actor lock/connection for the entire list, not one
+      // competing interactive transaction per row on the same session.
+      const current = await actor(tx, claimed, 'dossier.read', runtime.now?.() ?? new Date());
+      const visible: string[] = [];
+      for (const dossierId of new Set(dossierIds)) {
+        try { await readContext(tx, current, dossierId); visible.push(dossierId); }
+        catch (error) { if (!(error instanceof EngagementDossierError)) throw error; }
+      }
+      return visible;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    return new Set(ids);
+  } catch (error) {
+    if (error instanceof EngagementDossierError) return new Set<string>();
     throw error;
   }
 }
@@ -228,5 +266,5 @@ export async function authorizeEngagementDossierDelivery(db: Db, claimed: AuthSe
 
 export async function recordEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parseInput(z.object({ authorizationId: uuid, outcome: z.enum(['DELIVERED', 'FAILED']), evidence: z.object({ reference: z.string().trim().min(1).max(500), deliveredAt: z.union([z.date(), z.string().datetime({ offset: true }).transform((value) => new Date(value))]), synthetic: z.boolean().default(false), note: z.string().trim().max(2000).optional() }) }), raw); const now = runtime.now?.() ?? new Date();
-  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.write', now); await tx.$queryRaw`SELECT id FROM "EngagementDossierDeliveryAuthorization" WHERE id=${input.authorizationId}::uuid FOR UPDATE`; const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: input.authorizationId } }); if (!authorization || authorization.revokedAt) throw new EngagementDossierError('DENIED'); const { dossier, versions } = await scope(tx, current, authorization.dossierId); deliveryRecipients(authorization, versions); if (dossier.approvedVersionId !== authorization.versionId) throw new EngagementDossierError('CONFLICT'); const evidence = { ...input.evidence, deliveredAt: input.evidence.deliveredAt.toISOString() }; const evidenceHash = engagementDossierHash(evidence); const idempotencyHash = engagementDossierHash({ authorizationId: authorization.id, outcome: input.outcome, evidenceHash }); const prior = await tx.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }); if (prior) { if (prior.idempotencyHash === idempotencyHash) return prior; throw new EngagementDossierError('CONFLICT'); } const receipt = await tx.engagementDossierDeliveryReceipt.create({ data: { authorizationId: authorization.id, outcome: input.outcome, evidence: evidence as Prisma.InputJsonValue, evidenceHash, idempotencyHash, recordedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_record', dossier.id, { receiptId: receipt.id, authorizationId: authorization.id, versionId: authorization.versionId, outcome: input.outcome, evidenceHash }); return receipt; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.write', now); await tx.$queryRaw`SELECT id FROM "EngagementDossierDeliveryAuthorization" WHERE id=${input.authorizationId}::uuid FOR UPDATE`; const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: input.authorizationId } }); if (!authorization || authorization.revokedAt) throw new EngagementDossierError('DENIED'); const { dossier, versions } = await scope(tx, current, authorization.dossierId); deliveryRecipients(authorization, versions); if (dossier.approvedVersionId !== authorization.versionId) throw new EngagementDossierError('CONFLICT'); const evidence = { reference: input.evidence.reference, deliveredAt: input.evidence.deliveredAt.toISOString(), synthetic: input.evidence.synthetic, ...(input.evidence.note !== undefined ? { note: input.evidence.note } : {}) }; const evidenceHash = engagementDossierHash(evidence); const idempotencyHash = engagementDossierHash({ authorizationId: authorization.id, outcome: input.outcome, evidenceHash }); const prior = await tx.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }); if (prior) { assertDeliveryReceiptIntegrity(prior); if (prior.idempotencyHash === idempotencyHash) return prior; throw new EngagementDossierError('CONFLICT'); } const receipt = await tx.engagementDossierDeliveryReceipt.create({ data: { authorizationId: authorization.id, outcome: input.outcome, evidence: evidence as Prisma.InputJsonValue, evidenceHash, idempotencyHash, recordedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_record', dossier.id, { receiptId: receipt.id, authorizationId: authorization.id, versionId: authorization.versionId, outcome: input.outcome, evidenceHash }); return receipt; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }

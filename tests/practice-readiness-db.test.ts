@@ -24,6 +24,7 @@ import {
   EngagementDossierError,
   exportApprovedEngagementDossier,
   getEngagementDossierReadAccess,
+  getVisibleEngagementDossierIds,
   recordEngagementDossierDelivery,
   reviewEngagementDossierVersion,
   reviseEngagementDossier,
@@ -1906,6 +1907,9 @@ test("dossier access, export and delivery recheck current authority and roll bac
   assert.equal((await getEngagementDossierReadAccess(db, actorA, dossier.id))?.engagementHistory.versions.length, 3);
   assert.equal(await getEngagementDossierReadAccess(db, { ...actorA, sessionId: undefined }, dossier.id), null);
   assert.equal(await getEngagementDossierReadAccess(db, actorB, dossier.id), null);
+  assert.deepEqual([...await getVisibleEngagementDossierIds(db, actorA, [dossier.id, "missing-dossier", dossier.id])], [dossier.id]);
+  assert.equal((await getVisibleEngagementDossierIds(db, actorB, [dossier.id])).size, 0);
+  assert.equal((await getVisibleEngagementDossierIds(db, { ...actorA, sessionId: undefined }, [dossier.id])).size, 0);
   const review = { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, decision: "APPROVED", note: "Verifica finale sintetica" };
   let before = await snapshot();
   await assert.rejects(reviewEngagementDossierVersion(db, manager, review, { failAudit: true }), conflictDossier);
@@ -1977,5 +1981,28 @@ test("dossier access, export and delivery recheck current authority and roll bac
   assert.equal(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } }), 1);
   const receipt = await recordEngagementDossierDelivery(db, actorA, receiptInput);
   await assert.rejects(recordEngagementDossierDelivery(db, actorA, { ...receiptInput, evidence: { ...receiptInput.evidence, reference: "CONFLICT" } }), conflictDossier);
+  assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+  for (const corruption of [
+    { outcome: "FAILED" },
+    { evidence: { ...(receipt.evidence as Record<string, Prisma.InputJsonValue>), reference: "ALTERED-RECEIPT" } },
+    { evidenceHash: "0".repeat(64) },
+    { idempotencyHash: "1".repeat(64) },
+  ]) {
+    const altered = await db.engagementDossierDeliveryReceipt.update({ where: { id: receipt.id }, data: corruption });
+    try {
+      before = await snapshot();
+      assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+      assert.equal((await getVisibleEngagementDossierIds(db, actorA, [dossier.id])).size, 0);
+      await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
+      assert.deepEqual(await snapshot(), before);
+      assert.deepEqual(await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { id: receipt.id } }), altered);
+    } finally {
+      await db.engagementDossierDeliveryReceipt.update({ where: { id: receipt.id }, data: {
+        outcome: receipt.outcome, evidence: receipt.evidence as Prisma.InputJsonValue,
+        evidenceHash: receipt.evidenceHash, idempotencyHash: receipt.idempotencyHash,
+      } });
+    }
+  }
+  assert.ok(await getEngagementDossierReadAccess(db, actorA, dossier.id));
   assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
 });

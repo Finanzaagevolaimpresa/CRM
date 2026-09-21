@@ -5,7 +5,7 @@ import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table } from '@/co
 import { requirePermission } from '@/lib/auth';
 import { canViewClient, canViewClientContext } from '@/lib/access-control';
 import { prisma } from '@/lib/prisma';
-import { getClientDossierReadAccess } from '@/lib/read-access';
+import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 
 export default async function Page() {
   const session = await requirePermission('dossier.read');
@@ -18,8 +18,8 @@ export default async function Page() {
   const clientsById = new Map(clients.map((client) => [client.id, client]));
   const projectsById = new Map(projects.map((project) => [project.id, { ...project, client: clientsById.get(project.clientId) ?? null }]));
   const servicesById = new Map(services.map((service) => [service.id, { ...service, client: clientsById.get(service.clientId) ?? null, project: service.projectId ? projectsById.get(service.projectId) ?? null : null }]));
-  const visibleEngagementIds = new Set((await Promise.all(dossiers.filter((dossier) => dossier.practiceReadinessId)
-    .map(async (dossier) => (await getClientDossierReadAccess(session, dossier.id))?.dossier.id))).filter(Boolean));
+  const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
+    dossiers.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
   const visibleDossiers = dossiers.filter((dossier) => {
     if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
     const client = clientsById.get(dossier.clientId);

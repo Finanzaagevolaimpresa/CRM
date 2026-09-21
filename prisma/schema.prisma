@@ -886,6 +886,9 @@ model PreAnalysis {
   approvedAt               DateTime?
   createdAt                DateTime     @default(now())
   updatedAt                DateTime     @updatedAt
+  engagementDossiers ClientDossier[]
+  engagementDossierVersions EngagementDossierVersion[]
+
 }
 
 model Dossier {
@@ -933,6 +936,15 @@ model ClientDossier {
   serviceRevisionId  String?           @db.Uuid
   currentVersionId   String?           @unique @db.Uuid
   approvedVersionId  String?           @db.Uuid
+  practiceReadiness PracticeReadiness? @relation(fields: [practiceReadinessId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  preAnalysis PreAnalysis? @relation(fields: [preAnalysisId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  serviceRevision ServiceCatalogRevision? @relation(fields: [serviceRevisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentVersion EngagementDossierVersion? @relation("DossierCurrentVersion", fields: [currentVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  approvedVersion EngagementDossierVersion? @relation("DossierApprovedVersion", fields: [approvedVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  versions EngagementDossierVersion[] @relation("DossierVersions")
+  versionReviews EngagementDossierReview[]
+  versionExports EngagementDossierExport[]
+  deliveryAuthorizations EngagementDossierDeliveryAuthorization[]
 
   @@index([clientId])
   @@index([clientServiceId])
@@ -955,6 +967,17 @@ model EngagementDossierVersion {
   materialSnapshot      Json
   createdById           String
   createdAt             DateTime @default(now()) @db.Timestamptz(3)
+  dossier ClientDossier @relation("DossierVersions", fields: [dossierId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentForDossier ClientDossier? @relation("DossierCurrentVersion")
+  approvedForDossiers ClientDossier[] @relation("DossierApprovedVersion")
+  practiceReadiness PracticeReadiness @relation(fields: [practiceReadinessId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  acceptedOfferRevision PracticeOfferRevision @relation(fields: [acceptedOfferRevisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  serviceRevision ServiceCatalogRevision @relation(fields: [serviceRevisionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  preAnalysis PreAnalysis @relation(fields: [preAnalysisId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  reviews EngagementDossierReview[]
+  exports EngagementDossierExport[]
+  deliveryAuthorizations EngagementDossierDeliveryAuthorization[]
+
   @@unique([dossierId, version])
   @@index([practiceReadinessId, createdAt])
   @@index([contentHash])
@@ -969,6 +992,9 @@ model EngagementDossierReview {
   note        String   @db.VarChar(2000)
   decidedById String
   decidedAt   DateTime @default(now()) @db.Timestamptz(3)
+  dossier ClientDossier @relation(fields: [dossierId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version EngagementDossierVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
   @@unique([versionId, decision])
   @@index([dossierId, decidedAt])
 }
@@ -982,6 +1008,9 @@ model EngagementDossierExport {
   artifactHash String   @db.Char(64)
   exportedById String
   exportedAt   DateTime @default(now()) @db.Timestamptz(3)
+  dossier ClientDossier @relation(fields: [dossierId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version EngagementDossierVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
   @@index([dossierId, exportedAt])
   @@index([versionId, format])
 }
@@ -997,6 +1026,10 @@ model EngagementDossierDeliveryAuthorization {
   authorizedById  String
   authorizedAt    DateTime @default(now()) @db.Timestamptz(3)
   revokedAt       DateTime? @db.Timestamptz(3)
+  dossier ClientDossier @relation(fields: [dossierId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version EngagementDossierVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  receipt EngagementDossierDeliveryReceipt?
+
   @@index([dossierId, authorizedAt])
 }
 
@@ -1009,6 +1042,8 @@ model EngagementDossierDeliveryReceipt {
   idempotencyHash   String   @unique @db.Char(64)
   recordedById      String
   recordedAt        DateTime @default(now()) @db.Timestamptz(3)
+  authorization EngagementDossierDeliveryAuthorization @relation(fields: [authorizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
 }
 
 model Contract {
@@ -1904,6 +1939,8 @@ model ServiceCatalogRevision {
   retiredAt                 DateTime?
   createdAt                 DateTime                     @default(now())
   serviceCatalog            ServiceCatalog               @relation(fields: [serviceCatalogId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  engagementDossiers ClientDossier[]
+  engagementDossierVersions EngagementDossierVersion[]
 
   @@unique([serviceCatalogId, version], map: "ServiceCatalogRevision_service_version_key")
   @@index([status, validFrom, validUntil], map: "ServiceCatalogRevision_status_validity_idx")
@@ -2680,6 +2717,9 @@ model PracticeReadiness {
   materialAttestations  PracticeMaterialAttestation[]
   formalizations        PracticeFormalization[] @relation("PracticeFormalizationHistory")
   currentFormalization  PracticeFormalization? @relation("CurrentPracticeFormalization", fields: [currentFormalizationId], references: [id], onDelete: Restrict)
+  engagementDossier ClientDossier?
+  engagementDossierVersions EngagementDossierVersion[]
+
   @@index([clientId, projectId, createdAt], map: "PracticeReadiness_context_idx")
 }
 model PracticeFormalization {
@@ -2725,6 +2765,8 @@ model PracticeOfferRevision {
   proposedById String
   acceptance PracticeOfferAcceptance?
   formalizations PracticeFormalization[]
+  engagementDossierVersions EngagementDossierVersion[]
+
   @@unique([commercialOfferId, revision])
   @@index([clientId, projectId, proposedAt])
 }

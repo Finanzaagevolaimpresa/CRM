@@ -25,6 +25,9 @@ L'incremento F07 collega una `PracticeReadiness` già avviata, la revisione di s
 | Percorsi legacy e contenuto esportato | POST browser con ID manipolato verso le azioni generiche rifiutati senza effetti; hash dei byte Markdown/DOCX confrontato con il record di export; XML DOCX verificato dopo modifica anagrafica: solo titolo e contenuto approvati, senza dati cliente correnti |
 | Indice e orario della ricevuta | indice privo di titolo/link dopo riservatezza, archivio o sessione non canonica; browser Europe/Rome contro server UTC con verifica dell’istante e replay |
 | UI desktop/mobile | griglie responsive e form nel percorso pratica/dossier esistente |
+| Permessi di creazione | lettura e scrittura richieste prima della query delle preanalisi; prova browser write=true/read=false senza sintesi o ID nella risposta |
+| Integrità ricevute e liste | hash di evidenza ed esito ricontrollati su storico e replay; lista verificata con un solo lock canonico e una transazione, senza concorrenti per riga |
+| Coerenza Prisma/SQL | tutte le 17 FK della migrazione47 dichiarate anche nel datamodel; diff reale DB→schema verificato senza applicarlo, nessuna rimozione delle FK del dossier |
 
 ## Migrazione e lifecycle
 
@@ -41,3 +44,5 @@ Il primo commit della PR riproduce esattamente il tree Cloud `2a090712ddc365e14b
 ## Limiti
 
 Nessun invio email, provider, worker, AI reale, dato cliente o accesso produzione. I test usano esclusivamente destinatari e ricevute marcati sintetici. Le roadmap Governance citate dal mandato non erano leggibili dall'ambiente (HTTP 401); questa guida deriva dai requisiti trasmessi e dal sorgente CRM verificato.
+
+Ogni autorizzazione ammette un unico esito immutabile. Un nuovo tentativo dopo `FAILED` con la stessa versione e gli stessi destinatari richiede un'evoluzione esplicita del modello dei tentativi; non modificare artificiosamente i destinatari per aggirare il vincolo. Questa evoluzione è backlog separato, riconosciuto non bloccante dalla revisione indipendente.

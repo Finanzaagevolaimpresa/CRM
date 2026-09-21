@@ -13,7 +13,8 @@ import Link from 'next/link';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { canEditProject, canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
-import { getClientDossierReadAccess, listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
+import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
+import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
 
 const serviceSections = [
@@ -172,8 +173,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     }
     return canViewClientContext(session, { clientId: dossier.clientId, client, project });
   });
-  const visibleEngagementIds = new Set((await Promise.all(clientDossierRows.filter((row) => row.practiceReadinessId)
-    .map(async (row) => (await getClientDossierReadAccess(session, row.id))?.dossier.id))).filter(Boolean));
+  const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
+    clientDossierRows.filter((row) => row.practiceReadinessId).map((row) => row.id));
   const clientDossiers = clientDossierRows.filter((dossier) => {
     if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
     const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
