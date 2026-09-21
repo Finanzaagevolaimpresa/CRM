@@ -1944,6 +1944,23 @@ test("dossier access, export and delivery recheck current authority and roll bac
     await assert.rejects(recordEngagementDossierDelivery(db, actorA, receiptInput), deniedDossier);
     assert.deepEqual(await snapshot(), before);
   } finally { await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: document.containsSensitiveData } }); }
+  await db.document.update({ where: { id: document.id }, data: { deletedAt: new Date() } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    assert.equal((await getVisibleEngagementDossierIds(db, actorA, [dossier.id])).size, 0);
+    assert.deepEqual(await snapshot(), before);
+  } finally { await db.document.update({ where: { id: document.id }, data: { deletedAt: document.deletedAt } }); }
+  const revokedDownload = await db.userPermissionOverride.create({ data: {
+    userId: ids.userA, permission: "document.download", allowed: false,
+  } });
+  try {
+    before = await snapshot();
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    assert.equal((await getVisibleEngagementDossierIds(db, actorA, [dossier.id])).size, 0);
+    assert.deepEqual(await snapshot(), before);
+  } finally { await db.userPermissionOverride.delete({ where: { id: revokedDownload.id } }); }
+  assert.deepEqual([...await getVisibleEngagementDossierIds(db, actorA, [dossier.id])], [dossier.id]);
   const service = await db.clientService.findUniqueOrThrow({ where: { id: dossier.clientServiceId! } });
   await db.client.update({ where: { id: a.client.id }, data: { consultantId: ids.userB } });
   await db.project.update({ where: { id: a.project.id }, data: { consultantId: ids.userB } });

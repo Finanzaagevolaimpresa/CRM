@@ -28,6 +28,18 @@ L'incremento F07 collega una `PracticeReadiness` già avviata, la revisione di s
 | Permessi di creazione | lettura e scrittura richieste prima della query delle preanalisi; prova browser write=true/read=false senza sintesi o ID nella risposta |
 | Integrità ricevute e liste | hash di evidenza ed esito ricontrollati su storico e replay; lista verificata con un solo lock canonico e una transazione, senza concorrenti per riga |
 | Coerenza Prisma/SQL | tutte le 17 FK della migrazione47 dichiarate anche nel datamodel; diff reale DB→schema verificato senza applicarlo, nessuna rimozione delle FK del dossier |
+| Ricerca e report | stessi controlli canonici prima di titolo, snippet, stato, collegamento e conteggi; legacy e ordinamento conservati; PostgreSQL/browser con dinieghi correnti e controprove sulle vecchie implementazioni |
+
+## Lettori di ClientDossier verificati nel seguito R01
+
+- `src/app/search/page.tsx`: aggiunto il controllo batch canonico; limite 12 per categoria e ordinamento `updatedAt desc` conservati.
+- `src/lib/operational-report.ts`: aggiunto lo stesso controllo prima della composizione delle righe, con limite 10 invariato. Copre Markdown e DOCX di `/clients/[id]/operational-report` e `/technical-office/practices/[id]/operational-report`.
+- `/client-dossiers` e `/clients/[id]`: già protetti dal batch canonico.
+- Dettaglio e due export `/client-dossiers/[id]`: già passano da `getClientDossierReadAccess`, che delega il dossier versionato al controllo completo.
+- Le letture nelle azioni di conversione AI passano dal loader canonico prima del riuso; aggiornamento/approvazione/archiviazione/export generici rifiutano il dossier versionato.
+- Dashboard e `/dossiers` usano il distinto modello legacy `Dossier`; non espongono righe `ClientDossier`. Nessun altro lettore di tale modello trovato in `src`.
+
+La regressione browser segue il percorso completo già esistente e usa il relativo dossier PostgreSQL sintetico. Un termine nuovo distingue due risultati iniziali (versionato e legacy): dopo riservatezza, cancellazione logica del materiale, revoca di `document.download` o archiviazione del dossier resta solo il legacy, incluso nel conteggio. Si controllano risposta HTTP, DOM e quattro report, poi il ripristino positivo e il diniego della sessione non canonica. Due copie temporanee CI sostituiscono separatamente solo ricerca o report con il sorgente di `c89b8067`: il test deve fallire precisamente sull'asserzione di esposizione attesa. Un errore infrastrutturale o diverso non vale come rilevazione.
 
 ## Migrazione e lifecycle
 

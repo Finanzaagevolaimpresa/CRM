@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import { signSessionCookie } from "../../src/lib/session";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import { PrismaClient } from "@prisma/client";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
 
-const app = "http://127.0.0.1:3000";
+const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN ?? "http://127.0.0.1:3000";
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
 const evidenceDir = process.env.PRACTICE_READINESS_BROWSER_EVIDENCE_DIR!;
 const db = new PrismaClient();
@@ -153,6 +153,7 @@ async function readinessFootprint() {
 }
 
 test.beforeAll(async () => {
+  expect(new URL(app).hostname).toBe("127.0.0.1");
   mkdirSync(evidenceDir, { recursive: true });
   await assertSyntheticCatalogDatabase(db);
 });
@@ -977,4 +978,138 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   );
   await reader.close();
   await context.close();
+});
++
+// The preceding full flow creates the synthetic dossier. CI also reruns only
+// this test against each pre-fix reader after that flow, using the same guarded DB.
+test("versioned dossier listings follow current detail access", async ({ page, browser }) => {
+  currentPhase = "DOSSIER_LISTING_VISIBILITY";
+  await login(page, "readiness-owner@invalid.test");
+  const initial = await db.clientDossier.findFirstOrThrow({
+    where: { clientId: "readiness-browser-client-standard", practiceReadinessId: { not: null } },
+  });
+  const query = `R4Find-${randomUUID()}`;
+  const title = `Dossier versionato ${query}`;
+  const content = `Anteprima riservata ${query}`;
+  const detailUrl = `${app}/client-dossiers/${initial.id}`;
+  await page.goto(detailUrl);
+  const revisionForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Salva come nuova versione" }) });
+  await revisionForm.locator('[name="title"]').fill(title);
+  await revisionForm.locator('[name="content"]').fill(content);
+  await submitDossierAction(page, page.getByRole("button", { name: "Salva come nuova versione" }), "DOSSIER_VISIBILITY_FIXTURE");
+  const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: initial.id } });
+  const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: dossier.currentVersionId! } });
+  expect(version.title).toBe(title);
+  expect(version.content).toBe(content);
+  const materialId = (version.materialSnapshot as Array<{ documentId: string | null }>).find((row) => row.documentId)?.documentId;
+  expect(materialId).toBeTruthy();
+  const material = await db.document.findUniqueOrThrow({ where: { id: materialId! } });
+  const legacy = await db.clientDossier.create({ data: {
+    clientId: dossier.clientId, projectId: dossier.projectId, clientServiceId: dossier.clientServiceId,
+    title: `Dossier legacy ${query}`, content: `Anteprima legacy ${query}`, type: "dossier_cliente",
+    createdById: "readiness-browser-owner", updatedAt: new Date(dossier.updatedAt.getTime() + 10_000),
+  } });
+  const technicalPractice = await db.technicalPractice.create({ data: {
+    clientId: dossier.clientId, projectId: dossier.projectId, clientServiceId: dossier.clientServiceId,
+    title: "Pratica per verifica report dossier", practiceType: "Verifica sintetica", targetEntity: "Banco sintetico",
+    technicalOwnerId: "readiness-browser-owner", createdById: "readiness-browser-owner",
+  } });
+  const searchUrl = `${app}/search?q=${encodeURIComponent(query)}`;
+  const reportPaths = [
+    `/clients/${dossier.clientId}/operational-report`,
+    `/technical-office/practices/${technicalPractice.id}/operational-report`,
+  ];
+  const auditBeforeReads = await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: dossier.id } });
+
+  async function assertVisibility(visible: boolean, phase: string) {
+    const directDetail = await page.request.get(detailUrl);
+    const detailHtml = await directDetail.text();
+    if (visible) {
+      expect(directDetail.status()).toBe(200);
+      expect(detailHtml).toContain(title);
+      expect(detailHtml).toContain(content);
+    } else {
+      expect([200, 404]).toContain(directDetail.status());
+      expect(detailHtml).toContain("Bozza dossier non trovata");
+      expect(detailHtml).not.toContain(title);
+      expect(detailHtml).not.toContain(content);
+    }
+    await page.goto(detailUrl);
+    await expect(visible
+      ? page.getByRole("heading", { name: title, exact: true })
+      : page.getByText("Bozza dossier non trovata", { exact: true })).toBeVisible();
+
+    const response = await page.request.get(searchUrl);
+    expect(response.status()).toBe(200);
+    const html = await response.text();
+    expect(html).toContain(legacy.title);
+    expect(html).toContain(legacy.content);
+    expect(html).toContain(`/client-dossiers/${legacy.id}`);
+    if (visible) {
+      expect(html).toContain(title);
+      expect(html).toContain(content);
+      expect(html).toContain(`/client-dossiers/${dossier.id}`);
+    } else {
+      // This marker is checked by the old-source counterfactual: a failure
+      // elsewhere cannot be mistaken for successful defect detection.
+      expect(html, `DOSSIER_SEARCH_DENIAL_${phase}`).not.toContain(title);
+      expect(html).not.toContain(content);
+      expect(html).not.toContain(dossier.id);
+    }
+    await page.goto(searchUrl);
+    await expect(page.getByText(`Dossier (${visible ? 2 : 1})`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`${visible ? 2 : 1} risultati per “${query}”`, { exact: true })).toBeVisible();
+    const links = await page.locator('a[href^="/client-dossiers/"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")));
+    expect(links).toEqual(visible
+      ? [`/client-dossiers/${legacy.id}`, `/client-dossiers/${dossier.id}`]
+      : [`/client-dossiers/${legacy.id}`]);
+    for (const path of reportPaths) for (const suffix of ["", "/docx"]) {
+      const report = await page.request.get(`${app}${path}${suffix}`);
+      expect(report.status()).toBe(200);
+      const rendered = suffix ? docxDocumentXml(await report.body()) : await report.text();
+      expect(rendered).toContain(legacy.title);
+      if (visible) expect(rendered).toContain(title);
+      else expect(rendered, `DOSSIER_REPORT_DENIAL_${phase}`).not.toContain(title);
+    }
+  }
+
+  await assertVisibility(true, "initial");
+  for (const [phase, change] of [
+    ["sensitive", { containsSensitiveData: true }],
+    ["deleted", { deletedAt: new Date() }],
+  ] as const) {
+    await db.document.update({ where: { id: material.id }, data: change });
+    try { await assertVisibility(false, phase); }
+    finally { await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: material.containsSensitiveData, deletedAt: material.deletedAt } }); }
+  }
+  const override = await db.userPermissionOverride.create({ data: {
+    userId: "readiness-browser-owner", permission: "document.download", allowed: false,
+  } });
+  try { await assertVisibility(false, "permission_revoked"); }
+  finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "archiviata" } });
+  try { await assertVisibility(false, "archived"); }
+  finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: dossier.status } }); }
+  await assertVisibility(true, "restored");
+  expect(await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: dossier.id } })).toBe(auditBeforeReads);
+
+  const nonCanonical = await browser.newContext();
+  await nonCanonical.addCookies([{
+    name: process.env.AUTH_COOKIE_NAME!, url: app,
+    value: await signSessionCookie({ userId: "readiness-browser-owner", expiresAt: Math.floor(Date.now() / 1000) + 3600 }),
+  }]);
+  try {
+    for (const url of [searchUrl, ...reportPaths.flatMap((path) => [`${app}${path}`, `${app}${path}/docx`])]) {
+      const denied = await nonCanonical.request.get(url, { maxRedirects: 0 });
+      expect([303, 307]).toContain(denied.status());
+      expect(new URL(denied.headers().location, app).pathname).toBe("/login");
+      expect(await denied.text()).not.toContain(title);
+      expect(await denied.text()).not.toContain(dossier.id);
+    }
+  } finally { await nonCanonical.close(); }
+  writeFileSync(join(evidenceDir, "dossier-listing-visibility.json"), JSON.stringify({
+    synthetic: true, search: true, clientReports: ["markdown", "docx"], practiceReports: ["markdown", "docx"],
+    deniedStates: ["sensitive", "deleted", "permission_revoked", "archived"], nonCanonicalDenied: true,
+    legacyPreserved: true, searchCounts: [2, 1, 2], updatedAtOrderPreserved: true, restoredPositive: true,
+  }) + "\n", { mode: 0o600 });
 });
