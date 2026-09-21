@@ -3,34 +3,24 @@ set -euo pipefail
 
 test "${APP_ENV:-}" = test
 test "${PRACTICE_READINESS_BROWSER_CONFIRMED:-}" = 1
-candidate_root="$(git rev-parse --show-toplevel)"
 candidate_head="$(git rev-parse HEAD)"
 old_head=c89b80678bc3ad47a24a493b488537de95d13b56
 case "${1:-}" in
-  search) source_path=src/app/search/page.tsx; marker=DOSSIER_SEARCH_DENIAL_sensitive; port=3001 ;;
-  report) source_path=src/lib/operational-report.ts; marker=DOSSIER_REPORT_DENIAL_sensitive; port=3002 ;;
+  search) source_path=src/app/search/page.tsx; marker=DOSSIER_SEARCH_DENIAL_sensitive ;;
+  report) source_path=src/lib/operational-report.ts; marker=DOSSIER_REPORT_DENIAL_sensitive ;;
   *) echo "Expected search or report" >&2; exit 2 ;;
 esac
 evidence="$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR/counterfactual-$1"
 mkdir -p "$evidence"
-probe="$(mktemp -d "$RUNNER_TEMP/dossier-counterfactual-$1.XXXXXX")"
-git archive HEAD | tar -xf - -C "$probe"
-cp -a "$candidate_root/node_modules" "$probe/node_modules"
-git show "$old_head:$source_path" > "$probe/$source_path"
-origin="http://127.0.0.1:$port"
-cd "$probe"
-APP_ORIGIN="$origin" node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port "$port" > "$evidence/app.log" 2>&1 &
-app_pid=$!
-trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
-ready=0
-for attempt in $(seq 1 60); do
-  if curl --fail --silent --max-time 2 "$origin/api/health" >/dev/null; then ready=1; break; fi
-  kill -0 "$app_pid"
-  sleep 1
-done
-test "$ready" = 1
+test "$APP_ORIGIN" = http://127.0.0.1:3000
+curl --fail --silent --max-time 5 "$APP_ORIGIN/api/health" >/dev/null
+git diff --quiet -- "$source_path"
+# Keep the already-qualified dev server alive. Next recompiles this one reader
+# on request; restore its exact committed bytes even if the counterproof fails.
+trap 'git show "$candidate_head:$source_path" > "$source_path"' EXIT
+git show "$old_head:$source_path" > "$source_path"
 set +e
-PRACTICE_READINESS_BROWSER_ORIGIN="$origin" PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence" APP_ORIGIN="$origin" \
+PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence" \
   PLAYWRIGHT_JSON_OUTPUT_NAME="$evidence/playwright.json" \
   npx playwright test --config tests/practice-readiness-browser/playwright.config.ts \
   --grep '^versioned dossier listings follow current detail access$' --reporter=line,json \

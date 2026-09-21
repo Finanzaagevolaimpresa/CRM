@@ -195,11 +195,10 @@ jobs:
           head_sha="$(git rev-parse HEAD)"
           tree_sha="$(git rev-parse HEAD^{tree})"
           printf '{"phase":"complete","synthetic":true,"head":"%s","tree":"%s","schema":47,"tests":%s,"pass":%s,"fail":%s,"skipped":%s,"cases":%s}\n' "$head_sha" "$tree_sha" "$expected" "$expected" "$unexpected" "$skipped" "$scenarios" > "$evidence/status.json"
-      - name: Prove the visibility regression catches the previous search and report readers
-        shell: bash
-        run: |
+          # Counterproofs run before the EXIT trap stops this dev server.
           bash scripts/verify-dossier-listing-regression.sh search
           bash scripts/verify-dossier-listing-regression.sh report
+          git diff --exit-code -- src/app/search/page.tsx src/lib/operational-report.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
