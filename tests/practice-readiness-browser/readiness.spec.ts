@@ -1097,7 +1097,7 @@ test("versioned dossier listings follow current detail access", async ({ page, b
   }
   await db.clientDossier.update({ where: { id: dossier.id }, data: { status: "archiviata" } });
   try { await assertVisibility(false, "archived"); }
-  finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: dossier.status } }); }
+  finally { await db.clientDossier.update({ where: { id: dossier.id }, data: { status: dossier.status, updatedAt: dossier.updatedAt } }); }
   await assertVisibility(true, "restored");
   expect(await db.auditLog.count({ where: { entityType: "ClientDossier", entityId: dossier.id } })).toBe(auditBeforeReads);
 
