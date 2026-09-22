@@ -52,9 +52,11 @@ printf '::add-mask::%s\n' "$db_password" "$password" "$secret"
 docker run -d --name "$pg" --network "$prefix" --network-alias postgres --label fai.synthetic=r05 \
   -p 127.0.0.1:15432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB=fai_crm_test postgres:16 >/dev/null
 for attempt in $(seq 1 60); do
-  if docker exec "$pg" pg_isready -U postgres -d fai_crm_test >/dev/null 2>&1; then break; fi
+  # The temporary init server accepts Unix sockets before the final TCP listener exists.
+  if docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d fai_crm_test >/dev/null 2>&1; then break; fi
   sleep 1
 done
+docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d fai_crm_test >/dev/null
 docker exec "$pg" psql -U postgres -d fai_crm_test -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'" >/dev/null
 export DATABASE_URL="postgresql://postgres:$db_password@127.0.0.1:15432/fai_crm_test?schema=public"
 export APP_ENV=test NODE_ENV=development RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1

@@ -6,8 +6,8 @@ import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { maybeEnrollManualCommercialLead } from './commercial-lead-inbox';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
-import { hasPermission } from './permission-evaluator';
 import { engagementFeatureEnabled } from './internal-engagement-mode';
+import { hasPermission } from './permission-evaluator';
 import { FAI_SERVICE_CATALOG_V2 } from './service-catalog-v2';
 import { assertSyntheticCatalogDatabase, catalogRevisionIsSelectable } from './service-catalog-v2-persistence';
 
@@ -29,8 +29,8 @@ export const controlledIntakeSchema = z.object({
 }).superRefine((value, context) => {
   if (value.channel === 'WPFORMS_1098' && (!value.digitalProjectType || !value.objective || !value.functions)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Brief digitale incompleto.' });
   if (value.channel === 'WPFORMS_1485' && !value.administrativeRequest) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Richiesta amministrativa obbligatoria.' });
-  if (value.commercialOfferId && value.contractId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Un solo riferimento verificato Ã¨ ammesso.' });
-  if (value.channel !== 'WPFORMS_1485' && (value.commercialOfferId || value.contractId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Il riferimento verificato Ã¨ ammesso solo per WPForms 1485.' });
+  if (value.commercialOfferId && value.contractId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Un solo riferimento verificato è ammesso.' });
+  if (value.channel !== 'WPFORMS_1485' && (value.commercialOfferId || value.contractId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Il riferimento verificato è ammesso solo per WPForms 1485.' });
 });
 export type ControlledIntakeInput = z.infer<typeof controlledIntakeSchema>;
 export const controlledDuplicateDecisionSchema = z.object({
