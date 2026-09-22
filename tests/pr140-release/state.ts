@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
-import { assertSyntheticCatalogDatabase, prepareInternalServiceCatalogV2 } from '../../src/lib/service-catalog-v2-persistence';
+import { assertSyntheticCatalogDatabase, CatalogV2PreparationError, prepareInternalServiceCatalogV2 } from '../../src/lib/service-catalog-v2-persistence';
 import { createControlledIntake, ControlledIntakeError } from '../../src/lib/controlled-intake';
 import { createPracticeReadiness, PracticeReadinessError } from '../../src/lib/practice-readiness';
 
@@ -55,6 +55,7 @@ async function main() {
     await db.internalSession.create({ data: { id: sessionId, userId: 'release-owner', tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 600_000) } });
     const actor = { userId: 'release-owner', sessionId, expiresAt: Math.floor(Date.now() / 1000) + 600, role: 'admin' as const, active: true, permissionOverrides: [] };
     const before = await db.serviceCatalogRevision.count();
+    const denied = (e: unknown) => e instanceof CatalogV2PreparationError && e.message === 'INTERNAL_CATALOG_PREPARATION_DENIED';
     try {
       process.env.PRACTICE_READINESS_MODE = 'internal';
       process.env.CONTROLLED_INTAKE_MODE = 'internal';
@@ -62,7 +63,7 @@ async function main() {
       delete process.env.INTERNAL_ENGAGEMENT_MODE;
       await assert.rejects(createPracticeReadiness(db, actor, {}), (e: unknown) => e instanceof PracticeReadinessError && e.code === 'DISABLED');
       await assert.rejects(createControlledIntake(db, actor, {}), (e: unknown) => e instanceof ControlledIntakeError && e.code === 'DISABLED');
-      await assert.rejects(prepareInternalServiceCatalogV2(db, actor));
+      await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
       process.env.INTERNAL_ENGAGEMENT_MODE = 'controlled';
       process.env.INTERNAL_SESSION_MODE = 'legacy';
       await assert.rejects(createPracticeReadiness(db, actor, {}), (e: unknown) => e instanceof PracticeReadinessError && e.code === 'DISABLED');
@@ -71,13 +72,16 @@ async function main() {
       assert.equal((await prepareInternalServiceCatalogV2(db, actor)).created, 0);
       assert.equal(await db.serviceCatalogRevision.count(), before);
       await db.user.update({ where: { id: actor.userId }, data: { role: 'revisore' } });
-      await assert.rejects(prepareInternalServiceCatalogV2(db, actor));
-      await db.user.update({ where: { id: actor.userId }, data: { role: 'admin' } });
+      await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
+      // Admin has unconditional application permissions by policy. Test an
+      // override on direzione while the claimed snapshot still says admin.
+      await db.user.update({ where: { id: actor.userId }, data: { role: 'direzione' } });
+      assert.equal((await prepareInternalServiceCatalogV2(db, actor)).created, 0);
       const override = await db.userPermissionOverride.create({ data: { userId: actor.userId, permission: 'service.write', allowed: false } });
-      await assert.rejects(prepareInternalServiceCatalogV2(db, actor));
+      await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
       await db.userPermissionOverride.delete({ where: { id: override.id } });
       await db.internalSession.update({ where: { id: sessionId }, data: { revokedAt: new Date(), revokedReason: 'SYNTHETIC_DENIAL_CHECK' } });
-      await assert.rejects(prepareInternalServiceCatalogV2(db, actor));
+      await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
       assert.equal(await db.serviceCatalogRevision.count(), before);
       process.stdout.write(JSON.stringify({ synthetic: true, defaultOff: true, legacyDenied: true, canonicalRole: true, permissionRevocation: true, sessionRevocation: true, catalogIdempotent: true }) + '\n');
     } finally {
