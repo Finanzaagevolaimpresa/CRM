@@ -72,7 +72,7 @@ pg_forwarder=$!
 sleep 1
 kill -0 "$pg_forwarder"
 export DATABASE_URL="postgresql://postgres:$db_password@127.0.0.1:15432/fai_crm_test?schema=public"
-export APP_ENV=test NODE_ENV=development RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1
+export APP_ENV=test NODE_ENV=development TZ=UTC RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1
 export AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1
 export AUTH_SECRET="$secret" AUTH_COOKIE_NAME=fai_r05_synthetic_session
 export PRACTICE_READINESS_BROWSER_PASSWORD="$password" PRACTICE_READINESS_BROWSER_CONFIRMED=1
