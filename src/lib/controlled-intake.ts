@@ -7,6 +7,7 @@ import { canonicalSha256 } from './canonical-json';
 import { maybeEnrollManualCommercialLead } from './commercial-lead-inbox';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
+import { engagementFeatureEnabled } from './internal-engagement-mode';
 import { FAI_SERVICE_CATALOG_V2 } from './service-catalog-v2';
 import { assertSyntheticCatalogDatabase, catalogRevisionIsSelectable } from './service-catalog-v2-persistence';
 
@@ -28,8 +29,8 @@ export const controlledIntakeSchema = z.object({
 }).superRefine((value, context) => {
   if (value.channel === 'WPFORMS_1098' && (!value.digitalProjectType || !value.objective || !value.functions)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Brief digitale incompleto.' });
   if (value.channel === 'WPFORMS_1485' && !value.administrativeRequest) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Richiesta amministrativa obbligatoria.' });
-  if (value.commercialOfferId && value.contractId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Un solo riferimento verificato è ammesso.' });
-  if (value.channel !== 'WPFORMS_1485' && (value.commercialOfferId || value.contractId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Il riferimento verificato è ammesso solo per WPForms 1485.' });
+  if (value.commercialOfferId && value.contractId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Un solo riferimento verificato Ã¨ ammesso.' });
+  if (value.channel !== 'WPFORMS_1485' && (value.commercialOfferId || value.contractId)) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Il riferimento verificato Ã¨ ammesso solo per WPForms 1485.' });
 });
 export type ControlledIntakeInput = z.infer<typeof controlledIntakeSchema>;
 export const controlledDuplicateDecisionSchema = z.object({
@@ -56,7 +57,11 @@ async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) 
 }
 
 function requireEnabled() {
-  if (process.env.CONTROLLED_INTAKE_MODE !== 'synthetic') throw new ControlledIntakeError('DISABLED');
+  if (!engagementFeatureEnabled(process.env.CONTROLLED_INTAKE_MODE)) throw new ControlledIntakeError('DISABLED');
+}
+async function assertControlledIntakeDatabase(db: Db) {
+  requireEnabled();
+  if (process.env.CONTROLLED_INTAKE_MODE === 'synthetic') await assertSyntheticCatalogDatabase(db);
 }
 
 async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: string | null, digitalProjectType: string | null, now: Date) {
@@ -82,7 +87,7 @@ async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: str
 
 export async function createControlledIntake(db: Db, claimed: AuthSession, raw: unknown, faultAfterLead = false) {
   requireEnabled();
-  const input = controlledIntakeSchema.parse(raw); await assertSyntheticCatalogDatabase(db);
+  const input = controlledIntakeSchema.parse(raw); await assertControlledIntakeDatabase(db);
   const payloadHash = canonicalSha256(input);
   const run = () => db.$transaction(async (tx) => {
     const actor = await currentActor(tx, claimed);
@@ -133,7 +138,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
 export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSession, raw: unknown) {
   requireEnabled();
   const input = controlledDuplicateDecisionSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertControlledIntakeDatabase(db);
   try {
     return await db.$transaction(async (tx) => {
       const actor = await currentActor(tx, claimed);
@@ -177,7 +182,7 @@ export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSessi
 export async function linkAuthenticated1265Projection(db: Db, claimed: AuthSession, raw: unknown) {
   requireEnabled();
   const input = authenticated1265LinkSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertControlledIntakeDatabase(db);
   return db.$transaction(async (tx) => {
     const actor = await currentActor(tx, claimed);
     const projection = await tx.leadProjectionLedger.findUnique({

@@ -874,7 +874,10 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     // A streamed RSC response can carry the server error after HTTP 200 headers.
     // Assert the manipulated target and explicit denial, not only transport status.
     expect([200, 500]).toContain(response.status());
-    expect(await response.text()).toContain(buttonName === "Salva modifiche"
+    const deniedBody = await response.text();
+    if (process.env.PRACTICE_READINESS_PACKAGED === "1")
+      expect(deniedBody).toMatch(/"digest":/); // Production deliberately masks server exception messages.
+    else expect(deniedBody).toContain(buttonName === "Salva modifiche"
       ? "Usa le azioni della versione esatta del dossier."
       : "Usa la revisione della versione esatta del dossier.");
     expect(await db.clientDossier.findUniqueOrThrow({ where: { id: protectedDossier.id } })).toEqual(before);

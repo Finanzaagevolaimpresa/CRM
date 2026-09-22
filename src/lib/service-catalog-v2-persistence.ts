@@ -1,4 +1,8 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
+import type { AuthSession } from './auth';
+import { internalEngagementEnabled } from './internal-engagement-mode';
+import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { hasPermission } from './permission-evaluator';
 import { canonicalJson } from './canonical-json';
 import { FAI_SERVICE_CATALOG, serviceCatalogRevisionHash } from './service-catalog';
 import { FAI_SERVICE_CATALOG_V2, catalogV2RevisionHash, catalogV2Storage, type CatalogV2Revision } from './service-catalog-v2';
@@ -56,7 +60,26 @@ export function catalogRevisionIsSelectable(
 
 export async function prepareServiceCatalogV2(db: Db, actorId: string | null = null) {
   await assertSyntheticCatalogDatabase(db);
+  return prepareCatalogRecords(db, actorId);
+}
+
+export async function prepareInternalServiceCatalogV2(db: Db, claimed: AuthSession) {
+  if (!internalEngagementEnabled() || !claimed.sessionId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(claimed.sessionId))
+    throw new CatalogV2PreparationError('INTERNAL_CATALOG_PREPARATION_DENIED');
+  return prepareCatalogRecords(db, null, claimed);
+}
+
+async function prepareCatalogRecords(db: Db, actorId: string | null, claimed?: AuthSession) {
   return db.$transaction(async (tx) => {
+    let preparationActorId = actorId;
+    if (claimed) {
+      const current = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
+      if (!current || !current.live || current.revokedAt || !current.active || current.deletedAt
+        || !['admin', 'direzione'].includes(current.role)
+        || !hasPermission(current, 'service.read') || !hasPermission(current, 'service.write'))
+        throw new CatalogV2PreparationError('INTERNAL_CATALOG_PREPARATION_DENIED');
+      preparationActorId = current.userId;
+    }
     const legacy = await tx.serviceCatalogRevision.findMany({ where: { version: 1 }, include: { serviceCatalog: true } });
     for (const definition of FAI_SERVICE_CATALOG) {
       const row = legacy.find(({ serviceCatalog }) => serviceCatalog.code === definition.code);
@@ -94,7 +117,7 @@ export async function prepareServiceCatalogV2(db: Db, actorId: string | null = n
       await tx.serviceCatalogRevision.create({ data: { serviceCatalogId: catalog.id, version: definition.revisionVersion, publicName: definition.name, shortDescription: definition.description, priceMode: definition.priceMode, netPrice: definition.netPriceCents === null ? null : new Prisma.Decimal(definition.netPriceCents).div(100), currency: 'EUR', vatRateBps: 2200, validFrom: new Date(definition.validFrom), termsVersion: definition.termsVersion, checkoutEnabled: false, autoClientDeliveryAllowed: false, autoExternalActionAllowed: false, operationalConditions: storage.operationalConditions, checklist: storage.checklist, status: 'PUBLISHED', contentHash: catalogV2RevisionHash(definition), publishedAt: new Date(definition.validFrom) } });
       created += 1;
     }
-    if (created) await tx.auditLog.create({ data: { actorId, event: 'service_catalog_v2_prepare', entityType: 'ServiceCatalogRevision', after: { catalogVersion: '2026-09-13-v2', createdRevisions: created } } });
+    if (created) await tx.auditLog.create({ data: { actorId: preparationActorId, event: 'service_catalog_v2_prepare', entityType: 'ServiceCatalogRevision', after: { catalogVersion: '2026-09-13-v2', createdRevisions: created } } });
     return { created, currentServices: FAI_SERVICE_CATALOG_V2.length };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
