@@ -350,8 +350,9 @@ test('fresh46 preserves exact N13/N14 provenance types, validated CHECK, correct
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 46);
-  assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.length, 47);
+  assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
   assert.equal(names[41], migration42Name);
   assert.equal(names[42], migration43Name);
   const fixture = await createFixture('fresh', names);
@@ -365,7 +366,7 @@ test('fresh46 preserves exact N13/N14 provenance types, validated CHECK, correct
       readMigrationRecord(client, migration43Name),
       readBusinessRows(client),
     ]);
-    assert.equal(await readFinishedMigrationCount(client), 46);
+    assert.equal(await readFinishedMigrationCount(client), 47);
     assert.deepEqual(physical.columns, [
       { name: 'formCode', type: 'character varying(120)', notNull: true },
       { name: 'formVersion', type: 'character varying(80)', notNull: true },
@@ -411,8 +412,9 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 46);
-  assert.equal(names.at(-1), '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.length, 47);
+  assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
+  assert.equal(names.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
   const fixture = await createFixture('upgrade', names.slice(0, 42));
   const leadId = 'n13-n14-upgrade-sentinel-lead';
   const itemId = '00000000-0000-4000-8000-000000430001';

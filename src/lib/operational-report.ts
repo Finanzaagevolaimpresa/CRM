@@ -3,6 +3,7 @@ import { hasPermission } from "./auth";
 import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewTechnicalPractice, isSensitiveDocument } from "./access-control";
 import { prisma } from "./prisma";
 import { listAccessibleAiOutputs, listAccessibleTasks } from "./read-access";
+import { getVisibleEngagementDossierIds } from "./engagement-dossier";
 
 const DISCLAIMER =
   "Documento interno di lavoro. Finanza Agevola Impresa S.r.l. non eroga finanziamenti, non promette contributi e non garantisce esiti o erogazioni. Offre consulenza tecnica, strategica e di orientamento.";
@@ -217,7 +218,10 @@ export async function buildOperationalReportMarkdown(
     project: item.projectId ? projectById.get(item.projectId) ?? null : null,
     clientService: item.clientServiceId ? serviceById.get(item.clientServiceId) ?? null : null,
   }));
+  const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
+    clientDossiers.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
   const visibleClientDossiers = clientDossiers.filter((dossier) => {
+    if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
     const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
     const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
     if ((dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;

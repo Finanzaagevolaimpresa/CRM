@@ -250,6 +250,15 @@ async function main() {
         operationalStatus: "nuova",
       },
     });
+    await db.preAnalysis.create({
+      data: {
+        id: `readiness-browser-preanalysis-${item.key}`,
+        clientId: client.id,
+        projectId: project.id,
+        internalSummary: `Preanalisi sintetica ${item.label}`,
+        scenarioA: "Scenario sintetico verificabile",
+      },
+    });
     assert.equal(await db.company.count({ where: { clientId: client.id } }), 0);
     assert.ok(intake.id && offer.id);
   }

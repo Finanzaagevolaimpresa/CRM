@@ -1191,6 +1191,7 @@ export async function updateClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierUpdateSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+  if (before.practiceReadinessId) throw new UserFacingActionError('Usa le azioni della versione esatta del dossier.');
   await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
   if (before.status === 'archiviata' && data.status !== 'archiviata') throw new UserFacingActionError('Un dossier archiviato non può essere riaperto dalla modifica generica.');
   const substantiveChange = before.title !== data.title || before.type !== data.type || before.content !== data.content;
@@ -1233,6 +1234,7 @@ export async function approveClientDossier(form: FormData) {
   const context = await getClientDossierReadAccess(s, data.id);
   if (!context) denyWriteAccess();
   const before = context.dossier;
+  if (before.practiceReadinessId) throw new UserFacingActionError('Usa la revisione della versione esatta del dossier.');
   if (before.status === 'archiviata') throw new UserFacingActionError('Un dossier archiviato non può essere approvato.');
   if (before.reviewedById && before.reviewedAt && before.status === 'revisionata') return before;
   if (before.createdById === s.userId || before.updatedById === s.userId) {
@@ -1269,6 +1271,7 @@ export async function archiveClientDossier(form: FormData) {
   const s = await requirePermission('dossier.write');
   const data = clientDossierIdSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
+  if (before.practiceReadinessId) throw new UserFacingActionError('L’archiviazione generica non è disponibile per un dossier versionato.');
   await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
   if (before.status === 'archiviata') return before;
   const now = nextConcurrencyTimestamp(before.updatedAt);
@@ -1293,6 +1296,7 @@ export async function archiveClientDossier(form: FormData) {
 export async function auditClientDossierExport(id: string, format: 'markdown' | 'docx' = 'markdown') {
   const s = await requirePermission('dossier.read');
   const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
+  if (dossier.practiceReadinessId) throw new UserFacingActionError('Usa l’esportazione della versione approvata del dossier.');
   await requireClientContextReadAccess(s, { clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId });
   await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format });
   return dossier;

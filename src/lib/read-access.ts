@@ -11,6 +11,7 @@ import { UserFacingActionError } from './action-errors';
 import type { AuthSession } from './auth';
 import { coreQueryCandidateLimit, normalizeCoreQueryLimit } from './core-query-policy';
 import { prisma } from './prisma';
+import { getEngagementDossierReadAccess } from './engagement-dossier';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
 const clientSelect = { id: true, salesOwnerId: true, consultantId: true } as const;
@@ -169,12 +170,13 @@ export async function getLegacyDossierReadAccess(session: AuthSession, dossierId
 export async function getClientDossierReadAccess(session: AuthSession, dossierId: string) {
   const dossier = await prisma.clientDossier.findUnique({ where: { id: dossierId } });
   if (!dossier) return null;
+  if (dossier.practiceReadinessId) return getEngagementDossierReadAccess(prisma, session, dossier.id);
   const context = await getClientContextReadAccess(session, {
     clientId: dossier.clientId,
     clientServiceId: dossier.clientServiceId,
     projectId: dossier.projectId,
   });
-  return context ? { dossier, ...context } : null;
+  return context ? { dossier, ...context, engagementHistory: null } : null;
 }
 
 export async function getClientContextReadAccess(session: AuthSession, context: ClientReadContext) {

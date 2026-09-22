@@ -8,6 +8,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
+import Link from "next/link";
 import { listAccessiblePracticeReadiness } from "@/lib/practice-readiness";
 import {
   attestPracticeMaterialsCompleteAction,
@@ -697,6 +698,11 @@ export default async function Page({
                         Avvia esplicitamente
                       </PrimaryButton>
                     </form>
+                    {p.startedAt && (
+                      <Link className="inline-flex rounded-xl bg-fai-green px-4 py-2 font-bold text-white" href={`/engagement-dossiers/new/${p.id}`}>
+                        Preanalisi → dossier e consegna
+                      </Link>
+                    )}
                   </div>
                 )}
               </article>
