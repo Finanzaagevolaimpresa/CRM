@@ -1,8 +1,5 @@
 /** Internal operation is a separate, explicit admission; synthetic guards stay intact. */
-type EngagementEnvironment = {
-  INTERNAL_ENGAGEMENT_MODE?: string;
-  INTERNAL_SESSION_MODE?: string;
-};
+type EngagementEnvironment = Partial<NodeJS.ProcessEnv>;
 
 export function internalEngagementEnabled(env: EngagementEnvironment = process.env) {
   return env.INTERNAL_ENGAGEMENT_MODE === 'controlled'
