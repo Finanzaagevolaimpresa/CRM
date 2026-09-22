@@ -37,8 +37,16 @@ recovery_id="$(docker image inspect -f '{{.Id}}' "$recovery_image")"
 [[ "$(docker image inspect -f '{{index .Config.Labels "it.finanzaagevolaimpresa.source-tree"}}' "$recovery_id")" == "$recovery_tree" ]]
 pg="$prefix-postgres"
 app="$prefix-app"
+pg_forwarder=''
+app_forwarder=''
+stop_app() {
+  if [[ -n "$app_forwarder" ]]; then kill "$app_forwarder" 2>/dev/null || true; wait "$app_forwarder" 2>/dev/null || true; app_forwarder=''; fi
+  docker rm -f "$app" >/dev/null 2>&1 || true
+}
 cleanup() {
-  docker rm -f "$app" "$pg" >/dev/null 2>&1 || true
+  stop_app
+  if [[ -n "$pg_forwarder" ]]; then kill "$pg_forwarder" 2>/dev/null || true; wait "$pg_forwarder" 2>/dev/null || true; fi
+  docker rm -f "$pg" >/dev/null 2>&1 || true
   docker volume rm "$prefix-documents" >/dev/null 2>&1 || true
   docker network rm "$prefix" >/dev/null 2>&1 || true
 }
@@ -50,7 +58,7 @@ password="$(openssl rand -base64 36 | tr -d '\n')"
 secret="$(openssl rand -hex 32)"
 printf '::add-mask::%s\n' "$db_password" "$password" "$secret"
 docker run -d --name "$pg" --network "$prefix" --network-alias postgres --label fai.synthetic=r05 \
-  -p 127.0.0.1:15432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB=fai_crm_test postgres:16 >/dev/null
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB=fai_crm_test postgres:16 >/dev/null
 for attempt in $(seq 1 60); do
   # The temporary init server accepts Unix sockets before the final TCP listener exists.
   if docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d fai_crm_test >/dev/null 2>&1; then break; fi
@@ -58,6 +66,11 @@ for attempt in $(seq 1 60); do
 done
 docker exec "$pg" pg_isready -h 127.0.0.1 -U postgres -d fai_crm_test >/dev/null
 docker exec "$pg" psql -U postgres -d fai_crm_test -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'" >/dev/null
+bridge_ip() { docker inspect -f "{{with index .NetworkSettings.Networks \"$prefix\"}}{{.IPAddress}}{{end}}" "$1"; }
+node scripts/pr140/ci-loopback-forwarder.mjs "$(bridge_ip "$pg")" 15432 5432 &
+pg_forwarder=$!
+sleep 1
+kill -0 "$pg_forwarder"
 export DATABASE_URL="postgresql://postgres:$db_password@127.0.0.1:15432/fai_crm_test?schema=public"
 export APP_ENV=test NODE_ENV=development RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1
 export AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1
@@ -73,7 +86,7 @@ pg_id="$(docker inspect -f '{{.Id}}' "$pg")"
 pg_started="$(docker inspect -f '{{.State.StartedAt}}' "$pg")"
 start_app() {
   local image="$1" session_mode="$2" engagement_mode="$3" feature_mode="$4"
-  docker run -d --name "$app" --network "$prefix" --label fai.synthetic=r05 -p 127.0.0.1:13000:3000 \
+  docker run -d --name "$app" --network "$prefix" --label fai.synthetic=r05 \
     -v "$prefix-documents:/var/lib/fai-crm/documents" \
     -e DATABASE_URL="postgresql://postgres:$db_password@postgres:5432/fai_crm_test?schema=public" \
     -e APP_ENV=production -e NODE_ENV=production -e AUTH_SECRET="$secret" -e AUTH_COOKIE_NAME="$AUTH_COOKIE_NAME" \
@@ -84,11 +97,23 @@ start_app() {
     -e FEATURE_INTEGRATIONS_ENABLED=false -e FEATURE_AI_WORKER_ENABLED=false -e FEATURE_AI_DISPATCH_ENABLED=false \
     -e FEATURE_AI_EGRESS_ENABLED=false -e AI_EXTERNAL_PROVIDERS_ENABLED=false -e AI_ORCHESTRATOR_WORKER_ENABLED=0 -e AI_PROVIDER=mock \
     -e TZ=UTC "$image" >/dev/null
+  node scripts/pr140/ci-loopback-forwarder.mjs "$(bridge_ip "$app")" 13000 3000 &
+  app_forwarder=$!
 }
 wait_healthy() {
   for attempt in $(seq 1 120); do
     if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then return 0; fi
     [[ "$(docker inspect -f '{{.State.Running}}' "$app")" == true ]] || { docker logs "$app" 2>&1 | tail -25; return 1; }
+    sleep 1
+  done
+  docker logs "$app" 2>&1 | tail -25
+  return 1
+}
+expect_startup_denied() {
+  local marker="$1"
+  for attempt in $(seq 1 60); do
+    if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then echo R05_STARTUP_GATE_BYPASSED; return 1; fi
+    if docker logs "$app" 2>&1 | grep -F "$marker" >/dev/null; then return 0; fi
     sleep 1
   done
   docker logs "$app" 2>&1 | tail -25
@@ -117,18 +142,14 @@ node --import tsx tests/practice-readiness-browser/provision.ts
 run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 2
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
-docker rm -f "$app" >/dev/null
+stop_app
 start_app "$candidate_id" invalid controlled internal
-sleep 5
-if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then echo R05_FAULT_NOT_DETECTED; exit 1; fi
-docker logs "$app" 2>&1 | grep -F 'Internal session mode is not configured canonically' >/dev/null
-docker rm -f "$app" >/dev/null
+expect_startup_denied 'Internal session mode is not configured canonically'
+stop_app
 # Prove that recovery cannot silently resurrect pre-fault registry sessions.
 start_app "$recovery_id" registry disabled disabled
-sleep 5
-if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then echo R05_REGISTRY_GATE_BYPASSED; exit 1; fi
-docker logs "$app" 2>&1 | grep -F INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED >/dev/null
-docker rm -f "$app" >/dev/null
+expect_startup_denied INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED
+stop_app
 node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/session-revocation.json"
 start_app "$recovery_id" registry disabled disabled
 wait_healthy
@@ -140,7 +161,7 @@ cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker inspect -f '{{.Id}}' "$pg")" == "$pg_id" ]]
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 # Qualify resuming the candidate after the same explicit session gate.
-docker rm -f "$app" >/dev/null
+stop_app
 node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/resume-session-revocation.json"
 start_app "$candidate_id" registry controlled internal
 wait_healthy
