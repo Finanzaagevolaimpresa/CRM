@@ -38,6 +38,8 @@ Questo è un recupero concreto dal delta R05 alla versione PR140 verificata, man
 
 Il banco usa rete Docker interna, database `fai_crm_test` con sentinel e soli utenti/dati sintetici. Il server candidato gira con NODE_ENV=production, APP_ENV=production, registry e modalità internal, senza i flag di abilitazione del database sintetico. I processi che preparano e verificano fixture rimangono separati e vincolati al sentinel.
 
+L'accesso del browser avviene su HTTPS loopback con certificato effimero del solo banco: Chromium ammette quello specifico SPKI e le richieste Node/curl verificano la relativa CA. I cookie Secure restano invariati. Il proxy verso la rete interna non abilita egress esterno; l'origine interna di inoltro delle Server Actions è esplicitamente il loopback del container.
+
 Sequenza qualificata soltanto quando la CI la conclude:
 1. Immagini con revision/tree OCI verificati; schema47 applicato e immutato.
 2. Login reale browser, catalogo preparato dall'attore autorizzato, acquisizione manuale e conversione.
@@ -58,6 +60,8 @@ Il [preflight proprietario](pr140-owner-preflight-r05.md) è l'unico intervento 
 Ultima baseline riferita: PR139/schema46, checkout `/home/faiadmin/.local/share/fai-crm-releases/release-3230764a4406-20260920`; `/opt/fai-crm` resta storico. Serve una ricevuta attuale prima di fissare immagini, risorse e finestra. Il backup schema43 disponibile non è un backup46 pertinente.
 
 Il backup46 produttivo va preparato con il contratto N05 esistente, target e risorse della ricevuta corrente, set nuovo senza sovrascritture, quiescenza applicativa autorizzata, dump/documenti/configurazione coperti, manifest/checksum e recupero isolato verificato. Nessun contenuto protetto o chiave deve entrare negli artefatti dell'agente. Il relativo arresto app, le scritture di backup e l'eventuale recupero non sono eseguiti da questa qualificazione.
+
+Il wrapper di backup accetta EXPECTED_MIGRATION_COUNT=46 esplicito, mentre recovery_kit.py conserva guard rigidi sullo schema43. Quel kit e le sue prove storiche non costituiscono una prova di restore46; il recupero del set effettivo deve essere qualificato con una procedura pertinente. Anche la build premerge R05 non può essere rinominata come futuro merge: dopo l'eventuale merge autorizzato occorrono build e qualificazione sul commit esatto richiesto dal release gate.
 
 Unica migrazione produttiva prevista: `20260920090000_engagement_dossier_approval_delivery_v1`, SHA256 `f2f5927399f0f580654714015ebb975aacd47b741eda896b59e6cf475cfd6b88`. Nessuna migrazione aggiunta o modificata da R05. Prova46→47 precedente riutilizzata e mantenuta in CI sul suo vero riferimento schema46.
 

@@ -61,9 +61,13 @@ async function submitDossierAction(page: Page, button: Locator, phase: string) {
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
   await button.click();
   const response = await responsePromise;
-  await response.finished();
+  // Packaged RSC streams may remain open after the action has committed.
+  // Callers still verify navigation, rendered state and persisted data.
+  if (process.env.PRACTICE_READINESS_PACKAGED !== "1") await response.finished();
   expect(response.status(), phase).toBe(200);
-  expect(response.headers()["x-action-redirect"] ?? "", phase).not.toContain("dossierError=");
+  const redirect = response.headers()["x-action-redirect"] ?? "";
+  expect(redirect, phase).not.toContain("dossierError=");
+  if (redirect) await expect(page).toHaveURL(new URL(redirect.split(";", 1)[0], app).href);
 }
 
 async function submitAction(
@@ -858,8 +862,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     const responsePromise = actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
     await form.getByRole("button", { name: buttonName }).click();
     const legitimateResponse = await responsePromise;
-    await legitimateResponse.finished();
+    if (process.env.PRACTICE_READINESS_PACKAGED !== "1") await legitimateResponse.finished();
     expect(legitimateResponse.status()).toBe(200);
+    const legitimate = await db.clientDossier.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(legitimate.status).toBe(buttonName === "Salva modifiche" ? "bozza" : "revisionata");
+    expect(legitimate.updatedById).toBe(buttonName === "Salva modifiche" ? "readiness-browser-owner" : "readiness-browser-reader");
     const request = legitimateResponse.request();
     expect(request.postData()).toContain(legacy.id);
     // Replay the captured request with an explicit target replacement. DOM edits

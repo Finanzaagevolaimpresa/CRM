@@ -63,11 +63,14 @@ test('recovery image retains versioned history and current access denials', asyn
     await actorPage.goto(app + '/client-dossiers/' + legacy.id);
     const form = actorPage.locator('form').filter({ has: actorPage.getByRole('button', { name: button, exact: true }) });
     const before = await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } });
+    const auditBefore = await db.auditLog.count({ where: { entityType: 'ClientDossier', entityId: dossier.id } });
     const responsePending = actorPage.waitForResponse(r => r.request().method() === 'POST' && Boolean(r.request().headers()['next-action']));
     await form.getByRole('button', { name: button, exact: true }).click();
     const response = await responsePending;
-    await response.finished();
     expect(response.status()).toBe(200);
+    const legitimate = await db.clientDossier.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(legitimate.status).toBe(button === 'Salva modifiche' ? 'bozza' : 'revisionata');
+    expect(legitimate.updatedById).toBe(button === 'Salva modifiche' ? 'readiness-browser-owner' : 'readiness-browser-reader');
     const request = response.request();
     expect(request.postData()).toContain(legacy.id);
     const forged = request.postData()!.replaceAll(legacy.id, dossier.id);
@@ -78,6 +81,7 @@ test('recovery image retains versioned history and current access denials', asyn
     expect([200, 500]).toContain(denied.status());
     expect(await denied.text()).toMatch(/"digest":/);
     expect(await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } })).toEqual(before);
+    expect(await db.auditLog.count({ where: { entityType: 'ClientDossier', entityId: dossier.id } })).toBe(auditBefore);
   }
   await reviewer.close();
   const old = await browser.newContext();
