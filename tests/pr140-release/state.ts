@@ -45,7 +45,7 @@ async function main() {
     const live = await db.internalSession.count({ where: { revokedAt: null, expiresAt: { gt: new Date() } } });
     assert.ok(live > 0);
     const result = await db.internalSession.updateMany({ where: { revokedAt: null, expiresAt: { gt: new Date() } },
-      data: { revokedAt: new Date(), revokedReason: 'PR140_SYNTHETIC_RECOVERY_DRILL' } });
+      data: { revokedAt: new Date(), revokedReason: 'INTERNAL_GLOBAL', revokedByUserId: 'release-owner' } });
     assert.equal(await db.internalSession.count(), before);
     process.stdout.write(JSON.stringify({ synthetic: true, liveBefore: live, revoked: result.count, rowsPreserved: before }) + '\n');
   } else if (mode === 'admission') {
@@ -80,7 +80,7 @@ async function main() {
       const override = await db.userPermissionOverride.create({ data: { userId: actor.userId, permission: 'service.write', allowed: false } });
       await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
       await db.userPermissionOverride.delete({ where: { id: override.id } });
-      await db.internalSession.update({ where: { id: sessionId }, data: { revokedAt: new Date(), revokedReason: 'SYNTHETIC_DENIAL_CHECK' } });
+      await db.internalSession.update({ where: { id: sessionId }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: 'release-owner' } });
       await assert.rejects(prepareInternalServiceCatalogV2(db, actor), denied);
       assert.equal(await db.serviceCatalogRevision.count(), before);
       process.stdout.write(JSON.stringify({ synthetic: true, defaultOff: true, legacyDenied: true, canonicalRole: true, permissionRevocation: true, sessionRevocation: true, catalogIdempotent: true }) + '\n');

@@ -32,6 +32,10 @@ if ($sshExit -eq 255) {
 }
 try { $receipt = $serialized | ConvertFrom-Json } catch { throw 'Ricevuta non valida: conservare localmente il risultato senza inoltrare log grezzi.' }
 if ($receipt.protocol -ne 'PR140_OWNER_PREFLIGHT_R05' -or -not $receipt.readOnly) { throw 'Protocollo ricevuta inatteso.' }
+if ($sshExit -ne 0 -or $receipt.status -ne 'READ_ONLY_PREFLIGHT_COMPLETE') {
+    $failureCode = if ($receipt.code -match '^[A-Z0-9_]{1,80}$') { $receipt.code } else { 'COLLECTOR_INCOMPLETE' }
+    throw "PREFLIGHT_STOP: $failureCode. La ricevuta completa non viene creata; comunicare solo questo codice alla task."
+}
 [System.IO.File]::WriteAllText($receiptPath, ($receipt | ConvertTo-Json -Depth 15), [System.Text.UTF8Encoding]::new($false))
 Write-Output "Ricevuta minimizzata salvata: $receiptPath"
 Write-Output ($receipt | ConvertTo-Json -Depth 15)
