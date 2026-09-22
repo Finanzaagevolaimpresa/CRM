@@ -56,6 +56,13 @@ docker volume create --label fai.synthetic=r05 "$prefix-documents" >/dev/null
 db_password="$(openssl rand -hex 24)"
 password="$(openssl rand -base64 36 | tr -d '\n')"
 secret="$(openssl rand -hex 32)"
+tls_key="$RUNNER_TEMP/$prefix-tls.key"
+tls_cert="$RUNNER_TEMP/$prefix-tls.crt"
+[[ ! -e "$tls_key" && ! -e "$tls_cert" ]] || exit 1
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -keyout "$tls_key" -out "$tls_cert" \
+  -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 >/dev/null 2>&1
+export NODE_EXTRA_CA_CERTS="$tls_cert"
+export PR140_CI_CERT_SPKI="$(openssl x509 -in "$tls_cert" -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | openssl base64 -A)"
 printf '::add-mask::%s\n' "$db_password" "$password" "$secret"
 docker run -d --name "$pg" --network "$prefix" --network-alias postgres --label fai.synthetic=r05 \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$db_password" -e POSTGRES_DB=fai_crm_test postgres:16 >/dev/null
@@ -76,7 +83,7 @@ export APP_ENV=test NODE_ENV=development TZ=UTC RUN_DB_TESTS=1 AI_ORCHESTRATOR_D
 export AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1
 export AUTH_SECRET="$secret" AUTH_COOKIE_NAME=fai_r05_synthetic_session
 export PRACTICE_READINESS_BROWSER_PASSWORD="$password" PRACTICE_READINESS_BROWSER_CONFIRMED=1
-export PRACTICE_READINESS_BROWSER_ORIGIN=http://127.0.0.1:13000
+export PRACTICE_READINESS_BROWSER_ORIGIN=https://127.0.0.1:13000
 export PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence/browser"
 export PRACTICE_READINESS_PACKAGED=1
 mkdir -p "$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR"
@@ -91,18 +98,19 @@ start_app() {
     -e DATABASE_URL="postgresql://postgres:$db_password@postgres:5432/fai_crm_test?schema=public" \
     -e APP_ENV=production -e NODE_ENV=production -e AUTH_SECRET="$secret" -e AUTH_COOKIE_NAME="$AUTH_COOKIE_NAME" \
     -e APP_ORIGIN="$PRACTICE_READINESS_BROWSER_ORIGIN" -e INTERNAL_SESSION_MODE="$session_mode" \
+    -e __NEXT_PRIVATE_ORIGIN=http://127.0.0.1:3000 \
     -e INTERNAL_ENGAGEMENT_MODE="$engagement_mode" -e PRACTICE_READINESS_MODE="$feature_mode" -e CONTROLLED_INTAKE_MODE="$feature_mode" \
     -e LOGIN_THROTTLE_MODE=disabled -e PRIVILEGED_ACCESS_MODE=disabled -e SECURITY_HEADERS_MODE=report-only \
     -e COMMERCIAL_LEAD_INBOX_MODE=disabled -e WEBSITE_LEAD_MODE=disabled \
     -e FEATURE_INTEGRATIONS_ENABLED=false -e FEATURE_AI_WORKER_ENABLED=false -e FEATURE_AI_DISPATCH_ENABLED=false \
     -e FEATURE_AI_EGRESS_ENABLED=false -e AI_EXTERNAL_PROVIDERS_ENABLED=false -e AI_ORCHESTRATOR_WORKER_ENABLED=0 -e AI_PROVIDER=mock \
     -e TZ=UTC "$image" >/dev/null
-  node scripts/pr140/ci-loopback-forwarder.mjs "$(bridge_ip "$app")" 13000 3000 &
+  node scripts/pr140/ci-loopback-forwarder.mjs "$(bridge_ip "$app")" 13000 3000 "$tls_key" "$tls_cert" &
   app_forwarder=$!
 }
 wait_healthy() {
   for attempt in $(seq 1 120); do
-    if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then return 0; fi
+    if curl --cacert "$tls_cert" --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then return 0; fi
     [[ "$(docker inspect -f '{{.State.Running}}' "$app")" == true ]] || { docker logs "$app" 2>&1 | tail -25; return 1; }
     sleep 1
   done
@@ -112,7 +120,7 @@ wait_healthy() {
 expect_startup_denied() {
   local marker="$1"
   for attempt in $(seq 1 60); do
-    if curl --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then echo R05_STARTUP_GATE_BYPASSED; return 1; fi
+    if curl --cacert "$tls_cert" --fail --silent --max-time 2 "$PRACTICE_READINESS_BROWSER_ORIGIN/api/health" >/dev/null; then echo R05_STARTUP_GATE_BYPASSED; return 1; fi
     if docker logs "$app" 2>&1 | grep -F "$marker" >/dev/null; then return 0; fi
     sleep 1
   done
@@ -121,7 +129,11 @@ expect_startup_denied() {
 }
 run_browser() {
   local name="$1" config="$2" match="$3" expected="$4"
-  PLAYWRIGHT_JSON_OUTPUT_NAME="$evidence/$name.json" npx playwright test --config "$config" "$match" --reporter=line,json > "$evidence/$name.log" 2>&1 || { tail -70 "$evidence/$name.log"; return 1; }
+  PLAYWRIGHT_JSON_OUTPUT_NAME="$evidence/$name.json" npx playwright test --config "$config" "$match" --reporter=line,json > "$evidence/$name.log" 2>&1 || {
+    tail -70 "$evidence/$name.log"
+    docker logs "$app" 2>&1 | tail -40
+    return 1
+  }
   node - "$evidence/$name.json" "$expected" <<'NODE'
 const fs = require('node:fs'), assert = require('node:assert/strict');
 const result = JSON.parse(fs.readFileSync(process.argv[2]));
