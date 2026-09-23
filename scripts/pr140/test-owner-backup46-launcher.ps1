@@ -62,3 +62,6 @@ foreach ($name in @('extra-plan','missing-ledger','bad-target','duplicate')) {
 }
 if (@(Get-ChildItem -LiteralPath $testRoot -Filter '*_ATTEMPT.json').Count -ne 0) { throw 'INVALID_PACKET_CONSUMED_ATTEMPT' }
 Write-Output '{"protocol":"PR140_BACKUP46_LAUNCHER_TEST_R05","status":"PASS","synthetic":true,"remoteConnectionAttempted":false,"approvalDeniedBeforeDispatch":true,"canonicalDigestMatched":true,"malformedApprovedPacketsDenied":4,"completeLocalPacketAccepted":true}'
+# All expected nonzero native validator results were asserted above. Do not let
+# the runner inherit the last deliberately rejected packet's native exit code.
+exit 0
