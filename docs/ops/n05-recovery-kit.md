@@ -5,6 +5,23 @@ does not establish that a real backup is recoverable, create an off-host copy, o
 authorize a production action. The ordinary release gate, existing N05 backup
 confirmation, legacy provenance checks and restore drill remain applicable.
 
+The kit admits exactly schema43 and schema46 sources. A plan must explicitly bind
+the migration count to its source commit and tree; the complete migration
+inventory in that commit must have the same count. Backup preflight rejects a
+mislabeled source before invoking Docker or the backup wrapper. Recovery verifies
+every canonical migration name/checksum and completed status against that same
+declared count. Schema44, schema45, schema47 and inferred or partial inventories
+are not admitted by this kit. The existing restore-drill.sh retains its separate
+schema43/44 scope.
+
+The synthetic CI matrix runs the complete encrypted transfer and isolated
+recovery drill for both 43 and 46, including incorrect-count counterexamples.
+The operator-facing plan keys, private material handling, isolation and cleanup
+contracts are unchanged. Preserve old plans with their pinned original tool
+checkout; do not relabel a schema43 manifest or reuse an old plan hash for 46.
+See [schema46 preparation](../pr140-backup46-recovery-r05.md) for the PR140 release
+boundary and the remaining owner evidence.
+
 The initial implementation recovers PostgreSQL and document bytes/ownership/modes, and decrypts
 configuration and cryptographic material into separate private directories. It
 **never starts the CRM application**, runs a consumer, sources recovered environment
@@ -105,7 +122,8 @@ are rejected):
 
 The `expected` source object has exactly `environment`, `project`,
 `source_commit`, `source_tree`, `app_image_id`, `image_provenance`,
-`resource_provenance`, `migration_count` (43), `manifest_sha256`, and
+`resource_provenance`, `migration_count` (explicitly 43 or 46, matching the complete
+source commit inventory), `manifest_sha256`, and
 `checksums_sha256`. Pin the hashes of **both** MANIFEST.txt and SHA256SUMS; the
 latter binds the database and document archive digests. Provenance values are
 those accepted by the existing N05 verifier, not free-form claims.
@@ -122,8 +140,9 @@ Additional exact keys by phase:
 
 The backup `environment` contains only N05's existing explicit variables
 (see `ENV_KEYS` in the tool). It must provide absolute ENV_FILE/APP_ENV_FILE
-paths, exact source/image/resource provenance, database identity, 43 migrations
-and a unique backup set name. The production route calls
+paths, exact source/image/resource provenance, database identity,
+EXPECTED_MIGRATION_COUNT set explicitly to 43 or 46 for that source, and a unique
+backup set name. The production route calls
 `scripts/backup-docker-prod.sh` and still requires
 `CONFIRM_PRODUCTION_BACKUP=FAI_CRM_PRODUCTION_BACKUP_V1`.
 Nonproduction qualification permits only the existing restore-source identity.
@@ -200,7 +219,8 @@ the corrected tools and the helper. The ordinary exact-tools gate is unchanged.
 The kit allocates new database/document volumes and refuses occupied names.
 It decrypts and checks all archives before allocating those volumes, restores the
 database in a single transaction, rebuilds constraints and indexes, checks the
-43 migration names/checksums against the image's source commit, and compares every
+declared 43 or 46 migration names/checksums against the image's source commit,
+and compares every
 document file digest, numeric UID/GID and mode internally, including the volume
 root and empty directories. GNU tar preserves numeric owners and permissions.
 An archive with special permission bits, invalid numeric ownership or omitted
@@ -291,11 +311,14 @@ repository archive or a substitute release artifact.
 
 Export image sources with `git -c core.autocrlf=false archive` to preserve
 canonical bytes on Windows too. Before creating the fixture database, the drill
-compares all 43 migration checksums inside the image with its source Git commit.
-OCI labels alone do not establish that byte-level correspondence.
+compares every declared migration checksum (43 or 46) inside the image with its
+source Git commit. Set N05_RECOVERY_EXPECTED_MIGRATION_COUNT=46 explicitly for the
+schema46 image; the historical runner default remains 43. Other counts are
+rejected. OCI labels alone do not establish that byte-level correspondence.
 
 Run guard tests with `python3 -B tests/n05/test_recovery_kit.py`. The separate
-`n05-recovery-kit` CI job builds a real baseline application image, runs actual
+`n05-recovery-kit` CI matrix builds the real schema43 and schema46 baseline images
+in separate jobs, runs actual
 Prisma migrations and N05 backup, uses age and pinned SSH, tests tampering and
 occupied destinations, checks recovered relational/document contents and cleans
 its resources. A newly generated production-format **synthetic** manifest tests

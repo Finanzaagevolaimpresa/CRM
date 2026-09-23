@@ -31,6 +31,7 @@ SCHEMA = "FAI_CRM_N05_RECOVERY_KIT_V1"
 LABEL = "it.finanzaagevolaimpresa.recovery-operation"
 TEST_LABEL = "it.finanzaagevolaimpresa.recovery-test"
 SENTINEL = "FAI_CRM_N05_ISOLATED_RECOVERY_V1"
+SUPPORTED_SOURCE_MIGRATION_COUNTS = (43, 46)
 N05_FILES = {"MANIFEST.txt", "SHA256SUMS", "postgres.dump", "documents.tar.gz"}
 COMPONENTS = ("database-documents", "configuration", "cryptographic-material")
 TOOL_FILES = ("scripts/n05/recovery_kit.py", "scripts/n05/lib.sh",
@@ -323,15 +324,34 @@ class Operation:
         self.lock.close()
 
 
+def source_migration_paths(source_commit):
+    paths = [p for p in git("ls-tree", "-r", "--name-only", source_commit,
+                           "--", "prisma/migrations").splitlines()
+             if p.endswith("/migration.sql")]
+    require(all(re.fullmatch(r"prisma/migrations/[^/]+/migration\.sql", p) for p in paths)
+            and len({Path(p).parent.name for p in paths}) == len(paths),
+            "SOURCE_MIGRATION_PATHS_INVALID")
+    return paths
+
+
+def verify_source_schema(source_commit, source_tree, migration_count):
+    require(type(migration_count) is int
+            and migration_count in SUPPORTED_SOURCE_MIGRATION_COUNTS,
+            "SOURCE_MIGRATION_COUNT_UNQUALIFIED")
+    for value in (source_commit, source_tree):
+        require(isinstance(value, str) and re.fullmatch(r"[a-f0-9]{40}", value),
+                "SOURCE_GIT_ID_INVALID")
+    require(git("rev-parse", source_commit + "^{tree}") == source_tree,
+            "SOURCE_TREE_MISMATCH")
+    require(len(source_migration_paths(source_commit)) == migration_count,
+            "SOURCE_MIGRATION_COUNT_MISMATCH")
+
+
 def expected_source(value):
     require(isinstance(value, dict) and set(value) == EXPECTED_KEYS, "SOURCE_BINDING_INVALID")
     require(value["environment"] in ("production", "staging", "restore-source"),
             "SOURCE_ENVIRONMENT_INVALID")
-    require(value["migration_count"] == 43, "EXACTLY_43_MIGRATIONS_REQUIRED")
-    for key in ("source_commit", "source_tree"):
-        require(re.fullmatch(r"[a-f0-9]{40}", value[key] or ""), "SOURCE_GIT_ID_INVALID")
-    require(git("rev-parse", value["source_commit"] + "^{tree}") == value["source_tree"],
-            "SOURCE_TREE_MISMATCH")
+    verify_source_schema(value["source_commit"], value["source_tree"], value["migration_count"])
     image_id(value["app_image_id"])
     hash_value(value["manifest_sha256"])
     hash_value(value["checksums_sha256"])
@@ -945,12 +965,11 @@ def recover(plan, op):
         '\'finished\',"finished_at" IS NOT NULL,\'rolled_back\',"rolled_back_at" IS NOT NULL) '
         'ORDER BY "migration_name"),\'[]\'::json) FROM "_prisma_migrations"; ROLLBACK;')
     observed = decode(sql(plan, names["postgres"], migrations_sql))
-    migration_paths = git("ls-tree", "-r", "--name-only", plan["expected"]["source_commit"],
-                          "--", "prisma/migrations").splitlines()
+    migration_paths = source_migration_paths(plan["expected"]["source_commit"])
     expected = {Path(p).parent.name: sha(run(["git", "-C", ROOT, "show",
                  plan["expected"]["source_commit"] + ":" + p])) for p in migration_paths
                 if p.endswith("/migration.sql")}
-    verify_restored_migrations(observed, expected)
+    verify_restored_migrations(observed, expected, plan["expected"]["migration_count"])
     invalid = sql(plan, names["postgres"],
         "BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; "
         "SELECT count(*) FROM pg_constraint WHERE contype IN ('f','c') AND NOT convalidated; ROLLBACK;").strip()
@@ -985,8 +1004,10 @@ def recover(plan, op):
     return result
 
 
-def verify_restored_migrations(observed, expected):
-    require(len(expected) == 43 and len(observed) == 43
+def verify_restored_migrations(observed, expected, migration_count=43):
+    require(type(migration_count) is int
+            and migration_count in SUPPORTED_SOURCE_MIGRATION_COUNTS
+            and len(expected) == migration_count and len(observed) == migration_count
             and {x["name"] for x in observed} == set(expected)
             and all(x["finished"] and not x["rolled_back"] and expected.get(x["name"]) == x["checksum"]
                     for x in observed), "RESTORED_MIGRATIONS_MISMATCH")
@@ -1087,7 +1108,9 @@ def backup_preflight(plan):
     value = plan["environment"]
     require(isinstance(value, dict) and set(value) <= ENV_KEYS
             and all(isinstance(v, str) for v in value.values()), "BACKUP_ENVIRONMENT_INVALID")
-    require(value.get("EXPECTED_MIGRATION_COUNT") == "43", "EXACTLY_43_MIGRATIONS_REQUIRED")
+    count = value.get("EXPECTED_MIGRATION_COUNT")
+    require(count in ("43", "46"), "SOURCE_MIGRATION_COUNT_UNQUALIFIED")
+    verify_source_schema(value.get("SOURCE_COMMIT"), value.get("SOURCE_TREE"), int(count))
     actual = decode(docker("info", "--format", "{{json .}}"))
     require(actual["ID"] == plan["engine_id"] and actual["OSType"] == "linux",
             "BACKUP_DOCKER_ENGINE_MISMATCH")

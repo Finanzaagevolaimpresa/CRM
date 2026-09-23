@@ -142,6 +142,9 @@ def tampered_bundle(source, destination):
 def main():
     os.umask(0o077)
     check(os.environ.get("N05_RECOVERY_SYNTHETIC_CONFIRMED") == "1", "synthetic-confirmation")
+    schema_count = os.environ.get("N05_RECOVERY_EXPECTED_MIGRATION_COUNT", "43")
+    check(schema_count in ("43", "46"), "explicit-qualified-source-schema")
+    migration_count = int(schema_count)
     test_id = os.environ["N05_RECOVERY_TEST_ID"]
     check(len(test_id) == 32 and all(c in "0123456789abcdef" for c in test_id), "synthetic-run-id")
     network = os.environ["N05_RECOVERY_TEST_NETWORK"]
@@ -223,7 +226,7 @@ def main():
                 "if(d.isDirectory()){const p='/app/prisma/migrations/'+d.name+'/migration.sql';"
                 "r[d.name]=c.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}}"
                 "process.stdout.write(JSON.stringify(r));"]))
-            check(len(canonical_migrations) == 43 and image_migrations == canonical_migrations,
+            check(len(canonical_migrations) == migration_count and image_migrations == canonical_migrations,
                   "image-migration-bytes-match-canonical-git-before-database-creation")
             # These are new synthetic resources with the real N05 source identity.
             # Only this explicit internal network is used; no application server runs.
@@ -290,7 +293,7 @@ def main():
             fixture_helper(["--network", "none", "--tmpfs", "/var/lib/postgresql/data",
                    "--mount", "type=volume,src=" + source_docs + ",dst=/docs",
                    "--entrypoint", "tar", pg_id, "-xf", "-", "-C", "/docs"], data=docs.getvalue())
-            check(True, "43-actual-prisma-migrations-and-relational-doc-fixture")
+            check(True, f"{migration_count}-actual-prisma-migrations-and-relational-doc-fixture")
             env_file = write(root / "source.env", b"# synthetic only\n")
             env = {"FAI_ENVIRONMENT": "restore-source", "FAI_ENVIRONMENT_SENTINEL": sentinel,
                    "COMPOSE_PROJECT_NAME": source_project, "COMPOSE_FILE": str(ROOT / "docker-compose.restore-drill.yml"),
@@ -301,11 +304,20 @@ def main():
                    "BACKUP_SET_ID": "synthetic-set", "SOURCE_COMMIT": source_commit, "SOURCE_TREE": source_tree,
                    "EXPECTED_APP_IMAGE_ID": app["Id"], "BACKUP_IMAGE_PROVENANCE": "oci-labels",
                    "BACKUP_RESOURCE_PROVENANCE": "n05-labels", "EXPECTED_DATABASE_NAME": "fai_recovery_source",
-                   "EXPECTED_MIGRATION_COUNT": "43", "EXPECTED_DATABASE_SENTINEL": sentinel,
+                   "EXPECTED_MIGRATION_COUNT": str(migration_count), "EXPECTED_DATABASE_SENTINEL": sentinel,
                    "BACKUP_CONSISTENCY": "application-quiesced"}
             backup_plan = basic("backup", work, binding) | {"environment": env,
                 "engine_id": engine,
                 "env_file_sha256": kit.digest(env_file), "app_env_file_sha256": kit.digest(env_file)}
+            wrong_schema = copy.deepcopy(backup_plan)
+            wrong_schema["environment"]["EXPECTED_MIGRATION_COUNT"] = (
+                "43" if migration_count == 46 else "46")
+            invoke(root, wrong_schema, "preflight", expect="SOURCE_MIGRATION_COUNT_MISMATCH")
+            check(list(backups.iterdir()) == [], "wrong-source-schema-creates-no-backup")
+            unqualified_schema = copy.deepcopy(backup_plan)
+            unqualified_schema["environment"]["EXPECTED_MIGRATION_COUNT"] = "47"
+            invoke(root, unqualified_schema, "preflight", expect="SOURCE_MIGRATION_COUNT_UNQUALIFIED")
+            check(list(backups.iterdir()) == [], "unqualified-schema-creates-no-backup")
             wrong_source_engine = backup_plan | {"engine_id": "wrong-synthetic-engine"}
             invoke(root, wrong_source_engine, "preflight", expect="BACKUP_DOCKER_ENGINE_MISMATCH")
             check(list(backups.iterdir()) == [], "wrong-source-engine-creates-no-backup")
@@ -318,7 +330,7 @@ def main():
             expected = {"environment": "restore-source", "project": source_project,
                         "source_commit": source_commit, "source_tree": source_tree,
                         "app_image_id": app["Id"], "image_provenance": "oci-labels",
-                        "resource_provenance": "n05-labels", "migration_count": 43,
+                        "resource_provenance": "n05-labels", "migration_count": migration_count,
                         "manifest_sha256": kit.digest(backup / "MANIFEST.txt"),
                         "checksums_sha256": kit.digest(backup / "SHA256SUMS")}
             identity = root / "age.identity"
@@ -526,7 +538,8 @@ def main():
             invoke(root, bad, "cleanup")
             recovery_plans.append(restored)
             result = invoke(root, restored)
-            check(result["status"] == "RECOVERY_VERIFIED" and result["migrations"] == 43, "complete-database-and-documents-recovery")
+            check(result["status"] == "RECOVERY_VERIFIED" and result["migrations"] == migration_count,
+                  "complete-database-and-documents-recovery")
             check(result["document_metadata_verified"], "document-root-directory-file-ownership-and-mode")
             check(result["document_helper_image_id"] == document_helper_id, "recovery-receipt-pins-helper")
             # Use the image's actual nonroot identity, without starting its app.
