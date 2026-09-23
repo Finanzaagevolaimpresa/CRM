@@ -1,10 +1,12 @@
-"""Synthetic admission, fault and recovery tests; no SSH, Docker or real files."""
+"""Synthetic tests; Linux also stops two disposable process groups. No SSH/Docker."""
 import copy
 import importlib.util
 import io
 import json
 import pathlib
+import os
 import subprocess
+import sys
 import time
 import unittest
 from contextlib import redirect_stdout
@@ -157,6 +159,10 @@ class LedgerModelTests(unittest.TestCase):
 
 class OperationTests(unittest.TestCase):
     def setUp(self):
+        # Native group operations are mocked on Windows; keep the Linux signal
+        # number confined to this fixture instead of changing the runtime.
+        native_kill=patch.object(s.signal,"SIGKILL",9,create=True)
+        native_kill.start(); self.addCleanup(native_kill.stop)
         self.o = s.Backup(packet()["plan"])
         self.o.approval = packet()["approval"]
         self.o.before = {"app": {"id": "1" * 64, "created": "original", "image_id": self.o.target["appImage"]}}
@@ -222,17 +228,19 @@ class OperationTests(unittest.TestCase):
             docker.assert_not_called()
 
     def test_fast_helper_requires_trusted_stdout_identity_and_absence(self):
-        cid="6"*64; proc=Mock(); proc.returncode=0
+        cid="6"*64; proc=Mock(); proc.returncode=0; proc.poll.return_value=0
         proc.communicate.return_value=(("N05_BACKUP_HELPER_REMOVED|container_id="+cid+"\n").encode(),b"")
         with patch.object(pathlib.Path,"exists",return_value=False), patch.object(s.subprocess,"Popen",return_value=proc), \
-             patch.object(self.o,"helper",return_value={"id":cid,"absent":True}) as helper, patch.object(self.o,"write"):
+             patch.object(self.o,"helper",return_value={"id":cid,"absent":True}) as helper, patch.object(self.o,"write"), \
+             patch.object(self.o,"process_group_exists",return_value=False):
             self.o.supervise_backup()
             self.assertEqual(helper.call_count,2)
 
     def test_unknown_helper_on_failure_never_adopts_or_deletes(self):
         proc=Mock(); proc.returncode=1; proc.poll.return_value=1; proc.communicate.return_value=(b"",b"private-error")
         with patch.object(pathlib.Path,"exists",return_value=False), patch.object(s.subprocess,"Popen",return_value=proc), \
-             patch.object(self.o,"stop_helper") as stop, patch.object(self.o,"docker") as docker:
+             patch.object(self.o,"stop_helper") as stop, patch.object(self.o,"docker") as docker, \
+             patch.object(self.o,"process_group_exists",return_value=False), patch.object(self.o,"terminate_process"):
             with self.assertRaisesRegex(s.Stop,"BACKUP_HELPER_IDENTITY_UNCERTAIN"): self.o.supervise_backup()
             stop.assert_not_called(); docker.assert_not_called()
 
@@ -287,6 +295,199 @@ class OperationTests(unittest.TestCase):
 
     def test_no_success_receipt_if_source_resume_fails(self):
         self.assertNotIn("BACKUP_VERIFIED.json",[name for name,_ in self.create_result(True)])
+
+    def test_reaped_leader_still_requires_attributed_group_kill(self):
+        proc=Mock(pid=123456); proc.poll.return_value=0
+        with patch.object(s.os,"killpg",create=True) as kill, \
+             patch.object(self.o,"process_group_exists",return_value=False) as group:
+            self.o.terminate_process(proc)
+        kill.assert_called_once_with(proc.pid,s.signal.SIGKILL)
+        group.assert_called_once_with(proc.pid)
+        proc.communicate.assert_called_once()
+        self.assertTrue(self.o.command_groups_quiet)
+
+    def test_reaped_leader_does_not_skip_surviving_descendant_wait(self):
+        proc=Mock(pid=123456); proc.poll.return_value=0
+        with patch.object(s.os,"killpg",create=True), patch.object(s.time,"sleep"), \
+             patch.object(self.o,"process_group_exists",side_effect=[True,True,False]) as group:
+            self.o.terminate_process(proc)
+        self.assertEqual(group.call_count,3)
+        self.assertEqual(proc.communicate.call_count,3)
+
+    def test_unverified_group_poison_survives_other_cleanup_and_blocks_resume(self):
+        proc=Mock(pid=123456); proc.poll.return_value=0
+        with patch.object(s.os,"killpg",create=True), patch.object(self.o,"remaining",return_value=.04), \
+             patch.object(self.o,"process_group_exists",return_value=True):
+            with self.assertRaisesRegex(s.Stop,"PROCESS_STOP_UNVERIFIED"):
+                self.o.terminate_process(proc)
+        self.assertFalse(self.o.command_groups_quiet)
+        # Settling a different group cannot erase the first group's uncertainty.
+        other=Mock(pid=123457); other.poll.return_value=0
+        with patch.object(s.os,"killpg",create=True), patch.object(self.o,"process_group_exists",return_value=False):
+            self.o.terminate_process(other)
+        with patch.object(self.o,"inspect") as inspect, patch.object(self.o,"docker") as docker:
+            with self.assertRaisesRegex(s.Stop,"PROCESS_STOP_UNVERIFIED"): self.o.resume()
+        inspect.assert_not_called(); docker.assert_not_called()
+
+    def test_canonical_unverified_group_also_blocks_resume(self):
+        self.o.adapter=Mock()
+        self.o.adapter.snapshot.side_effect=RuntimeError("LOCAL_COMMAND_STOP_UNVERIFIED")
+        with self.assertRaisesRegex(RuntimeError,"LOCAL_COMMAND_STOP_UNVERIFIED"): self.o.same_source()
+        with patch.object(self.o,"inspect") as inspect:
+            with self.assertRaisesRegex(s.Stop,"PROCESS_STOP_UNVERIFIED"): self.o.resume()
+        inspect.assert_not_called()
+
+    def test_normal_command_cannot_hide_descendant_after_zero_exit(self):
+        proc=Mock(pid=123456,returncode=0); proc.poll.return_value=0
+        proc.communicate.return_value=(b"synthetic",b"")
+        with patch.object(s.subprocess,"Popen",return_value=proc), patch.object(s.os,"killpg",create=True) as kill, \
+             patch.object(self.o,"process_group_exists",side_effect=[True,False]):
+            with self.assertRaisesRegex(s.Stop,"COMMAND_INTERRUPTED_OR_EXPIRED"): self.o.run(["synthetic"])
+        kill.assert_called_once_with(proc.pid,s.signal.SIGKILL)
+        self.assertTrue(self.o.command_groups_quiet)
+
+    def test_pending_signal_stops_forward_work_before_spawn(self):
+        self.o.request_interruption(s.signal.SIGINT,None)
+        with patch.object(s.subprocess,"Popen") as popen:
+            with self.assertRaisesRegex(s.Stop,"OWNER_EXECUTION_INTERRUPTED"): self.o.run(["synthetic"])
+        popen.assert_not_called()
+
+    def test_unverified_canonical_preparation_is_recorded(self):
+        out=io.StringIO()
+        with patch.object(s,"Backup",return_value=self.o), patch.object(s.signal,"signal"), \
+             patch.object(self.o,"prepare",side_effect=RuntimeError("LOCAL_COMMAND_STOP_UNVERIFIED")), \
+             redirect_stdout(out):
+            self.assertEqual(s.entry_point(packet(),"f"*64),2)
+        self.assertFalse(json.loads(out.getvalue())["localCommandGroupsQuiet"])
+
+    def test_installed_signals_during_real_resume_do_not_skip_restart(self):
+        # Exercise entry_point -> failed stop reply -> actual resume(), including
+        # the installed callbacks at inspection, start and final health check.
+        handlers={}; writes=[]; calls=[]
+        stopped={"Id":"1"*64,"Created":"original","Image":self.o.target["appImage"],"State":{"Running":False}}
+        healthy=copy.deepcopy(stopped); healthy["State"]={"Running":True,"Health":{"Status":"healthy"}}
+        inspections=iter([stopped,healthy])
+        def inspect(_cid):
+            handlers[s.signal.SIGTERM](s.signal.SIGTERM,None)
+            return next(inspections)
+        def docker(*args,**kwargs):
+            calls.append(args)
+            if args[0]=="stop": raise s.Stop("SYNTHETIC_LOST_STOP_REPLY")
+            handlers[s.signal.SIGINT](s.signal.SIGINT,None)
+        out=io.StringIO()
+        with patch.object(s,"Backup",return_value=self.o), patch.object(self.o,"prepare"), \
+             patch.object(s.signal,"signal",side_effect=lambda sig,fn:handlers.__setitem__(sig,fn)), \
+             patch.object(self.o,"same_source"), patch.object(self.o,"rows",return_value=[]), \
+             patch.object(self.o,"check_inputs"), patch.object(self.o,"write",side_effect=lambda p,v:writes.append(p.name)), \
+             patch.object(self.o,"inspect",side_effect=inspect), patch.object(self.o,"docker",side_effect=docker), \
+             redirect_stdout(out):
+            self.assertEqual(s.entry_point(packet(),"f"*64),2)
+        result=json.loads(out.getvalue())
+        self.assertEqual(result["status"],"STOP")
+        self.assertTrue(result["appResumedHealthy"])
+        self.assertTrue(result["interruptionRequested"])
+        self.assertEqual(calls[-1],("start","1"*64))
+        self.assertEqual(sum(x[0]=="start" for x in calls),1)
+        self.assertNotIn("BACKUP_VERIFIED.json",writes)
+
+    def test_signal_during_cleanup_does_not_prevent_group_stop(self):
+        proc=Mock(pid=123456); proc.poll.return_value=0
+        proc.communicate.side_effect=lambda **kw:self.o.request_interruption(s.signal.SIGTERM,None)
+        with patch.object(s.os,"killpg",create=True), patch.object(self.o,"process_group_exists",return_value=False):
+            self.o.terminate_process(proc)
+        self.assertTrue(self.o.interruption_requested)
+        self.assertTrue(self.o.command_groups_quiet)
+
+    def test_repeated_signals_do_not_extend_expired_resume_budget(self):
+        self.o.monotonic-=1600
+        self.o.request_interruption(s.signal.SIGTERM,None)
+        self.o.request_interruption(s.signal.SIGINT,None)
+        with patch.object(self.o,"inspect") as inspect, patch.object(self.o,"docker") as docker:
+            with self.assertRaisesRegex(s.Stop,"ORIGINAL_EXECUTION_BUDGET_EXPIRED"): self.o.resume()
+        inspect.assert_not_called(); docker.assert_not_called()
+
+    def test_signal_during_successful_backup_resume_prevents_success_receipt(self):
+        stopped={"Id":"1"*64,"Created":"original","Image":self.o.target["appImage"],
+                 "State":{"Running":False,"Pid":0}}
+        healthy=copy.deepcopy(stopped); healthy["State"]={"Running":True,"Health":{"Status":"healthy"}}
+        inspections=iter([stopped,stopped,healthy]); writes=[]
+        def inspect(_cid):
+            if self.o.emergency: self.o.request_interruption(s.signal.SIGTERM,None)
+            return next(inspections)
+        with patch.object(self.o,"same_source",return_value={"app":{"state":"exited"}}), \
+             patch.object(self.o,"rows",return_value=[]), patch.object(self.o,"check_inputs"), \
+             patch.object(self.o,"write",side_effect=lambda p,v:writes.append(p.name)), \
+             patch.object(self.o,"docker") as docker, patch.object(self.o,"inspect",side_effect=inspect), \
+             patch.object(self.o,"run",return_value=b"synthetic"), \
+             patch.object(self.o,"supervise_backup",return_value=b"synthetic"), \
+             patch.object(s,"read_stable",return_value=b"synthetic"), \
+             patch.object(pathlib.Path,"open",return_value=io.BytesIO(b"synthetic")):
+            with self.assertRaisesRegex(s.Stop,"OWNER_EXECUTION_INTERRUPTED"): self.o.create()
+        self.assertTrue(self.o.app_resumed)
+        self.assertEqual(docker.call_args_list[-1].args,("start","1"*64))
+        self.assertNotIn("BACKUP_VERIFIED.json",writes)
+
+    def test_process_stop_cannot_renew_original_execution_budget(self):
+        self.o.monotonic-=1600
+        with patch.object(s.os,"killpg",create=True) as kill:
+            with self.assertRaisesRegex(s.Stop,"ORIGINAL_EXECUTION_BUDGET_EXPIRED"):
+                self.o.terminate_process(Mock(pid=123456))
+        kill.assert_not_called()
+        self.assertFalse(self.o.command_groups_quiet)
+
+
+@unittest.skipUnless(sys.platform=="linux","native process groups require Linux")
+class NativeProcessGroupTests(unittest.TestCase):
+    def exercise(self, leader_exits):
+        # Both children are ours, in a new session. The descendant ignores TERM
+        # and closes output pipes, reproducing a leader whose communicate()
+        # completes while its descendant still runs. No Docker or SSH involved.
+        script="""import os, signal, sys, time
+r,w=os.pipe()
+child=os.fork()
+if child==0:
+    os.close(r)
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    os.write(w,b'1'); os.close(w)
+    for fd in (0,1,2): os.close(fd)
+    time.sleep(30)
+    os._exit(0)
+os.close(w); os.read(r,1); os.close(r)
+print(child,flush=True)
+if sys.argv[1]=='exit': os._exit(0)
+time.sleep(30)
+"""
+        proc=subprocess.Popen([sys.executable,"-c",script,"exit" if leader_exits else "wait"],
+                              start_new_session=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        child=None
+        try:
+            child=int(proc.stdout.readline())
+            if leader_exits: proc.wait(timeout=3)
+            operation=s.Backup(packet()["plan"])
+            began=time.monotonic()
+            try:
+                operation.terminate_process(proc)
+            except s.Stop as exc:
+                # A host that has not reaped an orphan zombie is still denied;
+                # only a vanished group admits resume, never just a dead leader.
+                self.assertEqual(str(exc),"PROCESS_STOP_UNVERIFIED")
+                self.assertFalse(operation.command_groups_quiet)
+                with patch.object(operation,"inspect") as inspect:
+                    with self.assertRaisesRegex(s.Stop,"PROCESS_STOP_UNVERIFIED"): operation.resume()
+                inspect.assert_not_called()
+            else:
+                self.assertFalse(operation.process_group_exists(proc.pid))
+            self.assertLess(time.monotonic()-began,6)
+            state=pathlib.Path(f"/proc/{child}/stat")
+            if state.exists(): self.assertIn(state.read_text().rsplit(")",1)[1].split()[0],("Z","X"))
+        finally:
+            try: os.killpg(proc.pid,s.signal.SIGKILL)
+            except ProcessLookupError: pass
+            proc.wait(timeout=3)
+            proc.stdout.close(); proc.stderr.close()
+
+    def test_native_reaped_leader_descendant_is_stopped(self): self.exercise(True)
+    def test_native_live_leader_with_term_ignoring_child_is_stopped(self): self.exercise(False)
 
 
 if __name__ == "__main__":

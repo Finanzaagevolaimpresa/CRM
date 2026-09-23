@@ -92,6 +92,20 @@ create a new indefinite deadline. A backup/helper failure may leave a private
 partial/full set or require owner attention. Preserve such evidence rather than
 performing broad cleanup. An unidentifiable helper is never adopted or removed.
 
+Every spawned command uses its own process group. Completion requires both a
+reaped leader and absence of that group; cleanup terminates the attributed group
+even if its leader has already exited. Its five-second stop bound is inside the
+original execution reserve. An unverified group permanently blocks further
+commands and app resumption, including uncertainty reported by the canonical
+runtime adapter. Settling another command cannot clear that failure.
+
+SIGINT/SIGTERM/SIGHUP handlers only record an interruption request. The normal
+bounded command/loop checkpoints stop forward work. During cleanup and actual
+app resumption, repeated signals remain recorded without raising an asynchronous
+exception; the original deadline and all identity guards still apply. An
+interruption arriving during otherwise successful resumption yields STOP after
+health verification, never a backup success receipt.
+
 ## Evidence and limits
 
 The package's CI tests use synthetic identifiers and mocks to check approval,
@@ -100,6 +114,12 @@ restart detection and failure to resume. Launcher tests verify canonical hashing
 and rejection before SSH on Windows and Linux. These tests do not attest an
 operation on the real target. The underlying N05 backup/recovery tools already
 have separate synthetic Docker qualifications for schema43 and46.
+Linux also exercises two disposable native process groups: a reaped leader with
+a surviving descendant, and a live leader whose descendant ignores SIGTERM and
+closes its output pipes. An unreaped orphan zombie remains an unverified group
+and blocks resumption; absence of a running leader alone is never sufficient.
+Signal regressions execute the real resume method with synthetic Docker
+boundaries, including callbacks installed by the real entry point.
 
 This step produces and verifies the new source set **on the server**. Its receipt
 explicitly sets `offHostEncryptedCopiesCreated=false`. Encryption/transfer through

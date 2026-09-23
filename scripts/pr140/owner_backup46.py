@@ -168,11 +168,20 @@ class Backup:
         self.quiescence_attempted = self.app_resumed = False
         self.helper_ref = None
         self.approval = None
+        self.command_groups_quiet = True
+        self.interruption_requested = False
+
+    def request_interruption(self, _signum, _frame):
+        # Never raise asynchronously inside process settlement or app recovery.
+        # Ordinary checkpoints stop forward work; recovery only obeys the
+        # original finite deadline, even if more signals arrive.
+        self.interruption_requested = True
 
     def remaining(self):
         limit = 1500 if self.emergency else 1200
         remaining = min(self.started + limit - time.time(), self.monotonic + limit - time.monotonic())
         need(remaining > 0, "ORIGINAL_EXECUTION_BUDGET_EXPIRED")
+        need(self.emergency or not self.interruption_requested, "OWNER_EXECUTION_INTERRUPTED")
         return remaining
 
     def deadline(self, cap=90):
@@ -187,11 +196,12 @@ class Backup:
 
     def run(self, args, *, cap=60, env=None, stdin=None):
         seconds = min(cap, self.remaining())
-        proc = subprocess.Popen(args, cwd=self.root, env=self.environment() | (env or {}),
+        proc = self.spawn(args, cwd=self.root, env=self.environment() | (env or {}),
                                 stdin=stdin or subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, start_new_session=True)
         try:
             out, _ = proc.communicate(timeout=seconds)
+            self.verify_process_exit(proc)
         except BaseException:
             self.terminate_process(proc)
             raise Stop("COMMAND_INTERRUPTED_OR_EXPIRED") from None
@@ -199,22 +209,61 @@ class Backup:
         self.remaining()
         return out
 
+    def spawn(self, *args, **kwargs):
+        need(self.command_groups_quiet, "PROCESS_STOP_UNVERIFIED")
+        try:
+            return subprocess.Popen(*args, **kwargs)
+        except BaseException:
+            # A lost creation reply supplies no PID with which to prove stop.
+            self.command_groups_quiet = False
+            raise
+
     @staticmethod
-    def terminate_process(proc):
-        if proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.communicate(timeout=5)
+    def process_group_exists(pgid):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def verify_process_exit(self, proc):
         need(proc.poll() is not None, "PROCESS_STOP_UNVERIFIED")
+        need(not self.process_group_exists(proc.pid), "PROCESS_GROUP_OUTLIVED_COMMAND")
+
+    def terminate_process(self, proc):
+        self.emergency = True
+        try:
+            self._terminate_process(proc)
+        except BaseException:
+            # Sticky: settling a different command later cannot clear an
+            # earlier unverified group, including the canonical adapter's.
+            self.command_groups_quiet = False
+            raise
+
+    def _terminate_process(self, proc):
+        need(type(proc.pid) is int and proc.pid > 1 and
+             (not hasattr(os, "getpgrp") or proc.pid != os.getpgrp()), "PROCESS_GROUP_IDENTITY")
+        # The PGID is the PID returned by our start_new_session=True spawn.
+        # A reaped leader is not proof that its descendants stopped. As in
+        # the canonical N05 command runner, terminate that exact group and
+        # require ESRCH before admitting another command or app resumption.
+        budget = min(5, self.remaining())
+        mono_end, wall_end = time.monotonic() + budget, time.time() + budget
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        while True:
+            left = min(mono_end - time.monotonic(), wall_end - time.time(), self.remaining())
+            need(left > 0, "PROCESS_STOP_UNVERIFIED")
+            try:
+                proc.communicate(timeout=min(.1, left))
+            except subprocess.TimeoutExpired:
+                pass
+            if proc.poll() is not None and not self.process_group_exists(proc.pid):
+                return
+            time.sleep(min(.02, max(0, mono_end - time.monotonic()),
+                           max(0, wall_end - time.time()), self.remaining()))
 
     def docker(self, *args, **kwargs):
         return self.run(["docker", "--host", "unix:///var/run/docker.sock", *args], **kwargs).decode().strip()
@@ -267,7 +316,13 @@ class Backup:
              app["State"].get("Health", {}).get("Status") == "healthy", "BASELINE_APP_DRIFT")
 
     def same_source(self, *, healthy=True):
-        current = self.adapter.snapshot(self.deadline())
+        need(self.command_groups_quiet, "PROCESS_STOP_UNVERIFIED")
+        try:
+            current = self.adapter.snapshot(self.deadline())
+        except BaseException as exc:
+            if str(exc) == "LOCAL_COMMAND_STOP_UNVERIFIED":
+                self.command_groups_quiet = False
+            raise
         need(current["engine"] == self.before["engine"] and
              current["postgres"] == self.before["postgres"] and
              current["resources"] == self.before["resources"] and current["postgres_healthy"], "PERSISTENCE_DRIFT")
@@ -386,7 +441,7 @@ class Backup:
 
     def supervise_backup(self):
         self.remaining()
-        proc = subprocess.Popen([str(self.root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
+        proc = self.spawn([str(self.root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
             env=self.environment() | self.backup_environment(), stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         cidpath = self.work / "sets" / (".partial-" + self.set_id) / ".documents-helper.cid"
@@ -407,6 +462,7 @@ class Backup:
                     break
                 except subprocess.TimeoutExpired:
                     pass
+            self.verify_process_exit(proc)
             need(proc.returncode == 0, "BACKUP_COMMAND_FAILED")
             ids = [line.split(b"container_id=", 1)[1].decode() for line in out.splitlines()
                    if line.startswith(b"N05_BACKUP_HELPER_REMOVED|container_id=")]
@@ -431,6 +487,8 @@ class Backup:
 
     def resume(self):
         self.emergency = True
+        need(self.command_groups_quiet, "PROCESS_STOP_UNVERIFIED")
+        self.remaining()
         app = self.inspect(self.target["appId"])
         need(app["Id"] == self.before["app"]["id"] and app["Created"] == self.before["app"]["created"] and
              app["Image"] == self.target["appImage"], "RESUME_IDENTITY")
@@ -495,6 +553,7 @@ class Backup:
         finally:
             # Lost stop/backup replies never skip an identity-bound source resume.
             self.resume()
+        need(not self.interruption_requested, "OWNER_EXECUTION_INTERRUPTED")
         need(receipt is not None and self.app_resumed, "SUCCESS_NOT_ESTABLISHED")
         receipt["appResumedHealthy"] = True
         receipt["completedUtc"] = utc()
@@ -536,13 +595,11 @@ def entry_point(packet, program_sha256):
     operation = None
     try:
         plan = validate_packet(packet, program_sha256)
-        def interrupted(_signum, _frame):
-            raise Stop("OWNER_EXECUTION_INTERRUPTED")
+        operation = Backup(plan)
         for signal_name in ("SIGTERM", "SIGINT", "SIGHUP"):
             if hasattr(signal, signal_name):
-                signal.signal(getattr(signal, signal_name), interrupted)
+                signal.signal(getattr(signal, signal_name), operation.request_interruption)
         os.umask(0o077)
-        operation = Backup(plan)
         operation.approval = packet["approval"]
         operation.prepare()
         operation.write(operation.work / "ADMISSION.json", {
@@ -553,9 +610,13 @@ def entry_point(packet, program_sha256):
         print(canonical(result), flush=True)
         return 0
     except BaseException as exc:
+        if operation is not None and str(exc) == "LOCAL_COMMAND_STOP_UNVERIFIED":
+            operation.command_groups_quiet = False
         result = {"protocol": PROTOCOL, "status": "STOP", "code": denial(exc), "realKeyAccess": False,
                   "secretValuesExported": False, "quiescenceAttempted": bool(operation and operation.quiescence_attempted),
-                  "appResumedHealthy": bool(operation and operation.app_resumed)}
+                  "appResumedHealthy": bool(operation and operation.app_resumed),
+                  "interruptionRequested": bool(operation and operation.interruption_requested),
+                  "localCommandGroupsQuiet": bool(operation and operation.command_groups_quiet)}
         if operation is not None and operation.module is not None and operation.work.is_dir():
             try:
                 operation.write(operation.work / "STOP.json", result)
