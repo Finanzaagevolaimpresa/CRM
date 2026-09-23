@@ -157,6 +157,115 @@ class LedgerModelTests(unittest.TestCase):
         with self.assertRaises(s.Stop): s.validate_model(m, "sha256:" + "4" * 64)
 
 
+class CommandDiagnosticTests(unittest.TestCase):
+    def exercise_stop_receipt(self, failed_phase, resume_failure=False):
+        operation = s.Backup(packet()["plan"])
+        operation.before = {"app": {"id": "1" * 64, "created": "original"}}
+        operation.module = Mock()
+        writes = {}
+        commands = []
+
+        def spawn(args, **kwargs):
+            commands.append(args)
+            failed = operation.phase == failed_phase or operation.phase == "APP_RESUME"
+            code = 11 if operation.phase == "APP_RESUME" else 7 if failed else 0
+            raw = [{"Id": "1" * 64, "Created": "original", "State": {"Running": False, "Pid": 0}}]
+            out = b"PRIVATE_STDOUT" if failed else json.dumps(raw).encode()
+            return Mock(returncode=code, communicate=Mock(return_value=(out, b"Permission denied PRIVATE_STDERR" if failed else b"")))
+
+        def resume():
+            if resume_failure:
+                operation.phase = "APP_RESUME"
+                operation.emergency = True
+                operation.docker("start", operation.target["appId"])
+            operation.app_resumed = True
+
+        out = io.StringIO()
+        with patch.object(s, "Backup", return_value=operation), patch.object(s.signal, "signal"), \
+             patch.object(s.os, "umask"), patch.object(operation, "prepare"), \
+             patch.object(operation, "same_source"), patch.object(operation, "rows", return_value=[]), \
+             patch.object(operation, "check_inputs"), patch.object(operation, "verify_process_exit"), \
+             patch.object(operation, "resume", side_effect=resume), \
+             patch.object(operation, "write", side_effect=lambda p,v: writes.update({p.name: copy.deepcopy(v)})), \
+             patch.object(pathlib.Path, "is_dir", return_value=True), \
+             patch.object(s.subprocess, "Popen", side_effect=spawn), redirect_stdout(out):
+            self.assertEqual(s.entry_point(packet(), "f" * 64), 2)
+        result = json.loads(out.getvalue())
+        self.assertEqual(result, writes["STOP.json"])
+        self.assertEqual(result["code"], "COMMAND_FAILED")
+        self.assertEqual(result["diagnosticVersion"], 1)
+        self.assertNotIn("BACKUP_VERIFIED.json", writes)
+        self.assertFalse(result["secretValuesExported"])
+        for private in ("PRIVATE_STDOUT", "PRIVATE_STDERR", "1" * 64, str(operation.root)):
+            self.assertNotIn(private, out.getvalue())
+        return result, commands
+
+    def test_three_preflight_command_failures_are_distinguished_in_both_receipts(self):
+        for phase, command in (("APP_QUIESCE", "DOCKER_STOP"),
+                               ("APP_STOP_VERIFY", "DOCKER_APP_INSPECT"),
+                               ("BACKUP_PREFLIGHT", "BACKUP_PREFLIGHT")):
+            with self.subTest(phase=phase):
+                result, _ = self.exercise_stop_receipt(phase)
+                self.assertEqual(result["commandFailure"]["phase"], phase)
+                self.assertEqual(result["commandFailure"]["commandId"], command)
+                self.assertEqual(result["commandFailure"]["exitCode"], 7)
+                self.assertEqual(result["commandFailure"]["errorClass"], "ACCESS_DENIED")
+                self.assertTrue(result["appResumedHealthy"])
+                self.assertNotIn("recoveryCommandFailure", result)
+
+    def test_resume_failure_preserves_original_command_and_records_recovery_separately(self):
+        result, _ = self.exercise_stop_receipt("BACKUP_PREFLIGHT", resume_failure=True)
+        self.assertEqual(result["commandFailure"]["phase"], "BACKUP_PREFLIGHT")
+        self.assertEqual(result["commandFailure"]["exitCode"], 7)
+        self.assertEqual(result["recoveryCommandFailure"]["phase"], "APP_RESUME")
+        self.assertEqual(result["recoveryCommandFailure"]["commandId"], "DOCKER_START")
+        self.assertEqual(result["recoveryCommandFailure"]["exitCode"], 11)
+        self.assertFalse(result["appResumedHealthy"])
+
+    def test_unknown_diagnostics_cannot_export_dynamic_labels_or_error_text(self):
+        operation = s.Backup(packet()["plan"])
+        operation.phase = "PRIVATE_PHASE"
+        operation.record_command_failure("PRIVATE_ARGUMENT", Mock(returncode=3), b"secret=value\x00\xff")
+        record = operation.command_failure
+        self.assertEqual(record["phase"], "UNSPECIFIED")
+        self.assertEqual(record["commandId"], "UNSPECIFIED")
+        self.assertEqual(record["errorClass"], "OUTPUT_REDACTED")
+        self.assertNotIn("secret", s.canonical(record))
+        self.assertNotIn("PRIVATE", s.canonical(record))
+
+    def test_timeout_is_captured_before_cleanup_without_fabricated_exit_code(self):
+        operation = s.Backup(packet()["plan"])
+        operation.phase = "BACKUP_PREFLIGHT"
+        proc = Mock(returncode=None)
+        proc.communicate.side_effect = subprocess.TimeoutExpired(["PRIVATE_ARGUMENT"], 1, stderr=b"PRIVATE_STDERR")
+        with patch.object(s.subprocess, "Popen", return_value=proc), \
+             patch.object(operation, "terminate_process") as cleanup:
+            with self.assertRaisesRegex(s.Stop, "COMMAND_INTERRUPTED_OR_EXPIRED"):
+                operation.run(["PRIVATE_ARGUMENT"], command_id="BACKUP_PREFLIGHT")
+        cleanup.assert_called_once_with(proc)
+        self.assertIsNone(operation.command_failure["exitCode"])
+        self.assertEqual(operation.command_failure["errorClass"], "COMMAND_INTERRUPTED_OR_EXPIRED")
+        self.assertNotIn("PRIVATE", s.canonical(operation.command_failure))
+
+    def test_failed_process_creation_retains_sticky_stop_guard(self):
+        operation = s.Backup(packet()["plan"])
+        with patch.object(s.subprocess, "Popen", side_effect=OSError("PRIVATE_ERROR")):
+            with self.assertRaises(OSError):
+                operation.run(["PRIVATE_ARGUMENT"], command_id="SOURCE_REVISION")
+        self.assertFalse(operation.command_groups_quiet)
+        self.assertIsNone(operation.command_failure["exitCode"])
+        self.assertEqual(operation.command_failure["errorClass"], "PROCESS_START_FAILED")
+        self.assertNotIn("PRIVATE", s.canonical(operation.command_failure))
+
+    def test_successful_command_has_no_failure_record_and_same_output(self):
+        operation = s.Backup(packet()["plan"])
+        proc = Mock(returncode=0, communicate=Mock(return_value=(b"expected", b"")))
+        with patch.object(s.subprocess, "Popen", return_value=proc), patch.object(operation, "verify_process_exit"):
+            self.assertEqual(operation.run(["synthetic"], command_id="SOURCE_REVISION"), b"expected")
+        self.assertIsNone(operation.command_failure)
+        self.assertIsNone(operation.recovery_command_failure)
+
+
 class OperationTests(unittest.TestCase):
     def setUp(self):
         # Native group operations are mocked on Windows; keep the Linux signal
@@ -243,6 +352,10 @@ class OperationTests(unittest.TestCase):
              patch.object(self.o,"process_group_exists",return_value=False), patch.object(self.o,"terminate_process"):
             with self.assertRaisesRegex(s.Stop,"BACKUP_HELPER_IDENTITY_UNCERTAIN"): self.o.supervise_backup()
             stop.assert_not_called(); docker.assert_not_called()
+        self.assertEqual(self.o.command_failure["phase"], "BACKUP_CREATE")
+        self.assertEqual(self.o.command_failure["commandId"], "BACKUP_CREATE")
+        self.assertEqual(self.o.command_failure["exitCode"], 1)
+        self.assertNotIn("private-error", s.canonical(self.o.command_failure))
 
     def test_database_restart_is_detected(self):
         pg={"Id":"2"*64,"Image":self.o.target["postgresImage"],"Created":"original","RestartCount":0,

@@ -38,6 +38,32 @@ TOOLS = {
     "docker-compose.prod.example.yml": "10a56d1058c64de7b265352f9ad4f29f3c9d5db88f42e8ce1f901a9836508c75",
     "docker-compose.prod.legacy-resources.yml": "b6c4ea08bc30726677a2ede1076a72dddc0986ac58e7e58609b6bd98b02a5e73",
 }
+DIAGNOSTIC_PHASES = frozenset({
+    "PREPARE", "BEFORE_QUIESCENCE", "APP_QUIESCE", "APP_STOP_VERIFY",
+    "BACKUP_PREFLIGHT", "BACKUP_CREATE", "BACKUP_VERIFY", "ARCHIVE_VERIFY",
+    "POST_BACKUP_VERIFY", "APP_RESUME",
+})
+DIAGNOSTIC_COMMANDS = frozenset({
+    "SOURCE_REVISION", "SOURCE_STATUS", "MIGRATION_SOURCE", "LEDGER_READ",
+    "POSTGRES_DATABASE_NAME", "DOCKER_INFO", "DOCKER_IMAGE", "DOCKER_INSPECT",
+    "DOCKER_APP_INSPECT", "DOCKER_POSTGRES_INSPECT", "DOCKER_HELPER_INSPECT",
+    "DOCKER_EXEC", "DOCKER_PS", "DOCKER_STOP", "DOCKER_START", "DOCKER_RM",
+    "BACKUP_PREFLIGHT", "BACKUP_CREATE", "BACKUP_MANIFEST_VERIFY", "PG_ARCHIVE_READ",
+})
+
+
+def sanitized_command_error(stderr):
+    # Fixed categories only: never return excerpts, arguments or environment.
+    value = stderr[-65536:].lower()
+    for markers, code in (
+        ((b"permission denied", b"operation not permitted", b"access is denied"), "ACCESS_DENIED"),
+        ((b"no space left on device",), "SPACE_EXHAUSTED"),
+        ((b"cannot connect to the docker daemon", b"is the docker daemon running"), "DOCKER_UNAVAILABLE"),
+        ((b"no such file or directory", b"command not found"), "FILE_OR_COMMAND_NOT_FOUND"),
+    ):
+        if any(marker in value for marker in markers):
+            return code
+    return "OUTPUT_REDACTED"
 
 
 class Stop(Exception):
@@ -170,6 +196,8 @@ class Backup:
         self.approval = None
         self.command_groups_quiet = True
         self.interruption_requested = False
+        self.phase = "PREPARE"
+        self.command_failure = self.recovery_command_failure = None
 
     def request_interruption(self, _signum, _frame):
         # Never raise asynchronously inside process settlement or app recovery.
@@ -194,17 +222,43 @@ class Backup:
             "DOCKER_HOST": "unix:///var/run/docker.sock",
         }
 
-    def run(self, args, *, cap=60, env=None, stdin=None):
+    def record_command_failure(self, command_id, proc=None, stderr=b"", *, kind="NONZERO_EXIT"):
+        stderr = stderr if isinstance(stderr, bytes) else b""
+        exit_code = getattr(proc, "returncode", None)
+        record = {
+            "phase": self.phase if self.phase in DIAGNOSTIC_PHASES else "UNSPECIFIED",
+            "commandId": command_id if command_id in DIAGNOSTIC_COMMANDS else "UNSPECIFIED",
+            "exitCode": exit_code if type(exit_code) is int else None,
+            "errorClass": sanitized_command_error(stderr) if kind == "NONZERO_EXIT" else kind,
+            "stderrBytes": len(stderr), "stderrSha256": sha_bytes(stderr),
+        }
+        # A successful resume, or a second failure during cleanup/resume, must
+        # never replace the evidence identifying the initial command failure.
+        if self.command_failure is None:
+            self.command_failure = record
+        elif self.emergency and self.recovery_command_failure is None and record != self.command_failure:
+            self.recovery_command_failure = record
+
+    def run(self, args, *, cap=60, env=None, stdin=None, command_id="UNSPECIFIED"):
         seconds = min(cap, self.remaining())
-        proc = self.spawn(args, cwd=self.root, env=self.environment() | (env or {}),
-                                stdin=stdin or subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, start_new_session=True)
         try:
-            out, _ = proc.communicate(timeout=seconds)
-            self.verify_process_exit(proc)
+            proc = self.spawn(args, cwd=self.root, env=self.environment() | (env or {}),
+                                    stdin=stdin or subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, start_new_session=True)
         except BaseException:
+            self.record_command_failure(command_id, kind="PROCESS_START_FAILED")
+            raise
+        err = b""
+        try:
+            out, err = proc.communicate(timeout=seconds)
+            self.verify_process_exit(proc)
+        except BaseException as exc:
+            self.record_command_failure(command_id, proc, getattr(exc, "stderr", None) or err,
+                                        kind="COMMAND_INTERRUPTED_OR_EXPIRED")
             self.terminate_process(proc)
             raise Stop("COMMAND_INTERRUPTED_OR_EXPIRED") from None
+        if proc.returncode != 0:
+            self.record_command_failure(command_id, proc, err)
         need(proc.returncode == 0, "COMMAND_FAILED")
         self.remaining()
         return out
@@ -266,10 +320,12 @@ class Backup:
                            max(0, wall_end - time.time()), self.remaining()))
 
     def docker(self, *args, **kwargs):
+        kwargs.setdefault("command_id", "DOCKER_" + args[0].upper())
         return self.run(["docker", "--host", "unix:///var/run/docker.sock", *args], **kwargs).decode().strip()
 
     def inspect(self, cid):
-        return strict_json(self.docker("inspect", cid))[0]
+        role = "APP" if cid == self.target["appId"] else "POSTGRES" if cid == self.target["postgresId"] else "HELPER"
+        return strict_json(self.docker("inspect", cid, command_id="DOCKER_" + role + "_INSPECT"))[0]
 
     def write(self, path, value):
         self.module.private_file(path, may_create=True)
@@ -293,7 +349,7 @@ class Backup:
                "applied_steps_count::text FROM _prisma_migrations ORDER BY migration_name; COMMIT;")
         output = self.docker("exec", self.target["postgresId"], "sh", "-ceu",
             'exec psql -X -qAt -F "\t" -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"',
-            "backup-ledger", sql)
+            "backup-ledger", sql, command_id="LEDGER_READ")
         rows = [line.split("\t") for line in output.splitlines()]
         validate_ledger(rows, self.plan["expectedLedger"])
         return rows
@@ -340,13 +396,13 @@ class Backup:
         trusted_directory(self.root)
         need(not os.path.lexists(self.work), "OUTPUT_ALREADY_EXISTS")
         need(shutil.disk_usage(BASE).free >= 2 * 1024 ** 3, "BACKUP_SPACE_LOW")
-        need(self.run(["git", "rev-parse", "HEAD", "HEAD^{tree}"]).decode().split() == [SOURCE, TREE], "SOURCE_CHECKOUT_DRIFT")
-        need(not self.run(["git", "status", "--porcelain", "--untracked-files=no"]).strip(), "TRACKED_SOURCE_DIRTY")
+        need(self.run(["git", "rev-parse", "HEAD", "HEAD^{tree}"], command_id="SOURCE_REVISION").decode().split() == [SOURCE, TREE], "SOURCE_CHECKOUT_DRIFT")
+        need(not self.run(["git", "status", "--porcelain", "--untracked-files=no"], command_id="SOURCE_STATUS").strip(), "TRACKED_SOURCE_DIRTY")
         for name, expected in TOOLS.items():
             need(sha_bytes(read_stable(self.root / name)) == expected, "CANONICAL_TOOL_DRIFT")
         for name, expected in self.plan["expectedLedger"].items():
             path = "prisma/migrations/" + name + "/migration.sql"
-            need(sha_bytes(self.run(["git", "show", SOURCE + ":" + path])) == expected and
+            need(sha_bytes(self.run(["git", "show", SOURCE + ":" + path], command_id="MIGRATION_SOURCE")) == expected and
                  sha_bytes(read_stable(self.root / path)) == expected, "CANONICAL_LEDGER_DRIFT")
         pg_state = self.check_pg_state()
         need(pg_state["restarts"] == 0, "BASELINE_POSTGRES_RESTARTED")
@@ -357,7 +413,7 @@ class Backup:
         labels = actual_image["Config"].get("Labels") or {}
         need(actual_image["Id"] == self.target["appImage"] and labels.get("org.opencontainers.image.revision") == SOURCE and
              labels.get("it.finanzaagevolaimpresa.source-tree") == TREE, "SOURCE_IMAGE_PROVENANCE")
-        need(self.docker("exec", self.target["postgresId"], "sh", "-ceu", 'printf %s "$POSTGRES_DB"') ==
+        need(self.docker("exec", self.target["postgresId"], "sh", "-ceu", 'printf %s "$POSTGRES_DB"', command_id="POSTGRES_DATABASE_NAME") ==
              self.plan["databaseName"], "DATABASE_NAME_DRIFT")
         module_path = self.root / "scripts/n05/failed_app_return.py"
         spec = importlib.util.spec_from_file_location("backup46_canonical", module_path)
@@ -440,10 +496,16 @@ class Backup:
         need(self.helper(ref["id"])["absent"], "HELPER_REMOVAL_UNVERIFIED")
 
     def supervise_backup(self):
+        self.phase = "BACKUP_CREATE"
         self.remaining()
-        proc = self.spawn([str(self.root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
-            env=self.environment() | self.backup_environment(), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            proc = self.spawn([str(self.root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
+                env=self.environment() | self.backup_environment(), stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        except BaseException:
+            self.record_command_failure("BACKUP_CREATE", kind="PROCESS_START_FAILED")
+            raise
+        err = b""
         cidpath = self.work / "sets" / (".partial-" + self.set_id) / ".documents-helper.cid"
         def capture():
             if self.helper_ref is not None or not cidpath.exists():
@@ -458,11 +520,13 @@ class Backup:
                 capture()
                 self.remaining()
                 try:
-                    out, _ = proc.communicate(timeout=0.1)
+                    out, err = proc.communicate(timeout=0.1)
                     break
                 except subprocess.TimeoutExpired:
                     pass
             self.verify_process_exit(proc)
+            if proc.returncode != 0:
+                self.record_command_failure("BACKUP_CREATE", proc, err)
             need(proc.returncode == 0, "BACKUP_COMMAND_FAILED")
             ids = [line.split(b"container_id=", 1)[1].decode() for line in out.splitlines()
                    if line.startswith(b"N05_BACKUP_HELPER_REMOVED|container_id=")]
@@ -473,6 +537,8 @@ class Backup:
             need(ids == [self.helper_ref["id"]] and self.helper(ids[0])["absent"], "BACKUP_HELPER_STILL_PRESENT")
             return out
         except BaseException:
+            if self.command_failure is None:
+                self.record_command_failure("BACKUP_CREATE", proc, err, kind="BACKUP_COMMAND_INTERRUPTED_OR_UNVERIFIED")
             self.emergency = True
             capture_failed = False
             try:
@@ -486,6 +552,7 @@ class Backup:
             raise
 
     def resume(self):
+        self.phase = "APP_RESUME"
         self.emergency = True
         need(self.command_groups_quiet, "PROCESS_STOP_UNVERIFIED")
         self.remaining()
@@ -509,6 +576,7 @@ class Backup:
         raise Stop("RESUME_HEALTH_TIMEOUT")
 
     def create(self):
+        self.phase = "BEFORE_QUIESCENCE"
         need(self.approval is not None, "EXPLICIT_APPROVAL_REQUIRED")
         self.same_source()
         before_rows = self.rows()
@@ -518,23 +586,29 @@ class Backup:
         receipt = None
         try:
             self.quiescence_attempted = True
+            self.phase = "APP_QUIESCE"
             self.docker("stop", "--time", "30", self.target["appId"], cap=45)
+            self.phase = "APP_STOP_VERIFY"
             app = self.inspect(self.target["appId"])
             need(app["Id"] == self.before["app"]["id"] and app["Created"] == self.before["app"]["created"] and
                  not app["State"]["Running"] and app["State"]["Pid"] == 0 and not app.get("ExecIDs"), "QUIESCENCE_UNVERIFIED")
             env = self.backup_environment()
-            out = self.run([str(self.root / "scripts/backup-docker-prod.sh"), "--preflight"], env=env, cap=120)
+            self.phase = "BACKUP_PREFLIGHT"
+            out = self.run([str(self.root / "scripts/backup-docker-prod.sh"), "--preflight"], env=env, cap=120, command_id="BACKUP_PREFLIGHT")
             self.write(self.work / "BACKUP_PREFLIGHT.log", out)
             self.write(self.work / "BACKUP_CREATE.log", self.supervise_backup())
+            self.phase = "BACKUP_VERIFY"
             backup = self.work / "sets" / self.set_id
             verify_env = {"EXPECTED_ENVIRONMENT": "production", "EXPECTED_PROJECT": "fai-crm",
                 "EXPECTED_SOURCE_COMMIT": SOURCE, "EXPECTED_SOURCE_TREE": TREE, "EXPECTED_APP_IMAGE_ID": self.target["appImage"],
                 "EXPECTED_IMAGE_PROVENANCE": "oci-labels", "EXPECTED_RESOURCE_PROVENANCE": "authorized-legacy-compose-identity",
                 "EXPECTED_MIGRATION_COUNT": "46"}
-            self.run(["bash", str(self.root / "scripts/n05/verify-backup-manifest.sh"), str(backup)], env=verify_env, cap=120)
+            self.run(["bash", str(self.root / "scripts/n05/verify-backup-manifest.sh"), str(backup)], env=verify_env, cap=120, command_id="BACKUP_MANIFEST_VERIFY")
+            self.phase = "ARCHIVE_VERIFY"
             with (backup / "postgres.dump").open("rb") as stream:
                 self.run(["docker", "--host", "unix:///var/run/docker.sock", "exec", "-i", self.target["postgresId"],
-                          "pg_restore", "--file=/dev/null"], stdin=stream, cap=120)
+                          "pg_restore", "--file=/dev/null"], stdin=stream, cap=120, command_id="PG_ARCHIVE_READ")
+            self.phase = "POST_BACKUP_VERIFY"
             self.check_inputs()
             need(self.same_source(healthy=False)["app"]["state"] == "exited", "WRITER_REAPPEARED")
             need(self.rows() == before_rows, "BACKUP_LEDGER_DRIFT")
@@ -617,6 +691,12 @@ def entry_point(packet, program_sha256):
                   "appResumedHealthy": bool(operation and operation.app_resumed),
                   "interruptionRequested": bool(operation and operation.interruption_requested),
                   "localCommandGroupsQuiet": bool(operation and operation.command_groups_quiet)}
+        if operation is not None:
+            result["diagnosticVersion"] = 1
+            if operation.command_failure is not None:
+                result["commandFailure"] = operation.command_failure
+            if operation.recovery_command_failure is not None:
+                result["recoveryCommandFailure"] = operation.recovery_command_failure
         if operation is not None and operation.module is not None and operation.work.is_dir():
             try:
                 operation.write(operation.work / "STOP.json", result)

@@ -108,6 +108,30 @@ health verification, never a backup success receipt.
 
 ## Evidence and limits
 
+STOP receipts produced by the diagnostic update include `diagnosticVersion: 1`.
+When an owner-wrapper subprocess fails, `commandFailure` identifies its fixed
+`phase` and `commandId`, observed `exitCode` (null when unavailable), a sanitized
+`errorClass`, and stderr byte count/SHA256. The error class is a fixed category
+derived from recognized stderr patterns; unknown text becomes `OUTPUT_REDACTED`.
+No arguments, SQL, environment, stdout, raw stderr or excerpts are exported.
+Canonical adapter commands executed outside the owner wrapper retain their
+existing error handling and are not falsely assigned a wrapper command ID.
+
+The first command failure remains recorded after a successful app resume. A
+subsequent command failure during cleanup/resume has a separate
+`recoveryCommandFailure`; it never replaces the first record. The existing STOP
+code, command order, deadlines, process-group checks, admission guards and
+resumption behavior remain unchanged. These diagnostic fields appear in both
+the private STOP file and the minimized owner receipt.
+
+Historical receipts containing only `COMMAND_FAILED` cannot identify the failed
+subcommand retroactively. Missing preflight/create artifacts narrow an
+investigation but do not prove one particular cause. Preserve historical program
+bytes, receipts, attempt markers and backups; never rewrite them to add guessed
+diagnostics or rerun a consumed attempt. A revised program has a different hash
+and is rejected by an old approval packet. Publishing this diagnostic change
+does not authorize any new real backup execution, deploy or migration.
+
 The package's CI tests use synthetic identifiers and mocks to check approval,
 identity drift, lost replies, interrupted backup, helper substitution, database
 restart detection and failure to resume. Launcher tests verify canonical hashing
