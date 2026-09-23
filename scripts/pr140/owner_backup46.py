@@ -568,7 +568,33 @@ def entry_point(packet, program_sha256):
             os.close(operation.lock_fd)
 
 
+def validate_local_packet(packet, program_sha256, launcher_sha256):
+    """Use the full remote admission contract without constructing an operation."""
+    ready = False
+    try:
+        validate_packet(packet, program_sha256)
+        need(packet["approval"]["launcherSha256"] == launcher_sha256, "LAUNCHER_DIGEST_MISMATCH")
+        ready = True
+    except Stop as exc:
+        if str(exc) != "EXPLICIT_APPROVAL_REQUIRED":
+            raise
+    return {"protocol": "PR140_OWNER_BACKUP46_LOCAL_VALIDATION_R05", "runId": packet["plan"]["runId"],
+            "planSha256": sha(packet["plan"]), "programSha256": program_sha256,
+            "launcherSha256": launcher_sha256, "executionAdmitted": ready,
+            "remoteConnectionAttempted": False}
+
+
 if __name__ == "__main__":
-    # Production execution is only through the owner launcher after packet approval.
+    # A local validation entry point never constructs Backup or opens SSH.
+    if len(sys.argv) == 5 and sys.argv[1] == "--validate-packet" and sys.argv[3] == "--launcher-sha256":
+        try:
+            packet = strict_json(Path(sys.argv[2]).read_text(encoding="utf-8-sig"))
+            result = validate_local_packet(packet, sha_bytes(Path(__file__).read_bytes()), sys.argv[4])
+            print(canonical(result))
+            raise SystemExit(0)
+        except Exception as exc:
+            print(canonical({"protocol": "PR140_OWNER_BACKUP46_LOCAL_VALIDATION_R05", "status": "STOP",
+                             "code": denial(exc), "remoteConnectionAttempted": False}))
+            raise SystemExit(2)
     print(canonical({"protocol": PROTOCOL, "status": "OWNER_LAUNCHER_REQUIRED"}))
     raise SystemExit(2)

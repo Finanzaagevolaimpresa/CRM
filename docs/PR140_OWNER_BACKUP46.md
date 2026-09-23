@@ -41,9 +41,13 @@ From the already configured owner PowerShell profile, validate the private packe
 & .\scripts\pr140\Invoke-OwnerBackup46.ps1 -PacketPath '<private packet path>' -ValidateOnly
 ```
 
-Validation is local and never opens SSH. A packet without the reviewed approval
-reports `executionAdmitted=false`. No permanent execution-policy or SSH profile
-change is part of this package.
+Validation is local and never opens SSH. The launcher invokes the same complete
+Python validator used by the remote entry point, including duplicate-field and
+exact-schema checks. It uses Codex's existing bundled Python by default; an
+already installed interpreter may be selected explicitly with `-PythonPath`.
+Nothing is installed. A packet without reviewed approval reports
+`executionAdmitted=false`; malformed packets fail before the attempt marker or
+any SSH lookup. No permanent execution-policy or SSH profile change is included.
 
 Once the exact intervention is authorized, use the same command without
 `-ValidateOnly`. The launcher checks the hashes before opening SSH, uses the

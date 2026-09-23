@@ -86,6 +86,32 @@ class AdmissionTests(unittest.TestCase):
     def test_error_values_never_leak(self):
         self.assertEqual(s.denial(RuntimeError("sensitive-value=do-not-print")), "OPERATION_FAILED")
 
+    def test_local_validator_accepts_complete_approved_packet_without_operation(self):
+        with patch.object(s,"Backup") as operation:
+            result=s.validate_local_packet(packet(),"f"*64,"e"*64)
+        self.assertTrue(result["executionAdmitted"])
+        self.assertFalse(result["remoteConnectionAttempted"])
+        operation.assert_not_called()
+
+    def test_local_validator_closes_gate_on_missing_approval(self):
+        p=packet(); p["approval"]=None
+        self.assertFalse(s.validate_local_packet(p,"f"*64,"e"*64)["executionAdmitted"])
+
+    def test_locally_approved_malformed_packet_never_admitted(self):
+        for kind in ("extra-plan", "missing-ledger", "bad-target", "duplicate-container"):
+            p=packet()
+            if kind=="extra-plan": p["plan"]["unexpected"]=True
+            elif kind=="missing-ledger": p["plan"]["expectedLedger"].pop(next(iter(p["plan"]["expectedLedger"])))
+            elif kind=="bad-target": p["plan"]["target"]["appId"]="invalid"
+            else: p["plan"]["target"]["appId"]=p["plan"]["target"]["postgresId"]
+            p["approval"]["planSha256"]=s.sha(p["plan"])
+            with self.subTest(kind=kind), self.assertRaises(s.Stop):
+                s.validate_local_packet(p,"f"*64,"e"*64)
+
+    def test_local_validator_detects_launcher_drift(self):
+        with self.assertRaisesRegex(s.Stop,"LAUNCHER_DIGEST_MISMATCH"):
+            s.validate_local_packet(packet(),"f"*64,"d"*64)
+
 
 class LedgerModelTests(unittest.TestCase):
     def setUp(self):

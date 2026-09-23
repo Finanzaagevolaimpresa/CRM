@@ -1,33 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$PacketPath,
+    [string]$PythonPath = (Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'),
     [switch]$ValidateOnly
 )
 $ErrorActionPreference = 'Stop'
-
-function ConvertTo-CanonicalJson($Value) {
-    if ($null -eq $Value) { return 'null' }
-    if ($Value -is [string] -or $Value -is [bool] -or $Value -is [ValueType]) {
-        return ConvertTo-Json -InputObject $Value -Compress
-    }
-    if ($Value -is [System.Collections.IList]) {
-        $parts = @($Value | ForEach-Object { ConvertTo-CanonicalJson $_ })
-        return '[' + ($parts -join ',') + ']'
-    }
-    $keys = [string[]]@($Value.PSObject.Properties.Name)
-    [Array]::Sort($keys, [StringComparer]::Ordinal)
-    $parts = @($keys | ForEach-Object {
-        (ConvertTo-Json -InputObject $_ -Compress) + ':' + (ConvertTo-CanonicalJson $Value.$_)
-    })
-    return '{' + ($parts -join ',') + '}'
-}
-
-function Get-TextSha256([string]$Value) {
-    $hasher = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        return ([BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value)))).Replace('-', '').ToLowerInvariant()
-    } finally { $hasher.Dispose() }
-}
 
 $resolvedPacket = (Resolve-Path -LiteralPath $PacketPath).ProviderPath
 $packetItem = Get-Item -LiteralPath $resolvedPacket
@@ -42,17 +19,20 @@ if ($programItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'PR
 $programBytes = [IO.File]::ReadAllBytes($programPath)
 $programSha = (Get-FileHash -LiteralPath $programPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $launcherSha = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$planSha = Get-TextSha256 (ConvertTo-CanonicalJson $packet.plan)
-$ready = $null -ne $packet.approval -and
-    $packet.approval.status -eq 'OWNER_EXPLICITLY_AUTHORIZED' -and
-    $packet.approval.confirmation -eq 'FAI_CRM_SCHEMA46_STOP_BACKUP_RESUME_R05' -and
-    $packet.approval.planSha256 -eq $planSha -and $packet.approval.programSha256 -eq $programSha -and
-    $packet.approval.launcherSha256 -eq $launcherSha -and
-    $packet.approval.reviewReference -match '^[A-Za-z0-9:/._#?=-]{10,240}$'
+$resolvedPython = (Resolve-Path -LiteralPath $PythonPath).ProviderPath
+$validationOutput = & $resolvedPython -I -B $programPath --validate-packet $resolvedPacket --launcher-sha256 $launcherSha 2>$null
+$validationExit = $LASTEXITCODE
+try { $validation = ($validationOutput -join "`n") | ConvertFrom-Json } catch { throw 'LOCAL_VALIDATOR_RESULT_INVALID' }
+if ($validationExit -ne 0 -or $validation.protocol -ne 'PR140_OWNER_BACKUP46_LOCAL_VALIDATION_R05') {
+    $failureCode = if ($validation.code -match '^[A-Z0-9_]{1,100}$') { $validation.code } else { 'INVALID_PACKET' }
+    throw "LOCAL_PACKET_VALIDATION_FAILED_$failureCode"
+}
+if ($validation.programSha256 -ne $programSha -or $validation.launcherSha256 -ne $launcherSha -or
+    $validation.runId -ne $packet.plan.runId -or $validation.remoteConnectionAttempted -ne $false) { throw 'LOCAL_VALIDATION_BINDING_CHANGED' }
+$planSha = $validation.planSha256
+$ready = $validation.executionAdmitted -eq $true
 if ($ValidateOnly) {
-    [pscustomobject]@{ protocol = 'PR140_OWNER_BACKUP46_LOCAL_VALIDATION_R05'; runId = $packet.plan.runId;
-        planSha256 = $planSha; programSha256 = $programSha; launcherSha256 = $launcherSha;
-        executionAdmitted = [bool]$ready; remoteConnectionAttempted = $false } | ConvertTo-Json -Compress
+    $validation | ConvertTo-Json -Compress
     return
 }
 if (-not $ready) { throw 'REVIEW_AND_EXPLICIT_OWNER_APPROVAL_REQUIRED: nessuna connessione tentata.' }
