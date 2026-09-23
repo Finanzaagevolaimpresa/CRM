@@ -9,6 +9,10 @@ jobs:
   account-lifecycle:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        privileged_mode: [enforced, disabled]
     services:
       postgres:
         image: postgres:16
@@ -22,7 +26,7 @@ jobs:
       APP_ENV: test
       NODE_ENV: development
       INTERNAL_SESSION_MODE: registry
-      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_ACCESS_MODE: ${{ matrix.privileged_mode }}
       PRIVILEGED_STEP_UP_KEY_VERSION: "1"
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only
@@ -45,6 +49,7 @@ jobs:
           psql 'postgresql://postgres:synthetic-m1@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
       - name: PostgreSQL account and login concurrency tests
+        if: matrix.privileged_mode == 'enforced'
         run: node --import tsx --test tests/db/user-account-db.test.ts
       - name: Generate ephemeral browser inputs
         shell: bash
@@ -57,7 +62,3 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Account browser qualification
         run: npx playwright test --config tests/user-account-browser/playwright.config.ts --reporter=line
-      - name: Own admin profile with privileged access disabled
-        env:
-          PRIVILEGED_ACCESS_MODE: disabled
-        run: npx playwright test --config tests/user-account-browser/playwright.config.ts --grep "own admin profile" --reporter=line
