@@ -1,0 +1,45 @@
+name: PR140 owner backup package
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pr140-owner-backup.yml'
+      - 'scripts/pr140/owner_backup46.py'
+      - 'scripts/pr140/test_owner_backup46.py'
+      - 'scripts/pr140/Invoke-OwnerBackup46.ps1'
+      - 'scripts/pr140/test-owner-backup46-launcher.ps1'
+      - 'docs/PR140_OWNER_BACKUP46.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/pr140-owner-backup.yml'
+      - 'scripts/pr140/owner_backup46.py'
+      - 'scripts/pr140/test_owner_backup46.py'
+      - 'scripts/pr140/Invoke-OwnerBackup46.ps1'
+      - 'scripts/pr140/test-owner-backup46-launcher.ps1'
+      - 'docs/PR140_OWNER_BACKUP46.md'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Owner backup admission and failure handling (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Synthetic admission, identity, fault and resume tests
+        run: python scripts/pr140/test_owner_backup46.py
+      - name: Owner launcher refuses unapproved packets before SSH
+        shell: pwsh
+        run: ./scripts/pr140/test-owner-backup46-launcher.ps1
