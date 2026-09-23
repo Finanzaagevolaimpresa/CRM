@@ -114,6 +114,8 @@ if ($receipt.status -eq 'BACKUP_VERIFIED_AND_APP_RESUMED') {
         $receipt.databaseNotRestarted -ne $true -or $receipt.fullPgArchiveReadable -ne $true -or
         $receipt.runId -ne $packet.plan.runId -or $receipt.appId -ne $packet.plan.target.appId -or
         $receipt.postgresId -ne $packet.plan.target.postgresId -or
+        $receipt.planSha256 -ne $planSha -or $receipt.programSha256 -ne $programSha -or
+        $receipt.reviewReference -ne $packet.approval.reviewReference -or
         $receipt.sourceCommit -ne $packet.plan.sourceCommit -or $receipt.sourceTree -ne $packet.plan.sourceTree -or
         $receipt.migration47Applied -ne $false -or $receipt.deployPerformed -ne $false) {
         throw 'SUCCESS_RECEIPT_BINDING_INVALID_DO_NOT_REPEAT'

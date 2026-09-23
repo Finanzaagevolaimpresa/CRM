@@ -132,6 +132,7 @@ class LedgerModelTests(unittest.TestCase):
 class OperationTests(unittest.TestCase):
     def setUp(self):
         self.o = s.Backup(packet()["plan"])
+        self.o.approval = packet()["approval"]
         self.o.before = {"app": {"id": "1" * 64, "created": "original", "image_id": self.o.target["appImage"]}}
 
     def test_expired_budget_never_starts_subprocess(self):
@@ -216,6 +217,12 @@ class OperationTests(unittest.TestCase):
         pg["State"]["StartedAt"]="after"
         with patch.object(self.o,"inspect",return_value=pg), self.assertRaisesRegex(s.Stop,"POSTGRES_RESTART_OR_IDENTITY_DRIFT"):
             self.o.check_pg_state()
+
+    def test_restarted_initial_app_is_not_admitted(self):
+        app={"Id":"1"*64,"Image":self.o.target["appImage"],"RestartCount":1,
+             "State":{"Running":True,"Health":{"Status":"healthy"}}}
+        with patch.object(self.o,"inspect",return_value=app), self.assertRaisesRegex(s.Stop,"BASELINE_APP_DRIFT"):
+            self.o.check_initial_app()
 
     def test_wrapper_always_has_explicit46_and_source_identity(self):
         env=self.o.backup_environment()

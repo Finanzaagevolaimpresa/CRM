@@ -167,6 +167,7 @@ class Backup:
         self.configuration_copies = []
         self.quiescence_attempted = self.app_resumed = False
         self.helper_ref = None
+        self.approval = None
 
     def remaining(self):
         limit = 1500 if self.emergency else 1200
@@ -259,6 +260,12 @@ class Backup:
             need(state == self.pg_state, "POSTGRES_RESTART_OR_IDENTITY_DRIFT")
         return state
 
+    def check_initial_app(self):
+        app = self.inspect(self.target["appId"])
+        need(app["Id"] == self.target["appId"] and app["Image"] == self.target["appImage"] and
+             app["RestartCount"] == 0 and app["State"]["Running"] and
+             app["State"].get("Health", {}).get("Status") == "healthy", "BASELINE_APP_DRIFT")
+
     def same_source(self, *, healthy=True):
         current = self.adapter.snapshot(self.deadline())
         need(current["engine"] == self.before["engine"] and
@@ -289,6 +296,7 @@ class Backup:
         pg_state = self.check_pg_state()
         need(pg_state["restarts"] == 0, "BASELINE_POSTGRES_RESTARTED")
         self.pg_state = pg_state
+        self.check_initial_app()
         need(self.docker("info", "--format", "{{.ID}}") == self.target["engineId"], "ENGINE_IDENTITY")
         actual_image = strict_json(self.docker("image", "inspect", TAG))[0]
         labels = actual_image["Config"].get("Labels") or {}
@@ -443,6 +451,7 @@ class Backup:
         raise Stop("RESUME_HEALTH_TIMEOUT")
 
     def create(self):
+        need(self.approval is not None, "EXPLICIT_APPROVAL_REQUIRED")
         self.same_source()
         before_rows = self.rows()
         self.check_inputs()
@@ -472,6 +481,8 @@ class Backup:
             need(self.same_source(healthy=False)["app"]["state"] == "exited", "WRITER_REAPPEARED")
             need(self.rows() == before_rows, "BACKUP_LEDGER_DRIFT")
             receipt = {"protocol": PROTOCOL, "status": "BACKUP_VERIFIED_AND_APP_RESUMED", "utc": utc(),
+                "planSha256": sha(self.plan), "programSha256": self.approval["programSha256"],
+                "reviewReference": self.approval["reviewReference"],
                 "runId": self.plan["runId"], "sourceCommit": SOURCE, "sourceTree": TREE, "schema": 46,
                 "appId": self.target["appId"], "appImage": self.target["appImage"], "postgresId": self.target["postgresId"],
                 "set": str(backup), "manifestSha256": sha_bytes(read_stable(backup / "MANIFEST.txt", secret=True)),
@@ -532,7 +543,12 @@ def entry_point(packet, program_sha256):
                 signal.signal(getattr(signal, signal_name), interrupted)
         os.umask(0o077)
         operation = Backup(plan)
+        operation.approval = packet["approval"]
         operation.prepare()
+        operation.write(operation.work / "ADMISSION.json", {
+            "protocol": PROTOCOL, "planSha256": sha(plan), "programSha256": program_sha256,
+            "approval": packet["approval"], "startedUtc": utc(),
+        })
         result = operation.create()
         print(canonical(result), flush=True)
         return 0
