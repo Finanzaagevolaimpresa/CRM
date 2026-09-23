@@ -18,8 +18,6 @@ function auditSessionReference(sessionId: string) {
 export type RegistryLoginSessionInput = {
   userId: string;
   tokenDigest: Uint8Array;
-  expectedPasswordHash?: string;
-  expectedEmail?: string;
 };
 export async function tokenDigestFromCookie(cookie: string | undefined) {
   const bytes = parseRegistrySessionToken(cookie);
@@ -59,18 +57,15 @@ export async function createInternalSession(
 export async function createRegistryLoginSession(
   db: PrismaClient,
   input: RegistryLoginSessionInput,
+  admit?: (tx: Prisma.TransactionClient) => Promise<boolean>,
 ) {
   return db.$transaction(async (tx) => {
     const user = await lockInternalUser(tx, input.userId);
     if (!user?.active || user.deletedAt) return null;
 
-    if (input.expectedPasswordHash !== undefined || input.expectedEmail !== undefined) {
-      const credentials = await tx.user.findUnique({
-        where: { id: user.id }, select: { passwordHash: true, email: true },
-      });
-      if (input.expectedPasswordHash !== undefined && credentials?.passwordHash !== input.expectedPasswordHash) return null;
-      if (input.expectedEmail !== undefined && credentials?.email !== input.expectedEmail) return null;
-    }
+    // Authentication may revalidate admission while the user lock is held.
+    // Its inputs and implementation remain outside the session registry.
+    if (admit && !await admit(tx)) return null;
 
     const session = await createInternalSession(tx, input);
     await tx.$executeRaw(

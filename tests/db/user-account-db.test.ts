@@ -4,7 +4,8 @@ import test, { after, before } from 'node:test';
 import bcrypt from 'bcryptjs';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './ai-orchestrator-db-test-guard';
-import { createInternalSession, createRegistryLoginSession, resolveInternalSession } from '../../src/lib/internal-session-registry';
+import { createInternalSession, resolveInternalSession } from '../../src/lib/internal-session-registry';
+import { createAuthenticatedRegistryLoginSession } from '../../src/lib/registry-login-credentials';
 import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
 import { withSerializableTransaction } from '../../src/lib/serializable';
 import { changeAccountPassword, resetAccountPassword, revokeAccountSessions, updateAccountProfile } from '../../src/lib/user-account-service';
@@ -86,9 +87,9 @@ test('a login verified before a reset cannot issue a fresh session after the res
   const passwordHash = await bcrypt.hash(nextPassword, 4);
   await withSerializableTransaction(db, (tx) => resetAccountPassword(tx, admin, target.userId, passwordHash));
   const stale = createRegistrySessionToken();
-  const input = { userId: target.userId, tokenDigest: await digestRegistrySessionToken(stale.bytes) };
-  assert.equal(await createRegistryLoginSession(db, { ...input, expectedPasswordHash: verifiedBeforeReset }), null);
-  assert.ok(await createRegistryLoginSession(db, { ...input, expectedPasswordHash: passwordHash }));
+  const input = { userId: target.userId, tokenDigest: await digestRegistrySessionToken(stale.bytes), expectedEmail: target.user.email };
+  assert.equal(await createAuthenticatedRegistryLoginSession(db, { ...input, expectedPasswordHash: verifiedBeforeReset }), null);
+  assert.ok(await createAuthenticatedRegistryLoginSession(db, { ...input, expectedPasswordHash: passwordHash }));
 });
 
 test('own profile edits preserve role; only the admin may change a login email or another profile', { skip: !run }, async () => {
@@ -107,8 +108,8 @@ test('own profile edits preserve role; only the admin may change a login email o
   assert.equal(await resolveInternalSession(db, target.token), null);
   const token = createRegistrySessionToken();
   const loginInput = { userId: target.userId, tokenDigest: await digestRegistrySessionToken(token.bytes), expectedPasswordHash: target.user.passwordHash };
-  assert.equal(await createRegistryLoginSession(db, { ...loginInput, expectedEmail: target.user.email }), null);
-  assert.ok(await createRegistryLoginSession(db, { ...loginInput, expectedEmail: email }));
+  assert.equal(await createAuthenticatedRegistryLoginSession(db, { ...loginInput, expectedEmail: target.user.email }), null);
+  assert.ok(await createAuthenticatedRegistryLoginSession(db, { ...loginInput, expectedEmail: email }));
 });
 
 test('self revocation is allowed, cross-user revocation is admin-only, and legacy mode fails closed', { skip: !run }, async () => {
