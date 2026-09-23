@@ -10,6 +10,7 @@ import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
 import Link from "next/link";
 import { listAccessiblePracticeReadiness } from "@/lib/practice-readiness";
+import { engagementFeatureEnabled } from "@/lib/internal-engagement-mode";
 import {
   attestPracticeMaterialsCompleteAction,
   confirmPracticeFundingAction,
@@ -39,12 +40,12 @@ export default async function Page({
 }) {
   const feedback = await searchParams;
   const session = await requirePermission("service.read");
-  if (process.env.PRACTICE_READINESS_MODE !== "synthetic")
+  if (!engagementFeatureEnabled(process.env.PRACTICE_READINESS_MODE))
     return (
       <div className="space-y-6">
         <PageHeader
           title="Pratiche da preventivo ad avvio"
-          description="Percorso sintetico disattivato."
+          description="Percorso di avvio non attivo."
         />
         <EmptyState title="Acquisizione non attiva" />
       </div>

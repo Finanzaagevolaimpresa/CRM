@@ -1,0 +1,59 @@
+name: PR140 release qualification
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/pr140-release/**'
+      - 'tests/practice-readiness-browser/**'
+      - 'scripts/pr140/**'
+      - 'Dockerfile.prod.example'
+      - '.github/workflows/pr140-release-qualification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/lib/internal-engagement*'
+      - 'tests/pr140-release/**'
+      - 'scripts/pr140/**'
+      - '.github/workflows/pr140-release-qualification.yml'
+permissions:
+  contents: read
+concurrency:
+  group: pr140-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  release-schema47:
+    name: Packaged internal workflow and populated schema47 recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - name: Install locked qualification tools
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Verify exact source and owner preflight syntax
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          bash -n scripts/pr140/qualify-release.sh
+          python3 -c "from pathlib import Path; p=Path('scripts/pr140/owner-preflight.py'); compile(p.read_text(), str(p), 'exec')"
+      - name: Build immutable images and qualify actual recovery
+        run: bash scripts/pr140/qualify-release.sh
+      - name: Save minimized receipts and qualified image archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr140-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.R05_EVIDENCE_DIR }}/release-receipt.json
+            ${{ env.R05_EVIDENCE_DIR }}/*-summary.json
+            ${{ env.R05_EVIDENCE_DIR }}/admission.json
+            ${{ env.R05_EVIDENCE_DIR }}/*-recovery.json
+            ${{ env.R05_EVIDENCE_DIR }}/after-resume.json
+            ${{ env.R05_EVIDENCE_DIR }}/*session-revocation.json
+            ${{ env.R05_EVIDENCE_DIR }}/release-images.tar.gz
+          if-no-files-found: error
+          retention-days: 14

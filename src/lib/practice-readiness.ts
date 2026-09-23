@@ -11,6 +11,7 @@ import {
 } from "./access-control";
 import { hasPermission } from "./permission-evaluator";
 import { lockAuthoritativeInternalSession } from "./internal-session-registry";
+import { engagementFeatureEnabled } from "./internal-engagement-mode";
 import {
   assertSyntheticCatalogDatabase,
   catalogRevisionIsSelectable,
@@ -97,8 +98,13 @@ const linkServiceSchema = z.object({
 });
 type Db = Pick<PrismaClient, "$transaction" | "$queryRaw">;
 function enabled() {
-  if (process.env.PRACTICE_READINESS_MODE !== "synthetic")
+  if (!engagementFeatureEnabled(process.env.PRACTICE_READINESS_MODE))
     throw new PracticeReadinessError("DISABLED");
+}
+async function assertPracticeReadinessDatabase(db: Db) {
+  enabled();
+  if (process.env.PRACTICE_READINESS_MODE === "synthetic")
+    await assertSyntheticCatalogDatabase(db);
 }
 async function actor(
   tx: Prisma.TransactionClient,
@@ -315,7 +321,7 @@ export async function proposePracticeOfferRevision(
 ) {
   enabled();
   const input = proposalSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -443,7 +449,7 @@ export async function createPracticeReadiness(
 ) {
   enabled();
   const input = acceptanceSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -566,7 +572,7 @@ export async function recordPracticeFunding(
 ) {
   enabled();
   const input = fundingSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   const payloadHash = canonicalSha256({
     operation: "DECLARE",
     reference: input.reference,
@@ -618,7 +624,7 @@ async function transitionPracticeFunding(
 ) {
   enabled();
   const input = fundingTransitionSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return fundingTransaction(db, async (tx) => {
     const a = await actor(tx, claimed);
     const { practice } = await practiceScope(tx, a, input.practiceId);
@@ -758,7 +764,7 @@ export async function decidePracticeMaterial(
 ) {
   enabled();
   const input = parsePracticeMaterialInput(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -1100,7 +1106,7 @@ export async function startPractice(
 ) {
   enabled();
   const input = startSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -1203,7 +1209,7 @@ export async function formalizePractice(
 ) {
   enabled();
   const input = formalizeSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -1313,7 +1319,7 @@ export async function linkPracticeClientService(
 ) {
   enabled();
   const input = linkServiceSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -1369,7 +1375,7 @@ export async function attestPracticeMaterialsComplete(
 ) {
   enabled();
   const input = parsePracticeMaterialsCompletenessInput(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
@@ -1447,7 +1453,7 @@ export async function listAccessiblePracticeReadiness(
   claimed: AuthSession,
 ) {
   enabled();
-  await assertSyntheticCatalogDatabase(db);
+  await assertPracticeReadinessDatabase(db);
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed, "service.read");

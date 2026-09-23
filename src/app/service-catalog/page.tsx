@@ -1,21 +1,25 @@
 export const dynamic = 'force-dynamic';
 
 import { Card, EmptyState, PageHeader } from '@/components/ui';
-import { requirePermission } from '@/lib/auth';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { internalEngagementEnabled } from '@/lib/internal-engagement-mode';
+import { prepareInternalCatalogAction } from '@/lib/internal-engagement-actions';
 import { prisma } from '@/lib/prisma';
 import { DIGITAL_PROJECT_TYPES, FAI_SERVICE_CATALOG_V2, FAI_SERVICE_CATALOG_V2_VERSION, validateCatalogSelection } from '@/lib/service-catalog-v2';
 import { catalogRevisionIsSelectable } from '@/lib/service-catalog-v2-persistence';
 
 function priceLabel(mode: string, cents: number | null) { return mode === 'QUOTE_ONLY' ? 'Su preventivo' : `€ ${((cents ?? 0) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2 })} + IVA`; }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ serviceCode?: string; digitalProjectType?: string }> }) {
-  await requirePermission('service.read');
+export default async function Page({ searchParams }: { searchParams: Promise<{ serviceCode?: string; digitalProjectType?: string; preparation?: string }> }) {
+  const session = await requirePermission('service.read');
   const params = await searchParams;
   const histories = await prisma.serviceCatalogRevision.findMany({ include: { serviceCatalog: { select: { code: true, active: true } } }, orderBy: [{ serviceCatalogId: 'asc' }, { version: 'desc' }] });
   const historyByCode = new Map<string, typeof histories>();
   for (const revision of histories) historyByCode.set(revision.serviceCatalog.code, [...historyByCode.get(revision.serviceCatalog.code) ?? [], revision]);
   const now = new Date();
   const available = FAI_SERVICE_CATALOG_V2.filter((service) => (historyByCode.get(service.code) ?? []).some((revision) => catalogRevisionIsSelectable(service, revision, now)));
+  const canPrepare = internalEngagementEnabled() && ['admin', 'direzione'].includes(session.role)
+    && hasPermission(session, 'service.write') && available.length < FAI_SERVICE_CATALOG_V2.length;
   let selected: ReturnType<typeof validateCatalogSelection> | null = null;
   let selectionError = '';
   if (params.serviceCode) {
@@ -27,6 +31,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
   }
   return <div className="space-y-6">
     <PageHeader title="Catalogo servizi" description={`Composizione ${FAI_SERVICE_CATALOG_V2_VERSION}. Consultazione interna: richiesta, preventivo e incarico restano fasi separate.`} />
+    {params.preparation === 'complete' ? <p role="status">Revisioni interne disponibili.</p> : null}
+    {params.preparation === 'denied' ? <p role="alert">Preparazione non consentita oppure catalogo da riconciliare.</p> : null}
+    {canPrepare ? <Card title="Preparazione del catalogo interno"><p className="mb-3 text-sm">Pubblica le revisioni previste per le nuove selezioni, conservando lo storico. I documenti già emessi mantengono la propria revisione.</p><form action={prepareInternalCatalogAction}><button type="submit" className="rounded-xl bg-fai-blue px-4 py-3 font-bold text-white">Prepara catalogo interno</button></form></Card> : null}
     <Card title="Seleziona un servizio"><form method="get" className="grid gap-3 md:grid-cols-3"><select name="serviceCode" required className="rounded-xl border p-3"><option value="">Scegli il servizio</option>{available.map((service) => <option key={service.code} value={service.code}>{service.name} — {priceLabel(service.priceMode, service.netPriceCents)}</option>)}</select><select name="digitalProjectType" className="rounded-xl border p-3"><option value="">Nessuna tipologia digitale</option>{DIGITAL_PROJECT_TYPES.map((type) => <option key={type.code} value={type.code}>{type.label}</option>)}</select><button className="rounded-xl bg-fai-blue px-4 py-3 font-bold text-white" type="submit">Consulta selezione</button></form>{selectionError ? <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700">{selectionError}</p> : null}</Card>
     {selected ? <Card title="Selezione valida"><p className="font-bold text-fai-navy">{selected.service.name}</p><p>{priceLabel(selected.service.priceMode, selected.service.netPriceCents)}</p><p className="mt-2 text-sm text-slate-600">{selected.service.description}</p>{selected.digitalProjectType ? <p className="mt-2 text-sm"><strong>Tipologia:</strong> {selected.digitalProjectType.label}</p> : null}</Card> : null}
     <div className="grid gap-5 lg:grid-cols-2">{FAI_SERVICE_CATALOG_V2.map((service) => {

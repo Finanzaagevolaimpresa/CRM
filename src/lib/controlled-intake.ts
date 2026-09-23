@@ -6,6 +6,7 @@ import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { maybeEnrollManualCommercialLead } from './commercial-lead-inbox';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { engagementFeatureEnabled } from './internal-engagement-mode';
 import { hasPermission } from './permission-evaluator';
 import { FAI_SERVICE_CATALOG_V2 } from './service-catalog-v2';
 import { assertSyntheticCatalogDatabase, catalogRevisionIsSelectable } from './service-catalog-v2-persistence';
@@ -56,7 +57,11 @@ async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) 
 }
 
 function requireEnabled() {
-  if (process.env.CONTROLLED_INTAKE_MODE !== 'synthetic') throw new ControlledIntakeError('DISABLED');
+  if (!engagementFeatureEnabled(process.env.CONTROLLED_INTAKE_MODE)) throw new ControlledIntakeError('DISABLED');
+}
+async function assertControlledIntakeDatabase(db: Db) {
+  requireEnabled();
+  if (process.env.CONTROLLED_INTAKE_MODE === 'synthetic') await assertSyntheticCatalogDatabase(db);
 }
 
 async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: string | null, digitalProjectType: string | null, now: Date) {
@@ -82,7 +87,7 @@ async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: str
 
 export async function createControlledIntake(db: Db, claimed: AuthSession, raw: unknown, faultAfterLead = false) {
   requireEnabled();
-  const input = controlledIntakeSchema.parse(raw); await assertSyntheticCatalogDatabase(db);
+  const input = controlledIntakeSchema.parse(raw); await assertControlledIntakeDatabase(db);
   const payloadHash = canonicalSha256(input);
   const run = () => db.$transaction(async (tx) => {
     const actor = await currentActor(tx, claimed);
@@ -133,7 +138,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
 export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSession, raw: unknown) {
   requireEnabled();
   const input = controlledDuplicateDecisionSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertControlledIntakeDatabase(db);
   try {
     return await db.$transaction(async (tx) => {
       const actor = await currentActor(tx, claimed);
@@ -177,7 +182,7 @@ export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSessi
 export async function linkAuthenticated1265Projection(db: Db, claimed: AuthSession, raw: unknown) {
   requireEnabled();
   const input = authenticated1265LinkSchema.parse(raw);
-  await assertSyntheticCatalogDatabase(db);
+  await assertControlledIntakeDatabase(db);
   return db.$transaction(async (tx) => {
     const actor = await currentActor(tx, claimed);
     const projection = await tx.leadProjectionLedger.findUnique({
