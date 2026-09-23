@@ -35,6 +35,7 @@ const sections: NavSection[] = [
     title: "Operatività",
     items: [
       { label: "Dashboard", href: "/dashboard" },
+      { label: "Il mio account", href: "/settings/account" },
       { label: "Notifiche", href: "/notifications" },
       { label: "Ricerca", href: "/search" },
       { label: "Task", href: "/tasks", requiredPermission: "service.read" },

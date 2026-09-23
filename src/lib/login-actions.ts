@@ -58,6 +58,8 @@ async function createLoginSession(email: string, password: string) {
     const session = await createRegistryLoginSession(prisma, {
       userId: user.id,
       tokenDigest,
+      expectedPasswordHash: user.passwordHash,
+      expectedEmail: normalizedEmail,
     });
     if (!session) return false;
     (await cookies()).set(cookieName, token, sessionCookieOptions(Math.floor(session.expiresAt.getTime() / 1000)));

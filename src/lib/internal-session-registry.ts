@@ -18,6 +18,8 @@ function auditSessionReference(sessionId: string) {
 export type RegistryLoginSessionInput = {
   userId: string;
   tokenDigest: Uint8Array;
+  expectedPasswordHash?: string;
+  expectedEmail?: string;
 };
 export async function tokenDigestFromCookie(cookie: string | undefined) {
   const bytes = parseRegistrySessionToken(cookie);
@@ -61,6 +63,14 @@ export async function createRegistryLoginSession(
   return db.$transaction(async (tx) => {
     const user = await lockInternalUser(tx, input.userId);
     if (!user?.active || user.deletedAt) return null;
+
+    if (input.expectedPasswordHash !== undefined || input.expectedEmail !== undefined) {
+      const credentials = await tx.user.findUnique({
+        where: { id: user.id }, select: { passwordHash: true, email: true },
+      });
+      if (input.expectedPasswordHash !== undefined && credentials?.passwordHash !== input.expectedPasswordHash) return null;
+      if (input.expectedEmail !== undefined && credentials?.email !== input.expectedEmail) return null;
+    }
 
     const session = await createInternalSession(tx, input);
     await tx.$executeRaw(
