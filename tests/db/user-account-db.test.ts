@@ -9,6 +9,7 @@ import { createAuthenticatedRegistryLoginSession } from '../../src/lib/registry-
 import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
 import { withSerializableTransaction } from '../../src/lib/serializable';
 import { changeAccountPassword, resetAccountPassword, revokeAccountSessions, updateAccountProfile } from '../../src/lib/user-account-service';
+import { updateInternalUserRoleWithAudit } from '../../src/lib/user-privilege-service';
 
 const run = process.env.RUN_DB_TESTS === '1';
 let admitted = false;
@@ -32,10 +33,10 @@ after(async () => {
   }
   await db.$disconnect();
 });
-async function actor(role: RoleCode = 'consulente') {
+async function actor(role: RoleCode = 'consulente', initialPassword = password) {
   const user = await db.user.create({ data: {
     name: 'Synthetic account', email: `account-${randomUUID()}@example.test`,
-    role, passwordHash: await bcrypt.hash(password, 4),
+    role, passwordHash: await bcrypt.hash(initialPassword, 4),
   } });
   ids.push(user.id);
   const token = createRegistrySessionToken();
@@ -49,11 +50,10 @@ test('password change rejects a wrong current password and revokes every existin
   const second = createRegistrySessionToken();
   const secondDigest = await digestRegistrySessionToken(second.bytes);
   await db.$transaction((tx) => createInternalSession(tx, { userId: owner.userId, tokenDigest: secondDigest }));
-  const passwordHash = await bcrypt.hash(nextPassword, 4);
-  const denied = await withSerializableTransaction(db, (tx) => changeAccountPassword(tx, owner, { currentPassword: 'wrong', passwordHash }));
+  const denied = await withSerializableTransaction(db, (tx) => changeAccountPassword(tx, owner, { currentPassword: 'wrong', password: nextPassword }));
   assert.equal(denied.ok, false);
   assert.ok(await resolveInternalSession(db, owner.token));
-  const accepted = await withSerializableTransaction(db, (tx) => changeAccountPassword(tx, owner, { currentPassword: password, passwordHash }));
+  const accepted = await withSerializableTransaction(db, (tx) => changeAccountPassword(tx, owner, { currentPassword: password, password: nextPassword }));
   assert.deepEqual(accepted, { ok: true, sessionRevoked: true });
   assert.equal(await resolveInternalSession(db, owner.token), null);
   assert.equal(await db.internalSession.count({ where: { userId: owner.userId, revokedAt: null } }), 0);
@@ -61,7 +61,21 @@ test('password change rejects a wrong current password and revokes every existin
   assert.equal(await bcrypt.compare(nextPassword, persisted.passwordHash), true);
   const audits = await db.auditLog.findMany({ where: { actorId: owner.userId } });
   const auditJson = JSON.stringify(audits);
-  for (const sensitive of [password, nextPassword, passwordHash, owner.user.passwordHash]) assert.equal(auditJson.includes(sensitive), false);
+  for (const sensitive of [password, nextPassword, persisted.passwordHash, owner.user.passwordHash]) assert.equal(auditJson.includes(sensitive), false);
+});
+
+test('bcrypt-equivalent legacy password changes preserve hash, live sessions and absence of success audits', { skip: !run }, async () => {
+  const legacyPassword = 'x'.repeat(80);
+  const candidate = legacyPassword.slice(0, 72);
+  const owner = await actor('consulente', legacyPassword);
+  assert.notEqual(candidate, legacyPassword);
+  assert.equal(await bcrypt.compare(candidate, owner.user.passwordHash), true);
+  const result = await withSerializableTransaction(db, (tx) => changeAccountPassword(tx, owner, { currentPassword: legacyPassword, password: candidate }));
+  assert.deepEqual(result, { ok: false, message: 'La nuova password deve essere diversa da quella attuale.' });
+  assert.equal((await db.user.findUniqueOrThrow({ where: { id: owner.userId } })).passwordHash, owner.user.passwordHash);
+  assert.ok(await resolveInternalSession(db, owner.token));
+  assert.equal(await db.internalSession.count({ where: { userId: owner.userId, revokedAt: { not: null } } }), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: owner.userId, event: { in: ['user_password_changed', 'sessions_revoked_global'] } } }), 0);
 });
 
 test('reset requires an active admin session; overrides, revoked sessions and other-user sessions do not authorize it', { skip: !run }, async () => {
@@ -101,15 +115,35 @@ test('own profile edits preserve role; only the admin may change a login email o
   assert.equal(persisted.name, 'Reopened name');
   assert.equal(persisted.role, 'consulente');
   assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, owner.userId, { name: 'Ignored', email: `other-${randomUUID()}@example.test` }))).ok, false);
-  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, target.userId, { name: 'Ignored', email: target.user.email }))).ok, false);
+  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, target.userId, { name: 'Ignored', email: target.user.email }, true))).ok, false);
   const email = `replaced-${randomUUID()}@example.test`;
-  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, admin, target.userId, { name: 'Admin updated', email }))).ok, true);
+  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, admin, target.userId, { name: 'Admin updated', email }, true))).ok, true);
   assert.equal((await db.user.findUniqueOrThrow({ where: { id: target.userId } })).email, email);
   assert.equal(await resolveInternalSession(db, target.token), null);
   const token = createRegistrySessionToken();
   const loginInput = { userId: target.userId, tokenDigest: await digestRegistrySessionToken(token.bytes), expectedPasswordHash: target.user.passwordHash };
   assert.equal(await createAuthenticatedRegistryLoginSession(db, { ...loginInput, expectedEmail: target.user.email }), null);
   assert.ok(await createAuthenticatedRegistryLoginSession(db, { ...loginInput, expectedEmail: email }));
+});
+
+test('a promotion after the initial non-admin role read cannot replace privileged profile admission', { skip: !run }, async () => {
+  const admin = await actor('admin');
+  const owner = await actor();
+  const initialRole = owner.user.role;
+  assert.equal(initialRole, 'consulente');
+  assert.equal((await withSerializableTransaction(db, (tx) => updateInternalUserRoleWithAudit(tx, admin, owner.userId, 'admin'))).ok, true);
+  assert.equal((await resolveInternalSession(db, owner.token))?.user.role, 'admin');
+  const email = `promoted-${randomUUID()}@example.test`;
+  const denied = await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, owner.userId, { name: 'Ignored', email }, false));
+  assert.equal(denied.ok, false);
+  const unchanged = await db.user.findUniqueOrThrow({ where: { id: owner.userId } });
+  assert.equal(unchanged.email, owner.user.email);
+  assert.equal(unchanged.name, owner.user.name);
+  assert.ok(await resolveInternalSession(db, owner.token));
+  assert.equal(await db.auditLog.count({ where: { actorId: owner.userId, event: 'user_profile_updated' } }), 0);
+  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, owner.userId, { name: 'Own admin name', email: owner.user.email }, false))).ok, true);
+  assert.equal((await withSerializableTransaction(db, (tx) => updateAccountProfile(tx, owner, owner.userId, { name: 'Own admin name', email }, true))).ok, true);
+  assert.equal(await resolveInternalSession(db, owner.token), null);
 });
 
 test('self revocation is allowed, cross-user revocation is admin-only, and legacy mode fails closed', { skip: !run }, async () => {
@@ -127,9 +161,8 @@ test('self revocation is allowed, cross-user revocation is admin-only, and legac
 
 test('concurrent password changes cannot reuse the revoked authorizing session', { skip: !run }, async () => {
   const owner = await actor();
-  const passwordHash = await bcrypt.hash(nextPassword, 4);
   const results = await Promise.allSettled([1, 2].map(() => withSerializableTransaction(db, (tx) =>
-    changeAccountPassword(tx, owner, { currentPassword: password, passwordHash }))));
+    changeAccountPassword(tx, owner, { currentPassword: password, password: nextPassword }))));
   assert.equal(results.filter((item) => item.status === 'fulfilled' && item.value.ok).length, 1);
   assert.equal(await db.auditLog.count({ where: { actorId: owner.userId, event: 'user_password_changed' } }), 1);
   assert.equal(await resolveInternalSession(db, owner.token), null);

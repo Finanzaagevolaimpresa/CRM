@@ -57,3 +57,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Account browser qualification
         run: npx playwright test --config tests/user-account-browser/playwright.config.ts --reporter=line
+      - name: Own admin profile with privileged access disabled
+        env:
+          PRIVILEGED_ACCESS_MODE: disabled
+        run: npx playwright test --config tests/user-account-browser/playwright.config.ts --grep "own admin profile" --reporter=line

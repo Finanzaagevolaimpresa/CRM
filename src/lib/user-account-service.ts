@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { internalSessionMode } from './session';
 import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
-import { accountProfileSchema } from './user-account-contract';
+import { accountPasswordSchema, accountProfileSchema } from './user-account-contract';
 
 type Tx = Prisma.TransactionClient;
 export type AccountActor = { userId: string; sessionId?: string };
@@ -22,15 +22,20 @@ async function record(tx: Tx, actor: AccountActor, userId: string, event: string
   await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'User', entityId: userId, event } });
 }
 
-export async function updateAccountProfile(tx: Tx, actor: AccountActor, userId: string, input: unknown): Promise<AccountResult> {
+export async function updateAccountProfile(
+  tx: Tx, actor: AccountActor, userId: string, input: unknown, privilegedAdmission = false,
+): Promise<AccountResult> {
   const data = accountProfileSchema.parse(input);
+  if (actor.userId !== userId && !privilegedAdmission) return deny();
   if (!await actorForMutation(tx, actor, actor.userId !== userId)) return deny();
   const locked = await lockInternalUser(tx, userId);
   if (!locked || locked.deletedAt) return deny();
   const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
   // Changing a login identifier is reserved to an administrator, including on their own account.
   const emailChanged = data.email !== user.email;
-  if (emailChanged && !await actorForMutation(tx, actor, true)) return deny();
+  // A current admin role cannot replace the step-up admission checked by the
+  // server action, including when the role changed after the initial read.
+  if (emailChanged && (!privilegedAdmission || !await actorForMutation(tx, actor, true))) return deny();
   await tx.user.update({ where: { id: userId }, data });
   if (emailChanged) await revokeAllInternalSessions(tx, userId, 'INTERNAL_GLOBAL', actor.userId);
   await record(tx, actor, userId, 'user_profile_updated');
@@ -38,15 +43,21 @@ export async function updateAccountProfile(tx: Tx, actor: AccountActor, userId: 
 }
 
 export async function changeAccountPassword(
-  tx: Tx, actor: AccountActor, input: { currentPassword: string; passwordHash: string },
+  tx: Tx, actor: AccountActor, input: { currentPassword: string; password: string },
 ): Promise<AccountResult> {
   if (!await actorForMutation(tx, actor, false)) return deny();
+  const password = accountPasswordSchema.parse(input.password);
   const user = await tx.user.findUniqueOrThrow({ where: { id: actor.userId }, select: { passwordHash: true } });
   if (!await bcrypt.compare(input.currentPassword, user.passwordHash)) {
     await record(tx, actor, actor.userId, 'user_password_change_denied');
     return { ok: false, message: 'Password attuale non valida.' };
   }
-  await tx.user.update({ where: { id: actor.userId }, data: { passwordHash: input.passwordHash } });
+  if (await bcrypt.compare(password, user.passwordHash)) {
+    await record(tx, actor, actor.userId, 'user_password_change_denied');
+    return { ok: false, message: 'La nuova password deve essere diversa da quella attuale.' };
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  await tx.user.update({ where: { id: actor.userId }, data: { passwordHash } });
   await revokeAllInternalSessions(tx, actor.userId, 'INTERNAL_GLOBAL', actor.userId);
   await record(tx, actor, actor.userId, 'user_password_changed');
   return { ok: true, sessionRevoked: true };

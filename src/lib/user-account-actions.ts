@@ -17,18 +17,30 @@ type Operation = 'profile' | 'password' | 'reset' | 'revoke';
 async function mutate(operation: Operation, form: FormData): Promise<AccountFormState> {
   const session = await requireSession();
   const userId = operation === 'password' ? session.userId : String(form.get('userId') ?? session.userId);
-  const adminOperation = operation === 'reset' || userId !== session.userId || (operation === 'profile' && session.role === 'admin');
+  const profile = operation === 'profile' ? accountProfileSchema.safeParse({ name: form.get('name'), email: form.get('email') }) : null;
+  if (profile && !profile.success) return { ok: false, message: 'Controlla nome e indirizzo email.' };
+  const profileData = profile?.success ? profile.data : undefined;
+  let ownEmailChanged = false;
+  if (profileData && userId === session.userId) {
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+      if (!user) return { ok: false, message: 'Account non disponibile.' };
+      ownEmailChanged = profileData.email !== user.email;
+    } catch { return { ok: false, message: 'Profilo non disponibile. Riapri la pagina prima di riprovare.' }; }
+  }
+  const adminOperation = operation === 'reset' || userId !== session.userId || ownEmailChanged;
+  let privilegedAdmission = false;
   if (adminOperation) {
-    if (session.role !== 'admin') return { ok: false, message: 'Solo un amministratore può modificare altri account.' };
+    if (session.role !== 'admin') return { ok: false, message: 'Solo un amministratore può modificare l’email di accesso o altri account.' };
     await requireEnforcedPrivilegedMutation(session, 'USER_ACCOUNT_UPDATE');
+    privilegedAdmission = true;
   }
   let result: AccountFormState & { sessionRevoked?: boolean };
   try {
     if (internalSessionMode() !== 'registry') return { ok: false, message: 'Gestione account non disponibile. Contatta un amministratore.' };
     if (operation === 'profile') {
-      const data = accountProfileSchema.safeParse({ name: form.get('name'), email: form.get('email') });
-      if (!data.success) return { ok: false, message: 'Controlla nome e indirizzo email.' };
-      const outcome = await withSerializableTransaction(prisma, (tx) => updateAccountProfile(tx, session, userId, data.data));
+      if (!profileData) return { ok: false, message: 'Controlla nome e indirizzo email.' };
+      const outcome = await withSerializableTransaction(prisma, (tx) => updateAccountProfile(tx, session, userId, profileData, privilegedAdmission));
       result = outcome.ok ? { ...outcome, message: 'Profilo aggiornato.' } : outcome;
     } else if (operation === 'revoke') {
       const outcome = await withSerializableTransaction(prisma, (tx) => revokeAccountSessions(tx, session, userId));
@@ -37,10 +49,12 @@ async function mutate(operation: Operation, form: FormData): Promise<AccountForm
       const input = { currentPassword: form.get('currentPassword'), password: form.get('password'), confirmation: form.get('confirmation') };
       const data = operation === 'password' ? passwordChangeSchema.safeParse(input) : passwordResetSchema.safeParse(input);
       if (!data.success) return { ok: false, message: 'Usa una nuova password di almeno 12 caratteri (massimo 72 byte) e confermala.' };
-      const passwordHash = await bcrypt.hash(data.data.password, 12);
-      const outcome = await withSerializableTransaction(prisma, (tx) => operation === 'password'
-        ? changeAccountPassword(tx, session, { currentPassword: String(input.currentPassword), passwordHash })
-        : resetAccountPassword(tx, session, userId, passwordHash));
+      const outcome = operation === 'password'
+        ? await withSerializableTransaction(prisma, (tx) => changeAccountPassword(tx, session, { currentPassword: String(input.currentPassword), password: data.data.password }))
+        : await (async () => {
+          const passwordHash = await bcrypt.hash(data.data.password, 12);
+          return withSerializableTransaction(prisma, (tx) => resetAccountPassword(tx, session, userId, passwordHash));
+        })();
       result = outcome.ok ? { ...outcome, message: 'Password aggiornata. Le sessioni precedenti sono state revocate.' } : outcome;
     }
   } catch {
