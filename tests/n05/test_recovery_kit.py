@@ -552,16 +552,75 @@ class RecoveryGuards(unittest.TestCase):
                     {"Labels": {kit.LABEL: self.plan["run_id"]}}, self.plan)
 
     def test_restored_migrations_require_exact_set_and_completed_checksums(self):
-        expected = {"migration-" + str(n): kit.sha(str(n).encode()) for n in range(43)}
-        observed = [{"name": n, "checksum": c, "finished": True, "rolled_back": False}
-                    for n, c in expected.items()]
-        kit.verify_restored_migrations(observed, expected)
-        for field, value in (("checksum", "0" * 64), ("finished", False), ("rolled_back", True)):
-            changed = copy.deepcopy(observed)
-            changed[0][field] = value
-            self.denied("RESTORED_MIGRATIONS_MISMATCH", kit.verify_restored_migrations, changed, expected)
-        duplicate = observed[:-1] + [observed[0]]
-        self.denied("RESTORED_MIGRATIONS_MISMATCH", kit.verify_restored_migrations, duplicate, expected)
+        for count in (43, 46):
+            with self.subTest(migration_count=count):
+                expected = {"migration-" + str(n): kit.sha(str(n).encode()) for n in range(count)}
+                observed = [{"name": n, "checksum": c, "finished": True, "rolled_back": False}
+                            for n, c in expected.items()]
+                kit.verify_restored_migrations(observed, expected, count)
+                if count == 43:
+                    kit.verify_restored_migrations(observed, expected)
+                else:
+                    self.denied("RESTORED_MIGRATIONS_MISMATCH",
+                                kit.verify_restored_migrations, observed, expected)
+                for field, value in (("checksum", "0" * 64), ("finished", False), ("rolled_back", True)):
+                    changed = copy.deepcopy(observed)
+                    changed[0][field] = value
+                    self.denied("RESTORED_MIGRATIONS_MISMATCH",
+                                kit.verify_restored_migrations, changed, expected, count)
+                for changed in (observed[:-1], observed[:-1] + [observed[0]]):
+                    self.denied("RESTORED_MIGRATIONS_MISMATCH",
+                                kit.verify_restored_migrations, changed, expected, count)
+                self.denied("RESTORED_MIGRATIONS_MISMATCH",
+                            kit.verify_restored_migrations, observed, expected, 47)
+
+    @staticmethod
+    def source_git(count, tree="b" * 40):
+        def result(*args):
+            if args == ("rev-parse", "a" * 40 + "^{tree}"):
+                return tree
+            if args == ("ls-tree", "-r", "--name-only", "a" * 40, "--", "prisma/migrations"):
+                return "\n".join(f"prisma/migrations/migration-{n}/migration.sql" for n in range(count))
+            raise AssertionError(f"Unexpected Git read: {args}")
+        return result
+
+    def test_source_schema_is_explicit_and_matches_its_pinned_commit(self):
+        for declared in (43, 46):
+            with self.subTest(migration_count=declared), \
+                 patch.object(kit, "git", side_effect=self.source_git(declared)):
+                kit.verify_source_schema("a" * 40, "b" * 40, declared)
+            for actual in (42, 43, 44, 45, 46, 47):
+                if actual != declared:
+                    with self.subTest(declared=declared, actual=actual), \
+                         patch.object(kit, "git", side_effect=self.source_git(actual)):
+                        self.denied("SOURCE_MIGRATION_COUNT_MISMATCH",
+                                    kit.verify_source_schema, "a" * 40, "b" * 40, declared)
+
+    def test_unqualified_schema_and_forged_source_are_denied_before_private_work(self):
+        with patch.object(kit, "git") as source:
+            for count in (0, True, 44, 45, 47, "46", 46.0):
+                self.denied("SOURCE_MIGRATION_COUNT_UNQUALIFIED",
+                            kit.verify_source_schema, "a" * 40, "b" * 40, count)
+            for commit in (None, True, "--help", "g" * 40):
+                self.denied("SOURCE_GIT_ID_INVALID", kit.verify_source_schema, commit, "b" * 40, 46)
+            source.assert_not_called()
+        with patch.object(kit, "git", side_effect=self.source_git(46, tree="c" * 40)):
+            self.denied("SOURCE_TREE_MISMATCH", kit.verify_source_schema, "a" * 40, "b" * 40, 46)
+        with patch.object(kit, "git", return_value="prisma/migrations/nested/hidden/migration.sql"):
+            self.denied("SOURCE_MIGRATION_PATHS_INVALID", kit.source_migration_paths, "a" * 40)
+
+    def test_expected_source_keeps_manifest_and_declared_schema_binding(self):
+        expected = {"environment": "restore-source", "project": "fai-crm-synthetic",
+                    "source_commit": "a" * 40, "source_tree": "b" * 40,
+                    "app_image_id": "sha256:" + "c" * 64, "image_provenance": "oci-labels",
+                    "resource_provenance": "n05-labels", "migration_count": 46,
+                    "manifest_sha256": "d" * 64, "checksums_sha256": "e" * 64}
+        with patch.object(kit, "git", side_effect=self.source_git(46)):
+            kit.expected_source(expected)
+            self.denied("SOURCE_MIGRATION_COUNT_MISMATCH",
+                        kit.expected_source, expected | {"migration_count": 43})
+            self.denied("SOURCE_MIGRATION_COUNT_UNQUALIFIED",
+                        kit.expected_source, expected | {"migration_count": 47})
 
     def test_cleanup_requires_recorded_instance_even_with_matching_labels(self):
         plan = self.plan | {"phase": "recover", "target_project": "fai-crm-recovery-" + self.plan["run_id"]}
@@ -582,17 +641,36 @@ class RecoveryGuards(unittest.TestCase):
 
     def test_backup_socket_and_engine_are_bound_before_wrapper(self):
         plan = {"host": socket.gethostname(), "data_class": "synthetic", "engine_id": "expected-engine",
-                "environment": {"FAI_ENVIRONMENT": "restore-source", "EXPECTED_MIGRATION_COUNT": "43"}}
+                "environment": {"FAI_ENVIRONMENT": "restore-source", "EXPECTED_MIGRATION_COUNT": "43",
+                                "SOURCE_COMMIT": "a" * 40, "SOURCE_TREE": "b" * 40}}
         with patch.object(kit, "docker", return_value=b'{"ID":"other-engine","OSType":"linux"}'), \
+             patch.object(kit, "git", side_effect=self.source_git(43)), \
              patch.object(kit, "run") as runner:
             self.denied("BACKUP_DOCKER_ENGINE_MISMATCH", kit.backup_preflight, plan)
             runner.assert_not_called()
         with patch.object(kit, "docker", return_value=b'{"ID":"expected-engine","OSType":"linux"}'), \
+             patch.object(kit, "git", side_effect=self.source_git(43)), \
              patch.object(kit, "verify_backup_configuration"), patch.object(kit, "run") as runner, \
              patch.dict(os.environ, {"DOCKER_CONTEXT": "unapproved-context"}):
             kit.backup_preflight(plan)
             self.assertEqual(runner.call_args.kwargs["env"]["DOCKER_HOST"], "unix:///var/run/docker.sock")
             self.assertNotIn("DOCKER_CONTEXT", runner.call_args.kwargs["env"])
+
+    def test_backup46_requires_matching_source_before_docker_or_wrapper(self):
+        plan = {"host": socket.gethostname(), "data_class": "synthetic", "engine_id": "expected-engine",
+                "environment": {"FAI_ENVIRONMENT": "restore-source", "EXPECTED_MIGRATION_COUNT": "46",
+                                "SOURCE_COMMIT": "a" * 40, "SOURCE_TREE": "b" * 40}}
+        with patch.object(kit, "git", side_effect=self.source_git(43)), \
+             patch.object(kit, "docker") as engine, patch.object(kit, "run") as runner:
+            self.denied("SOURCE_MIGRATION_COUNT_MISMATCH", kit.backup_preflight, plan)
+            engine.assert_not_called()
+            runner.assert_not_called()
+        with patch.object(kit, "git", side_effect=self.source_git(46)), \
+             patch.object(kit, "docker", return_value=b'{"ID":"expected-engine","OSType":"linux"}'), \
+             patch.object(kit, "verify_backup_configuration"), patch.object(kit, "run") as runner:
+            kit.backup_preflight(plan)
+            self.assertEqual(runner.call_args.kwargs["env"]["EXPECTED_MIGRATION_COUNT"], "46")
+            self.assertEqual(runner.call_args.kwargs["env"]["DOCKER_HOST"], "unix:///var/run/docker.sock")
 
 
 if __name__ == "__main__":

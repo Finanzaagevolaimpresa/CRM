@@ -5,6 +5,23 @@ does not establish that a real backup is recoverable, create an off-host copy, o
 authorize a production action. The ordinary release gate, existing N05 backup
 confirmation, legacy provenance checks and restore drill remain applicable.
 
+The kit admits exactly schema43 and schema46 sources. A plan must explicitly bind
+the migration count to its source commit and tree; the complete migration
+inventory in that commit must have the same count. Backup preflight rejects a
+mislabeled source before invoking Docker or the backup wrapper. Recovery verifies
+every canonical migration name/checksum and completed status against that same
+declared count. Schema44, schema45, schema47 and inferred or partial inventories
+are not admitted by this kit. The existing restore-drill.sh retains its separate
+schema43/44 scope.
+
+The synthetic CI matrix runs the complete encrypted transfer and isolated
+recovery drill for both 43 and 46, including incorrect-count counterexamples.
+The operator-facing plan keys, private material handling, isolation and cleanup
+contracts are unchanged. Preserve old plans with their pinned original tool
+checkout; do not relabel a schema43 manifest or reuse an old plan hash for 46.
+See [schema46 preparation](../pr140-backup46-recovery-r05.md) for the PR140 release
+boundary and the remaining owner evidence.
+
 The initial implementation recovers PostgreSQL and document bytes/ownership/modes, and decrypts
 configuration and cryptographic material into separate private directories. It
 **never starts the CRM application**, runs a consumer, sources recovered environment

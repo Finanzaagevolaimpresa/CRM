@@ -1188,10 +1188,18 @@ jobs:
           retention-days: 14
 
   n05-recovery-kit:
-    name: N05 encrypted transfer and isolated recovery
+    name: N05 encrypted transfer and isolated recovery (schema${{ matrix.schema }})
     needs: build-context-guard
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - schema: 43
+            image_source: ff71b130d2476d77329c07bd492c95c6782162ca
+          - schema: 46
+            image_source: 3230764a4406182e50d22236bb7e701d0f1b5656
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@v4
@@ -1209,8 +1217,9 @@ jobs:
       - name: Qualify real N05, age, pinned SSH and isolated recovery
         env:
           N05_RECOVERY_SYNTHETIC_CONFIRMED: "1"
-          N05_RECOVERY_RUNNER_IMAGE: fai-crm:recovery-runner-${{ github.run_id }}-${{ github.run_attempt }}
-          N05_RECOVERY_APP_IMAGE: fai-crm:recovery-source-${{ github.run_id }}-${{ github.run_attempt }}
+          N05_RECOVERY_EXPECTED_MIGRATION_COUNT: "${{ matrix.schema }}"
+          N05_RECOVERY_RUNNER_IMAGE: fai-crm:recovery-runner-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.schema }}
+          N05_RECOVERY_APP_IMAGE: fai-crm:recovery-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.schema }}
           N05_RECOVERY_POSTGRES_IMAGE: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
           N05_RECOVERY_DOCUMENT_HELPER_IMAGE: node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
         run: |
@@ -1232,7 +1241,7 @@ jobs:
             rmdir "$context"
           }
           trap cleanup_images EXIT
-          image_source=ff71b130d2476d77329c07bd492c95c6782162ca
+          image_source=${{ matrix.image_source }}
           git -c core.autocrlf=false archive "$image_source" -- .dockerignore Dockerfile.prod.example package.json package-lock.json \
             prisma next-env.d.ts next.config.ts postcss.config.js tailwind.config.ts tsconfig.json public scripts src \
             | tar -xf - -C "$context"
