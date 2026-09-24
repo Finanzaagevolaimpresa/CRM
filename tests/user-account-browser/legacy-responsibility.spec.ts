@@ -58,10 +58,15 @@ test('a legacy context-only edit invalidates acceptance without admitting a new 
   }), { isolationLevel: 'Serializable' });
   const destination = await db.client.create({ data: { type: 'societa', displayName: f.tag + '-destination' } });
   await login(page, f.admin.email);
-  await page.goto('/technical-office/practices/' + practice.id);
+  const path = '/technical-office/practices/' + practice.id;
+  await page.goto(path);
   const form = page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva dati', exact: true }) });
-  await form.locator('input[name="clientId"]').evaluate((element, value) => { (element as HTMLInputElement).value = value; }, destination.id);
+  await capture(page, path);
   await form.getByRole('button', { name: 'Salva dati', exact: true }).click();
+  const request = await requestFrom(page);
+  expect(request.body).toContain(f.client.id);
+  const response = await replay(page, { ...request, body: request.body.replaceAll(f.client.id, destination.id) });
+  expect(response.status()).toBeLessThan(400);
   await expect.poll(async () => (await db.technicalPractice.findUniqueOrThrow({ where: { id: practice.id } })).clientId).toBe(destination.id);
   const current = await readResponsibility(db, 'TechnicalPractice', practice.id);
   expect(current.current?.decision).toMatchObject({ allowed: false, departmentCode: null });
