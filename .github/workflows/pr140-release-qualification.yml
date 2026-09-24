@@ -7,6 +7,8 @@ on:
       - 'tests/pr140-release/**'
       - 'tests/practice-readiness-browser/**'
       - 'scripts/pr140/**'
+      - 'scripts/r05/**'
+      - 'prisma/**'
       - 'Dockerfile.prod.example'
       - '.github/workflows/pr140-release-qualification.yml'
   push:
@@ -15,6 +17,8 @@ on:
       - 'src/lib/internal-engagement*'
       - 'tests/pr140-release/**'
       - 'scripts/pr140/**'
+      - 'scripts/r05/**'
+      - 'prisma/**'
       - '.github/workflows/pr140-release-qualification.yml'
 permissions:
   contents: read
@@ -22,8 +26,8 @@ concurrency:
   group: pr140-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release-schema47:
-    name: Packaged internal workflow and populated schema47 recovery
+  release-schema48:
+    name: Schema48 package and legacy storage compatibility (no recovery admission)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -41,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           bash -n scripts/pr140/qualify-release.sh
           python3 -c "from pathlib import Path; p=Path('scripts/pr140/owner-preflight.py'); compile(p.read_text(), str(p), 'exec')"
-      - name: Build immutable images and qualify actual recovery
+      - name: Verify candidate and legacy storage compatibility; recovery remains unqualified
         run: bash scripts/pr140/qualify-release.sh
       - name: Save minimized receipts and qualified image archive
         if: always()

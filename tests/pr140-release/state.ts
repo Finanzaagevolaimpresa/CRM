@@ -21,6 +21,7 @@ async function main() {
     assert.equal(await db.internalSession.count(), 0);
   } else if (mode === 'footprint') {
     const data = {
+      clientReadGrants: await db.clientReadGrant.findMany({ orderBy: { id: 'asc' } }),
       dossiers: await db.clientDossier.findMany({ where: { practiceReadinessId: { not: null } }, orderBy: { id: 'asc' } }),
       versions: await db.engagementDossierVersion.findMany({ orderBy: { id: 'asc' } }),
       reviews: await db.engagementDossierReview.findMany({ orderBy: { id: 'asc' } }),
@@ -33,7 +34,8 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 47);
+    assert.equal(data.ledger.length, 48);
+    assert.ok(data.clientReadGrants.length >= 3);
     const minimized = Object.fromEntries(Object.entries(data).map(([key, rows]) => [key, {
       count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows)).digest('hex'),
     }]));

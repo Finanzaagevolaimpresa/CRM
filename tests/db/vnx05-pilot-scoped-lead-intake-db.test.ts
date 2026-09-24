@@ -148,9 +148,9 @@ test.before(async () => {
     .filter((item) => item.isDirectory() && /^\d/u.test(item.name))
     .map((item) => item.name)
     .sort();
-  assert.equal(migrationNames.length, 47);
+  assert.equal(migrationNames.length, 48);
   assert.equal(migrationNames[45], '20260914130000_practice_engagement_readiness_v1');
-  assert.equal(migrationNames.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
+  assert.equal(migrationNames.at(-1), '20260924100000_admin_client_read_perimeters_v1');
   execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], {
     env: { ...process.env, DATABASE_URL: schemaUrl }, stdio: 'pipe', timeout: 180_000,
   });

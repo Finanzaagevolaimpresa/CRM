@@ -1,3 +1,4 @@
+import { clientVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = "force-dynamic";
 import { requirePermission, hasPermission } from "@/lib/auth";
 import {
@@ -51,29 +52,8 @@ export default async function Page({
       </div>
     );
   const writable = hasPermission(session, "service.write");
-  const global = [
-    "admin",
-    "direzione",
-    "revisore",
-    "backoffice",
-    "amministrazione",
-  ].includes(session.role);
   const clients = await prisma.client.findMany({
-    where: {
-      deletedAt: null,
-      ...(global
-        ? {}
-        : session.role === "commerciale"
-          ? { salesOwnerId: session.userId }
-          : session.role === "consulente"
-            ? { consultantId: session.userId }
-            : {
-                OR: [
-                  { salesOwnerId: session.userId },
-                  { consultantId: session.userId },
-                ],
-              }),
-    },
+    where: { deletedAt: null, ...clientVisibilityWhere(session) },
   });
   const clientIds = clients.map((x) => x.id);
   const activeLeadIds = (

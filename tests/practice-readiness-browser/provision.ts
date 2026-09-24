@@ -50,6 +50,7 @@ async function main() {
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({
     data: [
+      { id: "readiness-perimeter-admin", email: "readiness-perimeter-admin@invalid.test", name: "Synthetic perimeter admin", passwordHash, role: "admin" },
       {
         id: "readiness-browser-owner",
         email: "readiness-owner@invalid.test",
@@ -105,6 +106,8 @@ async function main() {
         consultantId: "readiness-browser-owner",
       },
     });
+    await db.clientReadGrant.create({ data: { userId: "readiness-browser-reader", clientId: client.id,
+      active: true, createdById: "readiness-perimeter-admin", updatedById: "readiness-perimeter-admin" } });
     const project = await db.project.create({
       data: {
         id: `readiness-browser-project-${item.key}`,

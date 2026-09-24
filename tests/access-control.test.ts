@@ -305,10 +305,12 @@ test('output AI richiedono contesto run identico e revisione indipendente dal ge
   assert.equal(canViewAiOutput(actor('revisore'), { ...output, clientId: null, client: null, run: { clientId: null, clientServiceId: null, projectId: null, createdById: 'generator-1' } }), false);
   assert.equal(canViewAiOutput(actor('direzione'), { ...output, clientId: null, client: null, run: { clientId: null, clientServiceId: null, projectId: null, createdById: 'generator-1' } }), true);
 
-  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), output), true);
+  const scopedReviewer = { ...actor('revisore', 'reviewer-1'), clientReadScope: ['client-1'] };
+  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), output), false);
+  assert.equal(canReviewAiOutput(scopedReviewer, output), true);
   assert.equal(canReviewAiOutput(actor('consulente', 'generator-1'), output), false);
-  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, forbiddenPhrases: ['garantito'] }), false);
-  assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), { ...output, run: { ...run, createdById: null } }), false);
+  assert.equal(canReviewAiOutput(scopedReviewer, { ...output, forbiddenPhrases: ['garantito'] }), false);
+  assert.equal(canReviewAiOutput(scopedReviewer, { ...output, run: { ...run, createdById: null } }), false);
   assert.equal(canApproveAiOutput(actor('revisore', 'approver-1'), output), false);
   assert.equal(canApproveAiOutput(actor('admin', 'approver-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), true);
   assert.equal(canApproveAiOutput(actor('revisore', 'reviewer-1'), { ...output, reviewedById: 'reviewer-1', reviewedAt: new Date() }), false);

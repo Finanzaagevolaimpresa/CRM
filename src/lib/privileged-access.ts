@@ -20,6 +20,7 @@ export const privilegedStepUpCookieName = 'fai_crm_privileged_step_up';
 export const privilegedMutationCodes = [
   'USER_ACCOUNT_UPDATE',
   'R05_TASK_EXCEPTION_ASSIGN',
+  'R05_CLIENT_READ_PERIMETER',
   'USER_CREATE',
   'USER_ACTIVATE',
   'USER_ROLE_UPDATE',

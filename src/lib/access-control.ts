@@ -1,7 +1,8 @@
 import type { Client, ClientService, Document, DocumentChecklistItem, Lead, Project, RoleCode, Task, User } from '@prisma/client';
 import type { AuthSession } from './auth';
+import { hasClientReadGrant, type ClientReadScope } from './client-read-perimeter-policy';
 
-export type Actor = Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -85,10 +86,9 @@ function hasValidServiceContext(service: ServiceAccessContext) {
   return hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project });
 }
 
-export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' | 'consultantId'>) {
+export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) {
   if (hasGlobalAccess(user)) return true;
-  // Existing review/accounting perimeters are separate from commercial and technical assignment.
-  if (user.role === 'revisore' || user.role === 'amministrazione') return true;
+  if (hasClientReadGrant(user, client.id)) return true;
   const id = getActorId(user);
   if (user.role === 'commerciale') return client.salesOwnerId === id;
   if (user.role === 'consulente') return client.consultantId === id;
@@ -315,7 +315,7 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
   return !!document.client && canEditClient(user, document.client);
 }
 
-export function canViewTechnicalPractice(user: Actor, practice: { commercialOwnerId?: string | null; technicalOwnerId?: string | null; client?: Pick<Client, 'salesOwnerId' | 'consultantId'> | null }) {
+export function canViewTechnicalPractice(user: Actor, practice: { commercialOwnerId?: string | null; technicalOwnerId?: string | null; client?: (Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) | null }) {
   if (!practice.client) return false;
   if (hasGlobalAccess(user)) return true;
   const id = getActorId(user);

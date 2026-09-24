@@ -6,13 +6,13 @@ on:
 permissions:
   contents: read
 jobs:
-  n14-candidate-schema47:
-    name: WordPress and admin N14 on exact candidate schema47
+  n14-candidate-schema48:
+    name: WordPress and admin N14 on exact candidate schema48
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       VNX03_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      VNX03_QUALIFICATION_PROFILE: candidate-schema47
+      VNX03_QUALIFICATION_PROFILE: candidate-schema48
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,14 +21,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
-      - name: Bind exact head, tree and unchanged schema47
+      - name: Bind exact head, tree and additive schema48 with immutable prefix47
         run: |
           test "$(git rev-parse HEAD)" = "$VNX03_EXPECTED_SOURCE_COMMIT"
           expected_tree=$(git rev-parse "$VNX03_EXPECTED_SOURCE_COMMIT^{tree}")
           printf 'VNX03_EXPECTED_SOURCE_TREE=%s\n' "$expected_tree" >> "$GITHUB_ENV"
-          VNX03_EXPECTED_SOURCE_TREE="$expected_tree" node scripts/vnx03/verify-candidate-scope.mjs
+          VNX03_EXPECTED_SOURCE_TREE="$expected_tree" node scripts/vnx03/verify-candidate-perimeter-scope.mjs
       - name: Exercise negative candidate guards
-        run: node --test tests/vnx03-candidate-scope.test.mjs
+        run: node --test tests/vnx03-candidate-scope.test.mjs tests/r05-perimeter-schema-guard.test.mjs
       - name: Install locked dependencies and browser
         run: |
           npm ci
@@ -59,8 +59,8 @@ jobs:
             const receipt = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/${file}`, 'utf8'));
             assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
             assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
-            assert.equal(receipt.profile, 'candidate-schema47');
-            assert.equal(receipt.migrations, 47);
+            assert.equal(receipt.profile, 'candidate-schema48');
+            assert.equal(receipt.migrations, 48);
             assert.equal(receipt.productionContact, false);
             if (file === 'n14-runtime.json') assert.equal(receipt.adminAssignmentBrowserCompleted, true);
           }

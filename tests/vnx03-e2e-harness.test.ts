@@ -17,6 +17,8 @@ test('VNX-03 schema banks are explicit and reject unknown profiles', () => {
     assert.deepEqual(qualificationSchema(), { profile: 'historical-schema44', migrations: 44 });
     process.env.VNX03_QUALIFICATION_PROFILE = 'candidate-schema47';
     assert.deepEqual(qualificationSchema(), { profile: 'candidate-schema47', migrations: 47 });
+    process.env.VNX03_QUALIFICATION_PROFILE = 'candidate-schema48';
+    assert.deepEqual(qualificationSchema(), { profile: 'candidate-schema48', migrations: 48 });
     process.env.VNX03_QUALIFICATION_PROFILE = '47';
     assert.throws(qualificationSchema, /VNX03_QUALIFICATION_PROFILE_INVALID/u);
   } finally {

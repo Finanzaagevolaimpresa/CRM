@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { canViewChecklistItem, canViewClientContext, canViewDocument } from './access-control';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
+import { loadClientReadScope } from './client-read-perimeter';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 
 export class EngagementDossierError extends Error {
@@ -56,7 +57,7 @@ async function actor(tx: Prisma.TransactionClient, claimed: AuthSession, permiss
   if (!claimed.sessionId || !uuid.safeParse(claimed.sessionId).success) throw new EngagementDossierError('DENIED');
   const user = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId, userId: claimed.userId });
   if (!user || !user.live || user.revokedAt || !user.active || user.deletedAt) throw new EngagementDossierError('DENIED');
-  const current = { ...claimed, role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
+  const current = { ...claimed, clientReadScope: await loadClientReadScope(tx, claimed.userId), role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
   if (!hasPermission(current, permission)) throw new EngagementDossierError('DENIED');
   return current;
 }
