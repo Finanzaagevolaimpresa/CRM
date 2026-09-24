@@ -9,7 +9,7 @@ import { previewPurchasedServiceHandoff, type HandoffInput } from '../src/lib/pu
 export async function purchasedFixture(db: PrismaClient, passwordHash = 'synthetic-no-login') {
   const tag = `Purchased-${randomUUID()}`;
   async function actor(role: RoleCode, name: string) {
-    const user = await db.user.create({ data: { name: `${tag}-${name}`, email: `${tag}-${name}@example.test`, role, passwordHash } });
+    const user = await db.user.create({ data: { name: `${tag}-${name}`, email: `${tag}-${name}@example.test`.toLowerCase(), role, passwordHash } });
     const token = createRegistrySessionToken(), tokenDigest = await digestRegistrySessionToken(token.bytes);
     const session = await db.$transaction(tx => createInternalSession(tx, { userId: user.id, tokenDigest }));
     return { ...user, userId: user.id, sessionId: session.id };
