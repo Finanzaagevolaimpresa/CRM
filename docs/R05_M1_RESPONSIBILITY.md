@@ -15,6 +15,16 @@ L'amministratore decide le responsabilità; il destinatario registra personalmen
 
 ## Persistenza e confini
 
+Tutti i raccordi che emettono una decisione ammessa verificano lo step-up prima
+delle scritture: aggiornamento assegnatario lead, creazione pratica con referenti,
+modifica referenti nei dati tecnici e comando storico «Assegna referenti».
+In modalità disabled o senza step-up owner, servizio e audit della risorsa restano
+invariati. La creazione senza referenti e la sola variazione del contesto
+registrano invece una decisione non ammessa: invalidano l'eventuale presa in carico
+e richiedono una successiva riconferma amministrativa, senza attribuirla implicitamente.
+Le regressioni HTTP esercitano tutti e quattro gli ingressi precedenti e il banco
+di rientro verifica anche il diniego sul comando storico nel pacchetto effettivo.
+
 Nessuna nuova migrazione: decisioni e conferme riusano `AuditLog`, con metadati ammessi dal filtro esistente, che resta invariato. Le nuove operazioni aggiungono eventi e non riscrivono lo storico. Non è una garanzia WORM contro un amministratore del database. Gli eventi hanno autore, data, revisione e riferimenti; lo storico è paginabile a 50 eventi. Le conferme sono vincolate all'ID della specifica decisione, non al solo assegnatario.
 
 La presa in carico non registra un contatto cliente, un'offerta accettata, un pagamento, un consenso o un invio. Non attiva regole automatiche, provider, worker, scheduler o dispatch. Gli owner del cliente non sono modificati dalle decisioni sulla singola pratica. La presenza di un'assunzione storica da parte di un account poi sospeso non riattiva l'account.

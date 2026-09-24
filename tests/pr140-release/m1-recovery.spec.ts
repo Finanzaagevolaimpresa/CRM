@@ -48,7 +48,8 @@ test('packaged image enforces live client perimeters on an existing reviewer ses
 test('packaged image reopens M1 handoff, acceptance and private materials with current access checks', async ({ page, browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_M1_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; clientId: string; serviceId: string; practiceId: string; handoffId: string; acceptanceId: string; originId: string;
-    tech: { id: string; email: string }; otherEmail: string; materialId: string; materialHash: string; sensitiveId: string;
+    tech: { id: string; email: string }; otherEmail: string; otherId: string; adminEmail: string;
+    materialId: string; materialHash: string; sensitiveId: string;
   };
   expect(f.synthetic).toBe(true);
   expect((await getHandoffReceipt(db, f.serviceId))?.id).toBe(f.handoffId);
@@ -56,6 +57,21 @@ test('packaged image reopens M1 handoff, acceptance and private materials with c
   const responsibility = await readResponsibility(db, 'TechnicalPractice', f.practiceId);
   expect(responsibility.valid).toBe(true);
   expect(responsibility.accepted.map(row => row.id)).toContain(f.acceptanceId);
+  // The packaged return must also reject the legacy assignment entry point.
+  const adminContext = await browser.newContext(), admin = await adminContext.newPage();
+  await login(admin, f.adminEmail);
+  const originalPractice = await db.technicalPractice.findUniqueOrThrow({ where: { id: f.practiceId } });
+  const originalService = await db.clientService.findUniqueOrThrow({ where: { id: f.serviceId } });
+  const originalAudit = await db.auditLog.findMany({ where: { entityId: f.practiceId }, orderBy: { id: 'asc' } });
+  await admin.goto(app + '/technical-office/practices/' + f.practiceId);
+  const legacyForm = admin.locator('form').filter({ has: admin.getByRole('button', { name: 'Assegna', exact: true }) });
+  await legacyForm.locator('select[name="technicalOwnerId"]').selectOption(f.otherId);
+  await legacyForm.getByRole('button', { name: 'Assegna', exact: true }).click();
+  await expect(admin).toHaveURL(/\/settings\/security/);
+  expect(await db.technicalPractice.findUniqueOrThrow({ where: { id: f.practiceId } })).toEqual(originalPractice);
+  expect(await db.clientService.findUniqueOrThrow({ where: { id: f.serviceId } })).toEqual(originalService);
+  expect(await db.auditLog.findMany({ where: { entityId: f.practiceId }, orderBy: { id: 'asc' } })).toEqual(originalAudit);
+  await adminContext.close();
   await login(page, f.tech.email);
   const path = app + '/services/' + f.serviceId + '/handoff';
   await page.goto(path);

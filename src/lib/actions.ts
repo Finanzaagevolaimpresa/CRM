@@ -660,6 +660,7 @@ export async function updateLeadCommercial(form: FormData) {
   }
   await requireActiveUser(nextAssignedToId);
   if (assignment !== undefined && s.role !== 'admin') denyManualAssignment();
+  if (assignment !== undefined) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
     const lead = await tx.lead.update({ where: { id: data.id, ...(assignment !== undefined ? { assignedToId: before.assignedToId } : {}) }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal } });
     const events = ['lead_update'];
@@ -1917,11 +1918,13 @@ export async function createTechnicalPractice(form: FormData) {
     requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
     requireActiveUser(data.technicalOwnerId, ['admin', 'direzione', 'consulente', 'backoffice']),
   ]);
-  if ((data.commercialOwnerId || data.technicalOwnerId) && s.role !== 'admin') denyManualAssignment();
-  return withAssignmentGuard(prisma, s, Boolean(data.commercialOwnerId || data.technicalOwnerId), [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+  const assignmentRequested = Boolean(data.commercialOwnerId || data.technicalOwnerId);
+  if (assignmentRequested && s.role !== 'admin') denyManualAssignment();
+  if (assignmentRequested) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
+  return withAssignmentGuard(prisma, s, assignmentRequested, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
     await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
-    await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: s.role === 'admin', reason: 'Apertura pratica: responsabilità iniziali, presa in carico non registrata', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
+    await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: assignmentRequested, reason: 'Apertura pratica: responsabilità iniziali, presa in carico non registrata', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     return practice;
   });
 }
@@ -1982,6 +1985,7 @@ export async function updateTechnicalPractice(form: FormData) {
   const technicalAssignment = changedAssignee(before.technicalOwnerId, form.has('technicalOwnerId'), data.technicalOwnerId);
   const ownerChanged = commercialAssignment !== undefined || technicalAssignment !== undefined;
   if (ownerChanged && s.role !== 'admin') denyManualAssignment();
+  if (ownerChanged) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   if (ownerChanged) {
     await Promise.all([
       requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
@@ -1998,7 +2002,7 @@ export async function updateTechnicalPractice(form: FormData) {
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: updateData as never });
     await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
-    if (ownerChanged || contextChanged) await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: s.role === 'admin', reason: contextChanged ? 'Contesto della pratica modificato' : 'Responsabili della pratica modificati', departmentCode: contextChanged ? null : undefined, state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
+    if (ownerChanged || contextChanged) await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: ownerChanged && !contextChanged, reason: contextChanged ? 'Contesto della pratica modificato' : 'Responsabili della pratica modificati', departmentCode: contextChanged ? null : undefined, state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     return practice;
   });
@@ -2021,6 +2025,8 @@ export async function updateTechnicalPracticeStatus(form: FormData) {
 
 export async function assignTechnicalPractice(form: FormData) {
   const s = await requirePermission('technical.assign');
+  if (s.role !== 'admin') denyManualAssignment();
+  await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   const data = technicalPracticeAssignSchema.parse(clean(form));
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
   await Promise.all([
