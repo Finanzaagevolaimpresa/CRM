@@ -81,10 +81,11 @@ for (const role of roles) test(`${role}: explicit admin grant and revocation aff
   const userId = users.get(role)!, path = `/settings/users/${userId}/perimeter`;
   await login(reader, role); await login(admin, 'admin');
   async function scope(allowed: boolean) {
-    for (const [url, label] of [['/clients/' + clientId, tag + '-client'], ['/projects/' + projectId, tag + '-project']]) {
+    for (const [url, label] of [['/clients/' + clientId, 'Fascicolo Cliente Interno — ' + tag + '-client'], ['/projects/' + projectId, 'Progetto — ' + tag + '-project']]) {
       await reader.goto(url);
-      if (allowed) await expect(reader.getByText(label, { exact: true }).first()).toBeVisible();
-      else await expect(reader.getByText(label, { exact: true })).toHaveCount(0);
+      const heading = reader.getByRole('heading', { name: label, exact: true });
+      if (allowed) await expect(heading).toBeVisible();
+      else await expect(heading).toHaveCount(0);
     }
     await reader.goto('/search?q=' + encodeURIComponent(tag));
     const clientLink = reader.locator(`a[href="/clients/${clientId}"]`);
