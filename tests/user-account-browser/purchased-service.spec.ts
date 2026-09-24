@@ -102,7 +102,10 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   await expect.poll(async () => (await db.practiceCommunication.findUniqueOrThrow({ where: { id: note.id } })).status).toBe('approvata');
   await tech.goto(practicePath); await tech.getByRole('button', { name: 'Segna usata/inviata', exact: true }).click();
   await expect.poll(async () => (await db.practiceCommunication.findUniqueOrThrow({ where: { id: note.id } })).status).toBe('usata_inviata');
-  await tech.reload(); await expect(tech.getByText(`${f.tag}-simulated-delivery`, { exact: true }).first()).toBeVisible();
+  await tech.reload();
+  const deliveredRow = tech.getByRole('row').filter({ hasText: `${f.tag}-simulated-delivery` });
+  await expect(deliveredRow).toHaveCount(1); await expect(deliveredRow).toBeVisible();
+  await expect(deliveredRow.getByRole('cell').first()).toContainText(`${f.tag}-simulated-delivery`);
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
   const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);

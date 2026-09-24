@@ -156,7 +156,9 @@ test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', 
 });
 
 test('documenti e checklist invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'prisma.document.create');
+  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'prisma.$transaction');
+  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'tx.document.create');
+  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'tx.documentVersion.create');
   assertGuardsBeforeMutation(
     'linkDocumentToService',
     ['requireDocumentEditAccess', 'requireServiceEditAccess'],

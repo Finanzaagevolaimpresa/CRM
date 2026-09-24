@@ -1,9 +1,10 @@
 # M1: qualifica del rientro applicativo su schema48
 
 Il banco `scripts/pr140/qualify-release.sh` costruisce il candidato esatto e
-l'immagine di rientro `1daef3783eadcd34704f877cd26a05ec54414d5a`, tree
-`c5c5442afab1515e3b705a8457c22678a2080333`. Quest'ultima comprende perimetri
-ClientReadGrant, responsabilità/presa in carico e passaggio del servizio acquistato.
+l'immagine di rientro `20125ce9c72ce370e6dc3ef0d66bc356607640b6`, tree
+`072c423303587166e331ec1735daeb51abd5d8f6`. Quest'ultima comprende perimetri
+ClientReadGrant, responsabilità/presa in carico, passaggio del servizio acquistato
+e registrazione atomica della prima versione dei file caricati.
 Le ricevute precedenti `CI_SCHEMA48_COMPATIBILITY_ONLY` restano valide soltanto
 come prove storiche di conservazione; l'immagine d3cf non è ammessa al rientro M1.
 
@@ -33,6 +34,8 @@ un recupero dei backup C:/F:, un rollback delle migrazioni o il rilascio reale.*
 Le prove storiche di backup/recupero restano separate. Il piano produttivo deve
 vincolare i suoi backup, target osservato, immagini e modalità di recupero;
 revoche reali e modifiche di configurazione non sono effettuate dal banco.
+Il rientro dispone delle stesse funzionalità M1: non costituisce un'implementazione
+alternativa capace di risolvere un difetto software condiviso con il candidato.
 
 Stato iniziale di questa revisione: qualifica da eseguire in CI, nessuna ammissione
 produttiva dedotta dalla sola pubblicazione del codice.

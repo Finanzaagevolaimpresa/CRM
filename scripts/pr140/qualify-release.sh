@@ -8,8 +8,8 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 head="$(git rev-parse HEAD)"
 tree="$(git rev-parse HEAD^{tree})"
-recovery_head=1daef3783eadcd34704f877cd26a05ec54414d5a
-recovery_tree=c5c5442afab1515e3b705a8457c22678a2080333
+recovery_head=20125ce9c72ce370e6dc3ef0d66bc356607640b6
+recovery_tree=072c423303587166e331ec1735daeb51abd5d8f6
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
 # The return image includes schema48 perimeters, responsibility and paid-service handoff.
 # Older storage-only receipts remain historical evidence, never recovery admission.
@@ -178,7 +178,7 @@ node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/sess
 start_app "$recovery_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$recovery_id" ]]
-run_browser recovery tests/pr140-release/playwright.config.ts recovery.spec.ts 1
+run_browser recovery tests/pr140-release/playwright.config.ts '/recovery.spec.ts$' 1
 run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-recovery.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
