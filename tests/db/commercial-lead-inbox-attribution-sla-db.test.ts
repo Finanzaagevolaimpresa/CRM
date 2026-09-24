@@ -217,7 +217,7 @@ test('current fresh46 catalog preserves N14 and contains zero policy, item, cycl
         (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
     `,
   ]);
-  assert.equal(Number(migrationRows[0]?.count), 47);
+  assert.equal(Number(migrationRows[0]?.count), 48);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
     'CommercialLeadInboxItem',
@@ -659,9 +659,9 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 47);
+  assert.equal(names.length, 48);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
-  assert.equal(names.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
+  assert.equal(names.at(-1), '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migrationName);
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set('schema', upgradeSchema);

@@ -6,10 +6,12 @@ import { prisma } from './prisma';
 import { internalSessionMode, verifySessionCookie, type SessionCookie } from './session';
 import { resolveInternalSession } from './internal-session-registry';
 import { rolePermissions, type Permission } from './permissions';
+import { loadClientReadScope } from './client-read-perimeter';
+import type { ClientReadScope } from './client-read-perimeter-policy';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type AuthSession = SessionCookie & {
+export type AuthSession = SessionCookie & ClientReadScope & {
   role: RoleCode;
   active: boolean;
   permissionOverrides: PermissionOverrideSnapshot[];
@@ -33,7 +35,8 @@ export async function getSession() {
   if (internalSessionMode() === 'registry') {
     const row = await resolveInternalSession(prisma, token);
     if (!row || !row.user.active || row.user.deletedAt) return null;
-    return { userId: row.userId, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000), role: row.user.role, active: row.user.active, permissionOverrides: row.user.permissionOverrides } satisfies AuthSession;
+    const clientReadScope = await loadClientReadScope(prisma, row.userId);
+    return { userId: row.userId, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000), role: row.user.role, active: row.user.active, permissionOverrides: row.user.permissionOverrides, clientReadScope } satisfies AuthSession;
   }
   const cookieSession = await verifySessionCookie(token);
   if (!cookieSession) return null;
@@ -48,7 +51,8 @@ export async function getSession() {
     return null;
   }
 
-  return { ...cookieSession, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides } satisfies AuthSession;
+  const clientReadScope = await loadClientReadScope(prisma, user.id);
+  return { ...cookieSession, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides, clientReadScope } satisfies AuthSession;
 }
 
 export async function requireSession(): Promise<AuthSession> {

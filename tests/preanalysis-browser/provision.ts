@@ -16,10 +16,12 @@ async function main() {
     { id: ids.noRead, email: 'preanalysis-no-read@invalid.test', name: 'Consulente Senza Dossier', passwordHash, role: 'consulente' },
     { id: ids.readOnly, email: 'preanalysis-read-only@invalid.test', name: 'Revisore Sola Lettura', passwordHash, role: 'revisore' },
     { id: ids.overrideDenied, email: 'preanalysis-override-denied@invalid.test', name: 'Backoffice Override Negato ABAC', passwordHash, role: 'backoffice' },
+    { id: 'preanalysis-perimeter-admin', email: 'preanalysis-perimeter-admin@invalid.test', name: 'Admin Perimetro Sintetico', passwordHash, role: 'admin' },
   ] });
   await db.userPermissionOverride.create({ data: { userId: ids.noRead, permission: 'dossier.read', allowed: false } });
   await db.userPermissionOverride.create({ data: { userId: ids.overrideDenied, permission: 'project.write', allowed: true } });
   await db.client.create({ data: { id: ids.client, type: 'societa', displayName: 'Cliente Sintetico Preanalisi', consultantId: ids.owner } });
+  await db.clientReadGrant.create({ data: { userId: ids.readOnly, clientId: ids.client, active: true, createdById: 'preanalysis-perimeter-admin', updatedById: 'preanalysis-perimeter-admin' } });
   await db.project.create({ data: { id: ids.project, clientId: ids.client, title: 'Progetto Sintetico Preanalisi', consultantId: ids.noRead } });
   process.stdout.write('{"preanalysisBrowserProvision":"ready"}\n');
 }

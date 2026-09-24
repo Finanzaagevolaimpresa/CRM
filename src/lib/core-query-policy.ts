@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import type { AuthSession } from './auth';
+import { perimeterRoles, type ClientReadScope } from './client-read-perimeter-policy';
 
 export const CORE_QUERY_PAGE_SIZE = 50;
 export const CORE_QUERY_MAX_PAGE = 200;
@@ -51,12 +52,14 @@ export function coreQueryCandidateLimit(limit: number): number {
   return Math.min(Math.max(canonicalLimit * 5, canonicalLimit), CORE_QUERY_MAX_CANDIDATES);
 }
 
-export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.ClientWhereInput {
-  if (session.role === 'admin' || session.role === 'direzione' || session.role === 'revisore' || session.role === 'amministrazione') return {};
-  if (session.role === 'commerciale') return { salesOwnerId: session.userId };
-  if (session.role === 'consulente') return { consultantId: session.userId };
-  if (session.role === 'backoffice' || session.role === 'collaboratore_limitato') return { OR: [{ salesOwnerId: session.userId }, { consultantId: session.userId }] };
-  return { id: { in: [] } };
+export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & ClientReadScope): Prisma.ClientWhereInput {
+  if (session.role === 'admin' || session.role === 'direzione') return {};
+  const readScope = perimeterRoles.includes(session.role) ? [...new Set(session.clientReadScope ?? [])] : [];
+  const own: Prisma.ClientWhereInput[] = [];
+  if (session.role === 'commerciale' || session.role === 'backoffice' || session.role === 'collaboratore_limitato') own.push({ salesOwnerId: session.userId });
+  if (session.role === 'consulente' || session.role === 'backoffice' || session.role === 'collaboratore_limitato') own.push({ consultantId: session.userId });
+  if (readScope.length) own.push({ id: { in: readScope } });
+  return own.length === 1 ? own[0] : own.length ? { OR: own } : { id: { in: [] } };
 }
 
 export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.LeadWhereInput {

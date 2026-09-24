@@ -39,6 +39,10 @@ case "$VNX03_QUALIFICATION_PROFILE" in
     node scripts/vnx03/verify-candidate-scope.mjs
     export VNX03_EXPECTED_MIGRATIONS=47
     ;;
+  candidate-schema48)
+    node scripts/vnx03/verify-candidate-perimeter-scope.mjs
+    export VNX03_EXPECTED_MIGRATIONS=48
+    ;;
   *) fail 'VNX03_QUALIFICATION_PROFILE_INVALID' ;;
 esac
 

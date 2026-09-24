@@ -1,3 +1,4 @@
+import { loadClientReadScope } from './client-read-perimeter';
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import type { AuthSession } from "./auth";
@@ -133,7 +134,7 @@ async function actor(
     )
   )
     throw new PracticeReadinessError("DENIED");
-  return s;
+  return { ...s, clientReadScope: await loadClientReadScope(tx, claimed.userId) };
 }
 async function practiceScope(
   tx: Prisma.TransactionClient,

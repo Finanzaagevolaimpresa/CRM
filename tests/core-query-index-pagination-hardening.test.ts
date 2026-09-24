@@ -89,12 +89,14 @@ test('N07 database visibility predicates preserve the existing ABAC decisions', 
   const leads = [{ assignedToId: null }, { assignedToId: 'actor-1' }, { assignedToId: 'other' }];
   const roles: RoleCode[] = ['admin', 'direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'];
   for (const role of roles) {
-    const session = actor(role);
+    for (const clientReadScope of [[], ['none', 'other']]) {
+    const session = { ...actor(role), clientReadScope };
     for (const client of clients) {
       assert.equal(matchesClientWhere(clientVisibilityWhere(session), client), canViewClient(session, client), `${role}:${client.id}`);
     }
     for (const lead of leads) {
       assert.equal(matchesLeadWhere(leadVisibilityWhere(session), lead), canViewLead(session, lead), `${role}:${String(lead.assignedToId)}`);
+    }
     }
   }
 });
@@ -129,7 +131,7 @@ test('N07 access helpers apply candidate limits at the database boundary and saf
 
 test('N07 migration 36 is additive, transactional and index-only', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 47);
+  assert.equal(names.length, 48);
   assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);

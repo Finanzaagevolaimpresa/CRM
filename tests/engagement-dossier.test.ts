@@ -11,9 +11,9 @@ test('dossier hashes are canonical and bind exact version content and recipients
 
 test('migration 47 is additive and preserves the immutable 46-file prefix', () => {
   const migrations = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(migrations.length, 47);
-  assert.equal(migrations.at(-1), '20260920090000_engagement_dossier_approval_delivery_v1');
-  const sql = readFileSync(`prisma/migrations/${migrations.at(-1)}/migration.sql`, 'utf8');
+  assert.equal(migrations.length, 48);
+  assert.equal(migrations[46], '20260920090000_engagement_dossier_approval_delivery_v1');
+  const sql = readFileSync(`prisma/migrations/${migrations[46]}/migration.sql`, 'utf8');
   assert.match(sql, /ALTER TABLE "ClientDossier"/);
   assert.match(sql, /CREATE TABLE "EngagementDossierVersion"/);
   assert.match(sql, /CREATE TABLE "EngagementDossierDeliveryReceipt"/);

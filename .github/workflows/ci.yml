@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   practice-readiness-db:
-    name: Dossier and practice PostgreSQL qualification (46 to 47)
+    name: Dossier and practice PostgreSQL qualification (46 to 47 to 48)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -41,15 +41,15 @@ jobs:
       - name: Verify candidate and immutable merged migration prefix
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 47
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | sort | tail -1)" = "prisma/migrations/20260920090000_engagement_dossier_approval_delivery_v1"
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 48
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | sort | tail -1)" = "prisma/migrations/20260924100000_admin_client_read_perimeters_v1"
           base="3230764a4406182e50d22236bb7e701d0f1b5656"
           test "$(git ls-tree -r --name-only "$base" -- prisma/migrations | sed -n '/\/migration.sql$/p' | wc -l | tr -d ' ')" = 46
           git diff --exit-code "$base" -- $(git ls-tree -r --name-only "$base" -- prisma/migrations)
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Qualify exact 46 to 47 migration and dossier behavior
+      - name: Qualify historical 46 to 47 and additive 47 to 48 with atomic failures
         shell: bash
         run: |
           set -euo pipefail
@@ -75,10 +75,27 @@ jobs:
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'EngagementDossier%'")" = 0
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ClientDossier' AND column_name IN ('practiceReadinessId','preAnalysisId','serviceRevisionId','currentVersionId','approvedVersionId')")" = 0
           printf '{"synthetic":true,"schemaBefore":46,"injectedFailureRolledBack":true}\n' > "$evidence/migration-atomicity.json"
-          npm run prisma:migrate:deploy
+          historical47="$RUNNER_TEMP/merged-schema47"
+          git worktree add --detach "$historical47" 8d87d7c0c1377e686ad9c3a9e15a48de6a7ec749
+          (cd "$historical47" && "$candidate_prisma" migrate deploy --schema prisma/schema.prisma)
+          git worktree remove --force "$historical47"
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY finished_at DESC LIMIT 1')" = 20260920090000_engagement_dossier_approval_delivery_v1
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT checksum FROM "_prisma_migrations" WHERE migration_name = '\''20260920090000_engagement_dossier_approval_delivery_v1'\'' AND finished_at IS NOT NULL AND rolled_back_at IS NULL')" = "$(sha256sum prisma/migrations/20260920090000_engagement_dossier_approval_delivery_v1/migration.sql | cut -d ' ' -f1)"
+          node scripts/r05/verify-perimeter-schema.mjs > "$evidence/schema48-candidate.json"
+          perimeter_file=prisma/migrations/20260924100000_admin_client_read_perimeters_v1/migration.sql
+          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$perimeter_file" > "$evidence/perimeter-fault.sql"
+          if psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -f "$evidence/perimeter-fault.sql" > "$evidence/perimeter-fault.log" 2>&1; then
+            echo "Schema48 injected failure did not fail" >&2
+            exit 1
+          fi
+          grep -Fq 'division by zero' "$evidence/perimeter-fault.log"
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc "SELECT to_regclass('public.\"ClientReadGrant\"') IS NULL")" = t
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
+          npm run prisma:migrate:deploy
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 48
+          test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "ClientReadGrant"')" = 0
+          printf '{"synthetic":true,"schemaBefore":47,"schemaAfter":48,"injectedFailureRolledBack":true,"historicalPrefixUnchanged":47}\n' > "$evidence/perimeter-atomicity.json"
           npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema-diff.sql"
           node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema-diff.sql" | tee "$evidence/schema-foreign-keys.json"
           if bash -o pipefail -c 'false | tee /dev/null'; then
@@ -99,7 +116,7 @@ jobs:
           test "$pass" = "$tests"
           test "$fail" = 0
           test "$skipped" = 0
-          printf '{"phase":"complete","synthetic":true,"ledgerBefore":46,"ledgerAfter":47,"tests":%s,"pass":%s,"fail":0,"skipped":0}\n' "$tests" "$pass" > "$evidence/status.json"
+          printf '{"phase":"complete","synthetic":true,"ledgerBefore":46,"ledgerIntermediate":47,"ledgerAfter":48,"tests":%s,"pass":%s,"fail":0,"skipped":0}\n' "$tests" "$pass" > "$evidence/status.json"
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -144,7 +161,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 47
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 48
           git diff --exit-code b8fbb9f7841d6f9639a93393909592432ab927ce -- $(git ls-tree -r --name-only b8fbb9f7841d6f9639a93393909592432ab927ce -- prisma/migrations)
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
@@ -163,7 +180,7 @@ jobs:
           printf '{"phase":"prepare","synthetic":true}\n' > "$evidence/status.json"
           psql 'postgresql://postgres:synthetic-readiness-browser@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql 'postgresql://postgres:synthetic-readiness-browser@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
+          test "$(psql 'postgresql://postgres:synthetic-readiness-browser@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 48
           node --import tsx tests/practice-readiness-browser/provision.ts | tee "$evidence/provision.log"
       - name: Run complete browser path
         shell: bash
@@ -194,7 +211,7 @@ jobs:
           test "$scenarios" = 3
           head_sha="$(git rev-parse HEAD)"
           tree_sha="$(git rev-parse HEAD^{tree})"
-          printf '{"phase":"complete","synthetic":true,"head":"%s","tree":"%s","schema":47,"tests":%s,"pass":%s,"fail":%s,"skipped":%s,"cases":%s}\n' "$head_sha" "$tree_sha" "$expected" "$expected" "$unexpected" "$skipped" "$scenarios" > "$evidence/status.json"
+          printf '{"phase":"complete","synthetic":true,"head":"%s","tree":"%s","schema":48,"tests":%s,"pass":%s,"fail":%s,"skipped":%s,"cases":%s}\n' "$head_sha" "$tree_sha" "$expected" "$expected" "$unexpected" "$skipped" "$scenarios" > "$evidence/status.json"
           # Counterproofs run before the EXIT trap stops this dev server.
           bash scripts/verify-dossier-listing-regression.sh search
           bash scripts/verify-dossier-listing-regression.sh report
@@ -278,7 +295,7 @@ jobs:
           test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 45
           git worktree remove --force "$schema45_source"
           npm run prisma:migrate:deploy
-          test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 47
+          test "$(psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 48
           node --import tsx --test tests/controlled-intake-db.test.ts
           node --import tsx tests/controlled-intake-browser/provision.ts
       - name: Run controlled intake browser path
@@ -328,10 +345,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", fetch-depth: 0, persist-credentials: false }
-      - name: Verify exact candidate and 47-migration chain
+      - name: Verify exact candidate and 48-migration chain
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 47
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 48
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci && npx playwright install --with-deps chromium
@@ -405,10 +422,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify candidate and 47-migration chain
+      - name: Verify candidate and 48-migration chain
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "47"
+          test "$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "48"
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - name: Install locked dependencies and Chromium

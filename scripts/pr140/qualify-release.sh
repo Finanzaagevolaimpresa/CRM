@@ -11,7 +11,9 @@ tree="$(git rev-parse HEAD^{tree})"
 recovery_head=d3cf4ea7309fc4fef7ed6bbf8db88924e974c6b4
 recovery_tree=d9696481ecc20c1495358682ba1af70b3f577d19
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-git diff --exit-code "$recovery_head" -- prisma
+# Schema48 is additive; prove the exact 47-migration prefix independently.
+node scripts/r05/verify-perimeter-schema.mjs
+git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
 node scripts/vnx00a-build-context-guard.mjs
 prefix="fai-crm-r05-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 evidence="$RUNNER_TEMP/$prefix-evidence"
@@ -183,6 +185,6 @@ cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_QUALIFIED","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":47,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA48_COMPATIBILITY_ONLY","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":48,"clientReadGrantsPreserved":true,"legacyRecoveryEnforcesClientPerimeters":false,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"

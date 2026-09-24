@@ -382,6 +382,9 @@ model User {
   deletedAt                          DateTime?
   lastLoginAt                        DateTime?
   permissionOverrides                UserPermissionOverride[]
+  clientReadGrants                    ClientReadGrant[]                       @relation("ClientReadGrantRecipient")
+  clientReadGrantsCreated             ClientReadGrant[]                       @relation("ClientReadGrantCreator")
+  clientReadGrantsUpdated             ClientReadGrant[]                       @relation("ClientReadGrantUpdater")
   internalSessions                   InternalSession[]                       @relation("InternalSessionOwner")
   sessionsRevokedByUser              InternalSession[]                       @relation("InternalSessionRevoker")
   applicationFeatureGatesUpdated     ApplicationFeatureGate[]                @relation("ApplicationFeatureGateUpdatedBy")
@@ -472,6 +475,26 @@ model UserPermissionOverride {
 
   @@unique([userId, permission])
   @@index([userId])
+}
+
+model ClientReadGrant {
+  id          String   @id @default(cuid())
+  userId      String
+  clientId    String
+  active      Boolean  @default(false)
+  version     Int      @default(1)
+  createdById String
+  updatedById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation("ClientReadGrantRecipient", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  createdBy   User     @relation("ClientReadGrantCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  updatedBy   User     @relation("ClientReadGrantUpdater", fields: [updatedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, clientId])
+  @@index([userId, active, clientId])
+  @@index([clientId])
 }
 
 model Lead {
@@ -609,6 +632,7 @@ model Client {
   deletedAt           DateTime?
   aiWorkflowInstances AiWorkflowInstance[]
   aiExecutionRequests AiExecutionRequest[] @relation("AiExecutionRequestClient")
+  readGrants          ClientReadGrant[]
 
   @@index([deletedAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Client_active_cursor_idx")
   @@index([salesOwnerId, deletedAt, updatedAt(sort: Desc), id(sort: Desc)], map: "Client_sales_owner_cursor_idx")
