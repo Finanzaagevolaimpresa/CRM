@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { qualificationSchema } from './schema-profile';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { canonicalJson } from '../../src/lib/canonical-json';
 import {
@@ -79,7 +80,7 @@ async function databaseIdentity() {
     FROM "_prisma_migrations"
     WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL
   `);
-  assert.equal(Number(migrations[0]?.count), 44);
+  assert.equal(Number(migrations[0]?.count), qualificationSchema().migrations);
 }
 
 function verifyEnvelope(raw: string, expected: ExpectedEvent): LeadSubmittedEventV1 {

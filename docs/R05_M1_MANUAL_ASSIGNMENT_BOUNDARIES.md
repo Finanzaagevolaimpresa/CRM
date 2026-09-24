@@ -46,6 +46,19 @@ visibility and first response. Its production-image profile receives a new
 ephemeral test key; the historical base profile and production configuration do
 not change. Existing N14/N15 database contracts continue to run.
 
+The historical VNX03 job in `ci.yml` checks out schema44 commit
+`c49b18ccc4df713e212e8e4f2f05100638aee317`. Its green result is historical evidence,
+not proof of this candidate's changed N14 browser path. Review P2 therefore adds
+`r05-n14-candidate.yml`: it checks out the exact event head, binds its tree, and
+runs both authentic WPForms and the admin N14 browser scenario on schema47.
+The candidate guard requires a clean checkout, unchanged schema and all migration
+bytes against baseline `8d87d7c0c1377e686ad9c3a9e15a48de6a7ec749`, and exactly 47
+migrations. Commit/tree mismatches, dirty files, schema/migration modifications
+and a further migration fail closed. The historical job and scope guard remain
+byte-identical. Unknown harness profiles are rejected; no numeric count override
+is accepted. Candidate preflight/runtime/N14 receipts identify the profile,
+commit, tree and migration count, and CI validates them before declaring success.
+
 Local tsx cannot initialize os.userInfo under this Windows host. Targeted tests
 can additionally run through TypeScript in-process transpilation; canonical
 tests, the dependency lock and browser qualification are checked in CI.
