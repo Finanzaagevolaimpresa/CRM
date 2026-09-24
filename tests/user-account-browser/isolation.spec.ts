@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Request } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
@@ -74,16 +74,35 @@ async function deniedSurfaces(page: Page, f: Fixture, documentId: string) {
     expect(await response.text()).not.toContain(f.tag);
   }
 }
-async function replayUpload(page: Page, request: Request, fromId: string, toId: string) {
-  const data = request.postData()!;
+type CapturedUpload = { url: string; action: string; contentType: string; body: string };
+async function captureUpload(page: Page) {
+  // Chromium's network event may omit multipart file bodies. Capture the exact
+  // synthetic Request before transport, then forward that same Request unchanged.
+  await page.evaluate(() => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      const action = request.headers.get('next-action');
+      if (request.method === 'POST' && action && new URL(request.url).pathname === '/documents') {
+        const captured = { url: request.url, action, contentType: request.headers.get('content-type')!, body: await request.clone().text() };
+        (window as Window & { isolationUpload?: CapturedUpload }).isolationUpload = captured;
+        window.fetch = original;
+        return original(request);
+      }
+      return original(input, init);
+    };
+  });
+}
+async function replayUpload(page: Page, request: CapturedUpload, fromId: string, toId: string) {
+  const data = request.body;
   expect(data).toContain(fromId);
-  return page.request.post(request.url(), { headers: {
-    'next-action': request.headers()['next-action'], 'content-type': request.headers()['content-type'], origin,
+  return page.request.post(request.url, { headers: {
+    'next-action': request.action, 'content-type': request.contentType, origin,
   }, data: data.replaceAll(fromId, toId) });
 }
 
 for (const role of roles) test(`${role}: foreign HTTP access is denied; enforced reassignment revokes old uploader in an open session`, async ({ browser }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(180_000);
   const f = fixtures.find(row => row.role === role)!;
   const foreign = fixtures.find(row => row.role !== role)!;
   const ownerContext = await browser.newContext({ baseURL: origin }), replacementContext = await browser.newContext({ baseURL: origin });
@@ -96,13 +115,17 @@ for (const role of roles) test(`${role}: foreign HTTP access is denied; enforced
   await owner.goto('/documents');
   const upload = owner.locator('form').filter({ has: owner.locator('input[type="file"]') });
   await upload.locator('select[name="clientId"]').selectOption(f.clientId);
+  await expect(upload.locator('select[name="projectId"]')).toBeEnabled();
   await upload.locator('input[name="title"]').fill(f.tag + '-document');
   const bytes = Buffer.from('Synthetic private document for ' + f.tag, 'utf8');
   await upload.locator('input[type="file"]').setInputFiles({ name: 'isolation.txt', mimeType: 'text/plain', buffer: bytes });
   await upload.getByRole('checkbox').check();
-  const pending = owner.waitForRequest(request => Boolean(request.headers()['next-action']) && (request.postData()?.includes(f.tag + '-document') ?? false));
+  await captureUpload(owner);
   await upload.getByRole('button', { name: 'Carica in storage privato' }).click();
-  const captured = await pending;
+  await expect.poll(() => owner.evaluate(() => Boolean((window as Window & { isolationUpload?: CapturedUpload }).isolationUpload)), { timeout: 30_000 }).toBe(true);
+  const captured = await owner.evaluate(() => (window as Window & { isolationUpload?: CapturedUpload }).isolationUpload!);
+  expect(captured.body).toContain(f.tag + '-document');
+  expect(captured.body).toContain(bytes.toString('utf8'));
   await expect.poll(() => db.document.count({ where: { clientId: f.clientId, title: f.tag + '-document' } })).toBe(1);
   const document = await db.document.findFirstOrThrow({ where: { clientId: f.clientId, title: f.tag + '-document' } });
   expect(document.uploadedById).toBe(f.ownerId);

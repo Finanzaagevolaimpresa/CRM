@@ -1,6 +1,6 @@
 # R05 M1 — current ownership and document provenance
 
-This increment depends on PR149 at dd7200ea47e77e77dd9b1250a72cf0bdf0151d02.
+This increment depends on PR149 at 3906c6b1162de7ea297f289db98cd8334d17c367.
 It tightens the existing commercial, consultant and backoffice record rules;
 it is not completion of M1 or qualification of production.
 

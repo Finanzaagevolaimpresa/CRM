@@ -26,6 +26,62 @@ test.beforeAll(async () => {
   if (mode === 'enforced') await db.applicationKeyVersion.upsert({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } },
     create: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) }, update: {} });
 });
+
+test('exception queue identifies completed work and reaches clientless and older-than-fifty tasks by exact ID', async ({ browser }) => {
+  const former = await db.user.create({ data: { email: email('task-former'), name: 'Task former owner', role: 'backoffice', active: false, passwordHash: 'not-a-login-hash' } });
+  const standalone = await db.task.create({ data: { title: 'Clientless completed continuity', status: 'completata', assignedToId: former.id, createdById: former.id } });
+  const older = await db.task.create({ data: { title: 'Older continuity task beyond fifty', clientId, assignedToId: former.id, createdById: former.id, updatedAt: new Date('2000-01-01T00:00:00Z') } });
+  const cancelled = await db.task.create({ data: { title: 'Cancelled continuity history', status: 'annullata', assignedToId: former.id } });
+  await db.task.createMany({ data: Array.from({ length: 52 }, (_, i) => ({ title: 'Newer synthetic task ' + i, clientId, assignedToId: adminId })) });
+  const adminContext = await browser.newContext({ baseURL: origin }), otherContext = await browser.newContext({ baseURL: origin });
+  const admin = await adminContext.newPage(), other = await otherContext.newPage();
+  await login(admin, 'admin'); await login(other, 'other');
+  await admin.goto('/clients/' + clientId);
+  await expect(admin.getByText(older.title, { exact: true })).toHaveCount(0);
+  await admin.goto('/settings/assignment-exceptions?kind=tasks');
+  for (const [task, label] of [[standalone, 'completata — Riferimento storico: lavoro concluso'], [cancelled, 'annullata — Riferimento storico: lavoro concluso'], [older, 'aperta — Stato corrente']] as const) {
+    const row = admin.getByRole('row').filter({ has: admin.getByRole('cell', { name: task.title, exact: true }) });
+    await expect(row.getByRole('cell', { name: label, exact: true })).toBeVisible();
+  }
+  await admin.getByRole('row').filter({ hasText: standalone.title }).getByRole('link', { name: 'Apri scheda' }).click();
+  await expect(admin).toHaveURL(origin + '/settings/assignment-exceptions/tasks/' + standalone.id);
+  const form = admin.getByRole('form', { name: 'Riassegna attività' });
+  await form.getByLabel('Nuovo responsabile').selectOption(otherId);
+  const pending = admin.waitForRequest(request => Boolean(request.headers()['next-action']));
+  await form.getByRole('button', { name: 'Riassegna attività' }).click();
+  const unauthenticatedStepUp = await pending;
+  await expect(admin).toHaveURL(mode === 'enforced' ? /status=required/ : /status=unavailable/);
+  await replay(other, unauthenticatedStepUp);
+  expect((await db.task.findUniqueOrThrow({ where: { id: standalone.id } })).assignedToId).toBe(former.id);
+  if (mode === 'disabled') {
+    await adminContext.close(); await otherContext.close(); return;
+  }
+  await admin.getByLabel('Password corrente').fill(password);
+  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await expect(admin).toHaveURL(/status=active/);
+  for (const task of [standalone, older]) {
+    await admin.goto('/settings/assignment-exceptions?kind=tasks');
+    await admin.getByRole('row').filter({ hasText: task.title }).getByRole('link', { name: 'Apri scheda' }).click();
+    await expect(admin).toHaveURL(origin + '/settings/assignment-exceptions/tasks/' + task.id);
+    const oldTimestamp = await form.locator('input[name="updatedAt"]').inputValue();
+    await form.getByLabel('Nuovo responsabile').selectOption(otherId);
+    const capture = admin.waitForRequest(request => Boolean(request.headers()['next-action']));
+    await form.getByRole('button', { name: 'Riassegna attività' }).click();
+    const request = await capture;
+    await expect(form.getByRole('status')).toHaveText('Attività riassegnata. Stato e storico conservati.');
+    const current = await db.task.findUniqueOrThrow({ where: { id: task.id } });
+    expect(current.assignedToId).toBe(otherId); expect(current.status).toBe(task.status); expect(current.createdById).toBe(former.id);
+    expect(request.postData()).toContain(oldTimestamp);
+    await replay(admin, request);
+    await replay(other, request, oldTimestamp, current.updatedAt.toISOString());
+    expect(await db.auditLog.count({ where: { entityId: task.id, event: 'exception_task_reassigned' } })).toBe(1);
+    await admin.goto('/settings/assignment-exceptions?kind=tasks');
+    await expect(admin.getByRole('cell', { name: task.title, exact: true })).toHaveCount(0);
+  }
+  expect(await db.task.findUniqueOrThrow({ where: { id: cancelled.id } })).toEqual(cancelled);
+  await adminContext.close(); await otherContext.close();
+});
+
 test.afterAll(async () => { await db.$disconnect(); });
 async function login(page: Page, who: string) {
   await page.goto('/login');

@@ -127,7 +127,6 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   const protectedAuditCount = await db.auditLog.count({ where: { entityId: recordId } });
   for (const identity of [
     { email: 'preanalysis-read-only@invalid.test', label: 'read-only' },
-    { email: 'preanalysis-override-denied@invalid.test', label: 'override-denied' },
   ]) {
     const context = await browser.newContext(); const restricted = await context.newPage();
     await login(restricted, identity.email);
@@ -150,6 +149,16 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   expect(await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } })).toEqual(protectedRecord);
   expect(await db.auditLog.count({ where: { entityId: recordId } })).toBe(protectedAuditCount);
 
+  const unassignedContext = await browser.newContext(); const unassigned = await unassignedContext.newPage();
+  await login(unassigned, 'preanalysis-override-denied@invalid.test');
+  await unassigned.goto(`${app}/preanalyses/new?clientId=preanalysis-browser-client&projectId=preanalysis-browser-project`);
+  await expect(unassigned.getByRole('heading', { name: 'Contesto non accessibile' })).toBeVisible();
+  await expect(unassigned.locator('textarea')).toHaveCount(0);
+  await unassigned.goto(`${app}/preanalyses/${recordId}`);
+  await expect(unassigned.getByRole('heading', { name: 'Pre-analisi non trovata' })).toBeVisible();
+  await expect(unassigned.locator('[data-preanalysis-field="internalSummary"]')).toHaveCount(0);
+  await unassignedContext.close();
+
   const foreignContext = await browser.newContext(); const foreign = await foreignContext.newPage();
   await login(foreign, 'preanalysis-foreign@invalid.test');
   await foreign.goto(`${app}/preanalyses/${recordId}`);
@@ -163,6 +172,6 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
   await expect(noRead).toHaveURL(`${app}/dashboard`);
 
   const persisted = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
-  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, readOnlyUiDenied: true, writeOverrideAbacUiDenied: true, restrictedReadPreserved: true, restrictedUiAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(join(evidence, 'preanalysis-browser-receipt.json'), `${JSON.stringify({ synthetic: true, created: true, fiveFieldsPersisted: Object.keys(fields).every((field) => persisted[field as keyof typeof persisted] !== null), validationRejected: true, validationTextRetained: true, validationVersionRetained: true, reloaded: true, secondUpdate: true, conflictDetected: true, conflictTextRetained: true, tamperedPostDenied: true, tamperedPostAtomic: true, permissionRevokedAfterOpenDenied: true, permissionRevokedAfterOpenAtomic: true, readOnlyUiDenied: true, writeOverrideAbacUiDenied: true, unassignedBackofficeReadDenied: true, restrictedReadPreserved: true, restrictedUiAtomic: true, foreignDenied: true, dossierReadDenied: true, desktopScreenshot: true, narrowScreenshot: true }, null, 2)}\n`, { mode: 0o600 });
   await Promise.all([owner.close(), foreignContext.close(), noReadContext.close()]);
 });
