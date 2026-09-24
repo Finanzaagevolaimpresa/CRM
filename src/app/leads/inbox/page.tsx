@@ -6,7 +6,6 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { commercialLeadInboxMode } from '@/lib/commercial-lead-inbox-contract';
 import {
   assignCommercialLeadInbox,
-  claimCommercialLeadInbox,
   closeCommercialLeadInbox,
   convertLeadToClientAndRedirect,
   recordCommercialLeadFirstResponse,
@@ -84,8 +83,7 @@ export default async function Page({
   ]);
   const page = toCoreQueryPage(rows, pageNumber);
   const users = new Map(userRows.map((user) => [user.id, user.name]));
-  const canManage = hasPermission(session, 'lead.inbox.assign') && readiness.active;
-  const canClaim = hasPermission(session, 'lead.inbox.claim');
+  const canManage = session.role === 'admin' && hasPermission(session, 'lead.inbox.assign') && readiness.active;
   const canWork = hasPermission(session, 'lead.write');
 
   return <div className="space-y-6">
@@ -110,7 +108,6 @@ export default async function Page({
             </div>
             <p className="mt-3 text-sm text-slate-600">Disponibile: {formatDateTime(cycle?.availableAt)} · Scadenza: {formatDateTime(cycle?.dueAt)} · Risposta: {formatDateTime(cycle?.firstResponseAt)}</p>
             <div className="mt-4 flex flex-wrap gap-2">
-              {item.state === 'OPEN' && !item.lead.assignedToId && canClaim && <form action={claimCommercialLeadInbox}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Prendi in carico</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && !cycle?.firstResponseAt && <form action={recordCommercialLeadFirstResponse}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Registra prima risposta</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && cycle?.firstResponseAt && <form action={convertLeadToClientAndRedirect} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="type" defaultValue="societa" className="rounded-xl border p-2"><option value="societa">Società</option><option value="ditta_individuale">Ditta individuale</option><option value="persona_fisica">Persona fisica</option><option value="professionista">Professionista</option><option value="soggetto_da_costituire">Soggetto da costituire</option><option value="associazione">Associazione</option><option value="altro">Altro</option></select><PrimaryButton type="submit">Converti</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && <form action={closeCommercialLeadInbox} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="reasonCode" className="rounded-xl border p-2" defaultValue="QUALIFIED_OUT"><option value="QUALIFIED_OUT">Non qualificato</option><option value="LOST">Perso</option><option value="ARCHIVED">Archiviato</option></select><PrimaryButton type="submit">Chiudi</PrimaryButton></form>}

@@ -45,8 +45,9 @@ function matchesLeadWhere(
   where: ReturnType<typeof leadVisibilityWhere>,
   lead: { assignedToId: string | null },
 ): boolean {
-  if (!where.OR) return true;
-  return where.OR.some((item) => (item as { assignedToId?: string | null }).assignedToId === lead.assignedToId);
+  if (where.assignedToId === undefined) return true;
+  if (typeof where.assignedToId === 'object' && where.assignedToId !== null) return lead.assignedToId !== null;
+  return where.assignedToId === lead.assignedToId;
 }
 
 test('N07 pagination is canonical, bounded and over-fetches exactly one row', () => {

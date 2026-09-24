@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
 import {
-  claimCommercialLeadInboxItem,
+  assignCommercialLeadInboxItem,
   recordCommercialLeadFirstResponse,
 } from '../../src/lib/commercial-lead-inbox';
 import { CommercialLeadInboxError } from '../../src/lib/commercial-lead-inbox-contract';
@@ -42,10 +42,10 @@ async function main() {
   const before = await snapshot();
   let expectedCode: 'N14_VERSION_CONFLICT' | 'N14_PERMISSION_DENIED';
   let operation: Promise<unknown>;
-  if (scenario === 'stale_claim') {
+  if (scenario === 'stale_assignment') {
     expectedCode = 'N14_VERSION_CONFLICT';
-    operation = claimCommercialLeadInboxItem(db, {
-      leadId: before.leadId, actor: await actor('vnx03-n14-commercial-one'), expectedInboxVersion: 1,
+    operation = assignCommercialLeadInboxItem(db, {
+      leadId: before.leadId, actor: { ...await actor('vnx03-n14-admin'), requireManualAdmin: true }, targetUserId: 'vnx03-n14-commercial-one', expectedInboxVersion: 1,
     });
   } else if (scenario === 'foreign_first_response') {
     expectedCode = 'N14_PERMISSION_DENIED';

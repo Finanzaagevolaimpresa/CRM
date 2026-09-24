@@ -43,6 +43,7 @@ const actorSessionId = '00000000-0000-4000-8000-000000140001';
 const managerUserId = 'n14-synthetic-manager-user';
 const managerSessionId = '00000000-0000-4000-8000-000000140003';
 
+
 function rootClient() {
   if (!rootDb) throw new Error('N14_ROOT_DB_UNAVAILABLE');
   return rootDb;
@@ -1125,4 +1126,18 @@ test('N14 database guards reject source overwrite, raw owner bypass and activity
   await assert.rejects(client().lead.update({
     where: { id: lead.id }, data: { status: 'da_contattare' },
   }), /N14_LEAD_WRITER_BYPASS/u);
+});
+
+
+// The public R05 path cannot inherit the historical direction-role authority.
+test('R05 public manager commands revalidate admin authority even with a valid non-admin registry session', { skip: !runDbTests }, async () => {
+  await ensureActorAndPolicy();
+  for (const actor of [
+    { userId: managerUserId, sessionId: managerSessionId, requireManualAdmin: true as const },
+    { userId: actorUserId, sessionId: actorSessionId, requireManualAdmin: true as const },
+  ]) {
+    await assert.rejects(assignCommercialLeadInboxItem(client(), {
+      leadId: 'r05-unavailable-lead', actor, targetUserId: actorUserId, expectedInboxVersion: 1,
+    }), /N14_PERMISSION_DENIED/);
+  }
 });

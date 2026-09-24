@@ -67,7 +67,7 @@ test('admin e direzione mantengono accesso globale soltanto su contesti coerenti
     assert.equal(canEditClient(user, client()), true);
     assert.equal(canEditProject(user, project()), true);
     assert.equal(canEditService(user, service()), true);
-    assert.equal(canAssignService(user, service()), true);
+    assert.equal(canAssignService(user, service()), role === 'admin');
     assert.equal(canEditTask(user, { clientId: 'client-1', assignedToId: null, createdById: null }), true);
     assert.equal(canEditChecklistItem(user, { clientId: 'client-1', createdById: null, updatedById: null }), true);
     assert.equal(canEditDocument(user, document()), true);
@@ -78,10 +78,10 @@ test('admin e direzione mantengono accesso globale soltanto su contesti coerenti
   assert.equal(canEditProject(actor('admin'), inconsistentProject), false);
 });
 
-test('il commerciale modifica i lead assegnati e quelli non assegnati della coda condivisa', () => {
+test('il commerciale modifica solo i lead assegnati; la coda resta all’admin', () => {
   const commerciale = actor('commerciale');
   assert.equal(canEditLead(commerciale, { assignedToId: 'user-1' }), true);
-  assert.equal(canEditLead(commerciale, { assignedToId: null }), true);
+  assert.equal(canEditLead(commerciale, { assignedToId: null }), false);
   assert.equal(canEditLead(commerciale, { assignedToId: 'user-2' }), false);
   assert.equal(canEditLead(actor('consulente'), { assignedToId: 'user-1' }), false);
   assert.equal(canEditLead(actor('collaboratore_limitato'), { assignedToId: 'user-1' }), false);
@@ -137,10 +137,10 @@ test('i servizi rispettano assegnazione, ownership e operativita trasversale del
   assert.equal(canEditService(backoffice, service('client-1', null)), true);
   assert.equal(canEditService(actor('collaboratore_limitato'), service('client-1', 'user-1')), false);
 
-  assert.equal(canAssignService(actor('commerciale'), service('client-1', null, client('client-1', 'user-1'))), true);
+  assert.equal(canAssignService(actor('commerciale'), service('client-1', null, client('client-1', 'user-1'))), false);
   assert.equal(canAssignService(actor('commerciale'), service('client-1', null, client('client-1', 'user-2'))), false);
-  assert.equal(canAssignService(consulente, service('client-1', 'user-1')), true);
-  assert.equal(canAssignService(consulente, service('client-1', null, ownedClient)), true);
+  assert.equal(canAssignService(consulente, service('client-1', 'user-1')), false);
+  assert.equal(canAssignService(consulente, service('client-1', null, ownedClient)), false);
   assert.equal(canAssignService(backoffice, service()), false);
 });
 
@@ -214,7 +214,7 @@ test('le pratiche tecniche sono globali per backoffice ma il consulente deve ess
 
 test('le letture di lead e offerte seguono assegnazione, creatore e parent coerenti', () => {
   const commerciale = actor('commerciale');
-  assert.equal(canViewLead(commerciale, { assignedToId: null }), true);
+  assert.equal(canViewLead(commerciale, { assignedToId: null }), false);
   assert.equal(canViewLead(commerciale, { assignedToId: 'user-1' }), true);
   assert.equal(canViewLead(commerciale, { assignedToId: 'user-2' }), false);
   assert.equal(canViewCommercialOffer(commerciale, { createdById: 'user-1' }), true);

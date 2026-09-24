@@ -28,20 +28,20 @@ async function main() {
     assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED']);
     assert.deepEqual(auditEvents.map((row) => row.event), ['commercial_lead_inbox_initialized']);
     assert.equal(item.slaCycles[0]?.firstResponseAt, null);
-  } else if (checkpoint === 'claimed') {
+  } else if (checkpoint === 'assigned') {
     assert.equal(lead.assignedToId, 'vnx03-n14-commercial-one');
     assert.equal(item.version, 2);
-    assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'CLAIMED']);
+    assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'ASSIGNED']);
     assert.deepEqual(auditEvents.map((row) => row.event), [
-      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_claimed',
+      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_assigned',
     ]);
     assert.equal(item.activities[1]?.actorSessionId !== null, true);
   } else if (checkpoint === 'contacted') {
     assert.equal(lead.assignedToId, 'vnx03-n14-commercial-one');
     assert.equal(item.version, 3);
-    assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'CLAIMED', 'FIRST_RESPONSE_RECORDED']);
+    assert.deepEqual(item.activities.map((row) => row.activityType), ['INITIALIZED', 'ASSIGNED', 'FIRST_RESPONSE_RECORDED']);
     assert.deepEqual(auditEvents.map((row) => row.event), [
-      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_claimed',
+      'commercial_lead_inbox_initialized', 'commercial_lead_inbox_assigned',
       'commercial_lead_inbox_first_response_recorded',
     ]);
     assert.equal(item.slaCycles[0]?.outcome, 'MET');

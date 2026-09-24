@@ -29,7 +29,18 @@ source_tree="$(git rev-parse 'HEAD^{tree}')"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'VNX03_SOURCE_COMMIT_INVALID'
 [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]] || fail 'VNX03_SOURCE_TREE_INVALID'
 
-bash scripts/vnx03/verify-protected-scope.sh
+export VNX03_QUALIFICATION_PROFILE="${VNX03_QUALIFICATION_PROFILE:-historical-schema44}"
+case "$VNX03_QUALIFICATION_PROFILE" in
+  historical-schema44)
+    bash scripts/vnx03/verify-protected-scope.sh
+    export VNX03_EXPECTED_MIGRATIONS=44
+    ;;
+  candidate-schema47)
+    node scripts/vnx03/verify-candidate-scope.mjs
+    export VNX03_EXPECTED_MIGRATIONS=47
+    ;;
+  *) fail 'VNX03_QUALIFICATION_PROFILE_INVALID' ;;
+esac
 
 docker_context="$(docker context show)"
 docker_endpoint="$(docker context inspect "$docker_context" --format '{{ (index .Endpoints "docker").Host }}')"
@@ -78,6 +89,8 @@ node -e '
     createdBeforeApplicationWrites: true,
     sourceCommit: process.env.VNX03_SOURCE_COMMIT,
     sourceTree: process.env.VNX03_SOURCE_TREE,
+    profile: process.env.VNX03_QUALIFICATION_PROFILE,
+    migrations: Number(process.env.VNX03_EXPECTED_MIGRATIONS),
     dockerContext: process.env.VNX03_DOCKER_CONTEXT,
     dockerEndpoint: process.env.VNX03_DOCKER_ENDPOINT,
     composeProject: process.env.COMPOSE_PROJECT_NAME,
@@ -214,6 +227,7 @@ export VNX03_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_AUTH_SECRET="$(openssl rand -hex 32)"
+export VNX03_PRIVILEGED_STEP_UP_SECRET="$(openssl rand -hex 32)"
 export VNX03_COMMERCIAL_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
 export VNX03_WORDPRESS_ADMIN_PASSWORD="$(openssl rand -hex 24)"
 export VNX03_WORDPRESS_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
@@ -284,6 +298,7 @@ npx playwright test tests/vnx03/wpforms-https-e2e.spec.ts \
 "${compose[@]}" run --rm -T \
   -e COMMERCIAL_LEAD_INBOX_MODE=enforced \
   -e VNX03_COMMERCIAL_PASSWORD \
+  -e VNX03_PRIVILEGED_STEP_UP_SECRET \
   harness node --import tsx tests/vnx03/provision-n14.ts
 "${compose[@]}" --profile n14 up -d --wait --wait-timeout 120 crm-n14 crm-browser-proxy
 curl --fail --silent --show-error --max-time 10 "$VNX03_CRM_PUBLIC_URL/login" >/dev/null
@@ -296,6 +311,11 @@ node -e '
   const { writeFileSync } = require("node:fs");
   writeFileSync(process.argv[1], `${JSON.stringify({
     qualification: "VNX-03-N14-SYNTHETIC", n14Enabled: true,
+    sourceCommit: process.env.VNX03_SOURCE_COMMIT,
+    sourceTree: process.env.VNX03_SOURCE_TREE,
+    profile: process.env.VNX03_QUALIFICATION_PROFILE,
+    migrations: Number(process.env.VNX03_EXPECTED_MIGRATIONS),
+    adminAssignmentBrowserCompleted: true,
     internalSessionMode: "registry", n15Enabled: false,
     browserIngressLoopbackOnly: true, productionContact: false
   }, null, 2)}\n`, { mode: 0o600 });
@@ -321,7 +341,8 @@ node -e '
     node: process.env.VNX03_RUNTIME_NODE_VERSION,
     docker: process.env.VNX03_RUNTIME_DOCKER_VERSION,
     dockerCompose: process.env.VNX03_RUNTIME_COMPOSE_VERSION,
-    migrations: 44,
+    profile: process.env.VNX03_QUALIFICATION_PROFILE,
+    migrations: Number(process.env.VNX03_EXPECTED_MIGRATIONS),
     n14Enabled: false,
     externalProvidersEnabled: false,
     productionContact: false

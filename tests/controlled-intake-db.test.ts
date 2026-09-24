@@ -45,7 +45,7 @@ const secretRoot = mkdtempSync(join(tmpdir(), 'controlled-intake-n13-'));
 const secretPath = join(secretRoot, 'synthetic-lead-identity.json');
 const actor = { userId, sessionId, expiresAt: Math.floor(Date.now() / 1000) + 3600, role: 'commerciale' as const, active: true, permissionOverrides: [] };
 const otherActor = { ...actor, userId: otherUserId, sessionId: otherSessionId };
-const managerActor = { userId: managerUserId, sessionId: managerSessionId };
+const managerActor = { userId: managerUserId, sessionId: managerSessionId, requireManualAdmin: true as const };
 const base = {
   sourceOccurredAt: '2026-09-14T09:00:00.000Z', firstName: 'Ada', lastName: 'Sintetica',
   subjectName: null, email: 'same@intake.invalid', phone: null, effectiveCategory: 'digitale',
@@ -65,7 +65,7 @@ test.before(async () => {
   await db.user.createMany({ data: [
     { id: userId, email: 'controlled-intake-db@invalid.test', name: 'Operatore sintetico', passwordHash: 'synthetic', role: 'commerciale' },
     { id: otherUserId, email: 'controlled-intake-other@invalid.test', name: 'Altro operatore', passwordHash: 'synthetic', role: 'commerciale' },
-    { id: managerUserId, email: 'controlled-intake-manager@invalid.test', name: 'Responsabile sintetico', passwordHash: 'synthetic', role: 'direzione' },
+    { id: managerUserId, email: 'controlled-intake-manager@invalid.test', name: 'Responsabile sintetico', passwordHash: 'synthetic', role: 'admin' },
     { id: deniedUserId, email: 'controlled-intake-denied@invalid.test', name: 'Lettore sintetico', passwordHash: 'synthetic', role: 'revisore' },
   ] });
   await db.internalSession.createMany({ data: [
@@ -287,6 +287,11 @@ test('an authenticated 1265 projection is produced by N13/N14, linked and replay
     projectionLedgerId: projection.id, effectiveCategory: 'digitale', need: 'Classificazione umana',
     subjectType: 'SOGGETTO_DA_COSTITUIRE', serviceCode: 'progetti_digitali', digitalProjectType: 'software_crm_workflow',
   };
+  await assert.rejects(linkAuthenticated1265Projection(db, actor, command), isCode('DENIED'));
+  await assignCommercialLeadInboxItem(db, {
+    leadId: projection.leadId!, actor: managerActor, targetUserId: userId,
+    expectedInboxVersion: projection.commercialInboxItem!.version,
+  });
   const linked = await linkAuthenticated1265Projection(db, actor, command);
   assert.equal(linked.acquisitionMode, 'AUTHENTICATED_AUTOMATIC');
   assert.equal(linked.sourceProjectionLedgerId, projection.id);

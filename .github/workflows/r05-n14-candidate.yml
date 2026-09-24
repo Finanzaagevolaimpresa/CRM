@@ -1,0 +1,76 @@
+name: R05 N14 exact candidate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  n14-candidate-schema47:
+    name: WordPress and admin N14 on exact candidate schema47
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VNX03_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      VNX03_QUALIFICATION_PROFILE: candidate-schema47
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - name: Bind exact head, tree and unchanged schema47
+        run: |
+          test "$(git rev-parse HEAD)" = "$VNX03_EXPECTED_SOURCE_COMMIT"
+          expected_tree=$(git rev-parse "$VNX03_EXPECTED_SOURCE_COMMIT^{tree}")
+          printf 'VNX03_EXPECTED_SOURCE_TREE=%s\n' "$expected_tree" >> "$GITHUB_ENV"
+          VNX03_EXPECTED_SOURCE_TREE="$expected_tree" node scripts/vnx03/verify-candidate-scope.mjs
+      - name: Exercise negative candidate guards
+        run: node --test tests/vnx03-candidate-scope.test.mjs
+      - name: Install locked dependencies and browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Require explicit synthetic confirmation
+        run: |
+          bash -n scripts/vnx03/run-e2e.sh
+          set +e
+          output=$(bash scripts/vnx03/run-e2e.sh --preflight-only 2>&1)
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fq VNX03_SYNTHETIC_CONFIRMATION_MISSING <<<"$output"
+          VNX03_SYNTHETIC_E2E_CONFIRMED=1 bash scripts/vnx03/run-e2e.sh --preflight-only
+      - name: Qualify candidate WPForms and admin assignment browser
+        env:
+          VNX03_SYNTHETIC_E2E_CONFIRMED: "1"
+          VNX03_EVIDENCE_DIR: ${{ runner.temp }}/r05-n14-candidate-evidence
+        run: npm run test:vnx03:e2e
+      - name: Verify candidate receipt
+        env:
+          VNX03_EVIDENCE_DIR: ${{ runner.temp }}/r05-n14-candidate-evidence
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          for (const file of ['preflight.json', 'runtime.json', 'n14-runtime.json']) {
+            const receipt = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/${file}`, 'utf8'));
+            assert.equal(receipt.sourceCommit, process.env.VNX03_EXPECTED_SOURCE_COMMIT);
+            assert.equal(receipt.sourceTree, process.env.VNX03_EXPECTED_SOURCE_TREE);
+            assert.equal(receipt.profile, 'candidate-schema47');
+            assert.equal(receipt.migrations, 47);
+            assert.equal(receipt.productionContact, false);
+            if (file === 'n14-runtime.json') assert.equal(receipt.adminAssignmentBrowserCompleted, true);
+          }
+          console.log('R05_N14_CANDIDATE_RECEIPTS_VERIFIED');
+          JS
+      - name: Upload separate candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r05-n14-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r05-n14-candidate-evidence
+          if-no-files-found: error
+          retention-days: 14

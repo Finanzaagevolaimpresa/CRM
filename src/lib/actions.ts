@@ -67,10 +67,10 @@ import {
   resolveLeadDuplicateCase,
 } from './lead-duplicate-resolution';
 import { internalSessionMode } from './session';
+import { authorizeManualAssignment, changedAssignee, denyManualAssignment, withAssignmentGuard } from './manual-assignment-guard';
 import { createManualPreAnalysisRecord, ManualPreAnalysisError, updateManualPreAnalysisRecord } from './manual-preanalysis-service';
 import {
   assignCommercialLeadInboxItem,
-  claimCommercialLeadInboxItem,
   closeCommercialLeadInboxItem,
   convertCommercialLeadInboxItem,
   initializeCommercialLeadInboxItem,
@@ -82,8 +82,8 @@ import {
 import { CommercialLeadInboxError } from './commercial-lead-inbox-contract';
 
 function clean(form: FormData) { return Object.fromEntries([...form.entries()].filter(([, v]) => v !== '')); }
-async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown) {
-  await prisma.auditLog.create({ data: { actorId, event, entityType, entityId, after: redactAuditPayload(after) as Prisma.InputJsonValue } });
+async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown, db: Prisma.TransactionClient = prisma) {
+  await db.auditLog.create({ data: { actorId, event, entityType, entityId, after: redactAuditPayload(after) as Prisma.InputJsonValue } });
 }
 
 class ConcurrentLeadConversionError extends Error {}
@@ -452,8 +452,8 @@ export async function createLead(form: FormData) {
   const s = await requirePermission('lead.write');
   const data = leadSchema.parse(clean(form));
   if (data.clientId) denyWriteAccess();
-  await requireActiveUser(data.assignedToId);
-  if (!hasGlobalAccess(s) && data.assignedToId && data.assignedToId !== s.userId) denyWriteAccess();
+  // Every new lead enters the administrator's unassigned queue.
+  if (data.assignedToId) denyManualAssignment();
   return prisma.$transaction(async (tx) => {
     await acquireLeadIdentityWriteLock(tx);
     if (await hasStrongRawLeadIdentityDuplicate(tx, data)) {
@@ -462,7 +462,7 @@ export async function createLead(form: FormData) {
       );
     }
     const lead = await tx.lead.create({
-      data: { ...data, clientId: null, nextAction: data.nextActionDate },
+      data: { ...data, assignedToId: null, clientId: null, nextAction: data.nextActionDate },
     });
     await tx.auditLog.create({
       data: {
@@ -576,23 +576,21 @@ export async function initializeCommercialLeadInboxAction(form: FormData) {
   } catch (error) { return mapCommercialLeadInboxError(error); }
 }
 
-export async function claimCommercialLeadInboxAction(form: FormData) {
-  const session = await requirePermission('lead.inbox.claim');
-  const data = commercialLeadInboxCommandSchema.parse(clean(form));
-  try {
-    return await claimCommercialLeadInboxItem(prisma, {
-      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
-    });
-  } catch (error) { return mapCommercialLeadInboxError(error); }
+export async function claimCommercialLeadInboxAction(_form: FormData) {
+  void _form;
+  await requirePermission('lead.inbox.claim');
+  // Acceptance is a separate action; it cannot establish ownership.
+  denyManualAssignment();
 }
 
 export async function assignCommercialLeadInboxAction(form: FormData) {
   const session = await requirePermission('lead.inbox.assign');
+  if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_ASSIGN');
   const data = commercialLeadInboxAssignSchema.parse(clean(form));
   try {
     return await assignCommercialLeadInboxItem(prisma, {
-      leadId: data.id, actor: commercialLeadActor(session), targetUserId: data.targetUserId,
+      leadId: data.id, actor: { ...commercialLeadActor(session), requireManualAdmin: true }, targetUserId: data.targetUserId,
       expectedInboxVersion: data.expectedInboxVersion,
     });
   } catch (error) { return mapCommercialLeadInboxError(error); }
@@ -600,11 +598,12 @@ export async function assignCommercialLeadInboxAction(form: FormData) {
 
 export async function unassignCommercialLeadInboxAction(form: FormData) {
   const session = await requirePermission('lead.inbox.assign');
+  if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_UNASSIGN');
   const data = commercialLeadInboxCommandSchema.parse(clean(form));
   try {
     return await unassignCommercialLeadInboxItem(prisma, {
-      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+      leadId: data.id, actor: { ...commercialLeadActor(session), requireManualAdmin: true }, expectedInboxVersion: data.expectedInboxVersion,
     });
   } catch (error) { return mapCommercialLeadInboxError(error); }
 }
@@ -632,11 +631,12 @@ export async function closeCommercialLeadInboxAction(form: FormData) {
 
 export async function reopenCommercialLeadInboxAction(form: FormData) {
   const session = await requirePermission('lead.inbox.assign');
+  if (session.role !== 'admin') denyManualAssignment();
   await requireEnforcedPrivilegedMutation(session, 'N14_LEAD_INBOX_REOPEN');
   const data = commercialLeadInboxCommandSchema.parse(clean(form));
   try {
     return await reopenCommercialLeadInboxItem(prisma, {
-      leadId: data.id, actor: commercialLeadActor(session), expectedInboxVersion: data.expectedInboxVersion,
+      leadId: data.id, actor: { ...commercialLeadActor(session), requireManualAdmin: true }, expectedInboxVersion: data.expectedInboxVersion,
     });
   } catch (error) { return mapCommercialLeadInboxError(error); }
 }
@@ -648,7 +648,8 @@ export async function updateLeadCommercial(form: FormData) {
   const inboxItem = await prisma.commercialLeadInboxItem.findUnique({
     where: { leadId: data.id }, select: { id: true },
   });
-  const nextAssignedToId = data.assignedToId ?? null;
+  const assignment = changedAssignee(before.assignedToId, form.has('assignedToId'), data.assignedToId);
+  const nextAssignedToId = assignment === undefined ? before.assignedToId : assignment;
   const protectedTerminalStatus = ['cliente_acquisito', 'vinto', 'perso', 'non_qualificato', 'archiviato'];
   if (inboxItem && (before.assignedToId !== nextAssignedToId
     || (before.status !== data.status && (protectedTerminalStatus.includes(before.status)
@@ -656,13 +657,15 @@ export async function updateLeadCommercial(form: FormData) {
     throw new UserFacingActionError('Owner e stati terminali di un item N14 si gestiscono dalla Commercial Lead Inbox.');
   }
   await requireActiveUser(nextAssignedToId);
-  if (before.assignedToId !== nextAssignedToId && !hasGlobalAccess(s) && nextAssignedToId && nextAssignedToId !== s.userId) denyWriteAccess();
-  const lead = await prisma.lead.update({ where: { id: data.id }, data: { status: data.status, priority: data.priority, assignedToId: nextAssignedToId, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal } });
-  const events = ['lead_update'];
-  if (before.status !== lead.status) events.push('lead_status_change');
-  if (before.assignedToId !== lead.assignedToId) events.push('lead_assign');
-  await Promise.all(events.map((event) => audit(s.userId, event, 'Lead', lead.id, { before, after: lead })));
-  return lead;
+  if (assignment !== undefined && s.role !== 'admin') denyManualAssignment();
+  return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
+    const lead = await tx.lead.update({ where: { id: data.id, ...(assignment !== undefined ? { assignedToId: before.assignedToId } : {}) }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal } });
+    const events = ['lead_update'];
+    if (before.status !== lead.status) events.push('lead_status_change');
+    if (assignment !== undefined) events.push('lead_assign');
+    await Promise.all(events.map((event) => audit(s.userId, event, 'Lead', lead.id, { before, after: lead }, tx)));
+    return lead;
+  });
 }
 
 export async function convertLeadToClient(form: FormData) {
@@ -695,7 +698,7 @@ export async function convertLeadToClient(form: FormData) {
   const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
   try {
     return await prisma.$transaction(async (tx) => {
-      const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId ?? s.userId, notes: lead.notes } });
+      const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId, notes: lead.notes } });
       const claimed = await tx.lead.updateMany({
         where: { id: lead.id, clientId: null, updatedAt: lead.updatedAt },
         data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) },
@@ -827,7 +830,7 @@ export async function createClient(form: FormData) {
   const s = await requirePermission('client.write');
   const data = clientSchema.parse(clean(form));
   if (data.leadId) await requireLeadEditAccess(s, data.leadId);
-  const client = await prisma.client.create({ data: { ...data, salesOwnerId: s.role === 'commerciale' ? s.userId : undefined } });
+  const client = await prisma.client.create({ data: { ...data, salesOwnerId: null } });
   await audit(s.userId, 'client_create', 'Client', client.id, client);
   return client;
 }
@@ -845,7 +848,7 @@ export async function createProject(form: FormData) {
   const s = await requirePermission('project.write');
   const data = projectSchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId });
-  const project = await prisma.project.create({ data: { ...data, consultantId: s.role === 'consulente' ? s.userId : undefined } as never });
+  const project = await prisma.project.create({ data: { ...data, consultantId: null } as never });
   await audit(s.userId, 'project_create', 'Project', project.id, project);
   return project;
 }
@@ -965,10 +968,12 @@ export async function createClientTask(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientTaskSchema.parse(clean(form));
   await assertTaskContext(s, data.clientId, data.clientServiceId, data.projectId, data.assignedToId);
-  if (data.assignedToId && data.assignedToId !== s.userId && !hasPermission(s, 'service.assign')) denyWriteAccess();
-  const task = await prisma.task.create({ data: { ...data, createdById: s.userId } as never });
-  await audit(s.userId, 'client_task_create', 'Task', task.id, task);
-  return task;
+  if (data.assignedToId && s.role !== 'admin') denyManualAssignment();
+  return withAssignmentGuard(prisma, s, Boolean(data.assignedToId), [{ userId: data.assignedToId }], async tx => {
+    const task = await tx.task.create({ data: { ...data, createdById: s.userId } as never });
+    await audit(s.userId, 'client_task_create', 'Task', task.id, task, tx);
+    return task;
+  });
 }
 
 export async function updateClientTask(form: FormData) {
@@ -976,16 +981,18 @@ export async function updateClientTask(form: FormData) {
   const data = taskUpdateSchema.parse(clean(form));
   const before = await requireTaskEditAccess(s, data.id);
   await requireActiveUser(data.assignedToId);
-  const nextAssignedToId = data.assignedToId ?? null;
-  if (before.assignedToId !== nextAssignedToId && nextAssignedToId !== s.userId && !hasPermission(s, 'service.assign')) denyWriteAccess();
+  const assignment = changedAssignee(before.assignedToId, form.has('assignedToId'), data.assignedToId);
+  if (assignment !== undefined && s.role !== 'admin') denyManualAssignment();
   const nextCompletedAt = data.status === 'completata' ? (before.completedAt ?? new Date()) : null;
-  const task = await prisma.task.update({ where: { id: data.id }, data: { status: data.status, priority: data.priority, assignedToId: data.assignedToId ?? null, dueAt: data.dueAt ?? null, completedAt: nextCompletedAt } });
-  const events = ['client_task_update'];
-  if (before.status !== task.status) events.push(task.status === 'completata' ? 'client_task_complete' : task.status === 'annullata' ? 'client_task_cancel' : 'client_task_status_change');
-  if (before.assignedToId !== task.assignedToId) events.push('client_task_assign');
-  if ((before.dueAt?.toISOString() ?? null) !== (task.dueAt?.toISOString() ?? null)) events.push('client_task_due_date_change');
-  await Promise.all(events.map((event) => audit(s.userId, event, 'Task', task.id, { before, after: task })));
-  return task;
+  return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
+    const task = await tx.task.update({ where: { id: data.id, ...(assignment !== undefined ? { assignedToId: before.assignedToId } : {}) }, data: { status: data.status, priority: data.priority, assignedToId: assignment, dueAt: data.dueAt ?? null, completedAt: nextCompletedAt } });
+    const events = ['client_task_update'];
+    if (before.status !== task.status) events.push(task.status === 'completata' ? 'client_task_complete' : task.status === 'annullata' ? 'client_task_cancel' : 'client_task_status_change');
+    if (assignment !== undefined) events.push('client_task_assign');
+    if ((before.dueAt?.toISOString() ?? null) !== (task.dueAt?.toISOString() ?? null)) events.push('client_task_due_date_change');
+    await Promise.all(events.map((event) => audit(s.userId, event, 'Task', task.id, { before, after: task }, tx)));
+    return task;
+  });
 }
 
 export async function completeClientTask(form: FormData) {
@@ -1377,10 +1384,12 @@ export async function createClientService(form: FormData) {
   if (payment && data.contractId && payment.contractId !== data.contractId) denyWriteAccess();
   if (data.status && ['chiuso', 'archiviato', 'consegnato'].includes(data.status) && !hasPermission(s, 'service.close')) denyWriteAccess();
   await requireActiveUser(data.assignedToId);
-  if (data.assignedToId && data.assignedToId !== s.userId && !hasPermission(s, 'service.assign')) denyWriteAccess();
-  const service = await prisma.clientService.create({ data: data as never });
-  await audit(s.userId, 'client_service_create', 'ClientService', service.id, service);
-  return service;
+  if (data.assignedToId && s.role !== 'admin') denyManualAssignment();
+  return withAssignmentGuard(prisma, s, Boolean(data.assignedToId), [{ userId: data.assignedToId }], async tx => {
+    const service = await tx.clientService.create({ data: data as never });
+    await audit(s.userId, 'client_service_create', 'ClientService', service.id, service, tx);
+    return service;
+  });
 }
 
 export async function updateClientServiceStatus(id: string, status: string) {
@@ -1438,9 +1447,11 @@ export async function assignClientService(id: string, assignedToId: string) {
   const s = await requirePermission('service.assign');
   const before = await requireServiceAssignAccess(s, id);
   await requireActiveUser(assignedToId || null);
-  const service = await prisma.clientService.update({ where: { id }, data: { assignedToId: assignedToId || null } });
-  await audit(s.userId, 'client_service_assign', 'ClientService', id, { before, after: service });
-  return service;
+  return withAssignmentGuard(prisma, s, true, [{ userId: assignedToId }], async tx => {
+    const service = await tx.clientService.update({ where: { id, assignedToId: before.assignedToId }, data: { assignedToId: assignedToId || null } });
+    await audit(s.userId, 'client_service_assign', 'ClientService', id, { before, after: service }, tx);
+    return service;
+  });
 }
 export async function updateClientServicePipeline(form: FormData) {
   const s = await requirePermission("service.write");
@@ -1459,10 +1470,11 @@ export async function updateClientServicePipeline(form: FormData) {
     !hasPermission(s, "service.close")
   )
     denyWriteAccess();
-  if (assigneeChanged && !hasPermission(s, "service.assign")) denyWriteAccess();
+  if (assigneeChanged && s.role !== 'admin') denyManualAssignment();
   if (assigneeChanged) await requireActiveUser(nextAssignedToId);
   return prisma.$transaction(
     async (tx) => {
+      if (assigneeChanged) await authorizeManualAssignment(tx, s, [{ userId: nextAssignedToId }]);
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${data.id} FOR UPDATE`;
       if (
         await tx.practiceReadiness.findUnique({
@@ -1475,7 +1487,7 @@ export async function updateClientServicePipeline(form: FormData) {
         );
       }
       const service = await tx.clientService.update({
-        where: { id: data.id },
+        where: { id: data.id, ...(assigneeChanged ? { assignedToId: before.assignedToId } : {}) },
         data: {
           operationalStatus: data.operationalStatus,
           statusUpdatedAt:
@@ -1485,7 +1497,7 @@ export async function updateClientServicePipeline(form: FormData) {
           practiceType: data.practiceType ?? null,
           requestedAmount: data.requestedAmount ?? null,
           plannedInvestment: data.plannedInvestment ?? null,
-          assignedToId: nextAssignedToId,
+          assignedToId: assigneeChanged ? nextAssignedToId : undefined,
           operationalNotes: data.operationalNotes ?? null,
         },
       });
@@ -1896,13 +1908,12 @@ export async function createTechnicalPractice(form: FormData) {
     requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
     requireActiveUser(data.technicalOwnerId, ['admin', 'direzione', 'consulente', 'backoffice']),
   ]);
-  if (!hasPermission(s, 'technical.assign')) {
-    if (data.commercialOwnerId || (data.technicalOwnerId && data.technicalOwnerId !== s.userId)) denyWriteAccess();
-  }
-  const technicalOwnerId = data.technicalOwnerId ?? (s.role === 'consulente' ? s.userId : undefined);
-  const practice = await prisma.technicalPractice.create({ data: { ...data, technicalOwnerId, createdById: s.userId } as never });
-  await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice);
-  return practice;
+  if ((data.commercialOwnerId || data.technicalOwnerId) && s.role !== 'admin') denyManualAssignment();
+  return withAssignmentGuard(prisma, s, Boolean(data.commercialOwnerId || data.technicalOwnerId), [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
+    await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
+    return practice;
+  });
 }
 
 const technicalPracticeComparableFields = [
@@ -1954,9 +1965,10 @@ export async function updateTechnicalPractice(form: FormData) {
   const nextProjectId = data.projectId ?? before.projectId;
   const nextClientServiceId = data.clientServiceId ?? before.clientServiceId;
   await requireClientContextWriteAccess(s, { clientId: data.clientId, projectId: nextProjectId, clientServiceId: nextClientServiceId }, { allowBackofficeClient: true });
-  const ownerChanged = (data.commercialOwnerId !== undefined && data.commercialOwnerId !== before.commercialOwnerId)
-    || (data.technicalOwnerId !== undefined && data.technicalOwnerId !== before.technicalOwnerId);
-  if (ownerChanged && !hasPermission(s, 'technical.assign')) denyWriteAccess();
+  const commercialAssignment = changedAssignee(before.commercialOwnerId, form.has('commercialOwnerId'), data.commercialOwnerId);
+  const technicalAssignment = changedAssignee(before.technicalOwnerId, form.has('technicalOwnerId'), data.technicalOwnerId);
+  const ownerChanged = commercialAssignment !== undefined || technicalAssignment !== undefined;
+  if (ownerChanged && s.role !== 'admin') denyManualAssignment();
   if (ownerChanged) {
     await Promise.all([
       requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
@@ -1968,12 +1980,14 @@ export async function updateTechnicalPractice(form: FormData) {
     Object.hasOwn(raw, field) && comparableValue(parsedFields[field]) !== comparableValue(before[field]),
   );
   if (statusControlledChange && !hasPermission(s, 'technical.status')) denyWriteAccess();
-  const updateData = { ...data, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
-  if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData })) return before;
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: updateData as never });
-  await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice });
-  if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
-  return practice;
+  const updateData = { ...data, commercialOwnerId: commercialAssignment, technicalOwnerId: technicalAssignment, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
+  if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData, commercialOwnerId: commercialAssignment === undefined ? before.commercialOwnerId : commercialAssignment, technicalOwnerId: technicalAssignment === undefined ? before.technicalOwnerId : technicalAssignment })) return before;
+  return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    const practice = await tx.technicalPractice.update({ where: { id: data.id, ...(ownerChanged ? { commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId } : {}) }, data: updateData as never });
+    await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    return practice;
+  });
 }
 
 export async function updateTechnicalPracticeStatus(form: FormData) {
@@ -1999,9 +2013,11 @@ export async function assignTechnicalPractice(form: FormData) {
     requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
     requireActiveUser(data.technicalOwnerId, ['admin', 'direzione', 'consulente', 'backoffice']),
   ]);
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { commercialOwnerId: data.commercialOwnerId ?? null, technicalOwnerId: data.technicalOwnerId ?? null } });
-  await audit(s.userId, 'technical_practice_assign', 'TechnicalPractice', practice.id, { before, after: practice });
-  return practice;
+  return withAssignmentGuard(prisma, s, true, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    const practice = await tx.technicalPractice.update({ where: { id: data.id, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: { commercialOwnerId: data.commercialOwnerId ?? null, technicalOwnerId: data.technicalOwnerId ?? null } });
+    await audit(s.userId, 'technical_practice_assign', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    return practice;
+  });
 }
 
 export async function archiveTechnicalPractice(form: FormData) {

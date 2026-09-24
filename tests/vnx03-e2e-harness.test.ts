@@ -2,12 +2,28 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { qualificationSchema } from './vnx03/schema-profile';
 
 const root = resolve(import.meta.dirname, '..');
 
 function source(path: string) {
   return readFileSync(resolve(root, path), 'utf8');
 }
+
+test('VNX-03 schema banks are explicit and reject unknown profiles', () => {
+  const previous = process.env.VNX03_QUALIFICATION_PROFILE;
+  try {
+    delete process.env.VNX03_QUALIFICATION_PROFILE;
+    assert.deepEqual(qualificationSchema(), { profile: 'historical-schema44', migrations: 44 });
+    process.env.VNX03_QUALIFICATION_PROFILE = 'candidate-schema47';
+    assert.deepEqual(qualificationSchema(), { profile: 'candidate-schema47', migrations: 47 });
+    process.env.VNX03_QUALIFICATION_PROFILE = '47';
+    assert.throws(qualificationSchema, /VNX03_QUALIFICATION_PROFILE_INVALID/u);
+  } finally {
+    if (previous === undefined) delete process.env.VNX03_QUALIFICATION_PROFILE;
+    else process.env.VNX03_QUALIFICATION_PROFILE = previous;
+  }
+});
 
 test('VNX-03 pins official WPForms, WordPress, database and browser inputs', () => {
   const runner = source('scripts/vnx03/run-e2e.sh');
@@ -68,7 +84,7 @@ test('VNX-03 environment is synthetic, internal and fail-closed', () => {
   assert.match(compose, /AI_EXTERNAL_PROVIDERS_ENABLED: "false"/u);
   assert.match(compose, /WEBSITE_LEAD_MODE: disabled/u);
   assert.match(provision, /FAI_CRM_VNX03_EPHEMERAL_TEST_ONLY_V1/u);
-  assert.match(provision, /Number\(migrations\[0\]\?\.count\), 44/u);
+  assert.match(provision, /Number\(migrations\[0\]\?\.count\), qualificationSchema\(\)\.migrations/u);
 });
 
 test('VNX-03 positive path uses authentic WPForms UI, HTTPS and bounded production components', () => {
@@ -146,16 +162,17 @@ test('VNX-03 N14 phase keeps the legacy phase disabled and uses authentic regist
   assert.match(browser, /waitForURL\(\(url\) => url\.pathname === '\/dashboard'/u);
   assert.match(browser, /n14-login-failure-\$\{identity\}\.json/u);
   assert.doesNotMatch(browser, /context\.cookies|cookie\.value|password[^\n]*JSON\.stringify/u);
-  assert.match(browser, /Prendi in carico[\s\S]*Promise\.all\(claimArrivals\)/u);
+  assert.match(browser, /name: 'Prendi in carico'[\s\S]*toHaveCount\(0\)/u);
+  assert.match(browser, /name: 'Assegna'[\s\S]*Promise\.all\(assignmentArrivals\)/u);
   assert.match(browser, /\$ACTION_ID_[\s\S]*\$ACTION_REF_/u);
   assert.match(browser, /request\.headers\(\)\['next-action'\] === action\.nextAction/u);
   assert.doesNotMatch(browser, /response\.finished\(/u);
-  assert.match(browser, /claimHttpStatuses, \[200, 500\]/u);
-  assert.match(browser, /claim-response-headers/u);
-  assert.match(browser, /claim-requests-released[\s\S]*deadlineSeconds: 30/u);
+  assert.match(browser, /assignmentHttpStatuses, \[200, 500\]/u);
+  assert.match(browser, /assignment-response-headers/u);
+  assert.match(browser, /assignment-requests-released[\s\S]*deadlineSeconds: 30/u);
   assert.match(browser, /transportHealth[\s\S]*\/api\/health/u);
   assert.match(browser, /successUiObserved: true[\s\S]*errorBrowserRecovered: true/u);
-  assert.match(browser, /staleClaimCodeVerifiedSeparately: true/u);
+  assert.match(browser, /staleAssignmentCodeVerifiedSeparately: true/u);
   assert.match(browser, /foreign_first_response[\s\S]*N14_PERMISSION_DENIED/u);
   assert.match(browser, /rejectedMutation\.status >= 400/u);
   assert.match(browser, /Registra prima risposta/u);

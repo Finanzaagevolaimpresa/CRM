@@ -31,6 +31,7 @@ export const COMMERCIAL_LEAD_INBOX_TRANSACTION = Object.freeze({
 export type CommercialLeadActor = Readonly<{
   userId: string;
   sessionId: string;
+  requireManualAdmin?: true;
 }>;
 
 export type CommercialLeadFaultPoint =
@@ -157,6 +158,7 @@ async function authorizeActor(
     ? 'lead.inbox.assign'
     : requirement === 'CLAIM' ? 'lead.inbox.claim' : 'lead.write';
   if (!session || session.revokedAt || !session.live || !session.active || session.deletedAt
+    || (actor.requireManualAdmin && session.role !== 'admin')
     || !hasPermission({
       role: session.role,
       active: session.active,

@@ -89,7 +89,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const userOf = (userId?: string | null) => users.find((u) => u.id === userId)?.name ?? '—';
   const canWrite = hasPermission(session, 'technical.write');
   const canStatus = hasPermission(session, 'technical.status');
-  const canAssign = hasPermission(session, 'technical.assign');
+  const canAssign = session.role === 'admin' && hasPermission(session, 'technical.assign');
   const canCommWrite = hasPermission(session, 'practice_communications.write');
   const canCommReview = hasPermission(session, 'practice_communications.review');
   const canCommUsed = hasPermission(session, 'practice_communications.mark_used');
