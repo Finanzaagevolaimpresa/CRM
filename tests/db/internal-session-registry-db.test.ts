@@ -101,8 +101,9 @@ async function revokeForDisabledUser(
   userId: string,
   actorId: string,
 ) {
+  const actorSession = await issueSession(actorId);
   return client.$transaction((tx) =>
-    deactivateInternalUserWithAudit(tx, { userId: actorId }, userId),
+    deactivateInternalUserWithAudit(tx, { userId: actorId, sessionId: actorSession.row.id }, userId),
   );
 }
 
@@ -771,8 +772,9 @@ test("N02 reactivation does not revive sessions", { skip: !run }, async () => {
     });
     assert.equal(revocationAudit.ipAddress, null);
 
+    const actorSession = await issueSession(actor.id);
     const activated = await db.$transaction((tx) =>
-      activateInternalUserWithAudit(tx, { userId: actor.id }, user.id),
+      activateInternalUserWithAudit(tx, { userId: actor.id, sessionId: actorSession.row.id }, user.id),
     );
     assert.equal(activated.ok, true);
     assert.equal(await resolveInternalSession(db, session.token), null);

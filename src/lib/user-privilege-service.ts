@@ -1,10 +1,10 @@
 import { Prisma, type RoleCode, type User } from '@prisma/client';
 import { serializableOptions } from './serializable';
 import { internalSessionMode } from './session';
-import { lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
+import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 import { redactAuditPayload } from './data-classification';
 
-export type PrivilegeActor = { userId: string };
+export type PrivilegeActor = { userId: string; sessionId?: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
 
 type Tx = Prisma.TransactionClient;
@@ -21,12 +21,19 @@ async function auditBlocked(tx: Tx, actor: PrivilegeActor, targetId: string, aft
 }
 
 async function loadActor(tx: Tx, actor: PrivilegeActor): Promise<ActorUser | null> {
+  if (internalSessionMode() === 'registry') {
+    if (!actor.sessionId) return null;
+    const session = await lockAuthoritativeInternalSession(tx, { userId: actor.userId, sessionId: actor.sessionId });
+    if (!session || session.revokedAt || !session.live) return null;
+    return { id: session.userId, role: session.role, active: session.active, deletedAt: session.deletedAt };
+  }
+  await lockInternalUser(tx, actor.userId);
   return tx.user.findFirst({ where: { id: actor.userId, deletedAt: null }, select: { id: true, role: true, active: true, deletedAt: true } });
 }
 
 async function requireAdminActor(tx: Tx, actor: PrivilegeActor, targetId: string, action: string, after: unknown) {
   const actorUser = await loadActor(tx, actor);
-  if (!actorUser || !actorUser.active || actorUser.role !== 'admin') {
+  if (!actorUser || !actorUser.active || actorUser.deletedAt || actorUser.role !== 'admin') {
     await auditBlocked(tx, actor, targetId, { action, ...typeof after === 'object' && after ? after : { detail: after } }, actorUser ? { role: actorUser.role, active: actorUser.active } : { missing: true });
     return null;
   }
@@ -35,6 +42,7 @@ async function requireAdminActor(tx: Tx, actor: PrivilegeActor, targetId: string
 
 async function activeAdminCount(tx: Tx) { return tx.user.count({ where: { role: 'admin', active: true, deletedAt: null } }); }
 async function loadMutableUser(tx: Tx, id: string) {
+  await lockInternalUser(tx, id);
   const user = await tx.user.findUnique({ where: { id }, include: { permissionOverrides: true } });
   if (!user || user.deletedAt) return null;
   return user;
@@ -61,7 +69,6 @@ export async function activateInternalUserWithAudit(tx: Tx, actor: PrivilegeActo
 export async function deactivateInternalUserWithAudit(tx: Tx, actor: PrivilegeActor, userId: string) {
   const actorUser = await requireAdminActor(tx, actor, userId, 'user_deactivate', { active: false });
   if (!actorUser) return denied('Solo un amministratore reale può disattivare utenti interni.');
-  if (internalSessionMode() === 'registry') await lockInternalUser(tx, userId);
   const before = await loadMutableUser(tx, userId);
   if (!before) return denied('Utente non modificabile.');
   if (userId === actor.userId) {
@@ -96,6 +103,27 @@ export async function updateInternalUserRoleWithAudit(tx: Tx, actor: PrivilegeAc
   const user = await tx.user.update({ where: { id: userId }, data: { role } });
   await auditTx(tx, actor.userId, 'role_change', 'User', user.id, { role: user.role, removedOverrides: role === 'admin' ? removedOverrides : [] }, { role: before.role, overrides: removedOverrides });
   return { ok: true, value: user } as const;
+}
+
+export async function removeInternalUserWithAudit(
+  tx: Tx, actor: PrivilegeActor, userId: string, privilegedAdmission = false,
+) {
+  if (!privilegedAdmission || internalSessionMode() !== 'registry') return denied('Rimozione account non disponibile.');
+  const administrator = await requireAdminActor(tx, actor, userId, 'user_removed', { removed: true });
+  if (!administrator) return denied('Solo un amministratore autenticato può rimuovere account.');
+  const before = await loadMutableUser(tx, userId);
+  if (!before) return denied('Utente non modificabile.');
+  if (actor.userId === userId || (before.active && before.role === 'admin' && await activeAdminCount(tx) <= 1)) {
+    await auditBlocked(tx, actor, userId, { action: 'user_removed' });
+    return denied('Non puoi rimuovere te stesso o l’ultimo admin attivo.');
+  }
+  // Logical removal preserves references, decisions and account identity. Current
+  // assignments remain visible in the administrator's derived exception queue.
+  await tx.user.update({ where: { id: userId }, data: { active: false, deletedAt: new Date() } });
+  await revokeAllInternalSessions(tx, userId, 'USER_DISABLED', actor.userId);
+  await auditTx(tx, actor.userId, 'user_removed', 'User', userId,
+    { active: false, removed: true, assignmentsRetained: true }, { active: before.active, role: before.role });
+  return { ok: true, value: { userId } } as const;
 }
 
 export async function updatePermissionOverridesWithAudit(tx: Tx, actor: PrivilegeActor, userId: string, overrides: { permission: string; allowed: boolean }[]) {

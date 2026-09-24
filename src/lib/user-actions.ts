@@ -26,7 +26,7 @@ export async function createInternalUser(form: FormData) {
   await requirePrivilegedMutation(s, 'USER_CREATE');
   const data = internalUserSchema.parse({ ...Object.fromEntries(form), active: form.get('active') === 'on' });
   const passwordHash = await bcrypt.hash(data.password, 12);
-  const result = await withSerializableTransaction(prisma, (tx) => createInternalUserWithAudit(tx, { userId: s.userId }, { email: data.email, name: data.name, role: data.role, active: data.active ?? true, passwordHash }));
+  const result = await withSerializableTransaction(prisma, (tx) => createInternalUserWithAudit(tx, s, { email: data.email, name: data.name, role: data.role, active: data.active ?? true, passwordHash }));
   failIfDenied(result);
   revalidatePath('/settings/users');
 }
@@ -35,7 +35,7 @@ export async function activateInternalUser(form: FormData) {
   const s = await requirePermission('user.write');
   await requirePrivilegedMutation(s, 'USER_ACTIVATE');
   const data = userIdSchema.parse(Object.fromEntries(form));
-  const result = await withSerializableTransaction(prisma, (tx) => activateInternalUserWithAudit(tx, { userId: s.userId }, data.userId));
+  const result = await withSerializableTransaction(prisma, (tx) => activateInternalUserWithAudit(tx, s, data.userId));
   failIfDenied(result);
   revalidatePath('/settings/users');
 }
@@ -44,7 +44,7 @@ export async function updateInternalUserRole(form: FormData) {
   const s = await requirePermission('user.write');
   await requirePrivilegedMutation(s, 'USER_ROLE_UPDATE');
   const data = userRoleSchema.parse(Object.fromEntries(form));
-  const result = await withSerializableTransaction(prisma, (tx) => updateInternalUserRoleWithAudit(tx, { userId: s.userId }, data.userId, data.role));
+  const result = await withSerializableTransaction(prisma, (tx) => updateInternalUserRoleWithAudit(tx, s, data.userId, data.role));
   failIfDenied(result);
   revalidatePath('/settings/users'); revalidatePath('/settings/roles'); revalidatePath(`/settings/users/${data.userId}`);
 }
@@ -53,7 +53,7 @@ export async function deactivateInternalUser(form: FormData) {
   const s = await requirePermission('user.write');
   await requirePrivilegedMutation(s, 'USER_DEACTIVATE');
   const data = userIdSchema.parse(Object.fromEntries(form));
-  const result = await withSerializableTransaction(prisma, (tx) => deactivateInternalUserWithAudit(tx, { userId: s.userId }, data.userId));
+  const result = await withSerializableTransaction(prisma, (tx) => deactivateInternalUserWithAudit(tx, s, data.userId));
   failIfDenied(result);
   revalidatePath('/settings/users');
 }
@@ -65,7 +65,7 @@ export async function updateUserPermissionOverrides(form: FormData) {
   const overrides = Array.from(form.entries()).filter(([key]) => key.startsWith('permission:')).map(([key, value]) => ({ permission: key.slice('permission:'.length), value }));
   const data = userPermissionOverridesSchema.parse({ userId, overrides });
   const rows = data.overrides.filter((item) => item.value !== 'inherit').map((item) => ({ permission: item.permission, allowed: item.value === 'allow' }));
-  const result = await withSerializableTransaction(prisma, (tx) => updatePermissionOverridesWithAudit(tx, { userId: s.userId }, data.userId, rows));
+  const result = await withSerializableTransaction(prisma, (tx) => updatePermissionOverridesWithAudit(tx, s, data.userId, rows));
   failIfDenied(result);
   revalidatePath('/settings/users'); revalidatePath(`/settings/users/${data.userId}`);
 }
@@ -74,7 +74,7 @@ export async function resetUserPermissionOverrides(form: FormData) {
   const s = await requirePermission('user.write');
   await requirePrivilegedMutation(s, 'USER_PERMISSION_OVERRIDE_RESET');
   const data = userIdSchema.parse(Object.fromEntries(form));
-  const result = await withSerializableTransaction(prisma, (tx) => resetPermissionOverridesWithAudit(tx, { userId: s.userId }, data.userId));
+  const result = await withSerializableTransaction(prisma, (tx) => resetPermissionOverridesWithAudit(tx, s, data.userId));
   failIfDenied(result);
   revalidatePath('/settings/users'); revalidatePath(`/settings/users/${data.userId}`);
   redirect(`/settings/users/${data.userId}`);
