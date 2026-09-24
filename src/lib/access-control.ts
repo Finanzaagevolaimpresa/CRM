@@ -87,11 +87,13 @@ function hasValidServiceContext(service: ServiceAccessContext) {
 
 export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' | 'consultantId'>) {
   if (hasGlobalAccess(user)) return true;
+  // Existing review/accounting perimeters are separate from commercial and technical assignment.
+  if (user.role === 'revisore' || user.role === 'amministrazione') return true;
   const id = getActorId(user);
   if (user.role === 'commerciale') return client.salesOwnerId === id;
   if (user.role === 'consulente') return client.consultantId === id;
-  if (user.role === 'collaboratore_limitato') return client.salesOwnerId === id || client.consultantId === id;
-  return ['revisore', 'backoffice', 'amministrazione'].includes(user.role);
+  return ['backoffice', 'collaboratore_limitato'].includes(user.role)
+    && (client.salesOwnerId === id || client.consultantId === id);
 }
 export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
   if (user.role === 'admin') return true;
@@ -104,9 +106,9 @@ export function canViewProject(user: Actor, project: ProjectAccessContext) {
   if (!client || !hasValidProjectContext(project)) return false;
   if (hasGlobalAccess(user)) return true;
   const id = getActorId(user);
-  if (user.role === 'consulente' || user.role === 'collaboratore_limitato') return project.consultantId === id || canViewClient(user, client);
   if (user.role === 'commerciale') return canViewClient(user, client);
-  return ['revisore', 'backoffice', 'amministrazione'].includes(user.role);
+  if (['consulente', 'backoffice', 'collaboratore_limitato'].includes(user.role)) return project.consultantId === id || canViewClient(user, client);
+  return canViewClient(user, client);
 }
 export function canViewService(user: Actor, service: ServiceAccessContext) {
   if (!hasValidServiceContext(service)) return false;
@@ -149,10 +151,12 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
   if (document.clientService && !hasValidServiceContext(document.clientService)) return false;
   if (hasGlobalAccess(user)) return true;
   const id = getActorId(user);
-  if (document.uploadedById === id || document.clientService?.assignedToId === id) return true;
+  // Uploading a client document records provenance, not a permanent access grant.
+  if (!document.clientId && document.uploadedById === id) return true;
+  if (document.clientService && canViewService(user, document.clientService)) return true;
   if (document.project && canViewProject(user, document.project)) return true;
   if (document.client && canViewClient(user, document.client)) return true;
-  return ['revisore', 'backoffice', 'amministrazione'].includes(user.role) && !isSensitiveDocument(document);
+  return false;
 }
 
 export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
@@ -170,7 +174,7 @@ export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccess
   if (hasGlobalAccess(user)) return true;
 
   const id = getActorId(user);
-  if (offer.createdById === id) return true;
+  if (!offer.leadId && !offer.clientId && offer.createdById === id) return true;
   if (offer.lead && canViewLead(user, offer.lead)) return true;
   return !!offer.client && canViewClient(user, offer.client);
 }
@@ -182,7 +186,7 @@ export function canEditCommercialOffer(user: Actor, offer: CommercialOfferAccess
   if (hasGlobalAccess(user)) return true;
 
   const id = getActorId(user);
-  if (offer.createdById === id) return true;
+  if (!offer.leadId && !offer.clientId && offer.createdById === id) return true;
   if (user.role !== 'commerciale') return false;
   if (offer.lead && canEditLead(user, offer.lead)) return true;
   return !!offer.client && canEditClient(user, offer.client);
@@ -192,14 +196,14 @@ export function canEditClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
   if (hasGlobalAccess(user)) return true;
   const id = getActorId(user);
   if (user.role === 'commerciale') return client.salesOwnerId === id;
-  if (user.role === 'consulente') return client.consultantId === id;
+  if (user.role === 'consulente' || user.role === 'backoffice') return client.consultantId === id;
   return false;
 }
 
 export function canEditProject(user: Actor, project: ProjectAccessContext) {
   if (!hasConsistentClientContext({ clientId: project.clientId, client: project.client })) return false;
   if (hasGlobalAccess(user)) return true;
-  if (user.role !== 'consulente') return false;
+  if (!['consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
   return project.consultantId === id || (!!project.client && project.client.consultantId === id);
 }
@@ -207,8 +211,7 @@ export function canEditProject(user: Actor, project: ProjectAccessContext) {
 export function canEditService(user: Actor, service: ServiceAccessContext) {
   if (!hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project })) return false;
   if (hasGlobalAccess(user)) return true;
-  if (user.role === 'backoffice') return true;
-  if (user.role !== 'consulente') return false;
+  if (!['consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
   if (service.assignedToId === id) return true;
   return (!!service.project && canEditProject(user, service.project)) || service.client?.consultantId === id;
@@ -225,10 +228,11 @@ export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   clientService?: ServiceAccessContext | null;
 }) {
   if (!hasConsistentClientContext(task)) return false;
-  if (hasGlobalAccess(user) || user.role === 'backoffice') return true;
-  if (!['commerciale', 'consulente'].includes(user.role)) return false;
+  if (hasGlobalAccess(user)) return true;
+  if (!['commerciale', 'consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
-  if (task.assignedToId === id || task.createdById === id) return true;
+  if (task.assignedToId === id) return true;
+  if (!task.clientId && !task.project && !task.clientService && !task.assignedToId && task.createdById === id) return true;
   if (task.clientService && canEditService(user, task.clientService)) return true;
   if (task.project && canEditProject(user, task.project)) return true;
   return !!task.client && canEditClient(user, task.client);
@@ -253,7 +257,8 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   if (task.clientService && !hasValidServiceContext(task.clientService)) return false;
   if (hasGlobalAccess(user)) return true;
   const id = getActorId(user);
-  if (task.assignedToId === id || task.createdById === id) return true;
+  if (task.assignedToId === id) return true;
+  if (!task.clientId && !task.assignedToId && task.createdById === id) return true;
   if (task.clientService && canViewService(user, task.clientService)) return true;
   if (task.project && canViewProject(user, task.project)) return true;
   return !!task.client && canViewClient(user, task.client);
@@ -265,10 +270,8 @@ export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   clientService?: ServiceAccessContext | null;
 }) {
   if (!hasConsistentClientContext(item)) return false;
-  if (hasGlobalAccess(user) || user.role === 'backoffice') return true;
-  if (user.role !== 'consulente') return false;
-  const id = getActorId(user);
-  if (item.createdById === id || item.updatedById === id) return true;
+  if (hasGlobalAccess(user)) return true;
+  if (!['consulente', 'backoffice'].includes(user.role)) return false;
   if (item.clientService && canEditService(user, item.clientService)) return true;
   if (item.project && canEditProject(user, item.project)) return true;
   return !!item.client && canEditClient(user, item.client);
@@ -291,8 +294,6 @@ export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   if (item.project && !hasValidProjectContext(item.project)) return false;
   if (item.clientService && !hasValidServiceContext(item.clientService)) return false;
   if (hasGlobalAccess(user)) return true;
-  const id = getActorId(user);
-  if (item.createdById === id || item.updatedById === id) return true;
   if (item.clientService && canViewService(user, item.clientService)) return true;
   if (item.project && canViewProject(user, item.project)) return true;
   return !!item.client && canViewClient(user, item.client);
@@ -305,10 +306,10 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
 }, canReadSensitive = false) {
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
-  if (hasGlobalAccess(user) || user.role === 'backoffice') return true;
-  if (!['commerciale', 'consulente'].includes(user.role)) return false;
+  if (hasGlobalAccess(user)) return true;
+  if (!['commerciale', 'consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
-  if (document.uploadedById === id) return true;
+  if (!document.clientId && !document.project && !document.clientService && document.uploadedById === id) return true;
   if (document.clientService && canEditService(user, document.clientService)) return true;
   if (document.project && canEditProject(user, document.project)) return true;
   return !!document.client && canEditClient(user, document.client);
@@ -320,13 +321,12 @@ export function canViewTechnicalPractice(user: Actor, practice: { commercialOwne
   const id = getActorId(user);
   if (practice.commercialOwnerId === id || practice.technicalOwnerId === id) return true;
   if (practice.client && canViewClient(user, practice.client)) return true;
-  return ['revisore', 'backoffice', 'amministrazione', 'consulente'].includes(user.role);
+  return false;
 }
 
 export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwnerId?: string | null }) {
   if (hasGlobalAccess(user)) return true;
-  if (user.role === 'backoffice') return true;
-  if (user.role !== 'consulente') return false;
+  if (!['consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
   return practice?.technicalOwnerId === id;
 }

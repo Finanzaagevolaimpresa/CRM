@@ -87,9 +87,11 @@ test('assigned practice access is independent from ownership of its client', () 
     assert.equal(result.commsToReview, 1);
   }
   assert.equal(buildDashboardTechnicalCounterContext({ ...input, session: commerciale }).commsToReview, 0);
-  // The canonical technical predicate also permits consultants independently
-  // from the separate client-list ownership predicate.
-  assert.equal(buildDashboardTechnicalCounterContext({ ...input, session: consulente }).commsToReview, 1);
+  // Role alone no longer opens every practice; explicit assignment still does.
+  assert.equal(buildDashboardTechnicalCounterContext({ ...input, session: consulente }).commsToReview, 0);
+  assert.equal(buildDashboardTechnicalCounterContext({ ...input, session: consulente,
+    practices: [{ ...practice, technicalOwnerId: consulente.userId }],
+  }).commsToReview, 1);
 });
 
 test('each communication parent reference must agree with the visible practice', () => {
