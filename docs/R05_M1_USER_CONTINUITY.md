@@ -39,6 +39,10 @@ rimozione e la nuova coda richiedono registry. Nessuna modalità viene attivata.
 Le prove PostgreSQL coprono tutti e sei i tipi di riferimenti, revoca, dinieghi
 con sessioni scambiate/revocate e override, concorrenza tra due admin, rollback
 su errore audit, coda oltre 50 righe, riassegnazione e riattivazione.
+La concorrenza sui lock PostgreSQL espone anche SQLSTATE 40001/40P01 dentro
+l'errore raw-query Prisma: viene ricondotta al conflitto controllato già usato
+per P2034, senza ritentare automaticamente la mutazione. Gli altri errori
+(vincoli, permessi e guasti generici) conservano la propria classificazione.
 Il browser usa i veri endpoint: tentativo senza step-up, prova con modalità
 privilegiata disabled, richiesta HTTP non admin, rimozione, accesso già aperto,
 riapertura dell'archivio, coda e successiva riassegnazione cliente. Nessun invio
