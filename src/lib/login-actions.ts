@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from './prisma';
-import { createRegistryLoginSession, logoutInternalSession } from './internal-session-registry';
+import { logoutInternalSession } from './internal-session-registry';
+import { createAuthenticatedRegistryLoginSession } from './registry-login-credentials';
 import { createRegistrySessionToken, digestRegistrySessionToken, internalSessionMode, signSessionCookie } from './session';
 import {
   clearLoginThrottle,
@@ -55,9 +56,11 @@ async function createLoginSession(email: string, password: string) {
   if (internalSessionMode() === 'registry') {
     const { token, bytes } = createRegistrySessionToken();
     const tokenDigest = await digestRegistrySessionToken(bytes);
-    const session = await createRegistryLoginSession(prisma, {
+    const session = await createAuthenticatedRegistryLoginSession(prisma, {
       userId: user.id,
       tokenDigest,
+      expectedPasswordHash: user.passwordHash,
+      expectedEmail: normalizedEmail,
     });
     if (!session) return false;
     (await cookies()).set(cookieName, token, sessionCookieOptions(Math.floor(session.expiresAt.getTime() / 1000)));

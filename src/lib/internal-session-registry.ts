@@ -57,10 +57,15 @@ export async function createInternalSession(
 export async function createRegistryLoginSession(
   db: PrismaClient,
   input: RegistryLoginSessionInput,
+  admit?: (tx: Prisma.TransactionClient) => Promise<boolean>,
 ) {
   return db.$transaction(async (tx) => {
     const user = await lockInternalUser(tx, input.userId);
     if (!user?.active || user.deletedAt) return null;
+
+    // Authentication may revalidate admission while the user lock is held.
+    // Its inputs and implementation remain outside the session registry.
+    if (admit && !await admit(tx)) return null;
 
     const session = await createInternalSession(tx, input);
     await tx.$executeRaw(
