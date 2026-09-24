@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
-import { commercialOriginEvents } from '../../src/lib/commercial-origin-contract';
+import { commercialOriginEvents, encodeCommercialOrigin } from '../../src/lib/commercial-origin-contract';
 
 const db = new PrismaClient(), baseURL = 'http://127.0.0.1:3015', run = randomUUID(), tag = `Origin-${run}`;
 const password = process.env.M1_BROWSER_PASSWORD!, mode = process.env.PRIVILEGED_ACCESS_MODE;
@@ -99,7 +99,7 @@ test('documented origin is admin-only, versioned and independent of current assi
   await form.getByRole('button', { name: 'Registra rettifica', exact: true }).click();
   await expect.poll(async () => (await originRows()).length).toBe(2);
   expect(await db.auditLog.findUniqueOrThrow({ where: { id: first.id } })).toEqual(first);
-  expect((await originRows())[1].after).toMatchObject({ revision: 2, predecessorId: first.id, acquiredById: ids.original, contractedById: ids.current });
+  expect((await originRows())[1].after).toMatchObject({ version: 2, predecessorId: first.id, acquiredById: ids.original, contractedById: ids.current });
   // The origin is historical: logical removal never reassigns it or grants renewed access.
   await db.user.update({ where: { id: ids.original }, data: { active: false, deletedAt: new Date() } });
   await admin.goto(path); await expect(admin.getByText('Acquisizione: ' + tag + '-original (rimosso)', { exact: true })).toBeVisible();
@@ -116,8 +116,8 @@ test('origin history and identity search remain reachable after the first page',
   for (let revision = 1; revision <= 27; revision++) {
     const entry = await db.auditLog.create({ data: { entityType: 'Client', entityId: foreignId, actorId: ids.admin,
       event: revision === 1 ? commercialOriginEvents[0] : commercialOriginEvents[1], createdAt: new Date(Date.UTC(2020, 0, 1) + revision * 1000),
-      after: { protocol: 'R05_COMMERCIAL_ORIGIN_V1', clientId: foreignId, revision, predecessorId, acquiredById: ids.current, contractedById: null,
-        sourceReference: 'Synthetic paging evidence', reason: `Synthetic evidence clarification revision ${revision}` } } });
+      after: encodeCommercialOrigin({ protocol: 'R05_COMMERCIAL_ORIGIN_V1', clientId: foreignId, revision, predecessorId, acquiredById: ids.current, contractedById: null,
+        sourceReference: 'Synthetic paging evidence', reason: `Synthetic evidence clarification revision ${revision}` }) } });
     predecessorId = entry.id;
   }
   const pagingTag = tag + '-identity';

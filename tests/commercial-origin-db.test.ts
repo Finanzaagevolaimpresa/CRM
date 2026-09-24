@@ -75,6 +75,19 @@ test('current admin, session, admission, live client and known identity are mand
   assert.equal(await readCommercialOrigin(db, client.id), null);
 });
 
+test('database audit redaction preserves structured origin while removing sensitive free text', { skip: !enabled }, async () => {
+  const { admin, client, input } = await fixture();
+  const first = await tx(t => recordCommercialOrigin(t, admin, { ...input, sourceReference: 'Registro synthetic@example.test' }, true));
+  const stored = await readCommercialOrigin(db, client.id);
+  assert.equal(stored?.snapshot.sourceReference, 'Registro [REDACTED:PERSONAL]');
+  assert.equal(stored?.snapshot.protocol, 'R05_COMMERCIAL_ORIGIN_V1');
+  assert.equal(stored?.snapshot.revision, 1);
+  assert.equal(JSON.stringify(first.after).includes('synthetic@example.test'), false);
+  const second = await tx(t => recordCommercialOrigin(t, admin, { ...input, expectedEntryId: first.id, reason: 'Confirmed against a separate synthetic register' }, true));
+  assert.deepEqual(second.before, first.after);
+  assert.deepEqual(await db.auditLog.findUniqueOrThrow({ where: { id: first.id } }), first);
+});
+
 test('concurrent first registration and correction each have one winner', { skip: !enabled }, async () => {
   const { admin, client, input } = await fixture();
   const outcomes = await Promise.allSettled([1, 2].map(() => tx(t => recordCommercialOrigin(t, admin, input, true))));

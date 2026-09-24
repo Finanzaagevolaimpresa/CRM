@@ -1,14 +1,14 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { UserFacingActionError } from './action-errors';
 import { authorizeManualAssignment, type AssignmentActor } from './manual-assignment-guard';
-import { commercialOriginEvents, commercialOriginInput, commercialOriginSnapshot, sameCommercialOrigin } from './commercial-origin-contract';
+import { commercialOriginEvents, commercialOriginInput, commercialOriginSnapshot, commercialOriginStored, encodeCommercialOrigin, sameCommercialOrigin } from './commercial-origin-contract';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 const originWhere = (clientId: string) => ({ entityType: 'Client', entityId: clientId, event: { in: [...commercialOriginEvents] } });
 const select = { id: true, actorId: true, createdAt: true, after: true } as const;
 
 function decode(row: { id: string; actorId: string | null; createdAt: Date; after: Prisma.JsonValue }, clientId: string) {
-  const parsed = commercialOriginSnapshot.safeParse(row.after);
+  const parsed = commercialOriginStored.safeParse(row.after);
   if (!parsed.success || parsed.data.clientId !== clientId || !row.actorId) {
     throw new UserFacingActionError('Storico di provenienza non coerente. È necessaria una verifica amministrativa.');
   }
@@ -57,11 +57,13 @@ export async function recordCommercialOrigin(tx: Prisma.TransactionClient, actor
     acquiredById: input.acquiredById, contractedById: input.contractedById,
     sourceReference: input.sourceReference, reason: input.reason,
   });
-  return tx.auditLog.create({ data: {
+  const entry = await tx.auditLog.create({ data: {
     actorId: actor.userId, entityType: 'Client', entityId: input.clientId,
     event: previous ? commercialOriginEvents[1] : commercialOriginEvents[0],
     // Strict chronology survives simultaneous timestamps and preserves every previous record.
     createdAt: new Date(Math.max(Date.now(), (previous?.createdAt.getTime() ?? 0) + 1)),
-    before: previous?.snapshot ?? Prisma.JsonNull, after,
+    before: previous ? encodeCommercialOrigin(previous.snapshot) : Prisma.JsonNull, after: encodeCommercialOrigin(after),
   } });
+  decode(entry, input.clientId); // A stored snapshot must remain readable, or the whole transaction rolls back.
+  return entry;
 }
