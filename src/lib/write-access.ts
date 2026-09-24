@@ -111,7 +111,6 @@ async function loadServiceContext(serviceId: string) {
 export async function requireClientContextWriteAccess(
   session: AuthSession,
   context: ClientWriteContext,
-  options: { allowBackofficeClient?: boolean } = {},
 ) {
   const [client, company, project, clientService] = await Promise.all([
     prisma.client.findFirst({ where: { id: context.clientId, deletedAt: null }, select: clientSelect }),
@@ -129,9 +128,7 @@ export async function requireClientContextWriteAccess(
   if (company && project?.companyId && project.companyId !== company.id) denyWriteAccess();
   if (company && clientService?.companyId && clientService.companyId !== company.id) denyWriteAccess();
 
-  const allowed = options.allowBackofficeClient === true && session.role === 'backoffice'
-    ? true
-    : clientService
+  const allowed = clientService
       ? canEditService(session, clientService)
       : project
         ? canEditProject(session, project)

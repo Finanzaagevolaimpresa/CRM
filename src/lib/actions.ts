@@ -869,7 +869,7 @@ export async function uploadDocument(form: FormData) {
   const parsed = documentUploadSchema.safeParse(clean(form));
   if (!parsed.success) throw new UserFacingActionError('Controlla i dati del documento: cliente, progetto e servizio devono essere coerenti.');
   const data = parsed.data;
-  await requireClientContextWriteAccess(s, data, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(s, data);
   const fileName = sanitizeFileName(file.name);
   const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
   const document = await prisma.document.create({ data: {
@@ -891,7 +891,7 @@ export async function uploadDocument(form: FormData) {
 const standardChecklistTitles = ['Visura aggiornata','Documento identità','Codice fiscale','DURC','Ultimo bilancio depositato','Situazione contabile aggiornata','Ultima dichiarazione redditi','Estratti conto ultimi 3 mesi','Centrale Rischi Banca d’Italia','CRIF / report creditizio','Preventivi investimento','Business plan / relazione progetto'];
 
 async function assertChecklistContext(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string, documentId?: string) {
-  await requireClientContextWriteAccess(session, { clientId, clientServiceId, projectId }, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(session, { clientId, clientServiceId, projectId });
   if (documentId) {
     const document = await requireDocumentEditAccess(session, documentId);
     if (document.clientId !== clientId) denyWriteAccess();
@@ -960,7 +960,7 @@ export async function deactivateDocumentChecklistItem(form: FormData) {
 }
 
 async function assertTaskContext(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string, assignedToId?: string) {
-  await requireClientContextWriteAccess(session, { clientId, clientServiceId, projectId }, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(session, { clientId, clientServiceId, projectId });
   await requireActiveUser(assignedToId);
 }
 
@@ -1373,7 +1373,7 @@ export async function registerPayment(form: FormData) {
 export async function createClientService(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientServiceSchema.parse(clean(form));
-  await requireClientContextWriteAccess(s, data, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(s, data);
   const [catalog, contract, payment] = await Promise.all([
     prisma.serviceCatalog.findFirst({ where: { id: data.serviceCatalogId, active: true }, select: { id: true } }),
     data.contractId ? prisma.contract.findFirst({ where: { id: data.contractId, clientId: data.clientId }, select: { id: true, clientId: true, projectId: true } }) : null,
@@ -1903,7 +1903,7 @@ export async function createTechnicalPractice(form: FormData) {
   const statusFieldsSubmitted = ['status', 'submittedAt', 'protocolNumber', 'integrationRequestNote', 'clientVisibleStatus', 'nextClientUpdateAt', 'lastClientUpdateAt']
     .some((field) => Object.hasOwn(raw, field));
   if (statusFieldsSubmitted && !hasPermission(s, 'technical.status')) denyWriteAccess();
-  await requireClientContextWriteAccess(s, data, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(s, data);
   await Promise.all([
     requireActiveUser(data.commercialOwnerId, ['admin', 'direzione', 'commerciale']),
     requireActiveUser(data.technicalOwnerId, ['admin', 'direzione', 'consulente', 'backoffice']),
@@ -1964,7 +1964,7 @@ export async function updateTechnicalPractice(form: FormData) {
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
   const nextProjectId = data.projectId ?? before.projectId;
   const nextClientServiceId = data.clientServiceId ?? before.clientServiceId;
-  await requireClientContextWriteAccess(s, { clientId: data.clientId, projectId: nextProjectId, clientServiceId: nextClientServiceId }, { allowBackofficeClient: true });
+  await requireClientContextWriteAccess(s, { clientId: data.clientId, projectId: nextProjectId, clientServiceId: nextClientServiceId });
   const commercialAssignment = changedAssignee(before.commercialOwnerId, form.has('commercialOwnerId'), data.commercialOwnerId);
   const technicalAssignment = changedAssignee(before.technicalOwnerId, form.has('technicalOwnerId'), data.technicalOwnerId);
   const ownerChanged = commercialAssignment !== undefined || technicalAssignment !== undefined;

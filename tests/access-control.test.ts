@@ -124,7 +124,7 @@ test('clienti e progetti sono modificabili soltanto dal responsabile previsto', 
   assert.equal(canEditClient(actor('collaboratore_limitato'), client('client-1', 'user-1', 'user-1')), false);
 });
 
-test('i servizi rispettano assegnazione, ownership e operativita trasversale del backoffice', () => {
+test('i servizi richiedono assegnazione corrente anche al backoffice', () => {
   const consulente = actor('consulente');
   const backoffice = actor('backoffice');
   const ownedClient = client('client-1', null, 'user-1');
@@ -134,7 +134,7 @@ test('i servizi rispettano assegnazione, ownership e operativita trasversale del
   assert.equal(canEditService(consulente, service('client-1', null, client('client-1'), project('client-1', 'user-1'))), true);
   assert.equal(canEditService(consulente, service('client-1', 'user-2')), false);
   assert.equal(canEditService(backoffice, service('client-1', 'user-1')), true);
-  assert.equal(canEditService(backoffice, service('client-1', null)), true);
+  assert.equal(canEditService(backoffice, service('client-1', null)), false);
   assert.equal(canEditService(actor('collaboratore_limitato'), service('client-1', 'user-1')), false);
 
   assert.equal(canAssignService(actor('commerciale'), service('client-1', null, client('client-1', 'user-1'))), false);
@@ -144,36 +144,36 @@ test('i servizi rispettano assegnazione, ownership e operativita trasversale del
   assert.equal(canAssignService(backoffice, service()), false);
 });
 
-test('task e checklist ereditano solo contesti coerenti e mantengono il backoffice operativo', () => {
+test('task e checklist ereditano contesti correnti, non la sola provenienza', () => {
   const consulente = actor('consulente');
   const ownedClient = client('client-1', null, 'user-1');
 
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: 'user-1', createdById: null }), true);
-  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: 'user-1' }), true);
+  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: 'user-1' }), false);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, client: ownedClient }), true);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, project: project('client-1', 'user-1') }), true);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, clientService: service('client-1', 'user-1') }), true);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: 'user-2', createdById: 'user-2' }), false);
-  assert.equal(canEditTask(actor('backoffice'), { clientId: 'client-1', assignedToId: null, createdById: null }), true);
+  assert.equal(canEditTask(actor('backoffice'), { clientId: 'client-1', assignedToId: null, createdById: null }), false);
   assert.equal(canEditTask(actor('collaboratore_limitato'), { clientId: 'client-1', assignedToId: 'user-1', createdById: 'user-1' }), false);
 
-  assert.equal(canEditChecklistItem(consulente, { clientId: 'client-1', createdById: 'user-1', updatedById: null }), true);
+  assert.equal(canEditChecklistItem(consulente, { clientId: 'client-1', createdById: 'user-1', updatedById: null }), false);
   assert.equal(canEditChecklistItem(consulente, { clientId: 'client-1', createdById: null, updatedById: null, client: ownedClient }), true);
-  assert.equal(canEditChecklistItem(actor('backoffice'), { clientId: 'client-1', createdById: null, updatedById: null }), true);
+  assert.equal(canEditChecklistItem(actor('backoffice'), { clientId: 'client-1', createdById: null, updatedById: null }), false);
   assert.equal(canEditChecklistItem(actor('collaboratore_limitato'), { clientId: 'client-1', createdById: 'user-1', updatedById: 'user-1' }), false);
 });
 
-test('i documenti sensibili richiedono sempre il flag e il backoffice resta trasversale sui non sensibili', () => {
+test('i documenti richiedono titolarita corrente oltre al permesso sui sensibili', () => {
   const sensitive = document({ containsSensitiveData: true });
 
   assert.equal(canEditDocument(actor('admin'), sensitive), false);
   assert.equal(canEditDocument(actor('admin'), sensitive, true), true);
   assert.equal(canEditDocument(actor('direzione'), document({ type: 'CRIF' })), false);
   assert.equal(canEditDocument(actor('direzione'), document({ type: 'CRIF' }), true), true);
-  assert.equal(canEditDocument(actor('backoffice'), document()), true);
+  assert.equal(canEditDocument(actor('backoffice'), document()), false);
   assert.equal(canEditDocument(actor('backoffice'), sensitive), false);
-  assert.equal(canEditDocument(actor('backoffice'), sensitive, true), true);
-  assert.equal(canEditDocument(actor('consulente'), document({ uploadedById: 'user-1' })), true);
+  assert.equal(canEditDocument(actor('backoffice'), sensitive, true), false);
+  assert.equal(canEditDocument(actor('consulente'), document({ uploadedById: 'user-1' })), false);
   assert.equal(canEditDocument(actor('consulente'), document({ client: client('client-1', null, 'user-1') })), true);
   assert.equal(canEditDocument(actor('commerciale'), document({ client: client('client-1', 'user-1') })), true);
   assert.equal(canEditDocument(actor('collaboratore_limitato'), document({ uploadedById: 'user-1' })), false);
@@ -204,8 +204,8 @@ test('contesti cross-client sono negati anche se una relazione secondaria appart
   })), false);
 });
 
-test('le pratiche tecniche sono globali per backoffice ma il consulente deve esserne titolare', () => {
-  assert.equal(canEditTechnicalPractice(actor('backoffice'), { technicalOwnerId: null }), true);
+test('le modifiche alle pratiche richiedono titolarita tecnica anche al backoffice', () => {
+  assert.equal(canEditTechnicalPractice(actor('backoffice'), { technicalOwnerId: null }), false);
   assert.equal(canEditTechnicalPractice(actor('consulente'), { technicalOwnerId: 'user-1' }), true);
   assert.equal(canEditTechnicalPractice(actor('consulente'), { technicalOwnerId: 'user-2' }), false);
   assert.equal(canEditTechnicalPractice(actor('commerciale'), { technicalOwnerId: 'user-1' }), false);

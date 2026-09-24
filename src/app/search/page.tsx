@@ -9,7 +9,7 @@ import { hasPermission, requireSession, type Permission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
-import { leadVisibilityWhere } from '@/lib/core-query-policy';
+import { clientVisibilityWhere, leadVisibilityWhere } from '@/lib/core-query-policy';
 
 type SearchResult = {
   id: string;
@@ -73,7 +73,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
   if (q.length >= 2) {
     const [clients, projects, services, documents, technicalPractices, tasks, communications, leads, offers] = await Promise.all([
       hasPermission(session, 'client.read')
-        ? prisma.client.findMany({ where: { deletedAt: null, OR: [{ displayName: text(q) }, { status: text(q) }, { notes: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        ? prisma.client.findMany({ where: { deletedAt: null, AND: [clientVisibilityWhere(session)], OR: [{ displayName: text(q) }, { status: text(q) }, { notes: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, title: true, consultantId: true, clientId: true }, take: 500 }),
       prisma.clientService.findMany({ where: { deletedAt: null }, take: 500 }),

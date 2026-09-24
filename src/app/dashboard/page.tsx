@@ -112,7 +112,7 @@ export default async function Dashboard() {
   const offerAccessWhere = session.role === "admin" || session.role === "direzione"
     ? {}
     : { OR: [
-        { createdById: session.userId },
+        { createdById: session.userId, leadId: null, clientId: null },
         { leadId: { in: visibleLeadIds } },
         { clientId: { in: visibleClientIds } },
       ] };

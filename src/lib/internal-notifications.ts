@@ -2,6 +2,7 @@ import { hasPermission, type AuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { TaskStatus } from "@prisma/client";
 import { leadVisibilityWhere } from "./core-query-policy";
+import { buildNotificationAccess } from "./internal-notification-policy";
 
 export type InternalNotification = {
   id: string;
@@ -21,15 +22,6 @@ function todayBounds(now = new Date()) {
   return { startOfToday, endOfToday };
 }
 
-function taskAccessWhere(session: AuthSession) {
-  const canSeeAllTasks = ["admin", "direzione", "revisore", "backoffice"].includes(session.role);
-  return {
-    deletedAt: null,
-    status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] },
-    ...(canSeeAllTasks ? {} : { OR: [{ assignedToId: session.userId }, { createdById: session.userId }] }),
-  };
-}
-
 export async function getInternalNotifications(session: AuthSession, options?: { limit?: number }) {
   const now = new Date();
   const { startOfToday, endOfToday } = todayBounds(now);
@@ -39,10 +31,20 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const canReadPracticeCommunications = hasPermission(session, "practice_communications.read");
   const canReviewPracticeCommunications = hasPermission(session, "practice_communications.review");
   const canReadLeads = hasPermission(session, "lead.read");
-  const openTaskWhere = taskAccessWhere(session);
   const leadWhere = leadVisibilityWhere(session);
+  // Resolve current ownership before applying preview limits. Communication
+  // snapshots and creator/upload provenance never replace current access.
+  const [clients, projects, services, practiceContexts, leadContexts] = await Promise.all([
+    prisma.client.findMany({ where: { deletedAt: null }, select: { id: true, displayName: true, salesOwnerId: true, consultantId: true, deletedAt: true } }),
+    prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, consultantId: true, deletedAt: true } }),
+    prisma.clientService.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true, assignedToId: true, deletedAt: true } }),
+    prisma.technicalPractice.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, commercialOwnerId: true, technicalOwnerId: true, deletedAt: true } }),
+    prisma.lead.findMany({ where: { deletedAt: null }, select: { id: true, assignedToId: true, clientId: true } }),
+  ]);
+  const access = buildNotificationAccess(session, { clients, projects, services, practices: practiceContexts, leads: leadContexts });
+  const openTaskWhere = { deletedAt: null, status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] }, AND: [access.taskWhere] };
 
-  const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers, clients] = await Promise.all([
+  const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers] = await Promise.all([
     session.role === "admin"
       ? prisma.aiExecutionAdminNotification.findMany({
           where: {
@@ -76,21 +78,21 @@ export async function getInternalNotifications(session: AuthSession, options?: {
       : [],
     canReviewPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "da_revisionare" },
+          where: { deletedAt: null, status: "da_revisionare", technicalPracticeId: { in: access.practiceIds } },
           orderBy: { createdAt: "asc" },
           take: limit,
         })
       : [],
     canReadPracticeCommunications
       ? prisma.practiceCommunication.findMany({
-          where: { deletedAt: null, status: "approvata", usedAt: null },
+          where: { deletedAt: null, status: "approvata", usedAt: null, technicalPracticeId: { in: access.practiceIds } },
           orderBy: { updatedAt: "asc" },
           take: limit,
         })
       : [],
     canReadTechnical
       ? prisma.technicalPractice.findMany({
-          where: { deletedAt: null, status: { notIn: ["approvata", "respinta", "archiviata"] } },
+          where: { deletedAt: null, id: { in: access.practiceIds }, status: { notIn: ["approvata", "respinta", "archiviata"] } },
           orderBy: [{ dueDate: "asc" }, { updatedAt: "desc" }],
           take: limit,
         })
@@ -104,37 +106,19 @@ export async function getInternalNotifications(session: AuthSession, options?: {
       : [],
     canReadLeads
       ? prisma.commercialOffer.findMany({
-          where: { deletedAt: null, followUpAt: { lte: endOfToday }, status: { notIn: ["accettata", "rifiutata"] } },
+          where: { deletedAt: null, AND: [access.offerWhere], followUpAt: { lte: endOfToday }, status: { notIn: ["accettata", "rifiutata"] } },
           orderBy: { followUpAt: "asc" },
           take: limit,
         })
       : [],
-    prisma.client.findMany({ where: { deletedAt: null }, select: { id: true, displayName: true, salesOwnerId: true, consultantId: true } }),
   ]);
 
   const clientNames = new Map(clients.map((client) => [client.id, client.displayName]));
-  const clientAccess = new Map(
-    clients.map((client) => [
-      client.id,
-      session.role === "admin" ||
-        session.role === "direzione" ||
-        ["revisore", "backoffice", "amministrazione"].includes(session.role) ||
-        client.salesOwnerId === session.userId ||
-        client.consultantId === session.userId,
-    ]),
-  );
-  const canSeeByOwnership = (item: { clientId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null; createdById?: string | null }) =>
-    session.role === "admin" ||
-    session.role === "direzione" ||
-    ["revisore", "backoffice", "amministrazione"].includes(session.role) ||
-    item.commercialOwnerId === session.userId ||
-    item.technicalOwnerId === session.userId ||
-    item.createdById === session.userId ||
-    (!!item.clientId && clientAccess.get(item.clientId));
-  const visibleCommunicationsToReview = communicationsToReview.filter(canSeeByOwnership);
-  const visibleApprovedCommunications = approvedCommunications.filter(canSeeByOwnership);
-  const visiblePractices = practices.filter(canSeeByOwnership);
-  const visibleOffers = offers.filter(canSeeByOwnership);
+  const visibleCommunicationsToReview = communicationsToReview.filter(access.canViewCommunication);
+  const visibleApprovedCommunications = approvedCommunications.filter(access.canViewCommunication);
+  const visiblePractices = practices;
+  const visibleOffers = offers.filter(access.canViewOffer);
+  const visibleTasks = tasks.filter(access.canViewTask);
   const notifications: InternalNotification[] = [
     ...aiAuthorizationNotifications.map((notification) => ({
       id: `ai-authorization-${notification.id}`,
@@ -145,7 +129,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
       related: notification.request.client?.displayName ?? notification.request.project?.title ?? "Richiesta amministrativa",
       href: notification.approvalPath,
     })),
-    ...tasks.map((task) => ({
+    ...visibleTasks.map((task) => ({
       id: `task-${task.id}`,
       title: task.title,
       category: task.dueAt && task.dueAt < startOfToday ? "Task scaduto" : "Task in scadenza oggi",

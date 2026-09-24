@@ -4,7 +4,7 @@ import { DocumentUploadForm } from '@/components/document-upload-form';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { canEditClient, canEditProject, canEditService, canViewChecklistItem, canViewClient, canViewDocument, hasGlobalAccess, isSensitiveDocument } from '@/lib/access-control';
+import { canEditClient, canEditProject, canEditService, canViewChecklistItem, canViewClient, canViewDocument, isSensitiveDocument } from '@/lib/access-control';
 import { privateDocumentExists } from '@/lib/storage';
 import { isMissingChecklistDocument } from '@/lib/document-checklist';
 
@@ -65,16 +65,16 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     { title: 'Altro / non classificato', tone: 'border-slate-200 bg-slate-50/70', rows: visible.filter((x) => x.status === 'archiviato' || !x.documentCategory || x.documentCategory === 'altro').map(rowOf) },
   ];
   const canUpload = hasPermission(session, 'document.upload');
-  const canWriteAnyClient = (client: (typeof clientRows)[number]) => hasGlobalAccess(session) || session.role === 'backoffice' || canEditClient(session, client);
+  const canWriteAnyClient = (client: (typeof clientRows)[number]) => canEditClient(session, client);
   const writableClients = canUpload ? clientRows.filter(canWriteAnyClient) : [];
   const writableClientIds = new Set(writableClients.map((client) => client.id));
   const writableProjects = canUpload ? projectRows.filter((project) => {
     const client = clientById.get(project.clientId);
-    return !!client && writableClientIds.has(project.clientId) && (session.role === 'backoffice' || canEditProject(session, { ...project, client }));
+    return !!client && writableClientIds.has(project.clientId) && canEditProject(session, { ...project, client });
   }) : [];
   const writableServices = canUpload ? serviceRows.filter((service) => {
     const hydrated = serviceById.get(service.id);
-    return !!hydrated && writableClientIds.has(service.clientId) && (session.role === 'backoffice' || canEditService(session, hydrated));
+    return !!hydrated && writableClientIds.has(service.clientId) && canEditService(session, hydrated);
   }) : [];
   const writableCompanies = canUpload ? companyRows.filter((company) => writableClientIds.has(company.clientId)) : [];
 

@@ -52,14 +52,10 @@ export function coreQueryCandidateLimit(limit: number): number {
 }
 
 export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.ClientWhereInput {
-  if (session.role === 'admin' || session.role === 'direzione'
-    || session.role === 'revisore' || session.role === 'backoffice'
-    || session.role === 'amministrazione') return {};
+  if (session.role === 'admin' || session.role === 'direzione' || session.role === 'revisore' || session.role === 'amministrazione') return {};
   if (session.role === 'commerciale') return { salesOwnerId: session.userId };
   if (session.role === 'consulente') return { consultantId: session.userId };
-  if (session.role === 'collaboratore_limitato') {
-    return { OR: [{ salesOwnerId: session.userId }, { consultantId: session.userId }] };
-  }
+  if (session.role === 'backoffice' || session.role === 'collaboratore_limitato') return { OR: [{ salesOwnerId: session.userId }, { consultantId: session.userId }] };
   return { id: { in: [] } };
 }
 
