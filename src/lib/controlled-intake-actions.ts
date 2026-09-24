@@ -18,6 +18,7 @@ export async function recordControlledIntake(form: FormData) {
     ...raw,
     sourceOccurredAt: Number.isNaN(date.getTime()) ? raw.sourceOccurredAt : date.toISOString(),
   });
+  if ('queued' in intake) redirect('/controlled-intakes?queued=1');
   redirect(`/controlled-intakes?created=${intake.id}#intake-${intake.id}`);
 }
 
