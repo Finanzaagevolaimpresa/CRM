@@ -12,8 +12,11 @@ export class SerializableConflictError extends Error {
 }
 
 export function mapSerializableConflict(error: unknown) {
-  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-    return new SerializableConflictError({ cause: error });
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    // SELECT ... FOR UPDATE uses Prisma's raw-query error envelope. PostgreSQL
+    // serialization failures and deadlocks have the same retryable boundary.
+    const rawConflict = error.code === 'P2010' && ['40001', '40P01'].includes(String(error.meta?.code));
+    if (error.code === 'P2034' || rawConflict) return new SerializableConflictError({ cause: error });
   }
   return error;
 }
