@@ -1,13 +1,15 @@
 import { test, expect, type Page, type Request } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 
 const db = new PrismaClient();
 const password = process.env.M1_BROWSER_PASSWORD!;
 const scope = process.env.PRIVILEGED_ACCESS_MODE!;
 const origin = 'http://127.0.0.1:3015';
-const email = (role: string) => 'assignment-' + role + '-' + scope + '@example.test';
+const fixtureRun = randomUUID();
+const email = (role: string) => 'assignment-' + role + '-' + scope + '-' + fixtureRun + '@example.test';
 let adminId: string, salesId: string, otherId: string, clientId: string, projectId: string;
 test.beforeAll(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -27,7 +29,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await db.$disconnect(); });
 async function login(page: Page, role: string) {
   await page.goto('/login');
-  await page.locator('[data-login-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(email(role));
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click();

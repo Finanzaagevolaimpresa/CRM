@@ -144,7 +144,7 @@ function assertGuardsBeforeMutation(
 }
 
 test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', () => {
-  assertGuardsBeforeMutation('updateLeadCommercial', ['requireLeadEditAccess'], 'prisma.lead.update');
+  assertGuardsBeforeMutation('updateLeadCommercial', ['requireLeadEditAccess', 'withAssignmentGuard'], 'tx.lead.update');
   assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'tx.client.create');
   assertGuardsBeforeMutation('createCommercialOffer', ['requireCommercialOfferTargetAccess'], 'prisma.commercialOffer.create');
   assertGuardsBeforeMutation(
@@ -187,14 +187,14 @@ test('documenti e checklist invocano le guardie ABAC prima delle scritture', () 
 });
 
 test('task e servizi invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('createClientTask', ['assertTaskContext'], 'prisma.task.create');
-  assertGuardsBeforeMutation('updateClientTask', ['requireTaskEditAccess'], 'prisma.task.update');
+  assertGuardsBeforeMutation('createClientTask', ['assertTaskContext', 'withAssignmentGuard'], 'tx.task.create');
+  assertGuardsBeforeMutation('updateClientTask', ['requireTaskEditAccess', 'withAssignmentGuard'], 'tx.task.update');
   assertGuardsBeforeMutation('completeClientTask', ['requireTaskEditAccess'], 'prisma.task.update');
   assert.match(functionBody('assertTaskContext'), /requireClientContextWriteAccess/);
 
-  assertGuardsBeforeMutation('createClientService', ['requireClientContextWriteAccess'], 'prisma.clientService.create');
+  assertGuardsBeforeMutation('createClientService', ['requireClientContextWriteAccess', 'withAssignmentGuard'], 'tx.clientService.create');
   assertGuardsBeforeMutation('updateClientServiceStatus', ['requireServiceEditAccess'], 'tx.clientService.update');
-  assertGuardsBeforeMutation('assignClientService', ['requireServiceAssignAccess'], 'prisma.clientService.update');
+  assertGuardsBeforeMutation('assignClientService', ['requireServiceAssignAccess', 'withAssignmentGuard'], 'tx.clientService.update');
   assertGuardsBeforeMutation('updateClientServicePipeline', ['requireServiceEditAccess'], 'tx.clientService.update');
 });
 
@@ -212,7 +212,7 @@ test('la verifica ABAC rileva guardie mancanti o successive alla mutazione', () 
 
 test('gli stati finali dei servizi richiedono service.close prima della mutazione', () => {
   for (const [action, mutation] of [
-    ['createClientService', 'prisma.clientService.create'],
+    ['createClientService', 'tx.clientService.create'],
     ['updateClientServiceStatus', 'tx.clientService.update'],
     ['updateClientServicePipeline', 'tx.clientService.update'],
   ] as const) {
@@ -234,14 +234,14 @@ test('gli stati finali dei servizi richiedono service.close prima della mutazion
 });
 
 test('pratiche tecniche invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('createTechnicalPractice', ['requireClientContextWriteAccess'], 'prisma.technicalPractice.create');
+  assertGuardsBeforeMutation('createTechnicalPractice', ['requireClientContextWriteAccess', 'withAssignmentGuard'], 'tx.technicalPractice.create');
   assertGuardsBeforeMutation(
     'updateTechnicalPractice',
-    ['requireTechnicalPracticeEditAccess', 'requireClientContextWriteAccess'],
-    'prisma.technicalPractice.update',
+    ['requireTechnicalPracticeEditAccess', 'requireClientContextWriteAccess', 'withAssignmentGuard'],
+    'tx.technicalPractice.update',
   );
   assertGuardsBeforeMutation('updateTechnicalPracticeStatus', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
-  assertGuardsBeforeMutation('assignTechnicalPractice', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
+  assertGuardsBeforeMutation('assignTechnicalPractice', ['requireTechnicalPracticeEditAccess', 'withAssignmentGuard'], 'tx.technicalPractice.update');
   assertGuardsBeforeMutation('archiveTechnicalPractice', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
 });
 
