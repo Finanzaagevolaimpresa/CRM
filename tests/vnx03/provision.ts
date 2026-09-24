@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { qualificationSchema } from './schema-profile';
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
   readSecureLeadGatewayKeyring,
@@ -48,7 +49,7 @@ async function main() {
     FROM "_prisma_migrations"
     WHERE "finished_at" IS NOT NULL AND "rolled_back_at" IS NULL
   `);
-  assert.equal(Number(migrations[0]?.count), 44);
+  assert.equal(Number(migrations[0]?.count), qualificationSchema().migrations);
 
   await db.$executeRawUnsafe(
     `COMMENT ON DATABASE "${DATABASE_NAME}" IS '${DATABASE_SENTINEL}'`,
@@ -141,7 +142,7 @@ async function main() {
 
   gatewaySecret.fill(0);
   identityKey.secret.fill(0);
-  process.stdout.write('{"provision":"ready","migrations":44,"synthetic":true}\n');
+  process.stdout.write(`${JSON.stringify({ provision: 'ready', ...qualificationSchema(), synthetic: true })}\n`);
 }
 
 void main()

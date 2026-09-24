@@ -90,7 +90,7 @@ async function record(page: Page, data: {
     const rejected = page.waitForResponse(response => Boolean(response.request().headers()['next-action']));
     await form.getByRole('button', { name: 'Registra richiesta' }).click().catch(() => undefined);
     expect((await rejected).status()).toBeGreaterThanOrEqual(400);
-    expect(await db.controlledIntake.count({ where: { channel_sourceId: { channel: data.channel, sourceId: data.sourceId } } })).toBe(0);
+    expect(await db.controlledIntake.count({ where: { channel: data.channel, sourceId: data.sourceId } })).toBe(0);
     return;
   }
   const submitted = page.waitForRequest(request => Boolean(request.headers()['next-action']));
@@ -103,7 +103,7 @@ async function record(page: Page, data: {
   const replay = await postCapturedAction(page, { url: request.url(), nextAction: request.headers()['next-action'], contentType: request.headers()['content-type'], body: request.postData()! });
   expect([200, 303]).toContain(replay.status());
   expect(replay.headers()['x-action-redirect']).toContain('queued=1');
-  expect(await db.controlledIntake.count({ where: { channel_sourceId: { channel: data.channel, sourceId: data.sourceId } } })).toBe(1);
+  expect(await db.controlledIntake.count({ where: { channel: data.channel, sourceId: data.sourceId } })).toBe(1);
   await adminPage.goto(app + '/controlled-intakes');
   await expect(adminPage.locator('#intake-' + record.id)).toBeVisible();
   await adminPage.goto(app + '/leads/inbox?queue=unassigned');
