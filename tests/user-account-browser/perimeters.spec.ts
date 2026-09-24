@@ -132,6 +132,56 @@ for (const role of roles) test(`${role}: explicit admin grant and revocation aff
   await readerContext.close(); await adminContext.close();
 });
 
+test('removed account archive exposes preserved grants with step-up revocation and rejects reactivation', async ({ page }) => {
+  // Only the guarded disposable database supplies historical state; every action below uses the real UI/HTTP.
+  const removed = await db.user.create({ data: { email: email('removed'), name: tag + '-removed', role: 'backoffice',
+    active: false, deletedAt: new Date(), passwordHash: await bcrypt.hash(password, 4) } });
+  const grant = await db.clientReadGrant.create({ data: { userId: removed.id, clientId, active: true,
+    createdById: adminId, updatedById: adminId } });
+  const path = `/settings/users/${removed.id}/perimeter`;
+  await login(page, 'admin');
+  async function openFromArchive() {
+    await page.goto('/settings/users');
+    await page.getByRole('link', { name: 'Account rimossi', exact: true }).click();
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: removed.name, exact: true }) })
+      .getByRole('link', { name: 'Apri archivio account', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Account rimosso', exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Gestisci consultazioni aggiuntive e revoche', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(path + '$'));
+    await expect(page.getByRole('heading', { name: 'Perimetro di consultazione: ' + removed.name, exact: true })).toBeVisible();
+    await expect(page.getByText(tag + '-client', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Consenti consultazione', exact: true })).toHaveCount(0);
+  }
+  await openFromArchive();
+  await capture(page, path);
+  await page.getByRole('button', { name: 'Revoca consultazione', exact: true }).click();
+  const request = await captured(page);
+  await expect(page).toHaveURL(mode === 'enforced' ? /status=required/ : /status=unavailable/);
+  expect(await db.clientReadGrant.findUniqueOrThrow({ where: { id: grant.id } })).toMatchObject({ active: true, version: 1 });
+  expect(await db.auditLog.count({ where: { entityType: 'ClientReadGrant', entityId: grant.id } })).toBe(0);
+  if (mode === 'disabled') return;
+  await page.getByLabel('Password corrente').fill(password);
+  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await expect(page).toHaveURL(/status=active/);
+  await openFromArchive();
+  await page.getByRole('button', { name: 'Revoca consultazione', exact: true }).click();
+  await expect.poll(() => db.clientReadGrant.findUniqueOrThrow({ where: { id: grant.id } }).then(row => row.active)).toBe(false);
+  await expect(page.getByText('Revocata', { exact: true })).toBeVisible();
+  expect(await db.clientReadGrant.findUniqueOrThrow({ where: { id: grant.id } })).toMatchObject({ active: false, version: 2, updatedById: adminId });
+  const audit = await db.auditLog.findMany({ where: { entityType: 'ClientReadGrant', entityId: grant.id } });
+  expect(audit).toHaveLength(1); expect(audit[0].actorId).toBe(adminId);
+  // Forge a current-version grant from the captured real action: inactive/removed target remains forbidden.
+  const body = request.body.replace(/(name="(?:\d+_)?active"\r\n\r\n)false/, '$1true')
+    .replace(/(name="(?:\d+_)?expectedVersion"\r\n\r\n)1/, (_match, prefix: string) => prefix + '2');
+  expect(body).not.toBe(request.body); expect(body).toContain('\r\n\r\ntrue'); expect(body).toContain('\r\n\r\n2');
+  const denied = await replay(page, { ...request, body });
+  expect(await denied.text()).toContain('Destinatario non disponibile per la consultazione.');
+  expect(await db.clientReadGrant.findUniqueOrThrow({ where: { id: grant.id } })).toMatchObject({ active: false, version: 2 });
+  expect(await db.auditLog.findMany({ where: { entityType: 'ClientReadGrant', entityId: grant.id } })).toEqual(audit);
+  await openFromArchive();
+  await expect(page.getByRole('button', { name: 'Revoca consultazione', exact: true })).toHaveCount(0);
+});
+
 test('admin can reach clients and previous grants beyond both first pages', async ({ page }) => {
   await login(page, 'admin');
   const userId = users.get('backoffice')!, prefix = `Paging-${run}`;

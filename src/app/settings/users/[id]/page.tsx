@@ -13,7 +13,7 @@ export default async function UserPermissionsPage({ params }: { params: Promise<
   const { id } = await params;
   const user = await prisma.user.findFirst({ where: { id, ...(session.role === 'admin' ? {} : { deletedAt: null }) }, include: { permissionOverrides: true } });
   if (!user) notFound();
-  if (user.deletedAt) return <Card title="Account rimosso"><p>{user.name}: identità, storico e riferimenti sono conservati. L’accesso è revocato.</p><Link href="/settings/assignment-exceptions">Apri coda eccezioni</Link></Card>;
+  if (user.deletedAt) return <Card title="Account rimosso"><p>{user.name}: identità, storico e riferimenti sono conservati. L’accesso è revocato.</p><div className="flex flex-wrap gap-4"><Link href="/settings/assignment-exceptions">Apri coda eccezioni</Link><Link href={`/settings/users/${user.id}/perimeter`}>Gestisci consultazioni aggiuntive e revoche</Link></div></Card>;
   const isAdminTarget = user.role === 'admin';
   const canEdit = session.role === 'admin' && !isAdminTarget && session.userId !== user.id;
   const overrideMap = new Map(user.permissionOverrides.map((o) => [o.permission, o.allowed]));
