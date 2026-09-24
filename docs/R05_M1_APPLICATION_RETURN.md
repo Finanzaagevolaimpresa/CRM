@@ -1,10 +1,15 @@
 # M1: qualifica del rientro applicativo su schema48
 
 Il banco `scripts/pr140/qualify-release.sh` costruisce il candidato esatto e
-l'immagine di rientro `20125ce9c72ce370e6dc3ef0d66bc356607640b6`, tree
-`072c423303587166e331ec1735daeb51abd5d8f6`. Quest'ultima comprende perimetri
+l'immagine di rientro `73432464d741164fd76690bbdef65b17d626e6e9`, tree
+`5ee2c7819c31f772fc04bc4a28784ab7b005af25`. Quest'ultima comprende perimetri
 ClientReadGrant, responsabilità/presa in carico, passaggio del servizio acquistato
-e registrazione atomica della prima versione dei file caricati.
+e registrazione atomica della prima versione dei file caricati, con ammissione
+privilegiata verificata anche nei precedenti ingressi di assegnazione.
+Il banco tenta dal vecchio form un cambio del tecnico su un servizio già affidato
+in modalità privileged disabled: pratica, servizio e audit della risorsa devono
+restare invariati in tutte e tre le fasi. Le prove UI/HTTP enforced/disabled dei
+quattro ingressi e il successo con step-up valido sono nella suite account M1.
 Le ricevute precedenti `CI_SCHEMA48_COMPATIBILITY_ONLY` restano valide soltanto
 come prove storiche di conservazione; l'immagine d3cf non è ammessa al rientro M1.
 

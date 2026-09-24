@@ -8,8 +8,8 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 head="$(git rev-parse HEAD)"
 tree="$(git rev-parse HEAD^{tree})"
-recovery_head=20125ce9c72ce370e6dc3ef0d66bc356607640b6
-recovery_tree=072c423303587166e331ec1735daeb51abd5d8f6
+recovery_head=73432464d741164fd76690bbdef65b17d626e6e9
+recovery_tree=5ee2c7819c31f772fc04bc4a28784ab7b005af25
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
 # The return image includes schema48 perimeters, responsibility and paid-service handoff.
 # Older storage-only receipts remain historical evidence, never recovery admission.
