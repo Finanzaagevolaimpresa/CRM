@@ -171,8 +171,8 @@ test('removed account archive exposes preserved grants with step-up revocation a
   const audit = await db.auditLog.findMany({ where: { entityType: 'ClientReadGrant', entityId: grant.id } });
   expect(audit).toHaveLength(1); expect(audit[0].actorId).toBe(adminId);
   // Forge a current-version grant from the captured real action: inactive/removed target remains forbidden.
-  const body = request.body.replace(/(name="(?:\d+_)?active"\r\n\r\n)false/, '$1true')
-    .replace(/(name="(?:\d+_)?expectedVersion"\r\n\r\n)1/, (_match, prefix: string) => prefix + '2');
+  const body = request.body.replace(/(name="(?:_?\d+_)?active"\r\n\r\n)false/, '$1true')
+    .replace(/(name="(?:_?\d+_)?expectedVersion"\r\n\r\n)1/, (_match, prefix: string) => prefix + '2');
   expect(body).not.toBe(request.body); expect(body).toContain('\r\n\r\ntrue'); expect(body).toContain('\r\n\r\n2');
   const denied = await replay(page, { ...request, body });
   expect(await denied.text()).toContain('Destinatario non disponibile per la consultazione.');
