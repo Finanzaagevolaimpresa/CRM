@@ -25,14 +25,14 @@ function compose(arguments_: readonly string[], timeout = 180_000) {
   });
 }
 
-function assertState(checkpoint: 'projected' | 'claimed' | 'contacted') {
+function assertState(checkpoint: 'projected' | 'assigned' | 'contacted') {
   const output = compose(['run', '--rm', '-T', '-e', 'COMMERCIAL_LEAD_INBOX_MODE=enforced',
     '-e', `VNX03_N14_CHECKPOINT=${checkpoint}`, 'harness', 'node', '--import', 'tsx',
     'tests/vnx03/assert-n14-state.ts']);
   assert.match(output, new RegExp(`"checkpoint":"${checkpoint}"`, 'u'));
 }
 
-function assertRejection(scenario: 'stale_claim' | 'foreign_first_response', code: string) {
+function assertRejection(scenario: 'stale_assignment' | 'foreign_first_response', code: string) {
   const output = compose(['run', '--rm', '-T', '-e', 'COMMERCIAL_LEAD_INBOX_MODE=enforced',
     '-e', 'INTERNAL_SESSION_MODE=registry',
     '-e', `VNX03_N14_REJECTION=${scenario}`, 'harness', 'node', '--import', 'tsx',
@@ -52,7 +52,7 @@ async function submitLogin(context: BrowserContext, email: string) {
 
 async function writeLoginFailureDiagnostic(
   page: Page,
-  identity: 'commercial_one' | 'commercial_two',
+  identity: 'commercial_one' | 'commercial_two' | 'admin',
 ) {
   const current = new URL(page.url());
   writeFileSync(join(evidenceDirectory, `n14-login-failure-${identity}.json`), `${JSON.stringify({
@@ -69,7 +69,7 @@ async function writeLoginFailureDiagnostic(
 async function loginActive(
   context: BrowserContext,
   email: string,
-  identity: 'commercial_one' | 'commercial_two',
+  identity: 'commercial_one' | 'commercial_two' | 'admin',
 ) {
   const page = await context.newPage();
   try {
@@ -146,7 +146,7 @@ async function submitSyntheticLead(page: Page) {
   assert.match(consumer, /"projectedNew":1/u);
 }
 
-test('N14 qualifies authentic login, claim conflict, ownership visibility and first response', async ({ browser, page }) => {
+test('R05 N14 qualifies admin assignment, conflict, ownership visibility and first response', async ({ browser, page }) => {
   test.setTimeout(5 * 60_000);
   mkdirSync(evidenceDirectory, { recursive: true });
   await submitSyntheticLead(page);
@@ -162,65 +162,78 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
 
   const owner = await browser.newContext();
   const ownerPage = await loginActive(owner, 'commercial.one@vnx03.invalid', 'commercial_one');
-  await ownerPage.goto(`${crmUrl}/leads/inbox?queue=unassigned`);
-  await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
-  const duplicatePage = await owner.newPage();
-  await duplicatePage.goto(`${crmUrl}/leads/inbox?queue=unassigned`);
-  const claimAction = await serverActionIdentity(ownerPage, 'Prendi in carico');
-  assert.deepEqual(await serverActionIdentity(duplicatePage, 'Prendi in carico'), claimAction);
-  const claimPath = '/leads/inbox?queue=unassigned';
-  let releaseClaims!: () => void;
-  const claimGate = new Promise<void>((resolve) => { releaseClaims = resolve; });
-  const claimArrivals: Promise<void>[] = [];
-  for (const claimPage of [ownerPage, duplicatePage]) {
+  await ownerPage.goto(crmUrl + '/leads/inbox?queue=unassigned');
+  await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toHaveCount(0);
+  await expect(ownerPage.getByRole('button', { name: 'Prendi in carico' })).toHaveCount(0);
+  const admin = await browser.newContext();
+  const adminPage = await loginActive(admin, 'admin.n14@vnx03.invalid', 'admin');
+  await adminPage.goto(crmUrl + '/settings/security');
+  await adminPage.getByLabel('Password corrente').fill(password);
+  await adminPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await expect(adminPage).toHaveURL(/status=active/);
+  await adminPage.goto(crmUrl + '/leads/inbox?queue=unassigned');
+  await expect(adminPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
+  await adminPage.locator('select[name="targetUserId"]').selectOption('vnx03-n14-commercial-one');
+  const duplicatePage = await admin.newPage();
+  await duplicatePage.goto(crmUrl + '/leads/inbox?queue=unassigned');
+  await duplicatePage.locator('select[name="targetUserId"]').selectOption('vnx03-n14-commercial-one');
+  const assignmentAction = await serverActionIdentity(adminPage, 'Assegna');
+  assert.deepEqual(await serverActionIdentity(duplicatePage, 'Assegna'), assignmentAction);
+  const assignmentPath = '/leads/inbox?queue=unassigned';
+  let releaseAssignments!: () => void;
+  const assignmentGate = new Promise<void>((resolve) => { releaseAssignments = resolve; });
+  const assignmentArrivals: Promise<void>[] = [];
+  for (const assignmentPage of [adminPage, duplicatePage]) {
     let markArrived!: () => void;
-    claimArrivals.push(new Promise<void>((resolve) => { markArrived = resolve; }));
-    await claimPage.route('**/*', async (route) => {
+    assignmentArrivals.push(new Promise<void>((resolve) => { markArrived = resolve; }));
+    await assignmentPage.route('**/*', async (route) => {
       const request = route.request();
-      if (!isServerActionRequest(request, claimPath, claimAction)) return route.continue();
+      if (!isServerActionRequest(request, assignmentPath, assignmentAction)) return route.continue();
       markArrived();
-      await claimGate;
+      await assignmentGate;
       await route.continue();
     });
   }
-  const claimPages = [ownerPage, duplicatePage] as const;
-  const claimResponses = claimPages.map((claimPage) =>
-    claimPage.waitForResponse((response) =>
-      isServerActionRequest(response.request(), claimPath, claimAction), { timeout: 30_000 }));
-  const clicks = claimPages.map((claimPage) =>
-    claimPage.getByRole('button', { name: 'Prendi in carico' }).click().catch(() => undefined));
-  await Promise.all(claimArrivals);
-  writeCheckpoint('claim-requests-released', {
-    requestsObserved: claimArrivals.length, exactActionMatched: true, deadlineSeconds: 30,
+  const assignmentPages = [adminPage, duplicatePage] as const;
+  const assignmentResponses = assignmentPages.map((assignmentPage) =>
+    assignmentPage.waitForResponse((response) =>
+      isServerActionRequest(response.request(), assignmentPath, assignmentAction), { timeout: 30_000 }));
+  const clicks = assignmentPages.map((assignmentPage) =>
+    assignmentPage.getByRole('button', { name: 'Assegna' }).click().catch(() => undefined));
+  await Promise.all(assignmentArrivals);
+  writeCheckpoint('assignment-requests-released', {
+    requestsObserved: assignmentArrivals.length, exactActionMatched: true, deadlineSeconds: 30,
   });
-  releaseClaims();
-  const responses = await Promise.all(claimResponses);
-  const claimHttpStatuses = responses.map((response) => response.status()).sort((left, right) => left - right);
-  const claimContentTypes = responses.map(responseMediaType);
-  writeCheckpoint('claim-response-headers', {
-    responsesObserved: responses.length, claimHttpStatuses, claimContentTypes,
+  releaseAssignments();
+  const responses = await Promise.all(assignmentResponses);
+  const assignmentHttpStatuses = responses.map((response) => response.status()).sort((left, right) => left - right);
+  const assignmentContentTypes = responses.map(responseMediaType);
+  writeCheckpoint('assignment-response-headers', {
+    responsesObserved: responses.length, assignmentHttpStatuses, assignmentContentTypes,
   });
-  assert.deepEqual(claimHttpStatuses, [200, 500]);
-  assert.ok(claimContentTypes.every((value) => value === 'text/x-component'));
-  const successPage = claimPages[responses.findIndex((response) => response.status() === 200)];
-  const errorPage = claimPages[responses.findIndex((response) => response.status() === 500)];
+  assert.deepEqual(assignmentHttpStatuses, [200, 500]);
+  assert.ok(assignmentContentTypes.every((value) => value === 'text/x-component'));
+  const successPage = assignmentPages[responses.findIndex((response) => response.status() === 200)];
+  const errorPage = assignmentPages[responses.findIndex((response) => response.status() === 500)];
   assert.ok(successPage && errorPage);
-  assertState('claimed');
+  assertState('assigned');
   const transportHealth = await ownerPage.request.get(`${crmUrl}/api/health`, { timeout: 10_000 });
   assert.equal(transportHealth.status(), 200);
   assert.equal(transportHealth.headers()['content-type']?.split(';', 1)[0], 'application/json');
-  await successPage.goto(`${crmUrl}/leads/inbox?queue=mine`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+  await successPage.goto(`${crmUrl}/leads/inbox?queue=open`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
   await expect(successPage.getByText('Owner: Commerciale Sintetico Uno', { exact: false }))
     .toBeVisible({ timeout: 20_000 });
   await errorPage.goto(`${crmUrl}/leads/inbox?queue=unassigned`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
   await expect(errorPage.getByText('Nessun item', { exact: true })).toBeVisible({ timeout: 20_000 });
   void Promise.all(clicks);
-  writeCheckpoint('claim-semantic-result', {
+  writeCheckpoint('assignment-semantic-result', {
     successUiObserved: true, errorBrowserRecovered: true,
-    transportHealthStatus: transportHealth.status(), persistentCheckpoint: 'claimed',
+    transportHealthStatus: transportHealth.status(), persistentCheckpoint: 'assigned',
   });
-  const ownerWorkPage = successPage;
-  assertRejection('stale_claim', 'N14_VERSION_CONFLICT');
+  await ownerPage.goto(crmUrl + '/leads/inbox?queue=mine');
+  await expect(ownerPage.getByText('VNX03 N14 Browser', { exact: true })).toBeVisible();
+  const ownerWorkPage = ownerPage;
+  assertRejection('stale_assignment', 'N14_VERSION_CONFLICT');
   const leadHref = await ownerWorkPage.getByRole('link', { name: 'VNX03 N14 Browser' }).getAttribute('href');
   assert.ok(leadHref);
   const firstResponseCommand = await ownerWorkPage.getByRole('button', { name: 'Registra prima risposta' })
@@ -246,7 +259,7 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
     return { status: response.status, type: response.type };
   }, firstResponseCommand);
   assert.ok(rejectedMutation.status >= 400, 'VNX03_N14_FOREIGN_MUTATION_NOT_REJECTED');
-  assertState('claimed');
+  assertState('assigned');
   assertRejection('foreign_first_response', 'N14_PERMISSION_DENIED');
 
   await ownerWorkPage.reload();
@@ -282,10 +295,10 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
 
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({
     synthetic: true, registryLogin: true, ownerPersistedAfterReload: true,
-    claimResponsesObserved: responses.length, claimHttpStatuses, claimContentTypes,
-    claimSuccessUiObserved: true, claimErrorBrowserRecovered: true,
-    claimTransportHealthStatus: transportHealth.status(),
-    staleClaimCodeVerifiedSeparately: true,
+    assignmentResponsesObserved: responses.length, assignmentHttpStatuses, assignmentContentTypes,
+    assignmentSuccessUiObserved: true, assignmentErrorBrowserRecovered: true,
+    assignmentTransportHealthStatus: transportHealth.status(),
+    staleAssignmentCodeVerifiedSeparately: true,
     secondCommercialMutationRejected: true, rejectedMutationStatus: rejectedMutation.status,
     firstResponseObserved: true, firstResponseHttpStatus: firstResponse.status(),
     firstResponseContentType, firstResponseUiAppliedBeforeReload: true, firstResponseRecorded: true,
@@ -293,4 +306,5 @@ test('N14 qualifies authentic login, claim conflict, ownership visibility and fi
   }, null, 2)}\n`, { mode: 0o600 });
   await other.close();
   await owner.close();
+  await admin.close();
 });

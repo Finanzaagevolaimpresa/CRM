@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 
 const db = new PrismaClient();
 const password = process.env.VNX03_COMMERCIAL_PASSWORD;
@@ -19,8 +20,15 @@ async function main() {
   assert.equal(await db.commercialLeadInboxItem.count(), 0);
   assert.equal(await db.communicationIntentRecord.count(), 0);
 
+  const secret = process.env.VNX03_PRIVILEGED_STEP_UP_SECRET;
+  assert.ok(secret && secret.length >= 32);
+  await db.applicationKeyVersion.create({ data: {
+    purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(),
+    keyDigest: privilegedStepUpKeyDigest(secret),
+  } });
   const passwordHash = await bcrypt.hash(password, 12);
   await db.user.createMany({ data: [
+    { id: 'vnx03-n14-admin', email: 'admin.n14@vnx03.invalid', name: 'Admin Sintetico N14', passwordHash, role: 'admin', active: true },
     { id: 'vnx03-n14-commercial-one', email: 'commercial.one@vnx03.invalid', name: 'Commerciale Sintetico Uno', passwordHash, role: 'commerciale', active: true },
     { id: 'vnx03-n14-commercial-two', email: 'commercial.two@vnx03.invalid', name: 'Commerciale Sintetico Due', passwordHash, role: 'commerciale', active: true },
     { id: 'vnx03-n14-commercial-inactive', email: 'commercial.inactive@vnx03.invalid', name: 'Commerciale Sintetico Inattivo', passwordHash, role: 'commerciale', active: false },

@@ -3,6 +3,7 @@ import {
   Stat,
   formatDateTime,
 } from "@/components/ui";
+import { leadVisibilityWhere } from "@/lib/core-query-policy";
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
@@ -104,10 +105,7 @@ export default async function Dashboard() {
       return leftDue - rightDue || +right.updatedAt - +left.updatedAt;
     })
     .slice(0, 20);
-  const leadAccessWhere =
-    session.role === "admin" || session.role === "direzione"
-      ? {}
-      : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
+  const leadAccessWhere = leadVisibilityWhere(session);
   const visibleLeadIds = canReadLeads
     ? (await prisma.lead.findMany({ where: { deletedAt: null, ...leadAccessWhere }, select: { id: true } })).map((lead) => lead.id)
     : [];

@@ -94,8 +94,10 @@ export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
   return ['revisore', 'backoffice', 'amministrazione'].includes(user.role);
 }
 export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
-  if (hasGlobalAccess(user)) return true;
-  return lead.assignedToId === null || lead.assignedToId === getActorId(user);
+  if (user.role === 'admin') return true;
+  if (lead.assignedToId === null) return false;
+  if (user.role === 'direzione') return true;
+  return lead.assignedToId === getActorId(user);
 }
 export function canViewProject(user: Actor, project: ProjectAccessContext) {
   const client = project.client;
@@ -154,9 +156,11 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
 }
 
 export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
-  if (hasGlobalAccess(user)) return true;
+  if (user.role === 'admin') return true;
+  if (lead.assignedToId === null) return false;
+  if (user.role === 'direzione') return true;
   if (user.role !== 'commerciale') return false;
-  return lead.assignedToId === null || lead.assignedToId === getActorId(user);
+  return lead.assignedToId === getActorId(user);
 }
 
 export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
@@ -211,16 +215,8 @@ export function canEditService(user: Actor, service: ServiceAccessContext) {
 }
 
 export function canAssignService(user: Actor, service: ServiceAccessContext) {
-  if (!hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project })) return false;
-  if (hasGlobalAccess(user)) return true;
-  const id = getActorId(user);
-  if (user.role === 'commerciale') return service.client?.salesOwnerId === id;
-  if (user.role === 'consulente') {
-    return service.assignedToId === id
-      || (!!service.project && canEditProject(user, service.project))
-      || service.client?.consultantId === id;
-  }
-  return false;
+  return user.role === 'admin'
+    && hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project });
 }
 
 export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {

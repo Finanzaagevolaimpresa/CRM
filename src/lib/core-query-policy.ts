@@ -64,8 +64,9 @@ export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userI
 }
 
 export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.LeadWhereInput {
-  if (session.role === 'admin' || session.role === 'direzione') return {};
-  return { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
+  if (session.role === 'admin') return {};
+  if (session.role === 'direzione') return { assignedToId: { not: null } };
+  return { assignedToId: session.userId };
 }
 
 export function coreQueryPageHref(
