@@ -6,6 +6,10 @@ import { PrismaClient } from '@prisma/client';
 import { assertSyntheticCatalogDatabase, CatalogV2PreparationError, prepareInternalServiceCatalogV2 } from '../../src/lib/service-catalog-v2-persistence';
 import { createControlledIntake, ControlledIntakeError } from '../../src/lib/controlled-intake';
 import { createPracticeReadiness, PracticeReadinessError } from '../../src/lib/practice-readiness';
+import { purchasedFixture } from '../purchased-service-fixture';
+import { handoffPurchasedService } from '../../src/lib/purchased-service-handoff';
+import { acceptResponsibility } from '../../src/lib/responsibility';
+import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -19,9 +23,30 @@ async function main() {
     for (const [id, role] of [['release-owner', 'admin'], ['release-observer', 'revisore']] as const)
       await db.user.create({ data: { id, email: `${id}@invalid.test`, name: id, role, passwordHash } });
     assert.equal(await db.internalSession.count(), 0);
+  } else if (mode === 'm1-history') {
+    assert.equal(process.env.INTERNAL_SESSION_MODE, 'registry');
+    const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
+    assert.ok(password.length >= 24);
+    const f = await purchasedFixture(db, await bcrypt.hash(password, 12));
+    const origin = await db.$transaction(tx => recordCommercialOrigin(tx, f.admin, { clientId: f.client.id,
+      expectedEntryId: '', acquiredById: f.admin.id, contractedById: f.admin.id,
+      sourceReference: 'Synthetic recovery fixture', reason: 'Preserve the independently recorded commercial origin' }, true));
+    const entry = await db.$transaction(tx => handoffPurchasedService(tx, f.admin, f.input, true), { isolationLevel: 'Serializable' });
+    const accepted = await db.$transaction(tx => acceptResponsibility(tx, f.tech, { kind: 'TechnicalPractice',
+      id: entry.receipt.technicalPracticeId, decisionId: entry.receipt.decisionId, role: 'tecnico' }), { isolationLevel: 'Serializable' });
+    writeFileSync(process.argv[3], JSON.stringify({ synthetic: true, clientId: f.client.id, serviceId: f.service.id,
+      practiceId: entry.receipt.technicalPracticeId, handoffId: entry.id, acceptanceId: accepted.id, originId: origin.id,
+      tech: { id: f.tech.id, email: f.tech.email }, otherEmail: f.other.email,
+      materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'footprint') {
     const data = {
       clientReadGrants: await db.clientReadGrant.findMany({ orderBy: { id: 'asc' } }),
+      m1History: await db.auditLog.findMany({ where: { event: { in: ['purchased_service_handoff', 'responsibility_assigned',
+        'responsibility_accepted', 'client_commercial_origin_recorded', 'client_commercial_origin_corrected'] } }, orderBy: { id: 'asc' } }),
+      services: await db.clientService.findMany({ orderBy: { id: 'asc' } }),
+      technicalPractices: await db.technicalPractice.findMany({ orderBy: { id: 'asc' } }),
+      tasks: await db.task.findMany({ orderBy: { id: 'asc' } }),
+      documentVersions: await db.documentVersion.findMany({ orderBy: { id: 'asc' } }),
       dossiers: await db.clientDossier.findMany({ where: { practiceReadinessId: { not: null } }, orderBy: { id: 'asc' } }),
       versions: await db.engagementDossierVersion.findMany({ orderBy: { id: 'asc' } }),
       reviews: await db.engagementDossierReview.findMany({ orderBy: { id: 'asc' } }),
@@ -36,6 +61,8 @@ async function main() {
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
     assert.equal(data.ledger.length, 48);
     assert.ok(data.clientReadGrants.length >= 3);
+    assert.ok(data.m1History.some(row => row.event === 'purchased_service_handoff'));
+    assert.ok(data.m1History.some(row => row.event === 'responsibility_accepted'));
     const minimized = Object.fromEntries(Object.entries(data).map(([key, rows]) => [key, {
       count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows)).digest('hex'),
     }]));

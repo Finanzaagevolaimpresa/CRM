@@ -875,17 +875,21 @@ export async function uploadDocument(form: FormData) {
   await requireClientContextWriteAccess(s, data);
   const fileName = sanitizeFileName(file.name);
   const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
-  const document = await prisma.document.create({ data: {
-    ...data,
-    title: data.title,
-    type: file.type || 'application/octet-stream',
-    fileName,
-    mimeType: file.type || 'application/octet-stream',
-    sizeBytes: saved.sizeBytes,
-    storagePath: saved.storagePath,
-    checksum: saved.checksum,
-    uploadedById: s.userId,
-  } as never });
+  const document = await prisma.$transaction(async (tx) => {
+    const created = await tx.document.create({ data: {
+      ...data,
+      title: data.title,
+      type: file.type || 'application/octet-stream',
+      fileName,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes: saved.sizeBytes,
+      storagePath: saved.storagePath,
+      checksum: saved.checksum,
+      uploadedById: s.userId,
+    } as never });
+    await tx.documentVersion.create({ data: { documentId: created.id, version: 1, storagePath: saved.storagePath, checksum: saved.checksum } });
+    return created;
+  });
   await audit(s.userId, 'document_upload', 'Document', document.id, { documentId: document.id, fileName, sizeBytes: saved.sizeBytes, checksum: saved.checksum });
   return document;
 }

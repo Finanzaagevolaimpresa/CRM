@@ -8,10 +8,11 @@ root="$(git rev-parse --show-toplevel)"
 cd "$root"
 head="$(git rev-parse HEAD)"
 tree="$(git rev-parse HEAD^{tree})"
-recovery_head=d3cf4ea7309fc4fef7ed6bbf8db88924e974c6b4
-recovery_tree=d9696481ecc20c1495358682ba1af70b3f577d19
+recovery_head=1daef3783eadcd34704f877cd26a05ec54414d5a
+recovery_tree=c5c5442afab1515e3b705a8457c22678a2080333
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema48 is additive; prove the exact 47-migration prefix independently.
+# The return image includes schema48 perimeters, responsibility and paid-service handoff.
+# Older storage-only receipts remain historical evidence, never recovery admission.
 node scripts/r05/verify-perimeter-schema.mjs
 git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
 node scripts/vnx00a-build-context-guard.mjs
@@ -88,6 +89,10 @@ export PRACTICE_READINESS_BROWSER_PASSWORD="$password" PRACTICE_READINESS_BROWSE
 export PRACTICE_READINESS_BROWSER_ORIGIN=https://127.0.0.1:13000
 export PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence/browser"
 export PRACTICE_READINESS_PACKAGED=1
+export INTERNAL_SESSION_MODE=registry
+export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/$prefix-m1-documents"
+export R05_M1_RECOVERY_FIXTURE="$evidence/m1-fixture.json"
+[[ ! -e "$LOCAL_DOCUMENT_STORAGE_ROOT" && ! -e "$R05_M1_RECOVERY_FIXTURE" ]] || exit 1
 mkdir -p "$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR"
 npm run prisma:migrate:deploy
 node --import tsx tests/pr140-release/state.ts actors
@@ -97,6 +102,7 @@ start_app() {
   local image="$1" session_mode="$2" engagement_mode="$3" feature_mode="$4"
   docker run -d --name "$app" --network "$prefix" --label fai.synthetic=r05 \
     -v "$prefix-documents:/var/lib/fai-crm/documents" \
+    -e LOCAL_DOCUMENT_STORAGE_ROOT=/var/lib/fai-crm/documents \
     -e DATABASE_URL="postgresql://postgres:$db_password@postgres:5432/fai_crm_test?schema=public" \
     -e APP_ENV=production -e NODE_ENV=production -e AUTH_SECRET="$secret" -e AUTH_COOKIE_NAME="$AUTH_COOKIE_NAME" \
     -e APP_ORIGIN="$PRACTICE_READINESS_BROWSER_ORIGIN" -e INTERNAL_SESSION_MODE="$session_mode" \
@@ -154,6 +160,10 @@ run_browser entry tests/pr140-release/playwright.config.ts entry.spec.ts 1
 node --import tsx tests/pr140-release/state.ts admission > "$evidence/admission.json"
 node --import tsx tests/practice-readiness-browser/provision.ts
 run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 2
+node --import tsx tests/pr140-release/state.ts m1-history "$R05_M1_RECOVERY_FIXTURE"
+# Only the fresh, synthetic fixture directory is copied; extraction runs as app UID1001.
+tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
+run_browser candidate-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
 stop_app
@@ -161,14 +171,15 @@ start_app "$candidate_id" invalid controlled internal
 expect_startup_denied 'Internal session mode is not configured canonically'
 stop_app
 # Prove that recovery cannot silently resurrect pre-fault registry sessions.
-start_app "$recovery_id" registry disabled disabled
+start_app "$recovery_id" registry controlled internal
 expect_startup_denied INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED
 stop_app
 node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/session-revocation.json"
-start_app "$recovery_id" registry disabled disabled
+start_app "$recovery_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$recovery_id" ]]
 run_browser recovery tests/pr140-release/playwright.config.ts recovery.spec.ts 1
+run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-recovery.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker exec "$app" sha256sum /var/lib/fai-crm/documents/r05-synthetic.txt | cut -d ' ' -f1)" == "$document_before" ]]
@@ -180,11 +191,12 @@ node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/resu
 start_app "$candidate_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$candidate_id" ]]
+run_browser resume-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA48_COMPATIBILITY_ONLY","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":48,"clientReadGrantsPreserved":true,"legacyRecoveryEnforcesClientPerimeters":false,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA48_M1_APPLICATION_RETURN_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":48,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"
