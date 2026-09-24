@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   release-schema48:
-    name: Schema48 package and legacy storage compatibility (no recovery admission)
+    name: Schema48 M1 package and application return
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -45,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           bash -n scripts/pr140/qualify-release.sh
           python3 -c "from pathlib import Path; p=Path('scripts/pr140/owner-preflight.py'); compile(p.read_text(), str(p), 'exec')"
-      - name: Verify candidate and legacy storage compatibility; recovery remains unqualified
+      - name: Verify candidate, M1 access controls and exact application return
         run: bash scripts/pr140/qualify-release.sh
       - name: Save minimized receipts and qualified image archive
         if: always()

@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 
 const db = new PrismaClient();
 const password = process.env.M1_BROWSER_PASSWORD!;
@@ -26,6 +27,8 @@ test.beforeAll(async () => {
   const project = await db.project.create({ data: { clientId, title: 'Assignment Project', consultantId: tech.id } });
   projectId = project.id;
   await db.userPermissionOverride.createMany({ data: ['service.assign', 'technical.assign'].map(permission => ({ userId: salesId, permission, allowed: true })) });
+  if (scope === 'enforced') await db.applicationKeyVersion.upsert({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } },
+    create: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) }, update: {} });
 });
 test.afterAll(async () => { await db.$disconnect(); });
 async function login(page: Page, role: string) {
@@ -118,6 +121,21 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   await expect(sales.getByRole('heading', { name: 'Lead non trovato' })).toBeVisible();
   await admin.goto('/leads/' + lead.id);
   const update = admin.locator('form').filter({ has: admin.getByRole('button', { name: 'Salva aggiornamenti', exact: true }) });
+  if (scope === 'disabled') {
+    await update.locator('select[name="assignedToId"]').selectOption(salesId);
+    const beforeLead = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const beforeDecisions = await db.auditLog.count({ where: { entityId: lead.id, event: 'responsibility_assigned' } });
+    await update.getByRole('button', { name: 'Salva aggiornamenti' }).click();
+    await expect(admin).toHaveURL(/\/settings\/security/);
+    expect(await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).toEqual(beforeLead);
+    expect(await db.auditLog.count({ where: { entityId: lead.id, event: 'responsibility_assigned' } })).toBe(beforeDecisions);
+    await adminContext.close(); await salesContext.close(); return;
+  }
+  await admin.goto('/settings/security');
+  await admin.getByLabel('Password corrente').fill(password);
+  await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await expect(admin).toHaveURL(/status=active/);
+  await admin.goto('/leads/' + lead.id);
   await update.locator('select[name="assignedToId"]').selectOption(salesId);
   await update.getByRole('button', { name: 'Salva aggiornamenti' }).click();
   await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId).toBe(salesId);

@@ -1,3 +1,4 @@
+import { appendResponsibilityDecision } from './responsibility';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type ClientType, type PrismaClient } from '@prisma/client';
 import {
@@ -526,6 +527,7 @@ async function mutateOwner(
     await appendAudit(tx, input.actor, `commercial_lead_inbox_${input.activityType.toLowerCase()}`, item.id, {
       state: item.state, version: updated.version, reasonCode: input.reasonCode,
     });
+    if (input.actor.requireManualAdmin) await appendResponsibilityDecision(tx, { kind: 'Lead', id: lead.id, actorId: input.actor.userId, allowed: true, reason: 'Assegnazione amministrativa dalla Commercial Lead Inbox', state: { clientId: lead.clientId, projectId: null, clientServiceId: null, commercialOwnerId: input.targetUserId, technicalOwnerId: null } });
     inject(input.faultAt, 'AFTER_AUDIT');
     if (n15Synthetic) {
       if (!n15Scope) throw new Error('N15_SYNTHETIC_SELF_CLAIM_TRANSACTION_REQUIRED');
