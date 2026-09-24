@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type APIResponse, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
-import { ControlledIntakeError, createControlledIntake } from '../../src/lib/controlled-intake';
+import { ControlledIntakeError, createControlledIntake, type ControlledIntakeInput } from '../../src/lib/controlled-intake';
 import { assignCommercialLeadInboxItem } from '../../src/lib/commercial-lead-inbox';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
 
@@ -58,11 +58,12 @@ async function login(page: Page, email: string) {
 }
 
 async function record(page: Page, data: {
-  channel: string; sourceId: string; subjectType: string; category: string; need: string;
+  channel: ControlledIntakeInput['channel']; sourceId: string; subjectType: string; category: string; need: string;
   firstName?: string; lastName?: string;
   email?: string; service?: string; digital?: string; objective?: string; functions?: string;
   administrative?: string; engagementReference?: string; commercialOfferId?: string;
-}) {
+  forbiddenAssignee?: string;
+}, adminPage: Page) {
   await page.goto(`${app}/controlled-intakes`);
   const form = page.getByRole('heading', { name: 'Nuova richiesta' }).locator('xpath=ancestor::section[1]');
   await form.locator('[name="channel"]').selectOption(data.channel);
@@ -81,8 +82,36 @@ async function record(page: Page, data: {
   if (data.administrative) await form.locator('[name="administrativeRequest"]').fill(data.administrative);
   if (data.engagementReference) await form.locator('[name="engagementReference"]').fill(data.engagementReference);
   if (data.commercialOfferId) await form.locator('[name="commercialOfferId"]').fill(data.commercialOfferId);
+  if (data.forbiddenAssignee) {
+    await form.locator('form').evaluate((element, value) => {
+      const input = document.createElement('input'); input.type = 'hidden'; input.name = 'assignedToId'; input.value = value;
+      element.appendChild(input);
+    }, data.forbiddenAssignee);
+    const rejected = page.waitForResponse(response => Boolean(response.request().headers()['next-action']));
+    await form.getByRole('button', { name: 'Registra richiesta' }).click().catch(() => undefined);
+    expect((await rejected).status()).toBeGreaterThanOrEqual(400);
+    expect(await db.controlledIntake.count({ where: { channel_sourceId: { channel: data.channel, sourceId: data.sourceId } } })).toBe(0);
+    return;
+  }
+  const submitted = page.waitForRequest(request => Boolean(request.headers()['next-action']));
   await form.getByRole('button', { name: 'Registra richiesta' }).click();
-  await expect(page.getByRole('status')).toHaveText('Richiesta registrata. Lo stato di presa in carico è indicato nella scheda.');
+  const request = await submitted;
+  await expect(page.getByRole('status')).toHaveText('Richiesta registrata nella coda dell’amministratore. Attendi l’assegnazione per lavorarla.');
+  const record = await db.controlledIntake.findUniqueOrThrow({ where: { channel_sourceId: { channel: data.channel, sourceId: data.sourceId } } });
+  expect((await db.lead.findUniqueOrThrow({ where: { id: record.leadId } })).assignedToId).toBeNull();
+  await expect(page.locator('#intake-' + record.id)).toHaveCount(0);
+  const replay = await postCapturedAction(page, { url: request.url(), nextAction: request.headers()['next-action'], contentType: request.headers()['content-type'], body: request.postData()! });
+  expect([200, 303]).toContain(replay.status());
+  expect(replay.headers()['x-action-redirect']).toContain('queued=1');
+  expect(await db.controlledIntake.count({ where: { channel_sourceId: { channel: data.channel, sourceId: data.sourceId } } })).toBe(1);
+  await adminPage.goto(app + '/controlled-intakes');
+  await expect(adminPage.locator('#intake-' + record.id)).toBeVisible();
+  await adminPage.goto(app + '/leads/inbox?queue=unassigned');
+  const inboxItem = adminPage.locator('article').filter({ has: adminPage.locator('a[href="/leads/' + record.leadId + '"]') });
+  await inboxItem.locator('select[name="targetUserId"]').selectOption('controlled-intake-browser-owner');
+  await inboxItem.getByRole('button', { name: 'Assegna', exact: true }).click();
+  await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: record.leadId } })).assignedToId).toBe('controlled-intake-browser-owner');
+  await page.goto(app + '/controlled-intakes');
   await expect(page.getByText(`ID ${data.sourceId}`, { exact: false })).toBeVisible();
 }
 
@@ -90,6 +119,7 @@ test.beforeAll(() => assertSyntheticCatalogDatabase(db));
 test.afterAll(() => db.$disconnect());
 
 test('four controlled channels, decisions, current assignment and direct denial', async ({ browser }) => {
+  test.setTimeout(180_000);
   mkdirSync(evidence, { recursive: true });
   const anonymous = await browser.newPage();
   await anonymous.goto(`${app}/controlled-intakes`);
@@ -98,13 +128,19 @@ test('four controlled channels, decisions, current assignment and direct denial'
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
   await login(page, 'intake-owner@invalid.test');
+  const managerPage = await browser.newPage();
+  await login(managerPage, 'intake-manager@invalid.test');
+  await managerPage.goto(app + '/settings/security');
+  await managerPage.getByLabel('Password corrente').fill(password);
+  await managerPage.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  await expect(managerPage).toHaveURL(/status=active/);
   const createdActionCapture = captureNextAction(page);
-  await record(page, { channel: 'WPFORMS_1265', sourceId: 'B-1265', subjectType: 'IMPRESA', firstName: 'Ada', lastName: 'Prima', category: 'da_classificare', need: 'Continuità manuale' });
-  await record(page, { channel: 'WPFORMS_1098', sourceId: 'B-1098', subjectType: 'SOGGETTO_DA_COSTITUIRE', firstName: 'Bruno', lastName: 'Secondo', service: 'progetti_digitali', digital: 'software_crm_workflow', category: 'digitale', need: 'Brief digitale', objective: 'Workflow', functions: 'Ruoli' });
-  await record(page, { channel: 'EMAIL', sourceId: 'B-EMAIL', subjectType: 'PROFESSIONISTA', service: 'consulenza_fiscale', category: 'fiscale', need: 'Richiesta fiscale' });
+  await record(page, { channel: 'WPFORMS_1265', sourceId: 'B-1265', subjectType: 'IMPRESA', firstName: 'Ada', lastName: 'Prima', category: 'da_classificare', need: 'Continuità manuale' }, managerPage);
+  await record(page, { channel: 'WPFORMS_1098', sourceId: 'B-1098', subjectType: 'SOGGETTO_DA_COSTITUIRE', firstName: 'Bruno', lastName: 'Secondo', service: 'progetti_digitali', digital: 'software_crm_workflow', category: 'digitale', need: 'Brief digitale', objective: 'Workflow', functions: 'Ruoli' }, managerPage);
+  await record(page, { channel: 'EMAIL', sourceId: 'B-EMAIL', subjectType: 'PROFESSIONISTA', service: 'consulenza_fiscale', category: 'fiscale', need: 'Richiesta fiscale' }, managerPage);
 
   const offer = await db.commercialOffer.findFirstOrThrow({ where: { title: 'Preventivo pertinente' } });
-  await record(page, { channel: 'WPFORMS_1485', sourceId: 'B-1485', subjectType: 'PERSONA', email: 'admin@intake.invalid', category: 'amministrativa', need: 'Richiesta dati', administrative: 'Bonifico da riconciliare', engagementReference: 'PREV-DICHIARATO', commercialOfferId: offer.id });
+  await record(page, { channel: 'WPFORMS_1485', sourceId: 'B-1485', subjectType: 'PERSONA', email: 'admin@intake.invalid', category: 'amministrativa', need: 'Richiesta dati', administrative: 'Bonifico da riconciliare', engagementReference: 'PREV-DICHIARATO', commercialOfferId: offer.id }, managerPage);
   await expect(page.getByText(/Amministrazione: riferimento verificato · dichiarato: PREV-DICHIARATO/u)).toBeVisible();
 
   const automaticForm = page.getByRole('button', { name: 'Collega e classifica 1265 autenticato' }).first().locator('xpath=ancestor::form[1]');
@@ -169,13 +205,11 @@ test('four controlled channels, decisions, current assignment and direct denial'
 
   const browserIntake = await db.controlledIntake.findUniqueOrThrow({ where: { channel_sourceId: { channel: 'WPFORMS_1098', sourceId: 'B-1098' } } });
   await db.lead.update({ where: { id: browserIntake.leadId }, data: { notes: 'Nota browser indipendente' } });
-  const managerPage = await browser.newPage();
-  await login(managerPage, 'intake-manager@invalid.test');
   const managerSession = await db.internalSession.findFirstOrThrow({ where: { userId: 'controlled-intake-browser-manager', revokedAt: null }, orderBy: { createdAt: 'desc' } });
   const browserInbox = await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: browserIntake.leadId } });
   await assignCommercialLeadInboxItem(db, {
     leadId: browserIntake.leadId,
-    actor: { userId: 'controlled-intake-browser-manager', sessionId: managerSession.id },
+    actor: { userId: 'controlled-intake-browser-manager', sessionId: managerSession.id, requireManualAdmin: true },
     targetUserId: 'controlled-intake-browser-other',
     expectedInboxVersion: browserInbox.version,
   });
@@ -185,6 +219,8 @@ test('four controlled channels, decisions, current assignment and direct denial'
   const reassignedCard = reassigned.locator(`#intake-${browserIntake.id}`);
   await expect(reassignedCard.getByText(/Esigenza: Brief digitale/u)).toBeVisible();
   await expect(reassignedCard.getByText(/Assegnazione corrente: tu/u)).toBeVisible();
+  await page.reload();
+  await expect(page.locator('#intake-' + browserIntake.id)).toHaveCount(0);
 
   await page.screenshot({ path: join(evidence, 'controlled-intakes-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -216,6 +252,7 @@ test('four controlled channels, decisions, current assignment and direct denial'
   expect(await db.controlledIntakeDuplicateDecision.count()).toBe(decisionCount);
   expect(await db.controlledIntakeDuplicateDecision.findUniqueOrThrow({ where: { intakeId: decisionIntakeId } })).toEqual(decisionBeforeDenial);
   expect((await db.controlledIntake.findUniqueOrThrow({ where: { id: decisionIntakeId } })).version).toBe(decisionIntakeVersion);
+  await record(page, { channel: 'EMAIL', sourceId: 'R05-FORGED-HTTP', subjectType: 'PERSONA', category: 'da_classificare', need: 'Forbidden ownership', forbiddenAssignee: 'controlled-intake-browser-owner' }, managerPage);
 
   writeFileSync(join(evidence, 'controlled-intake-receipt.json'), JSON.stringify({
     synthetic: true, anonymousDenied: true, channels: 4, persisted: true,
@@ -223,6 +260,8 @@ test('four controlled channels, decisions, current assignment and direct denial'
     duplicateDecisionRecorded: true, notesIndependent: true, currentAssignmentReloaded: true,
     directServiceDeniedWithoutEffects: true, httpCreateDenied: true,
     httpDecisionDenied: true, desktop: true, mobile390: true,
+    adminAssignmentThroughBrowser: true, queuedCreatorReceipt: true, queuedReplayNoDuplicate: true,
+    oldSessionRevokedScope: true, craftedOwnershipDenied: true,
   }), { mode: 0o600 });
   await anonymous.close();
   await managerPage.close();

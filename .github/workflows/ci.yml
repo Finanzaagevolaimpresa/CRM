@@ -236,6 +236,8 @@ jobs:
       AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
       CONTROLLED_INTAKE_MODE: synthetic
       COMMERCIAL_LEAD_INBOX_MODE: enforced
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: "1"
       CONTROLLED_INTAKE_BROWSER_CONFIRMED: "1"
     steps:
       - uses: actions/checkout@v4
@@ -251,9 +253,13 @@ jobs:
         run: |
           CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR="$RUNNER_TEMP/controlled-intake-evidence"
           CONTROLLED_INTAKE_BROWSER_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+          PRIVILEGED_STEP_UP_SECRET="$(openssl rand -base64 48 | tr -d '\n')"
           export CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR CONTROLLED_INTAKE_BROWSER_PASSWORD
+          export PRIVILEGED_STEP_UP_SECRET
           echo "::add-mask::$CONTROLLED_INTAKE_BROWSER_PASSWORD"
+          echo "::add-mask::$PRIVILEGED_STEP_UP_SECRET"
           printf 'CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR=%s\nCONTROLLED_INTAKE_BROWSER_PASSWORD=%s\n' "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR" "$CONTROLLED_INTAKE_BROWSER_PASSWORD" >> "$GITHUB_ENV"
+          printf 'PRIVILEGED_STEP_UP_SECRET=%s\n' "$PRIVILEGED_STEP_UP_SECRET" >> "$GITHUB_ENV"
           mkdir -p "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR"
           printf '{"phase":"PREPARE","synthetic":true}\n' > "$CONTROLLED_INTAKE_BROWSER_EVIDENCE_DIR/status.json"
           psql 'postgresql://postgres:synthetic-intake@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"

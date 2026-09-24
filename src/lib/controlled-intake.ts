@@ -87,15 +87,23 @@ async function selectableRevision(tx: Prisma.TransactionClient, serviceCode: str
 
 export async function createControlledIntake(db: Db, claimed: AuthSession, raw: unknown, faultAfterLead = false) {
   requireEnabled();
+  // Registration cannot establish ownership, including crafted server-action payloads.
+  if (raw && typeof raw === 'object' && ['assignedToId', 'salesOwnerId', 'consultantId', 'commercialOwnerId', 'technicalOwnerId', 'departmentId']
+    .some(key => Object.prototype.hasOwnProperty.call(raw, key))) throw new ControlledIntakeError('DENIED');
   const input = controlledIntakeSchema.parse(raw); await assertControlledIntakeDatabase(db);
   const payloadHash = canonicalSha256(input);
   const run = () => db.$transaction(async (tx) => {
     const actor = await currentActor(tx, claimed);
     const existing = await tx.controlledIntake.findUnique({ where: { channel_sourceId: { channel: input.channel, sourceId: input.sourceId } }, include: { duplicateCandidates: true, duplicateDecision: true } });
     if (existing) {
-      if (existing.payloadHash !== payloadHash) throw new ControlledIntakeError('CONFLICT');
       const lead = await tx.lead.findUnique({ where: { id: existing.leadId } });
-      if (!lead || lead.deletedAt || !canEditLead(actor, lead)) throw new ControlledIntakeError('DENIED');
+      if (!lead || lead.deletedAt) throw new ControlledIntakeError('DENIED');
+      const canEdit = canEditLead(actor, lead);
+      const ownQueuedReceipt = lead.assignedToId === null && existing.operatorId === actor.userId;
+      if (!canEdit && !ownQueuedReceipt) throw new ControlledIntakeError('DENIED');
+      if (existing.payloadHash !== payloadHash) throw new ControlledIntakeError('CONFLICT');
+      // A creator may acknowledge an identical queued submission, not read its current dossier.
+      if (!canEdit) return { id: existing.id, leadId: existing.leadId, queued: true as const };
       const candidateLeads = await tx.lead.findMany({ where: { id: { in: existing.duplicateCandidates.map(({ leadId }) => leadId) }, deletedAt: null } });
       const visibleIds = new Set(candidateLeads.filter((candidate) => canEditLead(actor, candidate)).map(({ id }) => id));
       return { ...existing, duplicateCandidates: existing.duplicateCandidates.filter(({ leadId }) => visibleIds.has(leadId)), duplicateDecision: existing.duplicateDecision && visibleIds.has(existing.duplicateDecision.candidateLeadId) ? existing.duplicateDecision : null };
@@ -123,12 +131,13 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
       contractId = contract.id;
     }
     const receiptId = randomUUID(); await tx.websiteLeadReceipt.create({ data: { id: receiptId, namespace: CONTROLLED_INTAKE_VERSION, keyDigest: canonicalSha256({ channel: input.channel, sourceId: input.sourceId }), payloadHash, status: 'completed', completedAt: now } });
-    const lead = await tx.lead.create({ data: { firstName: input.firstName, lastName: input.lastName, companyName: input.subjectName, phone: input.phone, email: input.email, source: `INTAKE:${input.channel}:${input.sourceId}`, leadSource: input.channel === 'WPFORMS_1265' ? 'sito' : 'manuale', interest: input.serviceCode, declaredInvestment: input.indicativeBudget, status: 'nuovo', priority: 'media', commercialStatus: input.effectiveCategory, assignedToId: actor.userId, notes: null } });
+    const lead = await tx.lead.create({ data: { firstName: input.firstName, lastName: input.lastName, companyName: input.subjectName, phone: input.phone, email: input.email, source: `INTAKE:${input.channel}:${input.sourceId}`, leadSource: input.channel === 'WPFORMS_1265' ? 'sito' : 'manuale', interest: input.serviceCode, declaredInvestment: input.indicativeBudget, status: 'nuovo', priority: 'media', commercialStatus: input.effectiveCategory, assignedToId: null, notes: null } });
     const record = await tx.controlledIntake.create({ data: { channel: input.channel, sourceId: input.sourceId, sourceOccurredAt: new Date(input.sourceOccurredAt), acquisitionMode: input.channel === 'WPFORMS_1265' ? 'MANUAL_CONTINUITY' : 'MANUAL_CONTROLLED', mappingVersion: 'service-mapping-2026-09-13-v2', payloadHash, leadId: lead.id, websiteLeadReceiptId: receiptId, subjectType: input.subjectType, subjectName: input.subjectName, firstName: input.firstName, lastName: input.lastName, email: input.email, phone: input.phone, classificationState: revision ? 'VERIFIED' : 'TO_CLASSIFY', effectiveCategory: input.effectiveCategory, serviceCatalogId: revision?.serviceCatalogId, serviceRevisionId: revision?.id, digitalProjectType: input.digitalProjectType, need: input.need, objective: input.objective, functions: input.functions, indicativeBudget: input.indicativeBudget, timing: input.timing, declaredMaterials: input.declaredMaterials, declaredEngagementReference: input.engagementReference, commercialOfferId, contractId, administrativeState: input.channel === 'WPFORMS_1485' ? commercialOfferId || contractId ? 'VERIFIED' : 'TO_RECONCILE' : 'NOT_APPLICABLE', administrativeRequest: input.administrativeRequest, operatorId: actor.userId, duplicateCandidates: { create: candidates.map(({ id }) => ({ leadId: id })) } }, include: { duplicateCandidates: true, duplicateDecision: true } });
     if (faultAfterLead) throw new Error('CONTROLLED_INTAKE_SYNTHETIC_FAULT');
     const inbox = await maybeEnrollManualCommercialLead(tx, { leadId: lead.id, actor: { userId: actor.userId, sessionId: claimed.sessionId! } });
     if (inbox) await tx.controlledIntake.update({ where: { id: record.id }, data: { status: 'ENROLLED' } });
     await tx.auditLog.create({ data: { actorId: actor.userId, event: 'controlled_intake_recorded', entityType: 'ControlledIntake', entityId: record.id, after: { channel: input.channel, payloadHash, leadId: lead.id, inboxItemId: inbox?.id ?? null, candidateCount: candidates.length } } });
+    if (!canEditLead(actor, lead)) return { id: record.id, leadId: lead.id, queued: true as const };
     return { ...record, status: inbox ? 'ENROLLED' : record.status };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   for (let attempt = 1; attempt <= 3; attempt += 1) { try { return await run(); } catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === 'P2034' || error.code === 'P2002') && attempt < 3) continue; throw error; } }

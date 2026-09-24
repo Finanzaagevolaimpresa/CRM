@@ -58,6 +58,20 @@ function isCode(code: ControlledIntakeError['code']) {
   return (error: unknown) => error instanceof ControlledIntakeError && error.code === code;
 }
 
+function requireRecord(result: Awaited<ReturnType<typeof createControlledIntake>>) {
+  assert.ok(!('queued' in result), 'An assigned operator must receive the authorized record.');
+  return result;
+}
+
+async function createAssignedIntake(input: unknown) {
+  const receipt = await createControlledIntake(db, actor, input);
+  assert.deepEqual(Object.keys(receipt).sort(), ['id', 'leadId', 'queued']);
+  assert.equal((await db.lead.findUniqueOrThrow({ where: { id: receipt.leadId } })).assignedToId, null);
+  const item = await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { leadId: receipt.leadId } });
+  await assignCommercialLeadInboxItem(db, { leadId: receipt.leadId, actor: managerActor, targetUserId: userId, expectedInboxVersion: item.version });
+  return requireRecord(await createControlledIntake(db, actor, input));
+}
+
 test.before(async () => {
   if (!enabled) return;
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -104,8 +118,8 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
     { ...base, channel: 'EMAIL', sourceId: 'MSG-FISCAL-1', subjectType: 'PROFESSIONISTA', effectiveCategory: 'fiscale', serviceCode: 'consulenza_fiscale', need: 'Esigenza fiscale inventata' },
     { ...base, channel: 'WPFORMS_1485', sourceId: '1485-A', subjectType: 'ENTE', effectiveCategory: 'amministrativa', serviceCode: null, administrativeRequest: 'Bonifico da riconciliare', engagementReference: null },
   ] as const;
-  const rows: Awaited<ReturnType<typeof createControlledIntake>>[] = [];
-  for (const input of inputs) rows.push(await createControlledIntake(db, actor, input));
+  const rows: Awaited<ReturnType<typeof createAssignedIntake>>[] = [];
+  for (const input of inputs) rows.push(await createAssignedIntake(input));
   assert.equal(new Set(rows.map(({ id }) => id)).size, 4);
   assert.equal(rows.every(({ status }) => status === 'ENROLLED'), true);
   const inbox = await db.commercialLeadInboxItem.findUniqueOrThrow({
@@ -118,10 +132,10 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
   assert.equal(digital.subjectType, 'SOGGETTO_DA_COSTITUIRE');
   assert.ok(digital.serviceRevisionId);
   assert.equal(digital.duplicateCandidates.some(({ leadId }) => leadId === rows[0]!.leadId), true);
-  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 1 });
-  const sanitizedReplay = await createControlledIntake(db, actor, inputs[1]);
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 2 });
+  const sanitizedReplay = requireRecord(await createControlledIntake(db, actor, inputs[1]));
   assert.equal(sanitizedReplay.duplicateCandidates.some(({ leadId }) => leadId === rows[0]!.leadId), false);
-  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: userId, expectedInboxVersion: 2 });
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: userId, expectedInboxVersion: 3 });
 
   const decision = await decideControlledIntakeDuplicate(db, actor, {
     intakeId: digital.id, candidateLeadId: rows[0]!.leadId,
@@ -138,7 +152,7 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
   assert.equal((await createControlledIntake(db, actor, inputs[0])).id, rows[0]!.id);
   await assert.rejects(createControlledIntake(db, actor, { ...inputs[0], need: 'Contenuto diverso' }), isCode('CONFLICT'));
 
-  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 3 });
+  await assignCommercialLeadInboxItem(db, { leadId: rows[0]!.leadId, actor: managerActor, targetUserId: otherUserId, expectedInboxVersion: 4 });
   await assert.rejects(createControlledIntake(db, actor, inputs[0]), isCode('DENIED'));
   assert.equal((await createControlledIntake(db, otherActor, inputs[0])).id, rows[0]!.id);
 
@@ -162,11 +176,11 @@ test('four channels, N14, scoped replay, duplicate decision and rollback', { ski
 });
 
 test('archived source and candidate leads deny replay and duplicate decisions without effects', { skip: !enabled }, async () => {
-  const sourceCandidate = await createControlledIntake(db, actor, {
+  const sourceCandidate = await createAssignedIntake({
     ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-SOURCE-CANDIDATE', subjectType: 'PERSONA',
     serviceCode: null, email: 'archive-source@intake.invalid', firstName: 'Candidato', lastName: 'Fonte',
   });
-  const archivedSource = await createControlledIntake(db, actor, {
+  const archivedSource = await createAssignedIntake({
     ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-SOURCE', subjectType: 'PERSONA',
     serviceCode: null, email: 'archive-source@intake.invalid', firstName: 'Fonte', lastName: 'Archiviata',
   });
@@ -188,11 +202,11 @@ test('archived source and candidate leads deny replay and duplicate decisions wi
   assert.equal(await db.controlledIntakeDuplicateDecision.count(), sourceBefore.decisions);
   assert.equal(await db.auditLog.count(), sourceBefore.audits);
 
-  const archivedCandidate = await createControlledIntake(db, actor, {
+  const archivedCandidate = await createAssignedIntake({
     ...base, channel: 'EMAIL', sourceId: 'ARCHIVE-CANDIDATE', subjectType: 'PERSONA',
     serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Candidato', lastName: 'Archiviato',
   });
-  const activeSource = await createControlledIntake(db, actor, {
+  const activeSource = await createAssignedIntake({
     ...base, channel: 'EMAIL', sourceId: 'ACTIVE-SOURCE', subjectType: 'PERSONA',
     serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Fonte', lastName: 'Attiva',
   });
@@ -206,7 +220,7 @@ test('archived source and candidate leads deny replay and duplicate decisions wi
     ...base, channel: 'EMAIL', sourceId: 'ACTIVE-SOURCE', subjectType: 'PERSONA',
     serviceCode: null, email: 'archive-candidate@intake.invalid', firstName: 'Fonte', lastName: 'Attiva',
   });
-  assert.equal(activeReplay.duplicateCandidates.some(({ leadId }) => leadId === archivedCandidate.leadId), false);
+  assert.equal(requireRecord(activeReplay).duplicateCandidates.some(({ leadId }) => leadId === archivedCandidate.leadId), false);
   await assert.rejects(decideControlledIntakeDuplicate(db, actor, {
     intakeId: activeSource.id, candidateLeadId: archivedCandidate.leadId,
     outcome: 'LINK_RELATED', expectedVersion: activeSource.version,
@@ -234,7 +248,9 @@ test('administrative references require visibility and subject pertinence', { sk
     administrativeRequest: 'Richiesta amministrativa', engagementReference: 'PREV-DICHIARATO',
     commercialOfferId: relatedOffer.id,
   };
-  const verified = await createControlledIntake(db, actor, input);
+  const receipt = await createControlledIntake(db, actor, input);
+  assert.deepEqual(Object.keys(receipt).sort(), ['id', 'leadId', 'queued']);
+  const verified = await db.controlledIntake.findUniqueOrThrow({ where: { id: receipt.id } });
   assert.equal(verified.administrativeState, 'VERIFIED');
   assert.equal(verified.declaredEngagementReference, 'PREV-DICHIARATO');
   assert.equal(verified.commercialOfferId, relatedOffer.id);
@@ -262,6 +278,28 @@ test('disabled, denied and unavailable catalog writes have no effect', { skip: !
     else process.env.CONTROLLED_INTAKE_MODE = oldMode;
   }
   assert.equal(await db.controlledIntake.count(), before);
+});
+
+test('queued intake has a minimal creator receipt, denies foreign replay and never assigns its caller', { skip: !enabled }, async () => {
+  const input = { ...base, channel: 'EMAIL', sourceId: 'R05-QUEUED', subjectType: 'PERSONA', serviceCode: null };
+  const receipt = await createControlledIntake(db, actor, input);
+  assert.deepEqual(Object.keys(receipt).sort(), ['id', 'leadId', 'queued']);
+  assert.equal((await db.lead.findUniqueOrThrow({ where: { id: receipt.leadId } })).assignedToId, null);
+  await db.controlledIntake.update({ where: { id: receipt.id }, data: { need: 'SYNTHETIC_ADMIN_ONLY_REVISED_NEED' } });
+  const before = { leads: await db.lead.count(), intakes: await db.controlledIntake.count(), audits: await db.auditLog.count() };
+  assert.deepEqual(await createControlledIntake(db, actor, input), receipt);
+  await assert.rejects(createControlledIntake(db, otherActor, input), isCode('DENIED'));
+  await assert.rejects(createControlledIntake(db, actor, { ...input, need: 'Changed payload' }), isCode('CONFLICT'));
+  const admin = { ...actor, ...managerActor, role: 'admin' as const };
+  assert.equal(requireRecord(await createControlledIntake(db, admin, input)).need, 'SYNTHETIC_ADMIN_ONLY_REVISED_NEED');
+  for (const claimed of [actor, admin]) for (const key of ['assignedToId', 'commercialOwnerId', 'technicalOwnerId', 'departmentId']) {
+    await assert.rejects(createControlledIntake(db, claimed, { ...input, sourceId: 'R05-FORGED-' + key, [key]: claimed.userId }), isCode('DENIED'));
+  }
+  assert.deepEqual({ leads: await db.lead.count(), intakes: await db.controlledIntake.count(), audits: await db.auditLog.count() }, before);
+  const adminReceipt = await createControlledIntake(db, admin, { ...input, sourceId: 'R05-ADMIN-QUEUED' });
+  assert.equal((await db.lead.findUniqueOrThrow({ where: { id: adminReceipt.leadId } })).assignedToId, null);
+  await db.lead.update({ where: { id: receipt.leadId }, data: { deletedAt: new Date() } });
+  await assert.rejects(createControlledIntake(db, actor, input), isCode('DENIED'));
 });
 
 test('an authenticated 1265 projection is produced by N13/N14, linked and replay-safe', { skip: !enabled }, async () => {
