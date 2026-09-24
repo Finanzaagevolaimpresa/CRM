@@ -59,6 +59,20 @@ test('an explicit current assignment remains a grant, while personal provenance 
   assert.equal(canViewDocument({ ...actor, userId: 'other' }, personalDocument, true), false);
 });
 
+test('service-linked documents inherit the current project assignment without a redundant document projectId', () => {
+  const actor = { userId: 'previous', role: 'backoffice' as const }, c = context('replacement');
+  const project = { ...c.project, consultantId: actor.userId };
+  const service = { ...c.service, project };
+  const document = { ...c.document, projectId: null, project: null, clientService: service };
+  assert.equal(canViewClient(actor, c.client), false);
+  assert.equal(canViewService(actor, service), true);
+  assert.equal(canViewDocument(actor, document, true), true);
+  assert.equal(canViewDocument(actor, document, false), false);
+  assert.equal(canViewDocument(actor, { ...document, clientService: { ...service, project: c.project } }, true), false);
+  assert.equal(canViewDocument(actor, { ...document, clientService: { ...service, project: null } }, true), false);
+  assert.equal(canViewDocument(actor, { ...document, clientService: { ...service, project: { ...project, clientId: 'foreign' } } }, true), false);
+});
+
 for (const role of roles) test(`${role}: notification access uses current bindings and rejects stale snapshots`, () => {
   const actor = { userId: 'previous', role };
   for (const owner of ['previous', 'replacement']) {

@@ -57,6 +57,24 @@ replay its former upload. The new owner downloads the original bytes while
 creator/uploader history remains unchanged. Disabled mode covers isolation and
 forged requests; it does not claim a successful privileged reassignment.
 
+The child-assignment regression uploads through project-only and service-only
+contexts. The selector exposes only the necessary client label and requires a
+child context when the general client is not writable. A service-linked file
+without a redundant projectId remains downloadable through its assigned project
+after the client moves to another operator. Removing that remaining project
+assignment denies the uploader again. Sensitive and inconsistent-parent guards
+remain in effect. The practice-only technical owner can edit ordinary fields
+without a client-level assignment; changes to the parent links require the new
+context's write permission. The update also compares the original parent and
+owner IDs so a concurrent reassignment cannot silently reuse that admission.
+The HTTP/DB regression covers ordinary edits, rejected foreign context and
+owner injection, an archived parent, and a subsequent authorized context move.
+
+Review comment 4092573219 identifies global minimal-context scans for notification
+counts. The independent reviewer classifies this as a non-blocking performance
+backlog, with no measured load qualification. It remains open for the M2 query
+work; this increment does not claim it is resolved.
+
 Local checks supplement canonical CI. Playwright is absent locally and the
 local tsx launcher is restricted by os.userInfo; no local browser/database PASS
 is inferred. Final qualification must name the actual CI HEAD/tree and results.

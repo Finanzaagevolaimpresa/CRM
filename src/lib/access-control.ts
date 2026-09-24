@@ -153,7 +153,7 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
   const id = getActorId(user);
   // Uploading a client document records provenance, not a permanent access grant.
   if (!document.clientId && document.uploadedById === id) return true;
-  if (document.clientService?.assignedToId === id) return true;
+  if (document.clientService && canViewService(user, document.clientService)) return true;
   if (document.project && canViewProject(user, document.project)) return true;
   if (document.client && canViewClient(user, document.client)) return true;
   return false;

@@ -1964,7 +1964,10 @@ export async function updateTechnicalPractice(form: FormData) {
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
   const nextProjectId = data.projectId ?? before.projectId;
   const nextClientServiceId = data.clientServiceId ?? before.clientServiceId;
-  await requireClientContextWriteAccess(s, { clientId: data.clientId, projectId: nextProjectId, clientServiceId: nextClientServiceId });
+  // The existing practice guard has already validated all current parent links.
+  // Ordinary edits use the practice assignment; moving it requires rights on the new context.
+  const contextChanged = data.clientId !== before.clientId || nextProjectId !== before.projectId || nextClientServiceId !== before.clientServiceId;
+  if (contextChanged) await requireClientContextWriteAccess(s, { clientId: data.clientId, projectId: nextProjectId, clientServiceId: nextClientServiceId });
   const commercialAssignment = changedAssignee(before.commercialOwnerId, form.has('commercialOwnerId'), data.commercialOwnerId);
   const technicalAssignment = changedAssignee(before.technicalOwnerId, form.has('technicalOwnerId'), data.technicalOwnerId);
   const ownerChanged = commercialAssignment !== undefined || technicalAssignment !== undefined;
@@ -1983,7 +1986,7 @@ export async function updateTechnicalPractice(form: FormData) {
   const updateData = { ...data, commercialOwnerId: commercialAssignment, technicalOwnerId: technicalAssignment, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData, commercialOwnerId: commercialAssignment === undefined ? before.commercialOwnerId : commercialAssignment, technicalOwnerId: technicalAssignment === undefined ? before.technicalOwnerId : technicalAssignment })) return before;
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
-    const practice = await tx.technicalPractice.update({ where: { id: data.id, ...(ownerChanged ? { commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId } : {}) }, data: updateData as never });
+    const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: updateData as never });
     await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     return practice;
