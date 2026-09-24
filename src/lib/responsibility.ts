@@ -53,6 +53,21 @@ export async function appendResponsibilityDecision(tx: Prisma.TransactionClient,
   departmentCode?: string | null; allowed: boolean; reason: string;
 }) {
   const previous = await latestResponsibility(tx, input.kind, input.id);
+  if (input.kind === 'TechnicalPractice') {
+    const handoff = await tx.auditLog.findFirst({ where: { entityType: 'TechnicalPractice', entityId: input.id, event: 'purchased_service_handoff' } });
+    if (handoff) {
+      const binding = handoff.after as Record<string, unknown> | null;
+      if (!binding || binding.type !== 'R05_PURCHASED_SERVICE_HANDOFF_V1' || binding.clientId !== input.state.clientId
+        || binding.projectId !== input.state.projectId || binding.clientServiceId !== input.state.clientServiceId || !previous) return deny('Il passaggio acquistato è vincolato al suo cliente e servizio.');
+      await tx.$queryRaw`SELECT "id" FROM "ClientService" WHERE "id"=${input.state.clientServiceId} FOR UPDATE`;
+      const service = await tx.clientService.findFirst({ where: { id: input.state.clientServiceId!, clientId: input.state.clientId!, deletedAt: null } });
+      if (!service || service.projectId !== input.state.projectId || service.assignedToId !== previous.decision.state.technicalOwnerId) return deny('Responsabilità di servizio e pratica non allineate: verifica amministrativa richiesta.');
+      if (service.assignedToId !== input.state.technicalOwnerId) {
+        if (!input.allowed) return deny();
+        await tx.clientService.update({ where: { id: service.id }, data: { assignedToId: input.state.technicalOwnerId } });
+      }
+    }
+  }
   const departmentCode = input.departmentCode === undefined ? previous?.decision.departmentCode ?? null : input.departmentCode;
   const after = responsibilityDecision.parse({ type: 'R05_RESPONSIBILITY_V1', version: (previous?.decision.version ?? 0) + 1,
     state: input.state, departmentCode, allowed: input.allowed, reason: input.reason });
@@ -61,6 +76,14 @@ export async function appendResponsibilityDecision(tx: Prisma.TransactionClient,
     before: previous?.decision ?? Prisma.JsonNull, after } });
   responsibilityDecision.parse(entry.after); // Verify the database's shared sanitizer preserved the metadata contract.
   return entry;
+}
+
+export async function requireUnboundServiceAssignment(tx: Prisma.TransactionClient, serviceId: string) {
+  await tx.$queryRaw`SELECT "id" FROM "ClientService" WHERE "id"=${serviceId} FOR UPDATE`;
+  if (await tx.auditLog.findFirst({ where: { event: 'purchased_service_handoff', entityType: 'TechnicalPractice',
+    after: { path: ['clientServiceId'], equals: serviceId } }, select: { id: true } })) {
+    return deny('Questo servizio segue il referente tecnico della pratica: usa Responsabilità e presa in carico.');
+  }
 }
 
 export async function savePracticeResponsibility(tx: Prisma.TransactionClient, actor: AssignmentActor, input: {

@@ -26,6 +26,6 @@ La cronologia mostra 25 registrazioni per pagina con cursore vincolato al medesi
 
 Le fixture sono soltanto sintetiche in CI isolata. Il codice riusa le 48 migrazioni della PR151 senza modificarne i byte. La compatibilità con l'immagine legacy resta `CI_SCHEMA48_COMPATIBILITY_ONLY`, senza ammissione del recupero operativo. Nessun deploy, backup reale, contatto SSH, migrazione produttiva, invio o attivazione è incluso.
 
-M1 rimane parziale: reparti, presa in carico separata e raccordo diretto al servizio acquistato seguono nel programma già autorizzato. Prima risposta N14 e accettazione economica del preventivo non sono una conferma dell'operatore. Il successivo pacchetto Work/report di M2 dovrà riferire questa provenienza senza reinterpretarla come titolarità.
+Reparti, presa in carico separata e raccordo diretto al servizio acquistato sono consolidati nella stessa PR152; la qualificazione finale M1 resta distinta dalla presenza del codice. Prima risposta N14 e accettazione economica del preventivo non sono una conferma dell'operatore. Il successivo pacchetto Work/report di M2 dovrà riferire questa provenienza senza reinterpretarla come titolarità.
 
 Rischio residuo: la consultazione del registro usa i filtri esistenti su `AuditLog`; non è una qualifica di carico o di conservazione legale. Il rollback del solo delta nasconde la pagina e il nuovo comando ma lascia i record inseriti disponibili nel registro; non ripristina o cambia automaticamente le responsabilità.

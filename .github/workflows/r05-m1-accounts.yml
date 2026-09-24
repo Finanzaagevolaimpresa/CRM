@@ -50,7 +50,7 @@ jobs:
           npm run prisma:migrate:deploy
       - name: PostgreSQL account and login concurrency tests
         if: matrix.privileged_mode == 'enforced'
-        run: node --import tsx --test --test-concurrency=1 tests/db/user-account-db.test.ts tests/db/manual-assignment-db.test.ts tests/db/user-continuity-db.test.ts tests/client-read-perimeter-db.test.ts tests/commercial-origin-db.test.ts tests/responsibility-db.test.ts
+        run: node --import tsx --test --test-concurrency=1 tests/db/user-account-db.test.ts tests/db/manual-assignment-db.test.ts tests/db/user-continuity-db.test.ts tests/client-read-perimeter-db.test.ts tests/commercial-origin-db.test.ts tests/responsibility-db.test.ts tests/purchased-service-handoff-db.test.ts
       - name: Generate ephemeral browser inputs
         shell: bash
         run: |

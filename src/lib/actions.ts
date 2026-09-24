@@ -1,6 +1,6 @@
 'use server';
 
-import { appendResponsibilityDecision } from './responsibility';
+import { appendResponsibilityDecision, requireUnboundServiceAssignment } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
@@ -1451,6 +1451,7 @@ export async function assignClientService(id: string, assignedToId: string) {
   const before = await requireServiceAssignAccess(s, id);
   await requireActiveUser(assignedToId || null);
   return withAssignmentGuard(prisma, s, true, [{ userId: assignedToId }], async tx => {
+    await requireUnboundServiceAssignment(tx, id);
     const service = await tx.clientService.update({ where: { id, assignedToId: before.assignedToId }, data: { assignedToId: assignedToId || null } });
     await audit(s.userId, 'client_service_assign', 'ClientService', id, { before, after: service }, tx);
     return service;
@@ -1478,6 +1479,7 @@ export async function updateClientServicePipeline(form: FormData) {
   return prisma.$transaction(
     async (tx) => {
       if (assigneeChanged) await authorizeManualAssignment(tx, s, [{ userId: nextAssignedToId }]);
+      if (assigneeChanged) await requireUnboundServiceAssignment(tx, data.id);
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${data.id} FOR UPDATE`;
       if (
         await tx.practiceReadiness.findUnique({

@@ -176,6 +176,7 @@ export function NavLinks({
                     </span>
                   ) : (
                     <span
+                      aria-hidden="true"
                       className={`ml-2 shrink-0 text-xs transition ${active ? "text-fai-orange" : "text-white/20 group-hover:translate-x-0.5 group-hover:text-fai-lime"}`}
                     >
                       ›
