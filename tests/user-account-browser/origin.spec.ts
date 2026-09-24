@@ -88,7 +88,7 @@ test('documented origin is admin-only, versioned and independent of current assi
   // Reassign through the existing admin UI; the original provenance remains byte-for-byte unchanged.
   await admin.goto('/clients/' + clientId);
   const owners = admin.getByRole('form', { name: 'Assegna responsabili', exact: true });
-  await owners.getByLabel('Responsabile commerciale', { exact: true }).selectOption(ids.next);
+  await owners.getByLabel('Responsabile commerciale').selectOption(ids.next);
   await owners.getByRole('button', { name: 'Salva responsabili' }).click();
   await expect.poll(() => db.client.findUniqueOrThrow({ where: { id: clientId } }).then(c => c.salesOwnerId)).toBe(ids.next);
   expect(await db.auditLog.findUniqueOrThrow({ where: { id: first.id } })).toEqual(first);
@@ -114,7 +114,7 @@ test('origin history and identity search remain reachable after the first page',
   await login(page, 'admin');
   let predecessorId: string | null = null;
   for (let revision = 1; revision <= 27; revision++) {
-    const entry = await db.auditLog.create({ data: { entityType: 'Client', entityId: foreignId, actorId: ids.admin,
+    const entry: { id: string } = await db.auditLog.create({ data: { entityType: 'Client', entityId: foreignId, actorId: ids.admin,
       event: revision === 1 ? commercialOriginEvents[0] : commercialOriginEvents[1], createdAt: new Date(Date.UTC(2020, 0, 1) + revision * 1000),
       after: encodeCommercialOrigin({ protocol: 'R05_COMMERCIAL_ORIGIN_V1', clientId: foreignId, revision, predecessorId, acquiredById: ids.current, contractedById: null,
         sourceReference: 'Synthetic paging evidence', reason: `Synthetic evidence clarification revision ${revision}` }) } });

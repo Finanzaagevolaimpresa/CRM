@@ -1,4 +1,6 @@
 'use server';
+
+import { appendResponsibilityDecision } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
 import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossierUpdateSchema, clientDossierIdSchema, aiAgentConfigUpdateSchema, aiControlSettingUpdateSchema, clientAiRunSchema, aiRequestKeySchema, aiExecutionSupersedesRequestIdSchema, aiDiagnosticReplacementIntegrationSchema, aiOutputDossierSchema, commercialOfferUpdateSchema, preAnalysisUpdateSchema } from './validation';
@@ -664,6 +666,7 @@ export async function updateLeadCommercial(form: FormData) {
     if (before.status !== lead.status) events.push('lead_status_change');
     if (assignment !== undefined) events.push('lead_assign');
     await Promise.all(events.map((event) => audit(s.userId, event, 'Lead', lead.id, { before, after: lead }, tx)));
+    if (assignment !== undefined) await appendResponsibilityDecision(tx, { kind: 'Lead', id: lead.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: lead.clientId, projectId: null, clientServiceId: null, commercialOwnerId: lead.assignedToId, technicalOwnerId: null } });
     return lead;
   });
 }
@@ -1912,6 +1915,7 @@ export async function createTechnicalPractice(form: FormData) {
   return withAssignmentGuard(prisma, s, Boolean(data.commercialOwnerId || data.technicalOwnerId), [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
     await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
+    await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: s.role === 'admin', reason: 'Apertura pratica: responsabilità iniziali, presa in carico non registrata', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     return practice;
   });
 }
@@ -1988,6 +1992,7 @@ export async function updateTechnicalPractice(form: FormData) {
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: updateData as never });
     await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    if (ownerChanged || contextChanged) await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: s.role === 'admin', reason: contextChanged ? 'Contesto della pratica modificato' : 'Responsabili della pratica modificati', departmentCode: contextChanged ? null : undefined, state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     return practice;
   });
@@ -2019,6 +2024,7 @@ export async function assignTechnicalPractice(form: FormData) {
   return withAssignmentGuard(prisma, s, true, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     const practice = await tx.technicalPractice.update({ where: { id: data.id, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: { commercialOwnerId: data.commercialOwnerId ?? null, technicalOwnerId: data.technicalOwnerId ?? null } });
     await audit(s.userId, 'technical_practice_assign', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     return practice;
   });
 }

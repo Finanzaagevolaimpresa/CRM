@@ -37,6 +37,7 @@ const sections: NavSection[] = [
       { label: "Dashboard", href: "/dashboard" },
       { label: "Il mio account", href: "/settings/account" },
       { label: "Notifiche", href: "/notifications" },
+      { label: "Le mie assegnazioni", href: "/assignments", requiredAnyPermissions: ["lead.read", "technical.read"] },
       { label: "Ricerca", href: "/search" },
       { label: "Task", href: "/tasks", requiredPermission: "service.read" },
       { label: "Scadenze", href: "/deadlines", requiredPermission: "service.read" },
