@@ -19,6 +19,7 @@ test.beforeAll(async () => {
   const sales = await db.user.create({ data: { name: 'Assignment Sales', email: email('sales'), role: 'commerciale', passwordHash } });
   const other = await db.user.create({ data: { name: 'Assignment Other', email: email('other'), role: 'commerciale', passwordHash } });
   const tech = await db.user.create({ data: { name: 'Assignment Technician', email: email('tech'), role: 'consulente', passwordHash } });
+  await db.user.create({ data: { name: 'Assignment Direction', email: email('direction'), role: 'direzione', passwordHash } });
   [adminId, salesId, otherId] = [admin.id, sales.id, other.id];
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Assignment Client', salesOwnerId: salesId, consultantId: tech.id } });
   clientId = client.id;
@@ -43,6 +44,21 @@ async function replay(page: Page, request: Request, oldTimestamp: string, newTim
     data: body.replaceAll(oldTimestamp, newTimestamp),
   });
 }
+
+test('search applies lead visibility before the result limit for commercial and direction sessions', async ({ browser }) => {
+  const query = 'r05-search-window-' + fixtureRun;
+  const visible = await db.lead.create({ data: { firstName: 'Visible', lastName: query, assignedToId: salesId, updatedAt: new Date('2026-01-01T00:00:00Z') } });
+  await db.lead.createMany({ data: Array.from({ length: 13 }, (_, index) => ({ firstName: `Hidden ${index}`, lastName: query, assignedToId: null })) });
+  for (const identity of ['sales', 'direction']) {
+    const context = await browser.newContext({ baseURL: origin });
+    const page = await context.newPage();
+    await login(page, identity);
+    await page.goto('/search?q=' + encodeURIComponent(query));
+    await expect(page.locator('a[href="/leads/' + visible.id + '"]')).toHaveCount(1);
+    await expect(page.getByRole('heading', { name: /^Hidden / })).toHaveCount(0);
+    await context.close();
+  }
+});
 test('admin assigns client/project; old sessions and direct actions cannot reclaim reassigned scope', async ({ browser }) => {
   const adminContext = await browser.newContext({ baseURL: origin });
   const salesContext = await browser.newContext({ baseURL: origin });

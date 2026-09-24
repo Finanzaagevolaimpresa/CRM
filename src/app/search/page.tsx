@@ -9,6 +9,7 @@ import { hasPermission, requireSession, type Permission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 
 type SearchResult = {
   id: string;
@@ -89,7 +90,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
         ? prisma.practiceCommunication.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { content: text(q) }, { internalNote: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'lead.read')
-        ? prisma.lead.findMany({ where: { deletedAt: null, OR: [{ firstName: text(q) }, { lastName: text(q) }, { companyName: text(q) }, { contactPerson: text(q) }, { phone: text(q) }, { email: text(q) }, { source: text(q) }, { region: text(q) }, { province: text(q) }, { city: text(q) }, { interest: text(q) }, { commercialStatus: text(q) }, { nextActionNote: text(q) }, { notes: text(q) }, { commercialProposal: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        ? prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)], OR: [{ firstName: text(q) }, { lastName: text(q) }, { companyName: text(q) }, { contactPerson: text(q) }, { phone: text(q) }, { email: text(q) }, { source: text(q) }, { region: text(q) }, { province: text(q) }, { city: text(q) }, { interest: text(q) }, { commercialStatus: text(q) }, { nextActionNote: text(q) }, { notes: text(q) }, { commercialProposal: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'lead.read')
         ? prisma.commercialOffer.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { description: text(q) }, { services: text(q) }, { includedActivities: text(q) }, { operationalConditions: text(q) }, { commercialProposal: text(q) }, { notes: text(q) }, { followUpNote: text(q) }, { outcomeNote: text(q) }, { rejectionReason: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
