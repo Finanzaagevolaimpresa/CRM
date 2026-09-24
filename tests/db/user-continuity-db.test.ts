@@ -9,6 +9,7 @@ import { withSerializableTransaction } from '../../src/lib/serializable';
 import { removeInternalUserWithAudit, deactivateInternalUserWithAudit, activateInternalUserWithAudit, updateInternalUserRoleWithAudit } from '../../src/lib/user-privilege-service';
 import { loadAssignmentExceptions, exceptionKinds } from '../../src/lib/assignment-exceptions';
 import { withAssignmentGuard } from '../../src/lib/manual-assignment-guard';
+import { reassignExceptionTask } from '../../src/lib/exception-task-assignment';
 
 const run = process.env.RUN_DB_TESTS === '1';
 const db = new PrismaClient();
@@ -138,6 +139,50 @@ test('concurrent removal of two administrators preserves an active admin and its
     assert.ok(results.some(result => result.status === 'rejected' || !result.value.ok));
     assert.ok(await db.user.count({ where: { id: { in: [first.userId, second.userId] }, active: true, deletedAt: null, role: 'admin' } }) >= 1);
   } finally { await db.user.updateMany({ where: { id: { in: previous.map(user => user.id) } }, data: { active: true } }); }
+});
+
+test('a specific clientless task can be reassigned without reopening it; stale, unauthorized and inactive targets fail atomically', { skip: !run }, async () => {
+  const admin = await actor('admin'), owner = await actor(), replacement = await actor(), outsider = await actor();
+  await db.user.update({ where: { id: owner.userId }, data: { active: false } });
+  const task = await db.task.create({ data: { title: 'Historical clientless task', assignedToId: owner.userId,
+    createdById: owner.userId, status: 'completata' } }); tasks.push(task.id);
+  const input = { id: task.id, updatedAt: task.updatedAt, assignedToId: replacement.userId };
+  const queue = await tx(t => loadAssignmentExceptions(t, admin, 'tasks'));
+  const row = queue.rows.find(row => row.id === task.id)!;
+  assert.equal(row.href, '/settings/assignment-exceptions/tasks/' + task.id);
+  assert.equal(row.status, 'completata'); assert.equal(row.historical, true);
+  await assert.rejects(tx(t => reassignExceptionTask(t, admin, input, false)));
+  await assert.rejects(tx(t => reassignExceptionTask(t, outsider, input, true)));
+  await assert.rejects(tx(t => reassignExceptionTask(t, admin, { ...input, assignedToId: owner.userId }, true)));
+  await assert.rejects(tx(t => reassignExceptionTask(t, admin, { ...input, updatedAt: new Date(0) }, true)));
+  assert.deepEqual(await db.task.findUniqueOrThrow({ where: { id: task.id } }), task);
+  const result = await tx(t => reassignExceptionTask(t, admin, input, true));
+  assert.equal(result.assignedToId, replacement.userId);
+  assert.equal(result.status, task.status); assert.equal(result.clientId, null);
+  assert.equal(result.createdById, owner.userId);
+  await assert.rejects(tx(t => reassignExceptionTask(t, admin, input, true)));
+  assert.equal(await db.auditLog.count({ where: { event: 'exception_task_reassigned', entityId: task.id } }), 1);
+  const raced = await Promise.allSettled([outsider.userId, admin.userId].map(assignedToId =>
+    tx(t => reassignExceptionTask(t, admin, { ...input, updatedAt: result.updatedAt, assignedToId }, true))));
+  assert.equal(raced.filter(item => item.status === 'fulfilled').length, 1);
+  assert.equal(await db.auditLog.count({ where: { event: 'exception_task_reassigned', entityId: task.id } }), 2);
+  await tx(t => revokeAllInternalSessions(t, admin.userId, 'INTERNAL_GLOBAL', admin.userId));
+  await assert.rejects(tx(t => reassignExceptionTask(t, admin, { ...input, updatedAt: result.updatedAt, assignedToId: outsider.userId }, true)));
+});
+
+test('exception task reassignment rolls back when its audit fails', { skip: !run }, async () => {
+  const admin = await actor('admin'), owner = await actor(), replacement = await actor();
+  const task = await db.task.create({ data: { title: 'Atomic task reassignment', assignedToId: owner.userId } }); tasks.push(task.id);
+  await db.$executeRawUnsafe(`CREATE FUNCTION r05_task_assignment_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event = 'exception_task_reassigned' THEN RAISE EXCEPTION 'R05_SYNTHETIC_FAULT'; END IF; RETURN NEW; END $$`);
+  await db.$executeRawUnsafe('CREATE TRIGGER r05_task_assignment_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION r05_task_assignment_fault()');
+  try {
+    await assert.rejects(tx(t => reassignExceptionTask(t, admin, { id: task.id, updatedAt: task.updatedAt, assignedToId: replacement.userId }, true)));
+    assert.deepEqual(await db.task.findUniqueOrThrow({ where: { id: task.id } }), task);
+    assert.equal(await db.auditLog.count({ where: { entityId: task.id, event: 'exception_task_reassigned' } }), 0);
+  } finally {
+    await db.$executeRawUnsafe('DROP TRIGGER r05_task_assignment_fault ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION r05_task_assignment_fault()');
+  }
 });
 
 test('removal and session revocation roll back together if the audit cannot persist; legacy mode denies removal', { skip: !run }, async () => {

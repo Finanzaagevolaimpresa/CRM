@@ -3,7 +3,7 @@ import { authorizeManualAssignment, type AssignmentActor } from './manual-assign
 
 export const exceptionKinds = ['leads', 'clients', 'projects', 'tasks', 'services', 'practices'] as const;
 export type ExceptionKind = typeof exceptionKinds[number];
-export type AssignmentException = { id: string; title: string; href: string; ownerIds: string[] };
+export type AssignmentException = { id: string; title: string; href: string; ownerIds: string[]; status: string; historical: boolean };
 const pageSize = 50;
 
 export async function loadAssignmentExceptions(
@@ -33,23 +33,23 @@ export async function loadAssignmentExceptions(
   let rows: AssignmentException[];
   switch (kind) {
     case 'leads': rows = (await tx.lead.findMany({ where: { ...leadWhere, ...page }, ...window,
-      select: { id: true, firstName: true, lastName: true, assignedToId: true } }))
-      .map(row => ({ id: row.id, title: `${row.firstName} ${row.lastName}`, href: `/leads/${row.id}`, ownerIds: owners(row.assignedToId) })); break;
+      select: { id: true, firstName: true, lastName: true, assignedToId: true, status: true } }))
+      .map(row => ({ id: row.id, title: `${row.firstName} ${row.lastName}`, href: `/leads/${row.id}`, status: row.status, historical: ['vinto', 'perso', 'cliente_acquisito', 'archiviato'].includes(row.status), ownerIds: owners(row.assignedToId) })); break;
     case 'clients': rows = (await tx.client.findMany({ where: { ...clientWhere, ...page }, ...window,
-      select: { id: true, displayName: true, salesOwnerId: true, consultantId: true } }))
-      .map(row => ({ id: row.id, title: row.displayName, href: `/clients/${row.id}`, ownerIds: owners(row.salesOwnerId, row.consultantId) })); break;
+      select: { id: true, displayName: true, salesOwnerId: true, consultantId: true, status: true } }))
+      .map(row => ({ id: row.id, title: row.displayName, href: `/clients/${row.id}`, status: row.status, historical: ['chiuso', 'archiviato'].includes(row.status), ownerIds: owners(row.salesOwnerId, row.consultantId) })); break;
     case 'projects': rows = (await tx.project.findMany({ where: { ...projectWhere, ...page }, ...window,
-      select: { id: true, title: true, consultantId: true } }))
-      .map(row => ({ id: row.id, title: row.title, href: `/projects/${row.id}`, ownerIds: owners(row.consultantId) })); break;
+      select: { id: true, title: true, consultantId: true, status: true } }))
+      .map(row => ({ id: row.id, title: row.title, href: `/projects/${row.id}`, status: row.status, historical: ['chiuso', 'archiviato'].includes(row.status), ownerIds: owners(row.consultantId) })); break;
     case 'tasks': rows = (await tx.task.findMany({ where: { ...leadWhere, ...page }, ...window,
-      select: { id: true, title: true, assignedToId: true, clientId: true } }))
-      .map(row => ({ id: row.id, title: row.title, href: row.clientId ? `/clients/${row.clientId}` : '/tasks', ownerIds: owners(row.assignedToId) })); break;
+      select: { id: true, title: true, assignedToId: true, clientId: true, status: true } }))
+      .map(row => ({ id: row.id, title: row.title, href: `/settings/assignment-exceptions/tasks/${row.id}`, status: row.status, historical: ['completata', 'annullata'].includes(row.status), ownerIds: owners(row.assignedToId) })); break;
     case 'services': rows = (await tx.clientService.findMany({ where: { ...leadWhere, ...page }, ...window,
-      select: { id: true, clientId: true, assignedToId: true } }))
-      .map(row => ({ id: row.id, title: `Servizio ${row.id}`, href: `/clients/${row.clientId}`, ownerIds: owners(row.assignedToId) })); break;
+      select: { id: true, clientId: true, assignedToId: true, status: true, operationalStatus: true } }))
+      .map(row => ({ id: row.id, title: `Servizio ${row.id}`, href: `/clients/${row.clientId}`, status: `${row.status} / ${row.operationalStatus}`, historical: ['consegnato', 'chiuso', 'archiviato'].includes(row.status) || ['chiusa', 'archiviata'].includes(row.operationalStatus), ownerIds: owners(row.assignedToId) })); break;
     case 'practices': rows = (await tx.technicalPractice.findMany({ where: { ...practiceWhere, ...page }, ...window,
-      select: { id: true, title: true, commercialOwnerId: true, technicalOwnerId: true } }))
-      .map(row => ({ id: row.id, title: row.title, href: `/technical-office/practices/${row.id}`, ownerIds: owners(row.commercialOwnerId, row.technicalOwnerId) })); break;
+      select: { id: true, title: true, commercialOwnerId: true, technicalOwnerId: true, status: true } }))
+      .map(row => ({ id: row.id, title: row.title, href: `/technical-office/practices/${row.id}`, status: row.status, historical: ['approvata', 'respinta', 'archiviata'].includes(row.status), ownerIds: owners(row.commercialOwnerId, row.technicalOwnerId) })); break;
   }
   return { kind, counts, users, rows: rows.slice(0, pageSize), next: rows.length > pageSize ? rows[pageSize - 1]!.id : null };
 }

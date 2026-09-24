@@ -27,6 +27,14 @@ Contatori e pagine da 50 elementi permettono di percorrere l'intera coda.
 Un'esplicita riassegnazione a un operatore attivo rimuove il riferimento dalla
 coda. La sospensione non inventa un sostituto e non sovrascrive una decisione.
 
+Ogni riga riporta ora lo stato effettivo; gli stati conclusivi sono identificati
+come riferimenti storici. Le attività hanno una destinazione amministrativa
+dedicata al loro ID, anche senza cliente o oltre le prime 50 attività del
+fascicolo. Il comando richiede admin corrente, permesso utenti, registry e
+step-up enforced; ricontrolla il destinatario attivo sotto lock e confronta
+la revisione dell'attività. Modifica soltanto il responsabile e registra l'audit
+nella stessa transazione, senza riaprire un lavoro completato o annullato.
+
 Lettura della coda e rimozione ricontrollano la sessione e il ruolo effettivo.
 Le mutazioni utenti preesistenti ricevono ora la sessione completa dal server;
 in modalità registry non basta un vecchio userId. Attore e destinatario restano
@@ -47,6 +55,12 @@ Il browser usa i veri endpoint: tentativo senza step-up, prova con modalità
 privilegiata disabled, richiesta HTTP non admin, rimozione, accesso già aperto,
 riapertura dell'archivio, coda e successiva riassegnazione cliente. Nessun invio
 esterno o dato reale è necessario per queste prove.
+
+Le regressioni del riesame aggiungono una coda mista (aperta/completata/annullata),
+una riassegnazione HTTP di attività senza cliente e una oltre 52 record più
+recenti nel fascicolo. Verificano i dinieghi senza step-up, disabled e non-admin,
+replay obsoleto e conservazione dello stato; le prove PostgreSQL includono
+sessione revocata, destinatario inattivo e rollback in caso di errore audit.
 
 Il PASS va riferito al candidato e alla CI effettivamente conclusa, non alla
 presenza dei test nel sorgente. I limiti del runner locale restano dichiarati.

@@ -22,8 +22,8 @@ export default async function AssignmentExceptionsPage({ searchParams }: { searc
     <p>Riferimenti conservati di utenti sospesi o rimossi. L’amministratore può aprire la scheda e riassegnare; una sospensione non trasferisce automaticamente le attività. Sono inclusi anche i riferimenti storici a lavori completati.</p>
     <nav aria-label="Tipo di assegnazione" className="mt-4 flex flex-wrap gap-4">{exceptionKinds.map(key => <Link key={key} aria-current={kind === key ? 'page' : undefined} href={`/settings/assignment-exceptions?kind=${key}`}>{labels[key]} ({result.counts[key]})</Link>)}</nav>
   </Card><Card title={labels[kind]}>
-    {result.rows.length ? <Table headers={['Riferimento', 'Responsabile non disponibile', 'Azione']} rows={result.rows.map(row => [
-      row.title, row.ownerIds.map(id => `${users.get(id)?.name ?? id} (${users.get(id)?.deletedAt ? 'rimosso' : 'sospeso'})`).join(', '),
+    {result.rows.length ? <Table headers={['Riferimento', 'Stato', 'Responsabile non disponibile', 'Azione']} rows={result.rows.map(row => [
+      row.title, `${row.status} — ${row.historical ? 'Riferimento storico: lavoro concluso' : 'Stato corrente'}`, row.ownerIds.map(id => `${users.get(id)?.name ?? id} (${users.get(id)?.deletedAt ? 'rimosso' : 'sospeso'})`).join(', '),
       <Link key={row.id} href={row.href}>Apri scheda</Link>,
     ])} /> : <p>Nessun riferimento in questa coda.</p>}
     {result.next ? <Link className="mt-4 inline-block" href={`/settings/assignment-exceptions?kind=${kind}&after=${encodeURIComponent(result.next)}`}>Pagina successiva</Link> : null}
