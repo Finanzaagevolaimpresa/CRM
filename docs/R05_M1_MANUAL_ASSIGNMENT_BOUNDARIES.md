@@ -39,6 +39,10 @@ Browser tests cover explicit client/project assignment, old-session/direct HTTP
 denial, unassigned manual intake and self-assignment tampering. Lead notifications
 use the canonical list policy; browser checks cover notifications, search and
 direct detail access before assignment and after reassignment in an existing session.
+Global lead search applies the same database visibility predicate before its
+12-result limit. A browser regression inserts 13 newer unassigned matches and
+an older assigned lead, then verifies that commercial and direction sessions
+still find the authorized lead without seeing the unassigned matches.
 
 The existing VNX03 isolated WordPress-to-CRM test is updated to exercise admin
 assignment with real ephemeral step-up, double-submit conflict, commercial
