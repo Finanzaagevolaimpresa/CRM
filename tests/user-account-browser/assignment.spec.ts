@@ -91,6 +91,13 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   await expect(sales.getByRole('status')).toHaveText('Lead registrato nella coda dell’amministratore.');
   const lead = await db.lead.findFirstOrThrow({ where: { firstName: 'AssignmentBrowser', lastName: scope } });
   expect(lead.assignedToId).toBeNull();
+  await db.lead.update({ where: { id: lead.id }, data: { nextActionDate: new Date(Date.now() - 86_400_000) } });
+  await sales.goto('/notifications');
+  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(0);
+  await sales.goto('/search?q=AssignmentBrowser');
+  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(0);
+  await admin.goto('/notifications');
+  await expect(admin.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(1);
   await sales.goto('/leads/' + lead.id);
   await expect(sales.getByRole('heading', { name: 'Lead non trovato' })).toBeVisible();
   await admin.goto('/leads/' + lead.id);
@@ -98,6 +105,8 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   await update.locator('select[name="assignedToId"]').selectOption(salesId);
   await update.getByRole('button', { name: 'Salva aggiornamenti' }).click();
   await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId).toBe(salesId);
+  await sales.goto('/notifications');
+  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(1);
   await sales.goto('/leads/' + lead.id);
   await expect(sales.getByRole('heading', { name: 'Lead non trovato' })).toHaveCount(0);
   const salesUpdate = sales.locator('form').filter({ has: sales.getByRole('button', { name: 'Salva aggiornamenti', exact: true }) });
@@ -123,5 +132,15 @@ test('manual leads enter the admin queue; operator HTTP payloads cannot self ass
   await nextCreate.getByRole('button', { name: 'Crea lead', exact: true }).click().catch(() => undefined);
   expect((await deniedCreation).status()).toBeGreaterThanOrEqual(400);
   expect(await db.lead.count({ where: { firstName: 'ForbiddenAssignment', lastName: scope } })).toBe(0);
+  await admin.goto('/leads/' + lead.id);
+  await admin.locator('select[name="assignedToId"]').selectOption(otherId);
+  await admin.getByRole('button', { name: 'Salva aggiornamenti' }).click();
+  await expect.poll(async () => (await db.lead.findUniqueOrThrow({ where: { id: lead.id } })).assignedToId).toBe(otherId);
+  await sales.goto('/notifications');
+  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(0);
+  await sales.goto('/search?q=AssignmentBrowser');
+  await expect(sales.locator('a[href="/leads/' + lead.id + '"]')).toHaveCount(0);
+  await sales.goto('/leads/' + lead.id);
+  await expect(sales.getByRole('heading', { name: 'Lead non trovato' })).toBeVisible();
   await adminContext.close(); await salesContext.close();
 });

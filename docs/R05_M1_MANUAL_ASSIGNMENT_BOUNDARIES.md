@@ -6,7 +6,7 @@ not completion of M1 or production qualification.
 
 ## Behavior
 
-- Every manual lead is created unassigned. Website projection already persists a
+- The ordinary manual lead form creates an unassigned lead. Website projection already persists a
   null assignee. Only administrators see the unassigned lead queue; direction
   retains visibility of assigned leads and commercial users see their own.
 - Public assignment commands are admin-only, including assignment at creation of
@@ -36,7 +36,9 @@ not completion of M1 or production qualification.
 Targeted PostgreSQL tests cover current role and session authority, inactive and
 removed targets, ownership/list consistency, rollback, and stale form preservation.
 Browser tests cover explicit client/project assignment, old-session/direct HTTP
-denial, unassigned manual intake and self-assignment tampering.
+denial, unassigned manual intake and self-assignment tampering. Lead notifications
+use the canonical list policy; browser checks cover notifications, search and
+direct detail access before assignment and after reassignment in an existing session.
 
 The existing VNX03 isolated WordPress-to-CRM test is updated to exercise admin
 assignment with real ephemeral step-up, double-submit conflict, commercial
@@ -54,6 +56,8 @@ No claim of current production health or backup success follows from these tests
 M1 remains partial: original/current commercial responsibility, departments,
 explicit acceptance distinct from assignment/notification, full removal/suspension
 continuity and all-surface technical isolation remain to complete.
+The separately gated controlled-intake service still assigns its creator; that
+residual entry point must be changed and qualified before M1 can be complete.
 M2–M5 follow in sequence in the same task.
 
 No schema changes or historical migration edits. Existing 47 migration bytes,

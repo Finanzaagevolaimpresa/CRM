@@ -1,6 +1,7 @@
 import { hasPermission, type AuthSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { TaskStatus } from "@prisma/client";
+import { leadVisibilityWhere } from "./core-query-policy";
 
 export type InternalNotification = {
   id: string;
@@ -29,12 +30,6 @@ function taskAccessWhere(session: AuthSession) {
   };
 }
 
-function leadAccessWhere(session: AuthSession) {
-  return session.role === "admin" || session.role === "direzione"
-    ? {}
-    : { OR: [{ assignedToId: null }, { assignedToId: session.userId }] };
-}
-
 export async function getInternalNotifications(session: AuthSession, options?: { limit?: number }) {
   const now = new Date();
   const { startOfToday, endOfToday } = todayBounds(now);
@@ -45,7 +40,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   const canReviewPracticeCommunications = hasPermission(session, "practice_communications.review");
   const canReadLeads = hasPermission(session, "lead.read");
   const openTaskWhere = taskAccessWhere(session);
-  const leadWhere = leadAccessWhere(session);
+  const leadWhere = leadVisibilityWhere(session);
 
   const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers, clients] = await Promise.all([
     session.role === "admin"
