@@ -88,6 +88,25 @@ namespace Fai.M1 {
     // Called only by the explicitly approved installer, after it has verified
     // this assembly's bytes. No arguments and no connection or credential reads.
     public static class FileChannelInstallSupport {
+        [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { internal int Length;internal IntPtr Descriptor;internal int InheritHandle; }
+        [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+        static extern bool CreateDirectory(string path,ref SecurityAttributes attributes);
+        internal static void CreateExclusive(string path,byte[] descriptor) {
+            IntPtr bytes=Marshal.AllocHGlobal(descriptor.Length);
+            try {
+                Marshal.Copy(descriptor,0,bytes,descriptor.Length);
+                var attributes=new SecurityAttributes{Length=Marshal.SizeOf(typeof(SecurityAttributes)),Descriptor=bytes,InheritHandle=0};
+                // Unlike Directory.CreateDirectory, fail if another process won
+                // the creation race; never inherit an attacker's existing DACL.
+                Data.Need(CreateDirectory(path,ref attributes),"CHANNEL_DIRECTORY_CREATION_REFUSED");
+            } finally { Marshal.FreeHGlobal(bytes); }
+        }
+        public static void CreateProtectedDirectory(string path,byte[] descriptor) {
+            string exact=Path.GetFullPath(path);
+            Data.Need(exact==ChannelBinding.Code || exact==ChannelBinding.State || exact==ChannelBinding.Inbox ||
+                Path.GetDirectoryName(exact)==ChannelBinding.Code && Regex.IsMatch(Path.GetFileName(exact),@"\A[0-9a-f]{16}\z"),"INSTALL_DIRECTORY_SCOPE");
+            CreateExclusive(exact,descriptor);
+        }
         public static string InboxIdentity() { using(var d=FileLease.Directory(ChannelBinding.Inbox)) return d.Identity; }
         public static IDisposable HoldInstallationParents() {
             return new ParentLocks();

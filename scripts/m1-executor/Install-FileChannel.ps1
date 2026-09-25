@@ -88,7 +88,8 @@ try {
         if ($Kind -ne 'Inbox') {
             $channelAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($channelOffline,'Write,Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership',$channelInheritance,'None','Deny'))
         }
-        [IO.Directory]::CreateDirectory($Path,$channelAcl)|Out-Null
+        $channelDescriptor=$channelAcl.GetSecurityDescriptorBinaryForm()
+        [void]$channelAssembly.GetType('Fai.M1.FileChannelInstallSupport').GetMethod('CreateProtectedDirectory').Invoke($null,@($Path,$channelDescriptor))
     }
     Channel-NewDirectory $channelCode Code
     Channel-NewDirectory $channelState State

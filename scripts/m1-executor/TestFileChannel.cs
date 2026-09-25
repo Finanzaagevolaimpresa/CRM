@@ -126,6 +126,13 @@ internal static class TestFileChannel {
         using(var writer=new FileStream(locked,FileMode.Open,FileAccess.Write,FileShare.Read)) {
             Reject(()=>FileLease.Read(locked,2048),"CHANNEL_FILE_OPEN_FAILED");
         }
+        string exclusive=Path.Combine(root,"exclusive-"+Guid.NewGuid().ToString("N"));
+        byte[] descriptor=Directory.GetAccessControl(root).GetSecurityDescriptorBinaryForm();
+        FileChannelInstallSupport.CreateExclusive(exclusive,descriptor);
+        string marker=Path.Combine(exclusive,"keep.txt");File.WriteAllText(marker,"synthetic");
+        Reject(()=>FileChannelInstallSupport.CreateExclusive(exclusive,descriptor),"CHANNEL_DIRECTORY_CREATION_REFUSED");
+        Check(File.ReadAllText(marker)=="synthetic","occupied directory is never altered");
+        Reject(()=>FileChannelInstallSupport.CreateProtectedDirectory(exclusive,descriptor),"INSTALL_DIRECTORY_SCOPE");
     }
     public static int Main(string[] args) {
         try {
