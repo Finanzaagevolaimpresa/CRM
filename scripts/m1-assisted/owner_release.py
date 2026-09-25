@@ -26,7 +26,7 @@ SSH_ARGS = [str(SSH), '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-
             '-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no', '-o', 'ServerAliveInterval=15',
             '-o', 'ServerAliveCountMax=2', 'fai-crm-prod']
 KEY_CONFIRMATION = 'AUTORIZZO_CHIAVE_STEP_UP_M1_VERSIONE_1'
-TIMES = {'prepare': 540, 'backup': 1540, 'protect': 900, 'copies-backup': 90, 'recover': 900,
+TIMES = {'prepare': 540, 'backup': 1800, 'protect': 900, 'copies-backup': 90, 'recover': 900,
          'provision': 120, 'copies-config': 90, 'migrate': 390, 'deploy': 960, 'postcheck': 180, 'status': 150,
          'fetch-backup': 600, 'fetch-config': 120}
 
@@ -96,6 +96,7 @@ def storage():
 
 def command(manifest, stage):
     need(stage in TIMES, 'FIXED_OPERATION_REQUIRED')
+    need(re.fullmatch('[a-f0-9]{32}', manifest.get('runId', '')), 'RUN_ID_INVALID')
     remote = '/home/faiadmin/.local/share/fai-crm-releases/m1-assisted-r21-' + manifest['runId']
     # Paths consist of fixed literals and a validated hex run. No supplied shell.
     return SSH_ARGS + ['python3 -I -B -S ' + remote + '/remote_release.py ' + stage]
@@ -243,7 +244,7 @@ def main():
         print('3/9 — Riconciliazione corrente, immagini, prerequisiti e diagnosi mirata.', flush=True)
         stage_call(manifest, 'prepare')
         confirmation = key_consent()
-        print('4/9 — Nuovo backup PR145 e rientro dell’applicazione; massimo 25 minuti.', flush=True)
+        print('4/9 — Nuovo backup PR145 e rientro dell’applicazione; massimo 30 minuti inclusi i controlli.', flush=True)
         stage_call(manifest, 'backup')
         print('5/9 — Cifratura e due copie verificate sulle destinazioni fisiche C:/F:.', flush=True)
         protected = stage_call(manifest, 'protect')

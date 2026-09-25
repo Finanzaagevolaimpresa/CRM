@@ -136,8 +136,15 @@ class StageTests(unittest.TestCase):
         for name, expected in b['canonicalPrograms'].items():
             raw = subprocess.check_output(['git','show','HEAD:' + name], cwd=root)
             self.assertEqual(hashlib.sha256(raw).hexdigest(), expected, name)
-        self.assertEqual(common.digest(root/'scripts/pr140/owner_backup46.py'), b['backupProgramSha256'])
-        self.assertEqual({p.parent.name:common.digest(p) for p in (root/'prisma/migrations').glob('*/migration.sql')}, b['ledger48'])
+        raw = subprocess.check_output(['git','show','HEAD:scripts/pr140/owner_backup46.py'], cwd=root)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), b['backupProgramSha256'])
+        inventory = {}
+        names = subprocess.check_output(['git','ls-tree','-r','--name-only','HEAD','prisma/migrations'], cwd=root).decode().splitlines()
+        for name in names:
+            if name.endswith('/migration.sql'):
+                raw = subprocess.check_output(['git','show','HEAD:' + name], cwd=root)
+                inventory[Path(name).parent.name] = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(inventory, b['ledger48'])
 
 
 class AdmissionTests(unittest.TestCase):
@@ -162,6 +169,8 @@ class AdmissionTests(unittest.TestCase):
     def test_no_arbitrary_remote_operation(self):
         with self.assertRaisesRegex(common.Stop, 'FIXED_OPERATION_REQUIRED'):
             owner.command({'runId': 'a' * 32}, 'rm -rf anything')
+        with self.assertRaisesRegex(common.Stop, 'RUN_ID_INVALID'):
+            owner.command({'runId': 'a; command'}, 'prepare')
 
     def test_ssh_errors_distinguish_domains_and_auth(self):
         self.assertEqual(owner.ssh_error(b'Could not resolve hostname'), 'SSH_DNS_FAILED')

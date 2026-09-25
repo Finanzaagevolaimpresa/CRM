@@ -154,7 +154,13 @@ class Release:
         before = self.observer()
         need(before['liveSessions'] == 0 and before['otherActiveDbSessions'] == 0, 'ACTIVE_SESSIONS_PRESENT')
         need(before['internalSessionMode'] == 'legacy' and before['privilegedAccessMode'] == 'disabled', 'SOURCE_MODE_DRIFT')
+        empty_step_up = self.c.docker('INITIAL_STEP_UP_CONFIGURATION', 'exec', self.t['appId'], 'node', '-e',
+            "console.log(!process.env.PRIVILEGED_STEP_UP_SECRET&&!process.env.PRIVILEGED_STEP_UP_KEY_VERSION?'ABSENT':'PRESENT')").strip()
+        need(empty_step_up == b'ABSENT', 'EXISTING_STEP_UP_CONFIGURATION_REQUIRES_RECONCILIATION')
         current_key_allowed(decode(self.sql(KEY_SQL)))
+        documents = decode(self.c.docker('DOCUMENT_CAPACITY_METADATA', 'exec', self.t['appId'], 'node', '-e',
+            "const fs=require('fs'),p=require('path');let bytes=0,files=0;function visit(d){for(const n of fs.readdirSync(d)){const f=p.join(d,n),s=fs.lstatSync(f);if(s.isSymbolicLink()||(!s.isFile()&&!s.isDirectory()))throw Error('ENTRY_DENIED');if(s.isDirectory())visit(f);else{bytes+=s.size;files++}if(files>20000||bytes>201326592)throw Error('CAPACITY')}}visit('/var/lib/fai-crm/documents');console.log(JSON.stringify({bytes,files}));"))
+        need(documents['bytes'] <= 192 * 1024**2 and documents['files'] <= 20000, 'ISOLATED_DOCUMENT_CAPACITY')
         memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
         need(int(memory['MemAvailable'].split()[0]) >= 3 * 1024**2, 'ISOLATED_RECOVERY_MEMORY_LOW')
         need(before['availableBytes'] >= 12 * 1024**3, 'SERVER_SPACE_LOW')
@@ -187,6 +193,7 @@ class Release:
         need({k:v for k,v in after.items() if k != 'availableBytes'} ==
              {k:v for k,v in before.items() if k != 'availableBytes'}, 'BASELINE_CHANGED_DURING_PREPARATION')
         return {'candidate': self.b['candidate'], 'observation': after, 'history': historic,
+                'documentCapacity': documents,
                 'imagesLoaded': True, 'imagesRebuilt': False, 'productionRuntimeMutationPerformed': False,
                 'recipientSha256': self.b['recipientSha256'], 'stepUpProvisioningRequired': True,
                 'backupCurrentPredicatesVerified': True, 'historicalCauseInferred': False}
@@ -243,13 +250,11 @@ class Release:
                 'cryptographic_sha256': kit.component_identity(crypto)['sha256'],
                 'output': str(self.work / 'backup46.bundle.tar')}
         exclusive(self.work / 'protect-plan.json', plan)
-        checked = kit.load_plan(self.work / 'protect-plan.json', digest(self.work / 'protect-plan.json'))
-        kit.protect_preflight(checked)
-        op = kit.Operation(checked, digest(self.work / 'protect-plan.json'))
-        try:
-            result = kit.protect(checked, op)
-        finally:
-            op.close()
+        result = decode(self.c.run('CANONICAL_N05_PROTECT', ['python3', '-I', '-B', '-S',
+            self.runtime / 'scripts/n05/recovery_kit.py', 'protect', '--plan', self.work / 'protect-plan.json',
+            '--plan-sha256', digest(self.work / 'protect-plan.json'),
+            '--authorize', 'FAI_CRM_N05_RECOVERY_PROTECT_V1'], seconds=780))
+        need(result.pop('status', None) == 'PROTECTION_VERIFIED', 'N05_PROTECTION_NOT_VERIFIED')
         return {'ciphertext': 'backup46.bundle.tar', **result, 'recipientSha256': self.b['recipientSha256']}
 
     def recover(self):
@@ -519,6 +524,12 @@ def main():
     if stage == 'status':
         result = release.status()
     else:
+        # Keep command settlement/receipt time inside the owner's SSH bound.
+        limits = {'prepare':480, 'protect':840, 'recover':840, 'provision':90,
+                  'migrate':330, 'deploy':900, 'postcheck':120, 'copies-backup':60, 'copies-config':60}
+        if stage in limits:
+            release.c.wall_end = time.time() + limits[stage]
+            release.c.mono_end = time.monotonic() + limits[stage]
         release.stages.begin(stage, DEPENDENCIES[stage])
         request = decode(sys.stdin.buffer.read(65537))
         need(set(request) <= {'keyConfirmation', 'copies'}, 'REQUEST_FIELDS_DENIED')

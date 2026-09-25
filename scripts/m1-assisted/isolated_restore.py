@@ -137,8 +137,9 @@ class Restore:
             need(self.psql(pg, 'SELECT count(*) FROM pg_constraint WHERE NOT convalidated;') == '0',
                  'RESTORED_CONSTRAINT_NOT_VALIDATED')
             # Read every restored table through pg_dump; no row contents are exported.
-            self.c.docker('RECOVERY_DATABASE_FULL_READ', 'exec', pg, 'pg_dump', '-h', '/tmp', '-U', 'postgres',
-                          '-d', 'm1_recovery', '--format=custom', '--file=/dev/null', seconds=180)
+            with open(os.devnull, 'wb') as discard:
+                self.c.docker('RECOVERY_DATABASE_FULL_READ', 'exec', pg, 'pg_dump', '-h', '/tmp', '-U', 'postgres',
+                              '-d', 'm1_recovery', '--format=custom', output=discard, seconds=180)
             doc = self.create('documents')
             with (backup / 'documents.tar.gz').open('rb') as source:
                 self.c.docker('RECOVERY_DOCUMENT_RESTORE', 'exec', '-i', '--user', '0:0', doc, 'tar',

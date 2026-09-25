@@ -30,9 +30,15 @@ def identity(path):
     return {'sha256': digest(path), 'bytes': path.stat().st_size}
 
 
+def repository_bytes(path):
+    relative = path.relative_to(REPO).as_posix()
+    return subprocess.check_output(['git', 'show', 'HEAD:' + relative], cwd=REPO)
+
+
 def delta():
     paths = {name: SOURCE / name for name in INPUTS} | CANONICAL
-    return value_sha({name: identity(path) for name, path in paths.items()})
+    return value_sha({name: {'sha256': hashlib.sha256(repository_bytes(path)).hexdigest(),
+                            'bytes': len(repository_bytes(path))} for name, path in paths.items()})
 
 
 def build(review_file, owner_binding_file, bundle_file):
@@ -40,6 +46,8 @@ def build(review_file, owner_binding_file, bundle_file):
     need(review['status'] == 'PASS_FOR_MERGE' and review['deltaSha256'] == delta() and review['candidate'] == CANDIDATE,
          'EXACT_DELTA_REVIEW_REQUIRED')
     need(review['ciStatus'] == 'success' and review['ciHead'] == review['reviewedHead'], 'EXACT_HEAD_CI_REQUIRED')
+    need(subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO).decode().strip() == review['reviewedHead'], 'BUILD_HEAD_NOT_REVIEWED')
+    need(not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=no'],cwd=REPO).strip(), 'BUILD_TRACKED_DIRTY')
     need(re.fullmatch(r'S-1-5-21-(?:[0-9]+-){3}[0-9]+', owner['ownerSid']), 'OWNER_SID_BINDING')
     need(set(owner['drives']) == {'C', 'F'} and owner['drives']['C']['disk'] != owner['drives']['F']['disk'], 'APPROVED_DISKS_BINDING')
     branch = 'codex/m1-runtime-candidate-r21'
@@ -55,8 +63,12 @@ def build(review_file, owner_binding_file, bundle_file):
         'owner-binding.json': owner_binding_file, 'review.json': review_file, 'candidate.bundle': bundle_file}
     files = {}
     for name, source in sources.items():
-        with Path(source).open('rb') as incoming, (output / name).open('xb') as outgoing:
-            shutil.copyfileobj(incoming, outgoing)
+        if name in INPUTS or name in CANONICAL:
+            with (output / name).open('xb') as outgoing:
+                outgoing.write(repository_bytes(source))
+        else:
+            with Path(source).open('rb') as incoming, (output / name).open('xb') as outgoing:
+                shutil.copyfileobj(incoming, outgoing)
         files[name] = identity(output / name)
     files['release-images.tar.gz'] = {'bytes': 543331793,
         'sha256': 'fadbed9be809e18e6d6afc4b123532edf7d0115a86e52e2e1e7bce16e245b2e7'}

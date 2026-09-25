@@ -158,6 +158,13 @@ class Commands:
             raise Stop('COMMAND_INTERRUPTED_OR_EXPIRED', commandId=command_id, exitCode=p.returncode) from None
         need(p.returncode == 0, 'COMMAND_FAILED', commandId=command_id, exitCode=p.returncode,
              errorClass=error_class(error), stderrBytes=len(error), stderrSha256=hashlib.sha256(error).hexdigest())
+        try:
+            os.killpg(p.pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            os.killpg(p.pid, signal.SIGKILL)
+            raise Stop('COMMAND_GROUP_OUTLIVED_COMMAND', commandId=command_id)
         need(output is not None or len(out) <= 8 * 1024 * 1024, 'COMMAND_OUTPUT_LIMIT', commandId=command_id)
         return out or b''
 
@@ -188,6 +195,8 @@ class Stages:
         exclusive(self.root / (stage + '.intent.json'), {'runId': self.run_id, 'stage': stage, 'utc': utc()})
 
     def complete(self, stage, evidence):
+        need(not set(evidence) & {'protocol', 'runId', 'stage', 'status', 'utc', 'agentRealKeyAccess'},
+             'EVIDENCE_CANNOT_OVERRIDE_STAGE_IDENTITY')
         result = {'protocol': 'FAI_M1_ASSISTED_STAGE_R21', 'runId': self.run_id, 'stage': stage,
                   'status': 'PASS', 'utc': utc(), 'agentRealKeyAccess': False, **evidence}
         exclusive(self.root / (stage + '.json'), result)
