@@ -31,16 +31,40 @@ $launchExeSha='@@EXE@@'
 $launchReview='@@REVIEW@@'
 $launchAdmin=@'
 $ErrorActionPreference='Stop'
+try {
 $bytes=[IO.File]::ReadAllBytes('@@PACKAGE@@\Install-FileChannel.ps1')
 $hasher=[Security.Cryptography.SHA256]::Create()
 try {$actual=([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hasher.Dispose()}
 if ($actual -ne '@@INSTALLER@@') {throw 'INSTALLER_HASH_MISMATCH'}
 & ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($bytes))) -PackagePath '@@PACKAGE@@' -ManifestSha256 '@@MANIFEST@@' -ReviewReference '@@REVIEW@@'
+exit 0
+} catch {
+    $failure=$_.Exception
+    for ($depth=0;$depth -lt 8 -and $failure.InnerException;$depth++) {$failure=$failure.InnerException}
+    # Only fixed exit codes cross the UAC boundary; no raw errors or secrets.
+    $code=switch -Exact ($failure.Message) {
+        'CHANNEL_PATH_OCCUPIED_RECONCILE_FIRST' {110}
+        'CHANNEL_RUN_VALUE_OCCUPIED' {111}
+        'EXPLICIT_OWNER_ADMIN_INSTALL_REQUIRED' {112}
+        'EXISTING_CORE_HASH_MISMATCH' {113}
+        'EXISTING_CORE_OWNER_MISMATCH' {114}
+        'OWNER_RUN_KEY_UNAVAILABLE' {115}
+        'INSTALLER_HASH_MISMATCH' {116}
+        'CHANNEL_MANIFEST_HASH_MISMATCH' {117}
+        'CHANNEL_PACKAGE_HASH_MISMATCH' {118}
+        'CHANNEL_DIRECTORY_CREATION_REFUSED' {119}
+        'CHANNEL_FILE_OPEN_FAILED' {120}
+        'CHANNEL_LINK_OR_TYPE_DENIED' {121}
+        'CHANNEL_PATH_CHANGED' {122}
+        default {199}
+    }
+    exit $code
+}
 @@END_INNER@@
 $launchEncoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launchAdmin))
 Write-Host 'Installazione del solo canale di lettura. Confermare UAC. Non ripetere in caso di errore.'
 $launchInstall=Start-Process -FilePath 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','RemoteSigned','-EncodedCommand',$launchEncoded) -Verb RunAs -WindowStyle Hidden -Wait -PassThru
-if ($launchInstall.ExitCode -ne 0) {throw 'CHANNEL_INSTALLATION_NOT_CONFIRMED_DO_NOT_REPEAT'}
+if ($launchInstall.ExitCode -ne 0) {throw ('CHANNEL_INSTALLATION_FAILED_CODE_'+$launchInstall.ExitCode+'_DO_NOT_REPEAT')}
 $launchState='C:\ProgramData\FAI-CRM-M1-CHANNEL-R18'
 $launchReceipt=[IO.File]::ReadAllText((Join-Path $launchState 'installation-receipt.json'))|ConvertFrom-Json
 if ($launchReceipt.manifestSha256 -ne $launchManifest -or $launchReceipt.status -ne 'INSTALLED_NOT_STARTED_OR_QUALIFIED') {throw 'INSTALLATION_RECEIPT_MISMATCH'}
