@@ -35,7 +35,8 @@ def isolation(raw, ref, run_id, *, document=False):
          and not h.get('Privileged') and not h.get('Devices') and not h.get('Binds'), 'ISOLATION_AUTHORITY')
     need(h['RestartPolicy']['Name'] == 'no' and h['LogConfig']['Type'] == 'none', 'ISOLATION_RESTART_LOGGING')
     need('no-new-privileges' in h.get('SecurityOpt', []) and 'ALL' in h.get('CapDrop', []), 'ISOLATION_SECURITY')
-    need(set(h.get('CapAdd') or []) == ({'CHOWN', 'FOWNER', 'DAC_OVERRIDE'} if document else set()), 'ISOLATION_CAPABILITIES')
+    capabilities = {name.removeprefix('CAP_') for name in h.get('CapAdd') or []}
+    need(capabilities == ({'CHOWN', 'FOWNER', 'DAC_OVERRIDE'} if document else set()), 'ISOLATION_CAPABILITIES')
     allowed = {'/work', '/tmp'} if document else {'/var/lib/postgresql/data', '/tmp'}
     need(all(m['Type'] == 'tmpfs' and m['Destination'] in allowed for m in raw.get('Mounts', [])),
          'ISOLATION_PERSISTENT_MOUNT')

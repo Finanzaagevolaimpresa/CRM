@@ -186,6 +186,13 @@ class AdmissionTests(unittest.TestCase):
                  'Tmpfs': {'/var/lib/postgresql/data': '', '/tmp': ''}, 'Memory': 2048*1024**2,
                  'MemorySwap': 2048*1024**2, 'NanoCpus': 1000000000, 'PidsLimit': 128}}
         restore.isolation(raw, ref, 'c'*32)
+        document = copy.deepcopy(raw)
+        document['HostConfig'].update(CapAdd=['CAP_CHOWN','CAP_FOWNER','CAP_DAC_OVERRIDE'],
+            Tmpfs={'/work':'','/tmp':''}, Memory=384*1024**2, MemorySwap=384*1024**2)
+        restore.isolation(document, ref, 'c'*32, document=True)
+        document['HostConfig']['CapAdd'].append('CAP_SYS_ADMIN')
+        with self.assertRaisesRegex(common.Stop, 'ISOLATION_CAPABILITIES'):
+            restore.isolation(document, ref, 'c'*32, document=True)
         for change in [lambda x: x['HostConfig'].update(NetworkMode='fai-crm_default'),
                        lambda x: x.update(Mounts=[{'Type':'volume','Destination':'/var/lib/postgresql/data'}]),
                        lambda x: x.update(Created='changed'),
