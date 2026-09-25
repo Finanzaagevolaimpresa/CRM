@@ -1,0 +1,32 @@
+name: M1 owner capability
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/m1-executor/**'
+      - 'docs/M1_OWNER_EXECUTOR.md'
+      - '.github/workflows/m1-owner-executor.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/m1-executor/**'
+      - 'docs/M1_OWNER_EXECUTOR.md'
+      - '.github/workflows/m1-owner-executor.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-capability:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Synthetic observer, ACL, input, package and stdio boundaries
+        shell: powershell
+        run: ./scripts/m1-executor/Test-M1Executor.ps1
