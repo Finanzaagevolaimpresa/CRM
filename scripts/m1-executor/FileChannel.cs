@@ -45,11 +45,11 @@ namespace Fai.M1 {
         static extern uint GetFinalPathNameByHandle(SafeFileHandle handle,StringBuilder path,uint size,uint flags);
         readonly List<SafeFileHandle> held=new List<SafeFileHandle>();
         internal string Identity;
-        internal static SafeFileHandle Open(string path,bool directory,out Info info,uint access=0x80000000U,uint? share=null) {
+        internal static SafeFileHandle Open(string path,bool directory,out Info info,uint access=0x80000000U,uint? share=null,uint disposition=3U) {
             info=new Info();
             // GENERIC_READ is intentional: attribute-only handles do not enforce
             // the sharing restriction needed to prevent directory replacement.
-            var h=CreateFile(path,access,share??(directory?3U:1U),IntPtr.Zero,3,0x00200000U|(directory?0x02000000U:0U),IntPtr.Zero);
+            var h=CreateFile(path,access,share??(directory?3U:1U),IntPtr.Zero,disposition,0x00200000U|(directory?0x02000000U:0U),IntPtr.Zero);
             try {
                 Data.Need(!h.IsInvalid && GetFileInformationByHandle(h,out info),"CHANNEL_FILE_OPEN_FAILED");
                 Data.Need((info.Attributes&0x400)==0 && ((info.Attributes&0x10)!=0)==directory,"CHANNEL_LINK_OR_TYPE_DENIED");
@@ -84,7 +84,7 @@ namespace Fai.M1 {
         }
         internal static FileLease ExclusiveFile(string path) {
             var lease=Directory(Path.GetDirectoryName(path));
-            try {Info info;lease.held.Add(Open(path,false,out info,0xC0000000U,0U));return lease;}
+            try {Info info;lease.held.Add(Open(path,false,out info,0xC0000000U,0U,4U));return lease;}
             catch {lease.Dispose();throw;}
         }
         public void Dispose() { for(int i=held.Count-1;i>=0;i--) held[i].Dispose(); held.Clear(); }
