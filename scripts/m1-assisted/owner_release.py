@@ -15,7 +15,7 @@ import time
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-from common import Stop, canonical, decode, digest, exclusive, load, need, utc
+from common import Stop, canonical, decode, digest, exclusive, load, need, private, utc
 
 SSH = Path(r'C:\Windows\System32\OpenSSH\ssh.exe')
 PS = Path(r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe')
@@ -175,9 +175,10 @@ def copies(manifest, source, label):
              'F': Path('F:/') / ('FAI-' + folder_name)}
     results = {}
     for drive, root in roots.items():
+        private(root.parent, directory=True)
         if label == 'backup':
             root.mkdir()
-        need(root.is_dir() and not root.is_symlink(), 'COPY_DIRECTORY_IDENTITY')
+        private(root, directory=True)
         path = root / target_names[label]
         with path.open('xb') as output:
             if drive == 'C':
@@ -189,6 +190,7 @@ def copies(manifest, source, label):
             os.fsync(output.fileno())
         need(path.stat().st_size == source['bundle_bytes'] and digest(path) == source['bundle_sha256'], 'CIPHERTEXT_COPY_HASH')
         after = storage()
+        private(path)
         need(after[drive]['disk'] == devices[drive]['disk'] and after[drive]['partition'] == devices[drive]['partition'], 'COPY_DESTINATION_CHANGED')
         results[drive] = {'path': str(path), 'sha256': digest(path), 'bytes': path.stat().st_size,
                           'physicalIdentityVerified': True, 'physicalDisk': devices[drive]['disk'], 'readbackVerified': True}

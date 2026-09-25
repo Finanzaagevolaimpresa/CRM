@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -128,6 +129,15 @@ class StageTests(unittest.TestCase):
         self.assertEqual(len(b['ledger48']), 48)
         self.assertEqual(len(set(b['ledger48']) - set(b['ledger46'])), 2)
         self.assertTrue(all(b['ledger48'][k] == v for k,v in b['ledger46'].items()))
+
+    def test_canonical_hashes_match_qualified_repository_bytes(self):
+        root = Path(__file__).resolve().parents[2]
+        b = common.load(root / 'scripts/m1-assisted/binding.json')
+        for name, expected in b['canonicalPrograms'].items():
+            raw = subprocess.check_output(['git','show','HEAD:' + name], cwd=root)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), expected, name)
+        self.assertEqual(common.digest(root/'scripts/pr140/owner_backup46.py'), b['backupProgramSha256'])
+        self.assertEqual({p.parent.name:common.digest(p) for p in (root/'prisma/migrations').glob('*/migration.sql')}, b['ledger48'])
 
 
 class AdmissionTests(unittest.TestCase):

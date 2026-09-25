@@ -6,7 +6,7 @@
   "canonicalPrograms": {
     "scripts/n05/failed_app_return.py": "b3793cea5ba599d6a4f6624406aef94b8a4bce081d50e5fa1732f24e26e2083d",
     "scripts/n05/key_mounts.py": "ffec4317f3f57a30b989efb237a902de020d18962877525f4df10744ce135c00",
-    "scripts/n05/recovery_kit.py": "66d9f8c438c71742cfa3851784e1081d70d0d4e7187928ca41b821d1ef0b2ea3",
+    "scripts/n05/recovery_kit.py": "5798b5cef6410c5727fc85fb24ca5725616e55f0ebbf826686e4524b437e794d",
     "src/lib/application-key-registry.ts": "26294c8508b61aea05d0bf336307f2ffa2f2c95026714a3d90cab4d2995fae20",
     "src/lib/privileged-step-up-token.ts": "494ce05588ada98d9436458df9157879cb2d85cb543bbf5ee62e63224ca2911f"
   },

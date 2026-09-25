@@ -67,6 +67,8 @@ def private(path, directory=False):
     for p in [path, *path.parents]:
         s = p.lstat()
         need(not stat.S_ISLNK(s.st_mode), 'SYMLINK_DENIED')
+        need(not getattr(s, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 1024),
+             'REPARSE_POINT_DENIED')
         if os.name != 'nt':
             need(s.st_uid in (0, os.getuid()) and not s.st_mode & 0o022, 'PATH_AUTHORITY')
     s = path.lstat()
@@ -98,7 +100,8 @@ def exclusive(path, value):
 
 
 def module(path, name, expected):
-    need(digest(private(path)) == expected, 'PROGRAM_HASH_MISMATCH')
+    observed = digest(private(path))
+    need(observed == expected, 'PROGRAM_HASH_MISMATCH', file=Path(path).name, expectedSha256=expected, observedSha256=observed)
     spec = importlib.util.spec_from_file_location(name, path)
     result = importlib.util.module_from_spec(spec)
     sys.modules[name] = result
