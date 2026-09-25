@@ -45,8 +45,12 @@ Il binding è un'aspettativa storica da riconciliare, non una prova di salute at
   `fai-crm-prod`. Alias ammesso: `faiadmin@desk.finanzaagevolaimpresa.it:22`.
   L'osservatore richiede poi hostname `fai-crm-prod-02`, uid 1000 e utente faiadmin.
 - Host key obbligatoria nel normale `~/.ssh/known_hosts`, non aggiornata.
+  `CheckHostIP=no` impedisce anche l'aggiunta automatica di nuovi indirizzi IP;
+  restano obbligatori `StrictHostKeyChecking=yes` e `UpdateHostKeys=no`.
   Forwarding, proxy, control socket, agent, comandi locali e direttive dinamiche
-  del profilo sono vietati. Il componente non ripara configurazioni incompatibili.
+  del profilo sono vietati anche nella sintassi `keyword=value`, in entrambe le
+  validazioni (installazione e runtime). L'autenticazione è limitata a publickey.
+  Il componente non ripara configurazioni incompatibili.
 - Il materiale SSH viene utilizzato internamente da OpenSSH; il componente non
   legge, copia o esporta file di chiave privata. L'agente riceve solo ricevute.
   `agentRealKeyAccess=false` non significa che OpenSSH autentichi senza credenziale.
@@ -69,6 +73,8 @@ statement timeout di 8 s e lock timeout di 2 s. Un Windows Job Object vincola la
 vita del processo figlio e dei discendenti; nessun payload remoto è inviato prima
 dell'assegnazione al job. L'ambiente del solo processo provider/figlio è ripulito;
 non cambia l'ambiente persistente dell'utente o del sistema.
+`PROGRAMDATA=C:\ProgramData` è l'unico percorso OS aggiunto alla lista minima
+necessario all'avvio di OpenSSH Windows, verificato con `-G` su una fixture.
 
 La ricevuta minimizzata rimane in `C:\ProgramData\FAI-CRM-M1-R18`, scrivibile dal
 proprietario ma non dall'agente. Non contiene environment, log grezzi, documenti,
@@ -86,6 +92,10 @@ confronto del digest avviene solo sulla VPS; non viene restituito all'agente.
 È un'ispezione in memoria della configurazione applicativa esistente, senza
 file di chiavi né provisioning. Una mancata corrispondenza resta un dato da
 riconciliare: non abilita automaticamente creazione o rotazione di segreti.
+I cinque mode gateway, inbox, intake, readiness ed engagement sono raccolti e
+ammessi soltanto quando mancanti, vuoti o `disabled`; ogni valore attivo o non
+canonico impedisce `closedGates=true`. Questo osservatore riguarda la baseline
+prima del rilascio, non una configurazione M1 già attivata.
 
 Il recipient pubblico age di produzione rimane `UNATTESTED`: non viene inventato
 né ricavato da fixture sintetiche. L'osservazione non legge il contenuto dei backup.
@@ -103,6 +113,10 @@ revisionato. Gli eseguibili compilati sono artefatti locali, non file Git.
 input arbitrari, ACL in memoria, minimizzazione degli errori, processo/descendenti
 terminati al timeout, protocollo stdio reale e rifiuto di pacchetti alterati.
 La prova stdio usa una build non installata e verifica il rifiuto prima di SSH.
+La regressione OpenSSH usa soltanto `-G -F <fixture-sintetica>` e riconferma
+le opzioni effettive, senza connessione, profilo proprietario o lettura di chiavi.
+Il predicato PowerShell dell'installer viene provato direttamente tramite AST,
+senza eseguire la sua sezione amministrativa.
 Non usa chiavi vere, non installa la capacità e non modifica il CRM.
 
 La CI dedicata è separata dalla qualifica applicativa M1 già acquisita. Le CI

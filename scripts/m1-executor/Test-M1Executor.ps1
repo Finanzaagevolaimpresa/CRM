@@ -13,6 +13,18 @@ $r18Observation=Join-Path $r18TestRoot 'synthetic-observation.json'
 if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_OBSERVATION_FAILED' }
 $r18Package=Join-Path $r18TestRoot 'package'
 & (Join-Path $PSScriptRoot 'Build-M1Executor.ps1') -BindingPath $r18Binding -OutputDirectory $r18Package
+# Exercise the installer's actual rejection predicate without running its
+# privileged section or opening the owner's profile/configuration.
+$r18Tokens=$null; $r18ParseErrors=$null
+$r18Ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'Install-M1Executor.ps1'),[ref]$r18Tokens,[ref]$r18ParseErrors)
+if ($r18ParseErrors.Count) { throw 'INSTALLER_PARSE_FAILED' }
+$r18ProfileIf=@($r18Ast.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Extent.Text.Contains('OWNER_PROFILE_UNSUPPORTED_DIRECTIVE')},$true))
+if ($r18ProfileIf.Count -ne 1) { throw 'INSTALLER_PROFILE_PREDICATE_NOT_UNIQUE' }
+$r18Predicate=[scriptblock]::Create('param([string]$r18ProfileText) '+$r18ProfileIf[0].Clauses[0].Item1.Extent.Text)
+foreach ($r18BadProfile in @('Include=x','Include x','iNcLuDe = x','Match=exec x',"`tMATCH `texec x",'KnownHostsCommand=x','ProxyCommand=x','SetEnv=BASH_ENV=/tmp/x','RemoteCommand=x')) {
+    if (-not (& $r18Predicate $r18BadProfile)) { throw 'INSTALLER_DYNAMIC_PROFILE_ACCEPTED' }
+}
+if (& $r18Predicate "Host synthetic-no-network.invalid`n HostName synthetic-no-network.invalid`n User synthetic`n IdentityFile none`n") { throw 'INSTALLER_STATIC_PROFILE_REJECTED' }
 $r18TestExe=Join-Path $r18TestRoot 'TestExecutor.exe'
 $r18Csc='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $r18Csc /nologo /target:exe /platform:x64 ('/out:'+(Join-Path $r18TestRoot 'TestChild.exe')) (Join-Path $PSScriptRoot 'TestChild.cs')
@@ -31,4 +43,4 @@ $r18Rejected=$false
 try { & (Join-Path $PSScriptRoot 'Install-M1Executor.ps1') -PackagePath $r18Package -ManifestSha256 $r18ManifestSha -ValidatePackageOnly }
 catch { if ($_.Exception.Message -ne 'PACKAGE_FILE_HASH_MISMATCH') { throw }; $r18Rejected=$true }
 if (-not $r18Rejected) { throw 'TAMPERED_PACKAGE_ACCEPTED' }
-[pscustomobject]@{status='WINDOWS_PACKAGE_TESTS_PASS';tamperRejected=$true;remoteConnectionAttempted=$false;installationPerformed=$false;testArtifacts=$r18TestRoot} | ConvertTo-Json -Compress
+[pscustomobject]@{status='WINDOWS_PACKAGE_TESTS_PASS';tamperRejected=$true;installerProfilePredicateCases=10;syntheticSshConfigOnly=$true;remoteConnectionAttempted=$false;installationPerformed=$false;testArtifacts=$r18TestRoot} | ConvertTo-Json -Compress

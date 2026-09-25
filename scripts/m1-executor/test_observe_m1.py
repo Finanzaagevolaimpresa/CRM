@@ -123,9 +123,12 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.Stop, code): run_fake(f)
 
     def test_external_gate_cannot_be_silently_enabled(self):
-        for flag in ("FEATURE_AI_DISPATCH_ENABLED", "FEATURE_CUSTOMER_PORTAL_ENABLED", "FEATURE_PAYMENTS_ENABLED"):
-            with self.subTest(flag=flag):
-                f = FakeObserver(); f.flag_override = {flag: "true"}
+        cases = [(flag, "true") for flag in ("FEATURE_AI_DISPATCH_ENABLED", "FEATURE_CUSTOMER_PORTAL_ENABLED", "FEATURE_PAYMENTS_ENABLED")]
+        cases += [("SECURE_LEAD_GATEWAY_MODE", "shadow"), ("SECURE_LEAD_GATEWAY_MODE", "enforced"),
+                  ("COMMERCIAL_LEAD_INBOX_MODE", "enforced")]
+        for flag, value in cases:
+            with self.subTest(flag=flag, value=value):
+                f = FakeObserver(); f.flag_override = {flag: value}
                 with self.assertRaisesRegex(m.Stop, "EXTERNAL_GATES_NOT_CLOSED"): run_fake(f)
 
     def test_key_mismatch_is_evidence_not_permission_to_provision(self):
@@ -135,6 +138,22 @@ class Tests(unittest.TestCase):
                 result = run_fake(f)
                 self.assertFalse(result["stepUpDigestMatches"])
                 self.assertFalse(result["releaseAdmitted"])
+
+    def test_each_operational_mode_rejects_active_and_noncanonical_values(self):
+        for mode in m.INACTIVE_MODES:
+            for value in ("controlled", "internal", "synthetic", "shadow", "enforced", "DISABLED"):
+                with self.subTest(mode=mode, value=value):
+                    f = FakeObserver(); f.flag_override = {mode: value}
+                    with self.assertRaisesRegex(m.Stop, "EXTERNAL_GATES_NOT_CLOSED"): run_fake(f)
+
+    def test_each_operational_mode_accepts_only_known_inactive_values(self):
+        for mode in m.INACTIVE_MODES:
+            for value in (None, "", "disabled"):
+                with self.subTest(mode=mode, value=value):
+                    f = FakeObserver(); f.flag_override = {mode: value}
+                    result = run_fake(f)
+                    self.assertTrue(result["closedGates"])
+                    self.assertFalse(result["releaseAdmitted"])
 
     def test_binding_has_no_path_or_command_escape(self):
         for field, value in (("path", "/etc/shadow"), ("command", "id"), ("appId", "a;id"), ("candidate", "0"*40)):

@@ -99,7 +99,7 @@ namespace Fai.M1 {
                 while((row=Marshal.PtrToStringUni(p)).Length>0) { int end=row.IndexOf('='); if(end>0) names.Add(row.Substring(0,end)); p=IntPtr.Add(p,(row.Length+1)*2); }
                 foreach(string name in names) Data.Need(SetEnvironmentVariable(name,null),"ENVIRONMENT_SANITIZATION_FAILED");
             } finally { FreeEnvironmentStrings(block); }
-            Data.Need(SetEnvironmentVariable("SystemRoot",@"C:\Windows") && SetEnvironmentVariable("WINDIR",@"C:\Windows") && SetEnvironmentVariable("PATH",@"C:\Windows\System32") && SetEnvironmentVariable("USERPROFILE",@"C:\Users\Utente"),"ENVIRONMENT_SANITIZATION_FAILED");
+            Data.Need(SetEnvironmentVariable("SystemRoot",@"C:\Windows") && SetEnvironmentVariable("WINDIR",@"C:\Windows") && SetEnvironmentVariable("PATH",@"C:\Windows\System32") && SetEnvironmentVariable("USERPROFILE",@"C:\Users\Utente") && SetEnvironmentVariable("PROGRAMDATA",@"C:\ProgramData"),"ENVIRONMENT_SANITIZATION_FAILED");
         }
         [StructLayout(LayoutKind.Sequential)] struct BasicLimit { internal long PerProcess,PerJob; internal uint Flags; internal UIntPtr MinWs,MaxWs; internal uint Active; internal UIntPtr Affinity; internal uint Priority,Scheduling; }
         [StructLayout(LayoutKind.Sequential)] struct IoCounters { internal ulong A,B,C,D,E,F; }
@@ -121,6 +121,9 @@ namespace Fai.M1 {
                 si.EnvironmentVariables.Clear(); si.EnvironmentVariables["SystemRoot"]=@"C:\Windows";
                 si.EnvironmentVariables["WINDIR"]=@"C:\Windows"; si.EnvironmentVariables["PATH"]=@"C:\Windows\System32";
                 si.EnvironmentVariables["USERPROFILE"]=@"C:\Users\Utente";
+                // Win32 OpenSSH exits silently with 255 if PROGRAMDATA is absent,
+                // even for -G. Supply this fixed OS path, not inherited values.
+                si.EnvironmentVariables["PROGRAMDATA"]=@"C:\ProgramData";
                 p.StartInfo=si; Data.Need(p.Start(),"CHILD_START_FAILED");
                 // No reviewed payload is sent until lifetime containment exists.
                 if(!AssignProcessToJobObject(job,p.Handle)) { p.Kill(); p.WaitForExit(5000); throw new Denied("JOB_ASSIGN_FAILED"); }
@@ -141,8 +144,11 @@ namespace Fai.M1 {
 
     internal static class Policy {
         internal const string Profile = @"C:\Users\Utente\.ssh\config";
-        internal const string Options = "-T -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o UserKnownHostsFile=C:/Users/Utente/.ssh/known_hosts -o GlobalKnownHostsFile=none -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o ClearAllForwardings=yes -o ForwardAgent=no -o ForwardX11=no -o PermitLocalCommand=no -o ProxyCommand=none -o ProxyJump=none -o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o IdentityAgent=none -o IdentitiesOnly=yes";
+        internal const string Options = "-T -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 -o CanonicalizeHostname=no -o StrictHostKeyChecking=yes -o CheckHostIP=no -o UpdateHostKeys=no -o UserKnownHostsFile=C:/Users/Utente/.ssh/known_hosts -o GlobalKnownHostsFile=none -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o ClearAllForwardings=yes -o ForwardAgent=no -o ForwardX11=no -o PermitLocalCommand=no -o ProxyCommand=none -o ProxyJump=none -o ControlMaster=no -o ControlPath=none -o ControlPersist=no -o IdentityAgent=none -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o GSSAPIAuthentication=no -o HostbasedAuthentication=no";
         internal static readonly string Args = Options + " -F \"" + Profile + "\"";
+        internal static void CheckProfile(string text) {
+            Data.Need(!Regex.IsMatch(text,@"(?im)^\s*(Include|Match|ProxyCommand|ProxyJump|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider|RemoteCommand|SetEnv)(?:\s|=)") && text.IndexOf("FAI-Custodia",StringComparison.OrdinalIgnoreCase)<0,"OWNER_PROFILE_UNSUPPORTED_DIRECTIVE");
+        }
         internal static string[] IdentityPaths(string text) {
             var fields=new Dictionary<string,List<string>>(StringComparer.Ordinal);
             foreach(string line in text.Split('\n')) { var parts=line.TrimEnd('\r').Split(new[]{' '},2); if(parts.Length!=2) continue; if(!fields.ContainsKey(parts[0])) fields[parts[0]]=new List<string>(); fields[parts[0]].Add(parts[1]); }
@@ -238,7 +244,7 @@ namespace Fai.M1 {
             Policy.OwnerFile(Policy.Profile,owner); Policy.OwnerFile(@"C:\Users\Utente\.ssh\known_hosts",owner);
             Data.Need(Data.FileSha(Policy.Profile)==Data.Text(a["profileSha256"]),"OWNER_PROFILE_CHANGED");
             string profile=File.ReadAllText(Policy.Profile);
-            Data.Need(!Regex.IsMatch(profile,@"(?im)^\s*(Include|Match|ProxyCommand|ProxyJump|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s") && profile.IndexOf("FAI-Custodia",StringComparison.OrdinalIgnoreCase)<0,"OWNER_PROFILE_UNSUPPORTED_DIRECTIVE");
+            Policy.CheckProfile(profile);
             Data.Need(Regex.IsMatch(Data.Text(a["reviewReference"]),@"\A[A-Za-z0-9:/._#?=-]{10,240}\z"),"REVIEW_REFERENCE_REQUIRED");
             Policy.Acl(StateRoot,owner);
             return owner;

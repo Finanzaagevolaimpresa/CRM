@@ -30,6 +30,8 @@ FLAGS = {
     "AI_EXTERNAL_PROVIDERS_ENABLED": "false", "AI_ORCHESTRATOR_WORKER_ENABLED": "0",
     "AI_PROVIDER": "mock", "WEBSITE_LEAD_MODE": "disabled",
 }
+INACTIVE_MODES = ("SECURE_LEAD_GATEWAY_MODE", "COMMERCIAL_LEAD_INBOX_MODE",
+                  "CONTROLLED_INTAKE_MODE", "PRACTICE_READINESS_MODE", "INTERNAL_ENGAGEMENT_MODE")
 NODE_METADATA = r"""
 const c=require('node:crypto');
 const e=process.env,v=e.PRIVILEGED_STEP_UP_KEY_VERSION,s=e.PRIVILEGED_STEP_UP_SECRET;
@@ -38,11 +40,10 @@ console.log(JSON.stringify({version:/^[1-9][0-9]{0,8}$/.test(v||'')?Number(v):nu
 configured:typeof s==='string'&&s.length>=32,
 digest:typeof s==='string'&&s.length>=32?c.createHash('sha256').update(s).digest('hex'):null,
 flags}));
-""" % json.dumps(list(FLAGS) + [
+""" % json.dumps(list(FLAGS) + list(INACTIVE_MODES) + [
     "VNX01_LEAD_INTAKE_CONSUMER_ENABLED", "VNX05_LEAD_INTAKE_PILOT_ENABLED",
     "N15_SYNTHETIC_SELF_CLAIM_OPT_IN", "N15_SYNTHETIC_ASSIGNMENT_OPT_IN",
-    "INTERNAL_SESSION_MODE", "PRIVILEGED_ACCESS_MODE", "INTERNAL_ENGAGEMENT_MODE",
-    "CONTROLLED_INTAKE_MODE", "PRACTICE_READINESS_MODE",
+    "INTERNAL_SESSION_MODE", "PRIVILEGED_ACCESS_MODE",
 ])
 SQL = '''BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL statement_timeout='8s';
@@ -177,7 +178,7 @@ class Observer:
              and pwd.getpwuid(os.geteuid()).pw_name == "faiadmin", "TARGET_IDENTITY_MISMATCH")
         need(self.docker("info", "--format", "{{.ID}}") == self.b["engineId"], "ENGINE_IDENTITY_DRIFT")
         app, pg = self.container("app"), self.container("postgres")
-        git = ["/usr/bin/git", "--no-optional-locks", "-C", RUNTIME]
+        git = ["/usr/bin/git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", RUNTIME]
         need(self.run(git + ["rev-parse", "HEAD", "HEAD^{tree}"], "SOURCE_IDENTITY").split() == [SOURCE, TREE],
              "SOURCE_REVISION_DRIFT")
         need(not self.run(git + ["status", "--porcelain=v1", "--untracked-files=no"], "SOURCE_STATUS"),
@@ -195,6 +196,9 @@ class Observer:
         need(ledger_matches(data["ledger"], self.b["ledger"]), "LEDGER46_DRIFT_OR_INCOMPLETE")
         local = strict_json(self.docker("exec", self.b["appId"], "node", "-e", NODE_METADATA, code="KEY_METADATA"))
         closed = all(str(local["flags"].get(k)).lower() == v for k, v in FLAGS.items())
+        # These modes are inactive when unset, empty or explicitly disabled.
+        # Active and noncanonical values never produce closedGates=true.
+        closed = closed and all(local["flags"].get(k) in (None, "", "disabled") for k in INACTIVE_MODES)
         closed = closed and all(local["flags"].get(k) in (None, "", "0", "false") for k in (
             "VNX01_LEAD_INTAKE_CONSUMER_ENABLED", "VNX05_LEAD_INTAKE_PILOT_ENABLED",
             "N15_SYNTHETIC_SELF_CLAIM_OPT_IN", "N15_SYNTHETIC_ASSIGNMENT_OPT_IN"))

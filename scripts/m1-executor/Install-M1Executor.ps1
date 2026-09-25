@@ -56,7 +56,7 @@ $r18SshExe='C:\Windows\System32\OpenSSH\ssh.exe'
 R18-NoLinks $r18SshProfile
 R18-NoLinks $r18SshExe
 $r18ProfileText=[IO.File]::ReadAllText($r18SshProfile)
-if ($r18ProfileText -match '(?im)^\s*(Include|Match|ProxyCommand|ProxyJump|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider)\s' -or
+if ($r18ProfileText -match '(?im)^\s*(Include|Match|ProxyCommand|ProxyJump|LocalCommand|KnownHostsCommand|PKCS11Provider|SecurityKeyProvider|RemoteCommand|SetEnv)(?:\s|=)' -or
     $r18ProfileText -match 'FAI-Custodia') { throw 'OWNER_PROFILE_UNSUPPORTED_DIRECTIVE' }
 $r18Offline=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxOffline')).Translate([Security.Principal.SecurityIdentifier])
 $r18Admins=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')

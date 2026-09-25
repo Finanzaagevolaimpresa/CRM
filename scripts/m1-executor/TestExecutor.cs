@@ -20,6 +20,9 @@ internal static class TestExecutor {
                 Reject(()=>StrictJson.Parse(text),"invalid JSON accepted");
             Assert(Data.Obj(StrictJson.Parse("{\"x\":true}"))["x"] is bool,"JSON boolean");
             Assert(Policy.IdentityPaths(Alias()).Length==1,"fixed alias");
+            Policy.CheckProfile("Host fai-crm-prod\n HostName desk.finanzaagevolaimpresa.it\n User faiadmin\n IdentityFile ~/.ssh/fai_crm_prod_ed25519\n"); tests++;
+            foreach(string profile in new[]{"ProxyCommand=arbitrary", "Match=exec arbitrary", "include=file", "Include file", "iNcLuDe = file", "\tMATCH \texec arbitrary", "SetEnv=BASH_ENV=/tmp/other", "  RemoteCommand = arbitrary", "KnownHostsCommand\tcommand", "KnownHostsCommand=command"})
+                Reject(()=>Policy.CheckProfile(profile),"dynamic SSH profile syntax accepted");
             Reject(()=>Policy.IdentityPaths(Alias("elsewhere.example")),"wrong target");
             Reject(()=>Policy.IdentityPaths(Alias(user:"root")),"wrong user");
             Reject(()=>Policy.IdentityPaths(Alias(identity:"C:/Users/Utente/FAI-Custodia/key")),"custody identity");
@@ -49,6 +52,15 @@ internal static class TestExecutor {
             Assert((bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="STOP",code="SSH_DNS_FAILED"}))))["isError"],"STOP is a tool error");
             Assert(!(bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="READ_CONFIRMED"}))))["isError"],"read success is not a tool error");
             string child=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"TestChild.exe");
+            // OpenSSH -G expands only this fresh synthetic profile. No connection,
+            // owner profile, key file or known_hosts contents are accessed.
+            string fixture=Path.Combine(Path.GetDirectoryName(child),"synthetic-ssh-config");
+            File.WriteAllText(fixture,"Host synthetic-no-network.invalid\n HostName synthetic-no-network.invalid\n User synthetic\n IdentityFile none\n CheckHostIP yes\n StrictHostKeyChecking no\n UpdateHostKeys yes\n");
+            var expanded=SshCommand.RunContained(SshCommand.Exe,Policy.Options+" -G -F \""+fixture+"\" synthetic-no-network.invalid",null,10);
+            Assert(expanded.Exit==0,"synthetic SSH config expansion: "+expanded.Exit+" "+expanded.Error.Trim().Replace(fixture,"<synthetic-fixture>"));
+            var effective=new Dictionary<string,string>();
+            foreach(string line in expanded.Output.Split('\n')) { var field=line.TrimEnd('\r').Split(new[]{' '},2); if(field.Length==2 && !effective.ContainsKey(field[0])) effective.Add(field[0],field[1]); }
+            Assert(effective["checkhostip"]=="no" && effective["updatehostkeys"]=="false" && (effective["stricthostkeychecking"]=="true" || effective["stricthostkeychecking"]=="yes"),"host identity read-only options override profile");
             Assert(SshCommand.RunContained(child,"echo","synthetic-input",5).Output=="synthetic-input","bounded process input/output");
             Reject(()=>SshCommand.RunContained(child,"overflow",null,5),"unbounded child output");
             string pidFile=Path.Combine(Path.GetDirectoryName(child),"descendant.pid");
