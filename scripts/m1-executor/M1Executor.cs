@@ -308,6 +308,12 @@ namespace Fai.M1 {
             if(p.ContainsKey("arguments")) Data.Fields(Data.Obj(p["arguments"]));
             return name;
         }
+        internal static object ToolResult(object value) {
+            string text=Data.Encode(value);
+            var fields=Data.Obj(StrictJson.Parse(text)); object status;
+            bool failed=fields.TryGetValue("status",out status) && status is string && (string)status=="STOP";
+            return new {content=new[]{new {type="text",text}},isError=failed};
+        }
         internal object Dispatch(Dictionary<string,object> request) {
             string method=Data.Text(request["method"]);
             var p=request.ContainsKey("params")?Data.Obj(request["params"]):new Dictionary<string,object>();
@@ -318,7 +324,7 @@ namespace Fai.M1 {
             if(method=="tools/call") {
                 try {
                     string name=ToolName(p); object value=name==Names[0]?executor.Status():executor.Observe(name==Names[2]);
-                    return new {content=new[]{new {type="text",text=Data.Encode(value)}},isError=false};
+                    return ToolResult(value);
                 } catch(Exception e) { return new {content=new[]{new {type="text",text=Data.Encode(new {status="STOP",code=e is Denied?e.Message:"LOCAL_OPERATION_FAILED_REDACTED",productionMutationPerformed=false})}},isError=true}; }
             }
             throw new Denied("METHOD_NOT_SUPPORTED");

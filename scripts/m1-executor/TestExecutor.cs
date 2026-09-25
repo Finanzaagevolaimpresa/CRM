@@ -14,7 +14,7 @@ internal static class TestExecutor {
     static string Alias(string host="desk.finanzaagevolaimpresa.it",string user="faiadmin",string identity="~/.ssh/fai_crm_prod_ed25519") {
         return "hostname "+host+"\nuser "+user+"\nport 22\nidentityfile "+identity+"\n";
     }
-    public static int Main() {
+    public static int Main(string[] args) {
         try {
             foreach(string text in new[]{"{\"x\":1,\"x\":2}","{\"x\":NaN}","[1,]","{\"x\":1}junk","{\"x\":01}","{\"x\":1e999}"})
                 Reject(()=>StrictJson.Parse(text),"invalid JSON accepted");
@@ -43,6 +43,11 @@ internal static class TestExecutor {
             stop["environment"]="sensitive"; Reject(()=>Policy.Minimize(Data.Encode(stop)),"extra output field"); stop.Remove("environment");
             stop["code"]="password=hidden"; Reject(()=>Policy.Minimize(Data.Encode(stop)),"raw error denied"); stop["code"]="TARGET_IDENTITY_MISMATCH";
             stop["secretValuesExported"]=true; Reject(()=>Policy.Minimize(Data.Encode(stop)),"unsafe receipt");
+            var success=Policy.Minimize(File.ReadAllText(args[0]));
+            Assert((string)success["status"]=="OBSERVATION_COMPLETE" && (bool)success["stepUpDigestMatches"],"actual observer receipt accepted");
+            success["releaseAdmitted"]=true; Reject(()=>Policy.Minimize(Data.Encode(success)),"observation must never admit release");
+            Assert((bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="STOP",code="SSH_DNS_FAILED"}))))["isError"],"STOP is a tool error");
+            Assert(!(bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="READ_CONFIRMED"}))))["isError"],"read success is not a tool error");
             string child=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"TestChild.exe");
             Assert(SshCommand.RunContained(child,"echo","synthetic-input",5).Output=="synthetic-input","bounded process input/output");
             Reject(()=>SshCommand.RunContained(child,"overflow",null,5),"unbounded child output");

@@ -158,5 +158,21 @@ class Tests(unittest.TestCase):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--write-synthetic-binding":
         Path(sys.argv[2]).write_text(json.dumps(binding(), sort_keys=True), encoding="utf-8")
+    elif len(sys.argv) == 3 and sys.argv[1] == "--write-synthetic-observation":
+        # Run the actual receipt assembler with a synthetic target. The C#
+        # tests consume these bytes to catch observer/protocol contract drift.
+        import contextlib
+        import io
+        stream = io.StringIO()
+        with patch.object(m, "Observer", return_value=FakeObserver()), \
+             patch.object(m.signal, "signal"), patch.object(m.signal, "alarm", create=True), \
+             patch.object(m.signal, "SIGALRM", 14, create=True), contextlib.redirect_stdout(stream):
+            fake_pwd = types.SimpleNamespace(getpwuid=lambda _: types.SimpleNamespace(pw_name="faiadmin"))
+            with patch.dict(sys.modules, {"pwd": fake_pwd}), \
+                 patch.object(m.socket, "gethostname", return_value="fai-crm-prod-02"), \
+                 patch.object(m.os, "geteuid", return_value=1000, create=True), \
+                 patch.object(m.os, "statvfs", return_value=types.SimpleNamespace(f_bavail=100000, f_frsize=4096), create=True):
+                assert m.main(binding()) == 0
+        Path(sys.argv[2]).write_text(stream.getvalue(), encoding="utf-8")
     else:
         unittest.main()

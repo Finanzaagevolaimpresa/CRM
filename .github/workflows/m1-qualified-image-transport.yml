@@ -31,7 +31,7 @@ jobs:
           github-token: ${{ github.token }}
           path: qualified-source
       - name: Verify the original image digest and split its exact bytes
-        run: python3 -I -B -S scripts/m1-executor/split_qualified_images.py qualified-source/release-images.tar.gz qualified-parts
+        run: python3 -I -B -S scripts/m1-executor/split_qualified_images.py qualified-source/pr140-release-36021069464-1/release-images.tar.gz qualified-parts
       - uses: actions/upload-artifact@v4
         with:
           name: m1-qualified-images-00-${{ github.run_id }}

@@ -8,6 +8,9 @@ $r18Binding=Join-Path $r18TestRoot 'synthetic-binding.json'
 if ($LASTEXITCODE -ne 0) { throw 'REMOTE_OBSERVER_TESTS_FAILED' }
 & $PythonPath -I -B -S (Join-Path $PSScriptRoot 'test_observe_m1.py') --write-synthetic-binding $r18Binding
 if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_BINDING_FAILED' }
+$r18Observation=Join-Path $r18TestRoot 'synthetic-observation.json'
+& $PythonPath -I -B -S (Join-Path $PSScriptRoot 'test_observe_m1.py') --write-synthetic-observation $r18Observation
+if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_OBSERVATION_FAILED' }
 $r18Package=Join-Path $r18TestRoot 'package'
 & (Join-Path $PSScriptRoot 'Build-M1Executor.ps1') -BindingPath $r18Binding -OutputDirectory $r18Package
 $r18TestExe=Join-Path $r18TestRoot 'TestExecutor.exe'
@@ -16,7 +19,7 @@ $r18Csc='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if ($LASTEXITCODE -ne 0) { throw 'CHILD_FIXTURE_COMPILATION_FAILED' }
 & $r18Csc /nologo /target:exe /platform:x64 /r:System.Web.Extensions.dll /main:TestExecutor ('/out:'+$r18TestExe) (Join-Path $PSScriptRoot 'M1Executor.cs') (Join-Path $PSScriptRoot 'TestExecutor.cs')
 if ($LASTEXITCODE -ne 0) { throw 'TEST_COMPILATION_FAILED' }
-& $r18TestExe
+& $r18TestExe $r18Observation
 if ($LASTEXITCODE -ne 0) { throw 'EXECUTOR_SECURITY_TESTS_FAILED' }
 & $PythonPath -I -B -S (Join-Path $PSScriptRoot 'test_protocol.py') (Join-Path $r18Package 'M1Executor.exe')
 if ($LASTEXITCODE -ne 0) { throw 'STDIO_PROTOCOL_TESTS_FAILED' }
