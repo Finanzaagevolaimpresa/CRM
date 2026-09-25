@@ -1,0 +1,48 @@
+name: M1 qualified image transport
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/m1-qualified-image-transport.yml'
+      - 'scripts/m1-executor/split_qualified_images.py'
+      - 'scripts/m1-executor/test_image_transport.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  preserve-qualified-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify transport rejection and exact reconstruction
+        run: python3 -I -B -S scripts/m1-executor/test_image_transport.py
+      - name: Retrieve the existing qualified artifact (no rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10817321285'
+          run-id: '36021069464'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-source
+      - name: Verify the original image digest and split its exact bytes
+        run: python3 -I -B -S scripts/m1-executor/split_qualified_images.py qualified-source/pr140-release-36021069464-1/release-images.tar.gz qualified-parts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-qualified-images-00-${{ github.run_id }}
+          path: qualified-parts/part-00/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m1-qualified-images-01-${{ github.run_id }}
+          path: qualified-parts/part-01/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
