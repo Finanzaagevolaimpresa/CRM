@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import time
 
-from common import Stop, canonical, decode, digest, exclusive, need, value_sha
+from common import Stop, canonical, decode, defer_interruptions, digest, exclusive, need, value_sha
 
 LABEL = 'it.finanzaagevolaimpresa.m1-isolated-restore'
 PG_START = r'''set -eu
@@ -88,18 +88,33 @@ class Restore:
             '-d', database, '-X', '-qAt', '-F', '\t', '-v', 'ON_ERROR_STOP=1', data=sql.encode(), seconds=40).decode().strip()
 
     def cleanup(self):
-        for role, ref in reversed(list(self.refs.items())):
-            raw = self.c.inspect('container', ref['id'])
-            isolation(raw, ref, self.run_id, document=role == 'documents')
-            if raw['State']['Running']:
-                self.c.docker('RECOVERY_STOP_' + role.upper(), 'stop', '--time', '10', ref['id'], seconds=25)
-            raw = self.c.inspect('container', ref['id'])
-            isolation(raw, ref, self.run_id, document=role == 'documents')
-            need(not raw['State']['Running'] and raw['State']['Pid'] == 0 and not raw.get('ExecIDs'),
-                 'RECOVERY_STOP_UNVERIFIED')
-            self.c.docker('RECOVERY_REMOVE_' + role.upper(), 'rm', ref['id'])
-            need(not self.c.docker('RECOVERY_ABSENCE', 'ps', '-aq', '--no-trunc', '--filter', 'id=' + ref['id']).strip(),
-                 'RECOVERY_REMOVAL_UNVERIFIED')
+        original_deadline = (self.c.wall_end, self.c.mono_end)
+        items = list(reversed(list(self.refs.items())))
+        errors = []
+        with defer_interruptions() as deferred:
+            for index, (role, ref) in enumerate(items):
+                try:
+                    # One failed resource cannot consume the other one's share.
+                    budget = self.c.remaining(90) / (len(items) - index)
+                    self.c.wall_end = min(original_deadline[0], time.time() + budget)
+                    self.c.mono_end = min(original_deadline[1], time.monotonic() + budget)
+                    raw = self.c.inspect('container', ref['id'])
+                    isolation(raw, ref, self.run_id, document=role == 'documents')
+                    if raw['State']['Running']:
+                        self.c.docker('RECOVERY_STOP_' + role.upper(), 'stop', '--time', '10', ref['id'], seconds=25)
+                    raw = self.c.inspect('container', ref['id'])
+                    isolation(raw, ref, self.run_id, document=role == 'documents')
+                    need(not raw['State']['Running'] and raw['State']['Pid'] == 0 and not raw.get('ExecIDs'),
+                         'RECOVERY_STOP_UNVERIFIED')
+                    self.c.docker('RECOVERY_REMOVE_' + role.upper(), 'rm', ref['id'])
+                    need(not self.c.docker('RECOVERY_ABSENCE', 'ps', '-aq', '--no-trunc', '--filter', 'id=' + ref['id']).strip(),
+                         'RECOVERY_REMOVAL_UNVERIFIED')
+                except BaseException as exc:
+                    errors.append({'role':role, 'code':getattr(exc, 'code', type(exc).__name__)})
+                finally:
+                    self.c.wall_end, self.c.mono_end = original_deadline
+        need(not errors, 'RECOVERY_RESOURCES_UNSETTLED', resources=errors)
+        return bool(deferred)
         # Never adopt a container after a lost creation reply. Its intent/name is
         # left for read-only reconciliation, without starting or deleting it.
 
@@ -165,11 +180,13 @@ class Restore:
             main_error = exc
         try:
             self.c.wall_end, self.c.mono_end = cleanup_deadline
-            self.cleanup()
+            interrupted_cleanup = self.cleanup()
         except BaseException as exc:
             raise Stop('RECOVERY_CLEANUP_UNVERIFIED', originalCode=getattr(main_error, 'code', None),
-                       cleanupCode=getattr(exc, 'code', type(exc).__name__)) from None
+                       cleanupCode=getattr(exc, 'code', type(exc).__name__),
+                       cleanupDetails=getattr(exc, 'details', {})) from None
         if main_error:
             raise main_error
+        need(not interrupted_cleanup, 'OWNER_INTERRUPTED_AFTER_RECOVERY_SETTLED')
         result['isolatedContainersRemoved'] = True
         return result

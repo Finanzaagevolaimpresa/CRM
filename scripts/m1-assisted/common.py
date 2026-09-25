@@ -1,5 +1,6 @@
 """Bounded execution and immutable receipts for the explicit owner release."""
 import datetime
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -122,15 +123,33 @@ def error_class(error):
     return 'COMMAND_ERROR_REDACTED'
 
 
+@contextlib.contextmanager
+def defer_interruptions():
+    """Do not interrupt an attributed stop; callers preserve the initial failure."""
+    received, previous = [], {}
+    for name in ('SIGINT', 'SIGTERM', 'SIGHUP'):
+        if hasattr(signal, name):
+            number = getattr(signal, name)
+            previous[number] = signal.getsignal(number)
+            signal.signal(number, lambda value, _frame: received.append(value))
+    try:
+        yield received
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 class Commands:
     def __init__(self, seconds=900, cwd=None):
         self.wall_end = time.time() + seconds
         self.mono_end = time.monotonic() + seconds
         self.cwd = cwd
+        self.groups_quiet = True
         self.env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/home/faiadmin',
                     'LANG': 'C', 'LC_ALL': 'C', 'GIT_TERMINAL_PROMPT': '0'}
 
     def remaining(self, cap):
+        need(self.groups_quiet, 'COMMAND_GROUP_STOP_UNVERIFIED')
         n = min(cap, self.wall_end - time.time(), self.mono_end - time.monotonic())
         need(n > 0, 'STAGE_DEADLINE_EXPIRED')
         return n
@@ -138,33 +157,53 @@ class Commands:
     def run(self, command_id, args, *, seconds=60, data=None, source=None, output=None, env=None):
         need(re.fullmatch('[A-Z0-9_]{1,80}', command_id), 'COMMAND_IDENTIFIER_INVALID')
         limit = self.remaining(seconds)
+        # Shutdown time is reserved before spawn, inside the original limit.
+        stop_wall, stop_mono = time.time() + limit, time.monotonic() + limit
+        communication_limit = limit - min(5.0, limit / 3)
         try:
             p = subprocess.Popen([str(x) for x in args], cwd=self.cwd,
                 env=self.env | (env or {}), stdin=source or (subprocess.PIPE if data is not None else subprocess.DEVNULL),
                 stdout=output or subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         except OSError:
             raise Stop('COMMAND_START_FAILED', commandId=command_id) from None
-        try:
-            out, error = p.communicate(data, timeout=limit)
-        except BaseException:
+        def alive():
             try:
-                os.killpg(p.pid, signal.SIGKILL)
+                os.killpg(p.pid, 0)
+                return True
             except ProcessLookupError:
-                pass
-            try:
-                p.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                raise Stop('COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id) from None
+                return False
+        def remaining_stop():
+            value = min(stop_wall - time.time(), stop_mono - time.monotonic())
+            need(value > 0, 'COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id)
+            return value
+        def settle():
+            self.groups_quiet = False
+            with defer_interruptions():
+                try:
+                    remaining_stop()
+                    if alive():
+                        try:
+                            os.killpg(p.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    p.communicate(timeout=remaining_stop())
+                    while alive():
+                        time.sleep(min(.02, remaining_stop()))
+                    need(p.poll() is not None, 'COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id)
+                    self.groups_quiet = True
+                except BaseException:
+                    raise Stop('COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id) from None
+        try:
+            out, error = p.communicate(data, timeout=communication_limit)
+        except BaseException:
+            settle()
             raise Stop('COMMAND_INTERRUPTED_OR_EXPIRED', commandId=command_id, exitCode=p.returncode) from None
+        outlived = alive()
+        if outlived:
+            settle()
         need(p.returncode == 0, 'COMMAND_FAILED', commandId=command_id, exitCode=p.returncode,
              errorClass=error_class(error), stderrBytes=len(error), stderrSha256=hashlib.sha256(error).hexdigest())
-        try:
-            os.killpg(p.pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            os.killpg(p.pid, signal.SIGKILL)
-            raise Stop('COMMAND_GROUP_OUTLIVED_COMMAND', commandId=command_id)
+        need(not outlived, 'COMMAND_GROUP_OUTLIVED_COMMAND', commandId=command_id)
         need(output is not None or len(out) <= 8 * 1024 * 1024, 'COMMAND_OUTPUT_LIMIT', commandId=command_id)
         return out or b''
 

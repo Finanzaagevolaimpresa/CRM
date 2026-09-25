@@ -89,6 +89,7 @@ $base = $PSScriptRoot
 $manifestPath = Join-Path $base 'package.json'
 if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne '%s') { throw 'PACKAGE_MANIFEST_CHANGED' }
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+if ((Get-FileHash -LiteralPath '%s' -Algorithm SHA256).Hash -ne $manifest.programs.python) { throw 'LOCAL_PYTHON_CHANGED' }
 foreach ($file in $manifest.files.PSObject.Properties) {
     if ($file.Name -eq 'release-images.tar.gz') { continue }
     if ([IO.Path]::GetFileName($file.Name) -ne $file.Name) { throw 'PACKAGE_PATH_INVALID' }
@@ -96,7 +97,7 @@ foreach ($file in $manifest.files.PSObject.Properties) {
 }
 & '%s' -I -B -S (Join-Path $base 'owner_release.py')
 exit $LASTEXITCODE
-""" % (manifest_hash, str(programs['python']))
+""" % (manifest_hash, str(programs['python']), str(programs['python']))
     exclusive(output / 'AVVIA-M1.ps1', launcher.encode('utf-8-sig'))
     batch = '@echo off\r\n"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy RemoteSigned -File "%~dp0AVVIA-M1.ps1"\r\necho Esito: %errorlevel%. Conservare le ricevute.\r\npause\r\n'
     exclusive(output / 'AVVIA-M1.cmd', batch.encode('ascii'))

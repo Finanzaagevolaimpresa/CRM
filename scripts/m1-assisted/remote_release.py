@@ -13,7 +13,7 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import Commands, Stop, Stages, canonical, decode, digest, exclusive, load, module, need, private, utc, value_sha
+from common import Commands, Stop, Stages, canonical, decode, defer_interruptions, digest, exclusive, load, module, need, private, utc, value_sha
 from isolated_restore import Restore, ledger_valid
 
 BASE = Path('/home/faiadmin/.local/share/fai-crm-releases')
@@ -270,6 +270,14 @@ class Release:
 
     def provision(self, request):
         need(request.get('keyConfirmation') == KEY_CONFIRMATION, 'SPECIFIC_STEP_UP_APPROVAL_REQUIRED')
+        n05 = self.n05()
+        lock = n05.acquire_lock(n05.PRODUCTION_LOCK_PATH, {'engine_id': self.t['engineId'], 'project': 'fai-crm'})
+        try:
+            return self.provision_locked()
+        finally:
+            os.close(lock)
+
+    def provision_locked(self):
         self.observer()
         metadata = decode(self.sql(KEY_SQL))
         current_key_allowed(metadata)
@@ -277,6 +285,7 @@ class Release:
         values = MODES | {'PRIVILEGED_STEP_UP_KEY_VERSION': '1', 'PRIVILEGED_STEP_UP_SECRET': secret}
         env = env_with_changes(private(OLD / '.env.production').read_bytes(), values)
         exclusive(self.runtime / '.env.production', env)
+        configuration_hash = hashlib.sha256(env).hexdigest()
         exclusive(self.work / 'key-provisioning-authority.json', {'confirmation': KEY_CONFIRMATION, 'version': 1,
                   'scope': 'INITIAL_STEP_UP_KEY_AND_ACTIVE_REGISTRY_WITH_AUDIT', 'ownerAccountVerified': True})
         hashes = {p: h for p, h in self.b['canonicalPrograms'].items() if p.startswith('src/')}
@@ -289,15 +298,60 @@ class Release:
             self.c.run('ENCRYPT_M1_CONFIGURATION', ['age', '--encrypt', '--recipient', self.b['recipient']], data=env, output=out)
             out.flush()
             os.fsync(out.fileno())
+        need(digest(private(self.runtime / '.env.production')) == configuration_hash, 'CONFIGURATION_CHANGED_DURING_PROTECTION')
         return {'version': 1, 'registeredActive': True, 'auditWritten': True, 'secretValuesExported': False,
+                'configurationSha256': configuration_hash,
                 'ciphertext': 'm1-configuration.age', 'bundle_sha256': digest(self.work / 'm1-configuration.age'),
                 'bundle_bytes': (self.work / 'm1-configuration.age').stat().st_size}
+
+    def require_config_binding(self):
+        proof = self.stages.result('provision')
+        need(proof and digest(private(self.runtime / '.env.production')) == proof['configurationSha256'],
+             'PROTECTED_CONFIGURATION_CHANGED')
 
     def n05(self):
         return module(self.runtime / 'scripts/n05/failed_app_return.py', 'm1_n05',
                       self.b['canonicalPrograms']['scripts/n05/failed_app_return.py'])
 
+    def canonical_transition(self, n05, operation, path):
+        """Keep N05 and its command supervisor in this process until settlement.
+
+        An outer subprocess group cannot contain N05's new-session Docker CLIs.
+        The unchanged canonical supervisor owns those groups and original bounds.
+        """
+        need(operation in ('forward', 'return'), 'CANONICAL_OPERATION_INVALID')
+        before_cwd, before_env = Path.cwd(), os.environ.copy()
+        previous, interrupted = {}, []
+        def interrupt_once(number, _frame):
+            interrupted.append(number)
+            if len(interrupted) == 1:
+                raise KeyboardInterrupt()
+        try:
+            for name in ('SIGINT', 'SIGTERM', 'SIGHUP'):
+                if hasattr(signal, name):
+                    number = getattr(signal, name)
+                    previous[number] = signal.getsignal(number)
+                    signal.signal(number, interrupt_once)
+            os.chdir(self.runtime)
+            os.environ.clear()
+            os.environ.update(self.c.env | {'FAI_ENVIRONMENT':'production',
+                'FAI_ENVIRONMENT_SENTINEL':'FAI_CRM_PRODUCTION_V1','COMPOSE_PROJECT_NAME':'fai-crm'})
+            with contextlib.redirect_stdout(io.StringIO()):
+                n05.production_main(['failed_app_return.py', operation, str(path)])
+        except BaseException as exc:
+            code = str(exc) if isinstance(exc, n05.Denied) else 'CANONICAL_OPERATION_INTERRUPTED' if isinstance(exc, KeyboardInterrupt) else 'CANONICAL_FAILURE_REDACTED'
+            if code == 'LOCAL_COMMAND_STOP_UNVERIFIED':
+                raise Stop('CANONICAL_COMMANDS_NOT_QUIET', operation=operation) from None
+            raise Stop(code, operation=operation) from None
+        finally:
+            os.environ.clear()
+            os.environ.update(before_env)
+            os.chdir(before_cwd)
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+
     def models(self):
+        self.require_config_binding()
         n05 = self.n05()
         baseline = load(BASE / ('evidence-backup46-' + self.run_id) / 'BASELINE.json')
         plan = {'project': 'fai-crm', 'source_app': {'id': self.t['appId'], 'image_id': self.t['appImage']},
@@ -306,8 +360,8 @@ class Release:
         prior = load(BASE / ('evidence-backup46-' + self.run_id) / 'configuration/frozen-source.json')
         adapter = n05.DockerEngine(plan, self.runtime)
         candidates = {'previous': prior,
-                      'candidate': adapter.model(self.b['candidateImage'], time.time() + 60),
-                      'return': adapter.model(self.b['returnImage'], time.time() + 60)}
+                      'candidate': adapter.model(self.b['candidateImage'], time.time() + self.c.remaining(60)),
+                      'return': adapter.model(self.b['returnImage'], time.time() + self.c.remaining(60))}
         for name, model in candidates.items():
             if name != 'previous':
                 need(model['services']['postgres'] == prior['services']['postgres'] and
@@ -330,7 +384,8 @@ class Release:
             path = self.work / ('frozen-' + name + '.json')
             exclusive(path, model)
             plan['configs'][name] = {'path': str(path), 'sha256': n05.sha(model), 'kind': 'frozen-compose-' + name}
-        snapshot = adapter.snapshot(time.time() + 90)
+        self.require_config_binding()
+        snapshot = adapter.snapshot(time.time() + self.c.remaining(90))
         need(snapshot['resources'] == baseline['resources'] and snapshot['postgres'] == baseline['postgres']
              and snapshot['postgres_healthy'] and not snapshot['foreign_containers'] and not snapshot['migrators']
              and snapshot['app']['id'] == self.t['appId'] and snapshot['app']['state'] == 'healthy', 'SOURCE_MODEL_RECONCILIATION')
@@ -341,6 +396,9 @@ class Release:
         n05 = self.n05()
         lock = n05.acquire_lock(n05.PRODUCTION_LOCK_PATH, {'engine_id': self.t['engineId'], 'project': 'fai-crm'})
         cid = ref = None
+        settlement_deadline = (self.c.wall_end, self.c.mono_end)
+        self.c.wall_end -= 90
+        self.c.mono_end -= 90
         try:
             metadata = decode(self.sql(KEY_SQL))
             need(metadata['keys'] == 1 and metadata['sessions'] == metadata['otherSessions'] == 0, 'MIGRATION_ADMISSION_DRIFT')
@@ -370,14 +428,30 @@ class Release:
             return {'before': 46, 'after': 48, 'prior46Unchanged': True, 'ledgerDigest': value_sha(after),
                     'newMigrations': sorted(set(self.b['ledger48']) - set(self.b['ledger46'])), 'migrator': ref}
         finally:
-            if ref:
-                raw = self.c.inspect('container', ref['id'])
-                need(raw['Image'] == ref['image_id'] and raw['Created'] == ref['created'], 'MIGRATOR_SETTLEMENT_IDENTITY')
-                if raw['State']['Running']:
-                    self.c.docker('MIGRATOR_SETTLE', 'stop', '--time', '10', ref['id'], seconds=30)
-            os.close(lock)
+            original_error = sys.exc_info()[1]
+            self.c.wall_end, self.c.mono_end = settlement_deadline
+            try:
+                with defer_interruptions() as deferred:
+                    if ref:
+                        raw = self.c.inspect('container', ref['id'])
+                        need(raw['Id'] == ref['id'] and raw['Image'] == ref['image_id']
+                             and raw['Created'] == ref['created'], 'MIGRATOR_SETTLEMENT_IDENTITY')
+                        if raw['State']['Running']:
+                            self.c.docker('MIGRATOR_SETTLE', 'stop', '--time', '10', ref['id'], seconds=30)
+                        raw = self.c.inspect('container', ref['id'])
+                        need(raw['Id'] == ref['id'] and raw['Image'] == ref['image_id'] and raw['Created'] == ref['created']
+                             and not raw['State']['Running'] and raw['State']['Pid'] == 0 and not raw.get('ExecIDs'),
+                             'MIGRATOR_STOP_UNVERIFIED')
+            except BaseException as exc:
+                raise Stop('MIGRATOR_SETTLEMENT_UNVERIFIED', originalCode=getattr(original_error, 'code', None),
+                           settlementCode=getattr(exc, 'code', type(exc).__name__)) from None
+            finally:
+                os.close(lock)
+            if deferred and original_error is None:
+                raise Stop('OWNER_INTERRUPTED_AFTER_MIGRATOR_SETTLED')
 
     def deploy(self):
+        self.require_config_binding()
         n05 = self.n05()
         baseline = load(BASE / ('evidence-backup46-' + self.run_id) / 'BASELINE.json')
         plan = load(self.work / 'models.json')
@@ -417,12 +491,12 @@ class Release:
         path = self.work / 'forward-plan.json'
         exclusive(path, plan)
         self.c.cwd = self.runtime
-        env = {'FAI_ENVIRONMENT': 'production', 'FAI_ENVIRONMENT_SENTINEL': 'FAI_CRM_PRODUCTION_V1', 'COMPOSE_PROJECT_NAME': 'fai-crm'}
         forward_error = None
         try:
-            self.c.run('CANONICAL_FORWARD', ['python3', '-I', '-B', '-S', self.runtime / 'scripts/n05/failed_app_return.py', 'forward', path],
-                       seconds=500, env=env)
+            self.canonical_transition(n05, 'forward', path)
         except Stop as exc:
+            if exc.code == 'CANONICAL_COMMANDS_NOT_QUIET':
+                raise
             forward_error = exc
         # The durable canonical receipt, not the CLI exit, authorizes the next action.
         n05.require_published(Path(plan['receipt_path']))
@@ -440,8 +514,7 @@ class Release:
         request = {'schema': 'FAI_CRM_N05_RETURN_REQUEST_V1', 'run_id': plan['run_id'], 'plan_sha256': n05.sha(plan),
                    'receipt_sha256': n05.sha(receipt), 'reason': reason, 'evidence': None}
         exclusive(Path(plan['return_request_path']), request)
-        self.c.run('CANONICAL_RETURN', ['python3', '-I', '-B', '-S', self.runtime / 'scripts/n05/failed_app_return.py', 'return', path],
-                   seconds=360, env=env)
+        self.canonical_transition(n05, 'return', path)
         raise Stop('QUALIFIED_APP_RETURN_PERFORMED_RELEASE_NOT_COMPLETE', returnCommit=self.b['returnCommit'], schema=48)
 
     def copies(self, stage, request):
@@ -455,6 +528,7 @@ class Release:
         return {'copies': receipt, 'ciphertextSha256': original['bundle_sha256'], 'ciphertextBytes': original['bundle_bytes']}
 
     def postcheck(self):
+        self.require_config_binding()
         m = self.n05()
         plan = load(self.work / 'forward-plan.json')
         current = m.DockerEngine(plan, self.runtime).snapshot(time.time() + 90)

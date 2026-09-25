@@ -6,10 +6,14 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -148,6 +152,181 @@ class StageTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_protected_configuration_drift_blocks_model_and_deploy(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = Path(folder)
+            path = runtime / '.env.production'
+            path.write_bytes(b'SYNTHETIC_CONFIGURATION=original\n')
+            expected = common.digest(path)
+            release = remote.Release.__new__(remote.Release)
+            release.runtime = runtime
+            release.stages = SimpleNamespace(result=lambda _: {'configurationSha256': expected})
+            release.require_config_binding()
+            path.write_bytes(b'SYNTHETIC_CONFIGURATION=changed\n')
+            for action in (release.models, release.deploy, release.postcheck):
+                with self.assertRaisesRegex(common.Stop, 'PROTECTED_CONFIGURATION_CHANGED'):
+                    action()
+
+    def test_provision_holds_canonical_lock_and_releases_on_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            descriptor = os.open(str(Path(folder) / 'lock'), os.O_RDWR | os.O_CREAT, 0o600)
+            release = remote.Release.__new__(remote.Release)
+            release.t = {'engineId': 'synthetic-engine'}
+            def acquire(path, binding):
+                self.assertEqual(binding, {'engine_id': 'synthetic-engine', 'project': 'fai-crm'})
+                return descriptor
+            release.n05 = lambda: SimpleNamespace(PRODUCTION_LOCK_PATH='synthetic-lock', acquire_lock=acquire)
+            def operation():
+                os.fstat(descriptor)
+                raise common.Stop('SYNTHETIC_PROVISION_FAILURE')
+            release.provision_locked = operation
+            with self.assertRaisesRegex(common.Stop, 'SYNTHETIC_PROVISION_FAILURE'):
+                release.provision({'keyConfirmation': remote.KEY_CONFIRMATION})
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_migrator_timeout_preserves_settlement_reserve_and_lock_release(self):
+        for settles in (True, False):
+            with self.subTest(settles=settles), tempfile.TemporaryDirectory() as folder:
+                clock = {'now': 1000.0}
+                calls = []
+                raw = {'Id':'a'*64, 'Created':'synthetic-created', 'Image':'sha256:'+'b'*64,
+                       'Mounts':[], 'HostConfig':{'PortBindings':{}}, 'ExecIDs':None,
+                       'State':{'Running':True,'Pid':123}}
+                class Commands(common.Commands):
+                    def docker(self, command_id, *args, **options):
+                        self.remaining(options.get('seconds',60))
+                        calls.append(command_id)
+                        if command_id == 'MIGRATOR_CREATE':
+                            return ('a'*64).encode()
+                        if command_id == 'MIGRATOR_WAIT':
+                            clock['now'] = self.wall_end + 1
+                            raise common.Stop('SYNTHETIC_MIGRATOR_TIMEOUT')
+                        if command_id == 'MIGRATOR_SETTLE' and settles:
+                            signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+                            raw['State'].update(Running=False,Pid=0)
+                        return b''
+                    def inspect(self, *args):
+                        self.remaining(60)
+                        return copy.deepcopy(raw)
+                descriptor = os.open(str(Path(folder) / 'lock'), os.O_RDWR | os.O_CREAT, 0o600)
+                with patch.object(common.time, 'time', side_effect=lambda: clock['now']), \
+                     patch.object(common.time, 'monotonic', side_effect=lambda: clock['now']):
+                    release = remote.Release.__new__(remote.Release)
+                    release.work = Path(folder)
+                    release.run_id = 'c'*32
+                    release.t = {'engineId':'synthetic-engine'}
+                    release.b = {'candidateImage':raw['Image'],'ledger46':{},'ledger48':{}}
+                    release.c = Commands(330)
+                    release.n05 = lambda: SimpleNamespace(PRODUCTION_LOCK_PATH='synthetic-lock',acquire_lock=lambda *_:descriptor)
+                    release.sql = lambda _: '{"keys":1,"sessions":0,"otherSessions":0}'
+                    release.rows = lambda _: []
+                    release.models = lambda: ({}, {})
+                    common.exclusive(release.work / 'frozen-candidate.json',
+                                     {'services':{'app':{'environment':{'DATABASE_URL':'postgresql://synthetic'}}}})
+                    expected = 'SYNTHETIC_MIGRATOR_TIMEOUT' if settles else 'MIGRATOR_SETTLEMENT_UNVERIFIED'
+                    with self.assertRaisesRegex(common.Stop, expected):
+                        release.migrate()
+                    self.assertIn('MIGRATOR_SETTLE',calls)
+                    self.assertEqual(release.c.wall_end,1330)
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_document_cleanup_failure_still_settles_attributed_postgres(self):
+        calls = []
+        run = 'a'*32
+        pg = {'id':'b'*64,'created':'synthetic-pg','image':'sha256:'+'c'*64}
+        doc = {'id':'d'*64,'created':'synthetic-doc','image':'sha256:'+'e'*64}
+        raw = {'Id':pg['id'],'Created':pg['created'],'Image':pg['image'],
+               'Config':{'Labels':{restore.LABEL:run}},'Mounts':[], 'ExecIDs':None,
+               'State':{'Running':True,'Pid':42},
+               'HostConfig':{'NetworkMode':'none','ReadonlyRootfs':True,'RestartPolicy':{'Name':'no'},
+                 'LogConfig':{'Type':'none'},'SecurityOpt':['no-new-privileges'],'CapDrop':['ALL'],
+                 'Tmpfs':{'/var/lib/postgresql/data':'','/tmp':''},'Memory':2048*1024**2,
+                 'MemorySwap':2048*1024**2,'NanoCpus':1000000000,'PidsLimit':128}}
+        class Commands(common.Commands):
+            def inspect(self, kind, cid):
+                self.remaining(60)
+                if cid == doc['id']:
+                    raise common.Stop('SYNTHETIC_DOCUMENT_INSPECT_FAILURE')
+                return copy.deepcopy(raw)
+            def docker(self, command_id, *args, **options):
+                self.remaining(options.get('seconds',60))
+                calls.append(command_id)
+                if command_id == 'RECOVERY_STOP_POSTGRES':
+                    raw['State'].update(Running=False,Pid=0)
+                return b''
+        operation = restore.Restore(Commands(90), Path(__file__).parent, run, pg['image'], doc['image'], None)
+        operation.refs = {'postgres':pg,'documents':doc}
+        with self.assertRaisesRegex(common.Stop,'RECOVERY_RESOURCES_UNSETTLED') as error:
+            operation.cleanup()
+        self.assertEqual(error.exception.details['resources'],
+                         [{'role':'documents','code':'SYNTHETIC_DOCUMENT_INSPECT_FAILURE'}])
+        self.assertIn('RECOVERY_STOP_POSTGRES',calls)
+        self.assertIn('RECOVERY_REMOVE_POSTGRES',calls)
+        self.assertFalse(raw['State']['Running'])
+
+
+@unittest.skipUnless(os.name == 'posix', 'Real process-group qualification runs on Linux CI')
+class ProcessSettlementTests(unittest.TestCase):
+    def test_nonzero_leader_with_live_descendant_is_settled_before_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            child_pid = Path(folder) / 'child.pid'
+            child = 'import time;time.sleep(20)'
+            parent = ('import pathlib,subprocess,sys;'
+                      'p=subprocess.Popen([sys.executable,"-c",' + repr(child) + '],'
+                      'stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);'
+                      'pathlib.Path(' + repr(str(child_pid)) + ').write_text(str(p.pid));'
+                      'raise SystemExit(7)')
+            commands = common.Commands(5,Path(folder))
+            with self.assertRaisesRegex(common.Stop,'COMMAND_FAILED') as error:
+                commands.run('SYNTHETIC_NONZERO_LEADER',[sys.executable,'-c',parent],seconds=3)
+            self.assertEqual(error.exception.details['exitCode'],7)
+            self.assertTrue(commands.groups_quiet)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(child_pid.read_text()),0)
+
+    def test_command_timeout_settles_group_inside_original_bound(self):
+        commands = common.Commands(5,Path(__file__).parent)
+        started = time.monotonic()
+        with self.assertRaisesRegex(common.Stop,'COMMAND_INTERRUPTED_OR_EXPIRED'):
+            commands.run('SYNTHETIC_TIMEOUT',[sys.executable,'-c','import time;time.sleep(20)'],seconds=.6)
+        self.assertLess(time.monotonic()-started,.9)
+        self.assertTrue(commands.groups_quiet)
+
+    def test_canonical_interruption_keeps_own_session_child_supervised(self):
+        root = Path(__file__).resolve().parents[2]
+        path = root / 'scripts/n05/failed_app_return.py'
+        n05 = common.module(path,'synthetic_n05_settlement',common.digest(path))
+        with tempfile.TemporaryDirectory() as folder:
+            pid_file = Path(folder) / 'canonical-child.pid'
+            code = 'import os,pathlib,time;pathlib.Path(' + repr(str(pid_file)) + ').write_text(str(os.getpid()));time.sleep(20)'
+            def operation(args):
+                self.assertEqual(args[1],'forward')
+                return n05.run_deadline([sys.executable,'-c',code],os.environ.copy(),time.time()+3,
+                                        stop_deadline=time.time()+5)
+            release = remote.Release.__new__(remote.Release)
+            release.runtime = root
+            release.c = common.Commands(10,root)
+            original_env, original_cwd = os.environ.copy(),Path.cwd()
+            original_handler = signal.getsignal(signal.SIGTERM)
+            timer = threading.Timer(.4,lambda:os.kill(os.getpid(),signal.SIGTERM))
+            try:
+                with patch.object(n05,'production_main',side_effect=operation):
+                    timer.start()
+                    with self.assertRaisesRegex(common.Stop,'CANONICAL_OPERATION_INTERRUPTED'):
+                        release.canonical_transition(n05,'forward',root/'synthetic-plan-not-read.json')
+            finally:
+                timer.cancel()
+                timer.join()
+            self.assertEqual(os.environ.copy(),original_env)
+            self.assertEqual(Path.cwd(),original_cwd)
+            self.assertEqual(signal.getsignal(signal.SIGTERM),original_handler)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()),0)
+
+
+class AdmissionBaselineTests(unittest.TestCase):
     def test_environment_preserves_unrelated_secrets_and_comments(self):
         source = b'# keep\nAUTH_SECRET="a$b#c"\nDATABASE_URL="postgresql://x"\nINTERNAL_SESSION_MODE=legacy\n'
         changed = remote.env_with_changes(source, {'INTERNAL_SESSION_MODE': 'registry'})
