@@ -1,5 +1,10 @@
 # M1: capability locale di ammissione R18
 
+La build 954db17 di questa capacità è stata installata separatamente. La
+disponibilità degli strumenti nella task non è stata qualificata. Il nuovo
+[trasporto a file](M1_OWNER_FILE_CHANNEL.md) mantiene immutati i byte installati
+e richiede una distinta decisione specifica prima della sua installazione.
+
 Il profilo con denied-read mantiene il processo shell di Codex nella sandbox;
 l'elevazione equivalente non rende disponibile il profilo SSH proprietario.
 Questo delta prepara una diversa **capacità MCP esplicita, da revisionare e

@@ -5,12 +5,14 @@ on:
     paths:
       - 'scripts/m1-executor/**'
       - 'docs/M1_OWNER_EXECUTOR.md'
+      - 'docs/M1_OWNER_FILE_CHANNEL.md'
       - '.github/workflows/m1-owner-executor.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/m1-executor/**'
       - 'docs/M1_OWNER_EXECUTOR.md'
+      - 'docs/M1_OWNER_FILE_CHANNEL.md'
       - '.github/workflows/m1-owner-executor.yml'
 
 permissions:
@@ -30,3 +32,9 @@ jobs:
       - name: Synthetic observer, ACL, input, package and stdio boundaries
         shell: powershell
         run: ./scripts/m1-executor/Test-M1Executor.ps1
+      - name: File transport admission, replay, crash recovery and filesystem boundaries
+        shell: powershell
+        run: |
+          ./scripts/m1-executor/Test-FileChannel.ps1
+          python -I -B -S ./scripts/m1-executor/test_file_channel_client.py
+          if ($LASTEXITCODE -ne 0) { throw 'FILE_CHANNEL_CLIENT_TESTS_FAILED' }
