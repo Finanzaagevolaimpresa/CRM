@@ -138,6 +138,14 @@ Un'installazione parziale non viene sovrascritta o ripetuta automaticamente.
 
 ## Fonti del protocollo
 
+Il delta contiene anche un trasporto GitHub Actions delle immagini già
+qualificate nel run 36021069464. Scarica l'artifact esistente 10817321285 e
+verifica lo SHA256 `fadbed9be809e18e6d6afc4b123532edf7d0115a86e52e2e1e7bce16e245b2e7`
+dell'archivio immagini interno; lo divide in due parti sotto il limite del
+connettore e ne verifica la ricomposizione. Non ricostruisce o esegue le immagini,
+non accede alla VPS e non acquisisce un backup dati. La ricomposizione locale deve
+verificare nuovamente lo stesso digest prima di qualsiasi uso del pacchetto.
+
 - [MCP in Codex e nell'app desktop](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 - [Trasporto stdio MCP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 - [Contratto degli strumenti MCP](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
