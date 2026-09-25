@@ -72,7 +72,12 @@ durante l'installazione. L'input resta non fidato anche dopo questi controlli.
 
 Un claim viene reso durevole prima della chiamata. Ricevute e marker sono
 pubblicati solo dopo il flush completo, con creazione esclusiva e senza
-sovrascrittura. Una richiesta già conclusa restituisce la ricevuta esistente;
+sovrascrittura. I file temporanei hanno nomi unici. All'avvio e prima delle
+operazioni, sotto il lock, le pubblicazioni interrotte vengono archiviate
+senza leggere o alterare i loro byte; costituiscono un blocco durevole fino a
+una riconciliazione riuscita. Anche un nonce con claim parzialmente scritto
+rimane riservato dopo la riconciliazione e non viene riutilizzato.
+Una richiesta già conclusa restituisce la ricevuta esistente;
 una richiesta interrotta non viene rilanciata. STOP/incertezza richiedono
 reconcile; status non cancella il blocco. I marker precedenti sono conservati.
 La riconciliazione esegue una nuova lettura, senza consumare tentativi di backup.
@@ -83,6 +88,14 @@ già testato del core. Il client attende 185 secondi e poi conserva la richiesta
 senza retry. collect legge soltanto la ricevuta dell'ultima richiesta.
 Un esplicito reconcile può archiviare i byte di una richiesta ancora pendente
 e inviare una nuova lettura con un nonce diverso.
+
+Il client mantiene un lock Windows esclusivo durante pubblicazione, attesa e
+raccolta. Il consumo apre la richiesta con accesso lettura/cancellazione senza
+condividere scrittura o cancellazione, verifica quei byte e marca per rimozione
+lo stesso handle. Non usa più una cancellazione per percorso successiva al
+confronto. Client concorrenti ricevono CHANNEL_CLIENT_BUSY; anche uno scrittore
+che ignori il lock non può sostituire il file durante verifica e consumo.
+Il lock del client viene liberato dal sistema anche dopo un'interruzione.
 
 Ogni istanza proprietaria ammette al massimo 128 richieste valide.
 Una nuova istanza ha un nuovo sessionId: gli input di sessioni precedenti o
@@ -103,6 +116,10 @@ simulata del processo, blocco dopo STOP, riconciliazione, sanitizzazione,
 contenimento dei percorsi, hard link, writer concorrente, pacchetto alterato
 e rifiuto dell'eseguibile reale non installato. Il client ha test separati di
 timeout/raccolta/ricevute e conservazione dei byte.
+Le regressioni della revisione simulano pubblicazioni interrotte di ready,
+pending, stop e claim (formato iniziale e temporanei unici), verificando il
+confronto byte per byte e l'assenza di replay. La regressione collect/reconcile
+esercita i veri handle Windows con due thread e uno scrittore non cooperante.
 
 Nella sandbox locale la lettura degli antenati del profilo Windows è negata:
 -FixtureBoundaryOnly limita il test degli handle alla directory sintetica.
@@ -123,3 +140,4 @@ backup restano conservati. Non termina processi SSH o operazioni in corso.
 - [CreateFile e modalità di condivisione](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
 - [Identità e numero di link del file aperto](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
 - [Avvio per utente Run/RunOnce](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)
+- [Consumo mediante lo stesso handle verificato](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)

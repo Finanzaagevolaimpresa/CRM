@@ -215,21 +215,39 @@ namespace Fai.M1 {
         internal ChannelEngine(string state,string session,IChannelProvider provider) { this.state=state;this.session=session;this.provider=provider; }
         internal static void WriteNew(string path,object value) {
             byte[] bytes=Encoding.UTF8.GetBytes(Data.Encode(value));
-            // Publish only complete bytes. An interrupted .writing file is kept.
+            // Publish only complete bytes. Unique staging avoids a permanent
+            // collision after interruption; recovery retains every partial file.
             Data.Need(!File.Exists(path),"CHANNEL_RECORD_EXISTS");
-            string staging=path+".writing";
+            string staging=path+"."+Guid.NewGuid().ToString("N")+".writing";
             using(var f=new FileStream(staging,FileMode.CreateNew,FileAccess.Write,FileShare.None)) { f.Write(bytes,0,bytes.Length); f.Flush(true); }
             File.Move(staging,path);
         }
         string ReceiptPath(string id) { ChannelBinding.HexId(id); return Path.Combine(state,"receipt-"+id+".json"); }
         internal bool HasReceipt(string id) { return File.Exists(ReceiptPath(id)); }
-        internal bool Gated { get { return File.Exists(Path.Combine(state,"pending.json")) || File.Exists(Path.Combine(state,"stop.json")); } }
+        internal bool Gated { get { return File.Exists(Path.Combine(state,"pending.json")) || File.Exists(Path.Combine(state,"stop.json")) ||
+            Directory.GetFiles(state,"*.writing").Length!=0 || Directory.GetFiles(state,"unreconciled-*.partial").Length!=0; } }
+        // Called only while the lifetime channel lock is held. Do not read,
+        // promote, overwrite or delete interrupted bytes. Their names retain the
+        // logical record/nonce, and their presence itself is a durable STOP gate.
+        internal void RecoverPublications() {
+            foreach(string path in Directory.GetFiles(state,"*.writing")) {
+                var name=Regex.Match(Path.GetFileName(path),@"\A(ready|pending|stop|claim-[0-9a-f]{32}|receipt-[0-9a-f]{32}|rejected-[0-9a-f]{32}|stopped-[0-9a-f]{32})\.json(?:\.[0-9a-f]{32})?\.writing\z");
+                Data.Need(name.Success,"UNRECOGNIZED_STAGING_RECORD");
+                File.Move(path,Path.Combine(state,"unreconciled-"+name.Groups[1].Value+".json-"+Guid.NewGuid().ToString("N")+".partial"));
+            }
+        }
+        bool Claimed(string id) {
+            // Also reserve nonces whose claim publication was interrupted, even
+            // after its partial bytes have been archived by reconciliation.
+            return Directory.GetFiles(state,"*claim-"+id+".json*").Length!=0;
+        }
         internal void Process(ChannelRequest r) {
             Data.Need(r.Session==session,"STALE_CHANNEL_SESSION"); ChannelBinding.HexId(r.Id);
+            RecoverPublications();
             if(HasReceipt(r.Id)) return; // The immutable receipt is the only replay answer.
             string claim=Path.Combine(state,"claim-"+r.Id+".json"),pending=Path.Combine(state,"pending.json"),stop=Path.Combine(state,"stop.json");
             bool gated=Gated;
-            Data.Need(!File.Exists(claim),"CLAIM_WITHOUT_RECEIPT_RECONCILE");
+            Data.Need(!Claimed(r.Id),"CLAIM_WITHOUT_RECEIPT_RECONCILE");
             WriteNew(claim,new{protocol="FAI_M1_CHANNEL_CLAIM_R18",requestId=r.Id,sessionId=session,operation=r.Operation,utc=DateTime.UtcNow.ToString("o")});
             string code=null; Dictionary<string,object> result=null; bool ok=false,called=false;
             try {
@@ -250,7 +268,11 @@ namespace Fai.M1 {
                 providerCalled=called,result,utc=DateTime.UtcNow.ToString("o"),readOnly=true,agentRealKeyAccess=false,productionMutationPerformed=false});
             if(ok && r.Operation!="status") {
                 if(File.Exists(pending)) File.Move(pending,Path.Combine(state,"pending-completed-"+r.Id+".json"));
-                if(r.Operation=="reconcile" && File.Exists(stop)) File.Move(stop,Path.Combine(state,"stop-reconciled-"+r.Id+".json"));
+                if(r.Operation=="reconcile") {
+                    if(File.Exists(stop)) File.Move(stop,Path.Combine(state,"stop-reconciled-"+r.Id+".json"));
+                    foreach(string partial in Directory.GetFiles(state,"unreconciled-*.partial"))
+                        File.Move(partial,Path.Combine(state,"reconciled-"+r.Id+"-"+Path.GetFileName(partial).Substring("unreconciled-".Length)));
+                }
             }
         }
     }
@@ -287,6 +309,7 @@ namespace Fai.M1 {
                     using(var serial=new FileStream(Path.Combine(ChannelBinding.State,"channel.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)) {
                         string session=Guid.NewGuid().ToString("N"),ready=Path.Combine(ChannelBinding.State,"ready.json");
                         var engine=new ChannelEngine(ChannelBinding.State,session,new SealedProvider());
+                        engine.RecoverPublications();
                         if(File.Exists(ready)) File.Move(ready,Path.Combine(ChannelBinding.State,"ready-before-"+session+".json"));
                         ChannelEngine.WriteNew(ready,new{protocol="FAI_M1_FILE_CHANNEL_READY_R18",candidate=Data.Candidate,taskId=ChannelBinding.TaskId,
                             sessionId=session,manifestSha256=manifestHash,startedUtc=DateTime.UtcNow.ToString("o"),readOnly=true,productionMutationCapability=false,

@@ -1,5 +1,7 @@
 """Agent-side client: fixed files and operations; no credentials or shell calls."""
 import datetime as dt
+import contextlib
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -31,9 +33,7 @@ def unique(pairs):
     return result
 
 
-def read(path, limit=32768):
-    with path.open("rb") as stream:
-        data = stream.read(limit + 1)
+def parse(data, limit):
     need(len(data) <= limit, "RECEIPT_SIZE")
     result = json.loads(data.decode("utf-8"), object_pairs_hook=unique,
                         parse_constant=lambda _: (_ for _ in ()).throw(Stop("JSON_CONSTANT")))
@@ -41,7 +41,89 @@ def read(path, limit=32768):
     return result
 
 
+class FileInfo(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint32) for name in (
+        "attributes", "creationLow", "creationHigh", "accessLow", "accessHigh",
+        "writeLow", "writeHigh", "volume", "sizeHigh", "sizeLow", "links",
+        "indexHigh", "indexLow")]
+
+
+def kernel():
+    need(os.name == "nt", "WINDOWS_REQUIRED")
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32,
+                               ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    api.CreateFileW.restype = ctypes.c_void_p
+    api.GetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.POINTER(FileInfo)]
+    api.GetFileInformationByHandle.restype = ctypes.c_int
+    api.GetFinalPathNameByHandleW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+    api.GetFinalPathNameByHandleW.restype = ctypes.c_uint32
+    api.ReadFile.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    api.ReadFile.restype = ctypes.c_int
+    api.SetFileInformationByHandle.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    api.SetFileInformationByHandle.restype = ctypes.c_int
+    api.CloseHandle.argtypes = [ctypes.c_void_p]
+    api.CloseHandle.restype = ctypes.c_int
+    return api
+
+
+@contextlib.contextmanager
+def opened(path, access, share, creation, busy_code="CHANNEL_FILE_BUSY"):
+    api = kernel()
+    handle = api.CreateFileW(str(path), access, share, None, creation, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value or handle is None:
+        error = ctypes.get_last_error()
+        if error in (2, 3):
+            raise FileNotFoundError()
+        raise Stop(busy_code if error in (32, 33) else "CHANNEL_FILE_OPEN_FAILED")
+    try:
+        info = FileInfo()
+        need(api.GetFileInformationByHandle(handle, ctypes.byref(info)), "CHANNEL_FILE_METADATA_FAILED")
+        need(not info.attributes & (0x400 | 0x10) and info.links == 1, "CHANNEL_LINK_OR_TYPE_DENIED")
+        name = ctypes.create_unicode_buffer(1024)
+        count = api.GetFinalPathNameByHandleW(handle, name, 1024, 0)
+        expected = "\\\\?\\" + str(path.absolute())
+        need(0 < count < 1024 and os.path.normcase(name.value) == os.path.normcase(expected), "CHANNEL_PATH_CHANGED")
+        yield api, handle, info
+    finally:
+        api.CloseHandle(handle)
+
+
+def contents(api, handle, info, limit):
+    need(info.sizeHigh == 0 and info.sizeLow <= limit, "RECEIPT_SIZE")
+    buffer = ctypes.create_string_buffer(limit + 1)
+    count = ctypes.c_uint32()
+    need(api.ReadFile(handle, buffer, limit + 1, ctypes.byref(count), None) and count.value == info.sizeLow,
+         "CHANNEL_FILE_READ_FAILED")
+    return parse(buffer.raw[:count.value], limit)
+
+
+def read(path, limit=32768):
+    with opened(path, 0x80000000, 1, 3) as (api, handle, info):
+        return contents(api, handle, info, limit)
+
+
+def consume_verified(path, expected):
+    # Read+DELETE access without sharing write/delete freezes the identity and
+    # contents until close. Disposition is applied to that same verified handle,
+    # never to a path that another client could replace between check and unlink.
+    with opened(path, 0x80010000, 1, 3) as (api, handle, info):
+        need(contents(api, handle, info, 2048) == expected, "REQUEST_CHANGED_PRESERVED")
+        disposition = ctypes.c_ubyte(1)  # FILE_DISPOSITION_INFO.DeleteFile
+        need(api.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition), ctypes.sizeof(disposition)),
+             "REQUEST_CONSUMPTION_FAILED_PRESERVED")
+
+
 def request(inbox, state, operation, timeout=185, sleep=time.sleep):
+    need(operation in ("status", "observe", "reconcile", "collect"), "OPERATION_NOT_ALLOWED")
+    need(inbox.is_dir() and state.is_dir(), "CHANNEL_NOT_INSTALLED")
+    # Crash-safe OS handle lock, not an existence marker. It serializes publish,
+    # collect and reconcile across processes, including the receipt wait window.
+    with opened(inbox / "client.lock", 0xC0000000, 0, 4, "CHANNEL_CLIENT_BUSY"):
+        return request_locked(inbox, state, operation, timeout, sleep)
+
+
+def request_locked(inbox, state, operation, timeout, sleep):
     """The CLI never accepts paths, timeout overrides, or extra request fields."""
     need(operation in ("status", "observe", "reconcile", "collect"), "OPERATION_NOT_ALLOWED")
     pending = inbox / "request.json"
@@ -91,8 +173,19 @@ def request(inbox, state, operation, timeout=185, sleep=time.sleep):
                  "RECEIPT_BINDING_INVALID")
             # Consume only this local request after its immutable receipt exists.
             # If another writer changed the file, preserve it and require inspection.
-            need(read(pending, 2048) == item, "REQUEST_CHANGED_PRESERVED")
-            pending.unlink()
+            try:
+                consume_verified(pending, item)
+            except Stop as exc:
+                if str(exc) != "CHANNEL_FILE_BUSY":
+                    raise
+                # A broker read can briefly deny DELETE sharing. Retry only the
+                # local receipt consumption, never publication/provider execution.
+                if time.monotonic() < deadline:
+                    sleep(0.05)
+                    continue
+                return dict(protocol="FAI_M1_FILE_CLIENT_R18", status="UNCERTAIN",
+                            code="RECEIPT_READY_REQUEST_BUSY_PRESERVED", requestId=rid,
+                            requestPreserved=True, automaticRetry=False)
             return result
         if time.monotonic() >= deadline:
             # Preserve pending bytes/nonce; collect never republishes or invokes.

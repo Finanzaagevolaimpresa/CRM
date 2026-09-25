@@ -134,12 +134,35 @@ internal static class TestFileChannel {
         Check(File.ReadAllText(marker)=="synthetic","occupied directory is never altered");
         Reject(()=>FileChannelInstallSupport.CreateProtectedDirectory(exclusive,descriptor),"INSTALL_DIRECTORY_SCOPE");
     }
+    static void InterruptedPublication(string root) {
+        foreach(string record in new[]{"ready","pending","stop"}) foreach(bool unique in new[]{false,true}) {
+            string dir=Temp(root);var fake=new Fake();var engine=new ChannelEngine(dir,Session,fake);
+            byte[] bytes=Encoding.UTF8.GetBytes("{\"interrupted\":\""+record);
+            string partial=Path.Combine(dir,record+".json"+(unique?"."+Guid.NewGuid().ToString("N"):"")+".writing");
+            File.WriteAllBytes(partial,bytes);
+            Check(engine.Gated,"partial publication is a gate before recovery");
+            engine.RecoverPublications();
+            if(record=="ready") ChannelEngine.WriteNew(Path.Combine(dir,"ready.json"),new{sessionId=Session});
+            Check(engine.Gated && fake.Calls==0 && Directory.GetFiles(dir,"*.writing").Length==0,"startup accepts reconciliation without invoking old request");
+            engine.Process(Parsed());Check(fake.Calls==0 && engine.Gated,"observation cannot clear partial-publication gate");
+            engine.Process(Parsed("reconcile"));
+            var preserved=Directory.GetFiles(dir,"reconciled-*.partial");
+            Check(fake.Calls==1 && !engine.Gated && preserved.Length==1 && File.ReadAllBytes(preserved[0]).SequenceEqual(bytes),"fresh reconciliation preserves exact partial bytes");
+        }
+        string claimDir=Temp(root);var provider=new Fake();var claimEngine=new ChannelEngine(claimDir,Session,provider);
+        var interrupted=Parsed();
+        File.WriteAllText(Path.Combine(claimDir,"claim-"+interrupted.Id+".json."+Guid.NewGuid().ToString("N")+".writing"),"{");
+        Reject(()=>claimEngine.Process(interrupted),"CLAIM_WITHOUT_RECEIPT_RECONCILE");
+        claimEngine.Process(Parsed("reconcile"));
+        Reject(()=>claimEngine.Process(interrupted),"CLAIM_WITHOUT_RECEIPT_RECONCILE");
+        Check(provider.Calls==1,"partial claim nonce is never replayed even after reconciliation");
+    }
     public static int Main(string[] args) {
         try {
             string root=Temp(Path.GetTempPath());
             bool fixtureBoundary=args.Length==1 && args[0]=="--fixture-boundary";
             Check(args.Length==0 || fixtureBoundary,"test arguments");
-            Requests();Responses();StateMachine(root);Files(root,fixtureBoundary);
+            Requests();Responses();StateMachine(root);Files(root,fixtureBoundary);InterruptedPublication(root);
             Console.WriteLine(Data.Encode(new{status="FILE_CHANNEL_SYNTHETIC_PASS",assertions=passed,fullAncestorLeaseTested=!fixtureBoundary,
                 remoteConnectionAttempted=false,installationPerformed=false,artifacts=root}));return 0;
         } catch(Exception e) { Console.Error.WriteLine(e.GetType().Name+": "+e.Message);return 1; }
