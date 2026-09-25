@@ -59,7 +59,7 @@ class FakeObserver(m.Observer):
                 "health": "healthy" if not pg or self.pg_healthy else "unhealthy",
                 "startedAt": "2026-09-20T18:00:00.000Z",
                 "restarts": 1 if self.mutate_after and self.container_reads > 2 else 0,
-                "networks": {"fai-crm_default": {"NetworkID": self.b["networkId"]}},
+                "networkCount": 1, "networkId": self.b["networkId"],
                 "mounts": [{"type": "volume", "name": "fai-crm_postgres_data" if pg else "fai-crm_crm_documents",
                             "destination": "/var/lib/postgresql/data" if pg else "/var/lib/fai-crm/documents"}]})
         if a[:2] == ["image", "inspect"]:
@@ -123,8 +123,10 @@ class Tests(unittest.TestCase):
                 with self.assertRaisesRegex(m.Stop, code): run_fake(f)
 
     def test_external_gate_cannot_be_silently_enabled(self):
-        f = FakeObserver(); f.flag_override = {"FEATURE_AI_DISPATCH_ENABLED": "true"}
-        with self.assertRaisesRegex(m.Stop, "EXTERNAL_GATES_NOT_CLOSED"): run_fake(f)
+        for flag in ("FEATURE_AI_DISPATCH_ENABLED", "FEATURE_CUSTOMER_PORTAL_ENABLED", "FEATURE_PAYMENTS_ENABLED"):
+            with self.subTest(flag=flag):
+                f = FakeObserver(); f.flag_override = {flag: "true"}
+                with self.assertRaisesRegex(m.Stop, "EXTERNAL_GATES_NOT_CLOSED"): run_fake(f)
 
     def test_key_mismatch_is_evidence_not_permission_to_provision(self):
         for field, value in (("key_digest", "0"*64), ("key_version", 9), ("key_status", "RETIRED")):

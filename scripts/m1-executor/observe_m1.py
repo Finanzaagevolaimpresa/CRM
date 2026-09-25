@@ -25,6 +25,7 @@ DOCKER = ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock"]
 SAFE_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "HOME": "/home/faiadmin"}
 FLAGS = {
     "FEATURE_INTEGRATIONS_ENABLED": "false", "FEATURE_AI_WORKER_ENABLED": "false",
+    "FEATURE_CUSTOMER_PORTAL_ENABLED": "false", "FEATURE_PAYMENTS_ENABLED": "false",
     "FEATURE_AI_DISPATCH_ENABLED": "false", "FEATURE_AI_EGRESS_ENABLED": "false",
     "AI_EXTERNAL_PROVIDERS_ENABLED": "false", "AI_ORCHESTRATOR_WORKER_ENABLED": "0",
     "AI_PROVIDER": "mock", "WEBSITE_LEAD_MODE": "disabled",
@@ -69,7 +70,8 @@ CONTAINER_FORMAT = ('{"id":{{json .Id}},"image":{{json .Image}},'
     '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
     '"mounts":[{{range $i,$m := .Mounts}}{{if $i}},{{end}}'
     '{"type":{{json $m.Type}},"name":{{json $m.Name}},"destination":{{json $m.Destination}}}{{end}}],'
-    '"networks":{{json .NetworkSettings.Networks}}}')
+    '"networkCount":{{len .NetworkSettings.Networks}},'
+    '"networkId":{{with index .NetworkSettings.Networks "fai-crm_default"}}{{json .NetworkID}}{{else}}null{{end}}}')
 
 
 class Stop(Exception):
@@ -162,8 +164,7 @@ class Observer:
         need(x["project"] == "fai-crm" and x["service"] == ("postgres" if role == "postgres" else "app"),
              "CONTAINER_ROLE_DRIFT")
         need(x["running"] is True and x["health"] == "healthy", "CONTAINER_NOT_HEALTHY")
-        need(set(x["networks"]) == {"fai-crm_default"}
-             and x["networks"]["fai-crm_default"]["NetworkID"] == self.b["networkId"], "NETWORK_DRIFT")
+        need(x["networkCount"] == 1 and x["networkId"] == self.b["networkId"], "NETWORK_DRIFT")
         expected = ("fai-crm_postgres_data", "/var/lib/postgresql/data") if role == "postgres" else (
             "fai-crm_crm_documents", "/var/lib/fai-crm/documents")
         need(len(x["mounts"]) == 1 and x["mounts"][0]["type"] == "volume"
@@ -176,7 +177,7 @@ class Observer:
              and pwd.getpwuid(os.geteuid()).pw_name == "faiadmin", "TARGET_IDENTITY_MISMATCH")
         need(self.docker("info", "--format", "{{.ID}}") == self.b["engineId"], "ENGINE_IDENTITY_DRIFT")
         app, pg = self.container("app"), self.container("postgres")
-        git = ["/usr/bin/git", "-C", RUNTIME]
+        git = ["/usr/bin/git", "--no-optional-locks", "-C", RUNTIME]
         need(self.run(git + ["rev-parse", "HEAD", "HEAD^{tree}"], "SOURCE_IDENTITY").split() == [SOURCE, TREE],
              "SOURCE_REVISION_DRIFT")
         need(not self.run(git + ["status", "--porcelain=v1", "--untracked-files=no"], "SOURCE_STATUS"),
