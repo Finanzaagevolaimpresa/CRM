@@ -13,7 +13,9 @@ spec.loader.exec_module(c)
 
 class ClientTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="fai-file-client-"))
+        # CI may spell TEMP with an 8.3 profile alias. Production uses fixed
+        # canonical paths; normalize only this synthetic fixture, not the client.
+        self.root = Path(tempfile.mkdtemp(prefix="fai-file-client-")).resolve(strict=True)
         self.inbox = self.root / "inbox"
         self.state = self.root / "state"
         self.inbox.mkdir()
