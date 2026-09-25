@@ -1,0 +1,71 @@
+name: M1 assisted release delta
+on:
+  pull_request:
+    paths:
+      - 'scripts/m1-assisted/**'
+      - '.github/workflows/m1-assisted-release.yml'
+      - 'docs/M1_ASSISTED_RELEASE_R21.md'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  owner-protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -I -B -S scripts/m1-assisted/test_assisted.py
+      - name: Check PowerShell parser without executing owner operations
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd/scripts/m1-assisted/storage_probe.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { throw 'POWERSHELL_SYNTAX_FAILED' }
+  saved-image-delta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10817321285'
+          run-id: '36021069464'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-source
+      - name: Verify real artifact Range responses used by the owner downloader
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I -B -S - <<'PY'
+          import pathlib, shutil, sys, time
+          sys.path.insert(0,str(pathlib.Path('scripts/m1-assisted').resolve()))
+          import download_images as d
+          d.GH=pathlib.Path(shutil.which('gh'))
+          events=[]
+          payload=d.obtain_range(10850108348,99336192,99336192+131071,314573847,time.monotonic()+60,events)
+          assert len(payload)==131072
+          print('EXACT_ARTIFACT_RANGE_PASS')
+          PY
+      - name: Restore schema46, audit initial key provisioning and migrate only 47/48
+        run: python3 -I -B -S scripts/m1-assisted/qualify_assisted.py qualified-source/pr140-release-36021069464-1/release-images.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m1-assisted-delta-${{ github.run_id }}
+          path: m1-assisted-ci-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
