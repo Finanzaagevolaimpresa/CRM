@@ -1,5 +1,6 @@
 """Resolve OCI config digests only through the exact qualified archive hash."""
 import hashlib
+import re
 import tarfile
 
 from common import decode, digest, need
@@ -23,8 +24,14 @@ def complete_binding(archive, binding):
             raw = stream.extractfile(member).read(32769)
             need(hashlib.sha256(raw).hexdigest() == binding[role + 'Image'][7:], 'MANIFEST_DIGEST')
             manifest = decode(raw)
-            need(manifest.get('schemaVersion') == 2, 'OCI_MANIFEST_VERSION')
-            found[role] = manifest['config']['digest']
+            # docker save can omit schemaVersion in its digest-bound metadata.
+            # Follow the actual config link, as the sealed archive verifier does;
+            # never infer an image identity from a tag or an unverified JSON field.
+            config = manifest.get('config') if isinstance(manifest, dict) else None
+            need(isinstance(config, dict) and
+                 re.fullmatch('sha256:[0-9a-f]{64}', str(config.get('digest', ''))),
+                 'OCI_MANIFEST_CONFIG_LINK_INVALID')
+            found[role] = config['digest']
     need(set(found) == {'candidate', 'return'}, 'QUALIFIED_MANIFEST_MISSING')
     result = dict(binding)
     for role, value in found.items():

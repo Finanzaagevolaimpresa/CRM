@@ -3,10 +3,13 @@ import ast
 import copy
 import hashlib
 import importlib.util
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tarfile
 import types
 import unittest
 
@@ -18,6 +21,32 @@ sys.path.insert(1,str(REPO/'scripts/m1-assisted'))
 import package_builder as builder
 import registry_settlement as registry
 import sealed_programs as sealed
+from image_binding import complete_binding
+from common import Stop
+
+
+class ImageBindingTests(unittest.TestCase):
+    def test_saved_metadata_config_links_with_and_without_schema_version(self):
+        for version in (None, 2):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
+                path=Path(folder)/'images.tar.gz'
+                binding={}
+                with tarfile.open(path,'w:gz') as archive:
+                    for index,role in enumerate(('candidate','return')):
+                        value={'config':{'digest':'sha256:'+str(index)*64}}
+                        if version is not None: value['schemaVersion']=version
+                        raw=json.dumps(value).encode()
+                        sha=hashlib.sha256(raw).hexdigest()
+                        member=tarfile.TarInfo('blobs/sha256/'+sha)
+                        member.size=len(raw)
+                        archive.addfile(member,io.BytesIO(raw))
+                        binding[role+'Image']='sha256:'+sha
+                binding['imageArchiveSha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+                result=complete_binding(path,binding)
+                self.assertEqual(result['candidateConfigDigest'],'sha256:'+'0'*64)
+                self.assertEqual(result['returnConfigDigest'],'sha256:'+'1'*64)
+                with self.assertRaises(Stop):
+                    complete_binding(path,binding|{'imageArchiveSha256':'0'*64})
 
 
 def reader(path,ref='HEAD'):
