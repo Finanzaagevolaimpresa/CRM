@@ -46,6 +46,8 @@ def qualify_backup_reference(c, repo, binding):
     tag = 'fai-crm:pr999-'+binding['candidate'][:12]
     c.docker('CI_BOUND_TAG','tag',binding['candidateImage'],tag)
     labels = ('--label','com.docker.compose.project=fai-crm','--label','fai.synthetic=m1-backup-reference-r25')
+    container_labels = labels + ('--label','com.docker.compose.oneoff=False',
+        '--label','com.docker.compose.config-hash=synthetic-r25','--label','com.docker.compose.container-number=1')
     network = None
     volumes, containers = [], []
     try:
@@ -55,7 +57,7 @@ def qualify_backup_reference(c, repo, binding):
             name = 'fai-crm_'+logical
             c.docker('CI_BACKUP_VOLUME','volume','create',*labels,'--label','com.docker.compose.volume='+logical,name)
             volumes.append(name)
-        pg = c.docker('CI_BACKUP_POSTGRES','create','--name','fai-crm-postgres-1',*labels,
+        pg = c.docker('CI_BACKUP_POSTGRES','create','--name','fai-crm-postgres-1',*container_labels,
             '--label','com.docker.compose.service=postgres','--network',network,'--network-alias','postgres',
             '--mount','type=volume,source=fai-crm_postgres_data,target=/var/lib/postgresql/data',
             '-e','POSTGRES_USER=postgres','-e','POSTGRES_PASSWORD='+password,'-e','POSTGRES_DB='+database,
@@ -71,7 +73,7 @@ def qualify_backup_reference(c, repo, binding):
         c.docker('CI_BACKUP_SYNTHETIC_LEDGER','exec',pg,'psql','-Xq','-v','ON_ERROR_STOP=1','-U','postgres','-d',database,
             '-c','CREATE TABLE "_prisma_migrations" (finished_at timestamptz, rolled_back_at timestamptz); '
                  'INSERT INTO "_prisma_migrations" VALUES (CURRENT_TIMESTAMP,NULL)')
-        app = c.docker('CI_BACKUP_APP_BY_DIGEST','create','--name','fai-crm-app-1',*labels,
+        app = c.docker('CI_BACKUP_APP_BY_DIGEST','create','--name','fai-crm-app-1',*container_labels,
             '--label','com.docker.compose.service=app','--network',network,
             '--mount','type=volume,source=fai-crm_crm_documents,target=/var/lib/fai-crm/documents',
             '--entrypoint','sh',binding['candidateImage'],'-c','exec sleep 600').decode().strip()
