@@ -86,14 +86,14 @@ def main():
         c.docker('CI_POSTGRES_START','start',pg)
         for _ in range(50):
             try:
-                c.docker('CI_POSTGRES_READY','exec',pg,'pg_isready','-U','postgres','-d','m2_release_test')
+                c.docker('CI_POSTGRES_READY','exec',pg,'pg_isready','-h','127.0.0.1','-U','postgres','-d','m2_release_test')
                 break
             except Stop: time.sleep(1)
         def sql(text):
             return c.docker('CI_FIXED_SQL','exec','-i',pg,'psql','-U','postgres','-d','m2_release_test',
                 '-XqAt','-F','\t','-v','ON_ERROR_STOP=1',data=text.encode()).decode().strip()
-        def node(text):
-            return c.docker('CI_SAVED_APPLICATION_HELPER','run','--rm','--network',network,'-e','DATABASE_URL='+url,
+        def node(text,command_id):
+            return c.docker(command_id,'run','--rm','--network',network,'-e','DATABASE_URL='+url,
                 '--entrypoint','node',binding['candidateImage'],'--import','tsx','-e',text,seconds=90).decode().strip()
         c.docker('CI_SYNTHETIC_SCHEMA48','run','--rm','--network',network,'-e','DATABASE_URL='+url,'--entrypoint','node',
             binding['candidateImage'],'node_modules/prisma/build/index.js','migrate','deploy',seconds=240)
@@ -104,17 +104,16 @@ def main():
              "const u=await d.user.create({data:{email:'m2-r26@example.invalid',name:'Synthetic release admin',role:'admin',passwordHash:'NONLOGIN_SYNTHETIC'}});"
              "const m=await import('./src/lib/application-key-registry.ts');const rotate=m.rotatePrivilegedStepUpKeyVersion??m.default.rotatePrivilegedStepUpKeyVersion;"
              "await d.$transaction(tx=>rotate(tx,{version:1,keyDigest:Buffer.alloc(32,8),actorUserId:u.id}));"
-             "for(let i=1;i<=3;i++)await d.internalSession.create({data:{userId:u.id,tokenDigest:Buffer.alloc(32,i),expiresAt:new Date(Date.now()+(i===3?-60000:3600000))}});"
-             "console.log('SYNTHETIC_FIXTURE_READY')})().catch(()=>{process.exitCode=2}).finally(()=>d.$disconnect());")
+             "for(let i=1;i<=3;i++)await d.internalSession.create({data:{userId:u.id,tokenDigest:Buffer.alloc(32,i),createdAt:new Date(Date.now()-7200000),expiresAt:new Date(Date.now()+(i===3?-60000:3600000))}});"
+             "console.log('SYNTHETIC_FIXTURE_READY')})().catch(e=>{console.error(/^P[0-9]{4}$/.test(e.code??'')?e.code:'CI_FIXTURE_FAILED_REDACTED');process.exitCode=2}).finally(()=>d.$disconnect());",
+             'CI_CREATE_SESSION_FIXTURE')
         fingerprint_sql='''SELECT md5(string_agg(id::text||encode("tokenDigest",'hex'),'|' ORDER BY id)) FROM "InternalSession";'''
         identity_before=sql(fingerprint_sql)
         audit_count=lambda:sql('''SELECT COUNT(*) FROM "AuditLog" WHERE event='sessions_revoked_global';''')
         need(sql(COUNT_SQL)=='2' and audit_count()=='0','SESSION_FIXTURE')
         need(parse_counts(sql(PREFLIGHT_SQL))=={'revokedCount':0,'auditCount':0} and sql(COUNT_SQL)=='2','PREFLIGHT_MUTATED_SESSIONS')
-        readiness="const{PrismaClient}=require('@prisma/client');const d=new PrismaClient();(async()=>{const m=await import('./src/lib/internal-session-registry.ts');await (m.assertRegistryActivationReady??m.default.assertRegistryActivationReady)(d);console.log('READY')})().catch(()=>{process.exitCode=2}).finally(()=>d.$disconnect());"
-        try: node(readiness)
-        except Stop: pass
-        else: raise Stop('LIVE_SESSION_GUARD_NOT_EXERCISED')
+        readiness="const{PrismaClient}=require('@prisma/client');const d=new PrismaClient();(async()=>{const m=await import('./src/lib/internal-session-registry.ts');await (m.assertRegistryActivationReady??m.default.assertRegistryActivationReady)(d);console.log('READY')})().catch(e=>{if(e.message==='INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED')console.log('LIVE_SESSIONS_DENIED');else{console.error('CI_READINESS_FAILED_REDACTED');process.exitCode=2}}).finally(()=>d.$disconnect());"
+        need(node(readiness,'CI_OBSERVE_LIVE_SESSION_GUARD')=='LIVE_SESSIONS_DENIED','LIVE_SESSION_GUARD_NOT_EXERCISED')
         # A rejected audit must roll back both the revoke and its counts.
         sql('''CREATE FUNCTION m2_ci_deny_audit() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN
           IF NEW.event='sessions_revoked_global' THEN RAISE EXCEPTION 'M2_SYNTHETIC_AUDIT_DENIED'; END IF; RETURN NEW; END$$;
@@ -127,7 +126,7 @@ def main():
         counts=parse_counts(sql(SQL))
         need(counts=={'revokedCount':2,'auditCount':1} and sql(COUNT_SQL)=='0' and audit_count()=='1','AUDITED_SETTLEMENT')
         need(sql(fingerprint_sql)==identity_before and sql('SELECT COUNT(*) FROM "InternalSession";')=='3','SESSION_ROWS_OR_DIGESTS_CHANGED')
-        need(node(readiness)=='READY','REGISTRY_STARTUP_STILL_DENIED')
+        need(node(readiness,'CI_OBSERVE_REGISTRY_READY')=='READY','REGISTRY_STARTUP_STILL_DENIED')
         need(parse_counts(sql(SQL))=={'revokedCount':0,'auditCount':0} and audit_count()=='1','SYNTHETIC_DUPLICATE_AUDIT')
         need(sql('''SELECT COUNT(*) FROM "ApplicationKeyVersion" WHERE purpose='PRIVILEGED_STEP_UP' AND version=1 AND status='ACTIVE';''')=='1','KEY_REGISTRY_CHANGED')
         backup=work/'set48'
