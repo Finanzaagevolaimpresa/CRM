@@ -12,7 +12,7 @@ ROOT = Path('/usr/local/lib/fai-crm-m1-r23-read')
 RULE = Path('/etc/sudoers.d/fai-crm-m1-r23-read')
 PYTHON = Path('/usr/bin/python3.14')
 PYTHON_SHA = '52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41'
-FILES = {'delegate.py': 'fbc707ede37dc5c8366be791f56116ae2ab507e235e8528c0cfec053c0bd7c38',
+FILES = {'delegate.py': 'd9478515e0d6b0c8fe16490e445ae2d8314984df7c1cc926cbfbd742363726b6',
          'observe_image_store_r22.py': '94743eaafd7815d9509f670e032dbc0166ee55fe18a930e5215b912ad8aa031a'}
 # One line, exact executable and complete arguments; no wildcards or continuation.
 SUDOERS = ('fai-codex fai-crm-prod-02=(faiadmin) NOPASSWD: NOSETENV: '
@@ -119,7 +119,7 @@ def main(mode, payload):
             import fcntl
             with lock.open('rb') as handle:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                need(handle.read(33) in (b'', b'COMPLETE\n', b'STOPPED\n'), 'OBSERVATION_UNRECONCILED')
+                need(handle.read(33) in (b'', b'COMPLETE\n'), 'OBSERVATION_UNRECONCILED')
                 RULE.unlink()
                 for name in sorted(expected_names):
                     (ROOT / name).unlink()

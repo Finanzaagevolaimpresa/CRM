@@ -58,12 +58,9 @@ def one_observation(read, handle):
     # A hard kill or unverified settlement leaves a durable barrier, even after
     # the kernel releases flock. No further observation/removal is then allowed.
     mark(handle, b'RUNNING\n')
-    try:
-        result = project(supervised_read(read))
-    except BaseException as exc:
-        if getattr(exc, 'code', '') != 'COMMAND_GROUP_STOP_UNVERIFIED':
-            mark(handle, b'STOPPED\n')
-        raise
+    # Only a successful return is positive settlement evidence. Even a signal
+    # immediately after Popen, before the canonical wait try, leaves RUNNING.
+    result = project(supervised_read(read))
     mark(handle, b'COMPLETE\n')
     return result
 

@@ -259,6 +259,40 @@ class InstallationLifecycle(unittest.TestCase):
                 d.one_observation(read,handle)
             spawn.assert_not_called()
 
+    def test_signal_after_spawn_before_canonical_wait_remains_latched(self):
+        import fcntl, signal
+        self.assertEqual(self.call('install')[0],0)
+        spec=importlib.util.spec_from_file_location('canonical_gap',ROOT.parent/'m1-assisted/common.py')
+        canonical=importlib.util.module_from_spec(spec);spec.loader.exec_module(canonical)
+        original=canonical.subprocess.Popen
+        children=[]
+        def spawn_then_signal(*args,**kwargs):
+            child=original(*args,**kwargs);children.append(child)
+            os.kill(os.getpid(),signal.SIGTERM)
+            return child
+        commands=canonical.Commands(2,self.base)
+        def read():
+            return commands.run('SYNTHETIC_GAP',[sys.executable,'-I','-B','-S','-c','import time;time.sleep(30)'],seconds=2)
+        try:
+            with (i.ROOT/'observation.lock').open('r+b') as handle:
+                fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with patch.object(canonical.subprocess,'Popen',side_effect=spawn_then_signal):
+                    with self.assertRaisesRegex(ValueError,'OBSERVATION_INTERRUPTED'):
+                        d.one_observation(read,handle)
+            self.assertEqual(len(children),1)
+            self.assertIsNone(children[0].poll())
+            self.assertEqual((i.ROOT/'observation.lock').read_bytes(),b'RUNNING\n')
+            with (i.ROOT/'observation.lock').open('r+b') as handle, patch.object(d,'supervised_read') as invoke:
+                with self.assertRaisesRegex(ValueError,'OBSERVATION_CONSUMED_RECONCILE_ONLY'):
+                    d.one_observation(read,handle)
+                invoke.assert_not_called()
+            rc,r=self.call('uninstall')
+            self.assertEqual((rc,r['code']),(2,'OBSERVATION_UNRECONCILED'))
+            self.assertTrue(i.RULE.exists())
+        finally:
+            for child in children:
+                child.kill();child.communicate(timeout=5)
+
     def canonical_process_case(self, interrupt):
         import fcntl, signal, threading, time
         spec=importlib.util.spec_from_file_location('canonical_common', ROOT.parent/'m1-assisted/common.py')

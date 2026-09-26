@@ -26,10 +26,12 @@ exceptions through that supervisor before the lock is released. The observer's
 outer SIGKILL that could orphan a Docker client in a different session.
 The dedicated state/lock file is root-owned, group faiadmin, mode0660; programs
 and configuration remain root-owned and nonwritable. Only fixed marker bytes
-are written there. RUNNING is flushed before the single observation. A hard
-kill or unverified command settlement leaves it latched, blocking another read
-and removal until owner reconciliation. Completed/settled STOP is also consumed,
-without replaying the observation. No historical release marker is modified.
+are written there. RUNNING is flushed before the single observation. Every error
+or interruption leaves it latched, including the gap between command spawn and
+its protected wait. Another read and removal are blocked until owner
+reconciliation. Only a successful observation writes COMPLETE. No historical
+release marker is modified. The conservative barrier deliberately does not
+infer process settlement from an exception code.
 
 The observer reuses the previously prepared R22 source with one necessary fix:
 the image-inspect JSON format now closes its outer object. Both image/container
