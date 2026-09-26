@@ -2064,7 +2064,7 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
   assert.deepEqual(await footprint(), before);
   const input = { dossierId: dossier.id, packageId: exportInput.packageId, packageArtifactHash: exported.receipt.artifactHash,
     expectedVersionId: dossier.currentVersionId, title: 'Risultato Work verificabile', content: 'Risultato manuale sintetico con fonti e limiti',
-    workReference: 'WORK-M2-DB-SYNTHETIC', producer: 'A04 dichiarato', returnedAt: '2026-09-26T22:00:00+02:00' };
+    workReference: 'WORK-M2-DB-SYNTHETIC', producer: 'A04', returnedAt: '2026-09-26T22:00:00+02:00' };
   await assert.rejects(importEngagementWorkResult(db, actorA, { ...input, packageArtifactHash: '0'.repeat(64) }), deniedWork);
   await assert.rejects(importEngagementWorkResult(db, actorB, input), deniedWork);
   await assert.rejects(importEngagementWorkResult(db, actorA, input, { failAudit: true }), conflictWork);
@@ -2094,7 +2094,7 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
     assert.deepEqual(await footprint(), before);
   } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
   const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: exportInput.packageId } });
-  await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...exported.receipt, manifestHash: '0'.repeat(64) } } });
+  await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...(exportAudit.after as Record<string, Prisma.InputJsonValue>), materialSnapshotHash: '0'.repeat(64) } } });
   try {
     assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
     await assert.rejects(importEngagementWorkResult(db, actorA, input), deniedWork);

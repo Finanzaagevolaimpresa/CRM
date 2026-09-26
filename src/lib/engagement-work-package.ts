@@ -29,28 +29,48 @@ export const workManifestSchema = z.object({
 export type WorkManifest = z.infer<typeof workManifestSchema>;
 
 export const workExportReceiptSchema = z.object({
-  protocol: z.literal('FAI_CRM_WORK_EXPORT_RECEIPT_V1'),
-  manifest: workManifestSchema,
+  type: z.literal('FAI_CRM_WORK_EXPORT_RECEIPT_V1'),
+  packageId: z.string().uuid(), dossierId: id, clientId: id, projectId: id, clientServiceId: id,
+  sourceVersionId: z.string().uuid(), sourceVersion: z.number().int().positive(), sourceVersionHash: hash,
+  serviceRevisionId: z.string().uuid(), practiceId: z.string().uuid(), acceptedOfferRevisionId: z.string().uuid(),
+  exportedAt: z.string().datetime(), exportedById: id,
+  materialSnapshotHash: hash,
+  source: z.array(z.object({ documentId: id, documentVersionId: id, checksumHash: hash, sizeBytes: z.number().int().positive().max(25 * 1024 * 1024) }).strict()).max(100),
   manifestHash: hash,
   artifactHash: hash,
 }).strict();
+
+export function workExportEvidence(manifest: WorkManifest, manifestHash: string, artifactHash: string) {
+  return workExportReceiptSchema.parse({
+    type: 'FAI_CRM_WORK_EXPORT_RECEIPT_V1', packageId: manifest.packageId, dossierId: manifest.dossierId,
+    clientId: manifest.client.id, projectId: manifest.project.id, clientServiceId: manifest.service.id,
+    sourceVersionId: manifest.sourceVersionId, sourceVersion: manifest.sourceVersion, sourceVersionHash: manifest.sourceVersionHash,
+    serviceRevisionId: manifest.service.revisionId, practiceId: manifest.engagement.practiceId, acceptedOfferRevisionId: manifest.engagement.acceptedOfferRevisionId,
+    exportedAt: manifest.exportedAt, exportedById: manifest.exportedById, materialSnapshotHash: manifest.materialSnapshotHash,
+    source: manifest.files.map(file => ({ documentId: file.documentId, documentVersionId: file.documentVersionId, checksumHash: file.sha256, sizeBytes: file.bytes })),
+    manifestHash, artifactHash,
+  });
+}
+
+export const workProducerRoles = ['OPERATORE', 'A00', 'A01', 'A02', 'A03', 'A04', 'A05', 'A06', 'A07', 'A08', 'A09', 'A10', 'A11', 'Q01', 'Q02', 'Q03', 'D01'] as const;
+const workReferenceCode = z.string().trim().regex(/^[A-Za-z][A-Za-z0-9_-]{0,119}$/);
 
 export const workImportInputSchema = z.object({
   dossierId: id, packageId: z.string().uuid(), packageArtifactHash: hash,
   expectedVersionId: z.string().uuid(),
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(200_000),
-  workReference: z.string().trim().min(1).max(240),
-  producer: z.string().trim().min(1).max(120),
+  workReference: workReferenceCode,
+  producer: z.enum(workProducerRoles),
   returnedAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()),
 });
 
 export const workImportReceiptSchema = z.object({
-  protocol: z.literal('FAI_CRM_MANUAL_WORK_IMPORT_V1'),
+  type: z.literal('FAI_CRM_MANUAL_WORK_IMPORT_V1'),
   packageId: z.string().uuid(), packageArtifactHash: hash,
   sourceVersionId: z.string().uuid(), sourceVersionHash: hash,
   versionId: z.string().uuid(), versionHash: hash,
-  workReference: z.string().min(1).max(240), producer: z.string().min(1).max(120),
+  referenceCode: workReferenceCode, producerRole: z.enum(workProducerRoles),
   returnedAt: z.string().datetime(), importHash: hash,
 }).strict();
 export type WorkImportReceipt = z.infer<typeof workImportReceiptSchema>;

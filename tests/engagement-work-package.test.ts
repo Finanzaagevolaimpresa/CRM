@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { buildWorkPackage, workBytesHash, workImportInputSchema, type WorkManifest } from '../src/lib/engagement-work-package';
+import { buildWorkPackage, workBytesHash, workExportEvidence, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, type WorkManifest } from '../src/lib/engagement-work-package';
+import { redactAuditPayload } from '../src/lib/data-classification';
 
 function fixture(): WorkManifest {
   return {
@@ -52,5 +53,21 @@ test('manual result requires source package, actor-declared provenance and an un
   assert.equal(workImportInputSchema.parse(input).returnedAt, '2026-09-26T20:30:00.000Z');
   assert.equal(workImportInputSchema.safeParse({ ...input, returnedAt: '2026-09-26T22:30' }).success, false);
   assert.equal(workImportInputSchema.safeParse({ ...input, producer: '' }).success, false);
+  assert.equal(workImportInputSchema.safeParse({ ...input, workReference: 'person@example.invalid' }).success, false);
   assert.equal(workImportInputSchema.safeParse({ ...input, packageArtifactHash: 'invented' }).success, false);
+});
+
+test('Work receipts preserve only technical evidence through the unchanged audit privacy policy', () => {
+  const manifest = fixture();
+  manifest.client.name = 'Persona sintetica person@example.invalid';
+  manifest.engagement.scope = 'Contenuto riservato del contratto';
+  const evidence = workExportEvidence(manifest, 'e'.repeat(64), 'f'.repeat(64));
+  assert.deepEqual(workExportReceiptSchema.parse(redactAuditPayload(evidence)), evidence);
+  assert.ok(!JSON.stringify(evidence).includes('Persona sintetica'));
+  assert.ok(!JSON.stringify(evidence).includes('Contenuto riservato'));
+  const returned = workImportReceiptSchema.parse({ type: 'FAI_CRM_MANUAL_WORK_IMPORT_V1', packageId: manifest.packageId,
+    packageArtifactHash: evidence.artifactHash, sourceVersionId: manifest.sourceVersionId, sourceVersionHash: manifest.sourceVersionHash,
+    versionId: randomUUID(), versionHash: 'e'.repeat(64), referenceCode: 'WORK-SYNTHETIC-001', producerRole: 'A04',
+    returnedAt: manifest.exportedAt, importHash: 'f'.repeat(64) });
+  assert.deepEqual(workImportReceiptSchema.parse(redactAuditPayload(returned)), returned);
 });

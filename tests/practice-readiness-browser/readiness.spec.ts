@@ -1133,7 +1133,7 @@ test("versioned dossier listings follow current detail access", async ({ page, b
 });
 
 test('M2 Work package returns as a new draft before independent review and simulated delivery', async ({ page, browser }) => {
-  await assertSyntheticCatalogDatabase(db, process.env);
+  await assertSyntheticCatalogDatabase(db);
   await login(page, 'readiness-owner@invalid.test');
   const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, createdById: 'readiness-browser-owner' }, orderBy: { createdAt: 'asc' } });
   await page.goto(`${app}/engagement-dossiers/new/${dossier.practiceReadinessId}`);
@@ -1142,9 +1142,14 @@ test('M2 Work package returns as a new draft before independent review and simul
   const packageId = await exportForm.locator('[name="packageId"]').inputValue();
   await exportForm.locator('[name="manualTransferAuthorized"]').check();
   const requestPromise = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/work-export'));
-  const downloadPromise = page.waitForEvent('download');
+  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/work-export'));
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
   await exportForm.getByRole('button', { name: 'Scarica pacchetto Work' }).click();
-  expect((await downloadPromise).suggestedFilename()).toBe(`work-${packageId}.zip`);
+  const exportResponse = await responsePromise;
+  expect(exportResponse.status(), `M2 export response: ${exportResponse.status()} ${exportResponse.headers().location ?? ''}`).toBe(200);
+  const download = await downloadPromise;
+  expect(download).not.toBeNull();
+  expect(download!.suggestedFilename()).toBe(`work-${packageId}.zip`);
   const exportRequest = await requestPromise;
   const exported = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
   expect(exported.status()).toBe(200);
@@ -1154,10 +1159,10 @@ test('M2 Work package returns as a new draft before independent review and simul
   expect(exported.headers()['x-work-package-sha256']).toBe(artifactHash);
   expect(await db.auditLog.count({ where: { id: packageId, event: 'engagement_work_package_export' } })).toBe(1);
   const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: packageId } });
-  const receipt = exportAudit.after as { manifest: { sourceVersionId: string; sourceVersionHash: string; files: Array<{ name: string; sha256: string }> }; artifactHash: string };
+  const receipt = exportAudit.after as { sourceVersionId: string; sourceVersionHash: string; source: Array<{ documentId: string; checksumHash: string }>; artifactHash: string };
   expect(receipt.artifactHash).toBe(artifactHash);
-  expect(receipt.manifest.sourceVersionId).toBe(dossier.currentVersionId);
-  expect(receipt.manifest.files.length).toBeGreaterThan(0);
+  expect(receipt.sourceVersionId).toBe(dossier.currentVersionId);
+  expect(receipt.source.length).toBeGreaterThan(0);
   expect(bytes.includes(Buffer.from('synthetic/readiness/'))).toBe(false);
   const foreignContext = await browser.newContext();
   const foreign = await foreignContext.newPage();
@@ -1171,7 +1176,7 @@ test('M2 Work package returns as a new draft before independent review and simul
   const returnForm = page.getByRole('form', { name: 'Rientro manuale da Work' });
   await returnForm.locator('[name="packageBinding"]').selectOption(`${packageId}:${artifactHash}`);
   await returnForm.locator('[name="workReference"]').fill('WORK-M2-BROWSER-SYNTHETIC');
-  await returnForm.locator('[name="producer"]').fill('A04 dichiarato, caso sintetico');
+  await returnForm.locator('[name="producer"]').selectOption('A04');
   await returnForm.locator('[name="returnedAtLocal"]').fill('2026-09-26T22:00');
   await returnForm.locator('[name="title"]').fill('Risultato M2 Work sintetico');
   await returnForm.locator('[name="content"]').fill('Risultato autonomo sintetico. Fonti: manifest del pacchetto. Limiti: simulazione. Prossimo passo: revisione umana.');

@@ -24,8 +24,8 @@ Un file mancante o alterato interrompe l'export senza registrare una ricevuta
 di successo. Il medesimo identificativo di richiesta restituisce lo stesso
 pacchetto, dopo aver rivalidato diritti e byte.
 
-Il rientro richiede pacchetto e hash esatti, versione di partenza, riferimento
-Work, produttore dichiarato e data con fuso orario. Registra una nuova versione
+Il rientro richiede pacchetto e hash esatti, versione di partenza, codice tecnico
+Work senza dati personali, ruolo del produttore dichiarato e data con fuso orario. Registra una nuova versione
 e la provenienza nella stessa transazione, azzera l'approvazione e torna in bozza.
 Il riferimento e il produttore sono dichiarazioni manuali: non attestano che una
 chat, un plugin o un'API abbia realmente eseguito il lavoro. Non si effettua alcun
@@ -47,6 +47,12 @@ convenzione di ricevute di dominio già usata dall'handoff M1. L'ID del pacchett
 è la chiave primaria della ricevuta; la transazione Serializable blocca il
 dossier prima di registrare l'export o creare la versione importata.
 Lettura e replay verificano struttura, hash e legami tra ricevute e versioni.
+Le ricevute contengono esclusivamente identificativi, hash, dimensioni, ruoli
+e date. Il manifest con i dati del cliente rimane nel pacchetto autorizzato;
+non viene memorizzato nell'audit. Il filtro N04 resta invariato e ogni scrittura
+verifica anche il record effettivamente restituito dal database prima del commit.
+Se i metadati del cliente cambiano tra download e replay, il vecchio pacchetto
+non viene ricostruito con dati diversi: occorre una nuova esportazione esplicita.
 
 EngagementDossierExport e il suo vincolo SQL markdown/docx restano riservati
 agli elaborati approvati: un pacchetto di lavoro non è un export approvato.

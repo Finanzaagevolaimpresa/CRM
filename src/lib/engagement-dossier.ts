@@ -7,7 +7,7 @@ import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { readPrivateDocumentBounded } from './storage';
-import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_MAX_BYTES, workBytesHash, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, workManifestSchema, type WorkManifest } from './engagement-work-package';
+import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_MAX_BYTES, workBytesHash, workExportEvidence, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, workManifestSchema, type WorkManifest } from './engagement-work-package';
 
 export class EngagementDossierError extends Error {
   constructor(readonly code: 'DENIED' | 'CONFLICT' | 'NOT_READY' | 'INVALID') { super(code); }
@@ -161,21 +161,19 @@ type WorkRuntime = Runtime & { readDocument?: typeof readPrivateDocumentBounded 
 function checkedWorkExport(row: { id: string; actorId: string | null; after: unknown }, context: DossierContext) {
   const parsed = workExportReceiptSchema.safeParse(row.after);
   if (!parsed.success) throw new EngagementDossierError('DENIED');
-  const receipt = parsed.data, manifest = receipt.manifest;
-  const source = context.versions.find(version => version.id === manifest.sourceVersionId);
-  const materials = source && materialSnapshotSchema.safeParse(source.materialSnapshot);
-  if (!source || !materials || !materials.success || row.id !== manifest.packageId || row.actorId !== manifest.exportedById
-    || manifest.dossierId !== context.dossier.id || manifest.client.id !== context.client.id
-    || manifest.project.id !== context.project.id || manifest.service.id !== context.service.id
-    || manifest.service.revisionId !== source.serviceRevisionId || manifest.engagement.practiceId !== source.practiceReadinessId
-    || manifest.engagement.acceptedOfferRevisionId !== source.acceptedOfferRevisionId
-    || manifest.sourceVersion !== source.version || manifest.sourceVersionHash !== source.contentHash
-    || manifest.materialSnapshotHash !== engagementDossierHash(source.materialSnapshot)
-    || receipt.manifestHash !== engagementDossierHash(manifest)
-    || engagementDossierHash(manifest.materials) !== engagementDossierHash(materials.data.map(({ checklistItemId, evidenceId, status, documentVersionId, checksum }) => ({ checklistItemId, evidenceId, status, documentVersionId, checksum })))
-    || manifest.files.some(file => !materials.data.some(material => material.status === 'VALIDATED' && material.documentId === file.documentId && material.documentVersionId === file.documentVersionId && material.checksum === file.sha256))) throw new EngagementDossierError('DENIED');
+  const receipt = parsed.data;
+  const version = context.versions.find(item => item.id === receipt.sourceVersionId);
+  const materials = version && materialSnapshotSchema.safeParse(version.materialSnapshot);
+  if (!version || !materials || !materials.success || row.id !== receipt.packageId || row.actorId !== receipt.exportedById
+    || receipt.dossierId !== context.dossier.id || receipt.clientId !== context.client.id
+    || receipt.projectId !== context.project.id || receipt.clientServiceId !== context.service.id
+    || receipt.serviceRevisionId !== version.serviceRevisionId || receipt.practiceId !== version.practiceReadinessId
+    || receipt.acceptedOfferRevisionId !== version.acceptedOfferRevisionId
+    || receipt.sourceVersion !== version.version || receipt.sourceVersionHash !== version.contentHash
+    || receipt.materialSnapshotHash !== engagementDossierHash(version.materialSnapshot)
+    || receipt.source.some(file => !materials.data.some(material => material.status === 'VALIDATED' && material.documentId === file.documentId && material.documentVersionId === file.documentVersionId && material.checksum === file.checksumHash))) throw new EngagementDossierError('DENIED');
   const required = new Set(materials.data.filter(material => material.status === 'VALIDATED' && material.documentVersionId).map(material => material.documentVersionId));
-  if (required.size !== manifest.files.length || manifest.files.some(file => !required.delete(file.documentVersionId))) throw new EngagementDossierError('DENIED');
+  if (required.size !== receipt.source.length || receipt.source.some(file => !required.delete(file.documentVersionId))) throw new EngagementDossierError('DENIED');
   return receipt;
 }
 
@@ -191,30 +189,14 @@ async function workHistory(tx: Prisma.TransactionClient, context: DossierContext
     const exported = packages.find(item => item.id === record.packageId);
     const version = context.versions.find(item => item.id === record.versionId);
     if (!exported || !version || row.actorId !== version.createdById || version.contentHash !== record.versionHash
-      || exported.artifactHash !== record.packageArtifactHash || exported.manifest.sourceVersionId !== record.sourceVersionId
-      || exported.manifest.sourceVersionHash !== record.sourceVersionHash
+      || exported.artifactHash !== record.packageArtifactHash || exported.sourceVersionId !== record.sourceVersionId
+      || exported.sourceVersionHash !== record.sourceVersionHash
       || record.importHash !== engagementDossierHash({ dossierId: context.dossier.id, packageId: record.packageId,
         packageArtifactHash: record.packageArtifactHash, expectedVersionId: record.sourceVersionId,
-        title: version.title, content: version.content, workReference: record.workReference, producer: record.producer, returnedAt: record.returnedAt })) throw new EngagementDossierError('DENIED');
-    return { id: row.id, importedAt: row.createdAt, ...record };
+        title: version.title, content: version.content, workReference: record.referenceCode, producer: record.producerRole, returnedAt: record.returnedAt })) throw new EngagementDossierError('DENIED');
+    return { id: row.id, importedAt: row.createdAt, ...record, workReference: record.referenceCode, producer: record.producerRole };
   });
   return { packages, imports };
-}
-
-async function workMaterialBytes(tx: Prisma.TransactionClient, manifest: WorkManifest, runtime: WorkRuntime) {
-  const bytes = new Map<string, Buffer>();
-  let total = 0;
-  for (const file of manifest.files) {
-    const version = await tx.documentVersion.findUnique({ where: { id: file.documentVersionId } });
-    if (!version || version.documentId !== file.documentId || version.checksum !== file.sha256) throw new EngagementDossierError('DENIED');
-    let data: Buffer;
-    try { data = await (runtime.readDocument ?? readPrivateDocumentBounded)(version.storagePath, Math.min(25 * 1024 * 1024, WORK_PACKAGE_MAX_BYTES - total)); }
-    catch { throw new EngagementDossierError('NOT_READY'); }
-    if (workBytesHash(data) !== file.sha256 || data.length !== file.bytes) throw new EngagementDossierError('NOT_READY');
-    total += data.length;
-    bytes.set(file.documentVersionId, data);
-  }
-  return bytes;
 }
 
 /** Explicit manual transfer only; the package is a draft, never an approved client deliverable. */
@@ -229,13 +211,11 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
     const source = context.versions.find(version => version.id === context.dossier.currentVersionId);
     if (!source || source.id !== input.expectedVersionId) throw new EngagementDossierError('CONFLICT');
     const existing = await tx.auditLog.findUnique({ where: { id: input.packageId } });
+    let previousReceipt: ReturnType<typeof checkedWorkExport> | null = null;
     if (existing) {
       if (existing.entityType !== 'ClientDossier' || existing.entityId !== context.dossier.id || existing.event !== WORK_PACKAGE_EVENT || existing.actorId !== current.userId) throw new EngagementDossierError('DENIED');
-      const receipt = checkedWorkExport(existing, context);
-      if (receipt.manifest.sourceVersionId !== source.id) throw new EngagementDossierError('CONFLICT');
-      const archive = buildWorkPackage(receipt.manifest, source.content, await workMaterialBytes(tx, receipt.manifest, runtime));
-      if (workBytesHash(archive) !== receipt.artifactHash) throw new EngagementDossierError('DENIED');
-      return { archive, receipt };
+      previousReceipt = checkedWorkExport(existing, context);
+      if (previousReceipt.sourceVersionId !== source.id) throw new EngagementDossierError('CONFLICT');
     }
     const [revision, offer] = await Promise.all([
       tx.serviceCatalogRevision.findUnique({ where: { id: source.serviceRevisionId } }),
@@ -266,7 +246,7 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
     }
     const manifest = parseInput(workManifestSchema, {
       protocol: 'FAI_CRM_MANUAL_WORK_PACKAGE_V1', purpose: 'INTERNAL_WORK_ONLY', packageId: input.packageId,
-      exportedAt: now.toISOString(), exportedById: current.userId, dossierId: context.dossier.id,
+      exportedAt: previousReceipt?.exportedAt ?? now.toISOString(), exportedById: current.userId, dossierId: context.dossier.id,
       sourceVersionId: source.id, sourceVersion: source.version, sourceVersionHash: source.contentHash,
       client: { id: context.client.id, name: context.client.displayName }, project: { id: context.project.id, title: context.project.title },
       service: { id: context.service.id, revisionId: revision.id, revisionHash: revision.contentHash, name: revision.publicName, assignedToId: context.service.assignedToId, dueAt: context.service.dueDate?.toISOString() ?? null },
@@ -279,7 +259,14 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
     try { archive = buildWorkPackage(manifest, source.content, bytes); }
     catch { throw new EngagementDossierError('NOT_READY'); }
     const receipt = { protocol: 'FAI_CRM_WORK_EXPORT_RECEIPT_V1' as const, manifest, manifestHash: engagementDossierHash(manifest), artifactHash: workBytesHash(archive) };
-    await tx.auditLog.create({ data: { id: input.packageId, actorId: current.userId, event: WORK_PACKAGE_EVENT, entityType: 'ClientDossier', entityId: context.dossier.id, after: receipt } });
+    const evidence = workExportEvidence(manifest, receipt.manifestHash, receipt.artifactHash);
+    if (previousReceipt) {
+      if (engagementDossierHash(evidence) !== engagementDossierHash(previousReceipt)) throw new EngagementDossierError('CONFLICT');
+      return { archive, receipt };
+    }
+    const stored = await tx.auditLog.create({ data: { id: input.packageId, actorId: current.userId, event: WORK_PACKAGE_EVENT, entityType: 'ClientDossier', entityId: context.dossier.id, after: evidence } });
+    const persisted = checkedWorkExport(stored, context);
+    if (engagementDossierHash(persisted) !== engagementDossierHash(evidence)) throw new EngagementDossierError('CONFLICT');
     if (runtime.failAudit) throw new EngagementDossierError('CONFLICT');
     return { archive, receipt };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
@@ -296,7 +283,7 @@ export async function importEngagementWorkResult(db: Db, claimed: AuthSession, r
     const context = await scope(tx, current, input.dossierId);
     const history = await workHistory(tx, context);
     const exported = history.packages.find(item => item.id === input.packageId);
-    if (!exported || exported.artifactHash !== input.packageArtifactHash || exported.manifest.sourceVersionId !== input.expectedVersionId) throw new EngagementDossierError('DENIED');
+    if (!exported || exported.artifactHash !== input.packageArtifactHash || exported.sourceVersionId !== input.expectedVersionId) throw new EngagementDossierError('DENIED');
     const replay = history.imports.find(item => item.importHash === importHash);
     if (replay) return context.versions.find(version => version.id === replay.versionId)!;
     if (context.dossier.currentVersionId !== input.expectedVersionId) throw new EngagementDossierError('CONFLICT');
@@ -306,11 +293,14 @@ export async function importEngagementWorkResult(db: Db, claimed: AuthSession, r
       serviceRevisionId: previous.serviceRevisionId, preAnalysisId: previous.preAnalysisId, materialSnapshot: previous.materialSnapshot });
     const version = await tx.engagementDossierVersion.create({ data: { ...payload, contentHash: engagementDossierHash(payload), materialSnapshot: previous.materialSnapshot as Prisma.InputJsonValue, createdById: current.userId } });
     await tx.clientDossier.update({ where: { id: context.dossier.id }, data: { title: input.title, content: input.content, currentVersionId: version.id, approvedVersionId: null, status: 'bozza', reviewedById: null, reviewedAt: null, updatedById: current.userId } });
-    await audit(tx, runtime, current.userId, WORK_IMPORT_EVENT, context.dossier.id, {
-      protocol: 'FAI_CRM_MANUAL_WORK_IMPORT_V1', packageId: input.packageId, packageArtifactHash: input.packageArtifactHash,
+    const evidence = workImportReceiptSchema.parse({
+      type: 'FAI_CRM_MANUAL_WORK_IMPORT_V1', packageId: input.packageId, packageArtifactHash: input.packageArtifactHash,
       sourceVersionId: previous.id, sourceVersionHash: previous.contentHash, versionId: version.id, versionHash: version.contentHash,
-      workReference: input.workReference, producer: input.producer, returnedAt: input.returnedAt, importHash,
+      referenceCode: input.workReference, producerRole: input.producer, returnedAt: input.returnedAt, importHash,
     });
+    const stored = await audit(tx, runtime, current.userId, WORK_IMPORT_EVENT, context.dossier.id, evidence);
+    const persisted = workImportReceiptSchema.safeParse(stored.after);
+    if (!persisted.success || engagementDossierHash(persisted.data) !== engagementDossierHash(evidence)) throw new EngagementDossierError('CONFLICT');
     return version;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
@@ -349,8 +339,9 @@ export async function getVisibleEngagementDossierIds(db: Db, claimed: AuthSessio
 }
 
 async function audit(tx: Prisma.TransactionClient, runtime: Runtime, actorId: string, event: string, dossierId: string, after: Prisma.InputJsonValue) {
-  await tx.auditLog.create({ data: { actorId, event, entityType: 'ClientDossier', entityId: dossierId, after } });
+  const entry = await tx.auditLog.create({ data: { actorId, event, entityType: 'ClientDossier', entityId: dossierId, after } });
   if (runtime.failAudit) throw new EngagementDossierError('CONFLICT');
+  return entry;
 }
 
 function versionPayload(input: { dossierId: string; version: number; title: string; content: string; practiceReadinessId: string; acceptedOfferRevisionId: string; serviceRevisionId: string; preAnalysisId: string; materialSnapshot: unknown }) {
