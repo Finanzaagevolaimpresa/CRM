@@ -12,6 +12,8 @@ Stato alla preparazione: software M2 CI verde, riesame finale ancora da acquisir
 - Recipient pubblico già approvato e destinazioni fisiche C:/F: conservati dal binding M1. I dischi vengono riconfermati a ogni copia, senza sostituire lettere o supporti.
 - Configurazione M1 copiata solo sul VPS in file privato e verificata byte per byte; step-up v1 già ACTIVE deve corrispondere. Nessuna registrazione/rotazione di credenziali.
 
+La lettura mirata dell'archivio nel run36278940196 ha dimostrato che gli ID97c04ee/8a31a996 della CI software sono digest di configurazione del daemon classic. I manifest OCI01c7a81/42ec4e54 nello stesso archivio puntano esattamente a quei digest: sono gli identificativi richiesti da Docker/containerd. Il programma verifica hash dell'archivio, entrambi i link manifest→config, piattaforma, layer e label; non sostituisce immagini o indebolisce un controllo. I due STOP precedenti riguardavano questa distinzione, prima di qualsiasi avvio produttivo. La successiva CI deve attestare anche il caricamento sul daemon qualificato.
+
 ## Sequenza del singolo avvio
 
 Il futuro `AVVIA-M2.ps1`, con hash pubblicato alla costruzione qualificata, esegue:

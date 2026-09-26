@@ -58,8 +58,10 @@ def render(run_id,reader=source):
     b=json.loads(old('binding.json'))
     b.update(protocol='FAI_M2_SCHEMA48_BINDING_R26',candidate=sealed.M2,candidateTree=sealed.M2_TREE,
         sourceCommit=sealed.M1,sourceTree=sealed.M1_TREE,
-        candidateImage='sha256:97c04ee3a04be24d66a773256a3585ebb81b7c1d189143a2dc71900532675c22',
-        returnImage='sha256:8a31a9968090e5b2bc1a29259ea033627625a93b2f0edb9eda2396ec9cabba38',imageArchiveSha256=ARCHIVE_SHA)
+        candidateImage='sha256:01c7a81a6c294651066765413243f465ce4b76f05b60f266b706559f917e7d19',
+        returnImage='sha256:42ec4e5431b77482ffffd00a2896356c94fd700aa1c5dc9bc60c500abd1b61d1',
+        candidateCiImage='sha256:97c04ee3a04be24d66a773256a3585ebb81b7c1d189143a2dc71900532675c22',
+        returnCiImage='sha256:8a31a9968090e5b2bc1a29259ea033627625a93b2f0edb9eda2396ec9cabba38',imageArchiveSha256=ARCHIVE_SHA)
     b['target'].update(appId='6ae0d2ac95dddc8d80859d32a68ef656bb578e1ff332a56dde6bacb70c05692c',
         appImage='sha256:06fe7f94dfd274eba7c24bd9e9cc102631ebc600f4a66e6066b708e846941bf9')
     for name in ('backupProgramSha256','candidateConfigDigest','returnConfigDigest','ledger46','consumedBackupStop'):

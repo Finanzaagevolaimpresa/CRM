@@ -26,7 +26,7 @@ from common import Stop
 
 
 class ImageBindingTests(unittest.TestCase):
-    def test_saved_metadata_config_links_with_and_without_schema_version(self):
+    def test_saved_metadata_links_exact_ci_config_to_runtime_manifest(self):
         for version in (None, 2):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as folder:
                 path=Path(folder)/'images.tar.gz'
@@ -41,12 +41,18 @@ class ImageBindingTests(unittest.TestCase):
                         member.size=len(raw)
                         archive.addfile(member,io.BytesIO(raw))
                         binding[role+'Image']='sha256:'+sha
+                        binding[role+'CiImage']='sha256:'+str(index)*64
                 binding['imageArchiveSha256']=hashlib.sha256(path.read_bytes()).hexdigest()
+                if version is None:
+                    with self.assertRaises(Stop): complete_binding(path,binding)
+                    continue
                 result=complete_binding(path,binding)
                 self.assertEqual(result['candidateConfigDigest'],'sha256:'+'0'*64)
                 self.assertEqual(result['returnConfigDigest'],'sha256:'+'1'*64)
                 with self.assertRaises(Stop):
                     complete_binding(path,binding|{'imageArchiveSha256':'0'*64})
+                with self.assertRaises(Stop):
+                    complete_binding(path,binding|{'candidateCiImage':'sha256:'+'f'*64})
 
 
 def reader(path,ref='HEAD'):

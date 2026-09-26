@@ -24,9 +24,7 @@ def complete_binding(archive, binding):
             raw = stream.extractfile(member).read(32769)
             need(hashlib.sha256(raw).hexdigest() == binding[role + 'Image'][7:], 'MANIFEST_DIGEST')
             manifest = decode(raw)
-            # docker save can omit schemaVersion in its digest-bound metadata.
-            # Follow the actual config link, as the sealed archive verifier does;
-            # never infer an image identity from a tag or an unverified JSON field.
+            need(manifest.get('schemaVersion') == 2, 'OCI_MANIFEST_VERSION')
             config = manifest.get('config') if isinstance(manifest, dict) else None
             need(isinstance(config, dict) and
                  re.fullmatch('sha256:[0-9a-f]{64}', str(config.get('digest', ''))),
@@ -35,6 +33,10 @@ def complete_binding(archive, binding):
     need(set(found) == {'candidate', 'return'}, 'QUALIFIED_MANIFEST_MISSING')
     result = dict(binding)
     for role, value in found.items():
+        # The source CI used classic Docker config IDs. The deployment daemon
+        # uses OCI manifest IDs. Both immutable identities must link through
+        # this very archive; they are not interchangeable inspect arguments.
+        need(value == binding[role + 'CiImage'], 'QUALIFIED_CI_CONFIG_LINK')
         result[role + 'ConfigDigest'] = value
     # The existing verifier subsequently hashes/parses both configs and checks
     # platform, source labels and layers. No tag-only identity is accepted.
