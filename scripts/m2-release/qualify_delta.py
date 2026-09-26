@@ -48,6 +48,7 @@ def main():
             for member in stream:
                 if not (member.name.startswith('blobs/sha256/') and member.isfile() and 0<member.size<=32768): continue
                 raw=stream.extractfile(member).read(32769)
+                if not raw.lstrip().startswith(b'{'): continue
                 sha='sha256:'+hashlib.sha256(raw).hexdigest()
                 need(member.name=='blobs/sha256/'+sha[7:],'ARCHIVE_METADATA_DIGEST')
                 value=decode(raw)
