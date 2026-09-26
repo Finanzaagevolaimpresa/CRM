@@ -137,12 +137,12 @@ wp_install('VNX02 Synthetic Test', 'vnx02_synthetic_admin', 'admin@synthetic.inv
 wp_set_current_user(1);
 
 $zip = new ZipArchive();
-vnx02_install_assert($zip->open('/workspace/dist/fai-secure-lead-connector-1.0.0.zip') === true);
+vnx02_install_assert($zip->open('/workspace/dist/fai-secure-lead-connector-1.1.0.zip') === true);
 vnx02_install_assert($zip->extractTo(WP_PLUGIN_DIR));
 $zip->close();
 $plugin = 'fai-secure-lead-connector/fai-secure-lead-connector.php';
 $headers = get_plugin_data(WP_PLUGIN_DIR . '/' . $plugin, false, false);
-vnx02_install_assert($headers['Version'] === '1.0.0');
+vnx02_install_assert($headers['Version'] === '1.1.0');
 vnx02_install_assert(activate_plugin($plugin, '', false, false) === null);
 vnx02_install_assert(is_plugin_active($plugin));
 $queue = new FAI\VNX02\QueueStore(new FAI\VNX02\WordPressDatabase($wpdb));

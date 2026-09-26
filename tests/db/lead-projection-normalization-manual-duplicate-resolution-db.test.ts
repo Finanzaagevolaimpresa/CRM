@@ -46,6 +46,8 @@ import {
 } from '../../src/lib/lead-intake-consumer';
 import { listLeadDuplicateReviewCases } from '../../src/lib/lead-duplicate-review';
 import { CORE_QUERY_MAX_CANDIDATES } from '../../src/lib/core-query-policy';
+import { LeadAcquisitionDenied, readLeadAcquisitions, readLeadAcquisitionSummary } from '../../src/lib/lead-acquisition';
+import { revokeInternalSession } from '../../src/lib/internal-session-registry';
 import {
   createLeadSubmittedEventV1,
   type LeadEventPayloadV1,
@@ -2091,4 +2093,108 @@ test('multiprocess manual-create/projection and duplicate decisions serialize on
   assert.equal(await client().leadDuplicateDecision.count({
     where: { duplicateCaseId: review.duplicateCase.id },
   }), 1);
+});
+
+async function m3Claim(eventRowId: string, ordinal: number) {
+  const lease = await claimBusinessQueueEvent(client(), {
+    queueKind: 'INBOX', leaseOwnerId: uuid(393_000 + ordinal), inboxEventIds: [eventRowId],
+  });
+  assert.ok(lease);
+  assert.equal(lease.eventRowId, eventRowId);
+  return lease;
+}
+
+test('M3 multiple submissions retain original campaign, request and privacy after replay and manual identity resolution', { skip: !runDbTests }, async () => {
+  const actor = { userId: primaryUserId, sessionId: primarySessionId };
+  const first = syntheticEvent(9301, { campaignCode: 'M3-A', adCode: 'A-1', message: 'First request.' }, undefined, { formCode: 'M3_HISTORY' });
+  const a = await admitBusinessInboxEvent(client(), first);
+  assert.equal((await admitBusinessInboxEvent(client(), first)).outcome, 'REPLAY');
+  const p = await projectClaimedLeadInboxEvent(client(), await m3Claim(a.inboxEventId, 1), projectionOptions());
+  assert.equal(p.result.state, 'PROJECTED_NEW');
+  const ledger = await client().leadProjectionLedger.findUniqueOrThrow({ where: { id: p.result.ledgerId } });
+  const leadId = ledger.leadId!;
+  const before = await client().lead.findUniqueOrThrow({ where: { id: leadId } });
+  const second = syntheticEvent(9302, { ...first.payload, campaignCode: 'M3-B', adCode: 'B-2', message: 'Different service for the same person.' }, undefined, { formCode: 'M3_HISTORY' });
+  const b = await admitBusinessInboxEvent(client(), second);
+  const p2 = await projectClaimedLeadInboxEvent(client(), await m3Claim(b.inboxEventId, 2), projectionOptions());
+  assert.equal(p2.result.state, 'REVIEW_REQUIRED');
+  const ambiguous = await readLeadAcquisitions(client(), actor, { queue: 'ambiguous' });
+  assert.equal(ambiguous.items.find((row) => row.id === b.inboxEventId)?.state, 'AMBIGUOUS');
+  const duplicate = await client().leadDuplicateCase.findUniqueOrThrow({ where: { projectionLedgerId: p2.result.ledgerId } });
+  await resolveLeadDuplicateCase(client(), { caseId: duplicate.id, expectedCaseVersion: 1,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE', selectedLeadId: leadId, reasonCode: 'M3_SAME_PERSON_NEW_REQUEST', ...resolutionActor() }, projectionOptions());
+  const history = await readLeadAcquisitions(client(), actor, { leadId });
+  assert.equal(history.items.length, 2);
+  assert.ok(history.items.every((row) => row.verified && row.state === 'LINKED'));
+  assert.deepEqual(new Set(history.items.map((row) => row.event?.payload.message)), new Set(['First request.', 'Different service for the same person.']));
+  assert.deepEqual(new Set(history.items.map((row) => row.event?.payload.campaignCode)), new Set(['M3-A', 'M3-B']));
+  assert.ok(history.items.every((row) => row.event?.privacy.marketing.decision === 'DENIED'));
+  assert.equal(await client().businessInboxEvent.count({ where: { id: { in: [a.inboxEventId, b.inboxEventId] } } }), 2);
+  assert.deepEqual(await client().lead.findUniqueOrThrow({ where: { id: leadId } }), before);
+  const summary = (await readLeadAcquisitionSummary(client(), actor)).find((row) => row.form === 'M3_HISTORY')!;
+  assert.equal(summary.requests, 2n); assert.equal(summary.leads, 1n); assert.equal(summary.paidLeads, 0n);
+  const customer = await client().client.create({ data: { type: 'societa', displayName: 'Synthetic M3 client', leadId } });
+  const contract = await client().contract.create({ data: { clientId: customer.id, contractNumber: 'M3-SYNTHETIC-9301', serviceName: 'Synthetic service', taxableAmount: 100, vatAmount: 22, totalAmount: 122 } });
+  await client().payment.createMany({ data: [1, 2].map(() => ({ clientId: customer.id, contractId: contract.id,
+    taxableAmount: 50, vatAmount: 11, totalAmount: 61, status: 'incassato' as const, collectedAt: new Date() })) });
+  const paid = (await readLeadAcquisitionSummary(client(), actor)).find((row) => row.form === 'M3_HISTORY')!;
+  assert.equal(paid.requests, 2n); assert.equal(paid.leads, 1n); assert.equal(paid.paidLeads, 1n);
+});
+
+test('M3 retry and terminal errors stay visible while successful recovery removes only the open error', { skip: !runDbTests }, async () => {
+  const actor = { userId: primaryUserId, sessionId: primarySessionId };
+  const event = syntheticEvent(9303, { campaignCode: 'M3-RECOVERY' }, undefined, { formCode: 'M3_RECOVERY' });
+  const admitted = await admitBusinessInboxEvent(client(), event);
+  await failBusinessQueueEvent(client(), { ...await m3Claim(admitted.inboxEventId, 3), failureCode: 'M3_SYNTHETIC_RETRY', retryable: true });
+  let errors = await readLeadAcquisitions(client(), actor, { queue: 'errors' });
+  const retry = errors.items.find((row) => row.id === admitted.inboxEventId)!;
+  assert.equal(retry.state, 'RETRY'); assert.equal(retry.attempts.length, 1); assert.ok(retry.availableAt);
+  await forceAvailableNow(admitted.inboxEventId); // Guarded ephemeral DB only; no waiting or production queue reset.
+  const projected = await projectClaimedLeadInboxEvent(client(), await m3Claim(admitted.inboxEventId, 4), projectionOptions());
+  const ledger = await client().leadProjectionLedger.findUniqueOrThrow({ where: { id: projected.result.ledgerId } });
+  const recovered = (await readLeadAcquisitions(client(), actor, { leadId: ledger.leadId! })).items[0];
+  assert.equal(recovered.state, 'LINKED'); assert.equal(recovered.failureCode, null);
+  assert.equal(recovered.attemptsTotal, 2); assert.equal(recovered.attempts.length, 2);
+  assert.equal(recovered.attempts[1].failureCode, 'M3_SYNTHETIC_RETRY');
+  assert.equal((await admitBusinessInboxEvent(client(), event)).outcome, 'REPLAY');
+  errors = await readLeadAcquisitions(client(), actor, { queue: 'errors' });
+  assert.equal(errors.items.some((row) => row.id === admitted.inboxEventId), false);
+  const terminal = await admitBusinessInboxEvent(client(), syntheticEvent(9304, {}, undefined, { formCode: 'M3_RECOVERY' }));
+  await failBusinessQueueEvent(client(), { ...await m3Claim(terminal.inboxEventId, 5), failureCode: 'M3_SYNTHETIC_TERMINAL', retryable: false });
+  const summary = (await readLeadAcquisitionSummary(client(), actor)).find((row) => row.form === 'M3_RECOVERY')!;
+  assert.equal(summary.requests, 2n); assert.equal(summary.errors, 1n); assert.equal(summary.waiting, 0n);
+  const terminalRow = (await readLeadAcquisitions(client(), actor, { queue: 'errors' })).items.find((row) => row.id === terminal.inboxEventId)!;
+  assert.equal(terminalRow.state, 'ERROR'); assert.equal(terminalRow.failureCode, 'M3_SYNTHETIC_TERMINAL');
+});
+
+test('M3 acquisition reads recheck revoked, suspended, permission-denied and reassigned sessions', { skip: !runDbTests }, async () => {
+  const actor = await createSession('commerciale', 9305);
+  const other = await createSession('commerciale', 9306);
+  const admin = await createSession('admin', 9307);
+  const lead = await client().lead.create({ data: { firstName: 'Synthetic M3', lastName: 'Assigned', assignedToId: actor.userId } });
+  assert.equal((await readLeadAcquisitions(client(), actor, { leadId: lead.id })).items.length, 0);
+  await assert.rejects(readLeadAcquisitions(client(), other, { leadId: lead.id }), LeadAcquisitionDenied);
+  await assert.rejects(readLeadAcquisitions(client(), actor, {}), LeadAcquisitionDenied);
+  await assert.rejects(readLeadAcquisitionSummary(client(), actor), LeadAcquisitionDenied);
+  await client().lead.update({ where: { id: lead.id }, data: { assignedToId: other.userId } });
+  await assert.rejects(readLeadAcquisitions(client(), actor, { leadId: lead.id }), LeadAcquisitionDenied);
+  await client().userPermissionOverride.create({ data: { userId: other.userId, permission: 'lead.read', allowed: false } });
+  await assert.rejects(readLeadAcquisitions(client(), other, { leadId: lead.id }), LeadAcquisitionDenied);
+  await client().user.update({ where: { id: admin.userId }, data: { active: false } });
+  await assert.rejects(readLeadAcquisitionSummary(client(), admin), LeadAcquisitionDenied);
+  await client().user.update({ where: { id: admin.userId }, data: { active: true } });
+  await client().$transaction((tx) => revokeInternalSession(tx, admin.sessionId, 'INTERNAL_SINGLE', primaryUserId));
+  await assert.rejects(readLeadAcquisitions(client(), admin, {}), LeadAcquisitionDenied);
+  await assert.rejects(readLeadAcquisitionSummary(client(), { userId: primaryUserId }), LeadAcquisitionDenied);
+});
+
+test('M3 acquisition pages are bounded and traverse separate receipts without duplication', { skip: !runDbTests }, async () => {
+  const actor = { userId: primaryUserId, sessionId: primarySessionId };
+  const ids = new Set<string>();
+  for (let i = 0; i < 51; i += 1) ids.add((await admitBusinessInboxEvent(client(), syntheticEvent(9400 + i, {}, undefined, { formCode: 'M3_PAGINATION' }))).inboxEventId);
+  const first = await readLeadAcquisitions(client(), actor, { queue: 'waiting' });
+  const second = await readLeadAcquisitions(client(), actor, { queue: 'waiting', page: '2' });
+  assert.equal(first.items.length, 50); assert.equal(first.hasNext, true); assert.equal(second.hasPrevious, true);
+  assert.equal(first.items.some((row) => second.items.some((next) => row.id === next.id)), false);
+  assert.equal([...first.items, ...second.items].filter((row) => ids.has(row.id)).length, 51);
 });

@@ -8,8 +8,15 @@ use FAI\VNX02\GatewayProtocol;
 
 require_once __DIR__ . '/vnx02-bootstrap.php';
 
-$config = ConnectorConfig::fromArray(vnx02_synthetic_config());
+$configuration = vnx02_synthetic_config();
 $fields = vnx02_synthetic_fields();
+if (($argv[1] ?? '') === 'campaign') {
+    $configuration['forms'][900001]['field_map']['campaignCode'] = 15;
+    $configuration['forms'][900001]['field_map']['adCode'] = 16;
+    $fields[15] = array('value' => 'AUTUNNO-26');
+    $fields[16] = array('value' => 'META:02');
+}
+$config = ConnectorConfig::fromArray($configuration);
 $fields[1]['value'] = " Cafe\u{0301} \u{1F600} \u{FEFF}";
 $fields[5]['value'] = "+39\u{FEFF}333\u{00A0}000\t0010";
 $fields[10]['value'] = '90071992547409,91';

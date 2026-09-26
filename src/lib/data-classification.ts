@@ -102,7 +102,9 @@ export const dataClassificationCatalog = Object.freeze({
     'payload.interestText': business,
     'payload.serviceInterestText': business,
     'payload.message': contact,
-    'payload.sourcePagePath': operational,
+      'payload.sourcePagePath': operational,
+      'payload.campaignCode': operational,
+      'payload.adCode': operational,
     'payload.requestedAmount.currency': rule(
       'FINANCIAL',
       'SERVICE_REQUEST_QUALIFICATION',

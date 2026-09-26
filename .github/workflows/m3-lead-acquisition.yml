@@ -1,0 +1,78 @@
+name: M3 lead acquisition browser
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: m3-lead-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-m3-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-m3-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-m3-browser-auth-not-production
+      AUTH_COOKIE_NAME: fai_m3_browser_session
+      APP_ORIGIN: http://127.0.0.1:3000
+      INTERNAL_SESSION_MODE: registry
+      PRIVILEGED_ACCESS_MODE: disabled
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      M3_BROWSER_CONFIRMED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Provision guarded synthetic database and requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 48
+          git diff --exit-code 7ab126f8a2ef385c3e720f190eda80f26f61ae39 -- prisma/schema.prisma prisma/migrations
+          evidence="$RUNNER_TEMP/m3-browser"
+          mkdir -p "$evidence"
+          password="$(openssl rand -base64 36 | tr -d '\n')"
+          echo "::add-mask::$password"
+          export M3_BROWSER_EVIDENCE="$evidence" M3_BROWSER_PASSWORD="$password"
+          printf 'M3_BROWSER_EVIDENCE=%s\nM3_BROWSER_PASSWORD=%s\n' "$evidence" "$password" >> "$GITHUB_ENV"
+          psql 'postgresql://postgres:synthetic-m3-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx tests/lead-acquisition-browser/provision.ts
+      - name: Qualify the new read views with Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev > "$M3_BROWSER_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3000/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          npx playwright test --config tests/lead-acquisition-browser/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/m3-browser/browser-proof.json
+            ${{ runner.temp }}/m3-browser/app.log
+          if-no-files-found: error
+          retention-days: 14

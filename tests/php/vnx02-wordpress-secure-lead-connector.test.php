@@ -137,6 +137,25 @@ vnx02_test('WPForms fields become a strict canonical N10 event with stable sourc
     vnx02_true(preg_match('/\A[0-9a-f]{64}\z/D', $envelope->businessKeyDigest) === 1);
 });
 
+vnx02_test('M3 optional campaign mapping preserves privacy and rejects URL or contact attribution', function (): void {
+    $configuration = vnx02_synthetic_config();
+    $configuration['forms'][900001]['field_map']['campaignCode'] = 15;
+    $configuration['forms'][900001]['field_map']['adCode'] = 16;
+    $form = ConnectorConfig::fromArray($configuration)->form(900001);
+    $fields = vnx02_synthetic_fields();
+    $fields[15] = array('value' => 'AUTUNNO-26');
+    $fields[16] = array('value' => 'META:02');
+    $event = EventContract::create($fields, 900001, 700001, $form);
+    vnx02_same('AUTUNNO-26', $event->event['payload']['campaignCode']);
+    vnx02_same('META:02', $event->event['payload']['adCode']);
+    vnx02_same('DENIED', $event->event['privacy']['marketing']['decision']);
+    foreach (array('https://example.invalid', 'test@example.invalid', 'utm=x&email=y', 'two words', str_repeat('a', 81)) as $invalid) {
+        $changed = $fields;
+        $changed[15] = array('value' => $invalid);
+        vnx02_throws(ConnectorException::LEAD_EVENT_INVALID, fn () => EventContract::create($changed, 900001, 700001, $form));
+    }
+});
+
 vnx02_test('privacy, contact, source path, unknown fields and body tamper fail closed', function (): void {
     $config = ConnectorConfig::fromArray(vnx02_synthetic_config());
     $form = $config->form(900001);

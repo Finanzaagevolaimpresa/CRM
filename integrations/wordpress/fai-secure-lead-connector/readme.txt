@@ -3,7 +3,7 @@ Contributors: fai
 Tags: wpforms, crm, webhook
 Requires at least: 6.5
 Requires PHP: 8.1
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 
 Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the FAI N12 gateway.
 
