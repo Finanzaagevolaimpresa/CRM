@@ -1146,16 +1146,15 @@ test('M2 Work package returns as a new draft before independent review and simul
   const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
   await exportForm.getByRole('button', { name: 'Scarica pacchetto Work' }).click();
   const exportResponse = await responsePromise;
-  if (!exportResponse) {
+  if (!exportResponse || exportResponse.status() !== 200) {
     const diagnostic = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
       form: { expectedVersionId: dossier.currentVersionId!, packageId, manualTransferAuthorized: 'on' },
       headers: { origin: app }, maxRedirects: 0,
     });
     const code = diagnostic.headers()['content-type']?.includes('application/json') ? (await diagnostic.json()).code : null;
-    throw new Error(`M2 browser did not receive export response; same bound synthetic request status=${diagnostic.status()}, code=${code}`);
+    throw new Error(`M2 browser export status=${exportResponse?.status() ?? 'missing'}, code=${exportResponse?.headers()['x-work-error-code'] ?? 'missing'}; same bound synthetic request status=${diagnostic.status()}, code=${code}`);
   }
-  const failureCode = exportResponse.headers()['content-type']?.includes('application/json') ? (await exportResponse.json()).code : null;
-  expect(exportResponse.status(), `M2 export response: ${exportResponse.status()}, code=${failureCode}`).toBe(200);
+  expect(exportResponse.headers()['content-type']).toBe('application/zip');
   const download = await downloadPromise;
   expect(download).not.toBeNull();
   expect(download!.suggestedFilename()).toBe(`work-${packageId}.zip`);

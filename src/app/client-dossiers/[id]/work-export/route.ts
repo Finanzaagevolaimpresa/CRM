@@ -34,6 +34,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const code = error instanceof EngagementDossierError ? error.code
       : error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034' ? 'CONFLICT' : null;
     if (!code) throw error;
-    return NextResponse.json({ code }, { status: code === 'DENIED' ? 403 : code === 'CONFLICT' ? 409 : code === 'NOT_READY' ? 422 : 400, headers: { 'Cache-Control': 'private, no-store' } });
+    return NextResponse.json({ code }, { status: code === 'DENIED' ? 403 : code === 'CONFLICT' ? 409 : code === 'NOT_READY' ? 422 : 400, headers: { 'Cache-Control': 'private, no-store', 'X-Work-Error-Code': code } });
   }
 }
