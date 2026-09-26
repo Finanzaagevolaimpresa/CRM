@@ -20,7 +20,7 @@ from common import Stop, canonical, digest, exclusive, load, need, value_sha
 REPO = SOURCE.parents[1]
 OUTPUT_ROOT = Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M1-assistito-R20')
 CANDIDATE = 'fb645e014653ee87dc64f2439970967192f91b62'
-INPUTS = ('binding.json', 'common.py', 'download_images.py', 'isolated_restore.py',
+INPUTS = ('binding.json', 'common.py', 'isolated_restore.py',
           'remote_release.py', 'owner_release.py', 'receive_package.py', 'storage_probe.ps1', 'qualified_images.py')
 CANONICAL = {'owner_backup46.py': REPO / 'scripts/pr140/owner_backup46.py',
              'observe_m1.py': REPO / 'scripts/m1-executor/observe_m1.py'}

@@ -104,6 +104,31 @@ class QualifiedImageTests(unittest.TestCase):
 
 
 class PreparedArchiveReuseTests(unittest.TestCase):
+    def test_owner_reaches_prepare_without_any_local_image_or_downloader(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            common.exclusive(root/'package.json',{'runId':'a'*32})
+            with patch.object(owner,'ROOT',root),patch.object(owner,'admit'),patch.object(owner,'storage'), \
+                 patch.object(owner,'upload') as upload,patch.object(owner,'stage_call',side_effect=common.Stop('SYNTHETIC_PREPARE_STOP')) as stage, \
+                 patch.object(owner.subprocess,'run',side_effect=AssertionError('No local download permitted')), \
+                 patch('builtins.print'):
+                self.assertEqual(owner.main(),2)
+            upload.assert_called_once_with({'runId':'a'*32})
+            stage.assert_called_once_with({'runId':'a'*32},'prepare')
+            self.assertEqual(common.load(root/'ESITO-ASSISTITO.json')['code'],'SYNTHETIC_PREPARE_STOP')
+
+    def test_owner_transport_does_not_include_or_open_local_images(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = {'runId':'a'*32,'files':{receiver.IMAGE_NAME:{'bytes':543331793},'receive_package.py':{}}}
+            common.exclusive(root/'package.json',manifest)
+            common.exclusive(root/'receive_package.py',b'# synthetic bootstrap, never executed\n')
+            with patch.object(owner,'ROOT',root),patch.object(owner,'call',return_value=(0,b'{"status":"PACKAGE_RECEIVED"}',b'')),patch('builtins.print'):
+                owner.upload(manifest)
+            with tarfile.open(root/'owner-transfer.tar') as archive:
+                self.assertEqual(set(archive.getnames()),{'package.json','receive_package.py'})
+            self.assertFalse((root/receiver.IMAGE_NAME).exists())
+
     def fixture(self,folder):
         prior,destination = Path(folder)/'prior',Path(folder)/'new'
         prior.mkdir(mode=0o700)
