@@ -13,6 +13,8 @@ import {
 import { PrismaClient } from "@prisma/client";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
+import { EngagementDossierError, exportEngagementWorkPackage } from '../../src/lib/engagement-dossier';
+import { workExportReceiptSchema } from '../../src/lib/engagement-work-package';
 
 const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN ?? "http://127.0.0.1:3000";
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
@@ -1152,7 +1154,26 @@ test('M2 Work package returns as a new draft before independent review and simul
       headers: { origin: app }, maxRedirects: 0,
     });
     const code = diagnostic.headers()['content-type']?.includes('application/json') ? (await diagnostic.json()).code : null;
-    throw new Error(`M2 browser export status=${exportResponse?.status() ?? 'missing'}, code=${exportResponse?.headers()['x-work-error-code'] ?? 'missing'}; same bound synthetic request status=${diagnostic.status()}, code=${code}`);
+    // Only the already-guarded synthetic fixture: locate the rejected boundary
+    // without exposing payloads, credentials or document contents in CI logs.
+    let boundary = 'START', receiptIssues = '', domainCode = '';
+    const diagnosticDb = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      boundary = `${model}.${operation}`;
+      const result = await query(args);
+      if (model === 'AuditLog' && operation === 'create') {
+        const parsed = workExportReceiptSchema.safeParse((result as { after?: unknown }).after);
+        receiptIssues = parsed.success ? 'shape-valid' : parsed.error.issues.map(issue => `${issue.path.join('.')}:${issue.code}`).join(',');
+      }
+      return result;
+    } } } });
+    const user = await db.user.findUniqueOrThrow({ where: { id: 'readiness-browser-owner' }, include: { permissionOverrides: true } });
+    const session = await db.internalSession.findFirstOrThrow({ where: { userId: user.id, revokedAt: null }, orderBy: { createdAt: 'desc' }, select: { id: true, expiresAt: true } });
+    try { await exportEngagementWorkPackage(diagnosticDb as unknown as Parameters<typeof exportEngagementWorkPackage>[0], {
+      userId: user.id, sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime() / 1000), role: user.role,
+      active: user.active, permissionOverrides: user.permissionOverrides,
+    }, { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId!, packageId, manualTransferAuthorized: true }); }
+    catch (error) { domainCode = error instanceof EngagementDossierError ? error.code : 'UNEXPECTED'; }
+    throw new Error(`M2 browser export status=${exportResponse?.status() ?? 'missing'}, code=${exportResponse?.headers()['x-work-error-code'] ?? 'missing'}; same bound synthetic request status=${diagnostic.status()}, code=${code}; domain=${domainCode}, boundary=${boundary}, receipt=${receiptIssues}`);
   }
   expect(exportResponse.headers()['content-type']).toBe('application/zip');
   const download = await downloadPromise;
