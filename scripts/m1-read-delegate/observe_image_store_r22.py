@@ -30,7 +30,7 @@ MANIFEST_IDS = {
 IMAGE_FORMAT = ('{"id":{{json .Id}},"os":{{json .Os}},"architecture":{{json .Architecture}},'
                 '"layers":{{json .RootFS.Layers}},'
                 '"commit":{{json (index .Config.Labels "org.opencontainers.image.revision")}},'
-                '"tree":{{json (index .Config.Labels "it.finanzaagevolaimpresa.source-tree")}}')
+                '"tree":{{json (index .Config.Labels "it.finanzaagevolaimpresa.source-tree")}}}')
 STATE_FORMAT = ('{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},'
                 '"health":{{json .State.Health.Status}},"restartCount":{{json .RestartCount}}}')
 FOLLOWING = ('backup', 'protect', 'copies-backup', 'recover', 'provision', 'copies-config', 'migrate', 'deploy', 'postcheck')

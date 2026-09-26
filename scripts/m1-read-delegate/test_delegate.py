@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -53,9 +54,24 @@ class Tests(unittest.TestCase):
     def test_exact_sudo_rule_and_no_root_target(self):
         self.assertEqual(i.SUDOERS.decode(), 'fai-codex fai-crm-prod-02=(faiadmin) NOPASSWD: NOSETENV: /usr/bin/python3.14 -I -B -S /usr/local/lib/fai-crm-m1-r23-read/delegate.py\n')
 
-    def test_pinned_existing_observer(self):
+    def test_pinned_corrected_observer(self):
         self.assertEqual(hashlib.sha256((ROOT / 'observe_image_store_r22.py').read_bytes()).hexdigest(), d.OBSERVER_SHA)
         self.assertEqual(i.FILES['observe_image_store_r22.py'], d.OBSERVER_SHA)
+
+    def test_docker_format_outputs_are_complete_json_objects(self):
+        values = {'.Id':'sha256:id', '.Image':'sha256:image', '.Os':'linux', '.Architecture':'amd64',
+                  '.RootFS.Layers':['sha256:layer'], '.State.Running':True,
+                  '.State.Health.Status':'healthy', '.RestartCount':0,
+                  '(index .Config.Labels "org.opencontainers.image.revision")':'commit',
+                  '(index .Config.Labels "it.finanzaagevolaimpresa.source-tree")':'tree'}
+        for template, expected in [(o.IMAGE_FORMAT,{'id','os','architecture','layers','commit','tree'}),
+                                   (o.STATE_FORMAT,{'id','image','running','health','restartCount'})]:
+            # Docker's json function substitutes one JSON value for each Go action.
+            rendered=re.sub(r'\{\{json (.*?)\}\}',lambda m:json.dumps(values[m[1]]),template)
+            self.assertNotIn('{{',rendered)
+            self.assertEqual(set(json.loads(rendered)),expected)
+            with self.assertRaises(json.JSONDecodeError):
+                json.loads(rendered[:-1])
 
     def test_pinned_delegate(self):
         self.assertEqual(hashlib.sha256((ROOT / 'delegate.py').read_bytes()).hexdigest(), i.FILES['delegate.py'])

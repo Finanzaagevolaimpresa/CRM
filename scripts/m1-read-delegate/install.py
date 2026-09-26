@@ -12,8 +12,8 @@ ROOT = Path('/usr/local/lib/fai-crm-m1-r23-read')
 RULE = Path('/etc/sudoers.d/fai-crm-m1-r23-read')
 PYTHON = Path('/usr/bin/python3.14')
 PYTHON_SHA = '52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41'
-FILES = {'delegate.py': '3fe0df7fc1e76f47ce67b2361d1e8b709cac66abc457d20606b53afdbb114a17',
-         'observe_image_store_r22.py': '45a8ecbdee430c2e72ade69ee4079536e4634cdcaba49c3268b60f7ce389bcc6'}
+FILES = {'delegate.py': '46d4f8458b15f544f570b648dc0b6f35ff871f8f8699a6b2d4a9c424e7301d2c',
+         'observe_image_store_r22.py': '94743eaafd7815d9509f670e032dbc0166ee55fe18a930e5215b912ad8aa031a'}
 # One line, exact executable and complete arguments; no wildcards or continuation.
 SUDOERS = ('fai-codex fai-crm-prod-02=(faiadmin) NOPASSWD: NOSETENV: '
            '/usr/bin/python3.14 -I -B -S /usr/local/lib/fai-crm-m1-r23-read/delegate.py\n').encode()

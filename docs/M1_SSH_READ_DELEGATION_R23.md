@@ -22,8 +22,11 @@ A nonblocking lock permits one observation at a time; the child inherits the
 lock so a disconnected controller cannot admit an overlapping observation.
 The child has no stdin, a fixed environment and a 125-second timeout.
 
-The observer is byte-identical to the previously prepared R22 source
-(`45a8ecbd…`). It verifies the existing package, STOP receipt and no later stage
+The observer reuses the previously prepared R22 source with one necessary fix:
+the image-inspect JSON format now closes its outer object. Both image/container
+formats have regression coverage. The old local R22 source is preserved;
+the corrected observer is pinned as `94743eaa…`.
+It verifies the existing package, STOP receipt and no later stage
 intent, then exports only the image-store backend, the two qualified image
 identities/label/layer matches, and minimal states of the two bound containers.
 It does not change the existing package, intent markers, receipts or containers.

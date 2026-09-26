@@ -13,7 +13,7 @@ import sys
 ROOT = Path('/usr/local/lib/fai-crm-m1-r23-read')
 PYTHON = Path('/usr/bin/python3.14')
 PYTHON_SHA = '52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41'
-OBSERVER_SHA = '45a8ecbdee430c2e72ade69ee4079536e4634cdcaba49c3268b60f7ce389bcc6'
+OBSERVER_SHA = '94743eaafd7815d9509f670e032dbc0166ee55fe18a930e5215b912ad8aa031a'
 PROTOCOL = 'FAI_M1_FIXED_READ_DELEGATE_R23'
 
 
