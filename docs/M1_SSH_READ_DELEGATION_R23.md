@@ -18,8 +18,9 @@ The rule contains the exact executable and complete arguments, on one line,
 with `NOPASSWD: NOSETENV:` and no wildcards. The installed directory and programs
 belong to root and are not writable by either CRM account. The caller and target
 identities, host, Python flags, Python binary hash and observer hash are checked.
-A nonblocking lock permits one observation at a time; the child has no stdin,
-a fixed environment and a 125-second timeout.
+A nonblocking lock permits one observation at a time; the child inherits the
+lock so a disconnected controller cannot admit an overlapping observation.
+The child has no stdin, a fixed environment and a 125-second timeout.
 
 The observer is byte-identical to the previously prepared R22 source
 (`45a8ecbd…`). It verifies the existing package, STOP receipt and no later stage

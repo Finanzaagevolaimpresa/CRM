@@ -224,6 +224,31 @@ class InstallationLifecycle(unittest.TestCase):
             self.assertEqual(rc,2)
             self.assertTrue(i.RULE.exists() and i.ROOT.exists())
 
+    def test_child_retains_lock_after_controller_closes_handle(self):
+        import fcntl
+        program=self.base/'synthetic-observer.py'
+        program.write_text("import time\nprint('ready',flush=True)\ntime.sleep(0.3)\n")
+        lock=self.base/'test.lock'
+        lock.write_bytes(b'')
+        handle=lock.open('rb')
+        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        p=None
+        try:
+            with patch.multiple(d,PYTHON=Path(sys.executable),ROOT=self.base):
+                p=d.spawn_observer(program,handle)
+            self.assertEqual(p.stdout.readline(),b'ready\n')
+            handle.close()
+            with lock.open('rb') as contender:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            p.communicate(timeout=5)
+            with lock.open('rb') as contender:
+                fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        finally:
+            handle.close()
+            if p is not None and p.poll() is None:
+                p.kill();p.communicate(timeout=5)
+
 
 if __name__ == '__main__':
     unittest.main()

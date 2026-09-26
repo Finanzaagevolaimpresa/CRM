@@ -56,6 +56,15 @@ def project(value):
     return value
 
 
+def spawn_observer(program, lock_handle):
+    # Keep serialization even if the SSH/controller process is interrupted.
+    # The observer owns the same open lock until its bounded work has ended.
+    return subprocess.Popen([str(PYTHON), '-I', '-B', '-S', str(program)], cwd=ROOT,
+        env={'PATH': '/usr/bin:/bin', 'HOME': '/home/faiadmin', 'LANG': 'C', 'LC_ALL': 'C'},
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True, pass_fds=(lock_handle.fileno(),))
+
+
 def run():
     import fcntl
     need(len(sys.argv) == 1 and socket.gethostname() == 'fai-crm-prod-02' and
@@ -72,9 +81,7 @@ def run():
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('OBSERVATION_ALREADY_RUNNING') from None
-        p = subprocess.Popen([str(PYTHON), '-I', '-B', '-S', str(program)], cwd=ROOT,
-            env={'PATH': '/usr/bin:/bin', 'HOME': '/home/faiadmin', 'LANG': 'C', 'LC_ALL': 'C'},
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        p = spawn_observer(program, handle)
         try:
             out, err = p.communicate(timeout=125)
         except BaseException:
