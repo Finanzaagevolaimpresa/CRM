@@ -51,6 +51,7 @@ async function main() {
       versions: await db.engagementDossierVersion.findMany({ orderBy: { id: 'asc' } }),
       reviews: await db.engagementDossierReview.findMany({ orderBy: { id: 'asc' } }),
       exports: await db.engagementDossierExport.findMany({ orderBy: { id: 'asc' } }),
+      workReceipts: await db.auditLog.findMany({ where: { entityType: 'ClientDossier', event: { in: ['engagement_work_package_export', 'engagement_work_result_import'] } }, orderBy: { id: 'asc' } }),
       authorizations: await db.engagementDossierDeliveryAuthorization.findMany({ orderBy: { id: 'asc' } }),
       receipts: await db.engagementDossierDeliveryReceipt.findMany({ orderBy: { id: 'asc' } }),
       practices: await db.practiceReadiness.findMany({ orderBy: { id: 'asc' } }),

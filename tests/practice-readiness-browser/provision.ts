@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import bcrypt from "bcryptjs";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../db/ai-orchestrator-db-test-guard";
 import { prepareServiceCatalogV2 } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
+import { localPathFromStoragePath } from '../../src/lib/storage';
 
 const db = new PrismaClient();
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD;
@@ -209,6 +210,11 @@ async function main() {
           .digest("hex"),
       },
     });
+    for (const [source, bytes] of [[document, `document-${item.key}`], [sensitiveDocument, `sensitive-document-${item.key}`]] as const) {
+      const path = localPathFromStoragePath(source.storagePath);
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, bytes, { flag: 'wx', mode: 0o600 });
+    }
     await db.documentVersion.create({
       data: {
         documentId: sensitiveDocument.id,

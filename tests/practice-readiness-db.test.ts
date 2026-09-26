@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -28,6 +28,8 @@ import {
   recordEngagementDossierDelivery,
   reviewEngagementDossierVersion,
   reviseEngagementDossier,
+  exportEngagementWorkPackage,
+  importEngagementWorkResult,
 } from "../src/lib/engagement-dossier";
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -158,7 +160,7 @@ async function createContext(label: string, consultantId: string) {
       storagePath: `synthetic/${suffix}/${label}.pdf`,
       uploadedById: consultantId,
       status: "verificato",
-      checksum: randomBytes(32).toString("hex"),
+      checksum: createHash('sha256').update(`material ${label}`).digest('hex'),
     },
   });
   const documentVersion = await db.documentVersion.create({
@@ -2029,4 +2031,83 @@ test("dossier access, export and delivery recheck current authority and roll bac
   }
   assert.ok(await getEngagementDossierReadAccess(db, actorA, dossier.id));
   assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+});
+
+test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before separate approval and delivery', { skip: !enabled }, async () => {
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, clientId: a.client.id } });
+  const deniedWork = (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED';
+  const conflictWork = (error: unknown) => error instanceof EngagementDossierError && error.code === 'CONFLICT';
+  const notReady = (error: unknown) => error instanceof EngagementDossierError && error.code === 'NOT_READY';
+  const exportInput = { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId, packageId: randomUUID(), manualTransferAuthorized: true };
+  const runtime = { readDocument: async (path: string) => {
+    assert.equal(path, a.documentVersion.storagePath);
+    return Buffer.from('material A');
+  } };
+  const footprint = async () => ({
+    dossier: await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } }),
+    versions: await db.engagementDossierVersion.count({ where: { dossierId: dossier.id } }),
+    audits: await db.auditLog.count({ where: { entityId: dossier.id, entityType: 'ClientDossier' } }),
+    authorizations: await db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: dossier.id } }),
+  });
+  let before = await footprint();
+  await assert.rejects(exportEngagementWorkPackage(db, actorB, exportInput, runtime), deniedWork);
+  await assert.rejects(exportEngagementWorkPackage(db, actorA, exportInput, { ...runtime, failAudit: true }), conflictWork);
+  await assert.rejects(exportEngagementWorkPackage(db, actorA, exportInput, { readDocument: async () => Buffer.from('CORRUPTED') }), notReady);
+  assert.deepEqual(await footprint(), before);
+  const exported = await exportEngagementWorkPackage(db, actorA, exportInput, runtime);
+  assert.equal(exported.receipt.artifactHash, createHash('sha256').update(exported.archive).digest('hex'));
+  assert.equal(exported.receipt.manifest.files.length, 1);
+  assert.ok(!exported.archive.includes(Buffer.from(a.documentVersion.storagePath)));
+  before = await footprint();
+  const replayExport = await exportEngagementWorkPackage(db, actorA, exportInput, runtime);
+  assert.deepEqual(replayExport, exported);
+  assert.deepEqual(await footprint(), before);
+  const input = { dossierId: dossier.id, packageId: exportInput.packageId, packageArtifactHash: exported.receipt.artifactHash,
+    expectedVersionId: dossier.currentVersionId, title: 'Risultato Work verificabile', content: 'Risultato manuale sintetico con fonti e limiti',
+    workReference: 'WORK-M2-DB-SYNTHETIC', producer: 'A04 dichiarato', returnedAt: '2026-09-26T22:00:00+02:00' };
+  await assert.rejects(importEngagementWorkResult(db, actorA, { ...input, packageArtifactHash: '0'.repeat(64) }), deniedWork);
+  await assert.rejects(importEngagementWorkResult(db, actorB, input), deniedWork);
+  await assert.rejects(importEngagementWorkResult(db, actorA, input, { failAudit: true }), conflictWork);
+  assert.deepEqual(await footprint(), before);
+  const imported = await importEngagementWorkResult(db, actorA, input);
+  assert.equal(imported.content, input.content);
+  assert.equal((await footprint()).dossier.approvedVersionId, null);
+  before = await footprint();
+  assert.equal((await importEngagementWorkResult(db, actorA, { ...input, returnedAt: '2026-09-26T20:00:00Z' })).id, imported.id);
+  await assert.rejects(importEngagementWorkResult(db, actorA, { ...input, content: 'Different return against consumed base' }), conflictWork);
+  assert.deepEqual(await footprint(), before);
+  const reopened = await getEngagementDossierReadAccess(db, actorA, dossier.id);
+  assert.equal(reopened?.engagementHistory.work.packages[0].artifactHash, exported.receipt.artifactHash);
+  assert.equal(reopened?.engagementHistory.work.imports[0].versionId, imported.id);
+  assert.equal(reopened?.engagementHistory.work.imports[0].workReference, input.workReference);
+  assert.equal(reopened?.engagementHistory.work.imports[0].returnedAt, '2026-09-26T20:00:00.000Z');
+  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: ids.manager } });
+  try {
+    await assert.rejects(importEngagementWorkResult(db, actorA, input), deniedWork);
+    await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    assert.deepEqual(await footprint(), before);
+  } finally { await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } }); }
+  const override = await db.userPermissionOverride.create({ data: { userId: ids.userA, permission: 'document.download', allowed: false } });
+  try {
+    await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
+    assert.deepEqual(await footprint(), before);
+  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: exportInput.packageId } });
+  await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...exported.receipt, manifestHash: '0'.repeat(64) } } });
+  try {
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    await assert.rejects(importEngagementWorkResult(db, actorA, input), deniedWork);
+  } finally { await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: exportAudit.after as Prisma.InputJsonValue } }); }
+
+  const review = { dossierId: dossier.id, versionId: imported.id, versionHash: imported.contentHash, decision: 'APPROVED', note: 'Revisione del risultato Work sintetico' };
+  await assert.rejects(reviewEngagementDossierVersion(db, actorA, review), deniedWork);
+  await reviewEngagementDossierVersion(db, manager, review);
+  const authorization = await authorizeEngagementDossierDelivery(db, manager, { dossierId: dossier.id, versionId: imported.id, versionHash: imported.contentHash, recipients: [{ kind: 'CLIENT', name: 'M2 sintetico', address: 'm2@invalid.test', synthetic: true }] });
+  const delivered = await recordEngagementDossierDelivery(db, actorA, { authorizationId: authorization.id, outcome: 'DELIVERED', evidence: { reference: 'SIMULATED-M2-DELIVERED', deliveredAt: new Date(), synthetic: true } });
+  assert.equal(delivered.outcome, 'DELIVERED');
+  const next = await reviseEngagementDossier(db, actorA, { dossierId: dossier.id, expectedVersionId: imported.id, title: imported.title, content: 'Modifica dopo consegna' });
+  assert.equal((await footprint()).dossier.approvedVersionId, null);
+  assert.equal((await importEngagementWorkResult(db, actorA, input)).id, imported.id);
+  assert.equal((await footprint()).dossier.currentVersionId, next.id);
 });

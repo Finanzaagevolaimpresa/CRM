@@ -847,8 +847,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await db.userPermissionOverride.deleteMany({ where: { id: { in: readWriteOverrides.map((row) => row.id) } } });
   }
   await page.goto(creationUrl);
-  await expect(page.locator(`[name="preAnalysisId"] option[value="${protectedPreanalysis.id}"]`)).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Crea dossier versionato" })).toBeVisible();
+  await expect(page).toHaveURL(`${app}/client-dossiers/${protectedDossier.id}`);
+  await expect(page.getByRole("button", { name: "Crea dossier versionato" })).toHaveCount(0);
   const legacy = await db.clientDossier.create({ data: {
     clientId: protectedDossier.clientId, projectId: protectedDossier.projectId,
     clientServiceId: protectedDossier.clientServiceId, type: "dossier_cliente",
@@ -1130,4 +1130,87 @@ test("versioned dossier listings follow current detail access", async ({ page, b
     deniedStates: ["sensitive", "deleted", "permission_revoked", "archived"], nonCanonicalDenied: true,
     legacyPreserved: true, searchCounts: [2, 1, 2], updatedAtOrderPreserved: true, restoredPositive: true,
   }) + "\n", { mode: 0o600 });
+});
+
+test('M2 Work package returns as a new draft before independent review and simulated delivery', async ({ page, browser }) => {
+  await assertSyntheticCatalogDatabase(db, process.env);
+  await login(page, 'readiness-owner@invalid.test');
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, createdById: 'readiness-browser-owner' }, orderBy: { createdAt: 'asc' } });
+  await page.goto(`${app}/engagement-dossiers/new/${dossier.practiceReadinessId}`);
+  await expect(page).toHaveURL(`${app}/client-dossiers/${dossier.id}`);
+  const exportForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Scarica pacchetto Work' }) });
+  const packageId = await exportForm.locator('[name="packageId"]').inputValue();
+  await exportForm.locator('[name="manualTransferAuthorized"]').check();
+  const requestPromise = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/work-export'));
+  const downloadPromise = page.waitForEvent('download');
+  await exportForm.getByRole('button', { name: 'Scarica pacchetto Work' }).click();
+  expect((await downloadPromise).suggestedFilename()).toBe(`work-${packageId}.zip`);
+  const exportRequest = await requestPromise;
+  const exported = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
+  expect(exported.status()).toBe(200);
+  const bytes = await exported.body();
+  expect(exported.headers()['x-work-package-id']).toBe(packageId);
+  const artifactHash = createHash('sha256').update(bytes).digest('hex');
+  expect(exported.headers()['x-work-package-sha256']).toBe(artifactHash);
+  expect(await db.auditLog.count({ where: { id: packageId, event: 'engagement_work_package_export' } })).toBe(1);
+  const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: packageId } });
+  const receipt = exportAudit.after as { manifest: { sourceVersionId: string; sourceVersionHash: string; files: Array<{ name: string; sha256: string }> }; artifactHash: string };
+  expect(receipt.artifactHash).toBe(artifactHash);
+  expect(receipt.manifest.sourceVersionId).toBe(dossier.currentVersionId);
+  expect(receipt.manifest.files.length).toBeGreaterThan(0);
+  expect(bytes.includes(Buffer.from('synthetic/readiness/'))).toBe(false);
+  const foreignContext = await browser.newContext();
+  const foreign = await foreignContext.newPage();
+  await login(foreign, 'readiness-foreign@invalid.test');
+  const denied = await foreign.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
+  expect(denied.status()).toBe(303);
+  expect(denied.headers().location).toContain('dossierError=DENIED');
+  const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
+  expect(crossOrigin.status()).toBe(403);
+  await page.reload();
+  const returnForm = page.getByRole('form', { name: 'Rientro manuale da Work' });
+  await returnForm.locator('[name="packageBinding"]').selectOption(`${packageId}:${artifactHash}`);
+  await returnForm.locator('[name="workReference"]').fill('WORK-M2-BROWSER-SYNTHETIC');
+  await returnForm.locator('[name="producer"]').fill('A04 dichiarato, caso sintetico');
+  await returnForm.locator('[name="returnedAtLocal"]').fill('2026-09-26T22:00');
+  await returnForm.locator('[name="title"]').fill('Risultato M2 Work sintetico');
+  await returnForm.locator('[name="content"]').fill('Risultato autonomo sintetico. Fonti: manifest del pacchetto. Limiti: simulazione. Prossimo passo: revisione umana.');
+  const importRequestPromise = page.waitForRequest(request => request.method() === 'POST' && Boolean(request.headers()['next-action']));
+  await submitDossierAction(page, returnForm.getByRole('button', { name: 'Registra risultato Work come nuova bozza' }), 'M2_IMPORT');
+  const importRequest = await importRequestPromise;
+  const afterImport = await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } });
+  expect(afterImport.currentVersionId).not.toBe(dossier.currentVersionId);
+  expect(afterImport.approvedVersionId).toBeNull();
+  const importReplay = await page.request.fetch(importRequest.url(), { method: 'POST', data: importRequest.postDataBuffer()!, headers: { 'next-action': importRequest.headers()['next-action'], 'content-type': importRequest.headers()['content-type'], origin: app, referer: `${app}/client-dossiers/${dossier.id}` }, maxRedirects: 0 });
+  expect(importReplay.status()).toBe(200);
+  expect(importReplay.headers()['x-action-redirect'] ?? '').not.toContain('dossierError=');
+  expect(await db.auditLog.count({ where: { entityId: dossier.id, event: 'engagement_work_result_import' } })).toBe(1);
+  expect((await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } })).currentVersionId).toBe(afterImport.currentVersionId);
+  await page.reload();
+  await page.getByText('Pacchetti e provenienza dei risultati', { exact: false }).click();
+  await expect(page.getByText('WORK-M2-BROWSER-SYNTHETIC', { exact: false })).toBeVisible();
+
+  const reviewerContext = await browser.newContext();
+  const reviewer = await reviewerContext.newPage();
+  await login(reviewer, 'readiness-reader@invalid.test');
+  await reviewer.goto(`${app}/client-dossiers/${dossier.id}`);
+  await reviewer.getByPlaceholder('Motivazione della decisione').fill('Verificati provenienza, fonti e limiti del risultato sintetico');
+  await submitDossierAction(reviewer, reviewer.getByRole('button', { name: 'Approva questa versione' }), 'M2_REVIEW');
+  await page.reload();
+  const authorizationForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Autorizza consegna manuale' }) });
+  await authorizationForm.locator('[name="recipientName"]').fill('Destinatario M2 sintetico');
+  await authorizationForm.locator('[name="recipientAddress"]').fill('m2-browser@invalid.test');
+  await authorizationForm.locator('[name="recipientSynthetic"]').check();
+  await submitDossierAction(page, authorizationForm.getByRole('button', { name: 'Autorizza consegna manuale' }), 'M2_AUTHORIZE');
+  const original = await db.engagementDossierDeliveryAuthorization.findFirstOrThrow({ where: { dossierId: dossier.id, versionId: afterImport.currentVersionId! }, orderBy: { authorizedAt: 'desc' } });
+  const deliveredForm = page.locator('form').filter({ has: page.locator(`[name="authorizationId"][value="${original.id}"]`) });
+  await deliveredForm.locator('[name="reference"]').fill('M2-SIMULATED-DELIVERED');
+  await deliveredForm.locator('[name="deliveredAtLocal"]').fill('2026-09-26T22:15');
+  await deliveredForm.locator('[name="evidenceSynthetic"]').check();
+  await submitDossierAction(page, deliveredForm.getByRole('button', { name: 'Registra esito manuale' }), 'M2_DELIVERED');
+  expect((await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { authorizationId: original.id } })).outcome).toBe('DELIVERED');
+  await page.screenshot({ path: join(evidenceDir, 'm2-work-roundtrip.png'), fullPage: true });
+  writeFileSync(join(evidenceDir, 'm2-work-roundtrip.json'), JSON.stringify({ status: 'PASS', synthetic: true, realMessagesSent: false, packageId, artifactHash, sourceVersionId: dossier.currentVersionId, importedVersionId: afterImport.currentVersionId, deliveryAuthorizationId: original.id, importIdempotent: true, authorizationRechecked: true }) + '\n', { mode: 0o600 });
+  await foreignContext.close();
+  await reviewerContext.close();
 });
