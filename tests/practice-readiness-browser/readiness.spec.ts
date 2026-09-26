@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import { signSessionCookie } from "../../src/lib/session";
@@ -1169,6 +1169,9 @@ test('M2 Work package returns as a new draft before independent review and simul
   expect(exported.headers()['x-work-package-id']).toBe(packageId);
   const artifactHash = createHash('sha256').update(bytes).digest('hex');
   expect(exported.headers()['x-work-package-sha256']).toBe(artifactHash);
+  const downloadedPath = await download!.path();
+  expect(downloadedPath).not.toBeNull();
+  expect(createHash('sha256').update(readFileSync(downloadedPath!)).digest('hex')).toBe(artifactHash);
   expect(await db.auditLog.count({ where: { id: packageId, event: 'engagement_work_package_export' } })).toBe(1);
   const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: packageId } });
   const receipt = workExportReceiptSchema.parse(exportAudit.after);
