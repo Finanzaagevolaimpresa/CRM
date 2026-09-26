@@ -1,5 +1,6 @@
 """CI-only schema48 session settlement and isolated recovery on saved M2 images."""
 import io
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -35,10 +36,31 @@ class CiCommands(Commands):
 def main():
     need(os.environ.get('CI')==os.environ.get('GITHUB_ACTIONS')=='true' and
          socket.gethostname()!='fai-crm-prod-02','CI_SYNTHETIC_ONLY')
-    need(len(sys.argv)==2,'QUALIFIED_IMAGE_ARCHIVE_REQUIRED')
-    image_archive=Path(sys.argv[1]).resolve()
+    observation_only=len(sys.argv)==3 and sys.argv[1]=='--archive-observation'
+    need(len(sys.argv)==2 or observation_only,'QUALIFIED_IMAGE_ARCHIVE_REQUIRED')
+    image_archive=Path(sys.argv[-1]).resolve()
     run=uuid.uuid4().hex
     binding=decode(builder.render(run)['binding.json'])
+    if observation_only:
+        need(digest(image_archive)==binding['imageArchiveSha256'],'QUALIFIED_ARCHIVE_CHANGED')
+        metadata={}
+        with tarfile.open(image_archive,'r|gz') as stream:
+            for member in stream:
+                if not (member.name.startswith('blobs/sha256/') and member.isfile() and 0<member.size<=32768): continue
+                raw=stream.extractfile(member).read(32769)
+                sha='sha256:'+hashlib.sha256(raw).hexdigest()
+                need(member.name=='blobs/sha256/'+sha[7:],'ARCHIVE_METADATA_DIGEST')
+                value=decode(raw)
+                if not isinstance(value,dict): continue
+                metadata[sha]={'schemaVersion':value.get('schemaVersion'),'hasRootfs':isinstance(value.get('rootfs'),dict),
+                    'configDigest':value.get('config',{}).get('digest'),'mediaType':value.get('mediaType'),
+                    'children':[x.get('digest') for x in value.get('manifests',[])]}
+        expected={role:binding[role+'Image'] for role in ('candidate','return')}
+        result={'protocol':'FAI_M2_IMAGE_ARCHIVE_OBSERVATION_R26','status':'OBSERVATION_ONLY',
+            'expectedCiIds':expected,'metadata':metadata,'imagesLoaded':False,'productionConnected':False}
+        exclusive(REPO/'m2-image-archive-observation.json',result)
+        print(canonical(result).decode(),flush=True)
+        return
     binding=complete_binding(image_archive,binding)
     c=CiCommands(1500,REPO)
     c.env.update(PATH=os.environ['PATH'],HOME=os.environ['HOME'])
