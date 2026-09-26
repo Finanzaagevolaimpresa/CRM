@@ -1142,11 +1142,20 @@ test('M2 Work package returns as a new draft before independent review and simul
   const packageId = await exportForm.locator('[name="packageId"]').inputValue();
   await exportForm.locator('[name="manualTransferAuthorized"]').check();
   const requestPromise = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/work-export'));
-  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/work-export'));
+  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/work-export'), { timeout: 50_000 }).catch(() => null);
   const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
   await exportForm.getByRole('button', { name: 'Scarica pacchetto Work' }).click();
   const exportResponse = await responsePromise;
-  expect(exportResponse.status(), `M2 export response: ${exportResponse.status()} ${exportResponse.headers().location ?? ''}`).toBe(200);
+  if (!exportResponse) {
+    const diagnostic = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
+      form: { expectedVersionId: dossier.currentVersionId!, packageId, manualTransferAuthorized: 'on' },
+      headers: { origin: app }, maxRedirects: 0,
+    });
+    const code = diagnostic.headers()['content-type']?.includes('application/json') ? (await diagnostic.json()).code : null;
+    throw new Error(`M2 browser did not receive export response; same bound synthetic request status=${diagnostic.status()}, code=${code}`);
+  }
+  const failureCode = exportResponse.headers()['content-type']?.includes('application/json') ? (await exportResponse.json()).code : null;
+  expect(exportResponse.status(), `M2 export response: ${exportResponse.status()}, code=${failureCode}`).toBe(200);
   const download = await downloadPromise;
   expect(download).not.toBeNull();
   expect(download!.suggestedFilename()).toBe(`work-${packageId}.zip`);
@@ -1171,8 +1180,8 @@ test('M2 Work package returns as a new draft before independent review and simul
   const foreign = await foreignContext.newPage();
   await login(foreign, 'readiness-foreign@invalid.test');
   const denied = await foreign.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
-  expect(denied.status()).toBe(303);
-  expect(denied.headers().location).toContain('dossierError=DENIED');
+  expect(denied.status()).toBe(403);
+  expect(await denied.json()).toEqual({ code: 'DENIED' });
   const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
   expect(crossOrigin.status()).toBe(403);
   const opaqueOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'null', 'sec-fetch-site': 'same-origin' }, maxRedirects: 0 });
