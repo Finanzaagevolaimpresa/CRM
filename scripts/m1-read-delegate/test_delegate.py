@@ -144,10 +144,10 @@ class Tests(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'POSIX identity')
     def test_wrong_identity_stops_before_any_program(self):
-        with patch.object(d.socket, 'gethostname', return_value='other-host'), patch.object(d.subprocess, 'Popen') as spawn:
+        with patch.object(d.socket, 'gethostname', return_value='other-host'), patch.object(d.importlib.util, 'spec_from_file_location') as load:
             with self.assertRaisesRegex(ValueError, 'DELEGATION_IDENTITY_OR_ARGUMENTS'):
                 d.run()
-            spawn.assert_not_called()
+            load.assert_not_called()
 
 
 @unittest.skipUnless(os.name != 'nt' and hasattr(os, 'getuid') and os.getuid() == 0,
@@ -240,30 +240,63 @@ class InstallationLifecycle(unittest.TestCase):
             self.assertEqual(rc,2)
             self.assertTrue(i.RULE.exists() and i.ROOT.exists())
 
-    def test_child_retains_lock_after_controller_closes_handle(self):
-        import fcntl
-        program=self.base/'synthetic-observer.py'
-        program.write_text("import time\nprint('ready',flush=True)\ntime.sleep(0.3)\n")
-        lock=self.base/'test.lock'
-        lock.write_bytes(b'')
-        handle=lock.open('rb')
-        fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        p=None
-        try:
-            with patch.multiple(d,PYTHON=Path(sys.executable),ROOT=self.base):
-                p=d.spawn_observer(program,handle)
-            self.assertEqual(p.stdout.readline(),b'ready\n')
-            handle.close()
+    def test_unreconciled_marker_blocks_removal_without_a_live_lock(self):
+        self.assertEqual(self.call('install')[0],0)
+        (i.ROOT/'observation.lock').write_bytes(b'RUNNING\n')
+        rc,r=self.call('uninstall')
+        self.assertEqual((rc,r['code']),(2,'OBSERVATION_UNRECONCILED'))
+        self.assertTrue(i.RULE.exists())
+
+    def test_unverified_settlement_latches_the_observation(self):
+        state=self.base/'state';state.write_bytes(b'')
+        class Unverified(Exception):code='COMMAND_GROUP_STOP_UNVERIFIED'
+        def read():raise Unverified()
+        with state.open('r+b') as handle:
+            with self.assertRaises(Unverified):d.one_observation(read,handle)
+        self.assertEqual(state.read_bytes(),b'RUNNING\n')
+        with state.open('r+b') as handle, patch.object(d,'supervised_read') as spawn:
+            with self.assertRaisesRegex(ValueError,'OBSERVATION_CONSUMED_RECONCILE_ONLY'):
+                d.one_observation(read,handle)
+            spawn.assert_not_called()
+
+    def canonical_process_case(self, interrupt):
+        import fcntl, signal, threading, time
+        spec=importlib.util.spec_from_file_location('canonical_common', ROOT.parent/'m1-assisted/common.py')
+        canonical=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(canonical)
+        pidfile=self.base/'child.pid'
+        script="import os,pathlib,time;pathlib.Path("+repr(str(pidfile))+").write_text(str(os.getpid()));time.sleep(30)"
+        commands=canonical.Commands(1.8,self.base)
+        lock=self.base/'test.lock';lock.write_bytes(b'')
+        errors=[]
+        def sender():
+            end=time.monotonic()+1
+            while not pidfile.exists() and time.monotonic()<end:time.sleep(.005)
+            if pidfile.exists():os.kill(os.getpid(),signal.SIGTERM)
+            else:errors.append('CHILD_NOT_STARTED')
+        thread=threading.Thread(target=sender) if interrupt else None
+        started=time.monotonic()
+        with lock.open('rb') as handle:
+            fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            def read():
+                if thread:thread.start()
+                return commands.run('SYNTHETIC_READ',[sys.executable,'-I','-B','-S','-c',script],seconds=1.5)
+            with self.assertRaises(canonical.Stop) as raised:
+                d.supervised_read(read)
+            self.assertEqual(raised.exception.code,'COMMAND_INTERRUPTED_OR_EXPIRED')
+            self.assertTrue(commands.groups_quiet)
             with lock.open('rb') as contender:
-                with self.assertRaises(BlockingIOError):
-                    fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            p.communicate(timeout=5)
-            with lock.open('rb') as contender:
-                fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        finally:
-            handle.close()
-            if p is not None and p.poll() is None:
-                p.kill();p.communicate(timeout=5)
+                with self.assertRaises(BlockingIOError):fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with self.assertRaises(ProcessLookupError):os.kill(int(pidfile.read_text()),0)
+        if thread:thread.join(timeout=2)
+        self.assertFalse(errors)
+        self.assertLess(time.monotonic()-started,2)
+
+    def test_interruption_settles_canonical_new_session_before_unlock(self):
+        self.canonical_process_case(True)
+
+    def test_timeout_settles_canonical_new_session_before_unlock(self):
+        self.canonical_process_case(False)
 
 
 if __name__ == '__main__':

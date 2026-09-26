@@ -18,9 +18,18 @@ The rule contains the exact executable and complete arguments, on one line,
 with `NOPASSWD: NOSETENV:` and no wildcards. The installed directory and programs
 belong to root and are not writable by either CRM account. The caller and target
 identities, host, Python flags, Python binary hash and observer hash are checked.
-A nonblocking lock permits one observation at a time; the child inherits the
-lock so a disconnected controller cannot admit an overlapping observation.
-The child has no stdin, a fixed environment and a 125-second timeout.
+A nonblocking lock permits one observation at a time. The observer runs in the
+same process as its canonical Commands supervisor, which settles each command
+even though commands use separate sessions. SIGINT/SIGTERM/SIGHUP propagate as
+exceptions through that supervisor before the lock is released. The observer's
+120-second alarm and canonical command deadlines remain in force. There is no
+outer SIGKILL that could orphan a Docker client in a different session.
+The dedicated state/lock file is root-owned, group faiadmin, mode0660; programs
+and configuration remain root-owned and nonwritable. Only fixed marker bytes
+are written there. RUNNING is flushed before the single observation. A hard
+kill or unverified command settlement leaves it latched, blocking another read
+and removal until owner reconciliation. Completed/settled STOP is also consumed,
+without replaying the observation. No historical release marker is modified.
 
 The observer reuses the previously prepared R22 source with one necessary fix:
 the image-inspect JSON format now closes its outer object. Both image/container

@@ -12,7 +12,7 @@ ROOT = Path('/usr/local/lib/fai-crm-m1-r23-read')
 RULE = Path('/etc/sudoers.d/fai-crm-m1-r23-read')
 PYTHON = Path('/usr/bin/python3.14')
 PYTHON_SHA = '52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41'
-FILES = {'delegate.py': '46d4f8458b15f544f570b648dc0b6f35ff871f8f8699a6b2d4a9c424e7301d2c',
+FILES = {'delegate.py': 'fbc707ede37dc5c8366be791f56116ae2ab507e235e8528c0cfec053c0bd7c38',
          'observe_image_store_r22.py': '94743eaafd7815d9509f670e032dbc0166ee55fe18a930e5215b912ad8aa031a'}
 # One line, exact executable and complete arguments; no wildcards or continuation.
 SUDOERS = ('fai-codex fai-crm-prod-02=(faiadmin) NOPASSWD: NOSETENV: '
@@ -33,6 +33,14 @@ def protected(path, directory=False):
     return path
 
 
+def state_file(path):
+    protected(path.parent, directory=True)
+    s = path.lstat()
+    need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_uid == 0 and s.st_gid == 1000 and
+         stat.S_IMODE(s.st_mode) == 0o660, 'DELEGATE_STATE_AUTHORITY')
+    return path
+
+
 def create(path, data, mode=0o640, gid=1000, created=None):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     fd = os.open(path, flags, mode)
@@ -44,7 +52,8 @@ def create(path, data, mode=0o640, gid=1000, created=None):
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
-    need(protected(path).read_bytes() == data, 'FILE_READBACK')
+    checked = state_file(path) if path == ROOT / 'observation.lock' else protected(path)
+    need(checked.read_bytes() == data, 'FILE_READBACK')
 
 
 def check_sudo(path):
@@ -88,7 +97,7 @@ def main(mode, payload):
             os.chmod(ROOT, 0o750)
             for name, value in data.items():
                 create(ROOT / name, value, created=created)
-            create(ROOT / 'observation.lock', b'', created=created)
+            create(ROOT / 'observation.lock', b'', 0o660, 1000, created)
             create(ROOT / 'sudoers.candidate', SUDOERS, 0o440, 0, created)
             check_sudo(ROOT / 'sudoers.candidate')
             check_sudo(Path('/etc/sudoers'))
@@ -104,13 +113,13 @@ def main(mode, payload):
             for name, value in data.items():
                 need(protected(ROOT / name).read_bytes() == value, 'INSTALLED_PROGRAM_CHANGED')
             need(protected(RULE).read_bytes() == protected(ROOT / 'sudoers.candidate').read_bytes() == SUDOERS, 'RULE_CHANGED')
-            lock = protected(ROOT / 'observation.lock')
-            need(lock.stat().st_size == 0, 'LOCK_CHANGED')
+            lock = state_file(ROOT / 'observation.lock')
             old = json.loads(protected(ROOT / 'installation.json').read_bytes())
             need(old['status'] == 'FIXED_READ_DELEGATION_INSTALLED' and old['files'] == FILES, 'INSTALLATION_RECEIPT_CHANGED')
             import fcntl
             with lock.open('rb') as handle:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                need(handle.read(33) in (b'', b'COMPLETE\n', b'STOPPED\n'), 'OBSERVATION_UNRECONCILED')
                 RULE.unlink()
                 for name in sorted(expected_names):
                     (ROOT / name).unlink()
@@ -124,7 +133,8 @@ def main(mode, payload):
             for path in reversed(created):
                 try:
                     if path.exists():
-                        protected(path).unlink()
+                        checked = state_file(path) if path == ROOT / 'observation.lock' else protected(path)
+                        checked.unlink()
                 except BaseException:
                     rollback = False
             if made_root:

@@ -1,13 +1,13 @@
 """Single immutable read-only delegation for the existing e67bea STOP."""
 import datetime
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import signal
 import socket
 import stat
-import subprocess
 import sys
 
 ROOT = Path('/usr/local/lib/fai-crm-m1-r23-read')
@@ -37,6 +37,37 @@ def verified(path, expected):
     return data
 
 
+def state_file(path):
+    protected(path.parent, directory=True)
+    s = path.lstat()
+    need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_uid == 0 and s.st_gid == 1000 and
+         stat.S_IMODE(s.st_mode) == 0o660, 'DELEGATE_STATE_AUTHORITY')
+    return path
+
+
+def mark(handle, value):
+    handle.seek(0)
+    handle.write(value)
+    handle.truncate()
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def one_observation(read, handle):
+    need(handle.read(33) == b'', 'OBSERVATION_CONSUMED_RECONCILE_ONLY')
+    # A hard kill or unverified settlement leaves a durable barrier, even after
+    # the kernel releases flock. No further observation/removal is then allowed.
+    mark(handle, b'RUNNING\n')
+    try:
+        result = project(supervised_read(read))
+    except BaseException as exc:
+        if getattr(exc, 'code', '') != 'COMMAND_GROUP_STOP_UNVERIFIED':
+            mark(handle, b'STOPPED\n')
+        raise
+    mark(handle, b'COMPLETE\n')
+    return result
+
+
 def project(value):
     """Deny extra output instead of forwarding potentially sensitive diagnostics."""
     need(isinstance(value, dict) and value.get('protocol') == 'FAI_M1_IMAGE_STORE_READONLY_R22', 'OBSERVER_PROTOCOL')
@@ -56,13 +87,20 @@ def project(value):
     return value
 
 
-def spawn_observer(program, lock_handle):
-    # Keep serialization even if the SSH/controller process is interrupted.
-    # The observer owns the same open lock until its bounded work has ended.
-    return subprocess.Popen([str(PYTHON), '-I', '-B', '-S', str(program)], cwd=ROOT,
-        env={'PATH': '/usr/bin:/bin', 'HOME': '/home/faiadmin', 'LANG': 'C', 'LC_ALL': 'C'},
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True, pass_fds=(lock_handle.fileno(),))
+def supervised_read(read):
+    # Stay in the canonical Commands supervisor: its children use new sessions.
+    # Killing an outer process group would orphan those commands and lose the lock.
+    def interrupted(_number, _frame):
+        raise ValueError('OBSERVATION_INTERRUPTED')
+    previous = {n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGALRM)}
+    try:
+        for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(n, interrupted)
+        return read()
+    finally:
+        signal.alarm(0)
+        for n, handler in previous.items():
+            signal.signal(n, handler)
 
 
 def run():
@@ -75,24 +113,16 @@ def run():
     verified(PYTHON, PYTHON_SHA)
     program = ROOT / 'observe_image_store_r22.py'
     verified(program, OBSERVER_SHA)
-    lock = protected(ROOT / 'observation.lock')
-    with lock.open('rb') as handle:
+    spec = importlib.util.spec_from_file_location('fixed_m1_observer', program)
+    observer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(observer)
+    lock = state_file(ROOT / 'observation.lock')
+    with lock.open('r+b') as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('OBSERVATION_ALREADY_RUNNING') from None
-        p = spawn_observer(program, handle)
-        try:
-            out, err = p.communicate(timeout=125)
-        except BaseException:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.communicate(timeout=5)
-            raise ValueError('OBSERVATION_TIMEOUT_OR_INTERRUPTED') from None
-        need(len(out) <= 32768 and len(err) == 0, 'OBSERVER_OUTPUT_REDACTED')
-        result = project(json.loads(out))
-        need(p.returncode in (0, 2), 'OBSERVER_EXIT_UNEXPECTED')
-        need((p.returncode == 0) == (result['status'] == 'OBSERVATION_COMPLETE'), 'OBSERVER_EXIT_CONTRADICTION')
-        return result
+        return one_observation(observer.remote_read, handle)
 
 
 if __name__ == '__main__':
@@ -101,7 +131,7 @@ if __name__ == '__main__':
     try:
         receipt.update(status='READ_RETURNED', observation=run())
     except BaseException as exc:
-        code = str(exc) if isinstance(exc, ValueError) else 'LOCAL_DELEGATE_ERROR'
+        code = getattr(exc, 'code', str(exc) if isinstance(exc, ValueError) else 'LOCAL_DELEGATE_ERROR')
         receipt.update(status='STOP', code=code if code.replace('_', '').isalnum() and len(code) <= 100 else 'REDACTED')
     print(json.dumps(receipt, separators=(',', ':')), flush=True)
     raise SystemExit(0 if receipt['status'] == 'READ_RETURNED' and receipt['observation']['status'] == 'OBSERVATION_COMPLETE' else 2)
