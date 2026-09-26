@@ -26,6 +26,10 @@ SSH_ARGS = [str(SSH), '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-
             '-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no', '-o', 'ServerAliveInterval=15',
             '-o', 'ServerAliveCountMax=2', 'fai-crm-prod']
 KEY_CONFIRMATION = 'AUTORIZZO_CHIAVE_STEP_UP_M1_VERSIONE_1'
+KEY_AUTHORIZATION_R25 = {'confirmation': KEY_CONFIRMATION,
+    'scope': 'INITIAL_STEP_UP_VERSION_1_SAME_M1_RELEASE',
+    'ownerConfirmedRunId': '5fa0006c36e64220b86d2c42c1d8159c',
+    'source': 'OWNER_CONSOLE_AND_CURRENT_TASK_MESSAGE'}
 TIMES = {'prepare': 540, 'backup': 1800, 'protect': 900, 'copies-backup': 90, 'recover': 900,
          'provision': 120, 'copies-config': 90, 'migrate': 390, 'deploy': 960, 'postcheck': 180, 'status': 150,
          'fetch-backup': 600, 'fetch-config': 120}
@@ -216,6 +220,17 @@ def key_consent():
     raise Stop('SPECIFIC_KEY_APPROVAL_TIMEOUT_NO_BACKUP_STARTED')
 
 
+def key_confirmation_for_run(manifest, prepared):
+    if not manifest.get('keyProvisioningPreauthorized'):
+        return key_consent()
+    need(manifest.get('keyAuthorization') == KEY_AUTHORIZATION_R25 and
+         prepared.get('consumedBackupReconciled', {}).get('runId') == KEY_AUTHORIZATION_R25['ownerConfirmedRunId'] and
+         prepared['consumedBackupReconciled']['status'] == 'STOP_RECONCILED_NO_SET',
+         'PRIOR_SPECIFIC_KEY_AUTHORIZATION_NOT_BOUND')
+    print('Decisione specifica sulla prima chiave M1 già acquisita: conservata per lo stesso rilascio.', flush=True)
+    return KEY_CONFIRMATION
+
+
 def main():
     manifest = load(ROOT / 'package.json')
     admit(manifest)
@@ -231,8 +246,8 @@ def main():
         storage()
         upload(manifest)
         print('3/9 — Riconciliazione corrente, immagini, prerequisiti e diagnosi mirata.', flush=True)
-        stage_call(manifest, 'prepare')
-        confirmation = key_consent()
+        prepared = stage_call(manifest, 'prepare')
+        confirmation = key_confirmation_for_run(manifest, prepared)
         print('4/9 — Nuovo backup PR145 e rientro dell’applicazione; massimo 30 minuti inclusi i controlli.', flush=True)
         stage_call(manifest, 'backup')
         print('5/9 — Cifratura e due copie verificate sulle destinazioni fisiche C:/F:.', flush=True)

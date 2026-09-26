@@ -18,6 +18,7 @@ from common import Commands, Stop, canonical, decode, digest, exclusive, load, m
 from isolated_restore import Restore, ledger_valid, LEDGER_SQL
 from remote_release import PROVISION_NODE
 from qualified_images import verify_images
+from qualify_backup_reference import qualify_backup_reference
 
 
 class CiCommands(Commands):
@@ -43,6 +44,7 @@ def main():
     c.docker('LOAD_EXISTING_QUALIFIED_IMAGES', 'load', '--input', image_archive, seconds=300)
     images = verify_images(c, image_archive, b)
     c.docker('PULL_ISOLATED_TEST_DATABASE_IMAGE', 'pull', 'postgres:16-alpine', seconds=120)
+    backup_reference = qualify_backup_reference(c, root, b)
     pg_image = c.inspect('image', 'postgres:16-alpine')['Id']
     run = uuid.uuid4().hex
     prefix = 'm1-assisted-ci-' + run
@@ -131,6 +133,7 @@ def main():
         result = {'protocol':'FAI_M1_ASSISTED_QUALIFICATION_R21','status':'PASS','synthetic':True,
                   'candidate':b['candidate'],'candidateImage':b['candidateImage'],'imagesRebuilt':False,
                   'qualifiedImageBindings':images, 'dockerVersion':b['imageStoreVersion'], 'containerdSnapshotter':True,
+                  'backupImageReference':backup_reference,
                   'imageArchiveBytes':image_archive.stat().st_size,'imageArchiveSha256':b['imageArchiveSha256'],
                   'restore':restored,'initialStepUpRegistrationAudited':True,'duplicateProvisionDenied':True,
                   'migrations47And48Verified':True,'prior46Unchanged':True,'productionConnected':False}

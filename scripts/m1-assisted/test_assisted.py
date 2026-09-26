@@ -31,6 +31,66 @@ import qualified_images as qualified
 import receive_package as receiver
 
 
+class ConsumedBackupTests(unittest.TestCase):
+    def test_existing_specific_key_decision_never_prompts_again(self):
+        manifest = {'keyProvisioningPreauthorized':True,'keyAuthorization':owner.KEY_AUTHORIZATION_R25}
+        prepared = {'consumedBackupReconciled':{'runId':owner.KEY_AUTHORIZATION_R25['ownerConfirmedRunId'],
+                                              'status':'STOP_RECONCILED_NO_SET'}}
+        with patch.object(owner,'key_consent') as prompt,patch('builtins.print'):
+            self.assertEqual(owner.key_confirmation_for_run(manifest,prepared),owner.KEY_CONFIRMATION)
+            prompt.assert_not_called()
+            prepared['consumedBackupReconciled']['runId'] = '0'*32
+            with self.assertRaisesRegex(common.Stop,'PRIOR_SPECIFIC_KEY_AUTHORIZATION_NOT_BOUND'):
+                owner.key_confirmation_for_run(manifest,prepared)
+        with patch.object(owner,'key_consent',return_value=owner.KEY_CONFIRMATION) as prompt:
+            self.assertEqual(owner.key_confirmation_for_run({},{}),owner.KEY_CONFIRMATION)
+            prompt.assert_called_once()
+
+    def fixture(self,folder):
+        base = Path(folder).resolve()
+        run = '5fa0006c36e64220b86d2c42c1d8159c'
+        root = base/('m1-assisted-r21-'+run)
+        evidence = base/('evidence-backup46-'+run)
+        for path in (root,root/'evidence',evidence,evidence/'sets'):
+            path.mkdir(mode=0o700)
+        common.exclusive(root/'package.json',{'runId':run})
+        result = {'status':'STOP','code':'COMMAND_FAILED','appResumedHealthy':True,'localCommandGroupsQuiet':True,
+                  'commandFailure':{'phase':'BACKUP_PREFLIGHT','commandId':'BACKUP_PREFLIGHT','exitCode':1,
+                  'errorClass':'OUTPUT_REDACTED','stderrBytes':56,
+                  'stderrSha256':'1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff'}}
+        common.exclusive(root/'evidence/backup.stop.json',{'stage':'backup','status':'STOP','code':'BACKUP_STOP',
+                                                        'details':{'backupReceipt':result}})
+        common.exclusive(root/'evidence/backup-pr145-receipt.json',result)
+        common.exclusive(evidence/'STOP.json',result)
+        binding = {'historicalRunIds':[run],'consumedBackupStop':{'runId':run,
+                   'manifestSha256':common.digest(root/'package.json'),
+                   'stopSha256':common.digest(root/'evidence/backup.stop.json')}}
+        return base,root,evidence,binding
+
+    def test_exact_consumed_stop_is_reconciled_without_writes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base,root,evidence,b = self.fixture(folder)
+            before = {p:p.read_bytes() for p in base.rglob('*') if p.is_file()}
+            result = remote.reconcile_consumed_backup(base,b)
+            self.assertEqual(result['status'],'STOP_RECONCILED_NO_SET')
+            self.assertEqual(before,{p:p.read_bytes() for p in base.rglob('*') if p.is_file()})
+
+    def test_later_intent_set_or_changed_receipt_denies_new_backup(self):
+        for mutation in ('intent','set','receipt','manifest'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as folder:
+                base,root,evidence,b = self.fixture(folder)
+                if mutation == 'intent':
+                    common.exclusive(root/'evidence/provision.intent.json',{})
+                elif mutation == 'set':
+                    (evidence/'sets'/('backup46-'+b['consumedBackupStop']['runId'])).mkdir(mode=0o700)
+                elif mutation == 'receipt':
+                    (evidence/'STOP.json').write_text('{}')
+                else:
+                    (root/'package.json').write_text('{}')
+                with self.assertRaises(common.Stop):
+                    remote.reconcile_consumed_backup(base,b)
+
+
 class QualifiedImageTests(unittest.TestCase):
     def fixture(self, folder):
         archive = Path(folder) / 'images.tar.gz'
