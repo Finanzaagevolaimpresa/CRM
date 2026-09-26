@@ -1,5 +1,5 @@
 {
-  "backupProgramSha256": "581fcf051b1ec61e33403e5fbc17a10e3e1e57bc6a2da23917059e4245837ce5",
+  "backupProgramSha256": "81fc3ca26974cb0d44256b7efad66139fbe016cb63f12abcf6fa30eca0c36202",
   "candidate": "fb645e014653ee87dc64f2439970967192f91b62",
   "candidateImage": "sha256:06fe7f94dfd274eba7c24bd9e9cc102631ebc600f4a66e6066b708e846941bf9",
   "candidateConfigDigest": "sha256:839602508e6c7648336e8baae3781813dd2aa2479f9fa88292878ea01c836d73",
@@ -13,8 +13,14 @@
   },
   "historicalRunIds": [
     "2f82ab3bd94a43e384e201c58c52631d",
-    "f81c01f839cb443c90a8f9ff526e7e47"
+    "f81c01f839cb443c90a8f9ff526e7e47",
+    "5fa0006c36e64220b86d2c42c1d8159c"
   ],
+  "consumedBackupStop": {
+    "runId": "5fa0006c36e64220b86d2c42c1d8159c",
+    "manifestSha256": "d48ef2b233a8fcbd2967c588e0ddbe8ea25f1baa594ff779c794014e7823f3c8",
+    "stopSha256": "595d4cae26689ec23cb8f411f9fed7447fba1d7ef980763a825dc24c6234d54d"
+  },
   "imageArchiveSha256": "fadbed9be809e18e6d6afc4b123532edf7d0115a86e52e2e1e7bce16e245b2e7",
   "imageStoreVersion": "29.6.1",
   "ledger46": {

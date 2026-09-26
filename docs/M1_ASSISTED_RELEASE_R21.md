@@ -79,5 +79,59 @@ failure leaves the existing application running and requires only reconciliation
 of the new package. After that boundary, the existing immutable stage receipts
 and canonical return procedure apply; no destructive database restore is added.
 
+# R25 — backup image-reference reconciliation
+
+The new consumed run `5fa0006c36e64220b86d2c42c1d8159c` passed current
+schema46/image/resource preparation and failed at `BACKUP_PREFLIGHT` before
+creating a set. Its PR145 receipt records exit 1, 56 stderr bytes and SHA256
+`1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff`.
+These match exactly the canonical public error
+`N05_FAILED|code=LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH\n`.
+The stopped app was resumed healthy and the subsequent read-only reconciliation
+also saw it healthy. Later stages were not started. This identifies the guard
+that failed; the receipt does not export the literal container image reference,
+and it does not prove the cause of the older opaque backup failures.
+
+The owner backup program now admits a source container reference only when it
+is either the qualified PR139 tag or the exact already-bound immutable image ID.
+A different alias or ID is rejected before quiescence. It still verifies the tag
+resolves to that image and its original source/tree labels, the container ID and
+creation/configuration, and all persistence/resource boundaries.
+
+The active source checkout and historical program/receipt bytes remain unchanged.
+The new backup creates a private, per-run copy of four hash-pinned N05 scripts.
+Only its copied library has two explicit substitutions: retain the original
+fixed source root, and accept the exact bound ID alongside the qualified tag in
+the container-reference predicate. The immediately following actual-image-ID
+check and all other guards remain unchanged. The copied executables are verified
+again at each input boundary and their hashes are receipted. There is no Docker
+wrapper that falsifies observations, retagging, source edit or permissive fallback.
+The resource guard also runs against the live healthy app before the stop;
+the full canonical preflight still requires quiescence before dump creation.
+
+A new package must reconcile the exact prior manifest and STOP hash, agreement
+of both PR145 receipts, absence of a completed/partial set and absence of every
+later-stage intent or receipt. Fresh runtime/ledger/key checks remain mandatory.
+The old attempt is never replayed, cleared or overwritten. New source-image
+references outside the two strict forms stop before application downtime.
+
+Antonio's explicit console confirmation for the first step-up key version1 was
+also provided in this task. A review-bound package may preserve precisely that
+existing decision after reconciling that consumed run. It cannot authorize a
+rotation, another version or an existing key. The provisioning transaction still
+requires zero prior keys, one active administrator, zero active sessions and
+writes the same audit. No additional general consent or repeated key prompt is
+needed for this same release. The owner launch remains required by the assisted
+execution channel.
+
+Tests cover the exact historical error fingerprint, tag and digest references,
+wrong alias/image/labels/volumes, failure before stop, unchanged source bytes,
+receipt disagreement and later effects. CI additionally recreates the real
+failure on an isolated Docker 29.6.1/containerd daemon using the saved image,
+then runs the corrected live guard, complete preflight, pg_dump/documents backup
+and app restart. Those synthetic resources and test database never contact
+production; existing restore/provision/47-48 qualifications also remain in CI.
+
+
 Docker references: [containerd image store](https://docs.docker.com/engine/storage/containerd/)
 and [isolated CI daemon setup](https://github.com/docker/setup-docker-action).

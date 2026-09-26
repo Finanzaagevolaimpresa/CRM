@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
@@ -157,6 +158,97 @@ class LedgerModelTests(unittest.TestCase):
         with self.assertRaises(s.Stop): s.validate_model(m, "sha256:" + "4" * 64)
 
 
+class BackupReferenceAdapterTests(unittest.TestCase):
+    def sources(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        return {name: subprocess.check_output(["git", "show", s.SOURCE + ":" + name], cwd=root)
+                for name in s.BACKUP_TOOL_PATHS}
+
+    def test_only_library_changes_and_original_bytes_are_preserved(self):
+        sources = self.sources()
+        before = dict(sources)
+        result = s.staged_backup_tools(sources, "/synthetic/runtime")
+        self.assertEqual(sources, before)
+        self.assertEqual([k for k in sources if sources[k] != result[k]], ["scripts/n05/lib.sh"])
+        self.assertIn(b"N05_REPO_ROOT='/synthetic/runtime'", result["scripts/n05/lib.sh"])
+        self.assertIn(b'== "$EXPECTED_APP_IMAGE_ID"', result["scripts/n05/lib.sh"])
+
+    def test_changed_original_tools_are_rejected(self):
+        for name in s.BACKUP_TOOL_PATHS:
+            sources = self.sources()
+            sources[name] += b"\n"
+            with self.subTest(name=name), self.assertRaisesRegex(s.Stop, "CANONICAL_TOOL_DRIFT"):
+                s.staged_backup_tools(sources, "/synthetic/runtime")
+
+    def test_reference_admission_rejects_unbound_aliases_and_images_before_stop(self):
+        operation = s.Backup(packet()["plan"])
+        app = {"Id":operation.target["appId"],"Image":operation.target["appImage"],
+               "RestartCount":0,"State":{"Running":True,"Health":{"Status":"healthy"}}}
+        for reference in (s.TAG, operation.target["appImage"]):
+            with patch.object(operation,"inspect",return_value=app | {"Config":{"Image":reference}}):
+                operation.check_initial_app()
+        for reference in ("fai-crm:other", "sha256:"+"0"*64, None):
+            with patch.object(operation,"inspect",return_value=app | {"Config":{"Image":reference}}), \
+                 self.assertRaisesRegex(s.Stop,"SOURCE_IMAGE_REFERENCE_UNSUPPORTED"):
+                operation.check_initial_app()
+        self.assertFalse(operation.quiescence_attempted)
+
+    def test_live_resource_guard_failure_never_stops_or_resumes_app(self):
+        operation = s.Backup(packet()["plan"])
+        operation.approval = packet()["approval"]
+        with patch.object(operation,"same_source"),patch.object(operation,"rows",return_value=[]), \
+             patch.object(operation,"check_inputs"),patch.object(operation,"write"), \
+             patch.object(operation,"run",side_effect=s.Stop("RESOURCE_GUARD_FAILED")) as command, \
+             patch.object(operation,"docker") as docker,patch.object(operation,"resume") as resume:
+            with self.assertRaisesRegex(s.Stop,"RESOURCE_GUARD_FAILED"):
+                operation.create()
+        self.assertEqual(command.call_args.kwargs["command_id"],"BACKUP_RESOURCE_PREFLIGHT")
+        docker.assert_not_called()
+        resume.assert_not_called()
+        self.assertFalse(operation.quiescence_attempted)
+
+    def test_observed_error_is_exact_and_no_dynamic_error_text_is_exported(self):
+        raw = b"N05_FAILED|code=LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH\n"
+        self.assertEqual(len(raw),56)
+        self.assertEqual(s.sha_bytes(raw),"1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff")
+        self.assertEqual(s.sanitized_command_error(raw),"LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH")
+        self.assertEqual(s.sanitized_command_error(raw+b"PRIVATE_VALUE"),"OUTPUT_REDACTED")
+
+    @unittest.skipIf(os.name == "nt", "Real Bash guard fixture runs on Linux")
+    def test_real_guard_accepts_tag_or_bound_digest_and_preserves_other_checks(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        fixture = (root / "tests/fixtures/n05-legacy-docker-mock.sh").read_text()
+        fixture = fixture.replace('printf \'%s\\n\' "$APP_IMAGE"', 'printf \'%s\\n\' "${MOCK_APP_REF:-$APP_IMAGE}"')
+        fixture = fixture.replace('printf \'%s\\n\' "$EXPECTED_APP_IMAGE_ID"',
+                                  'printf \'%s\\n\' "${MOCK_ACTUAL_IMAGE:-$EXPECTED_APP_IMAGE_ID}"')
+        sources = self.sources()
+        with tempfile.TemporaryDirectory() as folder:
+            lib = pathlib.Path(folder)/"lib.sh"
+            mock = pathlib.Path(folder)/"mock.sh"
+            mock.write_text(fixture)
+            env = dict(os.environ, FAI_ENVIRONMENT="production",FAI_ENVIRONMENT_SENTINEL="FAI_CRM_PRODUCTION_V1",
+                COMPOSE_PROJECT_NAME="fai-crm",APP_IMAGE=s.TAG,EXPECTED_APP_IMAGE_ID="sha256:"+"a"*64,
+                POSTGRES_IMAGE="postgres:16-alpine",BACKUP_RESOURCE_PROVENANCE="authorized-legacy-compose-identity",
+                CONFIRM_LEGACY_RESOURCE_IDENTITY="FAI_CRM_N05_LEGACY_RESOURCE_BRIDGE_V1",MOCK_APP_RUNNING="1")
+            def run(changes):
+                return subprocess.run(["bash","-c",'set -Eeuo pipefail; source "$1"; source "$2"; '
+                    'n05_assert_authorized_legacy_compose_resources postgres-id running',"unit",str(lib),str(mock)],
+                    env=env|changes,capture_output=True,timeout=10)
+            lib.write_bytes(sources["scripts/n05/lib.sh"])
+            historical = run({"MOCK_APP_REF":env["EXPECTED_APP_IMAGE_ID"]})
+            self.assertEqual(historical.returncode,1)
+            self.assertEqual(s.sha_bytes(historical.stderr),"1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff")
+            lib.write_bytes(s.staged_backup_tools(sources,"/synthetic/runtime")["scripts/n05/lib.sh"])
+            for reference in (s.TAG,env["EXPECTED_APP_IMAGE_ID"]):
+                result = run({"MOCK_APP_REF":reference})
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(result.stdout,b"5")
+            for changes in ({"MOCK_APP_REF":"fai-crm:other"},{"MOCK_APP_REF":"sha256:"+"b"*64},
+                            {"MOCK_ACTUAL_IMAGE":"sha256:"+"b"*64},{"TAMPER_VOLUME_LOGICAL":"1"},
+                            {"MOCK_APP_RUNNING":"0"},{"LABEL_MODE":"partial"}):
+                self.assertNotEqual(run(changes).returncode,0,changes)
+
+
 class CommandDiagnosticTests(unittest.TestCase):
     def exercise_stop_receipt(self, failed_phase, resume_failure=False):
         operation = s.Backup(packet()["plan"])
@@ -298,7 +390,7 @@ class OperationTests(unittest.TestCase):
              patch.object(self.o, "check_inputs"), patch.object(self.o, "write", side_effect=lambda p,v: writes.append(p.name)), \
              patch.object(self.o, "docker", side_effect=s.Stop("SYNTHETIC_LOST_STOP_REPLY") if at == "stop" else None), \
              patch.object(self.o, "inspect", return_value={"Id":"1"*64,"Created":"original","State":{"Running":False,"Pid":0}}), \
-             patch.object(self.o, "run", side_effect=run), patch.object(self.o, "resume") as resume:
+             patch.object(self.o, "resource_preflight"), patch.object(self.o, "run", side_effect=run), patch.object(self.o, "resume") as resume:
             with self.assertRaises(s.Stop): self.o.create()
             resume.assert_called_once()
         self.assertTrue(self.o.quiescence_attempted)
@@ -489,6 +581,7 @@ class OperationTests(unittest.TestCase):
             handlers[s.signal.SIGINT](s.signal.SIGINT,None)
         out=io.StringIO()
         with patch.object(s,"Backup",return_value=self.o), patch.object(self.o,"prepare"), \
+             patch.object(self.o,"resource_preflight"), \
              patch.object(s.signal,"signal",side_effect=lambda sig,fn:handlers.__setitem__(sig,fn)), \
              patch.object(self.o,"same_source"), patch.object(self.o,"rows",return_value=[]), \
              patch.object(self.o,"check_inputs"), patch.object(self.o,"write",side_effect=lambda p,v:writes.append(p.name)), \

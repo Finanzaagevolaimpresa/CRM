@@ -16,6 +16,7 @@ sys.dont_write_bytecode = True
 SOURCE = Path(__file__).resolve().parent
 sys.path.insert(0, str(SOURCE))
 from common import Stop, canonical, digest, exclusive, load, need, value_sha
+from owner_release import KEY_AUTHORIZATION_R25
 
 REPO = SOURCE.parents[1]
 OUTPUT_ROOT = Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M1-assistito-R20')
@@ -48,6 +49,8 @@ def build(review_file, owner_binding_file, bundle_file):
     need(review['ciStatus'] == 'success' and review['ciHead'] == review['reviewedHead'], 'EXACT_HEAD_CI_REQUIRED')
     need(subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO).decode().strip() == review['reviewedHead'], 'BUILD_HEAD_NOT_REVIEWED')
     need(not subprocess.check_output(['git','status','--porcelain=v1','--untracked-files=no'],cwd=REPO).strip(), 'BUILD_TRACKED_DIRTY')
+    key_authorization = review.get('keyAuthorization')
+    need(key_authorization is None or key_authorization == KEY_AUTHORIZATION_R25, 'SPECIFIC_KEY_AUTHORIZATION_INVALID')
     need(re.fullmatch(r'S-1-5-21-(?:[0-9]+-){3}[0-9]+', owner['ownerSid']), 'OWNER_SID_BINDING')
     need(set(owner['drives']) == {'C', 'F'} and owner['drives']['C']['disk'] != owner['drives']['F']['disk'], 'APPROVED_DISKS_BINDING')
     branch = 'codex/m1-runtime-candidate-r21'
@@ -79,7 +82,8 @@ def build(review_file, owner_binding_file, bundle_file):
                 'deltaSha256':delta(), 'reviewedHead':review['reviewedHead'],
                 'files':files, 'programs':{name:digest(path) for name,path in programs.items()},
                 'authorityReference':'https://chatgpt.com/codex/threads/01a0c20b-b096-78a3-b6f6-db9153b914fe',
-                'keyProvisioningPreauthorized':False, 'autonomyComponentRequired':False}
+                'keyProvisioningPreauthorized':key_authorization is not None,
+                'keyAuthorization':key_authorization, 'autonomyComponentRequired':False}
     exclusive(output / 'package.json', manifest)
     # The launcher validates every package byte before the Python program starts.
     manifest_hash = digest(output / 'package.json')

@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/m1-assisted/**'
+      - 'scripts/pr140/owner_backup46.py'
       - '.github/workflows/m1-assisted-release.yml'
       - 'docs/M1_ASSISTED_RELEASE_R21.md'
 permissions:

@@ -88,6 +88,37 @@ def current_key_allowed(metadata):
     need(0 < metadata['databaseBytes'] < 256 * 1024**2, 'ISOLATED_DATABASE_CAPACITY')
 
 
+def reconcile_consumed_backup(base, binding):
+    """A new run cannot proceed by silently ignoring a consumed backup attempt."""
+    previous = binding['consumedBackupStop']
+    run_id = previous['runId']
+    need(re.fullmatch('[a-f0-9]{32}', run_id) and run_id in binding['historicalRunIds'], 'PRIOR_BACKUP_BINDING')
+    root = base / ('m1-assisted-r21-' + run_id)
+    need(digest(private(root / 'package.json')) == previous['manifestSha256'], 'PRIOR_BACKUP_PACKAGE_CHANGED')
+    stop_path = private(root / 'evidence/backup.stop.json')
+    need(digest(stop_path) == previous['stopSha256'], 'PRIOR_BACKUP_STOP_CHANGED')
+    stop = load(stop_path)
+    result = stop['details']['backupReceipt']
+    need(stop['stage'] == 'backup' and stop['status'] == 'STOP' and stop['code'] == 'BACKUP_STOP' and
+         result['status'] == 'STOP' and result['code'] == 'COMMAND_FAILED' and result['appResumedHealthy'] is True and
+         result['localCommandGroupsQuiet'] is True and result['commandFailure'] == {
+             'phase':'BACKUP_PREFLIGHT','commandId':'BACKUP_PREFLIGHT','exitCode':1,'errorClass':'OUTPUT_REDACTED',
+             'stderrBytes':56,'stderrSha256':'1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff'},
+         'PRIOR_BACKUP_FAILURE_NOT_RECONCILED')
+    need(load(private(root / 'evidence/backup-pr145-receipt.json')) == result, 'PRIOR_BACKUP_RECEIPT_DISAGREES')
+    evidence = base / ('evidence-backup46-' + run_id)
+    need(load(private(evidence / 'STOP.json')) == result, 'PRIOR_CANONICAL_STOP_DISAGREES')
+    forbidden = [evidence/'BACKUP_VERIFIED.json', evidence/'BACKUP_CREATE.log',
+                 evidence/'sets'/('backup46-'+run_id), evidence/'sets'/('.partial-backup46-'+run_id),
+                 root/'evidence/backup.json']
+    forbidden += [root/'evidence'/(stage+suffix) for stage in
+                  ('protect','copies-backup','recover','provision','copies-config','migrate','deploy','postcheck')
+                  for suffix in ('.intent.json','.json','.stop.json')]
+    need(not any(p.exists() or p.is_symlink() for p in forbidden), 'PRIOR_BACKUP_HAS_LATER_EFFECTS_RECONCILE')
+    return {'runId':run_id,'stopSha256':previous['stopSha256'],'status':'STOP_RECONCILED_NO_SET',
+            'canonicalErrorCode':'LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH','historicalFilesModified':False}
+
+
 class Release:
     def __init__(self, root):
         self.root = private(root, directory=True)
@@ -153,6 +184,7 @@ class Release:
 
     def prepare(self):
         before = self.observer()
+        prior_backup = reconcile_consumed_backup(BASE, self.b)
         need(before['liveSessions'] == 0 and before['otherActiveDbSessions'] == 0, 'ACTIVE_SESSIONS_PRESENT')
         need(before['internalSessionMode'] == 'legacy' and before['privilegedAccessMode'] == 'disabled', 'SOURCE_MODE_DRIFT')
         empty_step_up = self.c.docker('INITIAL_STEP_UP_CONFIGURATION', 'exec', self.t['appId'], 'node', '-e',
@@ -190,7 +222,8 @@ class Release:
                 'documentCapacity': documents,
                 'imagesLoaded': False, 'imagesReused': images, 'imagesRebuilt': False, 'productionRuntimeMutationPerformed': False,
                 'recipientSha256': self.b['recipientSha256'], 'stepUpProvisioningRequired': True,
-                'backupCurrentPredicatesVerified': True, 'historicalCauseInferred': False}
+                'backupCurrentPredicatesVerified': True, 'historicalCauseInferred': False,
+                'consumedBackupReconciled': prior_backup}
 
     def backup(self):
         before = self.observer()
