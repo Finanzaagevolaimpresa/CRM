@@ -18,6 +18,7 @@ import {
   startPractice,
 } from "../src/lib/practice-readiness";
 import { prepareServiceCatalogV2 } from "../src/lib/service-catalog-v2-persistence";
+import { workAuditEvidence, workExportEvidence, workExportReceiptSchema } from '../src/lib/engagement-work-package';
 import {
   authorizeEngagementDossierDelivery,
   createEngagementDossier,
@@ -2055,6 +2056,10 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
   await assert.rejects(exportEngagementWorkPackage(db, actorA, exportInput, { readDocument: async () => Buffer.from('CORRUPTED') }), notReady);
   assert.deepEqual(await footprint(), before);
   const exported = await exportEngagementWorkPackage(db, actorA, exportInput, runtime);
+  const collision = { ...workExportEvidence(exported.receipt.manifest, exported.receipt.manifestHash, exported.receipt.artifactHash),
+    serviceRevisionId: '00000000-0000-4000-8000-000000000003' };
+  const sanitized = await db.$queryRaw<Array<{ evidence: unknown }>>`SELECT audit_sanitize_json_n04_v1(${JSON.stringify(workAuditEvidence(collision))}::jsonb) AS evidence`;
+  assert.deepEqual(workExportReceiptSchema.parse(sanitized[0].evidence), collision);
   assert.equal(exported.receipt.artifactHash, createHash('sha256').update(exported.archive).digest('hex'));
   assert.equal(exported.receipt.manifest.files.length, 1);
   assert.ok(!exported.archive.includes(Buffer.from(a.documentVersion.storagePath)));

@@ -6,6 +6,11 @@ export const WORK_IMPORT_EVENT = 'engagement_work_result_import';
 export const WORK_PACKAGE_MAX_BYTES = 50 * 1024 * 1024;
 const id = z.string().min(1).max(128);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
+// Preserve typed UUID references through the unchanged N04 phone redactor.
+// The prefix and delimiter-free hex match the existing M1 session convention.
+const auditUuid = z.union([z.string().uuid(), z.string().regex(/^work_uuid_[a-fA-F0-9]{32}$/)
+  .transform(value => { const hex = value.slice('work_uuid_'.length); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }).pipe(z.string().uuid())]);
+const auditUuidFields = new Set(['packageId', 'sourceVersionId', 'serviceRevisionId', 'practiceId', 'acceptedOfferRevisionId', 'versionId']);
 
 export const workManifestSchema = z.object({
   protocol: z.literal('FAI_CRM_MANUAL_WORK_PACKAGE_V1'),
@@ -30,9 +35,9 @@ export type WorkManifest = z.infer<typeof workManifestSchema>;
 
 export const workExportReceiptSchema = z.object({
   type: z.literal('FAI_CRM_WORK_EXPORT_RECEIPT_V1'),
-  packageId: z.string().uuid(), dossierId: id, clientId: id, projectId: id, clientServiceId: id,
-  sourceVersionId: z.string().uuid(), sourceVersion: z.number().int().positive(), sourceVersionHash: hash,
-  serviceRevisionId: z.string().uuid(), practiceId: z.string().uuid(), acceptedOfferRevisionId: z.string().uuid(),
+  packageId: auditUuid, dossierId: id, clientId: id, projectId: id, clientServiceId: id,
+  sourceVersionId: auditUuid, sourceVersion: z.number().int().positive(), sourceVersionHash: hash,
+  serviceRevisionId: auditUuid, practiceId: auditUuid, acceptedOfferRevisionId: auditUuid,
   exportedAt: z.string().datetime(), exportedById: id,
   materialSnapshotHash: hash,
   source: z.array(z.object({ documentId: id, documentVersionId: id, checksumHash: hash, sizeBytes: z.number().int().positive().max(25 * 1024 * 1024) }).strict()).max(100),
@@ -67,13 +72,20 @@ export const workImportInputSchema = z.object({
 
 export const workImportReceiptSchema = z.object({
   type: z.literal('FAI_CRM_MANUAL_WORK_IMPORT_V1'),
-  packageId: z.string().uuid(), packageArtifactHash: hash,
-  sourceVersionId: z.string().uuid(), sourceVersionHash: hash,
-  versionId: z.string().uuid(), versionHash: hash,
+  packageId: auditUuid, packageArtifactHash: hash,
+  sourceVersionId: auditUuid, sourceVersionHash: hash,
+  versionId: auditUuid, versionHash: hash,
   referenceCode: workReferenceCode, producerRole: z.enum(workProducerRoles),
   returnedAt: z.string().datetime(), importHash: hash,
 }).strict();
 export type WorkImportReceipt = z.infer<typeof workImportReceiptSchema>;
+
+export function workAuditEvidence<T extends z.infer<typeof workExportReceiptSchema> | WorkImportReceipt>(receipt: T): T {
+  return Object.fromEntries(Object.entries(receipt).map(([key, value]) => [key,
+    auditUuidFields.has(key) && typeof value === 'string' && z.string().uuid().safeParse(value).success
+      ? `work_uuid_${value.replaceAll('-', '')}` : value,
+  ])) as T;
+}
 
 export function workBytesHash(bytes: Uint8Array | string) {
   return createHash('sha256').update(bytes).digest('hex');

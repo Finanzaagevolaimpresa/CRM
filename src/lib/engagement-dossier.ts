@@ -7,7 +7,7 @@ import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { readPrivateDocumentBounded } from './storage';
-import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_MAX_BYTES, workBytesHash, workExportEvidence, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, workManifestSchema, type WorkManifest } from './engagement-work-package';
+import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_MAX_BYTES, workBytesHash, workAuditEvidence, workExportEvidence, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, workManifestSchema, type WorkManifest } from './engagement-work-package';
 
 export class EngagementDossierError extends Error {
   constructor(readonly code: 'DENIED' | 'CONFLICT' | 'NOT_READY' | 'INVALID') { super(code); }
@@ -264,7 +264,7 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
       if (engagementDossierHash(evidence) !== engagementDossierHash(previousReceipt)) throw new EngagementDossierError('CONFLICT');
       return { archive, receipt };
     }
-    const stored = await tx.auditLog.create({ data: { id: input.packageId, actorId: current.userId, event: WORK_PACKAGE_EVENT, entityType: 'ClientDossier', entityId: context.dossier.id, after: evidence } });
+    const stored = await tx.auditLog.create({ data: { id: input.packageId, actorId: current.userId, event: WORK_PACKAGE_EVENT, entityType: 'ClientDossier', entityId: context.dossier.id, after: workAuditEvidence(evidence) } });
     const persisted = checkedWorkExport(stored, context);
     if (engagementDossierHash(persisted) !== engagementDossierHash(evidence)) throw new EngagementDossierError('CONFLICT');
     if (runtime.failAudit) throw new EngagementDossierError('CONFLICT');
@@ -298,7 +298,7 @@ export async function importEngagementWorkResult(db: Db, claimed: AuthSession, r
       sourceVersionId: previous.id, sourceVersionHash: previous.contentHash, versionId: version.id, versionHash: version.contentHash,
       referenceCode: input.workReference, producerRole: input.producer, returnedAt: input.returnedAt, importHash,
     });
-    const stored = await audit(tx, runtime, current.userId, WORK_IMPORT_EVENT, context.dossier.id, evidence);
+    const stored = await audit(tx, runtime, current.userId, WORK_IMPORT_EVENT, context.dossier.id, workAuditEvidence(evidence));
     const persisted = workImportReceiptSchema.safeParse(stored.after);
     if (!persisted.success || engagementDossierHash(persisted.data) !== engagementDossierHash(evidence)) throw new EngagementDossierError('CONFLICT');
     return version;

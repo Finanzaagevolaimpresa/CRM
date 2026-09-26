@@ -47,6 +47,10 @@ convenzione di ricevute di dominio già usata dall'handoff M1. L'ID del pacchett
 è la chiave primaria della ricevuta; la transazione Serializable blocca il
 dossier prima di registrare l'export o creare la versione importata.
 Lettura e replay verificano struttura, hash e legami tra ricevute e versioni.
+I soli campi UUID tecnici sono conservati nell'audit come `work_uuid_` seguito
+da hex senza separatori, sul modello delle sessioni M1: il filtro telefonico N04
+rimane invariato e non altera UUID numerici validi. Il decoder ricostruisce e
+valida l'UUID prima dei controlli di legame; manifest e hash restano canonici.
 Il pulsante usa fetch in modalità CORS verso il percorso fisso dello stesso sito,
 senza referrer e senza seguire redirect. Questo conserva l'header Origin anche
 con Referrer-Policy no-referrer, che sui POST HTML nativi può produrre Origin null

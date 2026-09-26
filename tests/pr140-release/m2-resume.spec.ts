@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2-persistence';
+import { workImportReceiptSchema } from '../../src/lib/engagement-work-package';
 
 const db = new PrismaClient();
 test.afterAll(() => db.$disconnect());
@@ -9,7 +10,7 @@ test('M2 provenance and delivery remain readable after candidate recovery and re
   const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN!;
   expect(new URL(app).hostname).toBe('127.0.0.1');
   const provenance = await db.auditLog.findFirstOrThrow({ where: { event: 'engagement_work_result_import', entityType: 'ClientDossier' } });
-  const receipt = provenance.after as { referenceCode: string; packageId: string; versionId: string };
+  const receipt = workImportReceiptSchema.parse(provenance.after);
   const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: provenance.entityId! } });
   expect(dossier.currentVersionId).toBe(receipt.versionId);
   expect(dossier.approvedVersionId).toBe(receipt.versionId);
