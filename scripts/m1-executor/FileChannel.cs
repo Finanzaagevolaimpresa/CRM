@@ -45,11 +45,11 @@ namespace Fai.M1 {
         static extern uint GetFinalPathNameByHandle(SafeFileHandle handle,StringBuilder path,uint size,uint flags);
         readonly List<SafeFileHandle> held=new List<SafeFileHandle>();
         internal string Identity;
-        internal static SafeFileHandle Open(string path,bool directory,out Info info) {
+        internal static SafeFileHandle Open(string path,bool directory,out Info info,uint access=0x80000000U,uint? share=null,uint disposition=3U) {
             info=new Info();
             // GENERIC_READ is intentional: attribute-only handles do not enforce
             // the sharing restriction needed to prevent directory replacement.
-            var h=CreateFile(path,0x80000000U,directory?3U:1U,IntPtr.Zero,3,0x00200000U|(directory?0x02000000U:0U),IntPtr.Zero);
+            var h=CreateFile(path,access,share??(directory?3U:1U),IntPtr.Zero,disposition,0x00200000U|(directory?0x02000000U:0U),IntPtr.Zero);
             try {
                 Data.Need(!h.IsInvalid && GetFileInformationByHandle(h,out info),"CHANNEL_FILE_OPEN_FAILED");
                 Data.Need((info.Attributes&0x400)==0 && ((info.Attributes&0x10)!=0)==directory,"CHANNEL_LINK_OR_TYPE_DENIED");
@@ -82,6 +82,11 @@ namespace Fai.M1 {
                 }
             }
         }
+        internal static FileLease ExclusiveFile(string path) {
+            var lease=Directory(Path.GetDirectoryName(path));
+            try {Info info;lease.held.Add(Open(path,false,out info,0xC0000000U,0U,4U));return lease;}
+            catch {lease.Dispose();throw;}
+        }
         public void Dispose() { for(int i=held.Count-1;i>=0;i--) held[i].Dispose(); held.Clear(); }
     }
 
@@ -108,6 +113,26 @@ namespace Fai.M1 {
             CreateExclusive(exact,descriptor);
         }
         public static string InboxIdentity() { using(var d=FileLease.Directory(ChannelBinding.Inbox)) return d.Identity; }
+        public static IDisposable AcquireUpgradeClientLock() {
+            return FileLease.ExclusiveFile(Path.Combine(ChannelBinding.Inbox,"client.lock"));
+        }
+        public static void VerifyUpgradeInstallation(string owner) {
+            const string prior="0c1eacf5ab56062e050f1e4f82008e8a7488e660bf9cfa9b00a46628387da7a5";
+            string dir=Path.Combine(ChannelBinding.Code,prior.Substring(0,16));
+            Policy.Acl(ChannelBinding.Code);Policy.Acl(dir);Policy.Acl(ChannelBinding.State,owner);
+            string manifest=Path.Combine(dir,"manifest.json"),admission=Path.Combine(dir,"install.json");
+            Policy.Acl(manifest);Policy.Acl(admission);
+            Data.Need(Data.FileSha(manifest)==prior,"UPGRADE_PRIOR_MANIFEST_CHANGED");
+            var m=Data.Obj(StrictJson.Parse(FileLease.Read(manifest,8192)));
+            var files=Data.Obj(m["files"]);
+            Data.Fields(files,"M1FileChannel.exe","Install-FileChannel.ps1","Uninstall-FileChannel.ps1");
+            foreach(var file in files) {string p=Path.Combine(dir,file.Key);Policy.Acl(p);Data.Need(Data.FileSha(p)==Data.Text(file.Value),"UPGRADE_PRIOR_FILE_CHANGED");}
+            var a=Data.Obj(StrictJson.Parse(FileLease.Read(admission,4096)));
+            Data.Fields(a,"schema","ownerSid","manifestSha256","exeSha256","inboxIdentity","reviewReference");
+            Data.Need(Data.Text(a["schema"])=="FAI_M1_FILE_CHANNEL_INSTALL_R18" && Data.Text(a["ownerSid"])==owner &&
+                Data.Text(a["manifestSha256"])==prior && Data.Text(a["exeSha256"])==Data.Text(files["M1FileChannel.exe"]) &&
+                Data.Text(a["inboxIdentity"])==InboxIdentity(),"UPGRADE_PRIOR_ADMISSION_CHANGED");
+        }
         public static IDisposable HoldInstallationParents() {
             return new ParentLocks();
         }

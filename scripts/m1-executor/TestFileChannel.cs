@@ -126,6 +126,16 @@ internal static class TestFileChannel {
         using(var writer=new FileStream(locked,FileMode.Open,FileAccess.Write,FileShare.Read)) {
             Reject(()=>FileLease.Read(locked,2048),"CHANNEL_FILE_OPEN_FAILED");
         }
+        string clientLock=Path.Combine(dir,"client.lock");Check(!File.Exists(clientLock),"upgrade starts with absent client mutex");
+        IDisposable upgradeLease=fixtureBoundary?(IDisposable)FileLease.Open(clientLock,false,out metadata,0xC0000000U,0U,4U):FileLease.ExclusiveFile(clientLock);
+        using(upgradeLease) {
+            Check(File.Exists(clientLock),"upgrade safely creates missing client mutex");
+            Reject(()=>FileLease.Open(clientLock,false,out metadata,0xC0000000U,0U),"CHANNEL_FILE_OPEN_FAILED");
+            bool replaced=false;try{File.Move(clientLock,clientLock+"-replaced");replaced=true;}catch(IOException){}
+            Check(!replaced,"upgrade client mutex cannot be replaced while held");
+        }
+        using(FileLease.Open(clientLock,false,out metadata,0xC0000000U,0U)) Check(true,"upgrade mutex released after disposal");
+        Reject(()=>FileLease.Open(hard,false,out metadata,0xC0000000U,0U),"CHANNEL_HARDLINK_DENIED");
         string exclusive=Path.Combine(root,"exclusive-"+Guid.NewGuid().ToString("N"));
         byte[] descriptor=Directory.GetAccessControl(root).GetSecurityDescriptorBinaryForm();
         FileChannelInstallSupport.CreateExclusive(exclusive,descriptor);

@@ -1,5 +1,45 @@
 # R18: canale a file per il componente proprietario già installato
 
+## Correzione R19: cartella di stato .NET Framework
+
+La prima richiesta reale del 25 settembre ha raggiunto il core storico e ha
+restituito `INSTALLATION_NOT_VERIFIED`, senza aprire SSH. Una riproduzione locale
+con lo stesso ambiente ridotto ha mostrato che .NET Framework restituisce una
+stringa vuota per `CommonApplicationData` quando manca `SystemDrive`, anche se
+`PROGRAMDATA=C:\ProgramData` è presente. Il core costruisce quindi un percorso
+di stato relativo. Aggiungendo soltanto `SystemDrive=C:` la stessa prova risolve
+correttamente `C:\ProgramData`. Il test usa file e metadati non segreti; non legge
+il profilo proprietario. Questa è una causa riprodotta del fallimento locale;
+l'effettiva qualificazione proprietaria richiede ancora una nuova ricevuta.
+
+Il trasporto fornisce ora questo sesto valore fisso, senza ereditare ambiente
+arbitrario. La regressione esegue un vero figlio .NET Framework attraverso il
+contenimento di produzione, partendo da un valore ereditato errato, e verifica
+cartelle note e assenza di valori ereditati. Il core storico installato e i suoi
+hash restano invariati: viene aggiornata soltanto la compilazione del trasporto.
+
+`Install-FileChannel.ps1 -UpgradeExisting`, e l'omonima opzione del generatore
+del lanciatore, ammettono esclusivamente la precedente installazione PR153
+con manifest `0c1eacf5ab56062e050f1e4f82008e8a7488e660bf9cfa9b00a46628387da7a5`.
+L'aggiornamento richiede lo stesso proprietario/UAC e un nuovo pacchetto esatto
+revisionato. Verifica hash, ACL, identità NTFS della casella, ammissione e voce
+Run; acquisisce il mutex del client e rifiuta richieste pendenti. Richiede poi
+l'arresto ordinato del canale e attende il rilascio del lock di vita e la ricevuta
+della sessione corretta, fino a 185 secondi. Non termina processi e non apre SSH.
+
+Crea una nuova directory di versione protetta e cambia soltanto la voce Run
+già esistente. Conserva la vecchia directory e tutti i suoi byte; archivia
+soltanto la precedente ricevuta d'installazione e il marker di arresto volontario.
+Lo STOP diagnostico e tutte le ricevute operative restano intatti: il nuovo
+canale dovrà riconciliarli. Le ACL preesistenti non vengono ampliate. In caso di
+errore l'aggiornamento si ferma senza ripetizione automatica.
+
+La rimozione usa l'uninstaller della versione nuova: rimuove la sua sola voce
+Run e i suoi cinque file, mantenendo la versione precedente, stato e ricevute.
+La versione precedente non viene riattivata automaticamente perché contiene
+il difetto riprodotto. La ripresa dopo un aggiornamento parziale richiede la
+riconciliazione dei file effettivamente scritti, senza sovrascrivere i pacchetti.
+
 Il provider MCP della build 954db17 risulta installato e inizializzato nel
 catalogo globale dell'app, ma non è disponibile fra gli strumenti della task
 01a0c20b-b096-78a3-b6f6-db9153b914fe. La causa non è dimostrata e non viene
