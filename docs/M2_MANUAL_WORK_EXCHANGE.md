@@ -47,6 +47,12 @@ convenzione di ricevute di dominio già usata dall'handoff M1. L'ID del pacchett
 è la chiave primaria della ricevuta; la transazione Serializable blocca il
 dossier prima di registrare l'export o creare la versione importata.
 Lettura e replay verificano struttura, hash e legami tra ricevute e versioni.
+Il pulsante usa fetch in modalità CORS verso il percorso fisso dello stesso sito,
+senza referrer e senza seguire redirect. Questo conserva l'header Origin anche
+con Referrer-Policy no-referrer, che sui POST HTML nativi può produrre Origin null
+([Fetch Standard](https://fetch.spec.whatwg.org/#append-a-request-origin-header)).
+Il server continua a negare Origin null, origini diverse e richieste cross-site;
+il test browser controlla il download reale e questi dinieghi.
 Le ricevute contengono esclusivamente identificativi, hash, dimensioni, ruoli
 e date. Il manifest con i dati del cliente rimane nel pacchetto autorizzato;
 non viene memorizzato nell'audit. Il filtro N04 resta invariato e ogni scrittura

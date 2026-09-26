@@ -1151,6 +1151,9 @@ test('M2 Work package returns as a new draft before independent review and simul
   expect(download).not.toBeNull();
   expect(download!.suggestedFilename()).toBe(`work-${packageId}.zip`);
   const exportRequest = await requestPromise;
+  expect((await exportRequest.allHeaders()).origin).toBe(app);
+  expect((await exportRequest.allHeaders())['sec-fetch-site']).toBe('same-origin');
+  expect((await exportRequest.allHeaders()).referer).toBeUndefined();
   const exported = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
   expect(exported.status()).toBe(200);
   const bytes = await exported.body();
@@ -1172,6 +1175,8 @@ test('M2 Work package returns as a new draft before independent review and simul
   expect(denied.headers().location).toContain('dossierError=DENIED');
   const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
   expect(crossOrigin.status()).toBe(403);
+  const opaqueOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'null', 'sec-fetch-site': 'same-origin' }, maxRedirects: 0 });
+  expect(opaqueOrigin.status()).toBe(403);
   await page.reload();
   const returnForm = page.getByRole('form', { name: 'Rientro manuale da Work' });
   await returnForm.locator('[name="packageBinding"]').selectOption(`${packageId}:${artifactHash}`);

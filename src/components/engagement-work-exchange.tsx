@@ -5,6 +5,7 @@ import { DeliveryTimeInput } from './delivery-time-input';
 import { importEngagementWorkResultAction } from '@/lib/engagement-dossier-actions';
 import type { getEngagementDossierReadAccess } from '@/lib/engagement-dossier';
 import { workProducerRoles } from '@/lib/engagement-work-package';
+import { EngagementWorkDownload } from './engagement-work-download';
 
 type Context = NonNullable<Awaited<ReturnType<typeof getEngagementDossierReadAccess>>>;
 
@@ -16,11 +17,7 @@ export function EngagementWorkExchange({ context, canWrite, canExport }: { conte
     <p>Scarica il dossier e i materiali verificati, lavorali nella chat Work autorizzata e riporta qui il risultato. Ogni rientro crea una nuova bozza da revisionare.</p>
     <p className="mt-2 text-sm text-slate-600">Nessuna sincronizzazione tra chat o consegna al cliente. Limite del pacchetto: 50 MB, massimo 25 MB per documento. Conserva il file ZIP originale.</p>
     <div className="my-3 flex flex-wrap gap-3"><SecondaryLink href={`/practice-readiness#practice-${dossier.practiceReadinessId}`}>Incarico, pagamento e materiali</SecondaryLink><SecondaryLink href={`/clients/${dossier.clientId}#servizi`}>Attività e servizio nel fascicolo</SecondaryLink></div>
-    {canExport ? <form method="post" action={`/client-dossiers/${dossier.id}/work-export`} className="my-4 grid gap-3">
-      <input type="hidden" name="expectedVersionId" value={version.id}/><input type="hidden" name="packageId" value={randomUUID()}/>
-      <label className="flex items-center gap-2"><input type="checkbox" name="manualTransferAuthorized" required/>Confermo la lavorazione manuale autorizzata dei materiali in Work.</label>
-      <PrimaryButton type="submit">Scarica pacchetto Work</PrimaryButton>
-    </form> : <p>Per esportare servono i permessi di modifica dossier, lettura servizio e download dei documenti.</p>}
+    {canExport ? <EngagementWorkDownload dossierId={dossier.id} versionId={version.id} packageId={randomUUID()}/> : <p>Per esportare servono i permessi di modifica dossier, lettura servizio e download dei documenti.</p>}
     {canWrite && packages.length ? <form action={importEngagementWorkResultAction} className="my-4 grid gap-3" aria-label="Rientro manuale da Work">
       <input type="hidden" name="dossierId" value={dossier.id}/><input type="hidden" name="expectedVersionId" value={version.id}/>
       <label>Pacchetto di origine<select name="packageBinding" className="w-full rounded-xl border p-3" required>{packages.map(item => <option key={item.id} value={`${item.id}:${item.artifactHash}`}>{item.id} · v{item.sourceVersion}</option>)}</select></label>
