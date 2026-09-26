@@ -140,7 +140,9 @@ def upload(manifest, images):
     need(not archive.exists(), 'TRANSFER_ALREADY_STARTED_RECONCILE_ONLY')
     with tarfile.open(archive, 'x') as target:
         for name in [*manifest['files'], 'package.json']:
-            source = images if name == 'release-images.tar.gz' else ROOT / name
+            if name == 'release-images.tar.gz':
+                continue  # The fixed receiver verifies and copies the already transferred archive.
+            source = ROOT / name
             info = target.gettarinfo(str(source), arcname=name)
             info.uid = info.gid = 1000
             info.uname = info.gname = ''
@@ -155,7 +157,7 @@ def upload(manifest, images):
     code = bootstrap + '\nreceive(' + repr(packet) + ')\n'
     encoded = base64.b64encode(code.encode()).decode('ascii')
     remote = 'python3 -I -B -S -c "import base64;exec(base64.b64decode(\'' + encoded + '\'))"'
-    print('2/9 — Trasferimento verificato al server; massimo 10 minuti.', flush=True)
+    print('2/9 — Trasferimento del solo pacchetto e verifica delle immagini già sul server; massimo 10 minuti.', flush=True)
     with archive.open('rb') as source:
         status, out, error = call(SSH_ARGS + [remote], 600, source=source)
     result = None

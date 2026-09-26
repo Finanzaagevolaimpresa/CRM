@@ -41,3 +41,43 @@ Il recupero R21 prova database e documenti del **nuovo set in chiaro**, già pre
 L'immagine di rientro contiene lo stesso codice applicativo del candidato: copre i guasti di avvio/configurazione già provati, non un bug applicativo condiviso. Il controller non revoca sessioni reali per forzare un rientro e non effettua down-migration. La lavorazione dell'autonomia, compresa la riconferma dopo riapertura, rimane separata e non attestata dal rilascio assistito.
 
 La consegna finale deve indicare separatamente eseguito/prova oppure bloccato/causa per backup, copie, recuperabilità, migrazioni, deploy, stato produttivo e prova d'uso. La sola CI non attesta alcuna esecuzione produttiva.
+# R24 — reconciliation of the containerd image store
+
+The read-only R23 observation on 2026-09-26 confirmed Docker 29.6.1 with the
+containerd snapshotter. Both saved images are present with the qualified
+platform, root filesystem layers and source labels. Docker identifies them by
+their OCI manifest digests, whereas the previous preparation used their config
+digests. This establishes the current `INSPECT_IMAGE` failure; it does not
+establish the unrecorded subcommand of the two historical backup failures.
+
+The binding now names those exact manifest digests while retaining the original
+config digests. `qualified_images.py` verifies the saved archive hash, each
+manifest-to-config link, platform, layers, tags and source labels before any
+backup. It requires the observed Docker version and store. It neither builds nor
+loads images, and never substitutes an image based on a tag alone. All subsequent
+restore, migration, forward and return operations use the immutable manifest ID.
+
+A new run receives only the small executable package. The fixed receiver verifies
+the package and exact preparation STOP of consumed run
+`e67bea4040fc4aeb86a0c98ac6178e7e`, refuses any later-stage intent/receipt, and
+copies its already-transferred image archive into the new run. The copy must pass
+SHA256, size and readback checks. Historical files are not written or deleted;
+neither the stopped preparation nor a consumed backup is retried. A partial new
+package remains occupied and requires reconciliation. There is no network image
+download, reload or fallback in this reuse path.
+
+The new delta is checked on Windows/Linux with negative archive/identity/reuse
+tests and against an isolated CI Docker 29.6.1 containerd daemon, using the same
+saved images. That CI run covers the existing restore/key/migration path under
+the newly observed image-ID semantics; it does not requalify the application.
+The production Docker engine, SSH protections and canonical programs are unchanged.
+
+This version still requires one normal owner launch and the existing explicit
+step-up-key decision. Current runtime/ledger, C/F physical identities, recovery
+and stage dependencies remain mandatory. Before the first new backup, any
+failure leaves the existing application running and requires only reconciliation
+of the new package. After that boundary, the existing immutable stage receipts
+and canonical return procedure apply; no destructive database restore is added.
+
+Docker references: [containerd image store](https://docs.docker.com/engine/storage/containerd/)
+and [isolated CI daemon setup](https://github.com/docker/setup-docker-action).

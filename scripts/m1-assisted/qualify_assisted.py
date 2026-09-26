@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import socket
 import sys
 import tarfile
@@ -16,6 +17,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import Commands, Stop, canonical, decode, digest, exclusive, load, module, need
 from isolated_restore import Restore, ledger_valid, LEDGER_SQL
 from remote_release import PROVISION_NODE
+from qualified_images import verify_images
+
+
+class CiCommands(Commands):
+    def docker(self, command_id, *args, **options):
+        # CI's isolated daemon only. Production Commands keeps its fixed socket.
+        endpoint = os.environ['M1_CI_DOCKER_SOCKET']
+        if endpoint.startswith('/'):
+            endpoint = 'unix://' + endpoint
+        need(endpoint.startswith('unix:///') and socket.gethostname() != 'fai-crm-prod-02' and
+             os.environ.get('CI') == os.environ.get('GITHUB_ACTIONS') == 'true', 'CI_DAEMON_ONLY')
+        return self.run(command_id, [shutil.which('docker'), '--host', endpoint, *args], **options)
 
 
 def main():
@@ -25,11 +38,10 @@ def main():
     b = load(root / 'scripts/m1-assisted/binding.json')
     image_archive = Path(sys.argv[1]).resolve()
     need(digest(image_archive) == b['imageArchiveSha256'], 'QUALIFIED_IMAGE_ARCHIVE_CHANGED')
-    c = Commands(1500, root)
+    c = CiCommands(1500, root)
     c.env.update(PATH=os.environ['PATH'], HOME=os.environ['HOME'])
     c.docker('LOAD_EXISTING_QUALIFIED_IMAGES', 'load', '--input', image_archive, seconds=300)
-    for image in ('candidateImage', 'returnImage'):
-        need(c.inspect('image', b[image])['Id'] == b[image], 'QUALIFIED_IMAGE_ID')
+    images = verify_images(c, image_archive, b)
     c.docker('PULL_ISOLATED_TEST_DATABASE_IMAGE', 'pull', 'postgres:16-alpine', seconds=120)
     pg_image = c.inspect('image', 'postgres:16-alpine')['Id']
     run = uuid.uuid4().hex
@@ -118,6 +130,7 @@ def main():
         need(after[:46] == before, 'PREFIX46_NOT_PRESERVED')
         result = {'protocol':'FAI_M1_ASSISTED_QUALIFICATION_R21','status':'PASS','synthetic':True,
                   'candidate':b['candidate'],'candidateImage':b['candidateImage'],'imagesRebuilt':False,
+                  'qualifiedImageBindings':images, 'dockerVersion':b['imageStoreVersion'], 'containerdSnapshotter':True,
                   'imageArchiveBytes':image_archive.stat().st_size,'imageArchiveSha256':b['imageArchiveSha256'],
                   'restore':restored,'initialStepUpRegistrationAudited':True,'duplicateProvisionDenied':True,
                   'migrations47And48Verified':True,'prior46Unchanged':True,'productionConnected':False}
