@@ -122,25 +122,14 @@ def stage_call(manifest, stage, request=None, output=None):
     return result
 
 
-def acquire_images(manifest):
-    verified = R20 / '02-IMMAGINI-R21' / 'release-images.tar.gz'
-    if not verified.exists():
-        print('1/9 — Completamento delle immagini già qualificate; avanzamento in MB, massimo 10 minuti.', flush=True)
-        result = subprocess.run([str(PY), '-I', '-B', '-S', str(ROOT / 'download_images.py')], timeout=660, check=False)
-        need(result.returncode == 0, 'QUALIFIED_IMAGE_DOWNLOAD_STOP')
-    receipt = load(R20 / '02-RICEVUTA-R21.json')
-    expected = manifest['files']['release-images.tar.gz']
-    need(receipt['status'] == 'IMAGES_DOWNLOADED_AND_VERIFIED' and digest(verified) == expected['sha256']
-         and verified.stat().st_size == expected['bytes'], 'QUALIFIED_IMAGES_NOT_VERIFIED')
-    return verified
-
-
-def upload(manifest, images):
+def upload(manifest):
     archive = ROOT / 'owner-transfer.tar'
     need(not archive.exists(), 'TRANSFER_ALREADY_STARTED_RECONCILE_ONLY')
     with tarfile.open(archive, 'x') as target:
         for name in [*manifest['files'], 'package.json']:
-            source = images if name == 'release-images.tar.gz' else ROOT / name
+            if name == 'release-images.tar.gz':
+                continue  # The fixed receiver verifies and copies the already transferred archive.
+            source = ROOT / name
             info = target.gettarinfo(str(source), arcname=name)
             info.uid = info.gid = 1000
             info.uname = info.gname = ''
@@ -155,7 +144,7 @@ def upload(manifest, images):
     code = bootstrap + '\nreceive(' + repr(packet) + ')\n'
     encoded = base64.b64encode(code.encode()).decode('ascii')
     remote = 'python3 -I -B -S -c "import base64;exec(base64.b64decode(\'' + encoded + '\'))"'
-    print('2/9 — Trasferimento verificato al server; massimo 10 minuti.', flush=True)
+    print('2/9 — Trasferimento del solo pacchetto e verifica delle immagini già sul server; massimo 10 minuti.', flush=True)
     with archive.open('rb') as source:
         status, out, error = call(SSH_ARGS + [remote], 600, source=source)
     result = None
@@ -238,9 +227,9 @@ def main():
         return 0
     exclusive(ROOT / 'owner-started.json', {'runId': manifest['runId'], 'utc': utc(), 'ownerSidVerified': True})
     try:
+        print('1/9 — Verifica delle destinazioni fisiche C:/F: già approvate.', flush=True)
         storage()
-        images = acquire_images(manifest)
-        upload(manifest, images)
+        upload(manifest)
         print('3/9 — Riconciliazione corrente, immagini, prerequisiti e diagnosi mirata.', flush=True)
         stage_call(manifest, 'prepare')
         confirmation = key_consent()

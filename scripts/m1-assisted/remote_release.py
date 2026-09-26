@@ -15,6 +15,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import Commands, Stop, Stages, canonical, decode, defer_interruptions, digest, exclusive, load, module, need, private, utc, value_sha
 from isolated_restore import Restore, ledger_valid
+from qualified_images import verify_images
 
 BASE = Path('/home/faiadmin/.local/share/fai-crm-releases')
 OLD = BASE / 'release-3230764a4406-20260920'
@@ -171,7 +172,7 @@ class Release:
         self.c.run('BACKUP_SCRIPT_SYNTAX', ['bash', '-n', OLD / 'scripts/backup-docker-prod.sh'])
         need(os.access(OLD / 'scripts/backup-docker-prod.sh', os.X_OK), 'BACKUP_SCRIPT_NOT_EXECUTABLE')
         historic = self.historical()
-        need(digest(private(self.root / 'release-images.tar.gz')) == self.b['imageArchiveSha256'], 'IMAGE_ARCHIVE_HASH')
+        images = verify_images(self.c, private(self.root / 'release-images.tar.gz'), self.b)
         need(not self.runtime.exists(), 'CANDIDATE_RUNTIME_OCCUPIED')
         # Local bundle only: no checkout from the network, no hooks or image build.
         self.c.run('RUNTIME_CLONE', ['git', '-c', 'init.templateDir=', 'clone', '--no-checkout',
@@ -182,19 +183,12 @@ class Release:
              == [self.b['candidate'], self.b['candidateTree']], 'RUNTIME_IDENTITY')
         for name, expected in self.b['canonicalPrograms'].items():
             need(digest(private(self.runtime / name)) == expected, 'QUALIFIED_PROGRAM_DRIFT')
-        self.c.docker('IMAGE_LOAD', 'image', 'load', '--input', self.root / 'release-images.tar.gz', seconds=240)
-        for key, image, commit, tree in [('candidate', self.b['candidateImage'], self.b['candidate'], self.b['candidateTree']),
-                                      ('return', self.b['returnImage'], self.b['returnCommit'], self.b['returnTree'])]:
-            raw = self.c.inspect('image', image)
-            labels = raw['Config']['Labels']
-            need(raw['Id'] == image and labels['org.opencontainers.image.revision'] == commit
-                 and labels['it.finanzaagevolaimpresa.source-tree'] == tree, 'QUALIFIED_IMAGE_PROVENANCE')
         after = self.observer()
         need({k:v for k,v in after.items() if k != 'availableBytes'} ==
              {k:v for k,v in before.items() if k != 'availableBytes'}, 'BASELINE_CHANGED_DURING_PREPARATION')
         return {'candidate': self.b['candidate'], 'observation': after, 'history': historic,
                 'documentCapacity': documents,
-                'imagesLoaded': True, 'imagesRebuilt': False, 'productionRuntimeMutationPerformed': False,
+                'imagesLoaded': False, 'imagesReused': images, 'imagesRebuilt': False, 'productionRuntimeMutationPerformed': False,
                 'recipientSha256': self.b['recipientSha256'], 'stepUpProvisioningRequired': True,
                 'backupCurrentPredicatesVerified': True, 'historicalCauseInferred': False}
 

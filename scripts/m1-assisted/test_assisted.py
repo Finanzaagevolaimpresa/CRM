@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 import sys
 import tempfile
+import tarfile
 import threading
 import time
 from types import SimpleNamespace
@@ -26,6 +27,154 @@ import download_images as download
 import isolated_restore as restore
 import owner_release as owner
 import remote_release as remote
+import qualified_images as qualified
+import receive_package as receiver
+
+
+class QualifiedImageTests(unittest.TestCase):
+    def fixture(self, folder):
+        archive = Path(folder) / 'images.tar.gz'
+        b = {'candidate':'a'*40, 'candidateTree':'b'*40, 'returnCommit':'c'*40,
+             'returnTree':'d'*40, 'imageStoreVersion':'29.6.1'}
+        observations = {}
+        with tarfile.open(archive, 'w:gz') as stream:
+            for role in ('candidate','return'):
+                commit = b['candidate' if role == 'candidate' else 'returnCommit']
+                labels = {'org.opencontainers.image.revision':commit,
+                          'it.finanzaagevolaimpresa.source-tree':b[role+'Tree']}
+                config = {'os':'linux','architecture':'amd64','config':{'Labels':labels},
+                          'rootfs':{'diff_ids':['sha256:'+'e'*64]}}
+                config_raw = common.canonical(config)
+                b[role+'ConfigDigest'] = 'sha256:' + hashlib.sha256(config_raw).hexdigest()
+                manifest_raw = common.canonical({'config':{'digest':b[role+'ConfigDigest']}})
+                b[role+'Image'] = 'sha256:' + hashlib.sha256(manifest_raw).hexdigest()
+                for raw in (config_raw,manifest_raw):
+                    info = tarfile.TarInfo('blobs/sha256/'+hashlib.sha256(raw).hexdigest())
+                    info.size = len(raw)
+                    stream.addfile(info,io.BytesIO(raw))
+                tag = 'fai-crm:r05-' + ('candidate' if role == 'candidate' else 'recovery') + '-' + commit
+                observations[b[role+'Image']] = {'id':b[role+'Image'],'os':'linux','architecture':'amd64',
+                    'layers':config['rootfs']['diff_ids'],'tags':[tag],'commit':commit,'tree':b[role+'Tree']}
+        b['imageArchiveSha256'] = common.digest(archive)
+        engine = {'version':'29.6.1','driver':'overlayfs','status':[['driver-type','io.containerd.snapshotter.v1']]}
+        calls = []
+        def docker(command_id,*args,**_):
+            calls.append((command_id,args))
+            return common.canonical(engine if args[0]=='info' else observations[args[2]])
+        return archive,b,observations,engine,calls,SimpleNamespace(docker=docker)
+
+    def test_manifest_identity_is_bound_to_original_config_and_layers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive,b,observations,engine,calls,commands = self.fixture(folder)
+            result = qualified.verify_images(commands,archive,b)
+            self.assertEqual(result['candidate']['configDigest'],b['candidateConfigDigest'])
+            self.assertNotEqual(result['candidate']['imageId'],b['candidateConfigDigest'])
+            self.assertEqual([args[2] for _,args in calls if args[0]=='image'],[b['candidateImage'],b['returnImage']])
+            self.assertTrue(all(args[0]=='info' or args[:2]==('image','inspect') for _,args in calls))
+
+    def test_config_manifest_link_or_archive_tamper_rejected_before_docker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive,b,_,_,calls,commands = self.fixture(folder)
+            swapped = b | {'candidateConfigDigest':b['returnConfigDigest'],'returnConfigDigest':b['candidateConfigDigest']}
+            with self.assertRaisesRegex(common.Stop,'QUALIFIED_MANIFEST_CONFIG_LINK'):
+                qualified.verify_images(commands,archive,swapped)
+            with archive.open('ab') as stream:
+                stream.write(b'changed')
+            with self.assertRaisesRegex(common.Stop,'QUALIFIED_ARCHIVE_CHANGED'):
+                qualified.verify_images(commands,archive,b)
+            self.assertEqual(calls,[])
+
+    def test_runtime_identity_platform_layers_tag_and_labels_are_all_required(self):
+        changes = {'id':'sha256:'+'f'*64,'os':'windows','architecture':'arm64',
+                   'layers':['sha256:'+'f'*64],'tags':[],'commit':'e'*40,'tree':'f'*40}
+        for key,value in changes.items():
+            with self.subTest(key=key),tempfile.TemporaryDirectory() as folder:
+                archive,b,observations,_,_,commands = self.fixture(folder)
+                observations[b['candidateImage']][key] = value
+                with self.assertRaisesRegex(common.Stop,'QUALIFIED_IMAGE_PROVENANCE'):
+                    qualified.verify_images(commands,archive,b)
+
+    def test_changed_engine_is_reconciled_before_image_inspect(self):
+        with tempfile.TemporaryDirectory() as folder:
+            archive,b,_,engine,calls,commands = self.fixture(folder)
+            engine['status'] = []
+            with self.assertRaisesRegex(common.Stop,'IMAGE_STORE_RECONCILIATION_REQUIRED'):
+                qualified.verify_images(commands,archive,b)
+            self.assertEqual(len(calls),1)
+
+
+class PreparedArchiveReuseTests(unittest.TestCase):
+    def test_owner_reaches_prepare_without_any_local_image_or_downloader(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            common.exclusive(root/'package.json',{'runId':'a'*32})
+            with patch.object(owner,'ROOT',root),patch.object(owner,'admit'),patch.object(owner,'storage'), \
+                 patch.object(owner,'upload') as upload,patch.object(owner,'stage_call',side_effect=common.Stop('SYNTHETIC_PREPARE_STOP')) as stage, \
+                 patch.object(owner.subprocess,'run',side_effect=AssertionError('No local download permitted')), \
+                 patch('builtins.print'):
+                self.assertEqual(owner.main(),2)
+            upload.assert_called_once_with({'runId':'a'*32})
+            stage.assert_called_once_with({'runId':'a'*32},'prepare')
+            self.assertEqual(common.load(root/'ESITO-ASSISTITO.json')['code'],'SYNTHETIC_PREPARE_STOP')
+
+    def test_owner_transport_does_not_include_or_open_local_images(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = {'runId':'a'*32,'files':{receiver.IMAGE_NAME:{'bytes':543331793},'receive_package.py':{}}}
+            common.exclusive(root/'package.json',manifest)
+            common.exclusive(root/'receive_package.py',b'# synthetic bootstrap, never executed\n')
+            with patch.object(owner,'ROOT',root),patch.object(owner,'call',return_value=(0,b'{"status":"PACKAGE_RECEIVED"}',b'')),patch('builtins.print'):
+                owner.upload(manifest)
+            with tarfile.open(root/'owner-transfer.tar') as archive:
+                self.assertEqual(set(archive.getnames()),{'package.json','receive_package.py'})
+            self.assertFalse((root/receiver.IMAGE_NAME).exists())
+
+    def fixture(self,folder):
+        prior,destination = Path(folder)/'prior',Path(folder)/'new'
+        prior.mkdir(mode=0o700)
+        destination.mkdir(mode=0o700)
+        (prior/'evidence').mkdir(mode=0o700)
+        payload = b'synthetic-already-transferred-image-archive'
+        common.exclusive(prior/receiver.IMAGE_NAME,payload)
+        entry = {'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+        common.exclusive(prior/'package.json',{'runId':'e67bea4040fc4aeb86a0c98ac6178e7e','files':{receiver.IMAGE_NAME:entry}})
+        common.exclusive(prior/'evidence/prepare.stop.json',{'status':'STOP','stage':'prepare','code':'COMMAND_FAILED',
+            'details':{'commandId':'INSPECT_IMAGE','exitCode':1,'stderrBytes':115,
+                      'stderrSha256':'ff8de78af764da229499fee0e1131c12a6688c63664b8c8bbbe4cc2b5cbd06d0'}})
+        return prior,destination,entry
+
+    def test_reuse_copies_verified_bytes_without_changing_old_receipts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior,destination,entry = self.fixture(folder)
+            before = {p.relative_to(prior):p.read_bytes() for p in prior.rglob('*') if p.is_file()}
+            with patch.object(receiver,'PREPARED',prior),patch.object(receiver,'PREPARED_MANIFEST_SHA',common.digest(prior/'package.json')):
+                receiver.reuse_images(destination,entry)
+                with self.assertRaises(FileExistsError):
+                    receiver.reuse_images(destination,entry)
+            self.assertEqual(common.digest(destination/receiver.IMAGE_NAME),entry['sha256'])
+            self.assertEqual(before,{p.relative_to(prior):p.read_bytes() for p in prior.rglob('*') if p.is_file()})
+
+    def test_any_later_intent_blocks_reuse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior,destination,entry = self.fixture(folder)
+            common.exclusive(prior/'evidence/backup.intent.json',{})
+            with patch.object(receiver,'PREPARED',prior),patch.object(receiver,'PREPARED_MANIFEST_SHA',common.digest(prior/'package.json')):
+                with self.assertRaisesRegex(RuntimeError,'REUSE_LATER_STAGE_STARTED'):
+                    receiver.reuse_images(destination,entry)
+            self.assertFalse((destination/receiver.IMAGE_NAME).exists())
+
+    def test_wrong_old_package_or_image_is_not_adopted(self):
+        for change in ('package','image'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as folder:
+                prior,destination,entry = self.fixture(folder)
+                expected = common.digest(prior/'package.json')
+                name = 'package.json' if change=='package' else receiver.IMAGE_NAME
+                with (prior/name).open('ab') as stream:
+                    stream.write(b'changed')
+                with patch.object(receiver,'PREPARED',prior),patch.object(receiver,'PREPARED_MANIFEST_SHA',expected):
+                    with self.assertRaisesRegex(RuntimeError,'REUSE_PACKAGE_CHANGED|REUSE_IMAGE_SIZE'):
+                        receiver.reuse_images(destination,entry)
+                self.assertFalse((destination/receiver.IMAGE_NAME).exists())
 
 
 class DownloadTests(unittest.TestCase):

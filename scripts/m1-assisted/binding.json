@@ -1,7 +1,8 @@
 {
   "backupProgramSha256": "581fcf051b1ec61e33403e5fbc17a10e3e1e57bc6a2da23917059e4245837ce5",
   "candidate": "fb645e014653ee87dc64f2439970967192f91b62",
-  "candidateImage": "sha256:839602508e6c7648336e8baae3781813dd2aa2479f9fa88292878ea01c836d73",
+  "candidateImage": "sha256:06fe7f94dfd274eba7c24bd9e9cc102631ebc600f4a66e6066b708e846941bf9",
+  "candidateConfigDigest": "sha256:839602508e6c7648336e8baae3781813dd2aa2479f9fa88292878ea01c836d73",
   "candidateTree": "a55efe3062437dab4cbced9bc895f565ad91db9f",
   "canonicalPrograms": {
     "scripts/n05/failed_app_return.py": "b3793cea5ba599d6a4f6624406aef94b8a4bce081d50e5fa1732f24e26e2083d",
@@ -15,6 +16,7 @@
     "f81c01f839cb443c90a8f9ff526e7e47"
   ],
   "imageArchiveSha256": "fadbed9be809e18e6d6afc4b123532edf7d0115a86e52e2e1e7bce16e245b2e7",
+  "imageStoreVersion": "29.6.1",
   "ledger46": {
     "20260626000000_init": "664f4ba807c2d704ea9c165c8084e2ba4a41da46feef93771bada2aa5e6ef0a8",
     "20260626001000_document_valid_until": "749f02ccf0965166dfb6ff23c5e35635082d92d7924753b8e9ea700d126c38cf",
@@ -117,7 +119,8 @@
   "recipient": "age1cyw7y8vk7ztsntnm25dd2ymqd0sz4cwfm4jxlanksh52h8rqle0sxr0sut",
   "recipientSha256": "72b679238913c286201063a746bdfd0ea204736f141d8d3df314c1a9f2618659",
   "returnCommit": "73432464d741164fd76690bbdef65b17d626e6e9",
-  "returnImage": "sha256:11818e8f42c000700929452ffff8222d7f50c759c8fe59948838abf7c97c8458",
+  "returnImage": "sha256:bd70ecab1f747fd2c394a5846f8b3a3b6a93896fea42fc76dbd2aec5f25d0212",
+  "returnConfigDigest": "sha256:11818e8f42c000700929452ffff8222d7f50c759c8fe59948838abf7c97c8458",
   "returnTree": "5ee2c7819c31f772fc04bc4a28784ab7b005af25",
   "sourceCommit": "3230764a4406182e50d22236bb7e701d0f1b5656",
   "sourceTree": "e25e66e081d92ecf61f8b1422aed456f12128d39",
