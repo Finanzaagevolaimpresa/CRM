@@ -175,3 +175,46 @@ test('M4 complaint content cannot be disclosed by reclassifying a later revision
     kind: 'MAILBOX', canonicalMailboxId: null, providerReference: 'SYNTHETIC_PUBLIC', responsibleUserId: f.admin.userId,
     canSend: true, canReceive: true, restricted: false, configurationReference: 'SYNTHETIC_DOWNGRADE' }), failure('DENIED'));
 });
+
+
+test('M4 an editor waiting for the row lock cannot overwrite a concurrent prepared message', { skip: !enabled, timeout: 30_000 }, async () => {
+  const f = await fixture(), binding = await approved(f);
+  let readReady = () => {}, releaseRead = () => {};
+  const existingRead = new Promise<void>(resolve => { readReady = resolve; });
+  const continueEdit = new Promise<void>(resolve => { releaseRead = resolve; });
+  // Hold the real editor transaction after its initial read, before FOR UPDATE.
+  // Preparation uses another authenticated user and a separate PostgreSQL transaction.
+  const editorDb = db.$extends({ query: { approvedCommunication: {
+    async findUnique({ args, query }) {
+      const row = await query(args);
+      if (args.where.id === binding.messageId && !args.include) {
+        readReady(); await continueEdit;
+      }
+      return row;
+    },
+  } } }) as unknown as PrismaClient;
+  const editing = saveApprovedMessageDraft(editorDb, f.operator,
+    { ...f.input, expectedRevision: 1, body: 'Concurrent edit must not replace the prepared message.' }, runtime)
+    .then(value => ({ value, error: null }), error => ({ value: null, error }));
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([existingRead, new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('EDITOR_READ_BARRIER_TIMEOUT')), 10_000);
+    })]);
+    const prepared = await prepareManualMessage(db, f.commercial, { ...binding, requestId: randomUUID() }, runtime);
+    releaseRead();
+    const edited = await editing;
+    assert.equal(edited.value, null);
+    assert.ok(failure('CONFLICT')(edited.error));
+    const state = await footprint(binding.messageId);
+    assert.equal(state.row?.state, 'SENDING'); assert.equal(state.row?.currentRevision, 1);
+    assert.equal(state.versions, 1); assert.equal(state.attempts, 1);
+    await recordManualMessageEvidence(db, f.commercial, { messageId: binding.messageId, attemptId: prepared.attemptId,
+      reconciliation: false, evidence: { method: 'MANUAL_DECLARATION', outcome: 'SENT',
+        occurredAt: new Date().toISOString(), reference: 'SYNTHETIC_CONCURRENT_SEND_OUTCOME' } });
+    assert.equal((await footprint(binding.messageId)).row?.state, 'SENT');
+    assert.equal((await db.communicationAttempt.findUniqueOrThrow({ where: { id: prepared.attemptId } })).state, 'SENT');
+  } finally {
+    clearTimeout(timeout); releaseRead(); await editing;
+  }
+});
