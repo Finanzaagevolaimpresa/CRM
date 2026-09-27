@@ -70,7 +70,7 @@ def qualify_migration(c,repo,work,binding,pg,network,url,source_archive,helpers)
         result=release.migrate()
         need(result['before']==48 and result['after']==49 and result['prior48Unchanged'] and result['newMigrations']==[MIGRATION], 'CI_MIGRATION_RECEIPT')
         boxes=release.sql('''SELECT COUNT(*)::text||'|'||COUNT(*) FILTER (WHERE enabled OR "canSend" OR "canReceive")::text
-          FROM "CommunicationMailbox";''').decode().strip()
+          FROM "CommunicationMailbox";''').strip()
         need(boxes=='7|0','CI_MIGRATION_MAILBOXES')
         need(release.sql(key_sql)==key_before,'CI_KEY_CHANGED_BY_MIGRATION')
         return result|{'synthetic':True,'productionConnected':False,'mailboxes':{'count':7,'enabled':0},

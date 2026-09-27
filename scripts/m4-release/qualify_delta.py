@@ -36,6 +36,11 @@ with tempfile.TemporaryDirectory(prefix='m4-qualified-',dir=REPO) as folder:
     raw=source('scripts/m2-release/qualify_delta.py').decode()
     raw=raw.replace('m2-release-ci-receipt.json','m4-release-ci-receipt.json').replace('FAI_M2_RELEASE_DELTA_QUALIFICATION_R26','FAI_M4_RELEASE_DELTA_QUALIFICATION_R33')
     raw=raw.replace("binding['ledger48']","binding['ledger49']")
+    # The generated SQL helper uses the normal container variables, unlike
+    # the older CI harness's explicit psql -U argument.
+    pg_env="'-e','POSTGRES_DB=m2_release_test',pg_image"
+    if raw.count(pg_env)!=1:raise SystemExit('CI_POSTGRES_BINDING_CHANGED')
+    raw=raw.replace(pg_env,"'-e','POSTGRES_USER=postgres','-e','POSTGRES_DB=m2_release_test',pg_image")
     old="""        c.docker('CI_SYNTHETIC_SCHEMA48','run','--rm','--network',network,'-e','DATABASE_URL='+url,'--entrypoint','node',
             binding['candidateImage'],'node_modules/prisma/build/index.js','migrate','deploy',seconds=240)"""
     if raw.count(old)!=1:raise SystemExit('CI_MIGRATION_INSERTION_CHANGED')
