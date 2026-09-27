@@ -159,7 +159,9 @@ document_before="$(docker exec "$app" sha256sum /var/lib/fai-crm/documents/r05-s
 run_browser entry tests/pr140-release/playwright.config.ts entry.spec.ts 1
 node --import tsx tests/pr140-release/state.ts admission > "$evidence/admission.json"
 node --import tsx tests/practice-readiness-browser/provision.ts
-run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 2
+# Transfer only newly created synthetic sources, before the M2 browser export reads them.
+tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
+run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 3
 node --import tsx tests/pr140-release/state.ts m1-history "$R05_M1_RECOVERY_FIXTURE"
 # Only the fresh, synthetic fixture directory is copied; extraction runs as app UID1001.
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
@@ -192,6 +194,7 @@ start_app "$candidate_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$candidate_id" ]]
 run_browser resume-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
+run_browser resume-m2 tests/pr140-release/playwright.config.ts m2-resume.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]

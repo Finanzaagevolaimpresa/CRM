@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { Prisma } from '@prisma/client';
 import { requirePermission } from './auth';
 import { prisma } from './prisma';
-import { authorizeEngagementDossierDelivery, createEngagementDossier, EngagementDossierError, recordEngagementDossierDelivery, reviewEngagementDossierVersion, reviseEngagementDossier } from './engagement-dossier';
+import { authorizeEngagementDossierDelivery, createEngagementDossier, EngagementDossierError, importEngagementWorkResult, recordEngagementDossierDelivery, reviewEngagementDossierVersion, reviseEngagementDossier } from './engagement-dossier';
 
 async function execute(form: FormData, operation: (actor: Awaited<ReturnType<typeof requirePermission>>, value: Record<string, unknown>) => Promise<unknown>) {
   const actor = await requirePermission('dossier.read');
@@ -26,6 +26,11 @@ export async function createEngagementDossierAction(form: FormData) {
 }
 export async function reviseEngagementDossierAction(form: FormData) {
   await execute(form, (actor, value) => reviseEngagementDossier(prisma, actor, value));
+  revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
+}
+export async function importEngagementWorkResultAction(form: FormData) {
+  const [packageId, packageArtifactHash] = String(form.get('packageBinding') ?? '').split(':');
+  await execute(form, (actor, value) => importEngagementWorkResult(prisma, actor, { ...value, packageId, packageArtifactHash }));
   revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function reviewEngagementDossierVersionAction(form: FormData) {

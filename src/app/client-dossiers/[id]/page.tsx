@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { Card, EmptyState, PageHeader, StatusBadge, TimestampMeta, formatDateTime } from '@/components/ui';
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { DeliveryTimeInput } from '@/components/delivery-time-input';
+import { EngagementWorkExchange } from '@/components/engagement-work-exchange';
 import { approveClientDossierAndRefresh, archiveClientDossierAndRefresh, updateClientDossierAndRefresh } from '@/lib/form-actions';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -46,6 +47,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <TimestampMeta createdAt={dossier.createdAt} updatedAt={dossier.updatedAt} createdBy={creator?.name ?? dossier.createdById} updatedBy={updater?.name ?? dossier.updatedById} />
     </Card>
     {dossier.practiceReadinessId && currentVersion ? <>
+      {context.engagementHistory ? <EngagementWorkExchange context={{ ...context, engagementHistory: context.engagementHistory }} canWrite={canWrite} canExport={canWrite && hasPermission(session, 'document.download') && hasPermission(session, 'service.read')}/> : null}
       <Card title="Versione corrente e storico">
         <p className="font-semibold">Versione {currentVersion.version} · hash {currentVersion.contentHash}</p>
         <div className="mt-3 space-y-2">{versions.map((version) => <div className="rounded-xl border p-3 text-sm" key={version.id}><strong>v{version.version}</strong> · {version.contentHash}<br/>{version.id === dossier.approvedVersionId ? 'Approvata' : 'Non approvata'} · {version.createdAt.toLocaleString('it-IT')}</div>)}</div>

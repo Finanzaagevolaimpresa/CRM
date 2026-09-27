@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { mkdir, stat, writeFile, readFile } from 'fs/promises';
+import { mkdir, stat, writeFile, readFile, open } from 'fs/promises';
 import path from 'path';
 
 const provider = process.env.STORAGE_PROVIDER ?? 'local';
@@ -78,4 +78,23 @@ export async function privateDocumentExists(storagePath?: string | null) {
 
 export async function readPrivateDocument(storagePath: string) {
   return readFile(localPathFromStoragePath(storagePath));
+}
+
+export async function readPrivateDocumentBounded(storagePath: string, limit: number) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50 * 1024 * 1024) throw new Error('DOCUMENT_SIZE_LIMIT');
+  const file = await open(localPathFromStoragePath(storagePath), 'r');
+  try {
+    const metadata = await file.stat();
+    if (!metadata.isFile() || metadata.size < 1 || metadata.size > limit) throw new Error('DOCUMENT_SIZE_LIMIT');
+    // Read at most the attested length plus one byte, even if the file grows concurrently.
+    const bytes = Buffer.alloc(metadata.size + 1);
+    let used = 0;
+    while (used < bytes.length) {
+      const { bytesRead } = await file.read(bytes, used, bytes.length - used, null);
+      if (!bytesRead) break;
+      used += bytesRead;
+    }
+    if (used !== metadata.size) throw new Error('DOCUMENT_CHANGED');
+    return bytes.subarray(0, used);
+  } finally { await file.close(); }
 }
