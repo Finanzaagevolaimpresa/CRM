@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../src/lib/auth';
-import { engagementDossierHash, EngagementDossierError, exportApprovedEngagementDossier, authorizeEngagementDossierDelivery } from '../src/lib/engagement-dossier';
+import { engagementDossierHash, EngagementDossierError, exportApprovedEngagementDossier, authorizeEngagementDossierDelivery, recordEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 
 test('dossier hashes are canonical and bind exact version content and recipients', () => {
   assert.equal(engagementDossierHash({ b: 2, a: 1 }), engagementDossierHash({ a: 1, b: 2 }));
@@ -32,12 +32,15 @@ test('approval, export authorization and delivery are distinct audited operation
   assert.doesNotMatch(source, /sendMail|smtp|provider|worker/i);
 });
 
-for (const operation of ['export', 'authorize'] as const) test(operation + ' retries only known serialization aborts, at most three times', async () => {
+for (const operation of ['export', 'authorize', 'record'] as const) test(operation + ' retries only known serialization aborts, at most three times', async () => {
   const input = { dossierId: 'synthetic-retry', versionId: '10000000-0000-4000-8000-000000000001', format: 'markdown' };
   const invoke = (db: Pick<PrismaClient, '$transaction'>) => operation === 'export'
     ? exportApprovedEngagementDossier(db, {} as AuthSession, input, 'synthetic')
-    : authorizeEngagementDossierDelivery(db, {} as AuthSession, { ...input, versionHash: 'a'.repeat(64),
-      recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] });
+    : operation === 'authorize'
+      ? authorizeEngagementDossierDelivery(db, {} as AuthSession, { ...input, versionHash: 'a'.repeat(64),
+        recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] })
+      : recordEngagementDossierDelivery(db, {} as AuthSession, { authorizationId: input.versionId, outcome: 'DELIVERED',
+        evidence: { reference: 'SYNTHETIC_RECEIPT', deliveredAt: new Date().toISOString(), synthetic: true } });
   for (const error of [
     new Prisma.PrismaClientKnownRequestError('synthetic serialization', { code: 'P2034', clientVersion: 'test' }),
     new Prisma.PrismaClientKnownRequestError('synthetic raw serialization', { code: 'P2010', clientVersion: 'test', meta: { code: '40001' } }),

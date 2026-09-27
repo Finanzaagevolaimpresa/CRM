@@ -39,14 +39,16 @@ CI dedicata: cinque casi sintetici PostgreSQL dal preventivo/contratto/pagamento
 
 Le prove CI non qualificano fonti finanziarie reali, versioni produttive degli agenti, persone da assegnare, caselle o consegne reali. Il rilascio produttivo richiede il riesame indipendente e le ricevute operative del candidato esatto. In un ritorno a una versione precedente a M5, M5 è indisponibile e le lavorazioni/consegne di questi dossier vanno sospese: il vecchio codice non contiene i nuovi gate. Schema49 e ricevute restano conservati; nessun downgrade o ripristino distruttivo.
 
-Un conflitto di serializzazione durante l'export approvato o l'autorizzazione
-alla consegna interrompe e annulla l'intera transazione. Le due operazioni
+Un conflitto di serializzazione durante l'export approvato, l'autorizzazione
+alla consegna o la registrazione della ricevuta manuale interrompe e annulla
+l'intera transazione. Le tre operazioni
 ripetono al massimo tre tentativi soltanto per
 questi aborti confermati (Prisma P2034 o SQLSTATE 40001/40P01), rivalidando ogni
 volta sessione, permessi, versione approvata e catena M5. Errori di connessione,
 esiti incerti, conflitti di dominio e dinieghi non vengono ripetuti. Esauriti i
 tentativi, l'operazione resta negata; nessuna ricevuta parziale viene conservata.
-La qualifica comprende conflitti PostgreSQL effettivi per export e autorizzazione,
+La qualifica comprende conflitti PostgreSQL effettivi per tutte e tre le operazioni,
 il conteggio esatto delle ricevute/audit committati, l'idempotenza
-dell'autorizzazione e la revoca della sessione fra un aborto iniettato e il nuovo
-tentativo di export. Nessun invio esterno avviene in queste transazioni.
+dell'autorizzazione e della ricevuta, e la revoca della sessione fra un aborto
+iniettato e il nuovo tentativo di export o registrazione. Nessun invio esterno
+avviene in queste transazioni.

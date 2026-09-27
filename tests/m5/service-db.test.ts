@@ -64,11 +64,14 @@ test('M5 concurrent exports recover a real PostgreSQL serialization abort withou
   proof.push({ kind: 'concurrent-approved-exports', engine: 'PostgreSQL', aborts, attempts, committedExports: records.length, committedAudits: audits.length });
 });
 
-test('M5 export rechecks revocation after an aborted attempt and leaves no partial receipt', { skip: !enabled }, async () => {
+for (const operation of ['export', 'receipt'] as const) test('M5 ' + operation + ' rechecks revocation after an aborted attempt and leaves no partial receipt', { skip: !enabled }, async () => {
   const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
   await configure(f); await finishStages(f);
   await reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
     versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Synthetic retry revocation qualification.' });
+  const authorization = operation === 'receipt' ? await authorizeEngagementDossierDelivery(db, f.actors.admin,
+    { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash,
+      recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] }) : null;
   let attempts = 0;
   const wrapped = {
     $transaction: async <T>(operation: (tx: Prisma.TransactionClient) => Promise<T>, options: { isolationLevel: Prisma.TransactionIsolationLevel }) => {
@@ -86,15 +89,18 @@ test('M5 export rechecks revocation after an aborted attempt and leaves no parti
       }
     },
   } as unknown as Pick<PrismaClient, '$transaction'>;
-  await assert.rejects(exportApprovedEngagementDossier(wrapped, f.actors.operator,
-    { dossierId: f.dossier.id, versionId: f.version.id, format: 'markdown' }, f.version.content),
+  await assert.rejects(authorization ? recordEngagementDossierDelivery(wrapped, f.actors.operator,
+    { authorizationId: authorization.id, outcome: 'DELIVERED', evidence: { reference: 'SYNTHETIC_RECEIPT', deliveredAt: new Date().toISOString(), synthetic: true } })
+    : exportApprovedEngagementDossier(wrapped, f.actors.operator,
+      { dossierId: f.dossier.id, versionId: f.version.id, format: 'markdown' }, f.version.content),
   (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED');
   assert.equal(attempts, 2);
   assert.equal(await db.engagementDossierExport.count({ where: { dossierId: f.dossier.id } }), 0);
-  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: 'engagement_dossier_export' } }), 0);
-  proof.push({ kind: 'export-retry-revocation', injectedAbort: true, attempts, committedExports: 0, committedAudits: 0 });
+  if (authorization) assert.equal(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: authorization ? 'engagement_dossier_delivery_record' : 'engagement_dossier_export' } }), 0);
+  proof.push({ kind: operation + '-retry-revocation', injectedAbort: true, attempts, committedReceipts: 0, committedAudits: 0 });
 });
-test('M5 authorization recovers a real serialization abort and commits one idempotent receipt', { skip: !enabled, timeout: 30_000 }, async () => {
+for (const kind of ['authorization', 'receipt'] as const) test('M5 ' + kind + ' recovers a real serialization abort and commits one idempotent receipt', { skip: !enabled, timeout: 30_000 }, async () => {
   const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
   await configure(f); await finishStages(f);
   await reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
@@ -122,13 +128,20 @@ test('M5 authorization recovers a real serialization abort and commits one idemp
   } as unknown as Pick<PrismaClient, '$transaction'>;
   const input = { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash,
     recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] };
-  const receipt = await authorizeEngagementDossierDelivery(wrapped, f.actors.admin, input);
+  const authorization = kind === 'receipt' ? await authorizeEngagementDossierDelivery(db, f.actors.admin, input) : null;
+  const delivery = { authorizationId: authorization?.id, outcome: 'DELIVERED',
+    evidence: { reference: 'SYNTHETIC_RECEIPT', deliveredAt: new Date().toISOString(), synthetic: true } };
+  const invoke = (connection: Pick<PrismaClient, '$transaction'>) => authorization
+    ? recordEngagementDossierDelivery(connection, f.actors.operator, delivery)
+    : authorizeEngagementDossierDelivery(connection, f.actors.admin, input);
+  const receipt = await invoke(wrapped);
   assert.equal(attempts, 2); assert.equal(aborts, 1);
-  const repeated = await authorizeEngagementDossierDelivery(db, f.actors.admin, input);
+  const repeated = await invoke(db);
   assert.equal(repeated.id, receipt.id);
   assert.equal(await db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: f.dossier.id } }), 1);
-  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: 'engagement_dossier_delivery_authorize' } }), 1);
-  proof.push({ kind: 'authorization-retry', engine: 'PostgreSQL', aborts, attempts, committedAuthorizations: 1, committedAudits: 1, idempotent: true });
+  if (authorization) assert.equal(await db.engagementDossierDeliveryReceipt.count({ where: { authorizationId: authorization.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: authorization ? 'engagement_dossier_delivery_record' : 'engagement_dossier_delivery_authorize' } }), 1);
+  proof.push({ kind: kind + '-retry', engine: 'PostgreSQL', aborts, attempts, committedReceipts: 1, committedAudits: 1, idempotent: true });
 });
 
 async function actors() { return { operator: await syntheticUser(db, 'consulente', 'Responsabile M5'), admin: await syntheticUser(db, 'admin', 'Admin M5'),
