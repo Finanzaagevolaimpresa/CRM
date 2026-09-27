@@ -26,6 +26,7 @@ jobs:
       - run: python -I -B -S scripts/m2-release/test_release.py
       - run: python -I -B -S scripts/m2-release/test_r29.py
       - run: python -I -B -S scripts/m2-release/test_r30.py
+      - run: python -I -B -S scripts/m2-release/test_r31.py
       - run: python -I -B -S scripts/m2-release/package_builder.py --delta
   saved-images-and-schema48:
     runs-on: ubuntu-latest

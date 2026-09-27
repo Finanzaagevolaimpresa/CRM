@@ -13,6 +13,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 import owner_base as base
 from common import Stop, canonical, decode, digest, exclusive, load, need, private, utc
 from download_images import acquire
+from completed_release import verify_local_copies
 
 ROOT = Path(__file__).resolve().parent
 base.ROOT = ROOT
@@ -66,7 +67,7 @@ def copies(manifest,source,label):
     result={}
     for drive,root in roots.items():
         private(root.parent,directory=True)
-        if label=='backup': root.mkdir()
+        root.mkdir()
         private(root,directory=True)
         with (root/name).open('xb') as output:
             if drive=='C': stage_call(manifest,'fetch-'+label,output=output)
@@ -92,29 +93,26 @@ def main():
         return 0
     exclusive(ROOT/'owner-started.json',{'runId':manifest['runId'],'utc':utc(),'ownerSidVerified':True})
     try:
-        print('1/10 — Identita fisiche C:/F: e programmi; nessuna modifica ai permessi.',flush=True)
-        base.storage()
-        print('2/10 — Riuso verificato delle immagini M2 gia scaricate; nessun nuovo download.',flush=True)
+        print('1/6 — Verifica dei backup gia completati e delle copie fisiche C:/F:.',flush=True)
+        devices = base.storage()
+        proof, prior_copies = verify_local_copies(devices)
+        after = base.storage()
+        need(all(after[d][k] == devices[d][k] for d in ('C','F') for k in ('disk','partition')),
+             'COMPLETED_COPY_DESTINATIONS_CHANGED')
+        exclusive(ROOT/'completed-local-verification.json',proof | {'copies':prior_copies})
+        print('2/6 — Riuso immagini e trasferimento del solo pacchetto di ripresa.',flush=True)
         image=acquire(ROOT,manifest)
-        print('3/10 — Trasferimento del solo pacchetto corretto e riuso immagini sul server.',flush=True)
         upload(manifest,image)
-        print('4/10 — Riconciliazione del backup riuscito e dello stato corrente schema48.',flush=True)
-        stage_call(manifest,'prepare')
-        print('5/10 — Cifratura del backup gia riuscito e copie C:/F:; nessun nuovo backup iniziale.',flush=True)
-        protected=stage_call(manifest,'protect')
-        stage_call(manifest,'copies-backup',{'copies':copies(manifest,protected,'backup')})
-        print('6/10 — Recuperabilita del nuovo set in ambiente isolato.',flush=True)
-        stage_call(manifest,'recover')
-        print('7/10 — Conferma: zero migrazioni da applicare. Deploy M2 e controllo salute.',flush=True)
-        stage_call(manifest,'migrate')
+        print('3/6 — Riconciliazione in lettura: STOP precedente, schema48, recupero e piano completo.',flush=True)
+        stage_call(manifest,'prepare',{'copies':prior_copies})
+        print('4/6 — Deploy M2 e controllo salute; nessuna migrazione.',flush=True)
         stage_call(manifest,'deploy')
         stage_call(manifest,'postcheck')
-        print('8/10 — Backup post-deploy48 distinto e rientro applicativo.',flush=True)
+        print('5/6 — Backup post-deploy distinto, cifratura e due copie C:/F:.',flush=True)
         stage_call(manifest,'postbackup')
-        print('9/10 — Cifratura e copie C:/F: del backup post-deploy.',flush=True)
         protected=stage_call(manifest,'postprotect')
         stage_call(manifest,'copies-postbackup',{'copies':copies(manifest,protected,'postbackup')})
-        print('10/10 — Verifica finale M2 e ricevute.',flush=True)
+        print('6/6 — Verifica finale M2 e ricevute.',flush=True)
         result=stage_call(manifest,'final')
         exclusive(ROOT/'ESITO-M2.json',result)
         print('RILASCIO TECNICO M2 VERIFICATO. Codex acquisisce le ricevute e completa la prova d uso.',flush=True)

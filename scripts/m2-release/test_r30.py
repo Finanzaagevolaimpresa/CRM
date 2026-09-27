@@ -130,7 +130,7 @@ class ResumeTests(unittest.TestCase):
                isinstance(n.func,ast.Name) and n.func.id=='stage_call' and len(n.args)>1 and
                isinstance(n.args[1],ast.Constant)]
         self.assertNotIn('backup',calls)
-        self.assertIn('protect',calls)
+        self.assertNotIn('protect',calls)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
