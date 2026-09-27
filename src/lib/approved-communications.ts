@@ -178,7 +178,7 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const current = await actor(tx, claimed, 'practice_communications.write');
     const scope = await contextScope(tx, current, input.context, true);
     const box = await mailbox(tx, input.mailboxId, current, input.classification);
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId}, 0))`;
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true);
@@ -416,7 +416,7 @@ export async function acquireManualReply(db: Db, claimed: AuthSession, raw: unkn
     await responsibleMailbox(tx, box);
     if (!box.canReceive || !mailboxQualification(mailboxSnapshot(box)).tested) throw new ApprovedCommunicationError('SENDER_NOT_READY');
     const canonicalMailboxId = box.canonicalMailboxId ?? box.id;
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${canonicalMailboxId + ':' + input.externalMessageId}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${canonicalMailboxId + ':' + input.externalMessageId}, 0))`;
     const payload = { externalMessageId: input.externalMessageId, inReplyTo: input.inReplyTo, sender: input.sender,
       subject: input.subject, body: input.body, receivedAt: new Date(input.receivedAt).toISOString() };
     const contentHash = canonicalSha256({ ...payload, canonicalMailboxId });

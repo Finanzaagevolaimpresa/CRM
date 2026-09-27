@@ -2120,16 +2120,22 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
 
 
 test('M4 communications reuse readiness identity and fresh client/project scope', { skip: !enabled }, async () => {
-  const context = await createContext('M4-readiness', ids.userA);
-  const practice = await createPractice(context, actorA);
-  const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  const context = a;
+  const practice = await ensurePractice(a, actorA);
+  // Immutable communication evidence is deliberately rolled back in this test.
+  // The existing readiness fixture cleanup must not delete its history.
+  await assert.rejects(db.$transaction(async tx => {
+  const scoped = { $transaction: (callback: (client: Prisma.TransactionClient) => Promise<unknown>) => callback(tx) } as unknown as Pick<PrismaClient, '$transaction'>;
+  const box = await tx.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
   const binding = { kind: 'READINESS' as const, id: practice.id };
-  const saved = await saveApprovedMessageDraft(db, actorA, { messageId: randomUUID(), expectedRevision: 0, context: binding,
+  const saved = await saveApprovedMessageDraft(scoped, actorA, { messageId: randomUUID(), expectedRevision: 0, context: binding,
     mailboxId: box.id, replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [],
     subject: 'Synthetic M4 readiness message', body: 'Context is the existing M2 practice.', attachmentVersionIds: [], classification: 'ORDINARY' });
-  const page = await readPracticeCommunications(db, actorA, binding);
+  const page = await readPracticeCommunications(scoped, actorA, binding);
   assert.equal(page.messages[0].id, saved.id);
   assert.equal(page.messages[0].snapshot.clientId, context.client.id);
   assert.equal(page.messages[0].readinessId, practice.id);
-  await assert.rejects(readPracticeCommunications(db, actorB, binding), /DENIED/);
+  await assert.rejects(readPracticeCommunications(scoped, actorB, binding), /DENIED/);
+  throw new Error('M4_READINESS_FIXTURE_ROLLBACK');
+  }), error => error instanceof Error && error.message === 'M4_READINESS_FIXTURE_ROLLBACK');
 });
