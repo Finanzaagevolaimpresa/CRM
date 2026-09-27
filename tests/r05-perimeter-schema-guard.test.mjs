@@ -22,7 +22,8 @@ test('schema48 bank admits only the pinned additive migration and rejects identi
     const migration = `prisma/migrations/${perimeterMigration}/migration.sql`;
     for (const path of ['prisma/schema.prisma', migration, 'scripts/r05/verify-perimeter-schema.mjs', 'scripts/vnx03/verify-candidate-perimeter-scope.mjs']) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
-      copyFileSync(join(source, path), join(root, path));
+      if (path === 'prisma/schema.prisma') writeFileSync(join(root, path), execFileSync('git', ['-C', source, 'show', '9508d0da1b9642b02609d7431a984ced7b501e2e:prisma/schema.prisma']));
+      else copyFileSync(join(source, path), join(root, path));
     }
     commit();
     const check = (changes = {}) => spawnSync(process.execPath, ['scripts/vnx03/verify-candidate-perimeter-scope.mjs'], {

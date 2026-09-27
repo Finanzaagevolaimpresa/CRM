@@ -371,6 +371,9 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  communicationMailboxes CommunicationMailbox[]
+  approvedCommunications ApprovedCommunication[]
+  communicationApprovals CommunicationApproval[]
   id                                 String                                  @id @default(cuid())
   email                              String                                  @unique
   name                               String
@@ -619,6 +622,7 @@ model CommercialOffer {
 }
 
 model Client {
+  approvedCommunications ApprovedCommunication[]
   id                  String               @id @default(cuid())
   type                ClientType
   displayName         String
@@ -2050,6 +2054,7 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  approvedCommunications ApprovedCommunication[]
   id                     String                    @id @default(cuid())
   clientId               String
   projectId              String?
@@ -2709,6 +2714,7 @@ model CommunicationIntentAudit {
 }
 
 model PracticeReadiness {
+  approvedCommunications ApprovedCommunication[]
   id                    String @id @default(uuid()) @db.Uuid
   controlledIntakeId    String @unique @db.Uuid
   commercialOfferId     String
@@ -2851,4 +2857,147 @@ model PracticeMaterialAttestation {
   decidedById String
   practice PracticeReadiness @relation(fields:[practiceId], references:[id], onDelete: Restrict)
   @@index([practiceId, decidedAt])
+}
+
+
+// M4: manual external email. These records do not enable a provider or worker.
+model CommunicationMailbox {
+  id String @id @default(uuid()) @db.Uuid
+  address String @unique @db.VarChar(254)
+  purpose String @db.VarChar(200)
+  kind String @default("UNATTESTED") @db.VarChar(20)
+  providerReference String? @db.VarChar(128)
+  canonicalMailboxId String? @db.Uuid
+  canonicalRevision Int?
+  canonicalMailbox CommunicationMailbox? @relation("CanonicalCommunicationMailbox", fields: [canonicalMailboxId], references: [id], onDelete: Restrict)
+  aliases CommunicationMailbox[] @relation("CanonicalCommunicationMailbox")
+  responsibleUserId String?
+  responsibleUser User? @relation(fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  canSend Boolean @default(false)
+  canReceive Boolean @default(false)
+  revision Int @default(1)
+  configuredRevision Int?
+  configurationReference String? @db.VarChar(128)
+  testedRevision Int?
+  testReference String? @db.VarChar(128)
+  testedAt DateTime? @db.Timestamptz(3)
+  enabled Boolean @default(false)
+  restricted Boolean @default(false)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  history CommunicationMailboxHistory[]
+  messages ApprovedCommunication[]
+  replies CommunicationReply[]
+}
+model CommunicationMailboxHistory {
+  id String @id @default(uuid()) @db.Uuid
+  mailboxId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  actorId String
+  snapshot Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict)
+  @@index([mailboxId, createdAt])
+}
+model ApprovedCommunication {
+  id String @id @default(uuid()) @db.Uuid
+  clientId String
+  readinessId String? @db.Uuid
+  technicalPracticeId String?
+  mailboxId String @db.Uuid
+  state String @default("DRAFT") @db.VarChar(20)
+  currentRevision Int @default(1)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  readiness PracticeReadiness? @relation(fields: [readinessId], references: [id], onDelete: Restrict)
+  technicalPractice TechnicalPractice? @relation(fields: [technicalPracticeId], references: [id], onDelete: Restrict)
+  mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  versions CommunicationVersion[]
+  attempts CommunicationAttempt[]
+  events CommunicationEvent[]
+  replies CommunicationReply[]
+  @@index([readinessId, updatedAt])
+  @@index([technicalPracticeId, updatedAt])
+  @@index([state, updatedAt])
+}
+model CommunicationVersion {
+  id String @id @default(uuid()) @db.Uuid
+  messageId String @db.Uuid
+  revision Int
+  snapshot Json
+  snapshotHash String @db.Char(64)
+  createdById String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  approval CommunicationApproval?
+  attempts CommunicationAttempt[]
+  @@unique([messageId, revision])
+}
+model CommunicationApproval {
+  id String @id @default(uuid()) @db.Uuid
+  versionId String @unique @db.Uuid
+  snapshotHash String @db.Char(64)
+  mailboxRevision Int
+  approverUserId String
+  approverSessionId String @db.Uuid
+  approvedAt DateTime @default(now()) @db.Timestamptz(3)
+  version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  approver User @relation(fields: [approverUserId], references: [id], onDelete: Restrict)
+  attempts CommunicationAttempt[]
+}
+model CommunicationAttempt {
+  id String @id @default(uuid()) @db.Uuid
+  requestId String @db.Uuid
+  messageId String @db.Uuid
+  versionId String @db.Uuid
+  approvalId String @db.Uuid
+  startedById String
+  startedSessionId String @db.Uuid
+  state String @default("SENDING") @db.VarChar(20)
+  artifactHash String @db.Char(64)
+  evidence Json?
+  evidenceHash String? @db.Char(64)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  approval CommunicationApproval @relation(fields: [approvalId], references: [id], onDelete: Restrict)
+  @@unique([messageId, requestId])
+  @@index([messageId, createdAt])
+}
+model CommunicationReply {
+  id String @id @default(uuid()) @db.Uuid
+  canonicalMailboxId String @db.Uuid
+  externalMessageId String @db.VarChar(255)
+  contentHash String @db.Char(64)
+  inReplyTo String? @db.VarChar(255)
+  sender String @db.VarChar(254)
+  subject String @db.VarChar(998)
+  body String @db.Text
+  receivedAt DateTime @db.Timestamptz(3)
+  evidenceReference String @db.VarChar(128)
+  messageId String? @db.Uuid
+  acquiredById String
+  linkedById String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  mailbox CommunicationMailbox @relation(fields: [canonicalMailboxId], references: [id], onDelete: Restrict)
+  message ApprovedCommunication? @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  events CommunicationEvent[]
+  @@unique([canonicalMailboxId, externalMessageId])
+  @@index([messageId, receivedAt])
+}
+model CommunicationEvent {
+  id String @id @default(uuid()) @db.Uuid
+  messageId String? @db.Uuid
+  replyId String? @db.Uuid
+  actorId String
+  event String @db.VarChar(50)
+  evidence Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  message ApprovedCommunication? @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  reply CommunicationReply? @relation(fields: [replyId], references: [id], onDelete: Restrict)
+  @@index([messageId, createdAt])
 }

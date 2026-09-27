@@ -353,6 +353,7 @@ export default async function Page({
                   {p.requiredInitialAmount.toFixed(2)}
                 </p>
                 <p>Pratica operativa: {p.clientServiceId ?? "da collegare"}</p>
+                {hasPermission(session, 'practice_communications.read') ? <p><Link className="font-bold underline" href={`/communications?kind=READINESS&practice=${p.id}`}>Comunicazioni approvate della pratica</Link></p> : null}
                 <div>
                   <strong>Storico incarichi</strong>
                   {p.formalizations.map((f) => (

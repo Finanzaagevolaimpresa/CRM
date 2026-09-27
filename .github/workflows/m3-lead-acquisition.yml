@@ -42,8 +42,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
-          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 48
-          git diff --exit-code 7ab126f8a2ef385c3e720f190eda80f26f61ae39 -- prisma/schema.prisma prisma/migrations
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 49
+          node scripts/m4/verify-schema.mjs
           evidence="$RUNNER_TEMP/m3-browser"
           mkdir -p "$evidence"
           password="$(openssl rand -base64 36 | tr -d '\n')"

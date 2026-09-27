@@ -26,8 +26,8 @@ concurrency:
   group: pr140-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release-schema48:
-    name: Schema48 M1 package and application return
+  release-schema49:
+    name: Schema49 package with M1 application return
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
