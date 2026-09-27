@@ -26,7 +26,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   const configure = box.filter({ has: admin.locator('input[name="intent"][value="configure"]') });
   await configure.locator('..').locator('summary').click();
   await configure.getByLabel('Riferimento pubblico del provider').fill('SYNTHETIC_BROWSER_PROVIDER');
-  await configure.getByLabel('Responsabile', { exact: true }).selectOption(f.adminId);
+  await configure.getByLabel('Responsabile', { exact: false }).selectOption(f.adminId);
   await configure.getByLabel('Riferimento della configurazione verificata').fill('SYNTHETIC_BROWSER_CONFIG');
   await configure.getByLabel('Invio esterno manuale disponibile').check(); await configure.getByLabel('Ricezione disponibile').check();
   await configure.getByRole('button', { name: 'Registra configurazione' }).click(); await expect(admin).toHaveURL(/result=RECORDED/);
@@ -38,7 +38,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect.poll(async () => (await db.communicationMailbox.findUniqueOrThrow({ where: { id: f.mailboxId } })).enabled).toBe(true);
   await operator.goto(target);
   const draft = operator.locator('form').filter({ has: operator.locator('input[name="intent"][value="draft"]') });
-  await draft.getByLabel('Mittente', { exact: true }).selectOption(f.mailboxId); await draft.getByLabel('Reply-To', { exact: true }).fill('assistenza@finanzaagevolaimpresa.it');
+  await draft.getByLabel('Mittente', { exact: false }).selectOption(f.mailboxId); await draft.getByLabel('Reply-To', { exact: true }).fill('assistenza@finanzaagevolaimpresa.it');
   await draft.getByLabel('A · indirizzi separati da virgola').fill('client@invalid.test'); await draft.getByLabel('BCC esplicita').fill('archive@invalid.test');
   await draft.getByLabel('Oggetto', { exact: true }).fill('M4 synthetic approved email'); await draft.getByLabel('Testo esatto').fill('Synthetic exact body; no real delivery.');
   await draft.locator(`input[name="attachmentVersionId"][value="${f.versionId}"]`).check(); await draft.getByRole('button', { name: 'Salva bozza', exact: true }).click();
@@ -65,13 +65,13 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect(operator.getByRole('button', { name: 'Prepara invio manuale e scarica' })).toHaveCount(0);
   await admin.reload();
   const reconciliation = admin.locator('form').filter({ has: admin.locator('input[name="intent"][value="evidence"]') });
-  await reconciliation.getByLabel('Esito', { exact: true }).selectOption('SENT');
+  await reconciliation.getByLabel('Esito', { exact: false }).selectOption('SENT');
   await reconciliation.getByLabel('Riferimento della ricevuta esterna').fill('SYNTHETIC_MANUAL_SEND_ATTESTATION');
   await reconciliation.getByRole('button', { name: 'Registra dichiarazione' }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('SENT');
   await admin.goto('/settings/communications');
   const incoming = admin.locator('form').filter({ has: admin.locator('input[name="intent"][value="reply"]') });
-  await incoming.getByLabel('Casella', { exact: true }).selectOption(f.mailboxId); await incoming.getByLabel('Message-ID del messaggio ricevuto').fill('<m4-browser-reply@invalid.test>');
+  await incoming.getByLabel('Casella', { exact: false }).selectOption(f.mailboxId); await incoming.getByLabel('Message-ID del messaggio ricevuto').fill('<m4-browser-reply@invalid.test>');
   await incoming.getByLabel('In-Reply-To · se presente').fill(`<fai-${message.id}-v1@crm.finanzaagevolaimpresa.it>`);
   await incoming.getByLabel('Da', { exact: true }).fill('client@invalid.test'); await incoming.getByLabel('Oggetto', { exact: true }).fill('M4 synthetic reply');
   await incoming.getByLabel('Testo', { exact: true }).fill('Synthetic acquired response'); await incoming.getByLabel('Riferimento della prova').fill('SYNTHETIC_RECEIVE_ATTESTATION');
