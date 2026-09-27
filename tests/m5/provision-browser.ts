@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
+import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
 import { initialServiceCodes } from '../../src/lib/initial-service-contract';
 import { syntheticUser, syntheticCase } from './fixtures';
 const db = new PrismaClient();
@@ -26,6 +27,12 @@ async function main() {
     const f = await syntheticCase(db, code, actors);
     cases.push({ code, dossierId: f.dossier.id, documentVersionId: f.documentVersion.id, versionId: f.version.id });
   }
+  // Fixture actors needed live sessions for the real readiness transitions. End
+  // those synthetic sessions before boot; the unchanged M1 guard must still pass.
+  await db.$transaction(async tx => {
+    for (const actor of Object.values(actors)) await revokeAllInternalSessions(tx, actor.userId, 'INTERNAL_GLOBAL', actors.admin.userId);
+  });
+  await assertRegistryActivationReady(db);
   mkdirSync(root, { recursive: true }); writeFileSync(join(root, 'browser-fixture.json'), JSON.stringify({ synthetic: true,
     adminId: actors.admin.userId, operatorId: actors.operator.userId, human1Id: actors.human1.userId, cases }));
   console.log('M5_SYNTHETIC_BROWSER_READY');
