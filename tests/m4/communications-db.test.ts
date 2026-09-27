@@ -178,7 +178,7 @@ test('M4 complaint content cannot be disclosed by reclassifying a later revision
 
 
 test('M4 an editor waiting for the row lock cannot overwrite a concurrent prepared message', { skip: !enabled, timeout: 30_000 }, async () => {
-  const f = await fixture(), binding = await approved(f);
+  const f = await fixture(), binding = await approved(f), preparer = await user('admin');
   let readReady = () => {}, releaseRead = () => {};
   const existingRead = new Promise<void>(resolve => { readReady = resolve; });
   const continueEdit = new Promise<void>(resolve => { releaseRead = resolve; });
@@ -201,7 +201,7 @@ test('M4 an editor waiting for the row lock cannot overwrite a concurrent prepar
     await Promise.race([existingRead, new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error('EDITOR_READ_BARRIER_TIMEOUT')), 10_000);
     })]);
-    const prepared = await prepareManualMessage(db, f.commercial, { ...binding, requestId: randomUUID() }, runtime);
+    const prepared = await prepareManualMessage(db, preparer, { ...binding, requestId: randomUUID() }, runtime);
     releaseRead();
     const edited = await editing;
     assert.equal(edited.value, null);
@@ -209,7 +209,7 @@ test('M4 an editor waiting for the row lock cannot overwrite a concurrent prepar
     const state = await footprint(binding.messageId);
     assert.equal(state.row?.state, 'SENDING'); assert.equal(state.row?.currentRevision, 1);
     assert.equal(state.versions, 1); assert.equal(state.attempts, 1);
-    await recordManualMessageEvidence(db, f.commercial, { messageId: binding.messageId, attemptId: prepared.attemptId,
+    await recordManualMessageEvidence(db, preparer, { messageId: binding.messageId, attemptId: prepared.attemptId,
       reconciliation: false, evidence: { method: 'MANUAL_DECLARATION', outcome: 'SENT',
         occurredAt: new Date().toISOString(), reference: 'SYNTHETIC_CONCURRENT_SEND_OUTCOME' } });
     assert.equal((await footprint(binding.messageId)).row?.state, 'SENT');
