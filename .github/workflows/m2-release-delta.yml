@@ -1,0 +1,60 @@
+name: M2 schema48 release delta
+on:
+  pull_request:
+    paths:
+      - 'scripts/m2-release/**'
+      - '.github/workflows/m2-release-delta.yml'
+      - 'docs/M2_RELEASE_R26.md'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -I -B -S scripts/m2-release/test_release.py
+      - run: python -I -B -S scripts/m2-release/package_builder.py --delta
+  saved-images-and-schema48:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: docker/setup-docker-action@v5
+        id: docker
+        with:
+          version: v29.6.1
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10917328245'
+          run-id: '36276199090'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-m2
+      - name: Qualify exact saved images, session transaction and new schema48 recovery
+        env:
+          M2_CI_DOCKER_SOCKET: ${{ steps.docker.outputs.sock }}
+        run: python3 -I -B -S scripts/m2-release/qualify_delta.py qualified-m2/pr140-release-36276199090-1/release-images.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m2-release-delta-${{ github.run_id }}
+          path: m2-release-ci-receipt.json
+          if-no-files-found: warn
+          retention-days: 14
