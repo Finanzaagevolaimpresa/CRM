@@ -135,8 +135,10 @@ async function reviewDocument(tx: Tx, current: AuthSession, context: InitialServ
   if (!version || !doc || doc.deletedAt || doc.clientId !== context.client.id || (doc.projectId && doc.projectId !== context.project.id)
     || (doc.clientServiceId && doc.clientServiceId !== context.service.id) || ['respinto','scaduto','archiviato'].includes(doc.status)
     || (doc.validUntil && doc.validUntil.getTime() <= Date.now()) || !hasPermission(current, 'document.download')
-    || !canViewDocument(current, { ...doc, client: context.client, project: { ...context.project, client: context.client },
-      clientService: { ...context.service, client: context.client } }, hasPermission(current, 'document.sensitive.read'))) denied();
+    || !canViewDocument(current, { ...doc, client: context.client,
+      project: doc.projectId ? { ...context.project, client: context.client } : null,
+      clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
+      hasPermission(current, 'document.sensitive.read'))) denied();
   let bytes: Buffer;
   try { bytes = await (runtime.readDocument ?? readPrivateDocumentBounded)(version.storagePath, 10 * 1024 * 1024); }
   catch { return denied(); }
@@ -180,8 +182,9 @@ export async function initialServiceChoices(tx: Tx, current: AuthSession, contex
     where: { clientId: context.client.id, deletedAt: null, OR: [{ projectId: null }, { projectId: context.project.id }] },
     orderBy: { createdAt: 'desc' }, take: 100 }) : [];
   const visible = documents.filter(doc => (!doc.clientServiceId || doc.clientServiceId === context.service.id) && canViewDocument(current,
-    { ...doc, client: context.client, project: { ...context.project, client: context.client },
-      clientService: { ...context.service, client: context.client } }, hasPermission(current, 'document.sensitive.read')));
+    { ...doc, client: context.client, project: doc.projectId ? { ...context.project, client: context.client } : null,
+      clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
+    hasPermission(current, 'document.sensitive.read')));
   const versions = await tx.documentVersion.findMany({ where: { documentId: { in: visible.map(doc => doc.id) } },
     orderBy: [{ documentId: 'asc' }, { version: 'desc' }], take: 200 });
   return { users, documents: versions.map(version => ({ id: version.id, label: visible.find(doc => doc.id === version.documentId)!.title + ' · v' + version.version })) };
