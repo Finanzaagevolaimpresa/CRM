@@ -61,3 +61,5 @@ generato, age1.3.2 e recupero isolato schema48. Le prove protocollo Windows/Linu
 verificano il piano canonico prima della mutazione, errori non ripetibili,
 sequenza proprietaria e binding. Il pacchetto finale richiede PASS del Revisore
 e CI sul medesimo HEAD; la sua presenza non attesta un rilascio eseguito.
+
+Il guard schema49 dei controlli generali riconosce il merge squash M3 `8cf688f58f02b71ebe169f489b5c3c04f6a648b8`, verifica che schema e 48 migrazioni siano identici al candidato qualificato `9508d0da1b9642b02609d7431a984ced7b501e2e`, quindi mantiene tutti i controlli della migrazione49. Il pacchetto produttivo M3 resta vincolato al candidato originale schema48; non applica la migrazione49.
