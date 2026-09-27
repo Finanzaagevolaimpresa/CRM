@@ -94,6 +94,43 @@ test('M5 export rechecks revocation after an aborted attempt and leaves no parti
   assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: 'engagement_dossier_export' } }), 0);
   proof.push({ kind: 'export-retry-revocation', injectedAbort: true, attempts, committedExports: 0, committedAudits: 0 });
 });
+test('M5 authorization recovers a real serialization abort and commits one idempotent receipt', { skip: !enabled, timeout: 30_000 }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  await configure(f); await finishStages(f);
+  await reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
+    versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Synthetic authorization retry qualification.' });
+  const marker = await db.client.create({ data: { type: 'persona_fisica', displayName: 'Synthetic authorization barrier' } });
+  let attempts = 0, aborts = 0;
+  const wrapped = {
+    $transaction: async <T>(operation: (tx: Prisma.TransactionClient) => Promise<T>, options: { isolationLevel: Prisma.TransactionIsolationLevel }) => {
+      const first = ++attempts === 1;
+      try {
+        return await db.$transaction(async tx => {
+          await tx.client.findUniqueOrThrow({ where: { id: marker.id } });
+          const result = await operation(tx);
+          // A committed update after this snapshot makes the following update
+          // abort in PostgreSQL, rolling back authorization and audit together.
+          if (first) await db.client.update({ where: { id: marker.id }, data: { displayName: 'Synthetic concurrent update' } });
+          await tx.client.update({ where: { id: marker.id }, data: { displayName: 'Synthetic authorization complete' } });
+          return result;
+        }, { ...options, timeout: 10_000 });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') aborts += 1;
+        throw error;
+      }
+    },
+  } as unknown as Pick<PrismaClient, '$transaction'>;
+  const input = { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash,
+    recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] };
+  const receipt = await authorizeEngagementDossierDelivery(wrapped, f.actors.admin, input);
+  assert.equal(attempts, 2); assert.equal(aborts, 1);
+  const repeated = await authorizeEngagementDossierDelivery(db, f.actors.admin, input);
+  assert.equal(repeated.id, receipt.id);
+  assert.equal(await db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: f.dossier.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: 'engagement_dossier_delivery_authorize' } }), 1);
+  proof.push({ kind: 'authorization-retry', engine: 'PostgreSQL', aborts, attempts, committedAuthorizations: 1, committedAudits: 1, idempotent: true });
+});
+
 async function actors() { return { operator: await syntheticUser(db, 'consulente', 'Responsabile M5'), admin: await syntheticUser(db, 'admin', 'Admin M5'),
   human1: await syntheticUser(db, 'revisore', 'Revisore umano 1'), human2: await syntheticUser(db, 'revisore', 'Revisore umano 2') }; }
 type Fixture = Awaited<ReturnType<typeof syntheticCase>>;

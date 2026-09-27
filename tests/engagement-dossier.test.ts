@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../src/lib/auth';
-import { engagementDossierHash, EngagementDossierError, exportApprovedEngagementDossier } from '../src/lib/engagement-dossier';
+import { engagementDossierHash, EngagementDossierError, exportApprovedEngagementDossier, authorizeEngagementDossierDelivery } from '../src/lib/engagement-dossier';
 
 test('dossier hashes are canonical and bind exact version content and recipients', () => {
   assert.equal(engagementDossierHash({ b: 2, a: 1 }), engagementDossierHash({ a: 1, b: 2 }));
@@ -32,8 +32,12 @@ test('approval, export authorization and delivery are distinct audited operation
   assert.doesNotMatch(source, /sendMail|smtp|provider|worker/i);
 });
 
-test('approved export retries only known serialization aborts, at most three times', async () => {
+for (const operation of ['export', 'authorize'] as const) test(operation + ' retries only known serialization aborts, at most three times', async () => {
   const input = { dossierId: 'synthetic-retry', versionId: '10000000-0000-4000-8000-000000000001', format: 'markdown' };
+  const invoke = (db: Pick<PrismaClient, '$transaction'>) => operation === 'export'
+    ? exportApprovedEngagementDossier(db, {} as AuthSession, input, 'synthetic')
+    : authorizeEngagementDossierDelivery(db, {} as AuthSession, { ...input, versionHash: 'a'.repeat(64),
+      recipients: [{ kind: 'CLIENT', name: 'Synthetic recipient', address: 'synthetic@invalid.test', synthetic: true }] });
   for (const error of [
     new Prisma.PrismaClientKnownRequestError('synthetic serialization', { code: 'P2034', clientVersion: 'test' }),
     new Prisma.PrismaClientKnownRequestError('synthetic raw serialization', { code: 'P2010', clientVersion: 'test', meta: { code: '40001' } }),
@@ -41,15 +45,15 @@ test('approved export retries only known serialization aborts, at most three tim
   ]) {
     let attempts = 0;
     const db = { $transaction: async () => { attempts += 1; throw error; } } as unknown as Pick<PrismaClient, '$transaction'>;
-    await assert.rejects(exportApprovedEngagementDossier(db, {} as AuthSession, input, 'synthetic'),
+    await assert.rejects(invoke(db),
       (caught: unknown) => caught instanceof EngagementDossierError && caught.code === 'CONFLICT');
     assert.equal(attempts, 3);
   }
-  for (const error of [new Error('connection outcome uncertain'), new EngagementDossierError('DENIED'),
+  for (const error of [new Error('connection outcome uncertain'), new EngagementDossierError('DENIED'), new EngagementDossierError('CONFLICT'),
     new Prisma.PrismaClientKnownRequestError('synthetic unrelated database error', { code: 'P2002', clientVersion: 'test' })]) {
     let attempts = 0;
     const db = { $transaction: async () => { attempts += 1; throw error; } } as unknown as Pick<PrismaClient, '$transaction'>;
-    await assert.rejects(exportApprovedEngagementDossier(db, {} as AuthSession, input, 'synthetic'), caught => caught === error);
+    await assert.rejects(invoke(db), caught => caught === error);
     assert.equal(attempts, 1);
   }
 });
