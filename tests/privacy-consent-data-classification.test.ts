@@ -45,7 +45,7 @@ const leadBusinessEventFields = [
   'catalogReference.serviceVersion', 'payload.firstName', 'payload.lastName',
   'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.region',
   'payload.interestText', 'payload.serviceInterestText', 'payload.message',
-  'payload.sourcePagePath', 'payload.requestedAmount.currency',
+  'payload.sourcePagePath', 'payload.campaignCode', 'payload.adCode', 'payload.requestedAmount.currency',
   'payload.requestedAmount.minorUnits', 'idempotency.canonicalizationVersion',
   'idempotency.keyDigest', 'idempotency.payloadHash',
 ] as const;

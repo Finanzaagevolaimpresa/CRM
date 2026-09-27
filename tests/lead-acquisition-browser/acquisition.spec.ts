@@ -43,6 +43,8 @@ test('M3 browser: persisted receipts, separate requests, visible retry and fresh
   await login(operator, 'm3-operator@invalid.test');
   await operator.goto(`${app}/leads/${fixture.leadId}/requests`);
   await expect(operator.getByText('Richiesta sintetica M3 numero 2', { exact: true })).toBeVisible();
+  await expect(operator.getByText(/SYNTHETIC_PRIVACY_NOTICE/)).toHaveCount(0);
+  await expect(operator.getByText(/SYNTHETIC_MARKETING_NOTICE/)).toHaveCount(0);
   const global = await operator.goto(`${app}/leads/acquisition`);
   expect(global?.status() === 404 || !operator.url().endsWith('/leads/acquisition')).toBe(true);
   await expect(operator.getByText('Richiesta sintetica M3 numero 3', { exact: true })).toHaveCount(0);

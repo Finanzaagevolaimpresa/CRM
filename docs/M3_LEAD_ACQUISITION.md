@@ -11,6 +11,8 @@ qualifica esclusivamente il rilascio M2 e non autorizza il suo launcher a distri
   ricevute persistite, code da elaborare, errori/retry e identità ambigue.
 - `/leads/{id}/requests`: richieste conservate per quel lead, con controllo
   corrente di sessione, permesso e assegnazione dentro la transazione.
+- Le evidenze informative e consenso richiedono anche `privacy.evidence.read`;
+  non sono esportate nel risultato destinato agli operatori privi del permesso.
 - L'integrità dell'envelope N10 e del collegamento alla ricevuta viene verificata
   prima di mostrarne il contenuto. Una ricevuta incoerente richiede riconciliazione.
 - Ogni nuova submission rimane distinta; il replay tecnico riusa la ricevuta.

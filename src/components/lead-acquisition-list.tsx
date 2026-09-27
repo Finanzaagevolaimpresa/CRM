@@ -15,8 +15,10 @@ export function LeadAcquisitionList({ items }: { items: Awaited<ReturnType<typeo
         <p>Pagina: {row.event.payload.sourcePagePath ?? 'Non disponibile'}</p>
         <p>Servizio richiesto: {row.event.payload.serviceInterestText ?? row.event.catalogReference?.serviceCode ?? row.event.payload.interestText ?? 'Non specificato'}</p>
         {row.event.payload.message && <p className="whitespace-pre-wrap">{row.event.payload.message}</p>}
-        <p>Informativa: {row.event.privacy.service.noticeCode}, versione {row.event.privacy.service.noticeVersion} · presa visione registrata.</p>
-        <p>Marketing: {row.event.privacy.marketing.decision === 'GRANTED' ? 'Consenso registrato per la finalità dichiarata' : 'Consenso non concesso'}. Nessuna iscrizione newsletter dedotta.</p>
+        {row.privacyEvidence ? <>
+          <p>Informativa: {row.privacyEvidence.service.noticeCode}, versione {row.privacyEvidence.service.noticeVersion} · presa visione registrata.</p>
+          <p>Marketing: {row.privacyEvidence.marketing.decision === 'GRANTED' ? 'Consenso registrato per la finalità dichiarata' : 'Consenso non concesso'}. Nessuna iscrizione newsletter dedotta.</p>
+        </> : <p>Informativa e consensi sono consultabili dagli utenti autorizzati.</p>}
       </>}
       <p>Tentativi: {row.attemptsTotal}/{row.maxAttempts}{row.availableAt && row.attemptsTotal > 0 ? ` · prossimo tentativo non prima del ${formatDateTime(row.availableAt)}` : ''}</p>
       {row.failureCode && <p>Codice da riconciliare: <code>{row.failureCode}</code></p>}

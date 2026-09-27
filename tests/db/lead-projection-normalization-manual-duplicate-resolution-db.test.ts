@@ -2128,9 +2128,14 @@ test('M3 multiple submissions retain original campaign, request and privacy afte
   assert.ok(history.items.every((row) => row.verified && row.state === 'LINKED'));
   assert.deepEqual(new Set(history.items.map((row) => row.event?.payload.message)), new Set(['First request.', 'Different service for the same person.']));
   assert.deepEqual(new Set(history.items.map((row) => row.event?.payload.campaignCode)), new Set(['M3-A', 'M3-B']));
-  assert.ok(history.items.every((row) => row.event?.privacy.marketing.decision === 'DENIED'));
+  assert.ok(history.items.every((row) => row.privacyEvidence?.marketing.decision === 'DENIED'));
   assert.equal(await client().businessInboxEvent.count({ where: { id: { in: [a.inboxEventId, b.inboxEventId] } } }), 2);
   assert.deepEqual(await client().lead.findUniqueOrThrow({ where: { id: leadId } }), before);
+  const scopedReader = await createSession('commerciale', 9399);
+  await client().lead.update({ where: { id: leadId }, data: { assignedToId: scopedReader.userId } });
+  const scopedHistory = await readLeadAcquisitions(client(), scopedReader, { leadId });
+  assert.equal(scopedHistory.items.length, 2);
+  assert.ok(scopedHistory.items.every((row) => row.privacyEvidence === null && row.event && !Object.hasOwn(row.event, 'privacy')));
   const summary = (await readLeadAcquisitionSummary(client(), actor)).find((row) => row.form === 'M3_HISTORY')!;
   assert.equal(summary.requests, 2n); assert.equal(summary.leads, 1n); assert.equal(summary.paidLeads, 0n);
   const customer = await client().client.create({ data: { type: 'societa', displayName: 'Synthetic M3 client', leadId } });

@@ -24,6 +24,7 @@ jobs:
       AUTH_COOKIE_NAME: fai_m3_browser_session
       APP_ORIGIN: http://127.0.0.1:3000
       INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
       PRIVILEGED_ACCESS_MODE: disabled
       COMMERCIAL_LEAD_INBOX_MODE: disabled
       RUN_DB_TESTS: '1'

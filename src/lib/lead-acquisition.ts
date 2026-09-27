@@ -48,7 +48,10 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
       const parsed = verifiedAcquisitionEvent(row);
       const projection = row.leadProjectionLedger;
       const verified = !!parsed && (!projection || projection.sourceRecordHash === row.recordHash);
-      return { id: row.id, createdAt: row.createdAt, verified, event: verified ? parsed : null,
+      return { id: row.id, createdAt: row.createdAt, verified,
+        event: verified && parsed ? { eventId: parsed.eventId, occurredAt: parsed.occurredAt,
+          source: parsed.source, payload: parsed.payload, catalogReference: parsed.catalogReference } : null,
+        privacyEvidence: verified && parsed && hasPermission(fresh, 'privacy.evidence.read') ? parsed.privacy : null,
         state: verified ? acquisitionState(row.state, row.attemptCount, projection?.state ?? null) : 'ERROR' as const,
         leadId: verified ? projection?.leadId ?? null : null, attempts: row.attempts, attemptsTotal: row.attemptCount,
         maxAttempts: row.maxAttempts, availableAt: row.state === 'AVAILABLE' ? row.availableAt : null,
