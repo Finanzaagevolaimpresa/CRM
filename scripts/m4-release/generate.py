@@ -122,6 +122,8 @@ def render(run_id):
     owner = change(owner,"'migrate':180", "'migrate':600")
     owner = change(owner,'Conferma: zero migrazioni da applicare. Deploy M4 e controllo salute.', 'Sola migrazione 49, prefisso 48 conservato. Deploy M4 e controllo salute.')
     owner = change(owner,'Backup post-deploy48 distinto','Backup post-deploy49 distinto')
+    owner = change(owner,'Immagini M4 qualificate: scaricamento con avanzamento, massimo 10 minuti.',
+                   'Verifica immagini M4; riuso del file locale se presente.')
     result['owner_release.py'] = owner.encode()
     proof = json.loads((HERE/'qualification.json').read_bytes())
     receipt = proof['receipt']
@@ -129,6 +131,19 @@ def render(run_id):
     for name,value in {'ARTIFACT':proof['artifactId'],'ZIP_BYTES':proof['artifactZipBytes'],'ZIP_SHA':proof['artifactZipSha256'],
                        'IMAGE_SHA':receipt['imageArchiveSha256'],'CANDIDATE':CANDIDATE,'RUN':proof['run']}.items():
         download = sealed.assignment(download,name,repr(value))
+    download = change(download,'\n\ndef extract(', '\n\nEXPECTED_RECEIPT = '+repr(receipt)+'\n\ndef extract(')
+    download = change(download,
+        "receipt['status'] == 'CI_SCHEMA48_M1_APPLICATION_RETURN_PASS' and receipt['synthetic'] is True",
+        'receipt == EXPECTED_RECEIPT')
+    cached = """    path = root/'qualified-images.zip'
+    if path.exists():
+        result = extract(private(path),root)
+        exclusive(root/'images-acquired.json',result | {'events':[], 'reusedVerifiedZip':True,
+                  'remoteConnectionAttempted':False,'productionMutationPerformed':False})
+        print('Immagini M4 gia scaricate: hash e ricevuta verificati; nessun nuovo download.',flush=True)
+        return result
+"""
+    download = change(download,"    status,out,err,overflow = transport.bounded_command", cached+"    status,out,err,overflow = transport.bounded_command")
     result['download_images.py'] = download.replace('Immagini M3','Immagini M4').encode()
     for name in ('qualification.json','release_evidence.py','protect48.py'):
         result[name] = (HERE/name).read_bytes()
