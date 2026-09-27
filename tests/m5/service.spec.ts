@@ -63,8 +63,15 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await approval.locator('textarea[name="note"]').fill('Versione sintetica esatta approvata.');
     await approval.getByRole('button', { name: 'Approva questa versione' }).click();
     await expect.poll(async () => (await db.clientDossier.findUniqueOrThrow({ where: { id: item.dossierId } })).approvedVersionId).not.toBeNull();
+    const exportsBeforeNavigation = await db.engagementDossierExport.count({ where: { dossierId: item.dossierId } });
     await operator.reload();
-    const [download] = await Promise.all([operator.waitForEvent('download'), operator.getByRole('link', { name: 'Esporta approvato .docx', exact: true }).click()]);
+    const exportLink = operator.getByRole('link', { name: 'Esporta approvato .docx', exact: true });
+    await expect(exportLink).toHaveAttribute('download', '');
+    await operator.waitForLoadState('networkidle');
+    expect(await db.engagementDossierExport.count({ where: { dossierId: item.dossierId } })).toBe(exportsBeforeNavigation);
+    const [download] = await Promise.all([operator.waitForEvent('download', { timeout: 30_000 }), exportLink.click()]);
+    expect(await download.failure()).toBeNull();
+    expect(await db.engagementDossierExport.count({ where: { dossierId: item.dossierId } })).toBe(exportsBeforeNavigation + 1);
     const bytes = readFileSync((await download.path())!);
     const decoded = JSON.parse(execFileSync('python3', ['-I','-S','-c','import sys,io,zipfile,hashlib,json; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({"logo":hashlib.sha256(z.read("word/media/logo-fai.png")).hexdigest(),"text":z.read("word/document.xml").decode()}))'], { input: bytes, encoding: 'utf8' }));
     expect(decoded.logo).toBe(INITIAL_SERVICE_LOGO_SHA256); expect(decoded.text).toContain(INITIAL_SERVICES[item.code].title); expect(decoded.text).toContain('Non eroghiamo finanziamenti.');

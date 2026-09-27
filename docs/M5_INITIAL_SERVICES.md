@@ -52,3 +52,5 @@ il conteggio esatto delle ricevute/audit committati, l'idempotenza
 dell'autorizzazione e della ricevuta, e la revoca della sessione fra un aborto
 iniettato e il nuovo tentativo di export o registrazione. Nessun invio esterno
 avviene in queste transazioni.
+
+Gli export Markdown/Word del dossier usano link nativi con attributo `download`: nessun prefetch o navigazione client del router deve generare ricevute di export. Il browser verifica che aprire il dossier non crei export e che il clic produca un solo file e una sola registrazione. Riferimento: https://nextjs.org/docs/app/api-reference/components/link#onnavigate .
