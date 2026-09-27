@@ -2066,6 +2066,7 @@ async function getActivePracticeCommunication(id: string) {
 export async function createPracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationDraftSchema.parse(clean(form));
+  if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara i messaggi esterni da Comunicazioni approvate della pratica.');
   const practice = await requireTechnicalPracticeEditAccess(s, data.technicalPracticeId);
   const communication = await prisma.practiceCommunication.create({ data: {
     technicalPracticeId: practice.id, clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId,
@@ -2079,6 +2080,7 @@ export async function createPracticeCommunicationDraft(form: FormData) {
 export async function updatePracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationUpdateSchema.parse(clean(form));
+  if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara una versione in Comunicazioni approvate della pratica.');
   const before = await getActivePracticeCommunication(data.id);
   if (!['bozza','da_revisionare'].includes(before.status)) throw new UserFacingActionError('Solo bozze o comunicazioni da revisionare possono essere modificate.');
   await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
@@ -2091,6 +2093,7 @@ export async function approvePracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.review');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
+  if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Le comunicazioni esterne richiedono l’approvazione esatta in Comunicazioni approvate.');
   await getPracticeForCommunication(before.technicalPracticeId, s);
   if (before.status !== 'da_revisionare' || before.createdById === s.userId) denyWriteAccess();
   const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'approvata', reviewedById: s.userId, reviewedAt: new Date() } });
@@ -2102,6 +2105,7 @@ export async function markPracticeCommunicationAsUsed(form: FormData) {
   const s = await requirePermission('practice_communications.mark_used');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
+  if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Registra gli invii esterni nel flusso Comunicazioni approvate, con destinatari e ricevuta.');
   if (before.status !== 'approvata') throw new UserFacingActionError('Solo comunicazioni approvate possono essere segnate come usate/inviate manualmente.');
   const practice = await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
   const now = new Date();

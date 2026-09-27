@@ -40,6 +40,14 @@ async function main() {
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'footprint') {
     const data = {
+      m4Mailboxes: await db.communicationMailbox.findMany({ orderBy: { id: 'asc' } }),
+      m4MailboxHistory: await db.communicationMailboxHistory.findMany({ orderBy: { id: 'asc' } }),
+      m4Messages: await db.approvedCommunication.findMany({ orderBy: { id: 'asc' } }),
+      m4Versions: await db.communicationVersion.findMany({ orderBy: { id: 'asc' } }),
+      m4Approvals: await db.communicationApproval.findMany({ orderBy: { id: 'asc' } }),
+      m4Attempts: await db.communicationAttempt.findMany({ orderBy: { id: 'asc' } }),
+      m4Replies: await db.communicationReply.findMany({ orderBy: { id: 'asc' } }),
+      m4Events: await db.communicationEvent.findMany({ orderBy: { id: 'asc' } }),
       clientReadGrants: await db.clientReadGrant.findMany({ orderBy: { id: 'asc' } }),
       m1History: await db.auditLog.findMany({ where: { event: { in: ['purchased_service_handoff', 'responsibility_assigned',
         'responsibility_accepted', 'client_commercial_origin_recorded', 'client_commercial_origin_corrected'] } }, orderBy: { id: 'asc' } }),
@@ -60,7 +68,9 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 48);
+    assert.equal(data.ledger.length, 49);
+    assert.equal(data.m4Mailboxes.length, 7);
+    assert.ok(data.m4Messages.length >= 1 && data.m4Versions.length >= 1 && data.m4Approvals.length >= 1 && data.m4Attempts.length >= 1 && data.m4Replies.length >= 1 && data.m4Events.length >= 1);
     assert.ok(data.clientReadGrants.length >= 3);
     assert.ok(data.m1History.some(row => row.event === 'purchased_service_handoff'));
     assert.ok(data.m1History.some(row => row.event === 'responsibility_accepted'));

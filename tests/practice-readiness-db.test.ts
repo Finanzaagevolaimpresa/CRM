@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
+import { readPracticeCommunications, saveApprovedMessageDraft } from '../src/lib/approved-communications';
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   attestPracticeMaterialsComplete,
@@ -2115,4 +2116,20 @@ test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before
   assert.equal((await footprint()).dossier.approvedVersionId, null);
   assert.equal((await importEngagementWorkResult(db, actorA, input)).id, imported.id);
   assert.equal((await footprint()).dossier.currentVersionId, next.id);
+});
+
+
+test('M4 communications reuse readiness identity and fresh client/project scope', { skip: !enabled }, async () => {
+  const context = await createContext('M4-readiness', ids.userA);
+  const practice = await createPractice(context, actorA);
+  const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  const binding = { kind: 'READINESS' as const, id: practice.id };
+  const saved = await saveApprovedMessageDraft(db, actorA, { messageId: randomUUID(), expectedRevision: 0, context: binding,
+    mailboxId: box.id, replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [],
+    subject: 'Synthetic M4 readiness message', body: 'Context is the existing M2 practice.', attachmentVersionIds: [], classification: 'ORDINARY' });
+  const page = await readPracticeCommunications(db, actorA, binding);
+  assert.equal(page.messages[0].id, saved.id);
+  assert.equal(page.messages[0].snapshot.clientId, context.client.id);
+  assert.equal(page.messages[0].readinessId, practice.id);
+  await assert.rejects(readPracticeCommunications(db, actorB, binding), /DENIED/);
 });

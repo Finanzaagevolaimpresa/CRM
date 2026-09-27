@@ -38,6 +38,22 @@ const n15BusinessReference = rule('CONFIDENTIAL', 'N15_PHASE1A_UNASSIGNED', 'DPO
 const n15PrivacyEvidence = rule('PERSONAL', 'N15_PHASE1A_UNASSIGNED', 'DPO_VALIDATION_REQUIRED');
 
 export const dataClassificationCatalog = Object.freeze({
+  approved_manual_communication_v1: Object.freeze({
+    context: personalIdentifier,
+    clientId: personalIdentifier,
+    sender: contact,
+    replyTo: contact,
+    to: contact,
+    cc: contact,
+    bcc: contact,
+    subject: rule('CONFIDENTIAL', 'CLIENT_SERVICE_COMMUNICATION', 'CONTRACT_PERFORMANCE'),
+    body: rule('CONFIDENTIAL', 'CLIENT_SERVICE_COMMUNICATION', 'CONTRACT_PERFORMANCE'),
+    attachments: rule('SPECIAL_CATEGORY', 'CLIENT_SERVICE_COMMUNICATION', 'DPO_VALIDATION_REQUIRED'),
+    manualEvidence: rule('CONFIDENTIAL', 'CLIENT_SERVICE_ACCOUNTABILITY', 'CONTRACT_PERFORMANCE'),
+    approval: personalIdentifier,
+    reply: rule('CONFIDENTIAL', 'CLIENT_SERVICE_COMMUNICATION', 'CONTRACT_PERFORMANCE'),
+    mailboxQualification: operational,
+  }),
   website_lead_intake_v2: Object.freeze({
     firstName: contact,
     lastName: contact,
