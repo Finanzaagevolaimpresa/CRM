@@ -79,6 +79,8 @@ export interface LeadEventPayloadV1 {
   readonly serviceInterestText?: string;
   readonly message?: string;
   readonly sourcePagePath?: string;
+  readonly campaignCode?: string;
+  readonly adCode?: string;
   readonly requestedAmount?: LeadEventRequestedAmountV1;
 }
 
@@ -378,7 +380,7 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
     value,
     [
       'firstName', 'lastName', 'companyName', 'email', 'phone', 'city', 'region',
-      'interestText', 'serviceInterestText', 'message', 'sourcePagePath', 'requestedAmount',
+      'interestText', 'serviceInterestText', 'message', 'sourcePagePath', 'requestedAmount', 'campaignCode', 'adCode',
     ],
     [],
     'LEAD_EVENT_FIELD_INVALID',
@@ -417,6 +419,13 @@ function normalizePayload(value: unknown): LeadEventPayloadV1 {
   }
   const requestedAmount = normalizeRequestedAmount(payload.requestedAmount);
   if (requestedAmount) output.requestedAmount = requestedAmount;
+  for (const key of ['campaignCode', 'adCode'] as const) {
+    const code = optionalText(payload[key], 80);
+    if (code !== undefined) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(code)) fail('LEAD_EVENT_FIELD_INVALID');
+      output[key] = code;
+    }
+  }
   return output as LeadEventPayloadV1;
 }
 

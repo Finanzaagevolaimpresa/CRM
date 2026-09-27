@@ -94,6 +94,8 @@ final class EventContract
         'serviceInterestText' => 1000,
         'message' => 4000,
         'sourcePagePath' => 500,
+        'campaignCode' => 80,
+        'adCode' => 80,
         'requestedAmount' => null,
     );
 
@@ -744,6 +746,11 @@ final class EventContract
                 if (preg_match('/\A(?:\.|%2e){1,2}\z/iuD', $segment) === 1) {
                     throw new ConnectorException(ConnectorException::LEAD_EVENT_INVALID);
                 }
+            }
+        }
+        foreach (array('campaignCode', 'adCode') as $name) {
+            if (isset($payload[$name]) && preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}\z/D', $payload[$name]) !== 1) {
+                throw new ConnectorException(ConnectorException::LEAD_EVENT_INVALID);
             }
         }
         return $payload;
