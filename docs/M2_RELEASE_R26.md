@@ -109,3 +109,56 @@ decifratura delle copie produttive C/F o ripristino integrale VPS è dichiarata.
 Qualificazione CI, riesame del solo delta e pacchetto concreto restano
 necessari prima dell'avvio proprietario. STOP significa conservare ricevute
 e riconciliare; un secondo avvio continua a eseguire solo status.
+
+## R31 — ripresa dopo lo STOP nella costruzione del piano di deploy
+
+Questa sezione sostituisce la sequenza R30 per il seguito corrente. R30
+`2662a61c934f4a3888236cad99c446ee` ha completato protezione, copie C/F,
+recupero isolato e conferma schema48, senza migrazioni. Le ricevute originali
+restano immutate. La riconciliazione immediata ha osservato il medesimo
+container M1 healthy: non è un'attestazione della salute futura.
+
+Riproducendo offline gli esatti byte del programma e della review R30,
+`deploy()` solleva KeyError sul campo mancante returnCompatibilityEvidence,
+prima di scrivere evidenze o chiamare N05. Inoltre softwareEvidence era una
+stringa, incompatibile con il documento strutturato richiesto da N05.
+Il messaggio remoto storico rimane redatto: prima di un nuovo deploy la
+ripresa deve anche verificare sul VPS l'assenza di piano, evidenze, ricevuta,
+marker di pubblicazione e progresso N05 del vecchio run.
+
+Il builder include ora la ricevuta CI già qualificata del run36276199090,
+job108499319514 e artifact10917328245, vincolata a commit/tree, schema48,
+archivio, config digest CI e manifest OCI effettivi. Mantiene esplicita la
+natura sintetica e i limiti di quella prova; non la trasforma in prova di
+recupero produttivo. Gli input strutturati obbligatori sono verificati prima
+della costruzione e nuovamente all'ammissione remota. Il piano generato
+passa validate_plan e validate_evidence canonici prima del forward.
+
+completed_release.py lega ai rispettivi hash manifest, prepare, protect,
+copies-backup, recover, migrate e STOP R30. Ogni artefatto di forward o fase
+successiva impedisce la ripresa. Riconferma i programmi storici, il bundle
+cifrato sul VPS e il set R29 originario. Il proprietario riconferma identità
+fisiche, dimensioni e readback SHA delle copie C/F già completate. Non
+vengono riscritte o attribuite al nuovo run: le prove conservano runId R30.
+
+Il nuovo avvio ha sei passaggi: verifiche locali/copie → riuso immagini e
+trasferimento del solo pacchetto → riconciliazione remota e modelli correnti
+→ deploy M2 e salute → backup post-deploy distinto/protezione/copie C/F
+→ controlli finali. Backup iniziale, cifratura iniziale, copie iniziali,
+recupero isolato e migrazione non sono operazioni invocabili dalla nuova CLI.
+Il backup post-deploy continua a essere necessario e distinto.
+
+La regressione riproduce il difetto R30, esegue la costruzione reale del piano
+generato e tutti i validatori delle evidenze; su Linux raggiunge l'ingresso
+canonico fino al lock, con Docker e Git simulati, senza mutazione. Verifica
+campi mancanti/tipi errati, prove alterate, identità CI difformi e qualsiasi
+progresso del vecchio forward. La CI Docker esistente continua a verificare
+le immagini salvate, backup48, age e recupero. Il test del piano non attesta
+un deploy sul VPS; servono sempre ricevute effettive e prova d'uso M2.
+
+Tempi massimi: trasferimento600s, prepare600s, deploy960s, postcheck180s,
+backup post1800s, protezione900s, ogni lettura copia600s, finale210s.
+STOP conserva intent e ricevute; il secondo avvio è soltanto status. Un errore
+canonico prima della ricevuta conserva ora il proprio codice anziché essere
+mascherato dall'assenza della ricevuta. Nessun nuovo consenso, chiave,
+permesso o ampliamento del canale autonomo è incluso.

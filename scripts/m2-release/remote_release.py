@@ -24,13 +24,14 @@ from sealed_programs import BASE as BASE_STRING, M1, M1_TREE, M1_RUNTIME, M2, M2
 from transition_base import Release as Transition
 import completed_backup as completed
 from protect48 import qualify
+import completed_release as historical
+from release_evidence import validate as validate_evidence_inputs
 
 BASE = Path(BASE_STRING)
 OLD = BASE / M1_RUNTIME
-DEPENDENCIES = {'prepare': [], 'protect': ['prepare'],
-    'copies-backup': ['protect'], 'recover': ['copies-backup'], 'migrate': ['recover'],
-    'deploy': ['migrate'], 'postcheck': ['deploy'], 'postbackup': ['postcheck'],
-    'postprotect': ['postbackup'], 'copies-postbackup': ['postprotect'], 'final': ['copies-postbackup']}
+DEPENDENCIES = {'prepare': [], 'deploy': ['prepare'], 'postcheck': ['deploy'],
+    'postbackup': ['postcheck'], 'postprotect': ['postbackup'],
+    'copies-postbackup': ['postprotect'], 'final': ['copies-postbackup']}
 LIMITS = {'prepare': 540, 'protect': 840, 'copies-backup': 60, 'recover': 840,
           'migrate': 120, 'deploy': 900, 'postcheck': 120, 'postbackup': 1650,
           'postprotect': 840, 'copies-postbackup': 60, 'final': 150, 'status': 120}
@@ -60,7 +61,11 @@ class Release(Transition):
         need(self.review['status'] == 'PASS_FOR_MERGE' and self.review['candidate'] == M2 and
              self.review['deltaSha256'] == self.manifest['deltaSha256'] and
              self.review['recoveryScope'] == 'NEW_PLAINTEXT_DATABASE_AND_DOCUMENT_SET', 'REVIEW_NOT_QUALIFIED')
+        validate_evidence_inputs(self.review, self.b)
         self.work = private(root / 'evidence', directory=True)
+        need(self.manifest['completedReleaseRunId'] == historical.RUN and
+             self.manifest['completedPhasesReplayAllowed'] is False and
+             not {self.run_id, self.post_id} & {historical.RUN,historical.POST_RUN}, 'COMPLETED_RELEASE_BINDING')
         need(self.manifest['completedBackupRunId'] == completed.RUN and
              self.manifest['preBackupReplayAllowed'] is False and
              not {self.run_id, self.post_id} & {completed.RUN, completed.POST_RUN}, 'COMPLETED_BACKUP_BINDING')
@@ -94,7 +99,12 @@ class Release(Transition):
              observed['stepUpRegisteredActive'] and observed['stepUpDigestMatches'], 'EXISTING_STEP_UP_DRIFT')
         return observed
 
-    def prepare(self):
+    def completed_result(self, stage):
+        return historical.result(stage, remote=True)
+
+    def prepare(self, request):
+        prior = historical.reconcile(remote=True)
+        historical.validate_copies(request['copies'])
         consumed = completed.reconcile(remote=True)
         before = self.observer()
         need(before['otherActiveDbSessions'] == 0 and before['availableBytes'] >= 12 * 1024**3, 'SOURCE_CAPACITY_OR_WRITERS')
@@ -115,7 +125,9 @@ class Release(Transition):
              ['driver-type','io.containerd.snapshotter.v1'] in (store['status'] or []), 'IMAGE_STORE_DRIFT')
         images = verify_images(self.c, archive, binding)
         private(self.runtime, directory=True)
-        need(self.c.run('RUNTIME_IDENTITY',['git','-C',self.runtime,'rev-parse','HEAD','HEAD^{tree}']).decode().split() == [M2,M2_TREE], 'RUNTIME_IDENTITY')
+        need(self.c.run('RUNTIME_IDENTITY',['git','-C',self.runtime,'rev-parse','--abbrev-ref','HEAD']).decode().strip() == 'main', 'RUNTIME_BRANCH_DRIFT')
+        need(self.c.run('RUNTIME_COMMIT',['git','-C',self.runtime,'rev-parse','HEAD','HEAD^{tree}']).decode().split() == [M2,M2_TREE], 'RUNTIME_IDENTITY')
+        need(not self.c.run('RUNTIME_TRACKED',['git','-C',self.runtime,'status','--porcelain=v1','--untracked-files=no']).strip(), 'RUNTIME_TRACKED_DIRTY')
         for name, expected in self.b['canonicalPrograms'].items():
             need(digest(private(self.runtime/name)) == expected, 'QUALIFIED_PROGRAM_DRIFT')
         config = private(OLD/'.env.production')
@@ -125,16 +137,20 @@ class Release(Transition):
         kit = qualify(self.kit(), M1, M1_TREE)
         kit.verify_tools(kit.tools_binding())
         kit.verify_n05(set_path, self.protection_expected('before', receipt))
+        rows = self.rows(self.b['ledger48'])
+        need(value_sha(rows) == self.completed_result('migrate')['ledgerDigest'], 'COMPLETED_LEDGER_DRIFT')
+        self.models()
         after = self.observer()
         stable = ('appHealthy','postgresHealthy','postgresStartedAt','postgresRestartCount','ledgerChecksumsMatch','closedGates')
         need(all(after[k] == before[k] for k in stable), 'SOURCE_CHANGED_DURING_PREPARATION')
         return {'candidate':M2,'observation':after,'documentCapacity':documents,'images':images,
                 'configurationSha256':digest(config),'configurationChanged':False,'newCredentialsCreated':False,
-                'imageLoadPerformed':False,'runtimeApplicationChanged':False,'completedBackup':consumed,'migrationsRequired':[],
+                'imageLoadPerformed':False,'runtimeApplicationChanged':False,'completedBackup':consumed,'completedRelease':prior,
+                'revalidatedCopies':request['copies'],'migrationsRequired':[],
                 'plannedSessionRevocation':True,'historicalAttemptsRepeated':False}
 
     def require_config_binding(self):
-        prepared = self.stages.result('prepare')
+        prepared = self.stages.result('prepare') or self.completed_result('prepare')
         need(prepared and all(digest(private(p/'.env.production')) == prepared['configurationSha256']
                              for p in (OLD,self.runtime)), 'PROTECTED_CONFIGURATION_CHANGED')
 
@@ -178,9 +194,6 @@ class Release(Transition):
         need(result['set'] == str(path),'BACKUP_SET_PATH')
         return path,result
 
-    def protect(self):
-        return self.protect_set('before')
-
     def postprotect(self):
         return self.protect_set('after')
 
@@ -192,6 +205,7 @@ class Release(Transition):
             'manifest_sha256':receipt['manifestSha256'],'checksums_sha256':receipt['checksumsSha256']}
 
     def protect_set(self, role):
+        need(role == 'after', 'COMPLETED_PROTECTION_REPLAY_DENIED')
         kit = self.kit()
         backup,receipt = self.backup_set(role)
         target,commit,tree,run = self.source(role)
@@ -220,17 +234,6 @@ class Release(Transition):
         need(result.pop('status',None) == 'PROTECTION_VERIFIED','N05_PROTECTION_NOT_VERIFIED')
         return {'ciphertext':name,**result,'recipientSha256':self.b['recipientSha256']}
 
-    def recover(self):
-        before = self.observer()
-        folder = self.work/'isolated-recovery'
-        folder.mkdir(mode=0o700)
-        backup,_ = self.backup_set()
-        result = Restore(self.c,folder,self.run_id,self.t['postgresImage'],self.b['candidateImage'],self.kit()).run(backup,self.b['ledger48'])
-        after = self.observer()
-        need(all(after[k] == before[k] for k in ('appHealthy','postgresHealthy','postgresStartedAt',
-             'postgresRestartCount','ledgerChecksumsMatch','ledgerCount','closedGates')),'PRODUCTION_CHANGED_DURING_RECOVERY')
-        return result | {'productionUnchanged':True}
-
     def models(self):
         self.require_config_binding()
         n05 = self.n05()
@@ -257,14 +260,6 @@ class Release(Transition):
              snapshot['app']['id'] == self.t['appId'] and snapshot['app']['state'] == 'healthy','SOURCE_MODEL_DRIFT')
         exclusive(self.work/'models.json',plan)
         return plan,baseline
-
-    def migrate(self):
-        """Explicit NO-OP: the immutable 48-entry ledger must match exactly."""
-        self.observer()
-        rows = self.rows(self.b['ledger48'])
-        self.models()
-        return {'before':48,'after':48,'newMigrations':[],'databaseMigrationInvoked':False,
-                'ledgerDigest':value_sha(rows),'migrator':None}
 
     def canonical_transition(self,n05,operation,path):
         original = n05.DockerEngine
@@ -312,8 +307,9 @@ class Release(Transition):
         result = self.postcheck()
         result['ownerUsageProof'] = 'PENDING_FRESH_LOGIN_AND_M2_USAGE'
         result.update(preBackupVerified=True,postBackupVerified=True,completedBackupRunId=self.backup_run_id,preBackupReplayed=False,
-                      copiesBefore=self.stages.result('copies-backup'),copiesAfter=self.stages.result('copies-postbackup'),
-                      recovery=self.stages.result('recover'),migrationsApplied=[],autonomyQualified=False)
+                      completedReleaseRunId=historical.RUN,completedPhasesReplayed=False,
+                      copiesBefore=self.completed_result('copies-backup'),copiesAfter=self.stages.result('copies-postbackup'),
+                      recovery=self.completed_result('recover'),migrationsApplied=[],autonomyQualified=False)
         return result
 
     def status(self):
@@ -328,7 +324,7 @@ class Release(Transition):
 
 def main():
     os.umask(0o077)
-    need(len(sys.argv) == 2 and sys.argv[1] in set(DEPENDENCIES)|{'status','fetch-backup','fetch-postbackup'},'FIXED_OPERATION_REQUIRED')
+    need(len(sys.argv) == 2 and sys.argv[1] in set(DEPENDENCIES)|{'status','fetch-postbackup'},'FIXED_OPERATION_REQUIRED')
     stage = sys.argv[1]
     release = Release(Path(__file__).resolve().parent)
     if stage.startswith('fetch-'):
@@ -341,8 +337,9 @@ def main():
     else:
         release.stages.begin(stage,DEPENDENCIES[stage])
         request = decode(sys.stdin.buffer.read(65537))
-        need(set(request) <= ({'copies'} if stage.startswith('copies-') else set()),'REQUEST_FIELDS_DENIED')
-        evidence = release.copies(stage,request) if stage.startswith('copies-') else getattr(release,stage)()
+        need(set(request) == ({'copies'} if stage.startswith('copies-') or stage == 'prepare' else set()),'REQUEST_FIELDS_DENIED')
+        evidence = (release.prepare(request) if stage == 'prepare' else
+                    release.copies(stage,request) if stage.startswith('copies-') else getattr(release,stage)())
         result = release.stages.complete(stage,evidence)
     print(canonical(result).decode(),flush=True)
 
@@ -355,7 +352,8 @@ if __name__ == '__main__':
     except BaseException as exc:
         code = exc.code if isinstance(exc,Stop) else str(exc) if re.fullmatch('[A-Z0-9_]{1,100}',str(exc)) else 'REMOTE_FAILURE_REDACTED'
         result = {'protocol':'FAI_M2_STAGE_R26','status':'STOP','stage':sys.argv[1] if len(sys.argv)==2 else 'ADMISSION',
-                  'code':code,'details':exc.details if isinstance(exc,Stop) else {},'utc':utc(),'agentRealKeyAccess':False}
+                  'code':code,'details':exc.details if isinstance(exc,Stop) else {},'utc':utc(),'agentRealKeyAccess':False,
+                  'errorType':type(exc).__name__ if type(exc).__name__ in {'KeyError','TypeError','ValueError','OSError','Denied'} else 'CONTROLLED_STOP'}
         try: exclusive(Path(__file__).parent/'evidence'/(result['stage']+'.stop.json'),result)
         except BaseException: result['stopReceiptWritten']=False
         print(canonical(result).decode(),flush=True)

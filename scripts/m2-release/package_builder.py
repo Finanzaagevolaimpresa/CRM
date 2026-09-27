@@ -17,7 +17,7 @@ from common import canonical,digest,exclusive,load,need,value_sha
 import sealed_programs as sealed
 
 SEALED='b8f28c32e050176ddb2d13264ee6911bf51b808f'
-OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py','completed_backup.py','protect48.py')
+OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py','completed_backup.py','protect48.py','completed_release.py','release_evidence.py','return_qualification.json')
 REUSE=('common.py','isolated_restore.py','qualified_images.py','storage_probe.ps1','download_images.py',
        'binding.json','remote_release.py','owner_release.py','receive_package.py')
 OUTPUT=Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M2-rilascio-R26')
@@ -87,15 +87,22 @@ def build(review_path,owner_path,bundle_path):
     need(git('bundle','list-heads',str(bundle_path)).decode().split()==[sealed.M2,'refs/heads/codex/m2-runtime-candidate-r26'],'SOURCE_BUNDLE_REFERENCE')
     subprocess.run(['git','bundle','verify',str(bundle_path)],cwd=REPO,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
     from completed_backup import reconcile, RUN
+    from completed_release import reconcile as reconcile_release, RUN as COMPLETED_RELEASE
+    from release_evidence import details, validate
     reconcile()
+    reconcile_release()
+    binding=json.loads(render('a'*32)['binding.json'])
+    review=review | details(binding)
+    validate(review,binding)
     run,post=uuid.uuid4().hex,uuid.uuid4().hex
     OUTPUT.mkdir(exist_ok=True)
     output=OUTPUT/('M2-'+run)
     output.mkdir()
     files={name:exclusive(output/name,data) for name,data in render(run).items()}
-    for name,path in [('owner-binding.json',owner_path),('review.json',review_path),('candidate.bundle',bundle_path)]:
+    for name,path in [('owner-binding.json',owner_path),('candidate.bundle',bundle_path)]:
         with Path(path).open('rb') as incoming,(output/name).open('xb') as outgoing: shutil.copyfileobj(incoming,outgoing)
         files[name]={'bytes':(output/name).stat().st_size,'sha256':digest(output/name)}
+    files['review.json']=exclusive(output/'review.json',review)
     programs={'ssh':Path(r'C:\Windows\System32\OpenSSH\ssh.exe'),
         'powershell':Path(r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'),
         'python':Path(r'C:\Users\Utente\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'),
@@ -105,7 +112,8 @@ def build(review_path,owner_path,bundle_path):
         'imageArchiveSha256':ARCHIVE_SHA,'programs':{n:digest(p) for n,p in programs.items()},
         'authorityReference':'https://chatgpt.com/codex/threads/01a0c20b-b096-78a3-b6f6-db9153b914fe',
         'migrations':[],'configurationChanged':False,'plannedSessionRevocation':True,'autonomyComponentRequired':False,
-        'completedBackupRunId':RUN,'preBackupReplayAllowed':False}
+        'completedBackupRunId':RUN,'preBackupReplayAllowed':False,
+        'completedReleaseRunId':COMPLETED_RELEASE,'completedPhasesReplayAllowed':False}
     exclusive(output/'package.json',manifest)
     launcher="""$ErrorActionPreference = 'Stop'
 $base = $PSScriptRoot

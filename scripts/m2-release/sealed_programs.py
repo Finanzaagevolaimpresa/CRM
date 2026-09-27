@@ -166,6 +166,12 @@ class Release:
     result = replace(result, "'authorization': {'standingMandate': self.manifest['authorityReference'], 'key': load(self.work / 'key-provisioning-authority.json')},",
                      "'authorization': {'standingMandate': self.manifest['authorityReference'], 'configurationUnchanged': True, 'plannedSessionRevocation': True},")
     result = replace(result, "BASE / ('evidence-backup48-' + self.run_id)", "BASE / ('evidence-backup48-' + self.backup_run_id)")
+    result = replace(result, '    def deploy(self):\n        self.require_config_binding()', '    def deploy(self):\n        from release_evidence import validate\n        validate(self.review, self.b)\n        self.require_config_binding()')
+    for stage in ('migrate','recover','copies-backup'):
+        result = result.replace("self.stages.result('" + stage + "')", "self.completed_result('" + stage + "')")
+    result = replace(result, '        n05.validate_plan(plan)\n', '        n05.validate_plan(plan)\n        for reference in [*plan["gates"].values(), plan["compatibility"]]:\n            n05.validate_evidence(reference, plan, binding)\n')
+    result = replace(result, "        n05.require_published(Path(plan['receipt_path']))",
+                     "        if forward_error is not None and not Path(plan['receipt_path']).exists():\n            raise forward_error\n        n05.require_published(Path(plan['receipt_path']))")
     result = result.replace('PENDING_FRESH_LOGIN_AND_M1_USAGE','PENDING_FRESH_LOGIN_AND_M2_USAGE')
     compile(result,'transition_base.py','exec')
     return result.encode('utf-8')
@@ -198,7 +204,9 @@ def receiver(raw):
     result = replace(result, "    reuse_images(root, manifest['files'][IMAGE_NAME])\n",
                      "    sys.path.insert(0, str(root))\n"
                      "    from completed_backup import receive_prepared\n"
-                     "    receive_prepared(root)\n")
+                     "    receive_prepared(root)\n"
+                     "    from completed_release import receive_prepared as receive_completed_release\n"
+                     "    receive_completed_release(root)\n")
     result = replace(result,"'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,", "'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,")
     compile(result,'receive_package.py','exec')
     return result.encode('utf-8')
