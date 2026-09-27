@@ -1,0 +1,114 @@
+name: M5 initial services
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: m5-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-m5-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      browser-postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-m5-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-m5-browser-auth-not-production
+      AUTH_COOKIE_NAME: fai_m5_browser_session
+      APP_ORIGIN: http://127.0.0.1:3025
+      PORT: '3025'
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRACTICE_READINESS_MODE: synthetic
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      M5_DB_CONFIRMED: '1'
+      M5_BROWSER_CONFIRMED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Exact candidate and unchanged schema49
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/m5-evidence"
+          mkdir -p "$evidence"
+          echo "M5_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/m5-db-documents" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          test "$(psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 49
+      - name: Five complete PostgreSQL cases and negative gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/m5/service-db.test.ts | tee "$M5_EVIDENCE/database.tap"
+          grep -Eq '^# pass [1-9][0-9]*$' "$M5_EVIDENCE/database.tap"
+          grep -Fx '# fail 0' "$M5_EVIDENCE/database.tap"
+          grep -Fx '# skipped 0' "$M5_EVIDENCE/database.tap"
+      - name: Provision browser identity and isolated database
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in M5_BROWSER_PASSWORD PRIVILEGED_STEP_UP_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            export "$name=$value"
+            printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+          done
+          export DATABASE_URL='postgresql://postgres:synthetic-m5-only@127.0.0.1:5433/fai_crm_test?schema=public'
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/m5-browser-documents"
+          printf 'DATABASE_URL=%s\nLOCAL_DOCUMENT_STORAGE_ROOT=%s\n' "$DATABASE_URL" "$LOCAL_DOCUMENT_STORAGE_ROOT" >> "$GITHUB_ENV"
+          psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5433/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx tests/m5/provision-browser.ts
+      - name: Chromium five services and real branded document download
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev > "$M5_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3025/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          npx playwright test --config tests/m5/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m5-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/m5-evidence/schema-binding.json
+            ${{ runner.temp }}/m5-evidence/database.tap
+            ${{ runner.temp }}/m5-evidence/five-service-proof.json
+            ${{ runner.temp }}/m5-evidence/browser-proof.json
+            ${{ runner.temp }}/m5-evidence/app.log
+          if-no-files-found: error
+          retention-days: 14

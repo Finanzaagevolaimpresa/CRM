@@ -38,6 +38,15 @@ const n15BusinessReference = rule('CONFIDENTIAL', 'N15_PHASE1A_UNASSIGNED', 'DPO
 const n15PrivacyEvidence = rule('PERSONAL', 'N15_PHASE1A_UNASSIGNED', 'DPO_VALIDATION_REQUIRED');
 
 export const dataClassificationCatalog = Object.freeze({
+  initial_service_manual_v1: Object.freeze({
+    workflowId: operational, caseId: personalIdentifier, serviceId: personalIdentifier,
+    serviceCode: operational, responsibleUserId: personalIdentifier, humanReviewerIds: personalIdentifier,
+    versionId: operational, versionHash: operational, planHash: operational,
+    stage: operational, decision: operational, source: operational, agentId: operational,
+    agentVersionReference: operational, actorId: personalIdentifier, sessionId: operational,
+    documentVersionId: personalIdentifier, artifactHash: operational, recordedAt: operational,
+    reference: business, note: business,
+  }),
   approved_manual_communication_v1: Object.freeze({
     context: personalIdentifier,
     clientId: personalIdentifier,
