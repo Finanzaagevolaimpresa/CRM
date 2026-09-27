@@ -92,7 +92,12 @@ export async function readInitialServiceState(tx: Tx, context: InitialServiceCon
   const active = plan ? allReviews.filter(row => row.review.versionId === version.id && row.review.planHash === initialServicePlanHash(plan)) : [];
   // Stage order is explicit; timestamps can be identical within one millisecond.
   if (plan) active.sort((a,b) => initialServiceStages(plan).stages.indexOf(a.review.stage) - initialServiceStages(plan).stages.indexOf(b.review.stage));
-  const assessment = plan ? assessInitialServiceReviews(plan, active.map(row => row.review), version) : null;
+  let assessment = plan ? assessInitialServiceReviews(plan, active.map(row => row.review), version) : null;
+  // A new assignment plan cannot clear a change request on the same dossier version.
+  // Keep the original receipt and require a new content version to resume reviews.
+  if (assessment && allReviews.some(row => row.review.versionId === version.id && row.review.decision === 'REQUEST_CHANGES')) {
+    assessment = { ...assessment, ready: false, blocked: 'CHANGES_REQUIRED', nextStage: null };
+  }
   return { code, definition: INITIAL_SERVICES[code], plan, planHash: plan ? initialServicePlanHash(plan) : null,
     version, active, allReviews, assessment };
 }

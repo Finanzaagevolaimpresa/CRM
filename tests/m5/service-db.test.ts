@@ -98,3 +98,55 @@ test('M5 permission, atomic failure, concurrent stage, actual bytes, dual human 
   await assert.rejects(mutateInitialServiceWorkflow(db, f.actors.operator, { ...review, value: { ...review.value, stage: 'PRODUCER' } }));
   assert.equal((await state())!.engagementHistory.initialService!.active.length, 1);
 });
+
+
+test('M5 a rejected version stays blocked across unchanged and reassigned plans until a new content version', { skip: !enabled }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  await configure(f, true);
+  const state = async () => (await getEngagementDossierReadAccess(db, f.actors.admin, f.dossier.id))!.engagementHistory.initialService!;
+  const initial = await state(), plan = initial.plan!;
+  for (const stage of initialServiceStages(plan).stages) {
+    const human = stage === 'HUMAN_1';
+    await mutateInitialServiceWorkflow(db, human ? f.actors.human1 : f.actors.operator, { dossierId: f.dossier.id, intent: 'review', value: {
+      expectedPlanHash: initial.planHash, expectedVersionId: f.version.id, stage, decision: human ? 'REQUEST_CHANGES' : 'PASS',
+      note: 'Synthetic review requires corrected content before another review cycle.',
+      reference: 'SYNTHETIC_RECONFIGURE_' + stage, agentVersionReference: human ? null : 'SYNTHETIC_VERSION',
+      documentVersionId: human ? null : f.documentVersion.id,
+    } });
+    if (human) break;
+  }
+  const rejected = await state(), originalReviews = rejected.allReviews;
+  assert.equal(rejected.assessment?.blocked, 'CHANGES_REQUIRED');
+  for (const humanReviewerIds of [[f.actors.human1.userId, f.actors.human2.userId], [f.actors.human2.userId, f.actors.human1.userId]]) {
+    const prior = await state();
+    await mutateInitialServiceWorkflow(db, f.actors.admin, { dossierId: f.dossier.id, intent: 'configure', value: {
+      expectedPlanHash: prior.planHash, expectedVersionId: f.version.id, responsibleUserId: f.actors.operator.userId,
+      humanReviewerIds, outputKind: 'BUSINESS_PLAN', numericAnalysis: false, supportingAgents: ['A07'],
+    } });
+    const changed = await state();
+    assert.notEqual(changed.planHash, prior.planHash);
+    assert.deepEqual(changed.allReviews, originalReviews);
+    assert.equal(changed.assessment?.ready, false);
+    assert.equal(changed.assessment?.blocked, 'CHANGES_REQUIRED');
+    assert.equal(changed.assessment?.nextStage, null);
+    await assert.rejects(mutateInitialServiceWorkflow(db, f.actors.operator, { dossierId: f.dossier.id, intent: 'review', value: {
+      expectedPlanHash: changed.planHash, expectedVersionId: f.version.id, stage: 'A00', decision: 'PASS',
+      note: 'A new plan must not bypass the previous request for changes.', reference: 'SYNTHETIC_BLOCKED_A00',
+      agentVersionReference: 'SYNTHETIC_VERSION', documentVersionId: f.documentVersion.id,
+    } }));
+    await assert.rejects(reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
+      versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Unchanged rejected content must stay blocked.' }));
+  }
+  const version = await reviseEngagementDossier(db, f.actors.operator, { dossierId: f.dossier.id, expectedVersionId: f.version.id,
+    title: f.version.title, content: f.version.content + '\nCorrezione sintetica richiesta dai revisori.' });
+  const revised = await state();
+  assert.notEqual(version.id, f.version.id); assert.notEqual(version.contentHash, f.version.contentHash);
+  assert.equal(revised.assessment?.blocked, 'REVIEW_REQUIRED');
+  assert.equal(revised.assessment?.nextStage, 'A00'); assert.deepEqual(revised.allReviews, originalReviews);
+  await mutateInitialServiceWorkflow(db, f.actors.operator, { dossierId: f.dossier.id, intent: 'review', value: {
+    expectedPlanHash: revised.planHash, expectedVersionId: version.id, stage: 'A00', decision: 'PASS',
+    note: 'A genuinely new content version starts a new review cycle.', reference: 'SYNTHETIC_REVISED_A00',
+    agentVersionReference: 'SYNTHETIC_VERSION', documentVersionId: f.documentVersion.id,
+  } });
+  assert.equal((await state()).assessment?.nextStage, 'PRODUCER');
+});

@@ -182,8 +182,8 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true);
-      if (existing.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(existing.state)
-        || canonicalSha256(rowContext(existing)) !== canonicalSha256(input.context)) conflict();
+      if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
+        || canonicalSha256(rowContext(prior.row)) !== canonicalSha256(input.context)) conflict();
       if ((prior.box.restricted && !box.restricted)
         || (prior.snapshot.classification === 'COMPLAINT' && input.classification !== 'COMPLAINT')
         || (prior.snapshot.classification === 'SENSITIVE' && input.classification === 'ORDINARY')) denied();
