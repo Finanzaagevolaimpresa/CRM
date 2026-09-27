@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
 import tarfile
 import tempfile
@@ -65,6 +65,69 @@ class GeneratedTests(unittest.TestCase):
         self.assertNotIn(b'completed_release',remote)
         self.assertIn(b'M2_CONFIGURATION_DRIFT',remote)
         with self.assertRaisesRegex(ValueError,'SEALED_IDENTITY_DENIED'):generate.render('../arbitrary')
+
+    def test_source_runtime_is_preserved_in_prepare_status_and_both_roles(self):
+        run='e'*32
+        deployed='release-7ab126f8a2ef-m2-de4842fa7df64d6da023c53f808c48c0'
+        candidate='release-9508d0da1b96-m3-'+run
+        production=PurePosixPath('/home/faiadmin/.local/share/fai-crm-releases')
+        def runtime_value(name):
+            tree=ast.parse(self.files[name])
+            node=next(n for n in tree.body if isinstance(n,ast.Assign) and
+                any(isinstance(t,ast.Name) and t.id=='RUNTIME' for t in n.targets))
+            return str(eval(compile(ast.Expression(node.value),name,'eval'),{'__builtins__':{},'BASE':production}))
+        for role,expected in (('before',deployed),('after',candidate)):
+            for prefix in ('backup48_','observe48_'):
+                self.assertEqual(runtime_value(prefix+role+'.py'),str(production/expected))
+        sealed=imported(self.root/'sealed_programs.py','m3_path_sealed')
+        self.assertEqual(sealed.M1_RUNTIME,deployed)
+        self.assertEqual(sealed.identity('before',run)[2],deployed)
+        self.assertEqual(sealed.identity('after',run)[2],candidate)
+        remote=imported(self.root/'remote_release.py','m3_path_remote')
+        self.assertEqual(remote.OLD,Path(str(production))/deployed)
+        package=self.root/('m3-release-r32-'+run);package.mkdir(mode=0o700)
+        for name,raw in self.files.items():exclusive(package/name,raw)
+        (package/'evidence').mkdir(mode=0o700)
+        exclusive(package/'release-images.tar.gz',b'SYNTHETIC_NO_IMAGE_EXECUTION')
+        b=json.loads(self.files['binding.json'])|{'candidateImage':'sha256:'+'1'*64,'returnImage':'sha256:'+'2'*64}
+        review={'status':'PASS_FOR_MERGE','candidate':generate.CANDIDATE,'deltaSha256':'d'*64,
+            'recoveryScope':'NEW_PLAINTEXT_DATABASE_AND_DOCUMENT_SET',
+            **remote.validate_evidence_inputs.__globals__['details'](b,self.root/'qualification.json')}
+        exclusive(package/'review.json',review)
+        manifest={'runId':run,'postRunId':'f'*32,'candidate':generate.CANDIDATE,'deltaSha256':'d'*64,
+            'files':{name:{'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()} for name,raw in self.files.items()}}
+        exclusive(package/'package.json',manifest)
+        calls=[]
+        class NoExecutionCommands:
+            def __init__(this,seconds,cwd):this.cwd=cwd
+            def docker(this,command,*args):
+                calls.append((command,this.cwd))
+                if command=='ENGINE_IDENTITY':return b['target']['engineId'].encode()
+                if command=='APP_MINIMUM_STATUS':return b'SYNTHETIC_APP_STATUS'
+                raise AssertionError('UNEXPECTED_COMMAND: '+command)
+        with patch.object(remote,'BASE',self.root),patch.object(remote,'OLD',self.root/deployed),\
+             patch.object(remote,'private',side_effect=lambda path,**_:Path(path)),\
+             patch.object(remote,'complete_binding',return_value=b),patch.object(remote,'Commands',NoExecutionCommands),\
+             patch.object(remote,'os',types.SimpleNamespace(getuid=lambda:1000,getgid=lambda:1000,environ={})),\
+             patch.object(remote,'socket',types.SimpleNamespace(gethostname=lambda:'fai-crm-prod-02')),\
+             patch.dict(sys.modules,{'pwd':types.SimpleNamespace(getpwuid=lambda _:types.SimpleNamespace(pw_name='faiadmin'))}):
+            release=remote.Release(package)
+            self.assertEqual(release.c.cwd,self.root/deployed)
+            self.assertEqual(release.runtime,self.root/candidate)
+            self.assertTrue(release.status()['readOnly'])
+            selected=[]
+            def observer_module(path,*_):
+                selected.append(runtime_value(path.name))
+                class Observer:
+                    def __init__(this,binding):pass
+                    def observe(this):raise MutationBoundary()
+                return types.SimpleNamespace(Observer=Observer)
+            with patch.object(remote,'module',side_effect=observer_module):
+                with self.assertRaises(MutationBoundary):release.prepare()
+                release.stages.result=lambda stage:{'candidate':generate.CANDIDATE,'healthy':True,'appId':'a'*64}
+                with self.assertRaises(MutationBoundary):release.observer('after')
+            self.assertEqual(selected,[str(production/deployed),str(production/candidate)])
+        self.assertEqual(calls,[('ENGINE_IDENTITY',self.root/deployed),('APP_MINIMUM_STATUS',self.root/deployed)])
 
     def fixture(self):
         self.transition=imported(self.root/'transition_base.py','m3_test_transition')

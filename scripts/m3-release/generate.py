@@ -42,7 +42,7 @@ def member(text, name):
 
 
 def rename(text):
-    return text.replace('FAI_M2_', 'FAI_M3_').replace('_R26', '_R32').replace('m2-release-r26-', 'm3-release-r32-').replace('-m2-', '-m3-').replace('m2-r26-', 'm3-r32-').replace('M2_USAGE', 'M3_USAGE')
+    return text.replace('FAI_M2_', 'FAI_M3_').replace('_R26', '_R32').replace('m2-release-r26-', 'm3-release-r32-').replace("'-m2-'", "'-m3-'").replace('m2-r26-', 'm3-r32-').replace('M2_USAGE', 'M3_USAGE')
 
 
 def render(run_id, own=None):
