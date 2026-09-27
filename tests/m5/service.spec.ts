@@ -22,7 +22,7 @@ async function submit(page: Page, button: Locator) {
 test.afterAll(async () => db.$disconnect());
 test('M5 five service templates, authenticated actors, version-bound reviews, original logo export and synthetic delivery', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); expect(process.env.M5_BROWSER_CONFIRMED).toBe('1');
-  const ac = await browser.newContext(), oc = await browser.newContext(), hc = await browser.newContext();
+  const ac = await browser.newContext({ timezoneId: 'Europe/Rome' }), oc = await browser.newContext({ timezoneId: 'Europe/Rome' }), hc = await browser.newContext({ timezoneId: 'Europe/Rome' });
   const admin = await ac.newPage(), operator = await oc.newPage(), human = await hc.newPage();
   await login(admin, 'admin'); await login(operator, 'operator'); await login(human, 'human1');
   const evidence = [];
@@ -77,10 +77,15 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await operator.reload();
     const delivery = operator.locator('form').filter({ has: operator.locator('[name="evidenceSynthetic"]') });
     await delivery.locator('[name="reference"]').fill('SYNTHETIC_BROWSER_RECEIPT');
+    await delivery.locator('[name="deliveredAtLocal"]').fill('2026-09-27T12:00');
+    await expect(delivery.locator('[name="deliveredAt"]')).toHaveValue('2026-09-27T10:00:00.000Z');
     await delivery.locator('[name="evidenceSynthetic"]').check();
-    await delivery.getByRole('button', { name: 'Registra esito manuale' }).click();
+    await submit(operator, delivery.getByRole('button', { name: 'Registra esito manuale' }));
     await expect.poll(async () => db.engagementDossierDeliveryReceipt.count({ where: { authorization: { dossierId: item.dossierId } } })).toBe(1);
+    const receipt = await db.engagementDossierDeliveryReceipt.findFirstOrThrow({ where: { authorization: { dossierId: item.dossierId } } });
+    expect((receipt.evidence as { deliveredAt: string }).deliveredAt).toBe('2026-09-27T10:00:00.000Z');
     evidence.push({ code: item.code, dossierId: item.dossierId, archiveHash: createHash('sha256').update(bytes).digest('hex'), logoHash: decoded.logo });
+    console.log('M5_SYNTHETIC_BROWSER_SERVICE_PASS ' + item.code);
   }
   writeFileSync(join(root, 'browser-proof.json'), JSON.stringify({ synthetic: true, cases: evidence, realDelivery: false }, null, 2));
   await ac.close(); await oc.close(); await hc.close();
