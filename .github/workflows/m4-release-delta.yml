@@ -1,0 +1,77 @@
+name: M4 schema48 to49 owner release delta
+on:
+  pull_request:
+    paths:
+      - 'scripts/m4-release/**'
+      - '.github/workflows/m4-release-delta.yml'
+      - 'docs/M4_RELEASE_R33.md'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -I -B -S scripts/m4-release/test_release.py
+      - run: python -I -B -S scripts/m4-release/test_migration.py
+      - run: python -I -B -S scripts/m4-release/package_builder.py --delta
+  saved-images-and-migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: docker/setup-docker-action@v5
+        id: docker
+        with:
+          version: v29.6.1
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10934459652'
+          run-id: '36328704625'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-m4
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10919540739'
+          run-id: '36281830361'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-m3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - name: Install pinned age in the disposable runner
+        run: |
+          GOBIN="$RUNNER_TEMP/age-bin" go install filippo.io/age/cmd/...@v1.3.2
+          sudo install -m 755 "$RUNNER_TEMP/age-bin/age" "$RUNNER_TEMP/age-bin/age-keygen" /usr/local/bin/
+          test "$(age --version)" = 'v1.3.2'
+      - name: Qualify generated migration48to49, backup49, age and isolated recovery
+        env:
+          M2_CI_DOCKER_SOCKET: ${{ steps.docker.outputs.sock }}
+        run: python3 -I -B -S scripts/m4-release/qualify_delta.py qualified-m4/pr140-release-36328704625-1/release-images.tar.gz qualified-m3/pr140-release-36281830361-1/release-images.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m4-release-delta-${{ github.run_id }}
+          path: m4-release-ci-receipt.json
+          if-no-files-found: error
+          retention-days: 14
