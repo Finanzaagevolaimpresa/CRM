@@ -8,6 +8,7 @@ import uuid
 import time
 
 from common import Stop, digest, exclusive, module, need
+from qualify_protection import qualify_protection
 import package_builder as builder
 
 
@@ -109,7 +110,8 @@ def qualify_generated_backup(c, repo, binding):
                    'EXPECTED_MIGRATION_COUNT':'48','EXPECTED_IMAGE_PROVENANCE':'oci-labels',
                    'EXPECTED_RESOURCE_PROVENANCE':'authorized-legacy-compose-identity'})
         need(all((source/name).read_bytes() == raw for name,raw in originals.items()), 'CI_GENERATED_CANONICAL_CHANGED')
-        return {'r28ErrorReproduced':True,'errorBytes':47,'errorSha256':hashlib.sha256(
+        protection = qualify_protection(c, source, result, binding, work)
+        return {'protection':protection,'r28ErrorReproduced':True,'errorBytes':47,'errorSha256':hashlib.sha256(
             b'N05_FAILED|code=PRODUCTION_IMAGE_NOT_IMMUTABLE\n').hexdigest(),'generatedResourcePreflightPassed':True,
             'generatedEnvironmentUsed':True,'fullSchema48BackupPassed':True,'manifestVerified':True,'appResumed':True,
             'sourceToolsUnchanged':True,'databaseSha256':digest(result/'postgres.dump'),

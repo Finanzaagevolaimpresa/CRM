@@ -22,14 +22,16 @@ from qualified_images import archive_metadata, verify_images
 from registry_settlement import COUNT_SQL, PREFLIGHT_SQL, parse_counts, registry_engine
 from sealed_programs import BASE as BASE_STRING, M1, M1_TREE, M1_RUNTIME, M2, M2_TREE, MODES
 from transition_base import Release as Transition
+import completed_backup as completed
+from protect48 import qualify
 
 BASE = Path(BASE_STRING)
 OLD = BASE / M1_RUNTIME
-DEPENDENCIES = {'prepare': [], 'backup': ['prepare'], 'protect': ['backup'],
+DEPENDENCIES = {'prepare': [], 'protect': ['prepare'],
     'copies-backup': ['protect'], 'recover': ['copies-backup'], 'migrate': ['recover'],
     'deploy': ['migrate'], 'postcheck': ['deploy'], 'postbackup': ['postcheck'],
     'postprotect': ['postbackup'], 'copies-postbackup': ['postprotect'], 'final': ['copies-postbackup']}
-LIMITS = {'prepare': 540, 'backup': 1650, 'protect': 840, 'copies-backup': 60, 'recover': 840,
+LIMITS = {'prepare': 540, 'protect': 840, 'copies-backup': 60, 'recover': 840,
           'migrate': 120, 'deploy': 900, 'postcheck': 120, 'postbackup': 1650,
           'postprotect': 840, 'copies-postbackup': 60, 'final': 150, 'status': 120}
 KEY_SQL = '''BEGIN READ ONLY; SET LOCAL statement_timeout='8s';
@@ -59,7 +61,11 @@ class Release(Transition):
              self.review['deltaSha256'] == self.manifest['deltaSha256'] and
              self.review['recoveryScope'] == 'NEW_PLAINTEXT_DATABASE_AND_DOCUMENT_SET', 'REVIEW_NOT_QUALIFIED')
         self.work = private(root / 'evidence', directory=True)
-        self.runtime = BASE / ('release-' + M2[:12] + '-m2-' + self.run_id)
+        need(self.manifest['completedBackupRunId'] == completed.RUN and
+             self.manifest['preBackupReplayAllowed'] is False and
+             not {self.run_id, self.post_id} & {completed.RUN, completed.POST_RUN}, 'COMPLETED_BACKUP_BINDING')
+        self.backup_run_id = completed.RUN
+        self.runtime = completed.RUNTIME
         self.c = Commands(1800, OLD)
         self.stages = Stages(self.work, self.run_id)
         self.t = self.b['target']
@@ -72,7 +78,7 @@ class Release(Transition):
     def source(self, role):
         need(role in ('before', 'after'), 'SOURCE_ROLE')
         if role == 'before':
-            return self.t, M1, M1_TREE, self.run_id
+            return self.t, M1, M1_TREE, self.backup_run_id
         deployed = self.stages.result('deploy')
         need(deployed and deployed['candidate'] == M2 and deployed['healthy'], 'DEPLOY_NOT_CONFIRMED')
         return self.t | {'appId': deployed['appId'], 'appImage': self.b['candidateImage']}, M2, M2_TREE, self.post_id
@@ -89,8 +95,7 @@ class Release(Transition):
         return observed
 
     def prepare(self):
-        from consumed_preparation import reconcile
-        consumed = reconcile(remote=True)
+        consumed = completed.reconcile(remote=True)
         before = self.observer()
         need(before['otherActiveDbSessions'] == 0 and before['availableBytes'] >= 12 * 1024**3, 'SOURCE_CAPACITY_OR_WRITERS')
         metadata = decode(self.sql(KEY_SQL))
@@ -101,7 +106,7 @@ class Release(Transition):
         documents = decode(self.c.docker('DOCUMENT_CAPACITY_METADATA', 'exec', self.t['appId'], 'node', '-e',
             "const fs=require('fs'),p=require('path');let bytes=0,files=0;function v(d){for(const n of fs.readdirSync(d)){const f=p.join(d,n),s=fs.lstatSync(f);if(s.isSymbolicLink()||(!s.isFile()&&!s.isDirectory()))throw Error();if(s.isDirectory())v(f);else{bytes+=s.size;files++}if(files>20000||bytes>201326592)throw Error()}}v('/var/lib/fai-crm/documents');console.log(JSON.stringify({bytes,files}));"))
         need(self.c.run('AGE_VERSION', ['age','--version']).decode().strip() == 'v1.3.2', 'AGE_VERSION')
-        archive = private(self.root / 'release-images.tar.gz')
+        archive = private(completed.REMOTE / 'release-images.tar.gz')
         binding = complete_binding(archive, self.b)
         archive_metadata(archive, binding)
         store = decode(self.c.docker('IMAGE_STORE', 'info','--format',
@@ -109,22 +114,23 @@ class Release(Transition):
         need(store['version'] == self.b['imageStoreVersion'] and store['driver'] == 'overlayfs' and
              ['driver-type','io.containerd.snapshotter.v1'] in (store['status'] or []), 'IMAGE_STORE_DRIFT')
         images = verify_images(self.c, archive, binding)
-        need(not self.runtime.exists(), 'CANDIDATE_RUNTIME_OCCUPIED')
-        self.c.run('RUNTIME_CLONE', ['git','-c','init.templateDir=','clone','--no-checkout','--branch',
-                   'codex/m2-runtime-candidate-r26',self.root/'candidate.bundle',self.runtime],seconds=120)
-        self.c.run('RUNTIME_CHECKOUT', ['git','-C',self.runtime,'-c','core.hooksPath=/dev/null','checkout','-b','main',M2])
+        private(self.runtime, directory=True)
         need(self.c.run('RUNTIME_IDENTITY',['git','-C',self.runtime,'rev-parse','HEAD','HEAD^{tree}']).decode().split() == [M2,M2_TREE], 'RUNTIME_IDENTITY')
         for name, expected in self.b['canonicalPrograms'].items():
             need(digest(private(self.runtime/name)) == expected, 'QUALIFIED_PROGRAM_DRIFT')
         config = private(OLD/'.env.production')
-        exclusive(self.runtime/'.env.production', config.read_bytes())
+        need(digest(config) == consumed['configurationSha256'], 'COMPLETED_CONFIGURATION_DRIFT')
         need(digest(private(self.runtime/'.env.production')) == digest(config), 'CONFIGURATION_COPY_CHANGED')
+        set_path, receipt = self.backup_set()
+        kit = qualify(self.kit(), M1, M1_TREE)
+        kit.verify_tools(kit.tools_binding())
+        kit.verify_n05(set_path, self.protection_expected('before', receipt))
         after = self.observer()
         stable = ('appHealthy','postgresHealthy','postgresStartedAt','postgresRestartCount','ledgerChecksumsMatch','closedGates')
         need(all(after[k] == before[k] for k in stable), 'SOURCE_CHANGED_DURING_PREPARATION')
         return {'candidate':M2,'observation':after,'documentCapacity':documents,'images':images,
                 'configurationSha256':digest(config),'configurationChanged':False,'newCredentialsCreated':False,
-                'imageLoadPerformed':False,'runtimeApplicationChanged':False,'consumedPreparation':consumed,'migrationsRequired':[],
+                'imageLoadPerformed':False,'runtimeApplicationChanged':False,'completedBackup':consumed,'migrationsRequired':[],
                 'plannedSessionRevocation':True,'historicalAttemptsRepeated':False}
 
     def require_config_binding(self):
@@ -132,13 +138,11 @@ class Release(Transition):
         need(prepared and all(digest(private(p/'.env.production')) == prepared['configurationSha256']
                              for p in (OLD,self.runtime)), 'PROTECTED_CONFIGURATION_CHANGED')
 
-    def backup(self):
-        return self.make_backup('before')
-
     def postbackup(self):
         return self.make_backup('after')
 
     def make_backup(self, role):
+        need(role == 'after', 'PREBACKUP_REPLAY_DENIED')
         self.require_config_binding()
         before = self.observer(role)
         need(before['otherActiveDbSessions'] == 0, 'OTHER_DATABASE_WRITERS')
@@ -165,7 +169,10 @@ class Release(Transition):
         return {'receipt':result,'freshObservation':self.observer(role)}
 
     def backup_set(self, role='before'):
-        result = self.stages.result('backup' if role == 'before' else 'postbackup')['receipt']
+        if role == 'before':
+            result = completed.reconcile(remote=True)['backupReceipt']
+        else:
+            result = self.stages.result('postbackup')['receipt']
         _,_,_,run = self.source(role)
         path = BASE/('evidence-backup48-'+run)/'sets'/('backup48-'+run)
         need(result['set'] == str(path),'BACKUP_SET_PATH')
@@ -177,6 +184,13 @@ class Release(Transition):
     def postprotect(self):
         return self.protect_set('after')
 
+    def protection_expected(self, role, receipt):
+        target, commit, tree, _ = self.source(role)
+        return {'environment':'production','project':'fai-crm','source_commit':commit,'source_tree':tree,
+            'app_image_id':target['appImage'],'image_provenance':'oci-labels',
+            'resource_provenance':'authorized-legacy-compose-identity','migration_count':48,
+            'manifest_sha256':receipt['manifestSha256'],'checksums_sha256':receipt['checksumsSha256']}
+
     def protect_set(self, role):
         kit = self.kit()
         backup,receipt = self.backup_set(role)
@@ -187,10 +201,7 @@ class Release(Transition):
         exclusive(crypto/'application-environment',private(config/'.env.production').read_bytes())
         operations = self.work/('protect-'+role)
         operations.mkdir(mode=0o700)
-        expected = {'environment':'production','project':'fai-crm','source_commit':commit,'source_tree':tree,
-            'app_image_id':target['appImage'],'image_provenance':'oci-labels',
-            'resource_provenance':'authorized-legacy-compose-identity','migration_count':48,
-            'manifest_sha256':receipt['manifestSha256'],'checksums_sha256':receipt['checksumsSha256']}
+        expected = self.protection_expected(role, receipt)
         name = 'backup48.bundle.tar' if role == 'before' else 'post-backup48.bundle.tar'
         plan = {'schema':kit.SCHEMA,'phase':'protect','data_class':'production','run_id':run,
             'host':target['hostname'],'work_root':str(operations),'tools':kit.tools_binding(),
@@ -200,9 +211,12 @@ class Release(Transition):
             'cryptographic_sha256':kit.component_identity(crypto)['sha256'],'output':str(self.work/name)}
         path = self.work/('protect-'+role+'-plan.json')
         exclusive(path,plan)
-        result = decode(self.c.run('CANONICAL_N05_PROTECT',['python3','-I','-B','-S',
-            self.runtime/'scripts/n05/recovery_kit.py','protect','--plan',path,'--plan-sha256',digest(path),
-            '--authorize','FAI_CRM_N05_RECOVERY_PROTECT_V1'],seconds=780))
+        exclusive(self.work/('protect-'+role+'-binding.json'), {'planSha256':digest(path)})
+        raw = self.c.run('QUALIFIED_SCHEMA48_PROTECT',['python3','-I','-B','-S',
+            self.root/'protect48.py',role],seconds=780)
+        result = decode(raw)
+        need(result.get('status') == 'PROTECTION_VERIFIED', 'SCHEMA48_PROTECTION_STOP',
+             publicCode=result.get('code','PROTECTION_NOT_CONFIRMED'))
         need(result.pop('status',None) == 'PROTECTION_VERIFIED','N05_PROTECTION_NOT_VERIFIED')
         return {'ciphertext':name,**result,'recipientSha256':self.b['recipientSha256']}
 
@@ -220,11 +234,11 @@ class Release(Transition):
     def models(self):
         self.require_config_binding()
         n05 = self.n05()
-        baseline = load(BASE/('evidence-backup48-'+self.run_id)/'BASELINE.json')
+        baseline = load(BASE/('evidence-backup48-'+self.backup_run_id)/'BASELINE.json')
         plan = {'project':'fai-crm','source_app':{'id':self.t['appId'],'image_id':self.t['appImage']},
             'candidate':{'id':self.b['candidateImage']},'return_image':{'id':self.b['returnImage']},
             'postgres':baseline['postgres'],'ledger':{'schema':'prisma-m1-48'},'configs':{}}
-        prior = load(BASE/('evidence-backup48-'+self.run_id)/'configuration/frozen-source.json')
+        prior = load(BASE/('evidence-backup48-'+self.backup_run_id)/'configuration/frozen-source.json')
         adapter = n05.DockerEngine(plan,self.runtime)
         models = {'previous':prior,'candidate':adapter.model(self.b['candidateImage'],time.time()+60),
                   'return':adapter.model(self.b['returnImage'],time.time()+60)}
@@ -297,7 +311,7 @@ class Release(Transition):
     def final(self):
         result = self.postcheck()
         result['ownerUsageProof'] = 'PENDING_FRESH_LOGIN_AND_M2_USAGE'
-        result.update(preBackupVerified=True,postBackupVerified=True,
+        result.update(preBackupVerified=True,postBackupVerified=True,completedBackupRunId=self.backup_run_id,preBackupReplayed=False,
                       copiesBefore=self.stages.result('copies-backup'),copiesAfter=self.stages.result('copies-postbackup'),
                       recovery=self.stages.result('recover'),migrationsApplied=[],autonomyQualified=False)
         return result

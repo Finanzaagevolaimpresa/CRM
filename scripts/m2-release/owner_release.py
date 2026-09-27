@@ -16,7 +16,7 @@ from download_images import acquire
 
 ROOT = Path(__file__).resolve().parent
 base.ROOT = ROOT
-TIMES = {'prepare':600,'backup':1800,'protect':900,'copies-backup':90,'recover':900,'migrate':180,
+TIMES = {'prepare':600,'protect':900,'copies-backup':90,'recover':900,'migrate':180,
     'deploy':960,'postcheck':180,'postbackup':1800,'postprotect':900,'copies-postbackup':90,'final':210,
     'status':180,'fetch-backup':600,'fetch-postbackup':600}
 base.TIMES = TIMES
@@ -98,10 +98,9 @@ def main():
         image=acquire(ROOT,manifest)
         print('3/10 — Trasferimento del solo pacchetto corretto e riuso immagini sul server.',flush=True)
         upload(manifest,image)
-        print('4/10 — Riconciliazione schema48, chiave M1 esistente, risorse e immagini.',flush=True)
+        print('4/10 — Riconciliazione del backup riuscito e dello stato corrente schema48.',flush=True)
         stage_call(manifest,'prepare')
-        print('5/10 — Backup corrente48; revoca con audit delle sessioni e riavvio controllato.',flush=True)
-        stage_call(manifest,'backup')
+        print('5/10 — Cifratura del backup gia riuscito e copie C:/F:; nessun nuovo backup iniziale.',flush=True)
         protected=stage_call(manifest,'protect')
         stage_call(manifest,'copies-backup',{'copies':copies(manifest,protected,'backup')})
         print('6/10 — Recuperabilita del nuovo set in ambiente isolato.',flush=True)

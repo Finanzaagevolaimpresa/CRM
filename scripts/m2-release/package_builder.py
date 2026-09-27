@@ -17,7 +17,7 @@ from common import canonical,digest,exclusive,load,need,value_sha
 import sealed_programs as sealed
 
 SEALED='b8f28c32e050176ddb2d13264ee6911bf51b808f'
-OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py','consumed_preparation.py')
+OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py','completed_backup.py','protect48.py')
 REUSE=('common.py','isolated_restore.py','qualified_images.py','storage_probe.ps1','download_images.py',
        'binding.json','remote_release.py','owner_release.py','receive_package.py')
 OUTPUT=Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M2-rilascio-R26')
@@ -44,6 +44,7 @@ def delta():
 
 
 def render(run_id,reader=source):
+    from completed_backup import RUN
     old=lambda name:reader('scripts/m1-assisted/'+name,SEALED)
     result={name:reader('scripts/m2-release/'+name) for name in OWN}
     result.update({name:old(name) for name in ('common.py','isolated_restore.py','qualified_images.py','storage_probe.ps1')})
@@ -53,8 +54,8 @@ def render(run_id,reader=source):
     result['transport_base.py']=old('download_images.py')
     result['receive_package.py']=sealed.receiver(old('receive_package.py'))
     for role in ('before','after'):
-        result['backup48_'+role+'.py']=sealed.backup(reader('scripts/pr140/owner_backup46.py',SEALED),role,run_id)
-        result['observe48_'+role+'.py']=sealed.observer(reader('scripts/m1-executor/observe_m1.py',SEALED),role,run_id)
+        result['backup48_'+role+'.py']=sealed.backup(reader('scripts/pr140/owner_backup46.py',SEALED),role,RUN)
+        result['observe48_'+role+'.py']=sealed.observer(reader('scripts/m1-executor/observe_m1.py',SEALED),role,RUN)
     b=json.loads(old('binding.json'))
     b.update(protocol='FAI_M2_SCHEMA48_BINDING_R26',candidate=sealed.M2,candidateTree=sealed.M2_TREE,
         sourceCommit=sealed.M1,sourceTree=sealed.M1_TREE,
@@ -85,7 +86,7 @@ def build(review_path,owner_path,bundle_path):
          owner['drives']['C']['disk']!=owner['drives']['F']['disk'],'OWNER_PHYSICAL_BINDING')
     need(git('bundle','list-heads',str(bundle_path)).decode().split()==[sealed.M2,'refs/heads/codex/m2-runtime-candidate-r26'],'SOURCE_BUNDLE_REFERENCE')
     subprocess.run(['git','bundle','verify',str(bundle_path)],cwd=REPO,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
-    from consumed_preparation import reconcile
+    from completed_backup import reconcile, RUN
     reconcile()
     run,post=uuid.uuid4().hex,uuid.uuid4().hex
     OUTPUT.mkdir(exist_ok=True)
@@ -103,7 +104,8 @@ def build(review_path,owner_path,bundle_path):
         'deltaSha256':delta(),'reviewedHead':review['reviewedHead'],'files':files,
         'imageArchiveSha256':ARCHIVE_SHA,'programs':{n:digest(p) for n,p in programs.items()},
         'authorityReference':'https://chatgpt.com/codex/threads/01a0c20b-b096-78a3-b6f6-db9153b914fe',
-        'migrations':[],'configurationChanged':False,'plannedSessionRevocation':True,'autonomyComponentRequired':False}
+        'migrations':[],'configurationChanged':False,'plannedSessionRevocation':True,'autonomyComponentRequired':False,
+        'completedBackupRunId':RUN,'preBackupReplayAllowed':False}
     exclusive(output/'package.json',manifest)
     launcher="""$ErrorActionPreference = 'Stop'
 $base = $PSScriptRoot
