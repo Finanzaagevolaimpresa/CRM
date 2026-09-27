@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient, type Client, type Project, type ClientServic
 import { z } from 'zod';
 import { configureInitialService, readInitialServiceState, recordInitialServiceReview, assertInitialServiceReady, initialServiceChoices, type InitialServiceRuntime } from './initial-service-workflow';
 import { InitialServiceError } from './initial-service-contract';
+import { mapSerializableConflict, SerializableConflictError } from './serializable';
 import { canViewChecklistItem, canViewClientContext, canViewDocument } from './access-control';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
@@ -437,8 +438,29 @@ export async function reviewEngagementDossierVersion(db: Db, claimed: AuthSessio
 }
 
 export async function exportApprovedEngagementDossier(db: Db, claimed: AuthSession, raw: unknown, artifact: Uint8Array | string, runtime: WorkRuntime = {}) {
-  const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, format: z.enum(['markdown', 'docx']) }), raw); const now = runtime.now?.() ?? new Date();
-  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.read', now); const context = await scope(tx, current, input.dossierId); const { dossier } = context; await serviceGate(tx, current, context, runtime); if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } }); if (!version || version.dossierId !== dossier.id) throw new EngagementDossierError('DENIED'); const artifactHash = createHash('sha256').update(artifact).digest('hex'); const record = await tx.engagementDossierExport.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash, exportedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_export', dossier.id, { exportId: record.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash }); return { version, record }; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, format: z.enum(['markdown', 'docx']) }), raw);
+  // Only a transaction known to have aborted may be repeated. Each attempt
+  // rechecks session, scope, current approval and M5 evidence before recording.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await db.$transaction(async (tx) => {
+        const current = await actor(tx, claimed, 'dossier.read', runtime.now?.() ?? new Date());
+        const context = await scope(tx, current, input.dossierId);
+        const { dossier } = context;
+        await serviceGate(tx, current, context, runtime);
+        if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY');
+        const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } });
+        if (!version || version.dossierId !== dossier.id) throw new EngagementDossierError('DENIED');
+        const artifactHash = createHash('sha256').update(artifact).digest('hex');
+        const record = await tx.engagementDossierExport.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash, exportedById: current.userId } });
+        await audit(tx, runtime, current.userId, 'engagement_dossier_export', dossier.id, { exportId: record.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash });
+        return { version, record };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (!(mapSerializableConflict(error) instanceof SerializableConflictError)) throw error;
+      if (attempt >= 2) throw new EngagementDossierError('CONFLICT');
+    }
+  }
 }
 
 export async function authorizeEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: WorkRuntime = {}) {

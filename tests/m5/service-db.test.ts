@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { initialServiceCodes, initialServicePlanHash, initialServiceStages } from '../../src/lib/initial-service-contract';
 import { buildMarkdownDocx } from '../../src/lib/docx-export';
-import { mutateInitialServiceWorkflow, getEngagementDossierReadAccess, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
+import { EngagementDossierError, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
   authorizeEngagementDossierDelivery, recordEngagementDossierDelivery, reviseEngagementDossier } from '../../src/lib/engagement-dossier';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticUser, syntheticCase } from './fixtures';
@@ -19,6 +19,80 @@ test.before(async () => { if (enabled) await assertAiOrchestratorEphemeralDataba
 test.after(async () => {
   if (enabled && process.env.M5_EVIDENCE) { mkdirSync(process.env.M5_EVIDENCE, { recursive: true }); writeFileSync(join(process.env.M5_EVIDENCE, 'five-service-proof.json'), JSON.stringify({ synthetic: true, cases: proof, realDelivery: false }, null, 2)); }
   await db.$disconnect();
+});
+
+test('M5 concurrent exports recover a real PostgreSQL serialization abort without duplicate receipts', { skip: !enabled, timeout: 30_000 }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  await configure(f); await finishStages(f);
+  await reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
+    versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Synthetic concurrent export qualification.' });
+  const marker = await db.client.create({ data: { type: 'persona_fisica', displayName: 'Synthetic serialization barrier' } });
+  let arrivals = 0, aborts = 0;
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  const attempts = [0, 0];
+  const connection = (index: number) => ({
+    $transaction: async <T>(operation: (tx: Prisma.TransactionClient) => Promise<T>, options: { isolationLevel: Prisma.TransactionIsolationLevel }) => {
+      const first = ++attempts[index] === 1;
+      try {
+        return await db.$transaction(async tx => {
+          // Both snapshots read the same synthetic row. Updating it after the
+          // export forces PostgreSQL to abort one whole transaction.
+          await tx.client.findUniqueOrThrow({ where: { id: marker.id } });
+          if (first) { if (++arrivals === 2) release(); await barrier; }
+          const result = await operation(tx);
+          await tx.client.update({ where: { id: marker.id }, data: { displayName: 'Synthetic export ' + index } });
+          return result;
+        }, { ...options, timeout: 10_000 });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && ['P2034', 'P2010'].includes(error.code)) aborts += 1;
+        throw error;
+      }
+    },
+  }) as unknown as Pick<PrismaClient, '$transaction'>;
+  const input = { dossierId: f.dossier.id, versionId: f.version.id, format: 'markdown' };
+  const results = await Promise.all([
+    exportApprovedEngagementDossier(connection(0), f.actors.operator, input, f.version.content),
+    exportApprovedEngagementDossier(connection(1), f.actors.admin, input, f.version.content),
+  ]);
+  assert.ok(aborts >= 1); assert.ok(attempts.every(count => count >= 1 && count <= 3));
+  assert.equal(new Set(results.map(result => result.record.id)).size, 2);
+  const records = await db.engagementDossierExport.findMany({ where: { dossierId: f.dossier.id } });
+  const audits = await db.auditLog.findMany({ where: { entityId: f.dossier.id, event: 'engagement_dossier_export' } });
+  assert.equal(records.length, 2); assert.equal(audits.length, 2);
+  for (const record of records) assert.equal(record.artifactHash, createHash('sha256').update(f.version.content).digest('hex'));
+  proof.push({ kind: 'concurrent-approved-exports', engine: 'PostgreSQL', aborts, attempts, committedExports: records.length, committedAudits: audits.length });
+});
+
+test('M5 export rechecks revocation after an aborted attempt and leaves no partial receipt', { skip: !enabled }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  await configure(f); await finishStages(f);
+  await reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id,
+    versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Synthetic retry revocation qualification.' });
+  let attempts = 0;
+  const wrapped = {
+    $transaction: async <T>(operation: (tx: Prisma.TransactionClient) => Promise<T>, options: { isolationLevel: Prisma.TransactionIsolationLevel }) => {
+      const first = ++attempts === 1;
+      try {
+        return await db.$transaction(async tx => {
+          const result = await operation(tx);
+          if (first) throw new Prisma.PrismaClientKnownRequestError('Injected serialization abort after receipt writes', { code: 'P2034', clientVersion: 'test' });
+          return result;
+        }, options);
+      } catch (error) {
+        if (first) await db.internalSession.update({ where: { id: f.actors.operator.sessionId },
+          data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: f.actors.admin.userId } });
+        throw error;
+      }
+    },
+  } as unknown as Pick<PrismaClient, '$transaction'>;
+  await assert.rejects(exportApprovedEngagementDossier(wrapped, f.actors.operator,
+    { dossierId: f.dossier.id, versionId: f.version.id, format: 'markdown' }, f.version.content),
+  (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED');
+  assert.equal(attempts, 2);
+  assert.equal(await db.engagementDossierExport.count({ where: { dossierId: f.dossier.id } }), 0);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.dossier.id, event: 'engagement_dossier_export' } }), 0);
+  proof.push({ kind: 'export-retry-revocation', injectedAbort: true, attempts, committedExports: 0, committedAudits: 0 });
 });
 async function actors() { return { operator: await syntheticUser(db, 'consulente', 'Responsabile M5'), admin: await syntheticUser(db, 'admin', 'Admin M5'),
   human1: await syntheticUser(db, 'revisore', 'Revisore umano 1'), human2: await syntheticUser(db, 'revisore', 'Revisore umano 2') }; }
