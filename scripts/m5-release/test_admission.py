@@ -37,4 +37,3 @@ if __name__=='__main__':
         'test_model_drift_prevents_stage_completion'))
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(EolTests))
     raise SystemExit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
-
