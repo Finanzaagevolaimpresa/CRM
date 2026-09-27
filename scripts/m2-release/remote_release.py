@@ -89,6 +89,8 @@ class Release(Transition):
         return observed
 
     def prepare(self):
+        from consumed_preparation import reconcile
+        consumed = reconcile(remote=True)
         before = self.observer()
         need(before['otherActiveDbSessions'] == 0 and before['availableBytes'] >= 12 * 1024**3, 'SOURCE_CAPACITY_OR_WRITERS')
         metadata = decode(self.sql(KEY_SQL))
@@ -106,7 +108,6 @@ class Release(Transition):
             '{"version":{{json .ServerVersion}},"driver":{{json .Driver}},"status":{{json .DriverStatus}}}'))
         need(store['version'] == self.b['imageStoreVersion'] and store['driver'] == 'overlayfs' and
              ['driver-type','io.containerd.snapshotter.v1'] in (store['status'] or []), 'IMAGE_STORE_DRIFT')
-        self.c.docker('LOAD_QUALIFIED_M2_IMAGES', 'load','--input',archive, seconds=240)
         images = verify_images(self.c, archive, binding)
         need(not self.runtime.exists(), 'CANDIDATE_RUNTIME_OCCUPIED')
         self.c.run('RUNTIME_CLONE', ['git','-c','init.templateDir=','clone','--no-checkout','--branch',
@@ -123,7 +124,7 @@ class Release(Transition):
         need(all(after[k] == before[k] for k in stable), 'SOURCE_CHANGED_DURING_PREPARATION')
         return {'candidate':M2,'observation':after,'documentCapacity':documents,'images':images,
                 'configurationSha256':digest(config),'configurationChanged':False,'newCredentialsCreated':False,
-                'imageLoadPerformed':True,'runtimeApplicationChanged':False,'migrationsRequired':[],
+                'imageLoadPerformed':False,'runtimeApplicationChanged':False,'consumedPreparation':consumed,'migrationsRequired':[],
                 'plannedSessionRevocation':True,'historicalAttemptsRepeated':False}
 
     def require_config_binding(self):

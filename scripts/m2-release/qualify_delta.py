@@ -22,6 +22,7 @@ from image_binding import complete_binding
 from qualified_images import verify_images
 import package_builder as builder
 from registry_settlement import SQL, PREFLIGHT_SQL, COUNT_SQL, parse_counts
+from qualify_generated_backup import qualify_generated_backup
 
 
 class CiCommands(Commands):
@@ -68,6 +69,7 @@ def main():
     c.docker('CI_LOAD_SAVED_M2_IMAGES','load','--input',image_archive,seconds=300)
     images=verify_images(c,image_archive,binding)
     c.docker('CI_POSTGRES_IMAGE','pull','postgres:16-alpine',seconds=120)
+    generated_backup=qualify_generated_backup(c,REPO,binding)
     pg_image=c.inspect('image','postgres:16-alpine')['Id']
     work=REPO/('m2-release-ci-'+run)
     work.mkdir(mode=0o700)
@@ -153,7 +155,7 @@ def main():
             'liveSessionGuardObserved':True,'preflightNoMutation':True,'auditFailureAtomicRollback':True,
             'sessionRowsAndDigestsPreserved':True,'auditedRevocationCounts':counts,'registryReadyAfterSettlement':True,
             'keyRegistryPreserved':True,'restore':restored,'ledger48Preserved':True,'migrationsRequiredInProduction':[],
-            'productionConnected':False,'autonomyQualified':False}
+            'productionConnected':False,'autonomyQualified':False,'generatedBackup':generated_backup}
         exclusive(REPO/'m2-release-ci-receipt.json',result)
         print(canonical(result).decode(),flush=True)
     finally:

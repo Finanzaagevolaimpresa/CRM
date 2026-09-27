@@ -81,6 +81,15 @@ REGISTRY_METHODS = r'''
 '''
 
 
+
+BACKUP_TAG_ADAPTER = r'''
+    production_guard = b'[[ "$APP_IMAGE" =~ ^fai-crm:pr[0-9]+-[0-9a-f]{12}$ ]]'
+    legacy_guard = b'[[ "${APP_IMAGE:-}" =~ ^fai-crm:pr[0-9]+-[0-9a-f]{12}$ ]]'
+    need(data.count(production_guard) == data.count(legacy_guard) == 1, "BACKUP_TAG_GUARD_SOURCE_CHANGED")
+    exact_guard = ('[[ "${APP_IMAGE:-}" == "' + TAG + '" ]]').encode()
+    data = data.replace(production_guard, exact_guard).replace(legacy_guard, exact_guard)
+'''
+
 def backup(raw, role, run_id):
     text = verified(raw, BACKUP_TEMPLATE)
     commit, tree, runtime = identity(role, run_id)
@@ -90,6 +99,12 @@ def backup(raw, role, run_id):
             'TAG': repr('fai-crm:r05-candidate-' + commit)}.items():
         text = assignment(text, name, expression)
     text = schema48(text.replace('backup46', 'backup48').replace('schema46', 'schema48'))
+    text = replace(text, '    return sources | {"scripts/n05/lib.sh": data}',
+                   BACKUP_TAG_ADAPTER + '\n    return sources | {"scripts/n05/lib.sh": data}')
+    text = replace(text, '    value = stderr[-65536:].lower()',
+                   '    if stderr == b"N05_FAILED|code=PRODUCTION_IMAGE_NOT_IMMUTABLE\\n":\n'
+                   '        return "PRODUCTION_IMAGE_NOT_IMMUTABLE"\n'
+                   '    value = stderr[-65536:].lower()')
     text = replace(text, '"INTERNAL_SESSION_MODE": "legacy", "PRIVILEGED_ACCESS_MODE": "disabled"',
                    ', '.join(repr(k) + ': ' + repr(v) for k, v in MODES.items()))
     text = replace(text, '("SECURE_LEAD_GATEWAY_MODE", "COMMERCIAL_LEAD_INBOX_MODE", "CONTROLLED_INTAKE_MODE", "PRACTICE_READINESS_MODE", "INTERNAL_ENGAGEMENT_MODE")',
@@ -176,10 +191,13 @@ def receiver(raw):
              isinstance(n,ast.FunctionDef) and n.name in ('need','receive')]
     result = '\n'.join(''.join(lines[n.lineno-1:n.end_lineno]) for n in nodes)
     result = result.replace('m1-assisted-r21-','m2-release-r26-')
-    result = replace(result, "(set(manifest['files']) - {IMAGE_NAME}) | {'package.json'}", "set(manifest['files']) | {'release-images.tar.gz','package.json'}")
+    result = replace(result, "(set(manifest['files']) - {IMAGE_NAME}) | {'package.json'}", "set(manifest['files']) | {'package.json'}")
     result = replace(result, "        for member in members:\n", "        need(binding['image']['sha256'] == manifest['imageArchiveSha256'] and 0 < binding['image']['bytes'] <= 1024**3, 'QUALIFIED_IMAGE_BINDING')\n        for member in members:\n")
     result = replace(result, "            need(member.size == expected['bytes'], 'PACKAGE_FILE_SIZE')", "            if member.name == 'release-images.tar.gz': expected = binding['image']\n            need(member.size == expected['bytes'], 'PACKAGE_FILE_SIZE')")
-    result = replace(result, "    reuse_images(root, manifest['files'][IMAGE_NAME])\n", '')
-    result = replace(result,"'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,", "'imagesReusedFromConsumedPreparation': False, 'imageBytesTransferred': binding['image']['bytes'],")
+    result = replace(result, "    reuse_images(root, manifest['files'][IMAGE_NAME])\n",
+                     "    sys.path.insert(0, str(root))\n"
+                     "    from consumed_preparation import receive_prepared\n"
+                     "    receive_prepared(root)\n")
+    result = replace(result,"'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,", "'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,")
     compile(result,'receive_package.py','exec')
     return result.encode('utf-8')
