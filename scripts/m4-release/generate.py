@@ -73,6 +73,21 @@ def render(run_id):
 
     remote = result['remote_release.py'].decode()
     remote = change(remote,'decode, digest,','decode, defer_interruptions, digest,')
+    protection_selector = '''    def protection_kit(self, role):
+        need(role in ('before', 'after'), 'FIXED_PROTECTION_ROLE_REQUIRED')
+        runtime = OLD if role == 'before' else self.runtime
+        _, commit, tree, _ = self.source(role)
+        need(self.c.run('PROTECTION_TOOLS_IDENTITY', ['git', '-C', runtime,
+             'rev-parse', 'HEAD', 'HEAD^{tree}']).decode().split() == [commit, tree],
+             'PROTECTION_TOOLS_IDENTITY')
+        return module(private(runtime / 'scripts/n05/recovery_kit.py'), 'role_bound_protection',
+                      self.b['canonicalPrograms']['scripts/n05/recovery_kit.py'])
+
+'''
+    remote = change(remote,'    def protection_expected(self, role, receipt):',
+                    protection_selector+'    def protection_expected(self, role, receipt):')
+    remote = change(remote,'        kit = self.kit()\n        backup,receipt = self.backup_set(role)',
+                    '        kit = self.protection_kit(role)\n        backup,receipt = self.backup_set(role)')
     remote = change(remote,"'migrate': 120", "'migrate': 540")
     m1_source = source('scripts/m1-assisted/remote_release.py',m3.M1_TOOLS).decode()
     key_sql = next(ast.literal_eval(n.value) for n in ast.parse(m1_source).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='KEY_SQL' for t in n.targets))

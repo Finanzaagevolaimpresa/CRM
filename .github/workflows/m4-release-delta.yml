@@ -26,6 +26,7 @@ jobs:
       - run: python -I -B -S scripts/m4-release/test_release.py
       - run: python -I -B -S scripts/m4-release/test_migration.py
       - run: python -I -B -S scripts/m4-release/test_download.py
+      - run: python -I -B -S scripts/m4-release/test_protection_resume.py
       - run: python -I -B -S scripts/m4-release/package_builder.py --delta
   saved-images-and-migration:
     runs-on: ubuntu-latest
