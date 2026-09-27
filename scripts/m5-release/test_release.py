@@ -61,23 +61,11 @@ class NoMigrationTests(GeneratedTests):
         r.manifest={'migrations':[]}
         r.stages=types.SimpleNamespace(result=lambda _:{'status':'PASS'})
         calls=[]
-        r.observer=lambda:calls.append('observe') or {'ledgerCount':49,'zeroIncomplete':True}
+        r.observer=lambda:calls.append('observe') or {'ledgerCount':49,'zeroIncomplete':True,'liveSessions':0,'otherActiveDbSessions':0}
         r.rows=lambda expected:calls.append('ledger') or [[name,sha] for name,sha in sorted(expected.items())]
-        r.receipt=lambda stage,**data:{'stage':stage,'status':'PASS',**data}
         r.c=types.SimpleNamespace(run=lambda *a,**k:(_ for _ in ()).throw(AssertionError('COMMAND_FORBIDDEN')),
                                  docker=lambda *a,**k:(_ for _ in ()).throw(AssertionError('DOCKER_FORBIDDEN')))
         return r,calls
-
-    def test_no_migration_reads_exact_ledger_without_starting_a_program(self):
-        r,calls=self.no_migration_fixture()
-        result=r.migrate()
-        self.assertEqual(calls,['observe','ledger'])
-        self.assertEqual(result['before'],49)
-        self.assertEqual(result['after'],49)
-        self.assertTrue(result['ledger49Unchanged'])
-        self.assertEqual(result['newMigrations'],[])
-        self.assertIsNone(result['migrator'])
-        self.assertNotIn('ledger48',r.b)
 
     def test_migration_authority_and_recovery_failure_deny_before_observation(self):
         r,calls=self.no_migration_fixture()
@@ -92,6 +80,9 @@ class NoMigrationTests(GeneratedTests):
         r.observer=lambda:{'ledgerCount':48,'zeroIncomplete':True}
         with self.assertRaisesRegex(Stop,'SCHEMA49_OBSERVATION_REQUIRED'):r.migrate()
         self.assertEqual(calls,[])
+        r.observer=lambda:{'ledgerCount':49,'zeroIncomplete':True,'liveSessions':1,'otherActiveDbSessions':0}
+        with self.assertRaisesRegex(Stop,'PRE_DEPLOY_SESSIONS_CHANGED'):r.migrate()
+        self.assertEqual(calls,[])
 
 
 if __name__=='__main__':
@@ -100,7 +91,6 @@ if __name__=='__main__':
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ImageTests))
     for name in ('test_protection_accepts_schema49_only_for_each_exact_source_role',
                  'test_generated_recover_receives_the_complete_schema49_ledger',
-                 'test_no_migration_reads_exact_ledger_without_starting_a_program',
                  'test_migration_authority_and_recovery_failure_deny_before_observation'):
         suite.addTest(NoMigrationTests(name))
     result=unittest.TextTestRunner(verbosity=2).run(suite)

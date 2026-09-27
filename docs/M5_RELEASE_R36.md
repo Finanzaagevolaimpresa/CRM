@@ -20,8 +20,10 @@ Un solo avvio normale PowerShell verifica programmi e identità fisiche C:/F:,
 acquisisce e trasferisce l'immagine qualificata, riconcilia M4 e prepara M5.
 Esegue backup schema49 corrente con revoca auditata delle sessioni, cifratura,
 copie C:/F: e recupero isolato del nuovo database/documenti. Il passaggio
-migrate controlla soltanto il ledger49: nessun migratore, comando di migrazione
-o modifica dello schema è callable. Una lista di migrazioni non vuota è negata.
+migrate confronta il ledger49, richiede assenza di sessioni e prepara/verifica i
+modelli congelati per il deploy con sole osservazioni dell'ambiente. Nessun
+migratore, comando di migrazione o modifica dello schema è callable. Una lista
+di migrazioni non vuota è negata. La ricevuta è prodotta dal dispatcher reale.
 
 Seguono deploy esatto, controlli applicazione/PostgreSQL/HTTPS e registry,
 backup49 successivo distinto, cifratura e copie, verifica finale. I precedenti
@@ -37,6 +39,15 @@ repository sorgenti shallow distinti, backup49 reali generati per entrambi,
 cifratura/decifratura age1.3.2 dei tre componenti sintetici, recupero isolato
 e confronto del ledger dopo il metodo generato che non applica migrazioni.
 Il downloader è attraversato con lo ZIP originale esatto.
+
+La regressione attraversa dispatcher, Stages.complete e lettura della ricevuta,
+generazione effettiva dei modelli e validatori canonici prima del forward.
+Soltanto le osservazioni Docker sono sintetiche in questa prova di protocollo;
+la stessa sequenza legge inoltre il ledger PostgreSQL reale nel job Docker.
+Nessun metodo receipt viene aggiunto alle fixture e nessun modello di output
+è precreato. Un modello difforme impedisce di completare la fase.
+Gli attributi Git impongono LF ai sorgenti M5; il builder rifiuta CRLF. La CI
+confronta gli hash generati realmente su Windows e Linux in un job bloccante.
 
 Il recupero produttivo riguarda il set DB/documenti in chiaro sullo stesso VPS.
 Non attesta nuova decifratura produttiva C:/F:, configurazione o applicazione

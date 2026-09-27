@@ -23,9 +23,18 @@ def git(*args):
     return subprocess.check_output(['git',*args],cwd=REPO,timeout=90)
 
 
+def source_hashes(folder=HERE):
+    files = {}
+    for p in folder.iterdir():
+        if p.suffix not in ('.py','.json'):continue
+        raw = p.read_bytes()
+        need(b'\r' not in raw,'M5_SOURCE_LF_REQUIRED',file=p.name)
+        files[p.name] = hashlib.sha256(raw).hexdigest()
+    return files
+
+
 def delta():
-    files = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.iterdir() if p.suffix in ('.py','.json')}
-    return value_sha({'sources':files,'generated':inventory()})
+    return value_sha({'sources':source_hashes(),'generated':inventory()})
 
 
 def build(review_path,owner_path,bundle_path):

@@ -93,9 +93,14 @@ def render(run_id):
         observation = self.observer()
         need(observation['ledgerCount'] == 49 and observation['zeroIncomplete'] is True,
              'SCHEMA49_OBSERVATION_REQUIRED')
+        need(observation['liveSessions'] == observation['otherActiveDbSessions'] == 0,
+             'PRE_DEPLOY_SESSIONS_CHANGED')
         rows = self.rows(self.b['ledger49'])
-        return self.receipt('migrate', before=49, after=49, newMigrations=[],
-                            ledger49Unchanged=True, ledgerDigest=value_sha(rows), migrator=None)
+        self.models()
+        need(self.rows(self.b['ledger49']) == rows, 'LEDGER49_CHANGED_DURING_MODEL_PREPARATION')
+        return {'before':49, 'after':49, 'newMigrations':[], 'ledger49Unchanged':True,
+                'ledgerDigest':value_sha(rows), 'migrator':None,
+                'modelsSha256':digest(self.work/'models.json')}
 
 """
     remote = change(remote,member(remote,'migrate'),no_migration.rstrip())

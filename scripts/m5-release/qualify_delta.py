@@ -86,20 +86,8 @@ with tempfile.TemporaryDirectory(prefix='m5-qualified-',dir=REPO) as folder:
     if raw.count(restore)!=1:raise SystemExit('CI_RECOVERY_INSERTION_CHANGED')
     raw=raw.replace(restore,generated_restore)
     raw=raw.replace("'restore':restored","'restore':restored,'generatedRecoverUsed':True")
-    check="""        from remote_release import Release
-        from types import SimpleNamespace
-        admission=Release.__new__(Release)
-        admission.b=binding
-        admission.manifest={'migrations':[]}
-        admission.stages=SimpleNamespace(result=lambda _: {'status':'PASS'})
-        admission.observer=lambda:{'ledgerCount':len(rows()),'zeroIncomplete':True}
-        def exact_rows(expected):
-            current=rows()
-            ledger_valid(current,expected)
-            return current
-        admission.rows=exact_rows
-        admission.receipt=lambda stage,**fields:{'stage':stage,**fields}
-        no_migration=admission.migrate()
+    check="""        from admission_fixture import exercise
+        no_migration=exercise(HELPERS,work/'admission-proof',binding,rows)
         need(no_migration['newMigrations']==[] and no_migration['migrator'] is None and
              no_migration['before']==no_migration['after']==49 and rows()==before,
              'GENERATED_NO_MIGRATION_CHANGED_LEDGER')
