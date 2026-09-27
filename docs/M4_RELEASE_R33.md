@@ -59,3 +59,17 @@ non si inventano pratiche, approvazioni o invii per dichiarare una prova complet
 Le autorizzazioni di rilascio e migrazione M4 sono quelle del mandato vigente;
 il pacchetto richiede PASS e CI sul proprio HEAD esatto prima dell'avvio.
 La qualifica dell'autonomia resta distinta.
+
+## Correzione R34 del controllo immagini
+
+Il downloader generato confronta la ricevuta completa con la qualificazione M4
+schema49 vincolata, correggendo il precedente confronto residuo con schema48.
+La CI attraversa lo stesso metodo di estrazione usando lo ZIP GitHub originale,
+prima di usare l'archivio per le prove Docker. I test rifiutano schema48 e campi
+di qualificazione cambiati prima di creare l'archivio estratto.
+
+Un pacchetto nuovo può ricevere una copia locale dello ZIP già scaricato:
+dimensioni, SHA256 e ricevuta devono corrispondere prima del riuso. Uno ZIP
+locale difforme ferma il percorso senza scaricare o sovrascrivere nulla. Il
+pacchetto storico, il marker e la ricevuta STOP restano invariati; la ripresa
+usa un nuovo run e riconcilia nuovamente M3 prima delle operazioni produttive.

@@ -25,6 +25,7 @@ jobs:
         with: { python-version: '3.12' }
       - run: python -I -B -S scripts/m4-release/test_release.py
       - run: python -I -B -S scripts/m4-release/test_migration.py
+      - run: python -I -B -S scripts/m4-release/test_download.py
       - run: python -I -B -S scripts/m4-release/package_builder.py --delta
   saved-images-and-migration:
     runs-on: ubuntu-latest
@@ -41,13 +42,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: '10934459652'
-          run-id: '36328704625'
-          repository: Finanzaagevolaimpresa/CRM
-          github-token: ${{ github.token }}
-          path: qualified-m4
+      - name: Verify real M4 ZIP through the generated owner downloader
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/Finanzaagevolaimpresa/CRM/actions/artifacts/10934459652/zip > "$RUNNER_TEMP/m4-qualified.zip"
+          python3 -I -B -S scripts/m4-release/test_download.py --qualified-zip "$RUNNER_TEMP/m4-qualified.zip" qualified-m4/pr140-release-36328704625-1
       - uses: actions/download-artifact@v4
         with:
           artifact-ids: '10919540739'
