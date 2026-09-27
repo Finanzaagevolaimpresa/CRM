@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { NextResponse } from 'next/server';
 import { auditClientDossierExport } from '@/lib/actions';
 import { requirePermission } from '@/lib/auth';
@@ -29,6 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const docx = approvedVersion ? buildMarkdownDocx({
     title: approvedVersion.title,
     content: approvedVersion.content,
+    ...(context.engagementHistory?.initialService ? { logo: await readFile(join(process.cwd(), 'public', 'logo-fai.png')) } : {}),
     exportedAt: new Date(),
   }) : buildClientDossierDocx({
     title: dossier.title,

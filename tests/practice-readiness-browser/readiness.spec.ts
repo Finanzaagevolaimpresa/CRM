@@ -761,10 +761,20 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   expect((await db.clientDossier.findUniqueOrThrow({ where: { id: corrected.id } })).approvedVersionId).toBeTruthy();
 
   for (const [index, dossierId] of dossierIds.entries()) {
+    const exportsBeforeNavigation = await db.engagementDossierExport.count({ where: { dossierId } });
     await page.goto(`${app}/client-dossiers/${dossierId}`);
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('link', { name: 'Esporta approvato .md' }).click();
-    expect((await downloadPromise).suggestedFilename()).toContain('.md');
+    const exportLink = page.getByRole('link', { name: 'Esporta approvato .md', exact: true });
+    await expect(exportLink).toHaveAttribute('download', '');
+    await page.waitForLoadState('networkidle');
+    // Merely displaying an approved dossier must not prefetch or audit an export.
+    expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation);
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30_000 }),
+      exportLink.click(),
+    ]);
+    expect(await download.failure()).toBeNull();
+    expect(download.suggestedFilename()).toContain('.md');
+    expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation + 1);
     const approved = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: approved.approvedVersionId! } });
     const clientBeforeExport = await db.client.findUniqueOrThrow({ where: { id: approved.clientId } });
