@@ -13,6 +13,25 @@ exec(compile(raw,'pinned_m4_protocol_tests.py','exec'),globals())
 
 
 class NoMigrationTests(GeneratedTests):
+    def test_protection_accepts_schema49_only_for_each_exact_source_role(self):
+        protection=imported(self.root/'protect48.py','m5_protection_boundary')
+        roles=((generate.SOURCE,generate.SOURCE_TREE),(generate.CANDIDATE,generate.CANDIDATE_TREE))
+        for commit,tree in roles:
+            seen=[]
+            kit=types.SimpleNamespace(SUPPORTED_SOURCE_MIGRATION_COUNTS=(43,46),
+                verify_source_schema=lambda *args:seen.append(args))
+            protection.qualify(kit,commit,tree).verify_source_schema(commit,tree,49)
+            self.assertEqual(seen,[(commit,tree,49)])
+            self.assertEqual(kit.SUPPORTED_SOURCE_MIGRATION_COUNTS,(49,))
+            for bad_commit,bad_tree,count in ((commit,tree,48),(commit,tree,50),('0'*40,tree,49),(commit,'0'*40,49)):
+                with self.assertRaisesRegex(Stop,'PROTECTION_SOURCE_NOT_QUALIFIED'):
+                    kit.verify_source_schema(bad_commit,bad_tree,count)
+            self.assertEqual(seen,[(commit,tree,49)])
+        for commit,tree in roles:
+            kit=types.SimpleNamespace(SUPPORTED_SOURCE_MIGRATION_COUNTS=(43,46),verify_source_schema=lambda *_:None)
+            with self.assertRaisesRegex(Stop,'PROTECTION_SOURCE_NOT_QUALIFIED'):
+                protection.qualify(kit,commit,'0'*40)
+
     def test_generated_recover_receives_the_complete_schema49_ledger(self):
         remote=imported(self.root/'remote_release.py','m5_schema49_recover')
         r=remote.Release.__new__(remote.Release)
@@ -79,7 +98,8 @@ if __name__=='__main__':
     suite=unittest.TestSuite()
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(GeneratedTests))
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ImageTests))
-    for name in ('test_generated_recover_receives_the_complete_schema49_ledger',
+    for name in ('test_protection_accepts_schema49_only_for_each_exact_source_role',
+                 'test_generated_recover_receives_the_complete_schema49_ledger',
                  'test_no_migration_reads_exact_ledger_without_starting_a_program',
                  'test_migration_authority_and_recovery_failure_deny_before_observation'):
         suite.addTest(NoMigrationTests(name))

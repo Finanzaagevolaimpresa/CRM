@@ -101,6 +101,10 @@ def render(run_id):
     remote = change(remote,member(remote,'migrate'),no_migration.rstrip())
     remote = change(remote,"self.b['ledger48']","self.b['ledger49']")
     result['remote_release.py'] = remote.encode()
+    protection = change(result['protect48.py'].decode(),
+        'SOURCES = {M1: (M1_TREE,48), M2: (M2_TREE,49)}',
+        'SOURCES = {M1: (M1_TREE,49), M2: (M2_TREE,49)}')
+    result['protect48.py'] = protection.replace('M3/schema48 and M4/schema49','M4/schema49 and M5/schema49').encode()
     owner = result['owner_release.py'].decode().replace('M4','M5').replace(
         'SCHEMA48-49-R33','SCHEMA49-R36').replace('backup48.bundle.tar','backup49.bundle.tar')
     owner = owner.replace('schema48','schema49').replace('corrente48','corrente49')
