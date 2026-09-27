@@ -33,6 +33,21 @@ function parse<T extends z.ZodTypeAny>(schema: T, raw: unknown): z.infer<T> {
 }
 function json(value: unknown) { return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue; }
 
+async function readTransaction<T>(db: Db, read: (tx: Tx) => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await db.$transaction(read, { timeout: 30_000 });
+    } catch (error) {
+      const aborted = error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2034' || (error.code === 'P2010' &&
+          (error.meta?.code === '40001' || error.meta?.code === '40P01')));
+      // The entire read, including current session and permissions, starts again.
+      // Domain denials, connection failures and uncertain outcomes are not retried.
+      if (!aborted || attempt === 3) throw error;
+    }
+  }
+}
+
 async function actor(tx: Tx, claimed: AuthSession, permission: Permission, admin = false) {
   if (!claimed.active || claimed.expiresAt * 1000 <= Date.now() || !uuid.safeParse(claimed.sessionId).success) denied();
   const row = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId!, userId: claimed.userId });
@@ -292,7 +307,7 @@ export async function recordManualMessageEvidence(db: Db, claimed: AuthSession, 
 export async function readPracticeCommunications(db: Db, claimed: AuthSession, rawContext: unknown, page = 1) {
   const context = parse(communicationContextSchema, rawContext);
   if (!Number.isSafeInteger(page) || page < 1 || page > 200) throw new ApprovedCommunicationError('INVALID');
-  return db.$transaction(async tx => {
+  return readTransaction(db, async tx => {
     const current = await actor(tx, claimed, 'practice_communications.read');
     const scope = await contextScope(tx, current, context);
     const rows = await tx.approvedCommunication.findMany({ where: context.kind === 'READINESS'
@@ -343,7 +358,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
     return { context, client: { id: scope.client.id, name: scope.client.displayName }, messages, documents, page, hasMore: rows.length > 100 && page < 200,
       mailboxes: boxesWithQualification,
       canWrite: hasPermission(current, 'practice_communications.write'), canPrepare: hasPermission(current, 'practice_communications.mark_used'), isAdmin: current.role === 'admin' };
-  }, { timeout: 30_000 });
+  });
 }
 
 const mailboxConfigurationSchema = z.object({
@@ -457,7 +472,7 @@ export async function linkAmbiguousReply(db: Db, claimed: AuthSession, raw: unkn
 }
 
 export async function readCommunicationAdministration(db: Db, claimed: AuthSession) {
-  return db.$transaction(async tx => {
+  return readTransaction(db, async tx => {
     await actor(tx, claimed, 'practice_communications.read', true);
     const mailboxes = [];
     for (const box of await tx.communicationMailbox.findMany({ orderBy: { address: 'asc' } })) mailboxes.push({ ...box, qualification: await effectiveQualification(tx, box) });

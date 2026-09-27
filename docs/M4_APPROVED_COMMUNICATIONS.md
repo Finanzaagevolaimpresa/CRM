@@ -1,5 +1,7 @@
 # M4 — Comunicazioni esatte approvate e canale email manuale
 
+Le letture delle comunicazioni e della loro amministrazione ripetono l'intera transazione per al massimo tre tentativi totali soltanto dopo un aborto PostgreSQL accertato (`P2034`, `40001`, `40P01`). Ogni tentativo rilegge sessione, permessi e perimetro; dinieghi, errori di connessione ed esiti incerti non vengono ripetuti. La correzione deriva dal deadlock tra lettura admin e operatore riprodotto nella CI `36327928080` e da una regressione che forza il medesimo ciclo di lock. Non estende la ripetizione a preparazione, approvazione, invio o altre scritture.
+
 Il percorso si apre dalla pratica M2 (`PracticeReadiness`) o dalla pratica tecnica già esistente. Commerciale e tecnico preparano la bozza; soltanto un admin attivo con sessione corrente e conferma privilegiata può approvare la fotografia esatta. L'approvazione del dossier e le vecchie note non sostituiscono questa approvazione.
 
 La fotografia lega canale, pratica/cliente, casella e revisione, mittente, Reply-To, A/CC/BCC, oggetto, testo e versioni/hash/dimensioni degli allegati. Ogni modifica crea una versione immutabile nuova e torna a bozza. Le vecchie approvazioni rimangono conservate ma non autorizzano la nuova versione. Reclami e caselle riservate restano admin; un aggiornamento non può abbassare la riservatezza dello storico. Una casella diventata riservata non può tornare pubblica attraverso questa configurazione.
