@@ -16,6 +16,13 @@ jobs:
         options: >-
           --health-cmd="pg_isready -U postgres -d fai_crm_test"
           --health-interval=5s --health-timeout=5s --health-retries=10
+      browser-postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-m4-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
     env:
       DATABASE_URL: postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test?schema=public
       APP_ENV: test
@@ -76,7 +83,7 @@ jobs:
           grep -Eq '^# pass [1-9][0-9]*$' "$M4_BROWSER_EVIDENCE/database.tap"
           grep -Fx '# fail 0' "$M4_BROWSER_EVIDENCE/database.tap"
           grep -Fx '# skipped 0' "$M4_BROWSER_EVIDENCE/database.tap"
-      - name: Provision separate browser schema and masked synthetic credentials
+      - name: Provision isolated browser database and masked synthetic credentials
         shell: bash
         run: |
           set -euo pipefail
@@ -86,10 +93,10 @@ jobs:
             export "$name=$value"
             printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
           done
-          export DATABASE_URL='postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test?schema=m4_browser'
+          export DATABASE_URL='postgresql://postgres:synthetic-m4-only@127.0.0.1:5433/fai_crm_test?schema=public'
           export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/m4-browser-documents"
           printf 'DATABASE_URL=%s\nLOCAL_DOCUMENT_STORAGE_ROOT=%s\n' "$DATABASE_URL" "$LOCAL_DOCUMENT_STORAGE_ROOT" >> "$GITHUB_ENV"
-          psql 'postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA m4_browser'
+          psql 'postgresql://postgres:synthetic-m4-only@127.0.0.1:5433/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           node --import tsx tests/m4/provision-browser.ts
       - name: Real Chromium approval and manual message path
