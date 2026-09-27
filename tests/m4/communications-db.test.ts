@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { PrismaClient, type RoleCode } from '@prisma/client';
+import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { saveApprovedMessageDraft, submitApprovedMessage, approveExactMessage, prepareManualMessage, recordManualMessageEvidence,
   configureCommunicationMailbox, qualifyCommunicationMailbox, acquireManualReply, linkAmbiguousReply,
@@ -216,5 +216,81 @@ test('M4 an editor waiting for the row lock cannot overwrite a concurrent prepar
     assert.equal((await db.communicationAttempt.findUniqueOrThrow({ where: { id: prepared.attemptId } })).state, 'SENT');
   } finally {
     clearTimeout(timeout); releaseRead(); await editing;
+  }
+});
+
+test('M4 simultaneous admin and operator reads recover from the actual cross-user deadlock without writes', { skip: !enabled, timeout: 40_000 }, async () => {
+  const f = await fixture(), binding = await approved(f), before = await footprint(binding.messageId);
+  let signalMessage = () => {}, signalAdminWait = () => {};
+  const messageHeld = new Promise<void>(resolve => { signalMessage = resolve; });
+  const adminWaiting = new Promise<void>(resolve => { signalAdminWait = resolve; });
+  const attempts = { admin: 0, operator: 0 }, aborts: unknown[] = [];
+  function instrument(role: keyof typeof attempts): PrismaClient {
+    return { $transaction: async (read: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) => {
+      const first = ++attempts[role] === 1;
+      try {
+        return await db.$transaction(async tx => read(new Proxy(tx, {
+          get(target, key) {
+            const original = Reflect.get(target, key);
+            if (key !== '$queryRaw' || !first) return original;
+            return async (...args: unknown[]) => {
+              const query = args[0];
+              const sql = (Array.isArray(query) ? query : (query as Prisma.Sql).strings).join('?');
+              if (role === 'admin' && sql.includes('FROM "ApprovedCommunication"') && sql.includes('FOR UPDATE')) signalAdminWait();
+              const result = await Reflect.apply(original, target, args);
+              if (role === 'admin' && sql.includes('FROM "InternalSession"')) await messageHeld;
+              if (role === 'operator' && sql.includes('FROM "ApprovedCommunication"') && sql.includes('FOR UPDATE')) {
+                signalMessage(); await adminWaiting;
+              }
+              return result;
+            };
+          },
+        })), options);
+      } catch (error) { aborts.push(error); throw error; }
+    } } as unknown as PrismaClient;
+  }
+  const reading = Promise.all([
+    readPracticeCommunications(instrument('admin'), f.admin, f.context),
+    readPracticeCommunications(instrument('operator'), f.operator, f.context),
+  ]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([reading, new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => { signalMessage(); signalAdminWait(); reject(new Error('M4_READ_BARRIER_TIMEOUT')); }, 20_000);
+    })]);
+    assert.equal(aborts.length, 1);
+    const error = aborts[0];
+    assert.ok(error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === 'P2034' || (error.code === 'P2010' && error.meta?.code === '40P01')));
+    assert.equal(attempts.admin + attempts.operator, 3);
+    assert.ok(result.every(value => value.messages.length === 1 && value.messages[0].id === binding.messageId));
+    assert.deepEqual(await footprint(binding.messageId), before);
+  } finally { clearTimeout(timeout); signalMessage(); signalAdminWait(); await reading.catch(() => {}); }
+});
+
+test('M4 retried reads revalidate revoked sessions after confirmed PostgreSQL rollback', { skip: !enabled }, async () => {
+  for (const kind of ['practice', 'administration'] as const) {
+    const f = await fixture(), binding = await approved(f), before = await footprint(binding.messageId);
+    let attempts = 0;
+    const intercepted = { $transaction: async (read: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) => {
+      const attempt = ++attempts;
+      try {
+        return await db.$transaction(async tx => {
+          const result = await read(tx);
+          if (attempt === 1) await tx.$executeRaw`DO $$ BEGIN RAISE EXCEPTION USING ERRCODE='40P01', MESSAGE='M4_SYNTHETIC_READ_ABORT'; END $$`;
+          return result;
+        }, options);
+      } catch (error) {
+        if (attempt === 1) {
+          assert.ok(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2010' && error.meta?.code === '40P01');
+          await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: new Date() } });
+        }
+        throw error;
+      }
+    } } as unknown as PrismaClient;
+    await assert.rejects(kind === 'practice' ? readPracticeCommunications(intercepted, f.admin, f.context)
+      : readCommunicationAdministration(intercepted, f.admin), failure('DENIED'));
+    assert.equal(attempts, 2);
+    assert.deepEqual(await footprint(binding.messageId), before);
   }
 });
