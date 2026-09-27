@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: python -I -B -S scripts/m2-release/test_release.py
+      - run: python -I -B -S scripts/m2-release/test_r29.py
       - run: python -I -B -S scripts/m2-release/package_builder.py --delta
   saved-images-and-schema48:
     runs-on: ubuntu-latest

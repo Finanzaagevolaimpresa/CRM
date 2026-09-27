@@ -109,7 +109,8 @@ class SealedTests(unittest.TestCase):
         self.assertNotIn('e67bea',code)
         self.assertIn("binding['image']['sha256'] == manifest['imageArchiveSha256']",code)
         self.assertIn('PACKAGE_PATH_OCCUPIED_RECONCILE_ONLY',code)
-        self.assertIn("'release-images.tar.gz','package.json'",code)
+        self.assertIn("set(manifest['files']) | {'package.json'}",code)
+        self.assertIn("receive_prepared(root)",code)
 
     def test_generated_modules_import_and_owner_is_bound(self):
         with tempfile.TemporaryDirectory(dir=REPO/'artifacts' if (REPO/'artifacts').exists() else None) as folder:

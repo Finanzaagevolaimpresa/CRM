@@ -44,27 +44,9 @@ def extract(path,root):
 
 
 def acquire(root,manifest):
-    need(digest(transport.GH) == manifest['programs']['gh'],'GITHUB_PROGRAM_CHANGED')
-    status,out,err,overflow = transport.bounded_command(['api','repos/Finanzaagevolaimpresa/CRM/actions/artifacts/'+str(ARTIFACT)],65536,30)
-    need(status == 0 and not overflow,'QUALIFIED_ARTIFACT_METADATA_UNAVAILABLE')
-    artifact = decode(out)
-    need(artifact['id'] == ARTIFACT and artifact['size_in_bytes'] == ZIP_BYTES and
-         artifact['digest'] == 'sha256:'+ZIP_SHA and artifact['expired'] is False and
-         artifact['workflow_run']['id'] == RUN and artifact['workflow_run']['head_sha'] == CANDIDATE,
-         'QUALIFIED_ARTIFACT_CHANGED_OR_EXPIRED')
-    deadline = time.monotonic()+600
-    # The mandate permits no more than two identical failed attempts.
-    transport.RETRIES = 2
-    events = []
-    path = root/'qualified-images.zip'
-    with path.open('xb') as output:
-        offset = 0
-        while offset < ZIP_BYTES:
-            end = min(ZIP_BYTES,offset+transport.BLOCK)-1
-            block = transport.obtain_range(ARTIFACT,offset,end,ZIP_BYTES,deadline,events)
-            output.write(block); output.flush(); os.fsync(output.fileno())
-            offset += len(block)
-            print('Immagini M2: %d%% (%d/%d MB).' % (offset*100//ZIP_BYTES,offset//1000000,ZIP_BYTES//1000000),flush=True)
-    result = extract(path,root)
-    exclusive(root/'images-acquired.json',result | {'events':events,'productionMutationPerformed':False})
+    from consumed_preparation import reconcile, copy_archive
+    proof = reconcile()
+    need(manifest['imageArchiveSha256'] == IMAGE_SHA, 'REUSED_IMAGE_BINDING')
+    result = copy_archive(root)
+    exclusive(root/'images-acquired.json', result | {'reconciliation':proof, 'productionMutationPerformed':False})
     return result

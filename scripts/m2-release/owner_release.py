@@ -36,7 +36,7 @@ def upload(manifest,image):
     archive = ROOT/'owner-transfer.tar'
     need(not archive.exists(),'TRANSFER_ALREADY_STARTED_RECONCILE_ONLY')
     with tarfile.open(archive,'x') as target:
-        for name in [*manifest['files'],'package.json','release-images.tar.gz']:
+        for name in [*manifest['files'],'package.json']:
             source = private(ROOT/name)
             info = target.gettarinfo(str(source),arcname=name)
             info.uid=info.gid=1000
@@ -94,9 +94,9 @@ def main():
     try:
         print('1/10 — Identita fisiche C:/F: e programmi; nessuna modifica ai permessi.',flush=True)
         base.storage()
-        print('2/10 — Immagini M2 qualificate: scaricamento con avanzamento, massimo 10 minuti.',flush=True)
+        print('2/10 — Riuso verificato delle immagini M2 gia scaricate; nessun nuovo download.',flush=True)
         image=acquire(ROOT,manifest)
-        print('3/10 — Trasferimento del pacchetto verificato; massimo 10 minuti.',flush=True)
+        print('3/10 — Trasferimento del solo pacchetto corretto e riuso immagini sul server.',flush=True)
         upload(manifest,image)
         print('4/10 — Riconciliazione schema48, chiave M1 esistente, risorse e immagini.',flush=True)
         stage_call(manifest,'prepare')

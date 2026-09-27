@@ -17,7 +17,7 @@ from common import canonical,digest,exclusive,load,need,value_sha
 import sealed_programs as sealed
 
 SEALED='b8f28c32e050176ddb2d13264ee6911bf51b808f'
-OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py')
+OWN=('remote_release.py','owner_release.py','download_images.py','registry_settlement.py','image_binding.py','sealed_programs.py','consumed_preparation.py')
 REUSE=('common.py','isolated_restore.py','qualified_images.py','storage_probe.ps1','download_images.py',
        'binding.json','remote_release.py','owner_release.py','receive_package.py')
 OUTPUT=Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M2-rilascio-R26')
@@ -85,6 +85,8 @@ def build(review_path,owner_path,bundle_path):
          owner['drives']['C']['disk']!=owner['drives']['F']['disk'],'OWNER_PHYSICAL_BINDING')
     need(git('bundle','list-heads',str(bundle_path)).decode().split()==[sealed.M2,'refs/heads/codex/m2-runtime-candidate-r26'],'SOURCE_BUNDLE_REFERENCE')
     subprocess.run(['git','bundle','verify',str(bundle_path)],cwd=REPO,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
+    from consumed_preparation import reconcile
+    reconcile()
     run,post=uuid.uuid4().hex,uuid.uuid4().hex
     OUTPUT.mkdir(exist_ok=True)
     output=OUTPUT/('M2-'+run)
