@@ -1,4 +1,6 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+import { INITIAL_SERVICE_LOGO_SHA256 } from './initial-service-contract';
 
 const FAI_DISCLAIMER = 'Documento interno di lavoro. Finanza Agevola Impresa S.r.l. non eroga finanziamenti, non promette contributi e non garantisce esiti o erogazioni. Offre consulenza tecnica, strategica e di orientamento.';
 
@@ -56,14 +58,14 @@ function crc32(buffer: Buffer) {
 function u16(value: number) { const b = Buffer.alloc(2); b.writeUInt16LE(value); return b; }
 function u32(value: number) { const b = Buffer.alloc(4); b.writeUInt32LE(value); return b; }
 
-function zip(files: Array<{ name: string; content: string }>) {
+function zip(files: Array<{ name: string; content: string | Buffer }>) {
   const chunks: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
 
   for (const file of files) {
     const name = Buffer.from(file.name);
-    const data = Buffer.from(file.content, 'utf8');
+    const data = typeof file.content === 'string' ? Buffer.from(file.content, 'utf8') : file.content;
     const crc = crc32(data);
     const local = Buffer.concat([u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name, data]);
     chunks.push(local);
@@ -173,20 +175,23 @@ export function buildCommercialOfferDocx(input: CommercialOfferDocxInput) {
   ]);
 }
 
-export function buildMarkdownDocx(input: { title: string; exportedAt: Date; content: string }) {
-  const body = [
+export function buildMarkdownDocx(input: { title: string; exportedAt: Date; content: string; logo?: Buffer }) {
+  if (input.logo && createHash('sha256').update(input.logo).digest('hex') !== INITIAL_SERVICE_LOGO_SHA256) throw new Error('FAI_LOGO_MISMATCH');
+  const width = 1828800, height = input.logo ? Math.round(width * input.logo.readUInt32BE(20) / input.logo.readUInt32BE(16)) : 0;
+  const logo = input.logo ? `<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="${width}" cy="${height}"/><wp:docPr id="1" name="Logo originale FAI"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="1" name="logo-fai.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>` : '';
+  const body = [logo,
     paragraph('Finanza Agevola Impresa S.r.l.', 'Title'),
     paragraph(input.title, 'Heading1'),
     paragraph(`Data generazione/export: ${input.exportedAt.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' })}`),
-    markdownToWordXml(input.content),
+    markdownToWordXml(input.logo ? input.content.replace('![Logo originale FAI](logo-fai.png)', '') : input.content),
   ].join('');
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style></w:styles>`;
   const numbering = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`;
-  return zip([
-    { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>` },
+  return zip([...(input.logo ? [{ name: 'word/media/logo-fai.png', content: input.logo }] : []),
+    { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${input.logo ? '<Default Extension="png" ContentType="image/png"/>' : ''}</Types>` },
     { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
-    { name: 'word/_rels/document.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>` },
+    { name: 'word/_rels/document.xml.rels', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>${input.logo ? '<Relationship Id="rIdLogo" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo-fai.png"/>' : ''}</Relationships>` },
     { name: 'word/document.xml', content: document }, { name: 'word/styles.xml', content: styles }, { name: 'word/numbering.xml', content: numbering },
   ]);
 }

@@ -4,6 +4,7 @@ import { Card, EmptyState, PageHeader, StatusBadge, TimestampMeta, formatDateTim
 import { DisabledAction, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { DeliveryTimeInput } from '@/components/delivery-time-input';
 import { EngagementWorkExchange } from '@/components/engagement-work-exchange';
+import { InitialServiceWorkflow } from '@/components/initial-service-workflow';
 import { approveClientDossierAndRefresh, archiveClientDossierAndRefresh, updateClientDossierAndRefresh } from '@/lib/form-actions';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -31,11 +32,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const serviceLabel = service ? buildClientServiceLabel(service, serviceCatalog) : 'Fascicolo generale';
   if (!client) return <h1 className="text-3xl font-bold text-fai-navy">Dossier non accessibile</h1>;
   const canWrite = hasPermission(session, 'dossier.write');
-  const canApprove = hasPermission(session, 'dossier.approve');
+  const canApprove = hasPermission(session, 'dossier.approve') && (!context.engagementHistory?.initialService || session.role === 'admin');
 
   return <div className="space-y-6">
     <PageHeader title={`Dossier / Pre-analisi — ${dossier.title}`} description="Bozza interna salvata nel CRM. Il contenuto è modificabile manualmente e non espone percorsi di storage privati." />
-    {dossierError ? <p className="rounded-xl bg-red-50 p-3 font-semibold text-red-700">Operazione non completata ({dossierError}). Verifica stato, versione e autorizzazioni.</p> : null}
+    {dossierError === 'RECORDED' ? <p role="status" className="rounded-xl bg-green-50 p-3">Operazione registrata.</p> : dossierError ? <p className="rounded-xl bg-red-50 p-3 font-semibold text-red-700">Operazione non completata ({dossierError}). Verifica stato, versione e autorizzazioni.</p> : null}
     <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${dossier.clientId}#dossier`}>← Torna al fascicolo cliente</SecondaryLink>{!dossier.practiceReadinessId ? <><SecondaryLink href={`/client-dossiers/${dossier.id}/export`}>Esporta .md</SecondaryLink><SecondaryLink href={`/client-dossiers/${dossier.id}/export/docx`}>Esporta Word (.docx)</SecondaryLink></> : null}</div>
     <Card title="Dati bozza">
       <p>Cliente: {client.displayName}</p>
@@ -47,6 +48,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <TimestampMeta createdAt={dossier.createdAt} updatedAt={dossier.updatedAt} createdBy={creator?.name ?? dossier.createdById} updatedBy={updater?.name ?? dossier.updatedById} />
     </Card>
     {dossier.practiceReadinessId && currentVersion ? <>
+      {context.engagementHistory?.initialService && context.engagementHistory.serviceChoices ? <InitialServiceWorkflow state={context.engagementHistory.initialService} choices={context.engagementHistory.serviceChoices} dossierId={dossier.id} admin={session.role === 'admin'} canWrite={canWrite} userId={session.userId} approved={Boolean(approvedVersion)}/> : null}
       {context.engagementHistory ? <EngagementWorkExchange context={{ ...context, engagementHistory: context.engagementHistory }} canWrite={canWrite} canExport={canWrite && hasPermission(session, 'document.download') && hasPermission(session, 'service.read')}/> : null}
       <Card title="Versione corrente e storico">
         <p className="font-semibold">Versione {currentVersion.version} · hash {currentVersion.contentHash}</p>

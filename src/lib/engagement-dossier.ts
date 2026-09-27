@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
 import { z } from 'zod';
+import { configureInitialService, readInitialServiceState, recordInitialServiceReview, assertInitialServiceReady, initialServiceChoices, type InitialServiceRuntime } from './initial-service-workflow';
+import { InitialServiceError } from './initial-service-contract';
 import { canViewChecklistItem, canViewClientContext, canViewDocument } from './access-control';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
@@ -151,8 +153,10 @@ async function readContext(tx: Prisma.TransactionClient, current: AuthSession, d
   if (reviews.some((review) => !context.versions.some((version) => version.id === review.versionId && version.contentHash === review.versionHash))) throw new EngagementDossierError('DENIED');
   receipts.forEach(assertDeliveryReceiptIntegrity);
   const work = await workHistory(tx, context);
+  const initialService = await readInitialServiceState(tx, context);
+  const serviceChoices = initialService ? await initialServiceChoices(tx, current, context) : null;
   return { dossier: context.dossier, clientId: context.client.id, client: context.client, project: context.project, clientService: context.service,
-    engagementHistory: { versions: context.versions, reviews, authorizations: authorizations.map((authorization) => ({ ...authorization, recipients: deliveryRecipients(authorization, context.versions) })), receipts, work } };
+    engagementHistory: { versions: context.versions, reviews, authorizations: authorizations.map((authorization) => ({ ...authorization, recipients: deliveryRecipients(authorization, context.versions) })), receipts, work, initialService, serviceChoices } };
 }
 
 type DossierContext = Awaited<ReturnType<typeof scope>>;
@@ -287,6 +291,9 @@ export async function importEngagementWorkResult(db: Db, claimed: AuthSession, r
     const replay = history.imports.find(item => item.importHash === importHash);
     if (replay) return context.versions.find(version => version.id === replay.versionId)!;
     if (context.dossier.currentVersionId !== input.expectedVersionId) throw new EngagementDossierError('CONFLICT');
+    const initial = await readInitialServiceState(tx, context);
+    if (initial && ['A07', 'A09', 'A10', 'A11'].includes(input.producer)
+      && !initial.plan?.supportingAgents.includes(input.producer as 'A07' | 'A09' | 'A10' | 'A11')) throw new EngagementDossierError('NOT_READY');
     const previous = context.versions.find(version => version.id === input.expectedVersionId)!;
     const payload = versionPayload({ dossierId: context.dossier.id, version: previous.version + 1, title: input.title, content: input.content,
       practiceReadinessId: previous.practiceReadinessId, acceptedOfferRevisionId: previous.acceptedOfferRevisionId,
@@ -312,7 +319,7 @@ export async function getEngagementDossierReadAccess(db: Db, claimed: AuthSessio
       return readContext(tx, current, dossierId);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if (error instanceof EngagementDossierError) return null;
+    if (error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
     throw error;
   }
 }
@@ -393,12 +400,32 @@ export async function reviseEngagementDossier(db: Db, claimed: AuthSession, raw:
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export async function reviewEngagementDossierVersion(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
+async function serviceGate(tx: Prisma.TransactionClient, current: AuthSession, context: DossierContext, runtime: InitialServiceRuntime, admin = false) {
+  try { await assertInitialServiceReady(tx, current, context, runtime, admin); }
+  catch (error) {
+    if (!(error instanceof InitialServiceError)) throw error;
+    throw new EngagementDossierError(error.code === 'REVIEW_REQUIRED' || error.code === 'CHANGES_REQUIRED' ? 'NOT_READY' : error.code);
+  }
+}
+
+export async function mutateInitialServiceWorkflow(db: Db, claimed: AuthSession, raw: unknown, runtime: InitialServiceRuntime = {}) {
+  const input = parseInput(z.object({ dossierId: identifier, intent: z.enum(['configure', 'review']), value: z.unknown() }).strict(), raw);
+  return db.$transaction(async tx => {
+    const current = await actor(tx, claimed, 'dossier.read', new Date());
+    await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`;
+    const context = await scope(tx, current, input.dossierId);
+    return input.intent === 'configure' ? configureInitialService(tx, current, context, input.value, runtime)
+      : recordInitialServiceReview(tx, current, context, input.value, runtime);
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20_000 });
+}
+
+export async function reviewEngagementDossierVersion(db: Db, claimed: AuthSession, raw: unknown, runtime: WorkRuntime = {}) {
   const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, versionHash: z.string().length(64), decision: z.enum(['REQUEST_CHANGES', 'APPROVED']), note: z.string().trim().min(1).max(2000) }), raw); const now = runtime.now?.() ?? new Date();
   return db.$transaction(async (tx) => {
     const current = await actor(tx, claimed, 'dossier.approve', now); await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`; const { dossier } = await scope(tx, current, input.dossierId);
     if (dossier.currentVersionId !== input.versionId) throw new EngagementDossierError('CONFLICT'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } });
     if (!version || version.dossierId !== dossier.id || version.contentHash !== input.versionHash || version.createdById === current.userId) throw new EngagementDossierError('DENIED');
+    if (input.decision === 'APPROVED') await serviceGate(tx, current, await scope(tx, current, dossier.id), runtime, true);
     const priorReviews = await tx.engagementDossierReview.findMany({ where: { versionId: version.id } });
     const existing = priorReviews.find((review) => review.decision === input.decision);
     if (existing) { if (existing.note === input.note && existing.versionHash === input.versionHash) return existing; throw new EngagementDossierError('CONFLICT'); }
@@ -409,17 +436,17 @@ export async function reviewEngagementDossierVersion(db: Db, claimed: AuthSessio
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export async function exportApprovedEngagementDossier(db: Db, claimed: AuthSession, raw: unknown, artifact: Uint8Array | string, runtime: Runtime = {}) {
+export async function exportApprovedEngagementDossier(db: Db, claimed: AuthSession, raw: unknown, artifact: Uint8Array | string, runtime: WorkRuntime = {}) {
   const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, format: z.enum(['markdown', 'docx']) }), raw); const now = runtime.now?.() ?? new Date();
-  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.read', now); const { dossier } = await scope(tx, current, input.dossierId); if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } }); if (!version || version.dossierId !== dossier.id) throw new EngagementDossierError('DENIED'); const artifactHash = createHash('sha256').update(artifact).digest('hex'); const record = await tx.engagementDossierExport.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash, exportedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_export', dossier.id, { exportId: record.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash }); return { version, record }; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.read', now); const context = await scope(tx, current, input.dossierId); const { dossier } = context; await serviceGate(tx, current, context, runtime); if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } }); if (!version || version.dossierId !== dossier.id) throw new EngagementDossierError('DENIED'); const artifactHash = createHash('sha256').update(artifact).digest('hex'); const record = await tx.engagementDossierExport.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash, exportedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_export', dossier.id, { exportId: record.id, versionId: version.id, versionHash: version.contentHash, format: input.format, artifactHash }); return { version, record }; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export async function authorizeEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
+export async function authorizeEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: WorkRuntime = {}) {
   const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, versionHash: z.string().length(64), recipients: z.array(recipientSchema).min(1).max(20) }), raw); const now = runtime.now?.() ?? new Date();
-  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.approve', now); await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`; const { dossier } = await scope(tx, current, input.dossierId); if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } }); if (!version || version.dossierId !== dossier.id || version.contentHash !== input.versionHash) throw new EngagementDossierError('CONFLICT'); const recipients = [...input.recipients].sort((a,b) => `${a.kind}:${a.address}`.localeCompare(`${b.kind}:${b.address}`)); const recipientsHash = engagementDossierHash(recipients); const idempotencyHash = engagementDossierHash({ dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, recipientsHash }); const existing = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { idempotencyHash } }); if (existing) { if (existing.revokedAt) throw new EngagementDossierError('DENIED'); return existing; } const authorization = await tx.engagementDossierDeliveryAuthorization.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, recipients: recipients as Prisma.InputJsonValue, recipientsHash, idempotencyHash, authorizedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_authorize', dossier.id, { authorizationId: authorization.id, versionId: version.id, versionHash: version.contentHash, recipientsHash }); return authorization; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.approve', now); await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`; const context = await scope(tx, current, input.dossierId); const { dossier } = context; await serviceGate(tx, current, context, runtime, true); if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } }); if (!version || version.dossierId !== dossier.id || version.contentHash !== input.versionHash) throw new EngagementDossierError('CONFLICT'); const recipients = [...input.recipients].sort((a,b) => `${a.kind}:${a.address}`.localeCompare(`${b.kind}:${b.address}`)); const recipientsHash = engagementDossierHash(recipients); const idempotencyHash = engagementDossierHash({ dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, recipientsHash }); const existing = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { idempotencyHash } }); if (existing) { if (existing.revokedAt) throw new EngagementDossierError('DENIED'); return existing; } const authorization = await tx.engagementDossierDeliveryAuthorization.create({ data: { dossierId: dossier.id, versionId: version.id, versionHash: version.contentHash, recipients: recipients as Prisma.InputJsonValue, recipientsHash, idempotencyHash, authorizedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_authorize', dossier.id, { authorizationId: authorization.id, versionId: version.id, versionHash: version.contentHash, recipientsHash }); return authorization; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
 
-export async function recordEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
+export async function recordEngagementDossierDelivery(db: Db, claimed: AuthSession, raw: unknown, runtime: WorkRuntime = {}) {
   const input = parseInput(z.object({ authorizationId: uuid, outcome: z.enum(['DELIVERED', 'FAILED']), evidence: z.object({ reference: z.string().trim().min(1).max(500), deliveredAt: z.union([z.date(), z.string().datetime({ offset: true }).transform((value) => new Date(value))]), synthetic: z.boolean().default(false), note: z.string().trim().max(2000).optional() }) }), raw); const now = runtime.now?.() ?? new Date();
-  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.write', now); await tx.$queryRaw`SELECT id FROM "EngagementDossierDeliveryAuthorization" WHERE id=${input.authorizationId}::uuid FOR UPDATE`; const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: input.authorizationId } }); if (!authorization || authorization.revokedAt) throw new EngagementDossierError('DENIED'); const { dossier, versions } = await scope(tx, current, authorization.dossierId); deliveryRecipients(authorization, versions); if (dossier.approvedVersionId !== authorization.versionId) throw new EngagementDossierError('CONFLICT'); const evidence = { reference: input.evidence.reference, deliveredAt: input.evidence.deliveredAt.toISOString(), synthetic: input.evidence.synthetic, ...(input.evidence.note !== undefined ? { note: input.evidence.note } : {}) }; const evidenceHash = engagementDossierHash(evidence); const idempotencyHash = engagementDossierHash({ authorizationId: authorization.id, outcome: input.outcome, evidenceHash }); const prior = await tx.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }); if (prior) { assertDeliveryReceiptIntegrity(prior); if (prior.idempotencyHash === idempotencyHash) return prior; throw new EngagementDossierError('CONFLICT'); } const receipt = await tx.engagementDossierDeliveryReceipt.create({ data: { authorizationId: authorization.id, outcome: input.outcome, evidence: evidence as Prisma.InputJsonValue, evidenceHash, idempotencyHash, recordedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_record', dossier.id, { receiptId: receipt.id, authorizationId: authorization.id, versionId: authorization.versionId, outcome: input.outcome, evidenceHash }); return receipt; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  return db.$transaction(async (tx) => { const current = await actor(tx, claimed, 'dossier.write', now); await tx.$queryRaw`SELECT id FROM "EngagementDossierDeliveryAuthorization" WHERE id=${input.authorizationId}::uuid FOR UPDATE`; const authorization = await tx.engagementDossierDeliveryAuthorization.findUnique({ where: { id: input.authorizationId } }); if (!authorization || authorization.revokedAt) throw new EngagementDossierError('DENIED'); const context = await scope(tx, current, authorization.dossierId); const { dossier, versions } = context; await serviceGate(tx, current, context, runtime); deliveryRecipients(authorization, versions); if (dossier.approvedVersionId !== authorization.versionId) throw new EngagementDossierError('CONFLICT'); const evidence = { reference: input.evidence.reference, deliveredAt: input.evidence.deliveredAt.toISOString(), synthetic: input.evidence.synthetic, ...(input.evidence.note !== undefined ? { note: input.evidence.note } : {}) }; const evidenceHash = engagementDossierHash(evidence); const idempotencyHash = engagementDossierHash({ authorizationId: authorization.id, outcome: input.outcome, evidenceHash }); const prior = await tx.engagementDossierDeliveryReceipt.findUnique({ where: { authorizationId: authorization.id } }); if (prior) { assertDeliveryReceiptIntegrity(prior); if (prior.idempotencyHash === idempotencyHash) return prior; throw new EngagementDossierError('CONFLICT'); } const receipt = await tx.engagementDossierDeliveryReceipt.create({ data: { authorizationId: authorization.id, outcome: input.outcome, evidence: evidence as Prisma.InputJsonValue, evidenceHash, idempotencyHash, recordedById: current.userId } }); await audit(tx, runtime, current.userId, 'engagement_dossier_delivery_record', dossier.id, { receiptId: receipt.id, authorizationId: authorization.id, versionId: authorization.versionId, outcome: input.outcome, evidenceHash }); return receipt; }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 }
