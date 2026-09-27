@@ -73,3 +73,42 @@ dimensioni, SHA256 e ricevuta devono corrispondere prima del riuso. Uno ZIP
 locale difforme ferma il percorso senza scaricare o sovrascrivere nulla. Il
 pacchetto storico, il marker e la ricevuta STOP restano invariati; la ripresa
 usa un nuovo run e riconcilia nuovamente M3 prima delle operazioni produttive.
+# R35 — protection provenance and continuation of the completed backup
+
+The M4 candidate is a distinct Git history from the actually deployed M3 read-fix
+commit. The consumed R34 run completed and verified its schema48 backup, then
+the protection adapter loaded N05 from the M4 runtime and tried to resolve the
+M3 source tree in that repository. An isolated clone of the exact candidate
+bundle reproduces Git exit 128. A full development checkout had masked this
+missing-object dependency in the earlier qualification.
+
+`protection_kit(role)` now selects the M3 runtime for the before backup and the
+M4 runtime for the after backup. Both selections require exact commit/tree and
+the canonical program hash. Canonical N05 bytes and its source, component,
+recipient, private-path, manifest and output checks remain unchanged.
+
+The optional `package_builder.py --resume` package is bound to the single
+completed R34 backup and its exact manifest/prepare/backup/STOP hashes. It
+reconciles those files locally and remotely, verifies that the encryption
+operation directory is empty and that no following intent/receipt exists, and
+performs a minimized read-only Git diagnosis before admitting continuation.
+Partial encryption, changed programs/receipts, new sessions, changed runtime
+or a different Git failure stop the sequence. No historical file is overwritten.
+
+The new package has independent intents and receipts. It reuses the prepared
+candidate runtime and the verified images already present on the server,
+records explicit adoption of the successful backup, and cannot execute a new
+initial backup. It starts encryption into new output directories, then performs
+C:/F: copies, isolated database/document recovery, the sole migration49, the
+qualified M4 deploy, a distinct post-deploy backup and final checks. A repeated
+owner invocation remains read-only reconciliation. No production command is
+executed while building or testing this package.
+
+Validation uses actual separate shallow repositories on Windows and Linux,
+including reproduction of the old Git failure and both role selections. CI also
+creates schema48 and schema49 backups from the respective saved images, uses
+the generated selector to protect each set with real age, and decrypts/compares
+all three synthetic components. Owner-order, immutable-receipt, partial-progress
+and no-replay tests cover the continuation. The production recovery scope and
+all limitations from R33/R34 remain unchanged; synthetic CI decryption is not a
+new attestation of production C:/F: recovery.

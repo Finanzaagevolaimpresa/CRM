@@ -15,6 +15,7 @@ sys.path.insert(0,str(HERE))
 sys.path.insert(1,str(REPO/'scripts/m1-assisted'))
 from common import canonical, digest, exclusive, load, need, value_sha
 from generate import render, inventory, CANDIDATE, CANDIDATE_TREE, MIGRATION
+from resume import render_resume, RUN as COMPLETED_RUN
 
 OUTPUT = Path(r'C:\Users\Utente\Desktop\CRM\artifacts\M4-rilascio-R33')
 
@@ -25,10 +26,11 @@ def git(*args):
 
 def delta():
     files = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.iterdir() if p.suffix in ('.py','.json')}
-    return value_sha({'sources':files,'generated':inventory()})
+    resumed = {name:hashlib.sha256(raw).hexdigest() for name,raw in render_resume('a'*32).items()}
+    return value_sha({'sources':files,'generated':inventory(),'resumed':resumed})
 
 
-def build(review_path,owner_path,bundle_path):
+def build(review_path,owner_path,bundle_path,resume=False):
     review = load(review_path)
     head = git('rev-parse','HEAD').decode().strip()
     need(review['status'] == 'PASS_FOR_MERGE' and review['candidate'] == CANDIDATE and
@@ -37,6 +39,7 @@ def build(review_path,owner_path,bundle_path):
     need(review['softwareHead'] == CANDIDATE and review['softwareStatus'] == 'PASS_FOR_MERGE' and
          review['softwareCiStatus'] == 'success' and review['softwareMerged'] is True,'SOFTWARE_QUALIFICATION_REQUIRED')
     need(review['recoveryScope'] == 'NEW_PLAINTEXT_DATABASE_AND_DOCUMENT_SET','RECOVERY_SCOPE')
+    need(not resume or review.get('resumeOfBackupRun') == COMPLETED_RUN, 'BACKUP_RESUME_REVIEW_REQUIRED')
     need(not git('status','--porcelain=v1','--untracked-files=no').strip(),'BUILD_TRACKED_DIRTY')
     owner = load(owner_path)
     need(re.fullmatch(r'S-1-5-21-(?:[0-9]+-){3}[0-9]+',owner['ownerSid']) and set(owner['drives']) == {'C','F'} and
@@ -48,7 +51,7 @@ def build(review_path,owner_path,bundle_path):
     OUTPUT.mkdir(exist_ok=True)
     output = OUTPUT/('M4-'+run)
     output.mkdir()
-    files = {name:exclusive(output/name,data) for name,data in render(run).items()}
+    files = {name:exclusive(output/name,data) for name,data in (render_resume(run) if resume else render(run)).items()}
     # Import only generated local validators, not a production entry point.
     sys.path.insert(0,str(output))
     from release_evidence import details, validate
@@ -69,6 +72,7 @@ def build(review_path,owner_path,bundle_path):
         'authorityReference':'https://chatgpt.com/codex/threads/01a0c20b-b096-78a3-b6f6-db9153b914fe',
         'migrations':[MIGRATION],'configurationChanged':False,'plannedSessionRevocation':True,'autonomyComponentRequired':False,
         'historicalAttemptsReplayed':False,'providerActivation':False}
+    if resume: manifest['resumeOfBackupRun'] = COMPLETED_RUN
     exclusive(output/'package.json',manifest)
     launcher = """$ErrorActionPreference = 'Stop'
 $base = $PSScriptRoot
@@ -91,5 +95,7 @@ exit $LASTEXITCODE
 if __name__ == '__main__':
     if sys.argv[1:] == ['--delta']: print(delta())
     else:
-        need(len(sys.argv) == 4,'REVIEW_OWNER_BINDING_AND_SOURCE_BUNDLE_REQUIRED')
-        build(*map(Path,sys.argv[1:]))
+        resume = len(sys.argv) == 5 and sys.argv[1] == '--resume'
+        args = sys.argv[2:] if resume else sys.argv[1:]
+        need(len(args) == 3,'REVIEW_OWNER_BINDING_AND_SOURCE_BUNDLE_REQUIRED')
+        build(*map(Path,args),resume=resume)

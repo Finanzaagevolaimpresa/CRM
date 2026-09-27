@@ -59,7 +59,7 @@ def main():
          plan['host'] == target['hostname'] and plan['recipient'] == release.b['recipient'] and
          plan['expected']['manifest_sha256'] == receipt['manifestSha256'] and
          plan['expected']['checksums_sha256'] == receipt['checksumsSha256'], 'PROTECTION_RECEIPT_BINDING')
-    result = execute(release.kit(), path, binding['planSha256'], commit, tree)
+    result = execute(release.protection_kit(role), path, binding['planSha256'], commit, tree)
     result.update(adapterSha256=release.manifest['files']['protect48.py']['sha256'],
                   canonicalProgramSha256=release.b['canonicalPrograms']['scripts/n05/recovery_kit.py'],
                   sourceMigrationCount=SOURCES[commit][1])
