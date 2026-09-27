@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), root = process.env.M4_BROWSER_EVIDENCE!, password = process.env.M4_BROWSER_PASSWORD!;
@@ -14,6 +14,10 @@ async function login(page: Page, role: 'admin' | 'operator') {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
 test.afterAll(async () => { await db.$disconnect(); });
+async function submit(page: Page, button: Locator) {
+  const [response] = await Promise.all([page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action'])), button.click()]);
+  await response.finished(); expect(response.status()).toBeLessThan(400);
+}
 test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle, uncertain reconciliation and received reply', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); expect(process.env.M4_BROWSER_CONFIRMED).toBe('1');
   const ac = await browser.newContext({ baseURL: 'http://127.0.0.1:3024' }), oc = await browser.newContext({ baseURL: 'http://127.0.0.1:3024' });
@@ -34,7 +38,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await testForm.getByLabel('Riferimento del collaudo invio e ricezione già eseguito').fill('SYNTHETIC_BROWSER_ROUNDTRIP');
   await testForm.getByRole('button', { name: 'Registra prova esterna' }).click();
   await expect.poll(async () => (await db.communicationMailbox.findUniqueOrThrow({ where: { id: f.mailboxId } })).testedRevision).toBe(2);
-  await box.filter({ has: admin.locator('input[name="intent"][value="ENABLE"]') }).getByRole('button').click();
+  await submit(admin, box.filter({ has: admin.locator('input[name="intent"][value="ENABLE"]') }).getByRole('button'));
   await expect.poll(async () => (await db.communicationMailbox.findUniqueOrThrow({ where: { id: f.mailboxId } })).enabled).toBe(true);
   await operator.goto(target);
   const draft = operator.locator('form').filter({ has: operator.locator('input[name="intent"][value="draft"]') });
@@ -44,9 +48,11 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await draft.locator(`input[name="attachmentVersionId"][value="${f.versionId}"]`).check(); await draft.getByRole('button', { name: 'Salva bozza', exact: true }).click();
   await expect(operator).toHaveURL(/result=RECORDED/);
   const message = await db.approvedCommunication.findFirstOrThrow({ where: { technicalPracticeId: f.practiceId } });
-  await operator.getByRole('button', { name: 'Richiedi approvazione admin' }).click();
+  await submit(operator, operator.getByRole('button', { name: 'Richiedi approvazione admin' }));
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
-  await admin.goto(target); await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
+  await admin.goto(target); await expect(admin).toHaveURL(/\/communications\?kind=TECHNICAL/);
+  await expect(admin.getByText('In approvazione', { exact: true })).toBeVisible();
+  await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
   await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('APPROVED');
   await operator.reload();

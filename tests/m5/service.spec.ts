@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { INITIAL_SERVICES, INITIAL_SERVICE_LOGO_SHA256, type InitialServiceCode } from '../../src/lib/initial-service-contract';
 const db = new PrismaClient(), root = process.env.M5_EVIDENCE!, password = process.env.M5_BROWSER_PASSWORD!;
@@ -15,6 +15,10 @@ async function login(page: Page, role: string) {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
 function form(page: Page, intent: string) { return page.locator('form').filter({ has: page.locator('input[name="intent"][value="' + intent + '"]') }); }
+async function submit(page: Page, button: Locator) {
+  const [response] = await Promise.all([page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action'])), button.click()]);
+  await response.finished(); expect(response.status()).toBeLessThan(400);
+}
 test.afterAll(async () => db.$disconnect());
 test('M5 five service templates, authenticated actors, version-bound reviews, original logo export and synthetic delivery', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); expect(process.env.M5_BROWSER_CONFIRMED).toBe('1');
@@ -68,7 +72,8 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await authorization.locator('[name="recipientName"]').fill('Cliente sintetico');
     await authorization.locator('[name="recipientAddress"]').fill('synthetic@invalid.test');
     await authorization.locator('[name="recipientSynthetic"]').check();
-    await authorization.getByRole('button', { name: 'Autorizza consegna manuale' }).click();
+    await submit(admin, authorization.getByRole('button', { name: 'Autorizza consegna manuale' }));
+    await expect.poll(async () => db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: item.dossierId } })).toBe(1);
     await operator.reload();
     const delivery = operator.locator('form').filter({ has: operator.locator('[name="evidenceSynthetic"]') });
     await delivery.locator('[name="reference"]').fill('SYNTHETIC_BROWSER_RECEIPT');
