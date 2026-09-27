@@ -23,7 +23,7 @@ def render_resume(run_id):
     remote = change(remote,"self.runtime = BASE / ('release-' + M2[:12] + '-m4-' + self.run_id)",
                     'self.runtime = BASE / RUNTIME_NAME')
     remote = change(remote,'return self.t, M1, M1_TREE, self.run_id','return self.t, M1, M1_TREE, self.backup_run_id')
-    remote = change(remote,'        before = self.observer()\n        need(before[', 
+    remote = change(remote,'        before = self.observer()\n        need(before[',
                     "        proof = reconcile(remote=True)\n        before = self.observer()\n        need(before['liveSessions'] == 0, 'BACKUP_REUSE_NEW_SESSION')\n        need(before[")
     start = remote.index("        self.c.docker('LOAD_QUALIFIED_M2_IMAGES'")
     end = remote.index("        need(self.c.run('RUNTIME_IDENTITY'", start)
