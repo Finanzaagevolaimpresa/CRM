@@ -44,9 +44,9 @@ def extract(path,root):
 
 
 def acquire(root,manifest):
-    from consumed_preparation import reconcile, copy_archive
+    from completed_backup import reconcile, image_reference
     proof = reconcile()
     need(manifest['imageArchiveSha256'] == IMAGE_SHA, 'REUSED_IMAGE_BINDING')
-    result = copy_archive(root)
+    result = image_reference()
     exclusive(root/'images-acquired.json', result | {'reconciliation':proof, 'productionMutationPerformed':False})
     return result

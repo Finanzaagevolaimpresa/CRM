@@ -59,3 +59,53 @@ Le immagini già verificate vengono copiate con hash/dimensioni/readback da quel
 La regressione esegue realmente Bash su entrambe le varianti generate: riproduce byte/hash dell'errore, accetta solo il tag vincolato e rifiuta tag diversi. I test di riconciliazione rifiutano STOP successivi alla quiescenza, esiti incerti, ricevute cambiate, fasi avanzate e archivi alterati; non sovrascrivono una copia presente. La CI Docker esercita anche `resource_preflight()` e l'ambiente del programma backup generato, con immagini salvate, PostgreSQL/schema48, backup N05 completo e verifica del manifest. È un test sintetico del nuovo delta, non una nuova prova C/F o una ripetizione del tentativo produttivo.
 
 Il nuovo avvio resta subordinato al PASS del solo delta R29 e alle sue CI. Il candidato applicativo M2/PASS e i merge PR159/160 sono conservati. Restano identici limiti di recuperabilità e arresto/riconciliazione, nessuna nuova migrazione o credenziale.
+
+## R30 — ripresa dalla protezione del backup48 già riuscito
+
+Questa sezione sostituisce i passaggi iniziali R26/R29 per la prosecuzione attuale.
+Il run R29 de4842fa7df64d6da023c53f808c48c0 ha completato backup48 e rientro
+applicativo il 27 settembre 2026 alle 10:44:04 UTC. La successiva protezione
+ha ricevuto SOURCE_MIGRATION_COUNT_UNQUALIFIED: 67 byte, SHA256
+92541c64497e23f3f85104574c6e8d354441ec436da63c18600ff65e94c75e24.
+Il recovery kit originale ammette soltanto schema43/46; il rifiuto avviene nel
+preflight, prima della creazione dell'operazione di cifratura. Non è attribuito
+retroattivamente ad altri STOP storici.
+
+La prosecuzione lega manifest, prepare, backup PASS e protect STOP ai loro hash
+esatti in completed_backup.py. Prima dell'ammissione remota verifica ricevuta
+interna, identità del baseline, configurazione preservata, assenza di fasi
+successive e directory di protezione originale vuota. Qualsiasi progresso
+parziale o esito diverso ferma la ripresa. I file storici restano invariati.
+
+Il nuovo pacchetto ha run e post-run distinti, riferimenti espliciti al backup
+R29 e al checkout M2 già preparato. Non scarica, copia o carica nuovamente le
+immagini; non clona il runtime, non ricopia la configurazione e non ripete
+backup iniziale o revoca sessioni. Il comando remoto backup è rifiutato.
+Prima di proteggere verifica nuovamente stato corrente, ledger, risorse,
+configurazione, chiave M1, immagini e integrità del set. L'osservazione storica
+healthy non è usata come attestazione della salute corrente.
+
+protect48.py carica il programma canonico tramite hash, consente solo le coppie
+commit/tree M1 e M2 già qualificate e count48, conservando le verifiche Git,
+manifest, checksum, file privati e componenti. Non modifica byte canonici sul
+VPS e non espone le operazioni generiche backup, recovery o cleanup. Esegue
+soltanto la protezione del piano vincolato al ruolo prima/dopo; un rifiuto
+produce il codice pubblico minimizzato nella ricevuta della fase.
+
+Sequenza: riconciliazione → cifratura del set R29 → copie C/F con identità
+fisiche/readback → recupero isolato → conferma zero migrazioni → deploy M2
+immutabile e salute → nuovo backup post-M2 distinto → protezione e copie C/F
+post-M2 → verifica finale. Il riferimento del baseline del deploy resta il
+backup R29; l'identità dell'operazione di deploy è quella nuova. Restano
+valide revoca con audit al confine start e tutte le protezioni N05.
+
+I test R30 esercitano ricevute modificate, operazioni parziali, assenza di
+backup ripetibile e separazione fra vecchio set e nuova operazione. La CI
+Docker crea un backup48 reale sintetico col programma generato, riproduce
+esattamente l'errore R29, verifica i riferimenti Git M1/M2 e usa age1.3.2 per
+cifrare e decifrare tutti e tre i componenti confrontandone ogni hash.
+Le identità age della CI sono esclusivamente sintetiche: nessuna prova di
+decifratura delle copie produttive C/F o ripristino integrale VPS è dichiarata.
+Qualificazione CI, riesame del solo delta e pacchetto concreto restano
+necessari prima dell'avvio proprietario. STOP significa conservare ricevute
+e riconciliare; un secondo avvio continua a eseguire solo status.

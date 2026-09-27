@@ -165,6 +165,7 @@ class Release:
     result = result.replace('evidence-backup46-', 'evidence-backup48-').replace("'m1-r21-'", "'m2-r26-'")
     result = replace(result, "'authorization': {'standingMandate': self.manifest['authorityReference'], 'key': load(self.work / 'key-provisioning-authority.json')},",
                      "'authorization': {'standingMandate': self.manifest['authorityReference'], 'configurationUnchanged': True, 'plannedSessionRevocation': True},")
+    result = replace(result, "BASE / ('evidence-backup48-' + self.run_id)", "BASE / ('evidence-backup48-' + self.backup_run_id)")
     result = result.replace('PENDING_FRESH_LOGIN_AND_M1_USAGE','PENDING_FRESH_LOGIN_AND_M2_USAGE')
     compile(result,'transition_base.py','exec')
     return result.encode('utf-8')
@@ -196,7 +197,7 @@ def receiver(raw):
     result = replace(result, "            need(member.size == expected['bytes'], 'PACKAGE_FILE_SIZE')", "            if member.name == 'release-images.tar.gz': expected = binding['image']\n            need(member.size == expected['bytes'], 'PACKAGE_FILE_SIZE')")
     result = replace(result, "    reuse_images(root, manifest['files'][IMAGE_NAME])\n",
                      "    sys.path.insert(0, str(root))\n"
-                     "    from consumed_preparation import receive_prepared\n"
+                     "    from completed_backup import receive_prepared\n"
                      "    receive_prepared(root)\n")
     result = replace(result,"'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,", "'imagesReusedFromConsumedPreparation': True, 'imageBytesTransferred': 0,")
     compile(result,'receive_package.py','exec')
