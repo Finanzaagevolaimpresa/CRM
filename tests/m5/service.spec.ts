@@ -1,3 +1,4 @@
+import { captureManual } from '../manuals-r23/capture';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,7 +27,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
   const admin = await ac.newPage(), operator = await oc.newPage(), human = await hc.newPage();
   await login(admin, 'admin'); await login(operator, 'operator'); await login(human, 'human1');
   const evidence = [];
-  for (const item of f.cases as Array<{ code: InitialServiceCode; dossierId: string; documentVersionId: string }>) {
+  for (const item of f.cases as Array<{ code: InitialServiceCode; clientId: string; serviceId: string; dossierId: string; documentVersionId: string }>) {
     await admin.goto('/settings/security'); await admin.getByLabel('Password corrente').fill(password);
     await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(admin).toHaveURL(/status=active/);
     const target = '/client-dossiers/' + item.dossierId;
@@ -45,10 +46,16 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await configure.locator('[name="responsibleUserId"]').selectOption(f.operatorId);
     await configure.locator('[name="human1"]').selectOption(f.human1Id);
     await configure.getByRole('button', { name: 'Salva responsabilità del servizio' }).click(); await expect(admin).toHaveURL(/dossierError=RECORDED/);
+    if (item === f.cases[0]) {
+      await captureManual(admin, 'S06-responsabilita', 'admin', 'Responsabile del servizio e revisore umano distinti, legati alla versione sintetica corrente.', configure);
+      await operator.goto(target);
+      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Dossier sintetico corrente con percorso manuale Work e template del servizio.');
+    }
     for (const stage of ['A00','PRODUCER','Q01','Q02','Q03','HUMAN_1','D01']) {
       const page = stage === 'HUMAN_1' ? human : operator;
       await page.goto(target); const review = form(page, 'review');
       await expect(review.locator('[name="stage"]')).toHaveValue(stage);
+      if (item === f.cases[0] && stage === 'HUMAN_1') await captureManual(human, 'S06-revisione-umana', 'revisore', 'Giudizio umano sulla versione esatta dopo Q01, Q02 motivato e Q03.', review);
       const na = stage === 'Q02' && item.code !== 'audit_ai_bancabilita';
       if (stage !== 'HUMAN_1') {
         if (!na) { await review.locator('[name="documentVersionId"]').selectOption(item.documentVersionId); await review.locator('[name="agentVersionReference"]').fill('SYNTHETIC_VERSION'); }
@@ -91,6 +98,20 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await expect.poll(async () => db.engagementDossierDeliveryReceipt.count({ where: { authorization: { dossierId: item.dossierId } } })).toBe(1);
     const receipt = await db.engagementDossierDeliveryReceipt.findFirstOrThrow({ where: { authorization: { dossierId: item.dossierId } } });
     expect((receipt.evidence as { deliveredAt: string }).deliveredAt).toBe('2026-09-27T10:00:00.000Z');
+    if (item === f.cases[0] && process.env.R23_MANUAL_EVIDENCE) {
+      await operator.reload();
+      await captureManual(operator, 'S08-consegna-manuale', 'consulente', 'Ricevuta manuale sintetica della versione autorizzata; non è un invio reale.', operator.getByRole('heading', { name: 'Consegne manuali tracciate', exact: true }));
+      for (const role of ['sales', 'collaborator']) {
+        const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3025' }), reader = await context.newPage();
+        await login(reader, role); await reader.goto('/clients/' + item.clientId);
+        await expect(reader.getByRole('heading', { name: 'Fascicolo Cliente Interno — Cliente sintetico M5', exact: true })).toBeVisible();
+        await expect(reader.locator('#service-' + item.serviceId)).toBeVisible();
+        await captureManual(reader, role === 'sales' ? 'S08-continuita-commerciale' : 'S08-consultazione-limitata',
+          role === 'sales' ? 'commerciale' : 'collaboratore_limitato',
+          'Stesso cliente e servizio del dossier consegnato nel banco sintetico; vista limitata ai permessi del profilo.', reader.locator('#service-' + item.serviceId));
+        await context.close();
+      }
+    }
     evidence.push({ code: item.code, dossierId: item.dossierId, archiveHash: createHash('sha256').update(bytes).digest('hex'), logoHash: decoded.logo });
     console.log('M5_SYNTHETIC_BROWSER_SERVICE_PASS ' + item.code);
   }

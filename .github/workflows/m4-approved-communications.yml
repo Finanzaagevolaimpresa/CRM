@@ -25,6 +25,8 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=10
     env:
       DATABASE_URL: postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test?schema=public
+      R23_MANUAL_EVIDENCE: ${{ runner.temp }}/r23-manuals-m4
+      R23_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
       APP_ENV: test
       NODE_ENV: development
       AUTH_SECRET: synthetic-m4-browser-auth-not-production
@@ -124,5 +126,6 @@ jobs:
             ${{ runner.temp }}/m4-evidence/database.tap
             ${{ runner.temp }}/m4-evidence/browser-proof.json
             ${{ runner.temp }}/m4-evidence/app.log
+            ${{ runner.temp }}/r23-manuals-m4
           if-no-files-found: error
           retention-days: 14

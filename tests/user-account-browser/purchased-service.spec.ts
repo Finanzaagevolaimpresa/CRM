@@ -1,3 +1,4 @@
+import { captureManual } from '../manuals-r23/capture';
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -70,6 +71,9 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   await stepUp(admin); const committedRequest = await submit();
   await expect.poll(async () => Boolean(await getHandoffReceipt(db, f.service.id))).toBe(true);
   const receipt = (await getHandoffReceipt(db, f.service.id))!;
+  await admin.goto(path);
+  await expect(admin.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toBeVisible();
+  await captureManual(admin, 'S03-passaggio-admin', 'admin', 'Incarico e pagamento sintetici verificati; ricevuta del passaggio senza creare una seconda offerta.');
   await replay(admin, committedRequest); expect((await getHandoffReceipt(db, f.service.id))!.id).toBe(receipt.id);
   expect(await db.technicalPractice.count({ where: { clientServiceId: f.service.id } })).toBe(1);
   expect(await db.commercialOffer.count({ where: { clientId: f.client.id } })).toBe(0);
@@ -84,6 +88,7 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   expect((await tech.request.get(`/documents/${f.documents[0].id}/download`)).status()).toBe(403); // Sensitive evidence is not implicitly granted.
   await tech.getByRole('link', { name: 'Servizio acquistato e passaggio', exact: true }).click();
   await expect(tech.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toBeVisible();
+  await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Il referente ha accettato personalmente lo stesso servizio sintetico già acquistato.');
   const upload = tech.locator('form').filter({ has: tech.locator('input[type="file"]') }), bytes = Buffer.from('Elaborato sintetico manuale, consegna simulata senza invio esterno.');
   await upload.locator('input[name="title"]').fill(`${f.tag}-output-v1`); await upload.locator('select[name="clientServiceId"]').selectOption(f.service.id);
   await upload.locator('input[type="file"]').setInputFiles({ name: 'elaborato-v1.txt', mimeType: 'text/plain', buffer: bytes });
@@ -106,6 +111,7 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   const deliveredRow = tech.getByRole('row').filter({ hasText: `${f.tag}-simulated-delivery` });
   await expect(deliveredRow).toHaveCount(1); await expect(deliveredRow).toBeVisible();
   await expect(deliveredRow.getByRole('cell').first()).toContainText(`${f.tag}-simulated-delivery`);
+  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Stato della pratica e nota interna simulata; la nota usata/inviata non è una prova di recapito email.', deliveredRow);
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
   const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);
