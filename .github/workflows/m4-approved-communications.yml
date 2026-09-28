@@ -25,7 +25,6 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=10
     env:
       DATABASE_URL: postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test?schema=public
-      R23_MANUAL_EVIDENCE: ${{ runner.temp }}/r23-manuals-m4
       R23_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
       APP_ENV: test
       NODE_ENV: development
@@ -54,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          echo "R23_MANUAL_EVIDENCE=$RUNNER_TEMP/r23-manuals-m4" >> "$GITHUB_ENV"
           evidence="$RUNNER_TEMP/m4-evidence"
           mkdir -p "$evidence"
           echo "M4_BROWSER_EVIDENCE=$evidence" >> "$GITHUB_ENV"

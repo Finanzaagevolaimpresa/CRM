@@ -43,7 +43,7 @@ BEGIN
   NEW."recordedAt" := date_trunc('milliseconds', clock_timestamp());
   IF data->>'contactKey' IS DISTINCT FROM NEW."contactKey"
     OR data->>'eventId' IS DISTINCT FROM NEW."eventId"::TEXT
-    OR data->>'outcome' IS DISTINCT FROM CASE WHEN kind = 'GRANTED' THEN 'CONSENT_RECORDED' ELSE 'PROMOTIONAL_BLOCKED' END
+    OR data->>'outcome' IS DISTINCT FROM (CASE WHEN kind = 'GRANTED' THEN 'CONSENT_RECORDED' ELSE 'PROMOTIONAL_BLOCKED' END)
     OR kind IS NULL OR kind NOT IN ('GRANTED','DENIED','WITHDRAWN','SUPPRESSED','PURPOSE_CLOSED') THEN
     RAISE EXCEPTION 'MARKETING_EVENT_INVALID';
   END IF;
@@ -86,13 +86,15 @@ BEGIN
     END IF;
   END IF;
   RETURN NEW;
-END $$;
+END;
+$$;
 
 CREATE FUNCTION "marketing_preference_event_advance_r13"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   UPDATE "MarketingPreferenceSubject" SET "revision" = "revision" + 1 WHERE "contactKey" = NEW."contactKey";
   RETURN NEW;
-END $$;
+END;
+$$;
 
 CREATE FUNCTION "marketing_preference_subject_guard_r13"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -106,7 +108,8 @@ BEGIN
     RAISE EXCEPTION 'MARKETING_SUBJECT_MUTATION_DENIED';
   END IF;
   RETURN NEW;
-END $$;
+END;
+$$;
 
 CREATE TRIGGER "MarketingPreferenceSubject_guard_r13" BEFORE INSERT OR UPDATE OR DELETE ON "MarketingPreferenceSubject"
   FOR EACH ROW EXECUTE FUNCTION "marketing_preference_subject_guard_r13"();
