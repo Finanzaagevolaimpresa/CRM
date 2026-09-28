@@ -73,8 +73,9 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await cp.goto(origin + '/leads');
   await expect(cp.getByRole('heading', { name: 'Pipeline commerciale lead' })).toHaveCount(0);
   await sp.goto(origin + '/leads');
-  await expect(sp.getByText(lead.companyName!, { exact: true }).first()).toBeVisible();
-  await captureManual(sp, 'S04-pipeline', 'commerciale', 'Pipeline dei lead assegnati al commerciale; il lead manuale non prova consenso marketing.', sp.getByText(lead.companyName!, { exact: true }).first());
+  const leadRow = sp.getByRole('row').filter({ has: sp.locator(`a[href="/leads/${lead.id}"]`) });
+  await expect(leadRow).toHaveCount(1); await expect(leadRow).toContainText(lead.companyName!);
+  await captureManual(sp, 'S04-pipeline', 'commerciale', 'Pipeline dei lead assegnati al commerciale; il lead manuale non prova consenso marketing.', leadRow);
   await sp.goto(`${origin}/leads/${lead.id}`);
   await captureManual(sp, 'S04-lead', 'commerciale', 'Scheda del lead manuale interamente sintetico.');
   await sp.goto(`${origin}/leads/${lead.id}/requests`);
