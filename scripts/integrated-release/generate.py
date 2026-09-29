@@ -78,6 +78,9 @@ def _render(run_id):
         text = text.replace('codex/m5-runtime-candidate-r36', 'codex/crm-integrated-release')
         text = text.replace("'plannedSessionRevocation':True", "'plannedSessionRevocation':False")
         text = text.replace("'plannedSessionRevocation': True", "'plannedSessionRevocation': False")
+        if name.startswith('backup48_'):
+            text = text.replace('PLANNED_RELEASE_SESSION_REVOCATION', 'PLANNED_RELEASE_READONLY_SESSION_GUARD')
+            text = text.replace('SESSION_REVOCATION', 'SESSION_READONLY_GUARD')
         files[name] = text.encode()
 
     # The single shared SQL provider covers preflight, backup/resume and start.
@@ -126,6 +129,13 @@ def _render(run_id):
                           'controllo sessioni in sola lettura e riavvio controllato')
     owner = owner.replace('M5', 'R40')
     files['owner_release.py'] = owner.encode()
+    owner_base = files['owner_base.py'].decode()
+    owner_base = change(owner_base,
+        "    code, out, _ = call([PS, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-File', ROOT / 'storage_probe.ps1'], 75)",
+        "    script = private(ROOT/'storage_probe.ps1').read_text(encoding='utf-8-sig')\n"
+        "    script = script.replace('$PSScriptRoot', \"'\"+str(ROOT).replace(\"'\", \"''\")+\"'\")\n"
+        "    code, out, _ = call([PS, '-NoProfile', '-NonInteractive', '-Command', script], 75)")
+    files['owner_base.py'] = owner_base.encode()
     download = files['download_images.py'].decode()
     download = change(download, 'def acquire(root,manifest):', '''def acquire(root,manifest):
     target, receipt_path = root/'release-images.tar.gz', root/'release-receipt.json'

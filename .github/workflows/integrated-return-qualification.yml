@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/integrated-release/qualify_pair.py'
+      - 'scripts/integrated-release/return-*.ts'
       - '.github/workflows/integrated-return-qualification.yml'
 permissions:
   contents: read

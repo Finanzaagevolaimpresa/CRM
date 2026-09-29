@@ -33,6 +33,8 @@ docker load --input qualified-r37/release-images.tar.gz
 ''' + raw[b:]
 raw=raw.replace('CI_SCHEMA49_M1_APPLICATION_RETURN_PASS','CI_SCHEMA49_R37_APPLICATION_RETURN_PASS')
 raw=raw.replace('"m4AvailableDuringM1Return":false','"m4AvailableDuringReturn":true,"r37ReturnSource":true,"imagesRebuilt":false')
+raw=change(raw, 'run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2',
+           'run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2\nrun_browser recovery-m4 scripts/integrated-release/return-playwright.config.ts return-availability.spec.ts 1')
 # Config digests remain stable across classic Docker and containerd image stores.
 raw=change(raw,' "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before"',
  ''' "$head" "$tree" sha256:c1db10f9ee503a487e2191775b27ffba498e3e633d8ae908a728aca51599bbd5 "$recovery_head" "$recovery_tree" sha256:4f19689454481bb8276767d46d1affa527bbd7e94e341330c608b312dd1acc96 "$bundle_sha" "$document_before"''')

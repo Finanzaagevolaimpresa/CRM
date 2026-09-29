@@ -13,6 +13,20 @@ exec(compile(raw, 'pinned_protocol_tests.py', 'exec'), globals())
 
 
 class ReleaseBoundaryTests(GeneratedTests):
+    def test_storage_probe_does_not_change_execution_policy(self):
+        owner=imported(self.root/'owner_base.py','r40_storage_owner')
+        seen=[]
+        def capture(args,timeout,**kw):
+            seen.append(args)
+            return 0,b'{"status":"PASS","readOnly":true,"policyChanged":false}',b''
+        owner.call=capture
+        self.assertTrue(owner.storage()['readOnly'])
+        self.assertEqual(len(seen),1)
+        self.assertNotIn('-ExecutionPolicy',seen[0])
+        self.assertIn('-Command',seen[0])
+        self.assertIn('Get-CimInstance',seen[0][-1])
+        self.assertNotIn('$PSScriptRoot',seen[0][-1])
+
     def test_registry_read_only_denies_live_or_ambiguous_counts(self):
         registry = imported(self.root/'registry_settlement.py','r40_registry_test')
         for sql in (registry.SQL,registry.PREFLIGHT_SQL,registry.COUNT_SQL):
@@ -70,7 +84,8 @@ if __name__ == '__main__':
     suite = unittest.TestSuite()
     for cls in (GeneratedTests,ImageTests):
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(cls))
-    for name in ('test_registry_read_only_denies_live_or_ambiguous_counts',
+    for name in ('test_storage_probe_does_not_change_execution_policy',
+                 'test_registry_read_only_denies_live_or_ambiguous_counts',
                  'test_failed_forward_never_invokes_historical_return',
                  'test_remote_return_operation_is_denied_before_any_command',
                  'test_mailbox_full_row_fingerprint_must_match'):

@@ -15,6 +15,8 @@ raw = raw.replace("'M5-'", "'R40-'").replace('FAI_M5_OWNER_PACKAGE_R36','FAI_R40
 raw = raw.replace('01a0c20b-b096-78a3-b6f6-db9153b914fe','01a0e6a3-ef0c-7981-ab48-d124f0e3e590')
 raw = raw.replace("'plannedSessionRevocation':True", "'plannedSessionRevocation':False,'databaseWritesAuthorized':False,'automaticReturnAuthorized':False")
 raw = raw.replace('AVVIA-M5.ps1','AVVIA-R40.ps1')
+raw = change(raw, "'launcherSha256':digest(output/'AVVIA-R40.ps1')",
+             "'launcherSha256':digest(output/'AVVIA-R40.ps1'),'pythonLauncherSha256':digest(output/'AVVIA-R40.py')")
 raw = change(raw, "    exclusive(output/'package.json',manifest)", """    # Reuse the exact archive Antonio already downloaded and whose blobs were
     # verified in R63. The downloader can verify existing bytes without a ZIP.
     cache = Path(r'C:\\Users\\Utente\\Desktop\\CRM\\artifacts\\crm-integrated-release-R40\\release-artifact-36587091238-1')
