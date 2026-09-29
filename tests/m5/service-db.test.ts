@@ -5,9 +5,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { initialServiceCodes, initialServicePlanHash, initialServiceStages } from '../../src/lib/initial-service-contract';
+import { initialServiceCodes, initialServicePlanHash, initialServicePlanSchema, initialServiceStages } from '../../src/lib/initial-service-contract';
 import { buildMarkdownDocx } from '../../src/lib/docx-export';
-import { EngagementDossierError, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
+import { EngagementDossierError, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, getVisibleEngagementDossierIds, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
   authorizeEngagementDossierDelivery, recordEngagementDossierDelivery, reviseEngagementDossier } from '../../src/lib/engagement-dossier';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticUser, syntheticCase } from './fixtures';
@@ -168,6 +168,32 @@ async function finishStages(f: Fixture) {
     } });
   }
 }
+test('M5 reviewer assignment opens only the designated dossier and revocation takes effect immediately', { skip: !enabled }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  const plan = await configure(f);
+  assert.ok(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id));
+  assert.deepEqual([...(await getVisibleEngagementDossierIds(db, f.actors.human1, [f.dossier.id]))], [f.dossier.id]);
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id), null);
+  await db.userPermissionOverride.create({ data: { userId: f.actors.human1.userId, permission: 'dossier.write', allowed: true } });
+  await assert.rejects(reviseEngagementDossier(db, f.actors.human1, { dossierId: f.dossier.id, expectedVersionId: f.version.id,
+    title: 'Unauthorized producer change', content: f.version.content }), (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED');
+  const before = await db.engagementDossierVersion.count({ where: { dossierId: f.dossier.id } });
+  assert.equal(before, 1);
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: true } });
+  await db.userPermissionOverride.create({ data: { userId: f.actors.human1.userId, permission: 'document.sensitive.read', allowed: false } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: false } });
+  const currentPlan = initialServicePlanSchema.parse(plan);
+  await mutateInitialServiceWorkflow(db, f.actors.admin, { dossierId: f.dossier.id, intent: 'configure', value: {
+    expectedPlanHash: initialServicePlanHash(currentPlan), expectedVersionId: f.version.id, responsibleUserId: f.actors.operator.userId,
+    humanReviewerIds: [f.actors.human2.userId], outputKind: 'REPORT', numericAnalysis: false, supportingAgents: [],
+  } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  assert.ok(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id));
+  await db.clientReadGrant.updateMany({ where: { userId: f.actors.human2.userId, clientId: f.client.id }, data: { active: false } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id), null);
+});
 for (const code of initialServiceCodes) test('M5 full synthetic service: ' + code, { skip: !enabled }, async () => {
   const f = await syntheticCase(db, code, await actors());
   await assert.rejects(reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Missing reviews must block.' }));

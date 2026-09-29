@@ -84,12 +84,11 @@ test('PostgreSQL: permission/context revocation and linked deletion are rechecke
   await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
   await prisma.userPermissionOverride.deleteMany({ where: { userId: ownerId, permission: 'dossier.read' } });
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: foreignId } });
-  const stillAuthorized = await updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Autorità cliente valida' });
-  assert.equal(stillAuthorized.record.internalSummary, 'Autorità cliente valida');
-  await prisma.client.update({ where: { id: clientId }, data: { consultantId: foreignId } });
   const auditBeforeDenied = await prisma.auditLog.count({ where: { entityId: record.id } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Negato' }));
-  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Autorità cliente valida');
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato già alla riassegnazione del progetto' }));
+  await prisma.client.update({ where: { id: clientId }, data: { consultantId: foreignId } });
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
+  assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: record.id } })).internalSummary, 'Revoca');
   assert.equal(await prisma.auditLog.count({ where: { entityId: record.id } }), auditBeforeDenied);
   await prisma.client.update({ where: { id: clientId }, data: { consultantId: ownerId } });
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId } });
@@ -97,7 +96,7 @@ test('PostgreSQL: permission/context revocation and linked deletion are rechecke
   await prisma.project.update({ where: { id: projectId }, data: { companyId } });
   await prisma.company.update({ where: { id: companyId }, data: { deletedAt: new Date() } });
   await expectDenied(createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Company cancellata' }));
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Autorità cliente valida' }));
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Revoca' }));
   await prisma.project.update({ where: { id: projectId }, data: { companyId: otherCompanyId } });
   await expectDenied(createManualPreAnalysisRecord(prisma, actor(ownerId), { clientId, projectId, internalSummary: 'Company incoerente' }));
   await prisma.project.update({ where: { id: projectId }, data: { companyId: null } });
@@ -110,7 +109,7 @@ test('PostgreSQL: permission/context revocation and linked deletion are rechecke
   await expectDenied(updateManualPreAnalysisRecord(prisma, sessionActor, { id: sessionRecord.id, version: sessionRecord.updatedAt, internalSummary: 'Sessione revocata' }));
   assert.equal((await prisma.preAnalysis.findUniqueOrThrow({ where: { id: sessionRecord.id } })).internalSummary, 'Sessione viva');
   await prisma.project.update({ where: { id: projectId }, data: { deletedAt: new Date() } });
-  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: stillAuthorized.record.updatedAt, internalSummary: 'Negato' }));
+  await expectDenied(updateManualPreAnalysisRecord(prisma, actor(ownerId), { id: record.id, version: record.updatedAt, internalSummary: 'Negato' }));
   await prisma.project.update({ where: { id: projectId }, data: { consultantId: ownerId, deletedAt: null } });
 });
 

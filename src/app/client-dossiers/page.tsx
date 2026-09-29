@@ -21,7 +21,7 @@ export default async function Page() {
   const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
     dossiers.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
   const visibleDossiers = dossiers.filter((dossier) => {
-    if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
+    if (dossier.practiceReadinessId) return visibleEngagementIds.has(dossier.id);
     const client = clientsById.get(dossier.clientId);
     if (!client || !canViewClient(session, client)) return false;
     const project = dossier.projectId ? projectsById.get(dossier.projectId) ?? null : null;

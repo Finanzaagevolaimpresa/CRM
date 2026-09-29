@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 
-const db = new PrismaClient(), origin = 'http://127.0.0.1:3015', tag = `Isolation-${randomUUID()}`;
+const db = new PrismaClient(), origin = 'http://127.0.0.1:3015', tag = `isolation-${randomUUID()}`;
 const password = process.env.M1_BROWSER_PASSWORD!;
 const roles = ['commerciale', 'consulente', 'backoffice', 'revisore', 'collaboratore_limitato', 'admin', 'direzione', 'amministrazione'] satisfies RoleCode[];
 const users = new Map<RoleCode, string>();

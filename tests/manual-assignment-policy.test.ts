@@ -4,11 +4,11 @@ import type { RoleCode } from '@prisma/client';
 import { canViewLead, canEditLead, canAssignService } from '../src/lib/access-control';
 import { changedAssignee } from '../src/lib/manual-assignment-guard';
 
-test('the unassigned lead queue is admin-only, including direction and custom-permission roles', () => {
+test('unassigned leads permit global supervision but only admin can edit or assign them', () => {
   const roles: RoleCode[] = ['admin', 'direzione', 'commerciale', 'consulente', 'backoffice', 'amministrazione', 'revisore', 'collaboratore_limitato'];
   for (const role of roles) {
     const user = { id: 'operator', role };
-    assert.equal(canViewLead(user, { assignedToId: null }), role === 'admin');
+    assert.equal(canViewLead(user, { assignedToId: null }), ['admin', 'direzione', 'amministrazione'].includes(role));
     assert.equal(canEditLead(user, { assignedToId: null }), role === 'admin');
     assert.equal(canAssignService(user, { clientId: 'client', assignedToId: 'operator', client: { id: 'client', salesOwnerId: 'operator', consultantId: 'operator' } }), role === 'admin');
   }

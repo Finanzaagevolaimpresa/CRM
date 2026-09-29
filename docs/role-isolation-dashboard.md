@@ -29,3 +29,12 @@ Unit test di tutte le categorie di ruolo, cliente condiviso, assegnazione indivi
 Gli utenti operativi possono perdere visibilità di attività altrui precedentemente ereditata dal cliente. Verificare le assegnazioni prima del rilascio, senza riassegnare dati automaticamente. Amministrazione vede tutti i record delle funzioni per cui dispone di permesso. Nessun contenuto o responsabile è modificato dalla patch.
 
 Il rollback del solo codice non richiede modifiche al database ma ripristina la precedente visibilità più ampia: richiede una decisione esplicita di rilascio. Produzione, dati reali e PR172 restano fuori da questa consegna locale.
+# Revisione assegnata
+
+Il piano M5 salvato dall'admin assegna i revisori a un dossier esatto. La sola
+consultazione del cliente non apre il lavoro. Il revisore designato conserva il
+permesso di leggere quel dossier e il materiale collegato, con autorizzazioni
+funzionali e sui documenti sensibili ricontrollate. Non ottiene diritti di
+produzione, accesso agli altri dossier o ai documenti generici del cliente.
+Riassegnare il piano o revocare la consultazione impedisce l'accesso successivo.
+I flussi precedenti senza un piano M5 richiedono l'assegnazione corrente del lavoro.

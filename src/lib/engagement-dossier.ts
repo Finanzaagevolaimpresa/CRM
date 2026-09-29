@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
 import { z } from 'zod';
-import { configureInitialService, readInitialServiceState, recordInitialServiceReview, assertInitialServiceReady, initialServiceChoices, type InitialServiceRuntime } from './initial-service-workflow';
+import { configureInitialService, readInitialServiceState, recordInitialServiceReview, assertInitialServiceReady, initialServiceChoices, hasInitialServiceReviewAssignment, type InitialServiceRuntime } from './initial-service-workflow';
 import { InitialServiceError } from './initial-service-contract';
 import { mapSerializableConflict, SerializableConflictError } from './serializable';
-import { canViewChecklistItem, canViewClientContext, canViewDocument } from './access-control';
+import { canViewChecklistItem, canViewClientContext, canViewDocument, isSensitiveDocument } from './access-control';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
@@ -73,7 +73,7 @@ const materialSnapshotSchema = z.array(z.object({
 }));
 type MaterialContext = { practiceId: string; client: Client; project: Project; service: ClientService };
 
-async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthSession, context: MaterialContext, snapshot: unknown) {
+async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthSession, context: MaterialContext, snapshot: unknown, assignedReviewer = false) {
   const parsed = materialSnapshotSchema.safeParse(snapshot);
   if (!parsed.success) throw new EngagementDossierError('DENIED');
   const { client, project, service } = context;
@@ -89,21 +89,27 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
       || evidence.status !== row.status || evidence.documentId !== row.documentId
       || evidence.documentVersionId !== row.documentVersionId || evidence.documentChecksum !== row.checksum
       || !item || item.clientId !== client.id || item.projectId !== project.id
-      || !canViewChecklistItem(current, { ...item, client, project: hydratedProject, clientService: item.clientServiceId === service.id ? hydratedService : null })
+      || (item.clientServiceId && item.clientServiceId !== service.id)
+      || (!assignedReviewer && !canViewChecklistItem(current, { ...item, client, project: hydratedProject, clientService: item.clientServiceId === service.id ? hydratedService : null }))
       || (row.documentVersionId && !version) || (row.documentId && version && version.documentId !== row.documentId)
       || (row.checksum && version?.checksum && row.checksum !== version.checksum)) throw new EngagementDossierError('DENIED');
     const documentIds = [...new Set([item.documentId, row.documentId, version?.documentId].filter((id): id is string => Boolean(id)))];
     for (const documentId of documentIds) {
       const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-      if (!document || document.clientId !== client.id || !canViewDocument(current, {
+      if (!document || document.clientId !== client.id
+        || (document.projectId && document.projectId !== project.id)
+        || (document.clientServiceId && document.clientServiceId !== service.id)
+        || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))
+        || (assignedReviewer && !hasPermission(current, 'document.download'))
+        || (!assignedReviewer && !canViewDocument(current, {
         ...document, client, project: document.projectId === project.id ? hydratedProject : null,
         clientService: document.clientServiceId === service.id ? hydratedService : null,
-      }, hasPermission(current, 'document.sensitive.read'))) throw new EngagementDossierError('DENIED');
+      }, hasPermission(current, 'document.sensitive.read')))) throw new EngagementDossierError('DENIED');
     }
   }
 }
 
-async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string) {
+async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false) {
   const dossier = await tx.clientDossier.findUnique({ where: { id: dossierId } });
   if (!dossier || dossier.status === 'archiviata' || !dossier.practiceReadinessId || !dossier.preAnalysisId) throw new EngagementDossierError('DENIED');
   const [client, project, service] = await Promise.all([
@@ -111,10 +117,10 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
     dossier.projectId ? tx.project.findFirst({ where: { id: dossier.projectId, deletedAt: null } }) : null,
     dossier.clientServiceId ? tx.clientService.findFirst({ where: { id: dossier.clientServiceId, deletedAt: null } }) : null,
   ]);
-  if (!client || !project || !service) throw new EngagementDossierError('DENIED');
+  if (!client || !project || !service || project.clientId !== client.id || service.clientId !== client.id
+    || service.projectId !== project.id) throw new EngagementDossierError('DENIED');
   const hydratedProject = { ...project, client };
   const hydratedService = { ...service, client, project: hydratedProject };
-  if (!canViewClientContext(current, { clientId: dossier.clientId, client, project: hydratedProject, clientService: hydratedService })) throw new EngagementDossierError('DENIED');
   const [practice, preAnalysis, serviceRevision, versions] = await Promise.all([
     tx.practiceReadiness.findUnique({ where: { id: dossier.practiceReadinessId } }),
     tx.preAnalysis.findUnique({ where: { id: dossier.preAnalysisId } }),
@@ -129,6 +135,9 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
     || !versions.some((version) => version.id === dossier.currentVersionId)
     || (dossier.approvedVersionId && !versions.some((version) => version.id === dossier.approvedVersionId))) throw new EngagementDossierError('DENIED');
   if (preAnalysis.companyId && !(await tx.company.findFirst({ where: { id: preAnalysis.companyId, clientId: client.id, deletedAt: null } }))) throw new EngagementDossierError('DENIED');
+  const ordinaryAccess = canViewClientContext(current, { clientId: dossier.clientId, client, project: hydratedProject, clientService: hydratedService });
+  const assignedReviewer = !ordinaryAccess && allowReviewAssignment && await hasInitialServiceReviewAssignment(tx, current, { dossier, client, project, service, versions });
+  if (!ordinaryAccess && !assignedReviewer) throw new EngagementDossierError('DENIED');
   const checkedSnapshots = new Set<string>();
   for (const version of versions) {
     const { dossierId: boundDossierId, version: number, title, content, practiceReadinessId, acceptedOfferRevisionId, serviceRevisionId, preAnalysisId, materialSnapshot } = version;
@@ -137,7 +146,7 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
       || version.contentHash !== engagementDossierHash(versionPayload({ dossierId: boundDossierId, version: number, title, content, practiceReadinessId, acceptedOfferRevisionId, serviceRevisionId, preAnalysisId, materialSnapshot }))) throw new EngagementDossierError('DENIED');
     const snapshotHash = engagementDossierHash(materialSnapshot);
     if (!checkedSnapshots.has(snapshotHash)) {
-      await assertMaterialAccess(tx, current, { practiceId: practice.id, client, project, service }, materialSnapshot);
+      await assertMaterialAccess(tx, current, { practiceId: practice.id, client, project, service }, materialSnapshot, assignedReviewer);
       checkedSnapshots.add(snapshotHash);
     }
   }
@@ -145,7 +154,7 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
 }
 
 async function readContext(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string) {
-  const context = await scope(tx, current, dossierId);
+  const context = await scope(tx, current, dossierId, true);
   const [reviews, authorizations] = await Promise.all([
     tx.engagementDossierReview.findMany({ where: { dossierId }, orderBy: { decidedAt: 'desc' } }),
     tx.engagementDossierDeliveryAuthorization.findMany({ where: { dossierId }, orderBy: { authorizedAt: 'desc' } }),
@@ -414,7 +423,7 @@ export async function mutateInitialServiceWorkflow(db: Db, claimed: AuthSession,
   return db.$transaction(async tx => {
     const current = await actor(tx, claimed, 'dossier.read', new Date());
     await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`;
-    const context = await scope(tx, current, input.dossierId);
+    const context = await scope(tx, current, input.dossierId, input.intent === 'review');
     return input.intent === 'configure' ? configureInitialService(tx, current, context, input.value, runtime)
       : recordInitialServiceReview(tx, current, context, input.value, runtime);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20_000 });
@@ -423,7 +432,7 @@ export async function mutateInitialServiceWorkflow(db: Db, claimed: AuthSession,
 export async function reviewEngagementDossierVersion(db: Db, claimed: AuthSession, raw: unknown, runtime: WorkRuntime = {}) {
   const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, versionHash: z.string().length(64), decision: z.enum(['REQUEST_CHANGES', 'APPROVED']), note: z.string().trim().min(1).max(2000) }), raw); const now = runtime.now?.() ?? new Date();
   return db.$transaction(async (tx) => {
-    const current = await actor(tx, claimed, 'dossier.approve', now); await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`; const { dossier } = await scope(tx, current, input.dossierId);
+    const current = await actor(tx, claimed, 'dossier.approve', now); await tx.$queryRaw`SELECT id FROM "ClientDossier" WHERE id=${input.dossierId} FOR UPDATE`; const { dossier } = await scope(tx, current, input.dossierId, true);
     if (dossier.currentVersionId !== input.versionId) throw new EngagementDossierError('CONFLICT'); const version = await tx.engagementDossierVersion.findUnique({ where: { id: input.versionId } });
     if (!version || version.dossierId !== dossier.id || version.contentHash !== input.versionHash || version.createdById === current.userId) throw new EngagementDossierError('DENIED');
     if (input.decision === 'APPROVED') await serviceGate(tx, current, await scope(tx, current, dossier.id), runtime, true);
@@ -452,7 +461,7 @@ export async function exportApprovedEngagementDossier(db: Db, claimed: AuthSessi
   const input = parseInput(z.object({ dossierId: identifier, versionId: uuid, format: z.enum(['markdown', 'docx']) }), raw);
   return committedDossierReceipt(db, async tx => {
     const current = await actor(tx, claimed, 'dossier.read', runtime.now?.() ?? new Date());
-    const context = await scope(tx, current, input.dossierId);
+    const context = await scope(tx, current, input.dossierId, true);
     const { dossier } = context;
     await serviceGate(tx, current, context, runtime);
     if (dossier.approvedVersionId !== input.versionId) throw new EngagementDossierError('NOT_READY');

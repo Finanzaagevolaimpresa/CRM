@@ -141,7 +141,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
       dossierRows.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
     const visibleDossiers = dossierRows.filter((dossier) => {
-      if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
+      if (dossier.practiceReadinessId) return visibleEngagementIds.has(dossier.id);
       const client = clientById.get(dossier.clientId) ?? null;
       const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
       const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
