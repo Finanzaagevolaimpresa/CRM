@@ -95,6 +95,13 @@ def _render(run_id):
                                 'Read-only planned-restart session guard; no revocation or audit writes.')
     files['registry_settlement.py'] = registry.encode()
     files['mailbox_guard.py'] = (HERE/'mailbox_guard.py').read_bytes()
+    # The saved PR175 image retains its original candidate tag. Verify that
+    # exact provenance without retagging or rebuilding either archive member.
+    images = files['qualified_images.py'].decode()
+    images = change(images,
+        "('candidate' if role == 'candidate' else 'recovery')",
+        "('candidate' if role == 'candidate' or commit == '8e3874a304b1cb2281d59146448bcdf121afe0d1' else 'recovery')")
+    files['qualified_images.py'] = images.encode()
 
     remote = files['remote_release.py'].decode()
     remote = change(remote, 'from release_evidence import validate as validate_evidence_inputs',

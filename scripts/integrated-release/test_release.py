@@ -13,6 +13,31 @@ exec(compile(raw, 'pinned_protocol_tests.py', 'exec'), globals())
 
 
 class ReleaseBoundaryTests(GeneratedTests):
+    def test_saved_r37_keeps_original_candidate_tag_and_checks_labels(self):
+        self.fixture()
+        images=imported(self.root/'qualified_images.py','r40_pair_provenance')
+        binding=self.b | {'imageStoreVersion':'29.6.1'}
+        configs={role:{'os':'linux','architecture':'amd64','rootfs':{'diff_ids':['layer-'+role]}}
+                 for role in ('candidate','return')}
+        observed={}
+        for role in configs:
+            binding[role+'ConfigDigest']='sha256:'+('3' if role=='candidate' else '4')*64
+            commit=binding['candidate' if role=='candidate' else 'returnCommit']
+            observed[role]={'id':binding[role+'Image'],'os':'linux','architecture':'amd64',
+                'layers':configs[role]['rootfs']['diff_ids'],'tags':['fai-crm:r05-candidate-'+commit],
+                'commit':commit,'tree':binding[role+'Tree']}
+        def docker(command,*args):
+            if command=='QUALIFIED_IMAGE_STORE':
+                return canonical({'version':'29.6.1','driver':'overlayfs',
+                    'status':[['driver-type','io.containerd.snapshotter.v1']]})
+            return canonical(observed[command.removeprefix('QUALIFIED_IMAGE_').lower()])
+        with patch.object(images,'archive_metadata',return_value=configs):
+            result=images.verify_images(types.SimpleNamespace(docker=docker),None,binding)
+            self.assertTrue(result['return']['layersAndLabelsVerified'])
+            observed['return']['commit']='f'*40
+            with self.assertRaisesRegex(Stop,'QUALIFIED_IMAGE_PROVENANCE'):
+                images.verify_images(types.SimpleNamespace(docker=docker),None,binding)
+
     def test_storage_probe_does_not_change_execution_policy(self):
         owner=imported(self.root/'owner_base.py','r40_storage_owner')
         seen=[]
@@ -84,7 +109,8 @@ if __name__ == '__main__':
     suite = unittest.TestSuite()
     for cls in (GeneratedTests,ImageTests):
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(cls))
-    for name in ('test_storage_probe_does_not_change_execution_policy',
+    for name in ('test_saved_r37_keeps_original_candidate_tag_and_checks_labels',
+                 'test_storage_probe_does_not_change_execution_policy',
                  'test_registry_read_only_denies_live_or_ambiguous_counts',
                  'test_failed_forward_never_invokes_historical_return',
                  'test_remote_return_operation_is_denied_before_any_command',
