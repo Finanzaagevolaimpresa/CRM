@@ -111,7 +111,7 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   const deliveredRow = tech.getByRole('row').filter({ hasText: `${f.tag}-simulated-delivery` });
   await expect(deliveredRow).toHaveCount(1); await expect(deliveredRow).toBeVisible();
   await expect(deliveredRow.getByRole('cell').first()).toContainText(`${f.tag}-simulated-delivery`);
-  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Nota interna simulata della pratica tecnica; la nota usata/inviata non è una prova di recapito email né del completamento del servizio.', deliveredRow);
+  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Nota interna simulata della pratica tecnica; la nota usata/inviata non è una prova di recapito email né del completamento del servizio.', deliveredRow.getByRole('cell').first());
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
   const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);

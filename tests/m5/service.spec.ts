@@ -47,11 +47,13 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await configure.locator('[name="human1"]').selectOption(f.human1Id);
     await configure.getByRole('button', { name: 'Salva responsabilità del servizio' }).click(); await expect(admin).toHaveURL(/dossierError=RECORDED/);
     if (item === f.cases[0]) {
-      await captureManual(admin, 'S06-responsabilita', 'admin', 'Responsabile del servizio e revisore umano distinti, legati alla versione sintetica corrente.', configure);
+      await expect(configure.locator('[name="responsibleUserId"]')).toHaveValue(f.operatorId);
+      await expect(configure.locator('[name="human1"]')).toHaveValue(f.human1Id);
+      await captureManual(admin, 'S06-responsabilita', 'admin', 'Responsabile del servizio e revisore umano distinti, legati alla versione sintetica corrente.', configure, [configure.locator('[name="responsibleUserId"]'), configure.locator('[name="human1"]')]);
       await operator.goto(target);
       const workHeading = operator.getByRole('heading', { name: 'Lavorazione manuale con Work', exact: true });
       await expect(operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })).toBeVisible();
-      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Percorso manuale Work della versione sintetica corrente: conferma dell’operatore e preparazione del pacchetto; nessuna sincronizzazione automatica.', workHeading);
+      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Percorso manuale Work della versione sintetica corrente: conferma dell’operatore e preparazione del pacchetto; nessuna sincronizzazione automatica.', workHeading, [operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })]);
     }
     for (const stage of ['A00','PRODUCER','Q01','Q02','Q03','HUMAN_1','D01']) {
       const page = stage === 'HUMAN_1' ? human : operator;
@@ -110,7 +112,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
         await expect(reader.locator('#service-' + item.serviceId)).toBeVisible();
         await captureManual(reader, role === 'sales' ? 'S08-continuita-commerciale' : 'S08-consultazione-limitata',
           role === 'sales' ? 'commerciale' : 'collaboratore_limitato',
-          'Consultazione dello stesso cliente e servizio sintetico con i permessi del profilo; la vista non attesta incasso, completamento o recapito della consegna.', reader.locator('#service-' + item.serviceId));
+          'Dettaglio visibile dello stesso servizio sintetico con i permessi del profilo; la vista non attesta incasso, completamento o recapito della consegna.', reader.locator('#service-' + item.serviceId).getByRole('heading'));
         await context.close();
       }
     }

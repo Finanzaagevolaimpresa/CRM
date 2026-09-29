@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { savePrivateDocumentFile } from '../../src/lib/storage';
@@ -54,6 +56,15 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await captureManual(ap, 'S01-account', 'admin', 'Inventario degli account sintetici e dei profili; i comandi di gestione sono mostrati nelle viste dedicate.', ap.getByRole('cell', { name: collaborator.name, exact: true }));
   await ap.goto(`${origin}/settings/users/${collaborator.id}`);
   await expect(ap.locator('select[name="permission:document.upload"]')).toHaveValue('inherit');
+  if (process.env.R23_MANUAL_EVIDENCE) {
+    const rejectedId = 'S01-outside-viewport-rejected';
+    await expect(captureManual(ap, rejectedId, 'admin', 'Negative viewport regression: must never emit an image.',
+      ap.locator('select[name="permission:document.upload"]').locator('..'),
+      [ap.getByRole('heading', { name: 'Profilo utente', exact: true })])).rejects.toThrow(/evidence must be inside the screenshot/);
+    expect(existsSync(join(process.env.R23_MANUAL_EVIDENCE, rejectedId + '.png'))).toBe(false);
+    expect(existsSync(join(process.env.R23_MANUAL_EVIDENCE, rejectedId + '.json'))).toBe(false);
+    console.log('R29_CAPTURE_OUTSIDE_VIEWPORT_REJECTED_WITHOUT_SCREENSHOT');
+  }
   await captureManual(ap, 'S01-permessi', 'admin', 'Permesso di caricamento documenti ereditato dal profilo e negato al collaboratore limitato; nessuna eccezione operativa aggiunta.', ap.locator('select[name="permission:document.upload"]').locator('..'));
   await ap.goto(origin + '/settings/assignment-exceptions');
   await expect(ap.getByRole('heading', { name: 'Coda eccezioni delle assegnazioni' })).toBeVisible();
@@ -64,9 +75,15 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await expect(cp.locator('input[type="file"]')).toHaveCount(0);
   await expect(cp.getByRole('button', { name: 'Salva responsabili', exact: true })).toHaveCount(0);
   await captureManual(cp, 'S05-cliente', 'collaboratore_limitato', 'Lettura del solo cliente concesso, senza upload o gestione delle responsabilità.');
-  await captureManual(cp, 'S05-servizio', 'collaboratore_limitato', 'Servizio nel perimetro di consultazione; nessuna responsabilità attribuita dal permesso di lettura.', cp.locator('#servizi-acquistati'));
+  await captureManual(cp, 'S05-servizio', 'collaboratore_limitato', 'Servizio nel perimetro di consultazione; nessuna responsabilità attribuita dal permesso di lettura.', cp.locator('#servizi-acquistati').getByRole('heading', { name: 'Servizi acquistati', exact: true }), [cp.locator('#service-' + service.id).getByRole('heading')]);
   await expect(cp.getByText(document.title, { exact: true }).first()).toBeVisible();
   await captureManual(cp, 'S05-documenti', 'collaboratore_limitato', 'Documento sintetico consultabile; il profilo base non può caricare documenti.', cp.getByText(document.title, { exact: true }).first());
+  if (process.env.R23_MANUAL_EVIDENCE) {
+    const hashes = ['S05-cliente', 'S05-servizio', 'S05-documenti'].map(id =>
+      JSON.parse(readFileSync(join(process.env.R23_MANUAL_EVIDENCE!, id + '.json'), 'utf8')).sha256);
+    expect(new Set(hashes).size, 'Client, service and documents must have distinct screenshots').toBe(3);
+    console.log('R29_S05_THREE_DISTINCT_SCREENSHOTS');
+  }
   expect((await cp.request.get(`${origin}/documents/${document.id}/download`)).status()).toBe(200);
   await cp.goto(`${origin}/clients/${foreign.id}`);
   await expect(cp.getByRole('heading', { name: 'Cliente non trovato o non accessibile' })).toBeVisible();
@@ -75,7 +92,7 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await sp.goto(origin + '/leads');
   const leadRow = sp.getByRole('row').filter({ has: sp.locator(`a[href="/leads/${lead.id}"]`) });
   await expect(leadRow).toHaveCount(1); await expect(leadRow).toContainText(lead.companyName!);
-  await captureManual(sp, 'S04-pipeline', 'commerciale', 'Pipeline dei lead assegnati al commerciale; il lead manuale non prova consenso marketing.', leadRow);
+  await captureManual(sp, 'S04-pipeline', 'commerciale', 'Riga del lead sintetico assegnato al commerciale, nella parte visibile della pipeline; la presenza del lead manuale non prova consenso marketing.', leadRow.getByRole('cell').first());
   await sp.goto(`${origin}/leads/${lead.id}`);
   await captureManual(sp, 'S04-lead', 'commerciale', 'Scheda del lead manuale interamente sintetico.');
   await sp.goto(`${origin}/leads/${lead.id}/requests`);
