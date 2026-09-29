@@ -153,7 +153,11 @@ test('readiness hides sibling practices, funding, revisions and selector options
     expect(deniedHtml).not.toContain(marker);
   for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker]) expect(allowedHtml).toContain(marker);
   await db.clientService.update({ where: { id: fixture.service.id }, data: { assignedToId: a.userId } });
-  expect(await (await bp.goto('/practice-readiness'))!.text()).not.toContain(practice.id);
-  expect(await (await ap.goto('/practice-readiness'))!.text()).toContain(practice.id);
+  // The separate proposal still belongs to B and deliberately mentions the practice ID in its synthetic text.
+  // Check the actual practice row, not that unrelated text marker.
+  expect(await (await bp.goto('/practice-readiness'))!.text()).not.toContain('id="practice-' + practice.id + '"');
+  await expect(bp.locator('[id="practice-' + practice.id + '"]')).toHaveCount(0);
+  expect(await (await ap.goto('/practice-readiness'))!.text()).toContain('id="practice-' + practice.id + '"');
+  await expect(ap.locator('[id="practice-' + practice.id + '"]')).toHaveCount(1);
   await ac.close(); await bc.close();
 });

@@ -19,6 +19,21 @@ git diff --quiet -- "$source_path"
 # on request; restore its exact committed bytes even if the counterproof fails.
 trap 'git show "$candidate_head:$source_path" > "$source_path"' EXIT
 git show "$old_head:$source_path" > "$source_path"
+# The historical report predates required parent hydration. Adapt only that
+# caller contract; keep its vulnerable dossier filtering unchanged so the
+# counterproof still has to fail at the exact disclosure assertion.
+if test "$1" = report; then
+  node - "$source_path" <<'NODE'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = process.argv[2];
+const source = fs.readFileSync(path, 'utf8');
+const oldCall = 'canViewTechnicalPractice(session, { ...practice, client })';
+assert.equal(source.split(oldCall).length, 2);
+fs.writeFileSync(path, 'import { loadTechnicalPracticeAccessContext } from "./technical-practice-access";\n'
+  + source.replace(oldCall, 'canViewTechnicalPractice(session, { ...practice, ...await loadTechnicalPracticeAccessContext(prisma, practice) })'));
+NODE
+fi
 set +e
 PRACTICE_READINESS_BROWSER_EVIDENCE_DIR="$evidence" \
   PLAYWRIGHT_JSON_OUTPUT_NAME="$evidence/playwright.json" \
@@ -41,7 +56,7 @@ const specs = (suites) => suites.flatMap(suite => [...(suite.specs ?? []), ...sp
 const errors = specs(report.suites).flatMap(spec => spec.tests.flatMap(test => test.results.flatMap(result => result.errors ?? [])));
 const normalized = errors.map(error => String(error.message ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim().replace(/^Error:\s*/, ''));
 assert.ok(normalized.some(message => message.startsWith(marker + '\n')), 'The old reader must fail at its precise disclosure assertion');
-const evidence = { candidateHead, oldHead, sourcePath, expectedDefectDetected: true, assertion: marker, synthetic: true };
+const evidence = { candidateHead, oldHead, sourcePath, parentHydrationCompatibilityAdapter: sourcePath === 'src/lib/operational-report.ts', expectedDefectDetected: true, assertion: marker, synthetic: true };
 fs.writeFileSync(file.replace('playwright.json', 'detected.json'), JSON.stringify(evidence) + '\n');
 console.log(JSON.stringify(evidence));
 NODE
