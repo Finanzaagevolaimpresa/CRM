@@ -3,7 +3,7 @@ import { OpenLink, PrimaryButton } from '@/components/actions';
 import { createContractAndRefresh } from '@/lib/form-actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table } from '@/components/ui';
 import { prisma } from '@/lib/prisma';
-import { canViewClient, canViewProject } from '@/lib/access-control';
+import { canViewClient, canViewClientContext, canViewProject } from '@/lib/access-control';
 import { hasPermission, requirePermission } from '@/lib/auth';
 export default async function Page() {
   const session = await requirePermission('contract.read');
@@ -14,7 +14,7 @@ export default async function Page() {
   const visibleItems = items.filter((contract) => {
     const client = clientById.get(contract.clientId);
     if (!client) return false;
-    if (!contract.projectId) return true;
+    if (!contract.projectId) return canViewClientContext(session, { clientId: contract.clientId, client });
     const project = projectById.get(contract.projectId);
     return !!project && project.clientId === contract.clientId && canViewProject(session, { ...project, client });
   });

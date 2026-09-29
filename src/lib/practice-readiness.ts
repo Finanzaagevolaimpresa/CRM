@@ -6,11 +6,14 @@ import { canonicalSha256 } from "./canonical-json";
 import {
   canEditClient,
   canViewChecklistItem,
-  canViewClient,
+  canViewCommercialOffer,
+  canViewService,
   canViewDocument,
   isSensitiveDocument,
 } from "./access-control";
 import { hasPermission } from "./permission-evaluator";
+import { canViewPracticeReadinessWork } from './practice-readiness-access';
+import { loadTechnicalPracticeAccessContext } from './technical-practice-access';
 import { lockAuthoritativeInternalSession } from "./internal-session-registry";
 import { engagementFeatureEnabled } from "./internal-engagement-mode";
 import {
@@ -165,9 +168,11 @@ async function practiceScope(
     !lead ||
     lead.deletedAt ||
     lead.clientId !== client.id ||
-    (write ? !canEditClient(a, client) : !canViewClient(a, client))
+    (write && !canEditClient(a, client))
   )
     throw new PracticeReadinessError("DENIED");
+  const context = await loadTechnicalPracticeAccessContext(tx, practice);
+  if (!canViewPracticeReadinessWork(a, { ...practice, ...context, lead })) throw new PracticeReadinessError('DENIED');
   return { practice, client, project, intake, lead };
 }
 
@@ -357,8 +362,10 @@ export async function proposePracticeOfferRevision(
         !client ||
         client.deletedAt ||
         !canEditClient(a, client) ||
+        !canViewPracticeReadinessWork(a, { client, projectId: input.projectId, project: project ? { ...project, client } : null, lead }) ||
         !offer ||
         offer.deletedAt ||
+        !canViewCommercialOffer(a, { ...offer, client, lead }) ||
         offer.clientId !== client.id ||
         offer.leadId !== lead.id ||
         offer.updatedAt.getTime() !== input.expectedOfferUpdatedAt.getTime() ||
@@ -505,6 +512,7 @@ export async function createPracticeReadiness(
       )
         throw new PracticeReadinessError("DENIED");
       const acceptedAt = new Date();
+      if (!canViewPracticeReadinessWork(a, { client, projectId: revision.projectId, project: project ? { ...project, client } : null, lead })) throw new PracticeReadinessError('DENIED');
       const evidenceHash = canonicalSha256({
         offerRevisionId: revision.id,
         payloadHash: revision.payloadHash,
@@ -1324,7 +1332,7 @@ export async function linkPracticeClientService(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
-      const { practice } = await practiceScope(tx, a, input.practiceId);
+      const { practice, client, project } = await practiceScope(tx, a, input.practiceId);
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${input.clientServiceId} FOR UPDATE`;
       const [service, revision] = await Promise.all([
         tx.clientService.findUnique({ where: { id: input.clientServiceId } }),
@@ -1346,6 +1354,8 @@ export async function linkPracticeClientService(
         !revision ||
         service.serviceCatalogId !== revision.serviceCatalogId
       )
+        throw new PracticeReadinessError("DENIED");
+      if (!canViewService(a, { ...service, client, project: project ? { ...project, client } : null }))
         throw new PracticeReadinessError("DENIED");
       const row = await tx.practiceReadiness.update({
         where: { id: practice.id, version: input.expectedVersion },

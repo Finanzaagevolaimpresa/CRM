@@ -1,4 +1,4 @@
-import { canViewClient, canViewProject, type Actor } from './access-control';
+import { canViewClient, canViewClientContext, canViewProject, type Actor } from './access-control';
 
 type ActiveClientContext = {
   id: string;
@@ -35,7 +35,7 @@ export function canViewPaymentListRecord(session: Actor, {
 }: PaymentListContext): boolean {
   if (!client || client.deletedAt || client.id !== payment.clientId || !canViewClient(session, client)) return false;
   if (!contract || contract.id !== payment.contractId || contract.clientId !== payment.clientId) return false;
-  if (!contract.projectId) return true;
+  if (!contract.projectId) return canViewClientContext(session, { clientId: payment.clientId, client });
   if (!project || project.deletedAt || project.id !== contract.projectId || project.clientId !== payment.clientId) return false;
   return canViewProject(session, { ...project, client });
 }

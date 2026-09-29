@@ -5,12 +5,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { initialServiceCodes, initialServicePlanHash, initialServiceStages } from '../../src/lib/initial-service-contract';
+import { initialServiceCodes, initialServicePlanHash, initialServicePlanSchema, initialServiceStages } from '../../src/lib/initial-service-contract';
 import { buildMarkdownDocx } from '../../src/lib/docx-export';
-import { EngagementDossierError, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
+import { EngagementDossierError, getEngagementMaterialDownloadAccess, mutateInitialServiceWorkflow, getEngagementDossierReadAccess, getVisibleEngagementDossierIds, reviewEngagementDossierVersion, exportApprovedEngagementDossier,
   authorizeEngagementDossierDelivery, recordEngagementDossierDelivery, reviseEngagementDossier } from '../../src/lib/engagement-dossier';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticUser, syntheticCase } from './fixtures';
+import { listAccessiblePracticeReadiness, PracticeReadinessError, recordPracticeFunding, proposePracticeOfferRevision } from '../../src/lib/practice-readiness';
+import { buildOperationalReportMarkdown } from '../../src/lib/operational-report';
 const enabled = process.env.M5_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
   destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
   sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL, appEnvironment: process.env.APP_ENV, nodeEnvironment: process.env.NODE_ENV });
@@ -168,6 +170,75 @@ async function finishStages(f: Fixture) {
     } });
   }
 }
+test('M5 reviewer assignment opens only the designated dossier and revocation takes effect immediately', { skip: !enabled }, async () => {
+  const f = await syntheticCase(db, 'dossier_preanalisi', await actors());
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  const plan = await configure(f);
+  assert.equal((await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id))?.versionId, f.documentVersion.id);
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id, 'unrelated-version'), null);
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human2, f.document.id), null);
+  const reportSession = { ...f.actors.human1, clientReadScope: [f.client.id] };
+  assert.ok((await buildOperationalReportMarkdown(reportSession, { clientId: f.client.id }))?.markdown.includes(f.dossier.title));
+  const { id: unusedId, createdAt: unusedCreated, updatedAt: unusedUpdated, ...foreignData } = f.document;
+  void unusedId; void unusedCreated; void unusedUpdated;
+  const foreign = await db.document.create({ data: { ...foreignData, title: 'Unrelated same-client document' } });
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human1, foreign.id), null);
+  await db.document.update({ where: { id: f.document.id }, data: { storagePath: 'synthetic/not-in-snapshot.txt', checksum: '0'.repeat(64) } });
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id), null);
+  assert.equal((await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id, f.documentVersion.id))?.versionId, f.documentVersion.id);
+  await db.document.update({ where: { id: f.document.id }, data: { storagePath: f.document.storagePath, checksum: f.document.checksum } });
+  assert.ok(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id));
+  assert.deepEqual([...(await getVisibleEngagementDossierIds(db, f.actors.human1, [f.dossier.id]))], [f.dossier.id]);
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id), null);
+  await db.userPermissionOverride.create({ data: { userId: f.actors.human1.userId, permission: 'dossier.write', allowed: true } });
+  await assert.rejects(reviseEngagementDossier(db, f.actors.human1, { dossierId: f.dossier.id, expectedVersionId: f.version.id,
+    title: 'Unauthorized producer change', content: f.version.content }), (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED');
+  const before = await db.engagementDossierVersion.count({ where: { dossierId: f.dossier.id } });
+  assert.equal(before, 1);
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: true } });
+  await db.userPermissionOverride.create({ data: { userId: f.actors.human1.userId, permission: 'document.sensitive.read', allowed: false } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id), null);
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: false } });
+  const currentPlan = initialServicePlanSchema.parse(plan);
+  await mutateInitialServiceWorkflow(db, f.actors.admin, { dossierId: f.dossier.id, intent: 'configure', value: {
+    expectedPlanHash: initialServicePlanHash(currentPlan), expectedVersionId: f.version.id, responsibleUserId: f.actors.operator.userId,
+    humanReviewerIds: [f.actors.human2.userId], outputKind: 'REPORT', numericAnalysis: false, supportingAgents: [],
+  } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human1, f.dossier.id), null);
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human1, f.document.id), null);
+  assert.ok(!(await buildOperationalReportMarkdown(reportSession, { clientId: f.client.id }))?.markdown.includes(f.dossier.title));
+  assert.ok(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id));
+  await db.clientReadGrant.updateMany({ where: { userId: f.actors.human2.userId, clientId: f.client.id }, data: { active: false } });
+  assert.equal(await getEngagementDossierReadAccess(db, f.actors.human2, f.dossier.id), null);
+  assert.equal(await getEngagementMaterialDownloadAccess(db, f.actors.human2, f.document.id), null);
+});
+
+test('readiness and funding on a shared client follow the service assignment and immediate reassignment', { skip: !enabled }, async () => {
+  const a = await actors(), f = await syntheticCase(db, 'dossier_preanalisi', a);
+  const clientOwner = await syntheticUser(db, 'consulente', 'Shared client owner');
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: clientOwner.userId } });
+  assert.ok((await listAccessiblePracticeReadiness(db, a.operator)).some(p => p.id === f.practice.id));
+  assert.ok(!(await listAccessiblePracticeReadiness(db, clientOwner)).some(p => p.id === f.practice.id));
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: f.practice.id } });
+  const before = await db.auditLog.count({ where: { entityId: practice.id } });
+  await assert.rejects(recordPracticeFunding(db, clientOwner, { practiceId: practice.id, expectedVersion: practice.version, reference: 'UNAUTHORIZED', amount: '1.00', currency: 'EUR' }),
+    (error: unknown) => error instanceof PracticeReadinessError && error.code === 'DENIED');
+  assert.equal(await db.auditLog.count({ where: { entityId: practice.id } }), before);
+  const ownProject = await db.project.create({ data: { clientId: f.client.id, consultantId: clientOwner.userId, title: 'Own project cannot open sibling offer' } });
+  const source = await db.commercialOffer.findUniqueOrThrow({ where: { id: practice.commercialOfferId } });
+  const revisionsBefore = await db.practiceOfferRevision.count({ where: { commercialOfferId: source.id } });
+  const auditsBefore = await db.auditLog.count({ where: { actorId: clientOwner.userId } });
+  await assert.rejects(proposePracticeOfferRevision(db, clientOwner, { controlledIntakeId: practice.controlledIntakeId, commercialOfferId: source.id,
+    serviceRevisionId: practice.serviceRevisionId, clientId: f.client.id, projectId: ownProject.id, scope: 'Sibling source overpost',
+    startupConditions: 'Not authorized', requiredInitialAmount: '1.00', expectedOfferUpdatedAt: source.updatedAt }),
+    (error: unknown) => error instanceof PracticeReadinessError && error.code === 'DENIED');
+  assert.equal(await db.practiceOfferRevision.count({ where: { commercialOfferId: source.id } }), revisionsBefore);
+  assert.equal(await db.auditLog.count({ where: { actorId: clientOwner.userId } }), auditsBefore);
+  await db.clientService.update({ where: { id: f.service.id }, data: { assignedToId: clientOwner.userId } });
+  assert.ok(!(await listAccessiblePracticeReadiness(db, a.operator)).some(p => p.id === f.practice.id));
+  assert.ok((await listAccessiblePracticeReadiness(db, clientOwner)).some(p => p.id === f.practice.id));
+});
 for (const code of initialServiceCodes) test('M5 full synthetic service: ' + code, { skip: !enabled }, async () => {
   const f = await syntheticCase(db, code, await actors());
   await assert.rejects(reviewEngagementDossierVersion(db, f.actors.admin, { dossierId: f.dossier.id, versionId: f.version.id, versionHash: f.version.contentHash, decision: 'APPROVED', note: 'Missing reviews must block.' }));

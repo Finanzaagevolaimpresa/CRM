@@ -9,7 +9,7 @@ import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
 import { canViewClient, canViewCommercialOffer, canViewProject, canViewService } from "@/lib/access-control";
 import { getAccessibleDashboardAiReviewCount, getAccessibleDashboardTaskCounts, listAccessibleAiOutputs, listAccessibleTasks } from "@/lib/read-access";
-import { countAccessibleDashboardDossiers, countAccessibleDashboardOffers, countAccessibleDashboardPayments } from "@/lib/dashboard-business-counts";
+import { countAccessibleDashboardDossiers, countAccessibleDashboardOffers, countAccessibleDashboardPayments, getAccessibleDashboardOfferIds } from "@/lib/dashboard-business-counts";
 import { buildDashboardTechnicalCounterContext } from "@/lib/dashboard-technical-counter-context";
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
@@ -48,10 +48,11 @@ export default async function Dashboard() {
   const canReadAudit = hasPermission(session, "audit.read");
   const needsCommunicationCounts = canReadPracticeCommunications || canReviewPracticeCommunications;
   const needsTechnicalContext = canReadTechnical || needsCommunicationCounts;
-  const [offerCounts, paymentCount, dossierCounts] = await Promise.all([
+  const [offerCounts, paymentCount, dossierCounts, visibleOfferIds] = await Promise.all([
     canReadLeads ? countAccessibleDashboardOffers(session) : { sent: 0, accepted: 0 },
     canReadPayments ? countAccessibleDashboardPayments(session) : 0,
     canReadDossiers ? countAccessibleDashboardDossiers(session) : { preReview: 0, draftDossiers: 0 },
+    canReadLeads ? getAccessibleDashboardOfferIds(session) : [],
   ]);
   const [accessClients, accessProjects, accessServices, accessTechnicalPractices, accessCommunications] = await Promise.all([
     canReadClients || canReadProjects || canReadServices || needsTechnicalContext
@@ -106,16 +107,7 @@ export default async function Dashboard() {
     })
     .slice(0, 20);
   const leadAccessWhere = leadVisibilityWhere(session);
-  const visibleLeadIds = canReadLeads
-    ? (await prisma.lead.findMany({ where: { deletedAt: null, ...leadAccessWhere }, select: { id: true } })).map((lead) => lead.id)
-    : [];
-  const offerAccessWhere = session.role === "admin" || session.role === "direzione"
-    ? {}
-    : { OR: [
-        { createdById: session.userId, leadId: null, clientId: null },
-        { leadId: { in: visibleLeadIds } },
-        { clientId: { in: visibleClientIds } },
-      ] };
+  const offerAccessWhere = { id: { in: visibleOfferIds } };
   const accessibleAiContexts = canReadAiOutputs
     ? await listAccessibleAiOutputs(session, { where: { status: { in: ["needs_review", "flagged"] }, requiresHumanReview: true }, orderBy: { createdAt: "desc" } })
     : [];

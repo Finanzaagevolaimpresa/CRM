@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type CommunicationMailbox } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { canViewClientContext, canViewDocument, canViewTechnicalPractice } from './access-control';
+import { canViewDocument, canViewTechnicalPractice } from './access-control';
+import { canViewPracticeReadinessWork } from './practice-readiness-access';
 import { loadClientReadScope } from './client-read-perimeter';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
@@ -78,9 +79,18 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
     || (write && service?.status === 'sospeso') || (write && project?.status === 'archiviato')) denied();
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
-  const allowed = technical && 'commercialOwnerId' in practice
-    ? canViewTechnicalPractice(current, { ...practice, client })
-    : canViewClientContext(current, { clientId: client.id, client, project: hydratedProject, clientService: hydratedService });
+  let allowed = false;
+  if (technical && 'commercialOwnerId' in practice) {
+    allowed = canViewTechnicalPractice(current, { ...practice, client, project: hydratedProject, clientService: hydratedService });
+  } else if (!technical && 'controlledIntakeId' in practice) {
+    await tx.$queryRaw`SELECT "id" FROM "ControlledIntake" WHERE "id"=${practice.controlledIntakeId}::uuid FOR SHARE`;
+    const intake = await tx.controlledIntake.findUnique({ where: { id: practice.controlledIntakeId } });
+    if (!intake) denied();
+    await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id"=${intake.leadId} FOR SHARE`;
+    const lead = await tx.lead.findUnique({ where: { id: intake.leadId } });
+    if (!lead || lead.deletedAt || lead.clientId !== client.id) denied();
+    allowed = canViewPracticeReadinessWork(current, { ...practice, client, lead, project: hydratedProject, clientService: hydratedService });
+  }
   if (!allowed) denied();
   return { context, practice, client, project: hydratedProject, service: hydratedService };
 }

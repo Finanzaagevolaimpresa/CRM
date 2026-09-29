@@ -6,6 +6,9 @@ import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { INITIAL_SERVICES, INITIAL_SERVICE_LOGO_SHA256, type InitialServiceCode } from '../../src/lib/initial-service-contract';
+import bcrypt from 'bcryptjs';
+import { syntheticCase, syntheticUser } from './fixtures';
+import { proposePracticeOfferRevision } from '../../src/lib/practice-readiness';
 const db = new PrismaClient(), root = process.env.M5_EVIDENCE!, password = process.env.M5_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(join(root, 'browser-fixture.json'), 'utf8'));
 async function login(page: Page, role: string) {
@@ -45,6 +48,30 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     await configure.locator('[name="responsibleUserId"]').selectOption(f.operatorId);
     await configure.locator('[name="human1"]').selectOption(f.human1Id);
     await configure.getByRole('button', { name: 'Salva responsabilità del servizio' }).click(); await expect(admin).toHaveURL(/dossierError=RECORDED/);
+    // Exercise the actual protected download route, not just the dossier page.
+    const sourceVersion = await db.documentVersion.findUniqueOrThrow({ where: { id: item.documentVersionId } });
+    const sourceDocument = await db.document.findUniqueOrThrow({ where: { id: sourceVersion.documentId } });
+    const materialUrl = '/documents/' + sourceDocument.id + '/download';
+    const material = await human.request.get(materialUrl);
+    expect(material.status()).toBe(200);
+    expect(createHash('sha256').update(await material.body()).digest('hex')).toBe(sourceVersion.checksum);
+    expect((await human.request.get(materialUrl + '?versionId=unrelated-version')).status()).toBe(403);
+    const unrelated = await db.document.create({ data: { clientId: sourceDocument.clientId, projectId: sourceDocument.projectId,
+      type: sourceDocument.type, title: 'Unrelated material', fileName: sourceDocument.fileName, mimeType: sourceDocument.mimeType,
+      sizeBytes: sourceDocument.sizeBytes, storagePath: sourceDocument.storagePath, checksum: sourceDocument.checksum, uploadedById: sourceDocument.uploadedById } });
+    expect((await human.request.get('/documents/' + unrelated.id + '/download')).status()).toBe(403);
+    await db.document.update({ where: { id: sourceDocument.id }, data: { containsSensitiveData: true } });
+    await db.userPermissionOverride.upsert({ where: { userId_permission: { userId: f.human1Id, permission: 'document.sensitive.read' } }, create: { userId: f.human1Id, permission: 'document.sensitive.read', allowed: false }, update: { allowed: false } });
+    expect((await human.request.get(materialUrl)).status()).toBe(403);
+    await db.document.update({ where: { id: sourceDocument.id }, data: { containsSensitiveData: false } });
+    const grantWhere = { userId: f.human1Id, clientId: sourceDocument.clientId! };
+    await db.clientReadGrant.updateMany({ where: grantWhere, data: { active: false } });
+    expect((await human.request.get(materialUrl)).status()).toBe(403);
+    await db.clientReadGrant.updateMany({ where: grantWhere, data: { active: true } });
+    expect((await human.request.get(materialUrl)).status()).toBe(200);
+    const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: item.dossierId } });
+    const report = await human.request.get('/clients/' + sourceDocument.clientId + '/operational-report');
+    expect(report.status()).toBe(200); expect(await report.text()).toContain(dossier.title);
     for (const stage of ['A00','PRODUCER','Q01','Q02','Q03','HUMAN_1','D01']) {
       const page = stage === 'HUMAN_1' ? human : operator;
       await page.goto(target); const review = form(page, 'review');
@@ -96,4 +123,41 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
   }
   writeFileSync(join(root, 'browser-proof.json'), JSON.stringify({ synthetic: true, cases: evidence, realDelivery: false }, null, 2));
   await ac.close(); await oc.close(); await hc.close();
+});
+
+test('readiness hides sibling practices, funding, revisions and selector options on a shared client', async ({ browser }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const hash = await bcrypt.hash(password, 4);
+  const a = await syntheticUser(db, 'consulente', 'Synthetic client owner', hash), b = await syntheticUser(db, 'consulente', 'Synthetic service owner', hash);
+  const fixture = await syntheticCase(db, 'dossier_preanalisi', { operator: b, admin: await syntheticUser(db, 'admin', 'Synthetic admin'),
+    human1: await syntheticUser(db, 'revisore', 'Synthetic reviewer one'), human2: await syntheticUser(db, 'revisore', 'Synthetic reviewer two') });
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: fixture.practice.id } });
+  const revision = await db.practiceOfferRevision.findUniqueOrThrow({ where: { id: practice.acceptedOfferRevisionId } });
+  const scopeMarker = 'SIBLING_SCOPE_' + practice.id, startupMarker = 'SIBLING_STARTUP_' + practice.id;
+  // Immutable accepted revision is not changed: use a separate proposed revision as the selector/content marker.
+  const offer = await db.commercialOffer.findUniqueOrThrow({ where: { id: revision.commercialOfferId } });
+  const proposal = await proposePracticeOfferRevision(db, b, { controlledIntakeId: practice.controlledIntakeId, commercialOfferId: offer.id,
+    serviceRevisionId: revision.serviceRevisionId, clientId: fixture.client.id, projectId: fixture.project.id, scope: scopeMarker,
+    startupConditions: startupMarker, requiredInitialAmount: revision.requiredInitialAmount.toFixed(2), expectedOfferUpdatedAt: offer.updatedAt });
+  await db.client.update({ where: { id: fixture.client.id }, data: { consultantId: a.userId } });
+  const ac = await browser.newContext(), bc = await browser.newContext(); const ap = await ac.newPage(), bp = await bc.newPage();
+  for (const [page, actor] of [[ap, a], [bp, b]] as const) {
+    const user = await db.user.findUniqueOrThrow({ where: { id: actor.userId } });
+    await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await page.getByLabel('Email', { exact: true }).fill(user.email); await page.getByLabel('Password', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
+  }
+  const denied = await ap.goto('/practice-readiness'), allowed = await bp.goto('/practice-readiness');
+  const deniedHtml = await denied!.text(), allowedHtml = await allowed!.text();
+  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker, 'SYNTHETIC_M5_PAYMENT'])
+    expect(deniedHtml).not.toContain(marker);
+  for (const marker of [practice.id, proposal.id, practice.controlledIntakeId, revision.commercialOfferId, fixture.project.id, scopeMarker, startupMarker]) expect(allowedHtml).toContain(marker);
+  await db.clientService.update({ where: { id: fixture.service.id }, data: { assignedToId: a.userId } });
+  // The separate proposal still belongs to B and deliberately mentions the practice ID in its synthetic text.
+  // Check the actual practice row, not that unrelated text marker.
+  expect(await (await bp.goto('/practice-readiness'))!.text()).not.toContain('id="practice-' + practice.id + '"');
+  await expect(bp.locator('[id="practice-' + practice.id + '"]')).toHaveCount(0);
+  expect(await (await ap.goto('/practice-readiness'))!.text()).toContain('id="practice-' + practice.id + '"');
+  await expect(ap.locator('[id="practice-' + practice.id + '"]')).toHaveCount(1);
+  await ac.close(); await bc.close();
 });

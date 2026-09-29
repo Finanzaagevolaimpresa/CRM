@@ -5,9 +5,10 @@ import { execFileSync } from 'node:child_process';
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { readinessCommunicationFixture } from './readiness-fixture';
 const db = new PrismaClient(), root = process.env.M4_BROWSER_EVIDENCE!, password = process.env.M4_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8'));
-async function login(page: Page, role: 'admin' | 'operator') {
+async function login(page: Page, role: 'admin' | 'operator' | 'client-owner' | 'lead-owner') {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(`m4-browser-${role}@invalid.test`);
   await page.getByLabel('Password', { exact: true }).fill(password);
@@ -91,4 +92,60 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
     exactAdminApproval: true, actualDownloadedHash: archiveHash, uncertainReconciled: true, linkedReplyVisible: true, revokedAccessDenied: true,
     realProviderContact: false, realEmailSent: false, outcomeEvidence: 'SYNTHETIC_MANUAL_DECLARATION' }));
   await ac.close(); await oc.close();
+});
+
+test('M4 readiness direct URLs and draft submissions follow the current originating lead assignment', async ({ browser }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.M4_BROWSER_CONFIRMED).toBe('1');
+  const passwordHash = (await db.user.findUniqueOrThrow({ where: { id: f.adminId } })).passwordHash;
+  const a = await db.user.create({ data: { email: 'm4-browser-client-owner@invalid.test', name: 'Synthetic client owner', role: 'consulente', passwordHash, active: true } });
+  const b = await db.user.create({ data: { email: 'm4-browser-lead-owner@invalid.test', name: 'Synthetic lead owner', role: 'consulente', passwordHash, active: true } });
+  const r = await readinessCommunicationFixture(db, a.id, b.id), target = `/communications?kind=READINESS&practice=${r.practice.id}`;
+  expect(r.practice.projectId).toBeNull(); expect(r.practice.clientServiceId).toBeNull();
+  const own = await db.technicalPractice.create({ data: { clientId: r.client.id, title: 'Synthetic own context', practiceType: 'test',
+    targetEntity: 'Synthetic', technicalOwnerId: a.id, createdById: f.adminId } });
+  const ac = await browser.newContext(), bc = await browser.newContext(), ap = await ac.newPage(), bp = await bc.newPage();
+  await login(ap, 'client-owner'); await login(bp, 'lead-owner');
+  const subject = 'M4_PRIVATE_READINESS_SUBJECT', body = 'M4_PRIVATE_READINESS_BODY', recipient = 'private-readiness@invalid.test';
+  async function fill(draft: Locator) {
+    await draft.getByLabel('Mittente', { exact: false }).selectOption(f.mailboxId);
+    await draft.getByLabel('Reply-To', { exact: true }).fill('assistenza@finanzaagevolaimpresa.it');
+    await draft.getByLabel('A · indirizzi separati da virgola').fill(recipient);
+    await draft.getByLabel('Oggetto', { exact: true }).fill(subject); await draft.getByLabel('Testo esatto').fill(body);
+  }
+  const draft = (page: Page) => page.locator('form').filter({ has: page.locator('input[name="intent"][value="draft"]') }).first();
+  await bp.goto(target); await fill(draft(bp)); await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true }));
+  await expect(bp).toHaveURL(/result=RECORDED/); await expect(bp.locator('div.whitespace-pre-wrap').filter({ hasText: body })).toBeVisible();
+  const message = await db.approvedCommunication.findFirstOrThrow({ where: { readinessId: r.practice.id } });
+  const footprint = async () => ({ messages: await db.approvedCommunication.count({ where: { readinessId: r.practice.id } }),
+    versions: await db.communicationVersion.count({ where: { messageId: message.id } }),
+    events: await db.communicationEvent.count({ where: { messageId: message.id } }),
+    audits: await db.auditLog.count({ where: { entityId: message.id } }) });
+  const before = await footprint();
+  const denied = await ap.goto(target), deniedHtml = await denied!.text();
+  for (const marker of [subject, body, recipient, message.id]) expect(deniedHtml).not.toContain(marker);
+  await expect(ap.getByRole('heading', { name: '404', exact: true })).toBeVisible();
+  await expect(ap.locator('input[name="intent"][value="draft"]')).toHaveCount(0);
+  // A has a genuine permitted form, but replacing its target must not grant access to B's message.
+  await ap.goto(`/communications?kind=TECHNICAL&practice=${own.id}`); await fill(draft(ap));
+  for (const [name, value] of Object.entries({ contextKind: 'READINESS', contextId: r.practice.id, messageId: message.id, expectedRevision: '1' }))
+    await draft(ap).locator(`input[name="${name}"]`).evaluate((node: HTMLInputElement, next: string) => { node.value = next; }, value);
+  await submit(ap, draft(ap).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(ap).toHaveURL(/result=DENIED/);
+  expect(await footprint()).toEqual(before);
+  // B's already rendered form loses authority as soon as the lead changes hands.
+  await fill(draft(bp));
+  await db.lead.update({ where: { id: r.lead.id }, data: { assignedToId: a.id } });
+  await submit(bp, draft(bp).getByRole('button', { name: 'Salva bozza', exact: true })); await expect(bp).toHaveURL(/result=DENIED/);
+  expect(await footprint()).toEqual(before);
+  const revoked = await bp.goto(target), revokedHtml = await revoked!.text();
+  for (const marker of [subject, body, recipient, message.id]) expect(revokedHtml).not.toContain(marker);
+  await expect(bp.getByRole('heading', { name: '404', exact: true })).toBeVisible();
+  await ap.goto(target); await expect(ap.locator('div.whitespace-pre-wrap').filter({ hasText: body })).toBeVisible();
+  await ap.getByText('Modifica e invalida l’approvazione precedente', { exact: true }).click();
+  await submit(ap, ap.getByRole('button', { name: 'Salva nuova versione da approvare', exact: true }));
+  await expect(ap).toHaveURL(/result=RECORDED/);
+  expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).currentRevision).toBe(2);
+  writeFileSync(join(root, 'readiness-isolation-proof.json'), JSON.stringify({ synthetic: true, directUrlClientOwnerDenied: true,
+    crossContextSaveDeniedWithoutMutation: true, leadOwnerReadAndSaveAllowed: true, reassignmentRevokesStaleForm: true,
+    revokedDirectUrlContainsNoMessage: true, newLeadOwnerReadAndSaveAllowed: true, realEmailSent: false }));
+  await ac.close(); await bc.close();
 });

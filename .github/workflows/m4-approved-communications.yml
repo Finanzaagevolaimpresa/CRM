@@ -123,6 +123,7 @@ jobs:
             ${{ runner.temp }}/m4-evidence/migration-proof.json
             ${{ runner.temp }}/m4-evidence/database.tap
             ${{ runner.temp }}/m4-evidence/browser-proof.json
+            ${{ runner.temp }}/m4-evidence/readiness-isolation-proof.json
             ${{ runner.temp }}/m4-evidence/app.log
           if-no-files-found: error
           retention-days: 14

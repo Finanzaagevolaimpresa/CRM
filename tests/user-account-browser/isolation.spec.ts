@@ -158,7 +158,13 @@ for (const role of roles) test(`${role}: foreign HTTP access is denied; enforced
   await replacement.goto('/clients/' + f.clientId);
   await expect(replacement.getByText(f.tag + '-client', { exact: true }).first()).toBeVisible();
   const next = await replacement.request.get('/documents/' + document.id + '/download');
-  expect(next.status()).toBe(200); expect(await next.body()).toEqual(bytes);
+  expect(next.status()).toBe(403);
+  // A client handoff alone does not publish another person's client-only work.
+  // Link the synthetic document to the inherited project explicitly.
+  await db.document.update({ where: { id: document.id }, data: { projectId: f.projectId } });
+  const transferred = await replacement.request.get('/documents/' + document.id + '/download');
+  expect(transferred.status()).toBe(200); expect(await transferred.body()).toEqual(bytes);
+  expect((await owner.request.get('/documents/' + document.id + '/download')).status()).toBe(403);
   expect((await db.document.findUniqueOrThrow({ where: { id: document.id } })).uploadedById).toBe(f.ownerId);
   expect((await db.task.findUniqueOrThrow({ where: { id: f.taskId } })).createdById).toBe(f.ownerId);
   expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: f.checklistId } })).updatedById).toBe(f.ownerId);
