@@ -88,7 +88,7 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   expect((await tech.request.get(`/documents/${f.documents[0].id}/download`)).status()).toBe(403); // Sensitive evidence is not implicitly granted.
   await tech.getByRole('link', { name: 'Servizio acquistato e passaggio', exact: true }).click();
   await expect(tech.getByRole('heading', { name: 'Passaggio del servizio acquistato', exact: true })).toBeVisible();
-  await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Il referente ha accettato personalmente lo stesso servizio sintetico già acquistato.');
+  await captureManual(tech, 'S03-passaggio-tecnico', 'consulente', 'Ricevuta del passaggio dello stesso servizio acquistato nella vista del tecnico; la conferma personale è distinta e illustrata in S02.');
   const upload = tech.locator('form').filter({ has: tech.locator('input[type="file"]') }), bytes = Buffer.from('Elaborato sintetico manuale, consegna simulata senza invio esterno.');
   await upload.locator('input[name="title"]').fill(`${f.tag}-output-v1`); await upload.locator('select[name="clientServiceId"]').selectOption(f.service.id);
   await upload.locator('input[type="file"]').setInputFiles({ name: 'elaborato-v1.txt', mimeType: 'text/plain', buffer: bytes });
@@ -111,7 +111,7 @@ test('paid service UI: admin handoff, technician acceptance, saved output, revie
   const deliveredRow = tech.getByRole('row').filter({ hasText: `${f.tag}-simulated-delivery` });
   await expect(deliveredRow).toHaveCount(1); await expect(deliveredRow).toBeVisible();
   await expect(deliveredRow.getByRole('cell').first()).toContainText(`${f.tag}-simulated-delivery`);
-  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Stato della pratica e nota interna simulata; la nota usata/inviata non è una prova di recapito email.', deliveredRow);
+  await captureManual(tech, 'S08-pratica-tecnica', 'consulente', 'Nota interna simulata della pratica tecnica; la nota usata/inviata non è una prova di recapito email né del completamento del servizio.', deliveredRow);
   await stepUp(admin); await admin.goto(`${assignmentPath}?q=${encodeURIComponent(f.tag)}`);
   const assignment = admin.getByRole('form', { name: 'Decisione responsabilità', exact: true });
   await assignment.getByLabel('Referente tecnico', { exact: true }).selectOption(f.other.id);

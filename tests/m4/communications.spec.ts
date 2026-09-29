@@ -53,7 +53,11 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
   await admin.goto(target); await expect(admin).toHaveURL(/\/communications\?kind=TECHNICAL/);
   await expect(admin.getByText('In approvazione', { exact: true })).toBeVisible();
-  await captureManual(admin, 'S07-versione-esatta', 'admin', 'Messaggio sintetico in approvazione con destinatari, testo e allegato della versione esatta.');
+  const messageHeading = admin.getByRole('heading', { name: 'M4 synthetic approved email · v1', exact: true });
+  const messageCard = admin.locator('section').filter({ has: messageHeading });
+  await expect(messageCard.getByText('Synthetic exact body; no real delivery.', { exact: true })).toBeVisible();
+  await expect(messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })).toBeVisible();
+  await captureManual(admin, 'S07-versione-esatta', 'admin', 'Messaggio sintetico in approvazione con destinatari, testo e allegato della versione esatta.', messageHeading);
   await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
   await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('APPROVED');

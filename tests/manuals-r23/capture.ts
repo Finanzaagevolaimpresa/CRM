@@ -20,8 +20,15 @@ export async function captureManual(page: Page, id: string, role: string, captio
   assert.match(id, /^S0[1-8]-[a-z0-9-]+$/);
   assert.notEqual(url.pathname, '/login');
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.waitForLoadState('networkidle');
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
-  if (focus) await focus.scrollIntoViewIfNeeded();
+  if (focus) {
+    await focus.waitFor({ state: 'visible' });
+    // Frame the actual control below the sticky navigation, without changing UI or image bytes.
+    await focus.evaluate(element => window.scrollTo({
+      top: Math.max(0, window.scrollY + element.getBoundingClientRect().top - 112), behavior: 'instant',
+    }));
+  }
   else await page.evaluate(() => window.scrollTo(0, 0));
   mkdirSync(root, { recursive: true });
   const bytes = await page.screenshot({ path: join(root, id + '.png'), fullPage: false, animations: 'disabled' });

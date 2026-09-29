@@ -73,7 +73,9 @@ test('department does not grant access; actual admin decisions and personal acce
   await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
   expect(await acceptances()).toHaveLength(0);
   await assign(ids.tech); await expect.poll(async () => (await decisions()).length).toBe(2);
-  await captureManual(admin, 'S02-decisione', 'admin', 'Decisione del responsabile sul caso sintetico: la presa in carico personale non è ancora avvenuta.');
+  await admin.goto(search);
+  await expect(admin.getByText('Referente tecnico: ' + tag + '-tech', { exact: true })).toBeVisible();
+  await captureManual(admin, 'S02-decisione', 'admin', 'Decisione corrente registrata con il referente tecnico; la sua presa in carico personale è ancora da confermare.', admin.getByRole('heading', { name: 'Decisione corrente', exact: true }));
   await tech.goto('/assignments?kind=TechnicalPractice');
   await expect(tech.getByRole('link', { name: tag + '-practice', exact: true })).toBeVisible();
   await captureManual(tech, 'S02-assegnazioni', 'consulente', 'Stesso caso sintetico nella coda personale del referente tecnico.');

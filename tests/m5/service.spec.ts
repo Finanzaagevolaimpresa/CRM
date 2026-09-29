@@ -49,13 +49,15 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
     if (item === f.cases[0]) {
       await captureManual(admin, 'S06-responsabilita', 'admin', 'Responsabile del servizio e revisore umano distinti, legati alla versione sintetica corrente.', configure);
       await operator.goto(target);
-      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Dossier sintetico corrente con percorso manuale Work e template del servizio.');
+      const workHeading = operator.getByRole('heading', { name: 'Lavorazione manuale con Work', exact: true });
+      await expect(operator.getByRole('button', { name: 'Scarica pacchetto Work', exact: true })).toBeVisible();
+      await captureManual(operator, 'S06-dossier-work', 'consulente', 'Percorso manuale Work della versione sintetica corrente: conferma dell’operatore e preparazione del pacchetto; nessuna sincronizzazione automatica.', workHeading);
     }
     for (const stage of ['A00','PRODUCER','Q01','Q02','Q03','HUMAN_1','D01']) {
       const page = stage === 'HUMAN_1' ? human : operator;
       await page.goto(target); const review = form(page, 'review');
       await expect(review.locator('[name="stage"]')).toHaveValue(stage);
-      if (item === f.cases[0] && stage === 'HUMAN_1') await captureManual(human, 'S06-revisione-umana', 'revisore', 'Giudizio umano sulla versione esatta dopo Q01, Q02 motivato e Q03.', review);
+      if (item === f.cases[0] && stage === 'HUMAN_1') await captureManual(human, 'S06-revisione-umana', 'revisore', 'Modulo personale del revisore sulla versione corrente, ancora da registrare: PASS selezionato non è una ricevuta del giudizio.', review);
       const na = stage === 'Q02' && item.code !== 'audit_ai_bancabilita';
       if (stage !== 'HUMAN_1') {
         if (!na) { await review.locator('[name="documentVersionId"]').selectOption(item.documentVersionId); await review.locator('[name="agentVersionReference"]').fill('SYNTHETIC_VERSION'); }
@@ -108,7 +110,7 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
         await expect(reader.locator('#service-' + item.serviceId)).toBeVisible();
         await captureManual(reader, role === 'sales' ? 'S08-continuita-commerciale' : 'S08-consultazione-limitata',
           role === 'sales' ? 'commerciale' : 'collaboratore_limitato',
-          'Stesso cliente e servizio del dossier consegnato nel banco sintetico; vista limitata ai permessi del profilo.', reader.locator('#service-' + item.serviceId));
+          'Consultazione dello stesso cliente e servizio sintetico con i permessi del profilo; la vista non attesta incasso, completamento o recapito della consegna.', reader.locator('#service-' + item.serviceId));
         await context.close();
       }
     }

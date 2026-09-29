@@ -51,13 +51,13 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await captureManual(ap, 'S01-perimetro', 'admin', 'Consultazione esplicita di un solo cliente, distinta dalla responsabilità operativa.');
   await ap.goto(origin + '/settings/users');
   await expect(ap.getByRole('cell', { name: collaborator.name, exact: true })).toBeVisible();
-  await captureManual(ap, 'S01-account', 'admin', 'Account sintetici con profili distinti.', ap.getByRole('cell', { name: collaborator.name, exact: true }));
+  await captureManual(ap, 'S01-account', 'admin', 'Inventario degli account sintetici e dei profili; i comandi di gestione sono mostrati nelle viste dedicate.', ap.getByRole('cell', { name: collaborator.name, exact: true }));
   await ap.goto(`${origin}/settings/users/${collaborator.id}`);
   await expect(ap.locator('select[name="permission:document.upload"]')).toHaveValue('inherit');
-  await captureManual(ap, 'S01-permessi', 'admin', 'Il collaboratore eredita i permessi del profilo; nessuna eccezione operativa aggiunta.');
+  await captureManual(ap, 'S01-permessi', 'admin', 'Permesso di caricamento documenti ereditato dal profilo e negato al collaboratore limitato; nessuna eccezione operativa aggiunta.', ap.locator('select[name="permission:document.upload"]').locator('..'));
   await ap.goto(origin + '/settings/assignment-exceptions');
   await expect(ap.getByRole('heading', { name: 'Coda eccezioni delle assegnazioni' })).toBeVisible();
-  await captureManual(ap, 'S01-eccezioni', 'admin', 'Coda delle responsabilità da riesaminare nel banco sintetico.');
+  await captureManual(ap, 'S01-eccezioni', 'admin', 'Navigazione nella coda delle eccezioni: la categoria Lead mostrata è vuota; i contatori delle altre categorie non ne mostrano il dettaglio.');
   await cp.goto(`${origin}/clients/${client.id}`);
   await expect(cp.getByRole('heading', { name: 'Fascicolo Cliente Interno — ' + client.displayName, exact: true })).toBeVisible();
   expect(await db.userPermissionOverride.count({ where: { userId: collaborator.id } })).toBe(0);
