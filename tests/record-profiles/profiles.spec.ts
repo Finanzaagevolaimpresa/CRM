@@ -57,7 +57,7 @@ test('anagrafica journey persists lead, client, company and referent; outsider a
   await owner.locator('input[name="name"]').fill('Must not save');
   await db.userPermissionOverride.create({ data: { userId: f.ownerId, permission: 'company.write', allowed: false } });
   await owner.getByRole('button', { name: 'Salva anagrafica', exact: true }).click();
-  await expect(owner.getByRole('alert')).toContainText('Salvataggio non autorizzato');
+  await expect(owner.getByRole('alert').filter({ hasText: 'Salvataggio non autorizzato' })).toBeVisible();
   expect((await db.company.findUniqueOrThrow({ where: { id: company.id } })).name).toBe('Profiles Browser Company');
   writeFileSync(join(root, 'browser-proof.json'), JSON.stringify({ synthetic: true, lead: true, client: true, company: true, nullClearing: true,
     zeroPreserved: true, personCreateAndEdit: true, outsiderDenied: true, revokedOpenFormDenied: true }));
