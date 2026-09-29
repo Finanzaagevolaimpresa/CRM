@@ -45,7 +45,12 @@ L'esecutore conserva la ricevuta duratura N05 e si arresta se il candidato
 fallisce. Non avvia immagini precedenti né ripristina il database. Un recupero
 produttivo richiede l'autorità specifica e il relativo piano vincolato alla
 ricevuta di errore, senza allargare l'autorizzazione al normale rilascio.
-Fino alla disponibilità della qualifica della coppia, il pacchetto non è pronto.
+La coppia è qualificata dal run 36604695948, job 109530619208, artefatto
+11050489329. Il candidato conserva il medesimo config digest già verificato
+in R63; il nuovo archivio affianca l'immagine R37 necessaria al recupero.
+Il run 36605704659 verifica inoltre la pagina M4 sul ritorno R37 e la negazione
+a un operatore estraneo. Il download della coppia, se non già acquisita,
+avviene automaticamente nel singolo programma proprietario prima dello stop.
 
 Qualsiasi deriva di identità, configurazione, caselle, ledger, risorse o processi
 produce STOP e riconciliazione; non esiste ripetizione automatica dopo un esito

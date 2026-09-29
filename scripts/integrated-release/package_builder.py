@@ -17,15 +17,16 @@ raw = raw.replace("'plannedSessionRevocation':True", "'plannedSessionRevocation'
 raw = raw.replace('AVVIA-M5.ps1','AVVIA-R40.ps1')
 raw = change(raw, "'launcherSha256':digest(output/'AVVIA-R40.ps1')",
              "'launcherSha256':digest(output/'AVVIA-R40.ps1'),'pythonLauncherSha256':digest(output/'AVVIA-R40.py')")
-raw = change(raw, "    exclusive(output/'package.json',manifest)", """    # Reuse the exact archive Antonio already downloaded and whose blobs were
-    # verified in R63. The downloader can verify existing bytes without a ZIP.
-    cache = Path(r'C:\\Users\\Utente\\Desktop\\CRM\\artifacts\\crm-integrated-release-R40\\release-artifact-36587091238-1')
+raw = change(raw, "    exclusive(output/'package.json',manifest)", """    # Reuse an already acquired exact pair when available. Otherwise the owner
+    # downloader acquires the qualified pair before any app interruption.
+    cache = Path(r'C:\\Users\\Utente\\Desktop\\CRM\\artifacts\\crm-integrated-release-R40\\qualified-pair-11050489329')
     archive = cache/'release-images.tar.gz'
-    need(digest(archive) == binding['imageArchiveSha256'], 'ACQUIRED_ARCHIVE_CHANGED')
-    need(load(cache/'release-receipt.json') == load(HERE/'qualification.json')['receipt'], 'ACQUIRED_RECEIPT_CHANGED')
-    for name in ('release-images.tar.gz','release-receipt.json'):
-        with (cache/name).open('rb') as incoming,(output/name).open('xb') as outgoing:
-            shutil.copyfileobj(incoming,outgoing)
+    if archive.exists():
+        need(digest(archive) == binding['imageArchiveSha256'], 'ACQUIRED_ARCHIVE_CHANGED')
+        need(load(cache/'release-receipt.json') == load(HERE/'qualification.json')['receipt'], 'ACQUIRED_RECEIPT_CHANGED')
+        for name in ('release-images.tar.gz','release-receipt.json'):
+            with (cache/name).open('rb') as incoming,(output/name).open('xb') as outgoing:
+                shutil.copyfileobj(incoming,outgoing)
     exclusive(output/'package.json',manifest)""")
 raw = change(raw, "    launcher = \"\"\"", """    # An ordinary Python entry point avoids changing PowerShell execution policy.
     # It verifies the immutable manifest and every executable module before import.

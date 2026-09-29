@@ -67,6 +67,8 @@ def _render(run_id):
     base.CANDIDATE, base.CANDIDATE_TREE = CANDIDATE, CANDIDATE_TREE
     base.source = source
     files = base.render(run_id)
+    proof = json.loads((HERE/'qualification.json').read_bytes())
+    paired = proof['receipt']
     # Rename only the new package/runtime, never the established source path.
     for name, data in list(files.items()):
         if not name.endswith('.py'):
@@ -137,6 +139,8 @@ def _render(run_id):
         "    code, out, _ = call([PS, '-NoProfile', '-NonInteractive', '-Command', script], 75)")
     files['owner_base.py'] = owner_base.encode()
     download = files['download_images.py'].decode()
+    download = change(download, "artifact['workflow_run']['head_sha'] == CANDIDATE",
+                      "artifact['workflow_run']['head_sha'] == "+repr(proof['artifactHead']))
     download = change(download, 'def acquire(root,manifest):', '''def acquire(root,manifest):
     target, receipt_path = root/'release-images.tar.gz', root/'release-receipt.json'
     if target.exists() or receipt_path.exists():
@@ -154,6 +158,7 @@ def _render(run_id):
 '''.rstrip())
     files['download_images.py'] = download.encode()
     binding = json.loads(files['binding.json'])
+    binding.update(returnCommit=paired['recoveryCommit'],returnTree=paired['recoveryTree'])
     binding.update(protocol='FAI_R40_SCHEMA49_BINDING_R64', automaticReturnAuthorized=False,
                    databaseWritesAuthorized=False, sessionRevocationAuthorized=False,
                    mailboxState='PRESERVE_SEVEN_QUALIFIED')

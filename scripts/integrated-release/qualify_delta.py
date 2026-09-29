@@ -26,7 +26,9 @@ def readonly_fixture(raw):
              'EMPTY_REGISTRY_GUARD_WROTE_ROWS')
         from mailbox_guard import observe as observe_mailboxes
         sql(\'''UPDATE "CommunicationMailbox" SET enabled=true,"canSend"=true,"canReceive"=true,
+          kind='MAILBOX',"providerReference"='SYNTHETIC_ONLY',
           "configuredRevision"=revision,"testedRevision"=revision,
+          "configurationReference"='SYNTHETIC_CONFIG',"testReference"='SYNTHETIC_TEST',"testedAt"=CURRENT_TIMESTAMP,
           "responsibleUserId"=(SELECT id FROM "User" WHERE email='m2-r26@example.invalid');\''')
         boxes_before=observe_mailboxes(sql)
         need(observe_mailboxes(sql)==boxes_before,'READONLY_MAILBOX_GUARD_CHANGED_ROWS')
@@ -43,6 +45,8 @@ raw=pinned('scripts/m5-release/qualify_delta.py').decode()
 raw=raw.replace('from generate import source, render, SOURCE, SOURCE_TREE, schema49',
                 'from generate import source, render, SOURCE, SOURCE_TREE, schema49, pinned')
 raw=raw.replace("source('scripts/m4-release/qualification.json')", "pinned('scripts/m5-release/qualification.json')")
+raw=change(raw, "'candidateCiImage':proof['candidateImageId'],'returnCiImage':proof['recoveryImageId'],",
+           "'candidateCiImage':proof['candidateImageId'],'returnCiImage':proof['recoveryImageId'],\n        'returnCommit':proof['recoveryCommit'],'returnTree':proof['recoveryTree'],")
 raw=raw.replace('m5-release-ci-receipt.json','r40-release-ci-receipt.json')
 raw=raw.replace('FAI_M5_RELEASE_DELTA_QUALIFICATION_R36','FAI_R40_RELEASE_DELTA_QUALIFICATION_R64')
 raw=change(raw,"    exec(compile(raw,'qualified_m5_schema49_harness.py','exec'),globals())",
