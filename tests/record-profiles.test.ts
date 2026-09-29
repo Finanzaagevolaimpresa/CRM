@@ -22,6 +22,13 @@ test('profile edits cannot overpost lead status, ownership or target-client link
   for (const injected of [{ status: 'vinto' }, { assignedToId: 'other' }, { clientId: 'other' }]) assert.equal(leadProfileSchema.safeParse({ ...lead, ...injected }).success, false);
   assert.equal(companyProfileSchema.safeParse({ ...company, clientId: 'other' }).success, false);
 });
+test('acquired leads may retain missing names while updating company and contacts', () => {
+  const lead = { firstName: ' ', lastName: '', companyName: 'Synthetic company', contactPerson: '', email: 'contact@example.test', phone: '', region: '', province: '', city: '' };
+  const result = leadProfileSchema.parse(lead);
+  assert.equal(result.firstName, ''); assert.equal(result.lastName, '');
+  assert.equal(result.companyName, lead.companyName); assert.equal(result.email, lead.email);
+  assert.equal(personProfileSchema.safeParse({ firstName: '', lastName: '', email: '', phone: '', taxCode: '', notes: '', role: 'Referente', ownershipPercent: '' }).success, false);
+});
 test('person share is bounded and optimistic fingerprint covers both person and company membership', () => {
   const person = { firstName: 'Synthetic', lastName: 'Person', email: '', phone: '', taxCode: '', notes: '', role: 'Socio', ownershipPercent: '100' };
   assert.equal(personProfileSchema.safeParse(person).success, true);

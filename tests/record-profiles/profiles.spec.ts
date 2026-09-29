@@ -19,9 +19,13 @@ test('anagrafica journey persists lead, client, company and referent; outsider a
   const admin = await ac.newPage(), owner = await oc.newPage(), outsider = await xc.newPage();
   await login(admin, 'admin');
   await admin.goto(`/leads/${f.leadId}`); await admin.getByRole('link', { name: 'Modifica anagrafica', exact: true }).click();
+  await expect(admin.locator('input[name="firstName"]')).toHaveValue('');
+  await expect(admin.locator('input[name="lastName"]')).toHaveValue('');
   await admin.locator('input[name="phone"]').fill('SYNTHETIC-CONTACT');
   await admin.getByRole('button', { name: 'Salva anagrafica', exact: true }).click(); await expect(admin).toHaveURL(new RegExp(`/leads/${f.leadId}$`));
   expect((await db.lead.findUniqueOrThrow({ where: { id: f.leadId } })).phone).toBe('SYNTHETIC-CONTACT');
+  expect((await db.lead.findUniqueOrThrow({ where: { id: f.leadId } })).firstName).toBe('');
+  expect((await db.lead.findUniqueOrThrow({ where: { id: f.leadId } })).lastName).toBe('');
   await admin.goto(`/clients/${f.clientId}`); await admin.getByRole('link', { name: 'Modifica anagrafica', exact: true }).click();
   await admin.locator('input[name="displayName"]').fill('Profiles Browser Updated Client');
   await admin.getByRole('button', { name: 'Salva anagrafica', exact: true }).click(); await expect(admin).toHaveURL(/#anagrafica-completa$/);

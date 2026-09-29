@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { canonicalJson } from './canonical-json';
 
 export class RecordProfileError extends Error {
-  constructor(readonly code: 'DENIED' | 'STALE' | 'SHARED_PERSON') { super(code); }
+  constructor(readonly code: 'DENIED' | 'STALE' | 'SHARED_PERSON' | 'DUPLICATE_LEAD') { super(code); }
 }
 const id = z.string().min(1).max(128);
 const text = (max = 200) => z.string().trim().max(max).transform(value => value || null);
@@ -15,7 +15,7 @@ const date = text(10).refine(value => !value || (/^\d{4}-\d{2}-\d{2}$/.test(valu
 const amount = text(18).refine(value => !value || /^\d{1,14}(\.\d{1,2})?$/.test(value), 'Inserire un importo non negativo con massimo due decimali');
 export const clientTypes = ['persona_fisica', 'ditta_individuale', 'societa', 'professionista', 'soggetto_da_costituire', 'associazione', 'altro'] as const;
 export const clientProfileSchema = z.object({ displayName: required, type: z.enum(clientTypes), notes: text(5000) }).strict();
-export const leadProfileSchema = z.object({ firstName: required, lastName: required, companyName: text(), contactPerson: text(),
+export const leadProfileSchema = z.object({ firstName: z.string().trim().max(200), lastName: z.string().trim().max(200), companyName: text(), contactPerson: text(),
   email, phone: text(64), region: text(100), province: text(100), city: text(100) }).strict();
 export const companyProfileSchema = z.object({ name: required, vatNumber: text(32), taxCode: text(32), rea: text(64), pec: email,
   legalAddress: text(500), operatingAddress: text(500), region: text(100), province: text(100), city: text(100), legalForm: text(100),

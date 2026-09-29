@@ -27,6 +27,7 @@ export async function saveRecordProfileAction(_previous: ProfileFormState, form:
     if (error instanceof RecordProfileError) return { error: error.code === 'STALE'
       ? 'Questa scheda è stata modificata nel frattempo. Ricarica la pagina prima di salvare per non sovrascrivere le modifiche.'
       : error.code === 'SHARED_PERSON' ? 'Questo referente è collegato a più aziende: la modifica condivisa richiede una gestione dedicata.'
+        : error.code === 'DUPLICATE_LEAD' ? 'Esiste già un lead attivo con la stessa email o lo stesso telefono internazionale. Verifica i contatti o richiedi il controllo all’amministratore.'
         : 'Salvataggio non autorizzato: verifica l’assegnazione e i permessi attuali.' };
     throw error;
   }

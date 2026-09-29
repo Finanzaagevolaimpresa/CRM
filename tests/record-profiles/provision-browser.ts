@@ -18,7 +18,7 @@ async function main() {
   const owner = await db.user.create({ data: { name: 'Profiles Browser Owner', email: 'profiles-owner@example.test', role: 'consulente', active: true, passwordHash } });
   await db.user.create({ data: { name: 'Profiles Browser Outsider', email: 'profiles-outsider@example.test', role: 'consulente', active: true, passwordHash } });
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Profiles Browser Client', consultantId: owner.id } });
-  const lead = await db.lead.create({ data: { firstName: 'Synthetic', lastName: 'Browser', assignedToId: admin.id, clientId: client.id } });
+  const lead = await db.lead.create({ data: { firstName: '', lastName: '', companyName: 'Synthetic company-only lead', assignedToId: admin.id, clientId: client.id } });
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, clientId: client.id, leadId: lead.id, ownerId: owner.id }));
 }

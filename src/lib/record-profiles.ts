@@ -3,10 +3,11 @@ import type { AuthSession, Permission } from './auth';
 import { canEditClient, canEditLead } from './access-control';
 import { hasPermission } from './permission-evaluator';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from './lead-identity';
 import { RecordProfileError, personProfileVersion, profileCommandSchema } from './record-profile-contract';
 
 async function actor(tx: Prisma.TransactionClient, session: AuthSession, permission: Permission) {
-  if (!session.active || session.expiresAt * 1000 <= Date.now()) throw new RecordProfileError('DENIED');
+  if (!session.active || !Number.isFinite(session.expiresAt) || session.expiresAt * 1000 <= Date.now()) throw new RecordProfileError('DENIED');
   if (session.sessionId) {
     const current = await lockAuthoritativeInternalSession(tx, { userId: session.userId, sessionId: session.sessionId });
     if (!current?.active || current.deletedAt || current.revokedAt || !current.live) throw new RecordProfileError('DENIED');
@@ -20,6 +21,15 @@ async function actor(tx: Prisma.TransactionClient, session: AuthSession, permiss
   const fresh = { ...session, role: current.role, permissionOverrides: current.permissionOverrides };
   if (!hasPermission(fresh, permission)) throw new RecordProfileError('DENIED');
   return fresh;
+}
+async function assertUnexpired(tx: Prisma.TransactionClient, session: AuthSession) {
+  // The actor/session locks are already held. CURRENT_TIMESTAMP cannot detect
+  // expiry while waiting for a record lock because it is fixed at BEGIN.
+  if (session.sessionId) {
+    const [row] = await tx.$queryRaw<Array<{ live: boolean }>>`SELECT "expiresAt" > clock_timestamp() AND "revokedAt" IS NULL AS live FROM "InternalSession" WHERE id=${session.sessionId}::uuid AND "userId"=${session.userId}`;
+    if (!row?.live) throw new RecordProfileError('DENIED');
+  }
+  if (!Number.isFinite(session.expiresAt) || session.expiresAt * 1000 <= Date.now()) throw new RecordProfileError('DENIED');
 }
 async function client(tx: Prisma.TransactionClient, session: AuthSession, id: string) {
   await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${id} FOR UPDATE`;
@@ -42,6 +52,8 @@ function version(current: Date, expected: string) {
 export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, session: AuthSession, input: unknown) {
   const command = profileCommandSchema.parse(input);
   return db.$transaction(async tx => {
+    // Match createLead/intake lock order before actor or target-row locks.
+    if (command.kind === 'lead') await acquireLeadIdentityWriteLock(tx);
     const permission = command.kind === 'lead' ? 'lead.write' : command.kind === 'client' ? 'client.write' : 'company.write';
     const fresh = await actor(tx, session, permission);
     let entityType: string, resultId: string, destination: string;
@@ -50,19 +62,24 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
       const row = await tx.lead.findFirst({ where: { id: command.id, deletedAt: null } });
       if (!row || !canEditLead(fresh, row)) throw new RecordProfileError('DENIED');
       version(row.updatedAt, command.expectedVersion);
+      if (await hasStrongRawLeadIdentityDuplicate(tx, { ...command.data, excludeLeadId: row.id })) throw new RecordProfileError('DUPLICATE_LEAD');
+      await assertUnexpired(tx, fresh);
       await tx.lead.update({ where: { id: row.id }, data: command.data });
       entityType = 'Lead'; resultId = row.id; destination = `/leads/${row.id}`;
     } else if (command.kind === 'client') {
       const row = await client(tx, fresh, command.id); version(row.updatedAt, command.expectedVersion);
+      await assertUnexpired(tx, fresh);
       await tx.client.update({ where: { id: row.id }, data: command.data });
       entityType = 'Client'; resultId = row.id; destination = `/clients/${row.id}#anagrafica-completa`;
     } else if (command.kind === 'company' || command.kind === 'new-company') {
       if (command.kind === 'company') {
         const row = await company(tx, fresh, command.id); version(row.updatedAt, command.expectedVersion);
+        await assertUnexpired(tx, fresh);
         await tx.company.update({ where: { id: row.id }, data: command.data });
       } else {
         await client(tx, fresh, command.clientId);
         const existing = await tx.company.findUnique({ where: { id: command.id } });
+        await assertUnexpired(tx, fresh);
         if (existing) {
           if (existing.clientId !== command.clientId || existing.deletedAt) throw new RecordProfileError('DENIED');
           return `/companies/${existing.id}`;
@@ -83,10 +100,12 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
         if (personProfileVersion(person, link) !== command.expectedVersion) throw new RecordProfileError('STALE');
         // A change in this form must not modify another company's shared person.
         if (await tx.companyPerson.count({ where: { personId: person.id } }) !== 1) throw new RecordProfileError('SHARED_PERSON');
+        await assertUnexpired(tx, fresh);
         await tx.person.update({ where: { id: person.id }, data: personData });
         await tx.companyPerson.update({ where: { id: link.id }, data: { role, ownershipPercent } });
       } else {
         const existing = await tx.companyPerson.findUnique({ where: { id: command.id } });
+        await assertUnexpired(tx, fresh);
         if (existing) {
           if (existing.companyId !== parent.id) throw new RecordProfileError('DENIED');
           return `/companies/${parent.id}#referenti`;
@@ -96,6 +115,8 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
       }
       entityType = 'CompanyPerson'; resultId = command.id; destination = `/companies/${parent.id}#referenti`;
     }
+    // Any wait during the writes must also roll back atomically on expiry.
+    await assertUnexpired(tx, fresh);
     await tx.auditLog.create({ data: { actorId: fresh.userId, entityType, entityId: resultId, event: 'record_profile_saved',
       after: { action: command.kind, changedPaths: Object.keys(command.data).sort() } } });
     return destination;

@@ -22,6 +22,14 @@ sessione e autorizzazioni attuali, blocca la riga e applica un controllo di vers
 Un form aperto prima di una revoca o riassegnazione non conserva il diritto di
 scrivere. Un perimetro di sola lettura non concede facoltà di modifica.
 
+La scadenza effettiva della sessione viene ricontrollata dopo le attese sui lock
+e prima dell'audit; una scadenza sopraggiunta annulla anche le modifiche nella
+stessa transazione. Le correzioni dei contatti lead condividono con l'acquisizione
+il blocco globale e la verifica dei duplicati email/telefono normalizzati,
+escludendo il lead corrente. Due scritture concorrenti non possono rivendicare
+lo stesso contatto. I lead acquisiti senza nome o cognome restano modificabili
+senza inventare dati mancanti; i nomi dei referenti mantengono i propri vincoli.
+
 I referenti sono legati all'azienda; gli identificativi forniti dal form non
 permettono di spostare persone tra fascicoli. Una persona storica collegata a più
 aziende non può essere modificata globalmente da questo form: il salvataggio si
@@ -39,6 +47,9 @@ Questa patch non cambia account reali, dati cliente, stato dei servizi o produzi
 Validazione: unità per null/zero/date/importi e overposting; PostgreSQL sintetico
 per isolamento, revoca, riassegnazione, versione, referenti condivisi e rollback
 atomico; percorso Chromium dal lead all'azienda e al referente, con prova di
-diniego per un estraneo e per un modulo già aperto dopo revoca. I controlli standard
+diniego per un estraneo e per un modulo già aperto dopo revoca. Le prove
+includono attese reali PostgreSQL per le scadenze di sessione e per la concorrenza
+tra creazione e modifica dei contatti lead. Il percorso browser include un lead
+acquisito senza nome e cognome. I controlli standard
 del repository restano obbligatori. Rollback applicativo senza downgrade del
 database: mantenere anagrafiche e audit già salvati. Nessuna migrazione necessaria.

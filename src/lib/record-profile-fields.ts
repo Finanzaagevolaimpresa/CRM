@@ -1,6 +1,6 @@
 export type ProfileField = { name: string; label: string; type?: 'email' | 'date' | 'number' | 'textarea'; required?: boolean; max?: number; step?: string };
 export const leadProfileFields: ProfileField[] = [
-  { name: 'firstName', label: 'Nome', required: true }, { name: 'lastName', label: 'Cognome', required: true },
+  { name: 'firstName', label: 'Nome' }, { name: 'lastName', label: 'Cognome' },
   { name: 'companyName', label: 'Azienda dichiarata' }, { name: 'contactPerson', label: 'Persona di contatto' },
   { name: 'email', label: 'Email', type: 'email' }, { name: 'phone', label: 'Telefono', max: 64 },
   { name: 'region', label: 'Regione', max: 100 }, { name: 'province', label: 'Provincia', max: 100 }, { name: 'city', label: 'Comune', max: 100 },

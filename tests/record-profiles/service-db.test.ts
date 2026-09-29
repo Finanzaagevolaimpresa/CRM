@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { PrismaClient, type RoleCode } from '@prisma/client';
+import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
+import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from '../../src/lib/lead-identity';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { saveRecordProfile } from '../../src/lib/record-profiles';
 import { RecordProfileError, personProfileVersion } from '../../src/lib/record-profile-contract';
@@ -98,4 +99,104 @@ test('an audit failure rolls back the profile mutation', { skip: !enabled }, asy
   const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_AUDIT_FAILURE'); } } } }) as unknown as PrismaClient;
   await assert.rejects(saveRecordProfile(failing, f.owner, f.createCompany), /SYNTHETIC_AUDIT_FAILURE/);
   assert.equal(await db.company.count({ where: { clientId: f.client.id } }), 0);
+});
+
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+function namedConnection(name: string) {
+  return { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) => db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT set_config('application_name', ${name}, true)`;
+    return work(tx);
+  }, options) } as unknown as PrismaClient;
+}
+async function waitForLock(name: string) {
+  const until = Date.now() + 3000;
+  while (Date.now() < until) {
+    const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=${name} AND wait_event_type='Lock') AS blocked`;
+    if (row.blocked) return;
+    await pause(20);
+  }
+  assert.fail('Expected actual PostgreSQL lock contention');
+}
+for (const expiry of ['database-session', 'claimed-session', 'legacy-session'] as const) {
+  test(`profile ${expiry} expiry during a record lock wait leaves neither mutation nor audit`, { skip: !enabled }, async () => {
+    const f = await fixture(), name = 'profile-expiry-' + randomUUID();
+    if (expiry === 'database-session') await db.internalSession.update({ where: { id: f.owner.sessionId }, data: { expiresAt: new Date(Date.now() + 1800) } });
+    else f.owner.expiresAt = Math.floor(Date.now() / 1000) + 2;
+    const { sessionId, ...legacy } = f.owner; void sessionId;
+    const session = expiry === 'legacy-session' ? legacy : f.owner;
+    let locked!: () => void, release!: () => void;
+    const acquired = new Promise<void>(resolve => { locked = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const blocker = db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${f.client.id} FOR UPDATE`;
+      locked(); await released;
+    }, { timeout: 10_000 });
+    await Promise.race([acquired, blocker]);
+    const writer = Promise.allSettled([saveRecordProfile(namedConnection(name), session, f.createCompany)]);
+    try { await waitForLock(name); await pause(2200); }
+    finally { release(); await blocker; }
+    const [result] = await writer;
+    assert.equal(result.status, 'rejected');
+    if (result.status === 'rejected') assert.ok(failure('DENIED')(result.reason));
+    assert.equal(await db.company.count({ where: { clientId: f.client.id } }), 0);
+    assert.equal(await db.auditLog.count({ where: { entityId: f.createCompany.id } }), 0);
+  });
+}
+
+const leadData = { firstName: '', lastName: '', companyName: '', contactPerson: '', email: '', phone: '', region: '', province: '', city: '' };
+test('acquired lead contacts can be edited without inventing missing names', { skip: !enabled }, async () => {
+  const admin = await user('admin');
+  const lead = await db.lead.create({ data: { firstName: '', lastName: '', companyName: 'Synthetic unnamed lead' } });
+  await saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: lead.updatedAt.toISOString(), data: { ...leadData,
+    companyName: lead.companyName, email: `unnamed-${randomUUID()}@example.test` } });
+  const saved = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+  assert.equal(saved.firstName, ''); assert.equal(saved.lastName, ''); assert.ok(saved.email);
+});
+
+test('lead profile duplicate checks normalize strong contacts and exclude the current lead', { skip: !enabled }, async () => {
+  const admin = await user('admin'), email = `shared-${randomUUID()}@example.test`;
+  const other = await db.lead.create({ data: { firstName: 'Synthetic', lastName: 'Contact', email, phone: '+12025550199' } });
+  const lead = await db.lead.create({ data: { firstName: '', lastName: '', email: `own-${randomUUID()}@example.test` } });
+  await saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: lead.updatedAt.toISOString(), data: { ...leadData, email: lead.email } });
+  const current = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+  for (const contacts of [{ email: email.toUpperCase() }, { phone: '+1 (202) 555-0199' }]) {
+    await assert.rejects(saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, ...contacts } }), failure('DUPLICATE_LEAD'));
+  }
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: lead.id } }), current);
+  assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'record_profile_saved' } }), 1);
+  await db.lead.update({ where: { id: other.id }, data: { deletedAt: new Date() } });
+  await saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, email } });
+});
+
+test('concurrent lead profile writers cannot claim the same strong contact', { skip: !enabled }, async () => {
+  const admin = await user('admin'), email = `race-${randomUUID()}@example.test`;
+  const leads = await Promise.all([1, 2].map(() => db.lead.create({ data: { firstName: '', lastName: '' } })));
+  const results = await Promise.allSettled(leads.map(lead => saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: lead.updatedAt.toISOString(), data: { ...leadData, email } })));
+  assert.equal(results.filter(x => x.status === 'fulfilled').length, 1);
+  assert.equal(results.filter(x => x.status === 'rejected' && failure('DUPLICATE_LEAD')(x.reason)).length, 1);
+  assert.equal(await db.lead.count({ where: { email, deletedAt: null } }), 1);
+});
+
+test('profile edits wait for the canonical creation identity lock and reject the newly committed contact', { skip: !enabled }, async () => {
+  const admin = await user('admin'), email = `create-race-${randomUUID()}@example.test`, name = 'profile-identity-' + randomUUID();
+  const lead = await db.lead.create({ data: { firstName: '', lastName: '' } });
+  let checked!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { checked = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  // Same canonical creation boundary used by createLead, including a held gap
+  // between the duplicate query and insert. The editor must actually block.
+  const creation = db.$transaction(async tx => {
+    await acquireLeadIdentityWriteLock(tx);
+    assert.equal(await hasStrongRawLeadIdentityDuplicate(tx, { email }), false);
+    checked(); await released;
+    return tx.lead.create({ data: { firstName: 'Synthetic', lastName: 'Creation', email } });
+  }, { timeout: 10_000 });
+  await Promise.race([ready, creation]);
+  const writer = Promise.allSettled([saveRecordProfile(namedConnection(name), admin, { kind: 'lead', id: lead.id, expectedVersion: lead.updatedAt.toISOString(), data: { ...leadData, email } })]);
+  try { await waitForLock(name); } finally { release(); await creation; }
+  const [result] = await writer;
+  assert.equal(result.status, 'rejected');
+  if (result.status === 'rejected') assert.ok(failure('DUPLICATE_LEAD')(result.reason));
+  assert.equal(await db.lead.count({ where: { email, deletedAt: null } }), 1);
+  assert.equal(await db.auditLog.count({ where: { entityId: lead.id } }), 0);
 });
