@@ -12,6 +12,7 @@ const env = { DIRECT_EMAIL_TEST_MODE: 'enforced', DIRECT_EMAIL_TEST_REFERENCE: s
   DIRECT_EMAIL_TEST_RECIPIENT: settings.recipient, DIRECT_EMAIL_TEST_SMTP_HOST: settings.host,
   DIRECT_EMAIL_TEST_SMTP_PASSWORD: settings.password, DIRECT_EMAIL_TEST_APPROVAL_KEY: settings.approvalKey };
 const id = `direct_test_${'a'.repeat(64)}`;
+const control = () => ({ signal: new AbortController().signal, deadline: performance.now() + 15_000 });
 
 test('direct email diagnostic is disabled unless all protected configuration is valid', () => {
   assert.equal(readDirectTestConfig({}), null);
@@ -68,7 +69,7 @@ for (const [behavior, expected] of [['accepted', 'ACCEPTED'], ['auth-denied', 'N
   ['ambiguous', 'UNCERTAIN'], ['invalid-reply', 'UNCERTAIN']] as const) {
   test(`SMTP diagnostic ${behavior}: no retry and bounded single-recipient transport`, async () => {
     const mock = transport(behavior);
-    assert.equal(await sendDirectTestSmtp(settings, id, mock.factory), expected);
+    assert.equal(await sendDirectTestSmtp(settings, id, control(), mock.factory), expected);
     assert.equal(mock.socket.writes.filter(row => row.startsWith('RCPT')).length, behavior === 'auth-denied' ? 0 : 1);
     assert.equal(mock.socket.writes.filter(row => row.startsWith('From:')).length, behavior === 'auth-denied' ? 0 : 1);
     assert.ok(mock.socket.destroyed);
@@ -89,13 +90,37 @@ test('fixed MIME message has exact visible content, no CC/BCC, attachment or cre
 
 test('an unauthorized TLS connection never sends authentication or message bytes', async () => {
   const mock = transport('accepted'); mock.socket.authorized = false;
-  assert.equal(await sendDirectTestSmtp(settings, id, mock.factory), 'NOT_SENT');
+  assert.equal(await sendDirectTestSmtp(settings, id, control(), mock.factory), 'NOT_SENT');
   assert.equal(mock.socket.writes.length, 0);
 });
 
 test('a connection closed during TLS negotiation finishes without sending or retrying', async () => {
   const socket = new FakeTls('accepted');
   const factory = (() => { queueMicrotask(() => socket.emit('close')); return socket; }) as unknown as typeof connect;
-  assert.equal(await sendDirectTestSmtp(settings, id, factory), 'NOT_SENT');
+  assert.equal(await sendDirectTestSmtp(settings, id, control(), factory), 'NOT_SENT');
   assert.equal(socket.writes.length, 0);
+});
+
+test('an already expired or aborted transport never opens a socket', async () => {
+  const controller = new AbortController(); controller.abort();
+  const factory = (() => { assert.fail('No socket may be opened'); }) as typeof connect;
+  assert.equal(await sendDirectTestSmtp(settings, id, { signal: controller.signal, deadline: performance.now() + 1000 }, factory), 'NOT_SENT');
+  assert.equal(await sendDirectTestSmtp(settings, id, { ...control(), deadline: performance.now() - 1 }, factory), 'NOT_SENT');
+});
+
+for (const cause of ['abort', 'deadline'] as const) test(`SMTP ${cause} closes a slow transport before DATA bytes and rejects late replies`, async () => {
+  const mock = transport('accepted'), controller = new AbortController();
+  const write = mock.socket.write.bind(mock.socket);
+  mock.socket.write = text => {
+    if (text !== 'DATA\r\n') return write(text);
+    mock.socket.writes.push(text);
+    if (cause === 'abort') setTimeout(() => controller.abort(), 10);
+    return true;
+  };
+  const result = await sendDirectTestSmtp(settings, id, { signal: controller.signal,
+    deadline: performance.now() + (cause === 'deadline' ? 30 : 1000) }, mock.factory);
+  assert.equal(result, 'NOT_SENT'); assert.ok(mock.socket.destroyed);
+  mock.socket.emit('data', '354 delayed reply\r\n');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mock.socket.writes.filter(text => text.startsWith('From:')).length, 0);
 });

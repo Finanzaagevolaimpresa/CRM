@@ -76,3 +76,16 @@ Rollback is an authorized application rollback or disabling the protected mode.
 Retain AuditLog reservations/results and the campaign reference across rollback
 and restart. Do not delete attempts or regenerate references to retry. Reverting
 this dormant patch requires no schema downgrade or customer-data change.
+# Scadenze durante attese e trasporto
+
+Le scadenze dell'anteprima e della sessione vengono rivalidate dopo tutti i lock.
+La sessione persistita è confrontata con `clock_timestamp()` PostgreSQL, non con
+il timestamp fermo di inizio transazione. Un tentativo già prenotato rimane
+consumato anche se la validità scade prima del trasporto.
+
+Attese e SMTP condividono un limite monotono di 20 secondi, avviato prima della
+transazione finale di 30 secondi. Il socket ha inoltre un massimo di 15 secondi,
+ridotto dal tempo residuo e dalle scadenze di autorizzazione; ogni scrittura
+controlla scadenza e annullamento. L'annullamento distrugge il socket senza retry.
+Le prove PostgreSQL osservano una contesa reale, verificano tre scadenze, il
+budget esaurito senza trasporto e una revoca che committa dopo l'arresto del fake.

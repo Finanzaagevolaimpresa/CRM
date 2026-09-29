@@ -6,6 +6,7 @@ export const DIRECT_TEST_FROM = 'comunicazioni@finanzaagevolaimpresa.it';
 export const DIRECT_TEST_SUBJECT = 'FAI CRM — test tecnico di invio diretto';
 export const DIRECT_TEST_BODY = 'Messaggio tecnico di collaudo dal CRM FAI. Nessun dato cliente o contenuto promozionale.';
 export type DirectTestOutcome = 'ACCEPTED' | 'NOT_SENT' | 'UNCERTAIN';
+export type DirectTestTransportControl = { signal: AbortSignal; deadline: number };
 export class DirectTestError extends Error {
   constructor(readonly code: 'DISABLED' | 'INVALID' | 'DENIED' | 'STALE' | 'SENDER_NOT_READY') { super(code); }
 }

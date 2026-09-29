@@ -1,5 +1,5 @@
 import { connect, type TLSSocket } from 'node:tls';
-import { DIRECT_TEST_FROM, directTestMessage, type DirectTestConfig, type DirectTestOutcome } from './direct-email-test';
+import { DIRECT_TEST_FROM, directTestMessage, type DirectTestConfig, type DirectTestOutcome, type DirectTestTransportControl } from './direct-email-test';
 
 // Deliberately narrow diagnostic transport: one TLS/465 connection, one recipient,
 // fixed text, no attachments, STARTTLS downgrade, pool, reconnect or retry.
@@ -58,30 +58,41 @@ export function directTestMime(config: DirectTestConfig, attemptId: string) {
     Buffer.from(message.body).toString('base64').match(/.{1,76}/g)!.join('\r\n'), '', '.', '',
   ].join('\r\n');
 }
-export async function sendDirectTestSmtp(config: DirectTestConfig, attemptId: string, connectTls: typeof connect = connect): Promise<DirectTestOutcome> {
+export async function sendDirectTestSmtp(config: DirectTestConfig, attemptId: string, control: DirectTestTransportControl, connectTls: typeof connect = connect): Promise<DirectTestOutcome> {
+  const remaining = Math.min(15_000, control.deadline - performance.now());
+  if (control.signal.aborted || !Number.isFinite(remaining) || remaining <= 0) return 'NOT_SENT';
   const socket = connectTls({ host: config.host, port: 465, servername: config.host,
     rejectUnauthorized: true, minVersion: 'TLSv1.2' });
   const replies = new Replies(socket);
-  const timeout = setTimeout(() => socket.destroy(new Error('SMTP_TIMEOUT')), 15_000);
+  const abort = () => socket.destroy(new Error('SMTP_ABORTED'));
+  const timeout = setTimeout(abort, remaining);
+  control.signal.addEventListener('abort', abort, { once: true });
   let contentSubmitted = false;
+  function assertLive() {
+    if (control.signal.aborted || performance.now() >= control.deadline || socket.destroyed) throw new Error('SMTP_EXPIRED');
+  }
   async function command(text: string, expected: number[]) {
+    assertLive();
     socket.write(`${text}\r\n`);
     const code = await replies.read();
     if (!expected.includes(code)) throw new Error('SMTP_REJECTED');
   }
   try {
+    assertLive();
     await new Promise<void>((resolve, reject) => {
       const ready = () => { cleanup(); resolve(); };
       const failed = () => { cleanup(); reject(new Error('SMTP_UNAVAILABLE')); };
       const cleanup = () => { socket.off('secureConnect', ready); socket.off('error', failed); socket.off('close', failed); };
       socket.once('secureConnect', ready); socket.once('error', failed); socket.once('close', failed);
     });
+    assertLive();
     if (!socket.authorized || await replies.read() !== 220) return 'NOT_SENT';
     await command('EHLO crm.finanzaagevolaimpresa.it', [250]);
     await command(`AUTH PLAIN ${Buffer.from(`\0${DIRECT_TEST_FROM}\0${config.password}`).toString('base64')}`, [235]);
     await command(`MAIL FROM:<${DIRECT_TEST_FROM}>`, [250]);
     await command(`RCPT TO:<${config.recipient}>`, [250, 251]);
     await command('DATA', [354]);
+    assertLive();
     contentSubmitted = true;
     socket.write(directTestMime(config, attemptId));
     const outcome = await replies.read();
@@ -90,5 +101,5 @@ export async function sendDirectTestSmtp(config: DirectTestConfig, attemptId: st
     return 'UNCERTAIN';
   } catch {
     return contentSubmitted ? 'UNCERTAIN' : 'NOT_SENT';
-  } finally { clearTimeout(timeout); socket.destroy(); }
+  } finally { clearTimeout(timeout); control.signal.removeEventListener('abort', abort); socket.destroy(); }
 }

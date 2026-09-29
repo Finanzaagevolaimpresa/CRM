@@ -6,11 +6,14 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import { mailboxQualification } from './approved-communication-contract';
 import { DIRECT_TEST_FROM, DirectTestError, directTestDigest, directTestMessage, readDirectTestConfig,
-  signDirectTestPreview, verifyDirectTestPreview, type DirectTestConfig, type DirectTestOutcome } from './direct-email-test';
+  signDirectTestPreview, verifyDirectTestPreview, type DirectTestConfig, type DirectTestOutcome, type DirectTestTransportControl } from './direct-email-test';
 
 type Db = Pick<PrismaClient, '$transaction'>;
 type Runtime = { config: () => DirectTestConfig | null;
-  send: (config: DirectTestConfig, attemptId: string) => Promise<DirectTestOutcome> };
+  send: (config: DirectTestConfig, attemptId: string, control: DirectTestTransportControl) => Promise<DirectTestOutcome>;
+  // Tests may shorten the transport window, never extend the production budget.
+  transportWindowMs?: number };
+const FINAL_TRANSACTION_MS = 30_000, TRANSPORT_WINDOW_MS = 20_000;
 const receiptSchema = z.object({ format: z.literal('FAI_DIRECT_EMAIL_TEST_V1'),
   configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
   snapshotHash: z.string().regex(/^[a-f0-9]{64}$/), outcome: z.enum(['RESERVED', 'ACCEPTED', 'NOT_SENT', 'UNCERTAIN']) }).strict();
@@ -38,10 +41,17 @@ async function authorize(tx: Prisma.TransactionClient, session: AuthSession, set
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${box.responsibleUserId} FOR SHARE`;
   const responsible = await tx.user.findUnique({ where: { id: box.responsibleUserId }, select: { active: true, deletedAt: true } });
   if (!responsible?.active || responsible.deletedAt) throw new DirectTestError('SENDER_NOT_READY');
-  return directTestDigest(settings, { settings, message: directTestMessage(settings), mailboxId: box.id,
+  // CURRENT_TIMESTAMP is fixed at transaction start. Read the database wall
+  // clock after every blocking lock, retaining a conservative monotonic deadline.
+  const beforeClock = performance.now();
+  const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+  const databaseRemaining = current.expiresAt.getTime() - clock.now.getTime() - (performance.now() - beforeClock);
+  const remaining = Math.min(databaseRemaining, session.expiresAt * 1000 - Date.now());
+  if (remaining <= 0) throw new DirectTestError('DENIED');
+  return { sessionDeadline: performance.now() + remaining, snapshotHash: directTestDigest(settings, { settings, message: directTestMessage(settings), mailboxId: box.id,
     revision: box.revision, responsibleUserId: box.responsibleUserId, configuredRevision: box.configuredRevision,
     configurationReference: box.configurationReference, testedRevision: box.testedRevision, testReference: box.testReference,
-    sessionId: session.sessionId, userId: session.userId });
+    sessionId: session.sessionId, userId: session.userId }) };
 }
 function verifyReceipt(row: { entityType: string | null; entityId: string | null; event: string; after: unknown }, id: string, settings: DirectTestConfig, event: string) {
   const receipt = receiptSchema.safeParse(row.after);
@@ -58,7 +68,7 @@ async function outcome(tx: Prisma.TransactionClient, id: string, settings: Direc
 export async function previewDirectEmailTest(db: Db, session: AuthSession, runtime = { config: readDirectTestConfig }) {
   const settings = config(runtime);
   return db.$transaction(async tx => {
-    const snapshotHash = await authorize(tx, session, settings), id = attemptId(settings.reference);
+    const { snapshotHash } = await authorize(tx, session, settings), id = attemptId(settings.reference);
     const existing = await tx.auditLog.findUnique({ where: { id } });
     if (existing) {
       verifyReceipt(existing, id, settings, 'direct_email_test_reserved');
@@ -75,7 +85,8 @@ export async function sendApprovedDirectEmailTest(db: Db, session: AuthSession, 
   // The reservation commits before any provider call. The mailbox lock serializes
   // all attempts for this diagnostic; the primary key survives processes/restarts.
   const reservation = await db.$transaction(async tx => {
-    const hash = await authorize(tx, session, settings);
+    const { snapshotHash: hash } = await authorize(tx, session, settings);
+    verifyDirectTestPreview(settings, input.token);
     if (hash !== preview.snapshotHash) throw new DirectTestError('STALE');
     const existing = await tx.auditLog.findUnique({ where: { id } });
     if (existing) {
@@ -90,20 +101,29 @@ export async function sendApprovedDirectEmailTest(db: Db, session: AuthSession, 
     return { fresh: true, outcome: 'UNCERTAIN' as DirectTestOutcome };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30_000 });
   if (!reservation.fresh) return reservation.outcome;
+  const windowMs = runtime.transportWindowMs === undefined ? TRANSPORT_WINDOW_MS : Math.min(TRANSPORT_WINDOW_MS, runtime.transportWindowMs);
+  if (!Number.isFinite(windowMs) || windowMs <= 0) return 'UNCERTAIN';
+  // Starts before Prisma opens the final transaction, so queue and lock waits
+  // consume the same budget. Transport stops at least 10s before its timeout.
+  const controller = new AbortController(), deadline = performance.now() + windowMs;
+  const timer = setTimeout(() => controller.abort(), windowMs);
   try {
     // No transaction retry around transport. Locks prevent a revocation/mailbox
     // change from racing the final check and the SMTP call. Timeout is bounded.
     return await db.$transaction(async tx => {
       const currentConfig = config(runtime);
-      verifyDirectTestPreview(currentConfig, input.token);
-      if (await authorize(tx, session, currentConfig) !== preview.snapshotHash) throw new DirectTestError('STALE');
-      const result = await runtime.send(currentConfig, id);
+      const authorization = await authorize(tx, session, currentConfig);
+      const livePreview = verifyDirectTestPreview(currentConfig, input.token);
+      if (authorization.snapshotHash !== preview.snapshotHash || controller.signal.aborted || performance.now() >= deadline) throw new DirectTestError('STALE');
+      const result = await runtime.send(currentConfig, id, { signal: controller.signal,
+        deadline: Math.min(deadline, authorization.sessionDeadline, performance.now() + livePreview.expiresAt - Date.now()) });
       const receipt = receiptSchema.parse({ format: preview.protocol, snapshotHash: preview.snapshotHash,
         configurationHash: directTestDigest(currentConfig, currentConfig), outcome: result });
       const saved = await tx.auditLog.create({ data: { id: `${id}_result`, actorId: session.userId, entityType: 'DirectEmailTest', entityId: id,
         event: 'direct_email_test_result', after: receipt } });
       if (JSON.stringify(receiptSchema.parse(saved.after)) !== JSON.stringify(receipt)) throw new DirectTestError('INVALID');
       return result;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30_000 });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: FINAL_TRANSACTION_MS });
   } catch { return 'UNCERTAIN'; } // Durable reservation is retained, even if result commit is uncertain.
+  finally { clearTimeout(timer); controller.abort(); }
 }

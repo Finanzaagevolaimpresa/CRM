@@ -5,7 +5,7 @@ import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { configureCommunicationMailbox, qualifyCommunicationMailbox } from '../../src/lib/approved-communications';
 import { previewDirectEmailTest, sendApprovedDirectEmailTest } from '../../src/lib/direct-email-test-service';
-import { DIRECT_TEST_FROM, DirectTestError, type DirectTestConfig, type DirectTestOutcome } from '../../src/lib/direct-email-test';
+import { DIRECT_TEST_FROM, DirectTestError, signDirectTestPreview, verifyDirectTestPreview, type DirectTestConfig, type DirectTestOutcome, type DirectTestTransportControl } from '../../src/lib/direct-email-test';
 
 const enabled = process.env.DIRECT_EMAIL_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
   requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1',
@@ -150,4 +150,84 @@ test('a failed reservation never contacts transport; a changed configuration can
   await sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime);
   await assert.rejects(previewDirectEmailTest(db, f.admin, { config: () => ({ ...f.settings, recipient: 'changed@example.test' }) }), failure('STALE'));
   assert.equal(f.calls(), 1);
+});
+
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+function withFinalMailboxBarrier(mailboxId: string, holdMs: number) {
+  let transactions = 0, sawBlocked = false;
+  const connection = { $transaction: async (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options: object) => {
+    if (++transactions !== 2) return db.$transaction(work, options);
+    let locked!: () => void, release!: () => void;
+    const acquired = new Promise<void>(resolve => { locked = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const blocker = db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "CommunicationMailbox" WHERE id=${mailboxId} FOR UPDATE`;
+      locked(); await released;
+    }, { timeout: 15_000 });
+    await acquired;
+    const name = 'direct-expiry-' + randomUUID();
+    const running = db.$transaction(async tx => {
+      await tx.$queryRaw`SELECT set_config('application_name', ${name}, true)`;
+      return work(tx);
+    }, options);
+    try {
+      const until = Date.now() + 5000;
+      while (Date.now() < until) {
+        const rows = await db.$queryRaw<Array<{ blocked: boolean }>>`SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=${name} AND wait_event_type='Lock') AS blocked`;
+        if (rows[0].blocked) { sawBlocked = true; break; }
+        await pause(20);
+      }
+      assert.ok(sawBlocked, 'Real PostgreSQL lock contention must be observed');
+      await pause(holdMs);
+    } finally { release(); await blocker; }
+    return running;
+  } } as unknown as PrismaClient;
+  return { connection, blocked: () => sawBlocked };
+}
+
+for (const expiry of ['preview', 'database-session', 'claimed-session'] as const) {
+  test(`final PostgreSQL lock wait cannot outlive ${expiry}; reservation remains and SMTP is never called`, { skip: !enabled }, async () => {
+    const f = await fixture(), expiresAt = Date.now() + 2000;
+    if (expiry === 'preview') f.input.token = signDirectTestPreview(f.settings, { ...verifyDirectTestPreview(f.settings, f.input.token), expiresAt });
+    if (expiry === 'database-session') await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { expiresAt: new Date(expiresAt) } });
+    if (expiry === 'claimed-session') f.admin.expiresAt = Math.ceil(expiresAt / 1000);
+    const barrier = withFinalMailboxBarrier(f.box.id, 3100);
+    assert.equal(await sendApprovedDirectEmailTest(barrier.connection, f.admin, f.input, true, f.runtime), 'UNCERTAIN');
+    assert.ok(barrier.blocked()); assert.equal(f.calls(), 0);
+    const attempts = await db.auditLog.findMany({ where: { actorId: f.admin.userId, entityType: 'DirectEmailTest' } });
+    assert.equal(attempts.length, 1); assert.equal(attempts[0].event, 'direct_email_test_reserved');
+  });
+}
+
+test('exhausted shared lock/transport budget never starts SMTP and retains the reservation', { skip: !enabled }, async () => {
+  const f = await fixture(), barrier = withFinalMailboxBarrier(f.box.id, 400);
+  assert.equal(await sendApprovedDirectEmailTest(barrier.connection, f.admin, f.input, true, { ...f.runtime, transportWindowMs: 200 }), 'UNCERTAIN');
+  assert.ok(barrier.blocked()); assert.equal(f.calls(), 0);
+  assert.equal(await db.auditLog.count({ where: { actorId: f.admin.userId, event: 'direct_email_test_reserved' } }), 1);
+});
+
+test('slow transport aborts while PostgreSQL still holds authority locks; revocation commits only afterwards', { skip: !enabled }, async () => {
+  const f = await fixture(), barrier = withFinalMailboxBarrier(f.box.id, 300);
+  let transportLive = false, stopped = false, revoked = false, calls = 0;
+  let revocation: Promise<unknown> | undefined;
+  const send = async (_config: DirectTestConfig, id: string, control: DirectTestTransportControl): Promise<DirectTestOutcome> => {
+    calls++; transportLive = true;
+    assert.ok(await db.auditLog.findUnique({ where: { id } }));
+    revocation = db.user.update({ where: { id: f.admin.userId }, data: { active: false } }).then(() => {
+      assert.equal(transportLive, false, 'Authority cannot change while transport is live');
+      assert.ok(stopped); revoked = true;
+    });
+    await pause(100); assert.equal(revoked, false);
+    await new Promise<void>(resolve => {
+      if (control.signal.aborted) return resolve();
+      control.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    transportLive = false; stopped = true;
+    return 'NOT_SENT';
+  };
+  assert.equal(await sendApprovedDirectEmailTest(barrier.connection, f.admin, f.input, true, { ...f.runtime, send, transportWindowMs: 1500 }), 'NOT_SENT');
+  await revocation;
+  assert.ok(barrier.blocked()); assert.ok(revoked); assert.ok(stopped); assert.equal(calls, 1);
+  const attempts = await db.auditLog.findMany({ where: { actorId: f.admin.userId, entityType: 'DirectEmailTest' } });
+  assert.equal(attempts.length, 2);
 });
