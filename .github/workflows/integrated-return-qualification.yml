@@ -26,6 +26,7 @@ jobs:
           repository: Finanzaagevolaimpresa/CRM
           github-token: ${{ github.token }}
           path: qualified-r40
+          merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
           artifact-ids: '11040501304'
@@ -33,6 +34,7 @@ jobs:
           repository: Finanzaagevolaimpresa/CRM
           github-token: ${{ github.token }}
           path: qualified-r37
+          merge-multiple: true
       - name: Install qualification tools in the disposable runner
         run: npm ci && npx playwright install --with-deps chromium
       - name: Verify saved-image recovery and candidate resumption
