@@ -11,7 +11,7 @@ import { EngagementDossierError, getEngagementMaterialDownloadAccess, mutateInit
   authorizeEngagementDossierDelivery, recordEngagementDossierDelivery, reviseEngagementDossier } from '../../src/lib/engagement-dossier';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticUser, syntheticCase } from './fixtures';
-import { listAccessiblePracticeReadiness, PracticeReadinessError, recordPracticeFunding } from '../../src/lib/practice-readiness';
+import { listAccessiblePracticeReadiness, PracticeReadinessError, recordPracticeFunding, proposePracticeOfferRevision } from '../../src/lib/practice-readiness';
 import { buildOperationalReportMarkdown } from '../../src/lib/operational-report';
 const enabled = process.env.M5_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
   destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
@@ -225,6 +225,16 @@ test('readiness and funding on a shared client follow the service assignment and
   await assert.rejects(recordPracticeFunding(db, clientOwner, { practiceId: practice.id, expectedVersion: practice.version, reference: 'UNAUTHORIZED', amount: '1.00', currency: 'EUR' }),
     (error: unknown) => error instanceof PracticeReadinessError && error.code === 'DENIED');
   assert.equal(await db.auditLog.count({ where: { entityId: practice.id } }), before);
+  const ownProject = await db.project.create({ data: { clientId: f.client.id, consultantId: clientOwner.userId, title: 'Own project cannot open sibling offer' } });
+  const source = await db.commercialOffer.findUniqueOrThrow({ where: { id: practice.commercialOfferId } });
+  const revisionsBefore = await db.practiceOfferRevision.count({ where: { commercialOfferId: source.id } });
+  const auditsBefore = await db.auditLog.count({ where: { actorId: clientOwner.userId } });
+  await assert.rejects(proposePracticeOfferRevision(db, clientOwner, { controlledIntakeId: practice.controlledIntakeId, commercialOfferId: source.id,
+    serviceRevisionId: practice.serviceRevisionId, clientId: f.client.id, projectId: ownProject.id, scope: 'Sibling source overpost',
+    startupConditions: 'Not authorized', requiredInitialAmount: '1.00', expectedOfferUpdatedAt: source.updatedAt }),
+    (error: unknown) => error instanceof PracticeReadinessError && error.code === 'DENIED');
+  assert.equal(await db.practiceOfferRevision.count({ where: { commercialOfferId: source.id } }), revisionsBefore);
+  assert.equal(await db.auditLog.count({ where: { actorId: clientOwner.userId } }), auditsBefore);
   await db.clientService.update({ where: { id: f.service.id }, data: { assignedToId: clientOwner.userId } });
   assert.ok(!(await listAccessiblePracticeReadiness(db, a.operator)).some(p => p.id === f.practice.id));
   assert.ok((await listAccessiblePracticeReadiness(db, clientOwner)).some(p => p.id === f.practice.id));

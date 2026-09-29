@@ -6,6 +6,7 @@ import { canonicalSha256 } from "./canonical-json";
 import {
   canEditClient,
   canViewChecklistItem,
+  canViewCommercialOffer,
   canViewService,
   canViewDocument,
   isSensitiveDocument,
@@ -364,6 +365,7 @@ export async function proposePracticeOfferRevision(
         !canViewPracticeReadinessWork(a, { client, projectId: input.projectId, project: project ? { ...project, client } : null, lead }) ||
         !offer ||
         offer.deletedAt ||
+        !canViewCommercialOffer(a, { ...offer, client, lead }) ||
         offer.clientId !== client.id ||
         offer.leadId !== lead.id ||
         offer.updatedAt.getTime() !== input.expectedOfferUpdatedAt.getTime() ||
