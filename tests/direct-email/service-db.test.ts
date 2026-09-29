@@ -70,7 +70,7 @@ for (const outcome of ['ACCEPTED', 'NOT_SENT', 'UNCERTAIN'] as const) {
   });
 }
 
-test('fresh role, session revocation, permission revocation and mailbox disablement deny a stale open page', { skip: !enabled }, async () => {
+test('fresh role, session revocation, suspension and mailbox disablement deny a stale open page', { skip: !enabled }, async () => {
   const f = await fixture();
   const outsider = await user('commerciale');
   await assert.rejects(previewDirectEmailTest(db, outsider, f.runtime), failure('DENIED'));
@@ -80,9 +80,9 @@ test('fresh role, session revocation, permission revocation and mailbox disablem
   await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: new Date() } });
   await assert.rejects(sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime), failure('DENIED'));
   await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: null } });
-  const permission = await db.userPermissionOverride.create({ data: { userId: f.admin.userId, permission: 'settings.manage', allowed: false } });
+  await db.user.update({ where: { id: f.admin.userId }, data: { active: false } });
   await assert.rejects(sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime), failure('DENIED'));
-  await db.userPermissionOverride.update({ where: { id: permission.id }, data: { allowed: true } });
+  await db.user.update({ where: { id: f.admin.userId }, data: { active: true } });
   await qualifyCommunicationMailbox(db, f.admin, { mailboxId: f.box.id, expectedRevision: f.box.revision, action: 'DISABLE' });
   await assert.rejects(sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime), failure('SENDER_NOT_READY'));
   assert.equal(f.calls(), 0);
@@ -109,8 +109,10 @@ test('recipient, configuration, live session and qualified mailbox revision are 
   }
   const other = await user();
   await assert.rejects(sendApprovedDirectEmailTest(db, other, f.input, true, f.runtime), failure('STALE'));
-  await qualifyCommunicationMailbox(db, f.admin, { mailboxId: f.box.id, expectedRevision: f.box.revision, action: 'TEST', testReference: 'SYNTHETIC_NEW_PROOF' });
-  await assert.rejects(sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime));
+  const changed = await qualifyCommunicationMailbox(db, f.admin, { mailboxId: f.box.id, expectedRevision: f.box.revision, action: 'DISABLE' });
+  await qualifyCommunicationMailbox(db, f.admin, { mailboxId: f.box.id, expectedRevision: changed.revision, action: 'TEST', testReference: 'SYNTHETIC_NEW_PROOF' });
+  await qualifyCommunicationMailbox(db, f.admin, { mailboxId: f.box.id, expectedRevision: changed.revision, action: 'ENABLE' });
+  await assert.rejects(sendApprovedDirectEmailTest(db, f.admin, f.input, true, f.runtime), failure('STALE'));
   assert.equal(f.calls(), 0);
 });
 

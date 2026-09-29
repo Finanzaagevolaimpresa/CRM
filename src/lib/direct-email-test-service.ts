@@ -11,7 +11,7 @@ import { DIRECT_TEST_FROM, DirectTestError, directTestDigest, directTestMessage,
 type Db = Pick<PrismaClient, '$transaction'>;
 type Runtime = { config: () => DirectTestConfig | null;
   send: (config: DirectTestConfig, attemptId: string) => Promise<DirectTestOutcome> };
-const receiptSchema = z.object({ protocol: z.literal('FAI_DIRECT_EMAIL_TEST_V1'),
+const receiptSchema = z.object({ format: z.literal('FAI_DIRECT_EMAIL_TEST_V1'),
   configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
   snapshotHash: z.string().regex(/^[a-f0-9]{64}$/), outcome: z.enum(['RESERVED', 'ACCEPTED', 'NOT_SENT', 'UNCERTAIN']) }).strict();
 function attemptId(reference: string) { return `direct_test_${createHash('sha256').update(reference).digest('hex')}`; }
@@ -82,7 +82,7 @@ export async function sendApprovedDirectEmailTest(db: Db, session: AuthSession, 
       verifyReceipt(existing, id, settings, 'direct_email_test_reserved');
       return { fresh: false, outcome: await outcome(tx, id, settings) };
     }
-    const receipt = receiptSchema.parse({ protocol: preview.protocol, snapshotHash: hash,
+    const receipt = receiptSchema.parse({ format: preview.protocol, snapshotHash: hash,
       configurationHash: directTestDigest(settings, settings), outcome: 'RESERVED' });
     const saved = await tx.auditLog.create({ data: { id, actorId: session.userId, entityType: 'DirectEmailTest', entityId: id,
       event: 'direct_email_test_reserved', after: receipt } });
@@ -98,7 +98,7 @@ export async function sendApprovedDirectEmailTest(db: Db, session: AuthSession, 
       verifyDirectTestPreview(currentConfig, input.token);
       if (await authorize(tx, session, currentConfig) !== preview.snapshotHash) throw new DirectTestError('STALE');
       const result = await runtime.send(currentConfig, id);
-      const receipt = receiptSchema.parse({ protocol: preview.protocol, snapshotHash: preview.snapshotHash,
+      const receipt = receiptSchema.parse({ format: preview.protocol, snapshotHash: preview.snapshotHash,
         configurationHash: directTestDigest(currentConfig, currentConfig), outcome: result });
       const saved = await tx.auditLog.create({ data: { id: `${id}_result`, actorId: session.userId, entityType: 'DirectEmailTest', entityId: id,
         event: 'direct_email_test_result', after: receipt } });
