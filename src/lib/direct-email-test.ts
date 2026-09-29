@@ -19,7 +19,7 @@ const configSchema = z.object({
 }).strict();
 export type DirectTestConfig = z.infer<typeof configSchema>;
 // Server-only inputs: no provider host, credential, sender or recipient comes from a form.
-export function readDirectTestConfig(env: NodeJS.ProcessEnv = process.env): DirectTestConfig | null {
+export function readDirectTestConfig(env: Readonly<Record<string, string | undefined>> = process.env): DirectTestConfig | null {
   if (env.DIRECT_EMAIL_TEST_MODE !== 'enforced') return null;
   const parsed = configSchema.safeParse({ reference: env.DIRECT_EMAIL_TEST_REFERENCE,
     recipient: env.DIRECT_EMAIL_TEST_RECIPIENT, host: env.DIRECT_EMAIL_TEST_SMTP_HOST,
