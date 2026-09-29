@@ -59,16 +59,16 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx tests/record-profiles/provision-browser.ts
-          npm run dev > "$RECORD_PROFILES_EVIDENCE/app.log" 2>&1 &
+          npm run dev -- --hostname 127.0.0.1 --port 3038 > "$RECORD_PROFILES_EVIDENCE/app.log" 2>&1 &
           app_pid=$!
           trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
           ready=0
           for attempt in $(seq 1 60); do
             if curl --fail --silent --max-time 2 http://127.0.0.1:3038/api/health >/dev/null; then ready=1; break; fi
-            kill -0 "$app_pid"
+            if ! kill -0 "$app_pid" 2>/dev/null; then cat "$RECORD_PROFILES_EVIDENCE/app.log"; exit 1; fi
             sleep 1
           done
-          test "$ready" = 1
+          if [ "$ready" != 1 ]; then cat "$RECORD_PROFILES_EVIDENCE/app.log"; exit 1; fi
           npx playwright test --config tests/record-profiles/playwright.config.ts
       - if: always()
         uses: actions/upload-artifact@v4
