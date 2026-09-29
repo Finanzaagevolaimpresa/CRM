@@ -8,7 +8,7 @@ import { getAccessibleDashboardTaskCounts, getClientDossierReadAccess, listAcces
 import { buildOperationalReportMarkdown } from '../../src/lib/operational-report';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './ai-orchestrator-db-test-guard';
 
-const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
+const enabled = process.env.ROLE_DASHBOARD_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
   destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
   sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL, appEnvironment: process.env.APP_ENV, nodeEnvironment: process.env.NODE_ENV });
 test.before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(prisma); });

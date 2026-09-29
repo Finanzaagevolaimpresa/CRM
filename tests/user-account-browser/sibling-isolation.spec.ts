@@ -27,7 +27,7 @@ test.beforeAll(async () => {
   }
   adminId = users.get('admin')!;
   clientId = (await db.client.create({ data: { type: 'societa', displayName: tag + '-shared-client', salesOwnerId: users.get('commerciale'), consultantId: users.get('consulente') } })).id;
-  await db.clientReadGrant.createMany({ data: roles.filter(role => !['admin', 'direzione'].includes(role)).map(role => ({ userId: users.get(role)!, clientId, createdById: adminId, updatedById: adminId })) });
+  await db.clientReadGrant.createMany({ data: roles.filter(role => !['admin', 'direzione'].includes(role)).map(role => ({ userId: users.get(role)!, clientId, active: true, createdById: adminId, updatedById: adminId })) });
   ownProject = (await db.project.create({ data: { clientId, title: tag + '-own-project', consultantId: users.get('consulente') } })).id;
   foreignProject = (await db.project.create({ data: { clientId, title: tag + '-foreign-project', consultantId: adminId } })).id;
   taskId = (await db.task.create({ data: { clientId, title: ownTitle, assignedToId: users.get('consulente'), createdById: adminId, dueAt: new Date('2020-01-01') } })).id;
