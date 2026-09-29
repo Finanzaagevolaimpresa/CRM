@@ -21,7 +21,10 @@ export default async function Page({ params, searchParams }: {
   const entry = await getHandoffReceipt(prisma, id), { client, service, project } = context;
   const practice = entry ? await prisma.technicalPractice.findFirst({ where: { id: entry.receipt.technicalPracticeId, clientId: client.id,
     clientServiceId: id, projectId: service.projectId, deletedAt: null } }) : null;
-  if (session.role !== 'admin' && (!practice || !canViewTechnicalPractice(session, { ...practice, client }))) notFound();
+  if (session.role !== 'admin' && (!practice || !canViewTechnicalPractice(session, { ...practice, client,
+    project: project ? { ...project, client } : null,
+    clientService: { ...service, client, project: project ? { ...project, client } : null },
+  }))) notFound();
   const path = `/services/${id}/handoff`;
   if (entry) {
     const receipt = entry.receipt;

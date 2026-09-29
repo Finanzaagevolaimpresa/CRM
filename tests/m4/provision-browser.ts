@@ -21,12 +21,13 @@ async function main() {
   const operator = await db.user.create({ data: { email: 'm4-browser-operator@invalid.test', name: 'M4 Browser Operator', role: 'consulente', passwordHash, active: true } });
   await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) } });
   const client = await db.client.create({ data: { type: 'societa', displayName: 'M4 Browser Synthetic Client', consultantId: operator.id } });
-  const practice = await db.technicalPractice.create({ data: { clientId: client.id, title: 'M4 Browser Synthetic', practiceType: 'test', targetEntity: 'Synthetic', technicalOwnerId: operator.id, createdById: admin.id } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'M4 Browser Synthetic Project', consultantId: operator.id } });
+  const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id, title: 'M4 Browser Synthetic', practiceType: 'test', targetEntity: 'Synthetic', technicalOwnerId: operator.id, createdById: admin.id } });
   const material = Buffer.from('Synthetic actual M4 bytes for Chromium package qualification.');
   mkdirSync(join(root, client.id), { recursive: true });
   const storagePath = `${client.id}/m4-synthetic.txt`;
   writeFileSync(join(root, storagePath), material, { flag: 'wx', mode: 0o600 });
-  const document = await db.document.create({ data: { clientId: client.id, type: 'documento_operativo', title: 'M4 synthetic material', fileName: 'm4-synthetic.txt', mimeType: 'text/plain',
+  const document = await db.document.create({ data: { clientId: client.id, projectId: project.id, type: 'documento_operativo', title: 'M4 synthetic material', fileName: 'm4-synthetic.txt', mimeType: 'text/plain',
     storagePath, sizeBytes: material.length, checksum: createHash('sha256').update(material).digest('hex'), uploadedById: admin.id, status: 'verificato' } });
   const version = await db.documentVersion.create({ data: { documentId: document.id, version: 1, storagePath, checksum: document.checksum } });
   const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });

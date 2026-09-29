@@ -68,8 +68,8 @@ test('admin e direzione mantengono accesso globale soltanto su contesti coerenti
     assert.equal(canEditProject(user, project()), true);
     assert.equal(canEditService(user, service()), true);
     assert.equal(canAssignService(user, service()), role === 'admin');
-    assert.equal(canEditTask(user, { clientId: 'client-1', assignedToId: null, createdById: null }), true);
-    assert.equal(canEditChecklistItem(user, { clientId: 'client-1', createdById: null, updatedById: null }), true);
+    assert.equal(canEditTask(user, { clientId: 'client-1', assignedToId: null, createdById: null, client: client() }), true);
+    assert.equal(canEditChecklistItem(user, { clientId: 'client-1', createdById: null, updatedById: null, client: client() }), true);
     assert.equal(canEditDocument(user, document()), true);
     assert.equal(canEditTechnicalPractice(user, { technicalOwnerId: 'altro' }), true);
   }
@@ -118,7 +118,7 @@ test('clienti e progetti sono modificabili soltanto dal responsabile previsto', 
   assert.equal(canEditClient(consulente, client('client-1', 'user-1', 'user-2')), false);
 
   assert.equal(canEditProject(consulente, project('client-1', 'user-1')), true);
-  assert.equal(canEditProject(consulente, project('client-1', 'user-2', client('client-1', null, 'user-1'))), true);
+  assert.equal(canEditProject(consulente, project('client-1', 'user-2', client('client-1', null, 'user-1'))), false);
   assert.equal(canEditProject(consulente, project('client-1', 'user-2', client('client-1', null, 'user-2'))), false);
   assert.equal(canEditProject(commerciale, project('client-1', 'user-1')), false);
   assert.equal(canEditClient(actor('collaboratore_limitato'), client('client-1', 'user-1', 'user-1')), false);
@@ -148,11 +148,11 @@ test('task e checklist ereditano contesti correnti, non la sola provenienza', ()
   const consulente = actor('consulente');
   const ownedClient = client('client-1', null, 'user-1');
 
-  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: 'user-1', createdById: null }), true);
+  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: 'user-1', createdById: null, client: ownedClient }), true);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: 'user-1' }), false);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, client: ownedClient }), true);
-  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, project: project('client-1', 'user-1') }), true);
-  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, clientService: service('client-1', 'user-1') }), true);
+  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, client: ownedClient, project: project('client-1', 'user-1', ownedClient) }), true);
+  assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: null, createdById: null, client: ownedClient, clientService: service('client-1', 'user-1', ownedClient) }), true);
   assert.equal(canEditTask(consulente, { clientId: 'client-1', assignedToId: 'user-2', createdById: 'user-2' }), false);
   assert.equal(canEditTask(actor('backoffice'), { clientId: 'client-1', assignedToId: null, createdById: null }), false);
   assert.equal(canEditTask(actor('collaboratore_limitato'), { clientId: 'client-1', assignedToId: 'user-1', createdById: 'user-1' }), false);
@@ -174,8 +174,9 @@ test('i documenti richiedono titolarita corrente oltre al permesso sui sensibili
   assert.equal(canEditDocument(actor('backoffice'), sensitive), false);
   assert.equal(canEditDocument(actor('backoffice'), sensitive, true), false);
   assert.equal(canEditDocument(actor('consulente'), document({ uploadedById: 'user-1' })), false);
-  assert.equal(canEditDocument(actor('consulente'), document({ client: client('client-1', null, 'user-1') })), true);
-  assert.equal(canEditDocument(actor('commerciale'), document({ client: client('client-1', 'user-1') })), true);
+  assert.equal(canEditDocument(actor('consulente'), document({ client: client('client-1', null, 'user-1') })), false);
+  assert.equal(canEditDocument(actor('commerciale'), document({ client: client('client-1', 'user-1') })), false);
+  assert.equal(canEditDocument(actor('commerciale'), document({ uploadedById: 'user-1', client: client('client-1', 'user-1') })), true);
   assert.equal(canEditDocument(actor('collaboratore_limitato'), document({ uploadedById: 'user-1' })), false);
 });
 
@@ -299,7 +300,8 @@ test('output AI richiedono contesto run identico e revisione indipendente dal ge
     clientService: null,
   };
 
-  assert.equal(canViewAiOutput(actor('consulente', 'consultant-1'), output), true);
+  assert.equal(canViewAiOutput(actor('consulente', 'consultant-1'), output), false);
+  assert.equal(canViewAiOutput(actor('consulente', 'consultant-1'), { ...output, run: { ...run, createdById: 'consultant-1' } }), true);
   assert.equal(canViewAiOutput(actor('consulente', 'other-consultant'), output), false);
   assert.equal(canViewAiOutput(actor('admin'), { ...output, run: { ...run, clientId: 'client-2' } }), false);
   assert.equal(canViewAiOutput(actor('revisore'), { ...output, clientId: null, client: null, run: { clientId: null, clientServiceId: null, projectId: null, createdById: 'generator-1' } }), false);
@@ -307,7 +309,8 @@ test('output AI richiedono contesto run identico e revisione indipendente dal ge
 
   const scopedReviewer = { ...actor('revisore', 'reviewer-1'), clientReadScope: ['client-1'] };
   assert.equal(canReviewAiOutput(actor('revisore', 'reviewer-1'), output), false);
-  assert.equal(canReviewAiOutput(scopedReviewer, output), true);
+  assert.equal(canReviewAiOutput(scopedReviewer, output), false);
+  assert.equal(canReviewAiOutput(actor('direzione', 'independent-supervisor'), output), true);
   assert.equal(canReviewAiOutput(actor('consulente', 'generator-1'), output), false);
   assert.equal(canReviewAiOutput(scopedReviewer, { ...output, forbiddenPhrases: ['garantito'] }), false);
   assert.equal(canReviewAiOutput(scopedReviewer, { ...output, run: { ...run, createdById: null } }), false);

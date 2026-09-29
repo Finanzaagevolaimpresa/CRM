@@ -2,8 +2,8 @@ import type { Client, ClientService, PracticeCommunication, Project, TechnicalPr
 import { canViewTechnicalPractice, type Actor } from './access-control';
 
 type ClientContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId' | 'deletedAt'>;
-type ProjectContext = Pick<Project, 'id' | 'clientId' | 'deletedAt'>;
-type ServiceContext = Pick<ClientService, 'id' | 'clientId' | 'projectId' | 'deletedAt'>;
+type ProjectContext = Pick<Project, 'id' | 'clientId' | 'consultantId' | 'deletedAt'>;
+type ServiceContext = Pick<ClientService, 'id' | 'clientId' | 'projectId' | 'assignedToId' | 'deletedAt'>;
 type PracticeContext = Pick<TechnicalPractice,
   'id' | 'clientId' | 'projectId' | 'clientServiceId' | 'commercialOwnerId' | 'technicalOwnerId' | 'deletedAt'>;
 type CommunicationContext = Pick<PracticeCommunication,
@@ -40,7 +40,10 @@ export function buildDashboardTechnicalCounterContext<TPractice extends Practice
     const serviceProject = service?.projectId ? projectById.get(service.projectId) : null;
     if (service?.projectId && (!serviceProject || serviceProject.clientId !== practice.clientId)) return false;
     if (project && service?.projectId && service.projectId !== project.id) return false;
-    return canViewTechnicalPractice(session, { ...practice, client });
+    return canViewTechnicalPractice(session, { ...practice, client,
+      project: project ? { ...project, client } : null,
+      clientService: service ? { ...service, client, project: serviceProject ? { ...serviceProject, client } : null } : null,
+    });
   });
   const practiceById = new Map(visiblePractices.map((practice) => [practice.id, practice]));
   const visibleCommunications: CommunicationContext[] = [];

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { perimeterRoles, type ClientReadScope } from './client-read-perimeter-policy';
+import { hasGlobalReadAccess } from './read-supervision';
 
 export const CORE_QUERY_PAGE_SIZE = 50;
 export const CORE_QUERY_MAX_PAGE = 200;
@@ -53,7 +54,7 @@ export function coreQueryCandidateLimit(limit: number): number {
 }
 
 export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & ClientReadScope): Prisma.ClientWhereInput {
-  if (session.role === 'admin' || session.role === 'direzione') return {};
+  if (hasGlobalReadAccess(session)) return {};
   const readScope = perimeterRoles.includes(session.role) ? [...new Set(session.clientReadScope ?? [])] : [];
   const own: Prisma.ClientWhereInput[] = [];
   if (session.role === 'commerciale' || session.role === 'backoffice' || session.role === 'collaboratore_limitato') own.push({ salesOwnerId: session.userId });
@@ -63,8 +64,7 @@ export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userI
 }
 
 export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.LeadWhereInput {
-  if (session.role === 'admin') return {};
-  if (session.role === 'direzione') return { assignedToId: { not: null } };
+  if (hasGlobalReadAccess(session)) return {};
   return { assignedToId: session.userId };
 }
 

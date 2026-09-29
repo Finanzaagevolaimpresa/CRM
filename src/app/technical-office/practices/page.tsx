@@ -39,7 +39,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     if (practice.clientServiceId && (!service || service.clientId !== practice.clientId)) return false;
     if (service?.projectId && (!service.project || service.project.clientId !== practice.clientId)) return false;
     if (project && service?.projectId && service.projectId !== project.id) return false;
-    return canViewTechnicalPractice(session, { ...practice, client });
+    return canViewTechnicalPractice(session, { ...practice, client, project, clientService: service });
   });
   const clientOf = (id: string) => clientById.get(id)?.displayName ?? 'Cliente';
   const userOf = (id?: string | null) => users.find((u) => u.id === id)?.name ?? '—';

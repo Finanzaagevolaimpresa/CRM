@@ -24,13 +24,14 @@ export default async function Page() {
   const [practices, clients, projects, services, users] = await Promise.all([
     prisma.technicalPractice.findMany({ where: { deletedAt: null } }),
     prisma.client.findMany({ where: { deletedAt: null } }),
-    prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true } }),
-    prisma.clientService.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true } }),
+    prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, consultantId: true } }),
+    prisma.clientService.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true, assignedToId: true } }),
     prisma.user.findMany({ where: { active: true }, select: { id: true, name: true } }),
   ]);
   const clientById = new Map(clients.map((client) => [client.id, client]));
-  const projectById = new Map(projects.map((project) => [project.id, project]));
-  const serviceById = new Map(services.map((service) => [service.id, service]));
+  const projectById = new Map(projects.map((project) => [project.id, { ...project, client: clientById.get(project.clientId) ?? null }]));
+  const serviceById = new Map(services.map((service) => [service.id, { ...service, client: clientById.get(service.clientId) ?? null,
+    project: service.projectId ? projectById.get(service.projectId) ?? null : null }]));
   const visiblePractices = practices.filter((practice) => {
     const client = clientById.get(practice.clientId) ?? null;
     const project = practice.projectId ? projectById.get(practice.projectId) ?? null : null;
@@ -43,7 +44,7 @@ export default async function Page() {
       if (!serviceProject || serviceProject.clientId !== practice.clientId) return false;
       if (project && project.id !== serviceProject.id) return false;
     }
-    return canViewTechnicalPractice(session, { ...practice, client });
+    return canViewTechnicalPractice(session, { ...practice, client, project, clientService: service });
   });
   const next7 = new Date();
   next7.setTime(next7.getTime() + 7 * 24 * 60 * 60 * 1000);

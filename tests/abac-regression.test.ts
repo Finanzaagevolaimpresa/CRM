@@ -342,7 +342,7 @@ test('il fascicolo cliente autorizza il parent prima di interrogare le sezioni f
   assert.match(source, /visibleDocuments\.flatMap/);
   for (const guardedCollection of [
     'projectRows.filter',
-    'clientServiceRows.filter',
+    'serviceContexts.filter',
     'contractRows.filter',
     'paymentRows.filter',
     'preAnalysisRows.filter',

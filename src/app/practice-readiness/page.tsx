@@ -1,9 +1,9 @@
-import { clientVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = "force-dynamic";
 import { requirePermission, hasPermission } from "@/lib/auth";
 import {
   canViewChecklistItem,
   canViewDocument,
+  canViewClient, canViewLead, canViewCommercialOffer, canViewProject, canViewService, canViewClientContext,
   isSensitiveDocument,
 } from "@/lib/access-control";
 import { prisma } from "@/lib/prisma";
@@ -11,6 +11,7 @@ import { Card, EmptyState, PageHeader, StatusBadge } from "@/components/ui";
 import { PrimaryButton } from "@/components/actions";
 import Link from "next/link";
 import { listAccessiblePracticeReadiness } from "@/lib/practice-readiness";
+import { canViewPracticeReadinessWork } from '@/lib/practice-readiness-access';
 import { engagementFeatureEnabled } from "@/lib/internal-engagement-mode";
 import {
   attestPracticeMaterialsCompleteAction,
@@ -52,27 +53,28 @@ export default async function Page({
       </div>
     );
   const writable = hasPermission(session, "service.write");
-  const clients = await prisma.client.findMany({
-    where: { deletedAt: null, ...clientVisibilityWhere(session) },
+  const clientRows = await prisma.client.findMany({
+    where: { deletedAt: null },
   });
-  const clientIds = clients.map((x) => x.id);
-  const activeLeadIds = (
-    await prisma.lead.findMany({
+  const clients = clientRows.filter(client => canViewClient(session, client));
+  const clientIds = clientRows.map((x) => x.id);
+  const leadRows = await prisma.lead.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
-      select: { id: true },
-    })
-  ).map((x) => x.id);
+      select: { id: true, assignedToId: true, clientId: true },
+    });
+  const leadById = new Map(leadRows.map(lead => [lead.id, lead]));
+  const activeLeadIds = leadRows.filter(lead => canViewLead(session, lead)).map(lead => lead.id);
   const [
     practices,
     intakes,
-    offers,
+    offerRows,
     revisions,
-    projects,
-    contracts,
+    projectRows,
+    contractRows,
     documentRows,
     itemRows,
-    proposals,
-    services,
+    proposalRows,
+    serviceRows,
     documentServiceRows,
   ] = await Promise.all([
     listAccessiblePracticeReadiness(prisma, session),
@@ -81,7 +83,6 @@ export default async function Page({
     }),
     prisma.commercialOffer.findMany({
       where: {
-        status: "accettata",
         deletedAt: null,
         clientId: { in: clientIds },
       },
@@ -119,9 +120,9 @@ export default async function Page({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
   ]);
-  const clientById = new Map(clients.map((client) => [client.id, client]));
+  const clientById = new Map(clientRows.map((client) => [client.id, client]));
   const projectById = new Map(
-    projects.map((project) => [
+    projectRows.map((project) => [
       project.id,
       { ...project, client: clientById.get(project.clientId) ?? null },
     ]),
@@ -139,6 +140,22 @@ export default async function Page({
     ]),
   );
   const canReadDocuments = hasPermission(session, "document.download");
+  const projects = [...projectById.values()].filter(project => canViewProject(session, project));
+  const services = serviceRows.filter(service => {
+    const context = documentServiceById.get(service.id);
+    return context && canViewService(session, context);
+  });
+  const offers = offerRows.filter(offer => offer.status === 'accettata' && canViewCommercialOffer(session, { ...offer,
+    client: offer.clientId ? clientById.get(offer.clientId) ?? null : null, lead: offer.leadId ? leadById.get(offer.leadId) ?? null : null }));
+  const offerById = new Map(offerRows.map(offer => [offer.id, offer]));
+  const proposals = proposalRows.filter(proposal => {
+    const offer = offerById.get(proposal.commercialOfferId);
+    return canViewPracticeReadinessWork(session, { ...proposal, client: clientById.get(proposal.clientId) ?? null,
+      project: proposal.projectId ? projectById.get(proposal.projectId) ?? null : null,
+      lead: offer?.leadId ? leadById.get(offer.leadId) ?? null : null });
+  });
+  const contracts = contractRows.filter(contract => (!contract.projectId || projectById.has(contract.projectId)) && canViewClientContext(session, { ...contract,
+    client: clientById.get(contract.clientId) ?? null, project: contract.projectId ? projectById.get(contract.projectId) ?? null : null }));
   const canReadSensitiveDocuments = hasPermission(
     session,
     "document.sensitive.read",

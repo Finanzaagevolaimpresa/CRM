@@ -745,6 +745,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   const reviewerPage = await reviewerContext.newPage();
   await login(reviewerPage, "readiness-reader@invalid.test");
   for (const [index, dossierId] of dossierIds.entries()) {
+    // A client consultation grant does not expose another operator's work.
+    await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
+    await expect(reviewerPage.getByPlaceholder("Motivazione della decisione")).toHaveCount(0);
+    // This non-M5 fixture has no per-dossier review plan: explicitly assign its
+    // work and materials to the reviewer. The producer retains direction access.
+    const bound = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
+    await db.project.update({ where: { id: bound.projectId! }, data: { consultantId: 'readiness-browser-reader' } });
+    await db.clientService.update({ where: { id: bound.clientServiceId! }, data: { assignedToId: 'readiness-browser-reader' } });
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await reviewerPage.getByPlaceholder("Motivazione della decisione").fill(index === 0 ? "Correggere la prima versione" : "Versione verificata");
     await submitDossierAction(reviewerPage, reviewerPage.getByRole("button", { name: index === 0 ? "Richiedi modifiche" : "Approva questa versione" }), `DOSSIER_REVIEW_${index}`);
