@@ -1,0 +1,119 @@
+name: Integrated R40 release execution
+on:
+  pull_request:
+    paths:
+      - 'scripts/integrated-release/**'
+      - '.github/workflows/integrated-release-delta.yml'
+      - 'docs/INTEGRATED_RELEASE_EXECUTION.md'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  protocol:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -I -B -S scripts/integrated-release/test_release.py
+      - run: python -I -B -S scripts/integrated-release/test_admission.py
+      - run: python -I -B -S scripts/integrated-release/test_download.py
+      - name: Record exact operational delta
+        shell: python
+        run: |
+          import pathlib, re, subprocess, sys
+          value = subprocess.check_output([sys.executable,'-I','-B','-S',
+              'scripts/integrated-release/package_builder.py','--delta'],text=True).strip()
+          assert re.fullmatch('[a-f0-9]{64}',value)
+          pathlib.Path('delta.txt').write_text(value+'\n',encoding='utf-8',newline='\n')
+          print(value)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r40-delta-${{ matrix.os }}
+          path: delta.txt
+          if-no-files-found: error
+          retention-days: 14
+  delta-parity:
+    needs: protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: r40-delta-*
+          path: delta-inputs
+      - name: Verify Linux and Windows produce identical programs
+        shell: python
+        run: |
+          import json, pathlib, re
+          values={p.parent.name:p.read_text().strip() for p in pathlib.Path('delta-inputs').glob('*/delta.txt')}
+          assert set(values)=={'r40-delta-ubuntu-latest','r40-delta-windows-latest'}
+          assert all(re.fullmatch('[a-f0-9]{64}',v) for v in values.values())
+          assert len(set(values.values()))==1
+          result={'protocol':'FAI_R40_DELTA_PARITY_R64','status':'PASS',
+            'head':'${{ github.event.pull_request.head.sha }}','platforms':values,'deltaSha256':next(iter(values.values()))}
+          pathlib.Path('r40-delta-parity.json').write_text(json.dumps(result)+'\n')
+          print(json.dumps(result))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r40-delta-parity-${{ github.run_id }}
+          path: r40-delta-parity.json
+          if-no-files-found: error
+          retention-days: 14
+  saved-images-and-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: docker/setup-docker-action@v5
+        id: docker
+        with:
+          version: v29.6.1
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true}}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11041494760'
+          run-id: '36587091238'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-r40
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10935172794'
+          run-id: '36329143320'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-m5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - name: Install pinned age in the disposable runner
+        run: |
+          GOBIN="$RUNNER_TEMP/age-bin" go install filippo.io/age/cmd/...@v1.3.2
+          sudo install -m 755 "$RUNNER_TEMP/age-bin/age" "$RUNNER_TEMP/age-bin/age-keygen" /usr/local/bin/
+          test "$(age --version)" = 'v1.3.2'
+      - name: Test exact saved images and schema49 backups without registry writes
+        env:
+          M2_CI_DOCKER_SOCKET: ${{ steps.docker.outputs.sock }}
+        run: python3 -I -B -S scripts/integrated-release/qualify_delta.py qualified-r40/release-images.tar.gz qualified-m5/release-images.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r40-release-delta-${{ github.run_id }}
+          path: r40-release-ci-receipt.json
+          if-no-files-found: error
+          retention-days: 14
