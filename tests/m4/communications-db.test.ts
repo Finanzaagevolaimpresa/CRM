@@ -7,6 +7,7 @@ import { saveApprovedMessageDraft, submitApprovedMessage, approveExactMessage, p
   configureCommunicationMailbox, qualifyCommunicationMailbox, acquireManualReply, linkAmbiguousReply,
   readPracticeCommunications, readCommunicationAdministration } from '../../src/lib/approved-communications';
 import { ApprovedCommunicationError } from '../../src/lib/approved-communication-contract';
+import { readinessCommunicationFixture } from './readiness-fixture';
 
 const enabled = process.env.M4_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
   destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
@@ -81,6 +82,34 @@ test('M4 exact admin approval, commercial preparation and changed versions are e
   assert.equal((await footprint(saved.id)).row?.state, 'DRAFT');
   assert.equal(await db.communicationApproval.count({ where: { version: { messageId: saved.id } } }), 1);
   await assert.rejects(db.communicationVersion.update({ where: { messageId_revision: { messageId: saved.id, revision: 1 } }, data: { snapshotHash: '0'.repeat(64) } }));
+});
+
+test('M4 readiness communications follow the originating lead, not its client owner, on read, save and reassignment', { skip: !enabled }, async () => {
+  const a = await user('consulente'), b = await user('consulente');
+  const f = await readinessCommunicationFixture(db, a.userId, b.userId);
+  assert.equal(f.practice.projectId, null); assert.equal(f.practice.clientServiceId, null);
+  const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  const input = { messageId: randomUUID(), expectedRevision: 0, context: f.context, mailboxId: box.id, replyTo: box.address,
+    to: ['readiness-recipient@invalid.test'], cc: [], bcc: [], subject: 'Private lead work', body: 'Private lead message',
+    attachmentVersionIds: [], classification: 'ORDINARY' };
+  await saveApprovedMessageDraft(db, b, input);
+  assert.equal((await readPracticeCommunications(db, b, f.context)).messages[0].snapshot.body, input.body);
+  const before = await footprint(input.messageId), freshId = randomUUID(), freshBefore = await footprint(freshId);
+  await assert.rejects(readPracticeCommunications(db, a, f.context), failure('DENIED'));
+  await assert.rejects(saveApprovedMessageDraft(db, a, { ...input, expectedRevision: 1, body: 'Unauthorized edit' }), failure('DENIED'));
+  await assert.rejects(saveApprovedMessageDraft(db, a, { ...input, messageId: freshId }), failure('DENIED'));
+  assert.deepEqual(await footprint(input.messageId), before); assert.deepEqual(await footprint(freshId), freshBefore);
+  await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: a.userId } });
+  await assert.rejects(readPracticeCommunications(db, b, f.context), failure('DENIED'));
+  await assert.rejects(saveApprovedMessageDraft(db, b, { ...input, expectedRevision: 1 }), failure('DENIED'));
+  assert.deepEqual(await footprint(input.messageId), before);
+  assert.equal((await readPracticeCommunications(db, a, f.context)).messages[0].id, input.messageId);
+  assert.equal((await saveApprovedMessageDraft(db, a, { ...input, expectedRevision: 1 })).revision, 2);
+  const after = await footprint(input.messageId);
+  await db.lead.update({ where: { id: f.lead.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(readPracticeCommunications(db, a, f.context), failure('DENIED'));
+  await assert.rejects(saveApprovedMessageDraft(db, a, { ...input, expectedRevision: 2 }), failure('DENIED'));
+  assert.deepEqual(await footprint(input.messageId), after);
 });
 
 test('M4 double click has one attempt; uncertain results block retry until admin reconciliation', { skip: !enabled }, async () => {
