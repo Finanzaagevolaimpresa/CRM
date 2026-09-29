@@ -45,7 +45,11 @@ def readonly_fixture(raw):
     raw=raw.replace("'registryReadyAfterSettlement':True", "'registryReadyAfterSyntheticExpiry':True")
     raw=raw.replace("'auditedRevocationCounts':counts", "'readOnlyRegistryCounts':counts,'qualifiedMailboxes':boxes_before")
     raw=change(raw,"        no_migration=exercise(HELPERS,work/'admission-proof',binding,rows)",
-        "        need(observe_mailboxes(sql)==boxes_before and full_identity()==untouched and audit_count()=='0','RECOVERY_CHANGED_SOURCE_DATA')\n        no_migration=exercise(HELPERS,work/'admission-proof',binding,rows)")
+        "        need(observe_mailboxes(sql)==boxes_before and full_identity()==untouched and audit_count()=='0','RECOVERY_CHANGED_SOURCE_DATA')\n"
+        "        no_migration=exercise(HELPERS,work/'admission-proof',binding,rows)\n"
+        "        from qualify_plan_images import qualify as qualify_plan_images\n"
+        "        plan_images=qualify_plan_images(REPO,work/'admission-proof/work/forward-plan.json',binding)")
+    raw=change(raw,"'generatedNoMigration':no_migration", "'generatedNoMigration':no_migration,'generatedPlanImages':plan_images")
     return raw
 
 

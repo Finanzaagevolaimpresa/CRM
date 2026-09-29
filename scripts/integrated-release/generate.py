@@ -123,6 +123,9 @@ def _render(run_id):
                     "    def canonical_transition(self,n05,operation,path):\n        need(operation == 'forward', 'OLDER_IMAGE_RETURN_NOT_AUTHORIZED')\n        original = n05.DockerEngine")
     files['remote_release.py'] = remote.encode()
     transition = files['transition_base.py'].decode()
+    transition = change(transition,
+        "('candidate' if prefix == 'candidate' else 'recovery')",
+        "('candidate' if prefix == 'candidate' or self.b['returnCommit'] == '8e3874a304b1cb2281d59146448bcdf121afe0d1' else 'recovery')")
     a = transition.index("        state = current['app']['state'] if current['app'] else 'absent'")
     b = transition.index('\n    def postcheck(self):', a)
     transition = transition[:a]+'''        # N05 publishes the failure and stops the failed candidate. Keep that
@@ -139,6 +142,18 @@ def _render(run_id):
     owner = owner.replace('M5', 'R40')
     files['owner_release.py'] = owner.encode()
     owner_base = files['owner_base.py'].decode()
+    owner_base = change(owner_base,
+        'from common import Stop, canonical, decode, digest, exclusive, load, need, private, utc',
+        'from common import Stop, canonical, decode, digest, exclusive, load, need, private, utc\nfrom ssh_guard import OPTIONS, verify_profile')
+    owner_base = change(owner_base, """SSH_ARGS = [str(SSH), '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ConnectionAttempts=1',
+            '-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no', '-o', 'ServerAliveInterval=15',
+            '-o', 'ServerAliveCountMax=2', 'fai-crm-prod']""",
+        "SSH_ARGS = [str(SSH), *OPTIONS, 'fai-crm-prod']")
+    first = owner_base.index('    # Read only the effective, nonsecret target.')
+    target_check = "    need(fields == {'hostname': 'desk.finanzaagevolaimpresa.it', 'user': 'faiadmin', 'port': '22'}, 'SSH_ALIAS_TARGET_MISMATCH')"
+    last = owner_base.index(target_check, first) + len(target_check)
+    owner_base = owner_base[:first] + '    verify_profile(call, SSH_ARGS)' + owner_base[last:]
+    files['ssh_guard.py'] = (HERE/'ssh_guard.py').read_bytes()
     owner_base = change(owner_base,
         "    code, out, _ = call([PS, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-File', ROOT / 'storage_probe.ps1'], 75)",
         "    script = private(ROOT/'storage_probe.ps1').read_text(encoding='utf-8-sig')\n"

@@ -69,3 +69,10 @@ in presenza di sessioni attive; le scadenze simulate appartengono solo al DB CI.
 La costruzione del pacchetto eseguibile richiede CI verde e revisione
 indipendente del delta esatto. Il programma Python di avvio verifica tutti i
 file prima di importarli e non modifica l'ExecutionPolicy di PowerShell.
+
+Il piano N05 usa il tag originale candidato dell'immagine R37 anche come
+immagine di ritorno; la CI sottopone il piano generato al controllo reale
+`DockerEngine.image` sulle immagini salvate e nega tag e commit errati.
+L'ammissione del profilo SSH, il trasferimento e tutte le fasi usano le stesse
+opzioni protette del preflight V2. La controprova Windows/Linux usa solamente
+`ssh -G -F` con una configurazione sintetica contraria, senza connessioni.
