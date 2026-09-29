@@ -5,7 +5,7 @@ import { readCommunicationAdministration } from '@/lib/approved-communications';
 import { ApprovedCommunicationError } from '@/lib/approved-communication-contract';
 import { mutateCommunicationAdministrationAction as act } from '@/lib/approved-communication-actions';
 import { Card, PageHeader } from '@/components/ui';
-import { PrimaryButton } from '@/components/actions';
+import { PrimaryButton, SecondaryLink } from '@/components/actions';
 
 export const dynamic = 'force-dynamic';
 const field = 'w-full rounded-xl border p-2';
@@ -15,6 +15,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
   try { data = await readCommunicationAdministration(prisma, session); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
   return <div className="space-y-6"><PageHeader title="Caselle e risposte" description="Inventario email e prove dichiarate. Nessuna modifica a provider, DNS o credenziali." />
+    {session.role === 'admin' ? <SecondaryLink href="/settings/communications/test">Test di invio diretto</SecondaryLink> : null}
     {query.result ? <p role="status">{query.result === 'RECORDED' ? 'Operazione registrata.' : 'Operazione non eseguita. Controlla versione, accesso, prova e campi.'}</p> : null}
     <p>Configurazione e test fanno riferimento a prove esterne già acquisite. Non inserire password, token o contenuti di configurazioni private. Per abilitare l’invio occorrono capacità di invio/ricezione e una prova della stessa revisione.</p>
     {data.mailboxes.map(box => <Card key={box.id} title={box.address}>
