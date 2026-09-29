@@ -23,7 +23,7 @@ async function authorize(tx: Prisma.TransactionClient, session: AuthSession, set
     || session.expiresAt * 1000 <= Date.now()) throw new DirectTestError('DENIED');
   // One narrow diagnostic mailbox: serialize before actor/responsible locks so
   // competing admins cannot acquire those user locks in the opposite order.
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(641036, 1)`;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(641036, 1)::text`;
   const current = await lockAuthoritativeInternalSession(tx, { userId: session.userId, sessionId: session.sessionId });
   if (!current || !current.live || current.revokedAt || !current.active || current.deletedAt || current.role !== 'admin'
     || !hasPermission({ ...session, role: current.role, permissionOverrides: current.permissionOverrides }, 'settings.manage')) throw new DirectTestError('DENIED');
