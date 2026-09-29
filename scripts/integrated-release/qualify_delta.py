@@ -7,8 +7,16 @@ from generate import pinned, change
 
 
 def readonly_fixture(raw):
-    raw=raw.replace("sys.path.insert(1,str(REPO/'scripts/m1-assisted'))",
-                    "sys.path.insert(2,str(REPO/'scripts/m1-assisted'))")
+    raw=change(raw,
+        "sys.path.insert(0,str(HERE))\nsys.path.insert(1,str(REPO/'scripts/m1-assisted'))",
+        "helper_paths=[str(HERE),str(HELPERS),str(REPO/'scripts/m1-assisted')]\n"
+        "sys.path[:]=helper_paths+[p for p in sys.path if p not in helper_paths]")
+    raw=change(raw,
+        'from registry_settlement import SQL, PREFLIGHT_SQL, COUNT_SQL, parse_counts',
+        'from registry_settlement import SQL, PREFLIGHT_SQL, COUNT_SQL, parse_counts\n'
+        'import qualified_images, registry_settlement\n'
+        "need(all(Path(m.__file__).resolve().parent==HELPERS.resolve() for m in (qualified_images,registry_settlement)),\n"
+        "     'CI_MUST_EXERCISE_GENERATED_HELPERS')")
     a=raw.index("        need(parse_counts(sql(PREFLIGHT_SQL))==")
     b=raw.index("        backup=work/'set49'",a)
     raw=raw[:a]+'''        full_identity = lambda:sql('SELECT md5(jsonb_agg(to_jsonb(s) ORDER BY id)::text) FROM "InternalSession" s;')
