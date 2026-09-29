@@ -3,7 +3,7 @@ import type { AuthSession, Permission } from './auth';
 import { canEditClient, canEditLead } from './access-control';
 import { hasPermission } from './permission-evaluator';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
-import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from './lead-identity';
+import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate, normalizeLeadIdentityEmail, normalizeLeadIdentityPhone } from './lead-identity';
 import { RecordProfileError, personProfileVersion, profileCommandSchema } from './record-profile-contract';
 
 async function actor(tx: Prisma.TransactionClient, session: AuthSession, permission: Permission) {
@@ -62,7 +62,14 @@ export async function saveRecordProfile(db: Pick<PrismaClient, '$transaction'>, 
       const row = await tx.lead.findFirst({ where: { id: command.id, deletedAt: null } });
       if (!row || !canEditLead(fresh, row)) throw new RecordProfileError('DENIED');
       version(row.updatedAt, command.expectedVersion);
-      if (await hasStrongRawLeadIdentityDuplicate(tx, { ...command.data, excludeLeadId: row.id })) throw new RecordProfileError('DUPLICATE_LEAD');
+      // Historical duplicates must not block unrelated corrections. Only a new
+      // canonical contact can introduce a collision; formatting alone cannot.
+      const changedContacts = {
+        email: normalizeLeadIdentityEmail(row.email) === normalizeLeadIdentityEmail(command.data.email) ? undefined : command.data.email,
+        phone: normalizeLeadIdentityPhone(row.phone)?.canonicalValue === normalizeLeadIdentityPhone(command.data.phone)?.canonicalValue ? undefined : command.data.phone,
+        excludeLeadId: row.id,
+      };
+      if (await hasStrongRawLeadIdentityDuplicate(tx, changedContacts)) throw new RecordProfileError('DUPLICATE_LEAD');
       await assertUnexpired(tx, fresh);
       await tx.lead.update({ where: { id: row.id }, data: command.data });
       entityType = 'Lead'; resultId = row.id; destination = `/leads/${row.id}`;

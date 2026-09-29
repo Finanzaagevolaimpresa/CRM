@@ -177,6 +177,29 @@ test('concurrent lead profile writers cannot claim the same strong contact', { s
   assert.equal(await db.lead.count({ where: { email, deletedAt: null } }), 1);
 });
 
+test('historical duplicate contacts allow unrelated corrections and changes to one contact without bypassing new collisions', { skip: !enabled }, async () => {
+  const admin = await user('admin'), email = `historical-${randomUUID()}@example.test`, phone = '+12025550187';
+  const legacy = await Promise.all([1, 2].map(() => db.lead.create({ data: { firstName: '', lastName: '', email, phone, city: 'Old city' } })));
+  const save = async (id: string, contacts: { email: string; phone: string }, city: string) => {
+    const current = await db.lead.findUniqueOrThrow({ where: { id } });
+    await saveRecordProfile(db, admin, { kind: 'lead', id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, ...contacts, city } });
+    return db.lead.findUniqueOrThrow({ where: { id } });
+  };
+  let current = await save(legacy[0].id, { email, phone }, 'Corrected city');
+  assert.equal(current.city, 'Corrected city');
+  current = await save(current.id, { email: email.toUpperCase(), phone: '+1 (202) 555-0187' }, 'Normalized city');
+  assert.equal(current.city, 'Normalized city');
+  const uniqueEmail = `corrected-${randomUUID()}@example.test`;
+  current = await save(current.id, { email: uniqueEmail, phone }, 'Email corrected');
+  assert.equal(current.email, uniqueEmail); assert.equal(current.phone, phone);
+  const other = await save(legacy[1].id, { email, phone: '+12025550188' }, 'Phone corrected');
+  assert.equal(other.email, email); assert.equal(other.phone, '+12025550188');
+  await assert.rejects(save(current.id, { email, phone }, 'New email collision'), failure('DUPLICATE_LEAD'));
+  await assert.rejects(save(current.id, { email: uniqueEmail, phone: other.phone! }, 'New phone collision'), failure('DUPLICATE_LEAD'));
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: current.id } }), current);
+  assert.equal(await db.auditLog.count({ where: { entityId: current.id, event: 'record_profile_saved' } }), 3);
+});
+
 test('profile edits wait for the canonical creation identity lock and reject the newly committed contact', { skip: !enabled }, async () => {
   const admin = await user('admin'), email = `create-race-${randomUUID()}@example.test`, name = 'profile-identity-' + randomUUID();
   const lead = await db.lead.create({ data: { firstName: '', lastName: '' } });

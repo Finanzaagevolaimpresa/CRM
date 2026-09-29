@@ -26,7 +26,10 @@ La scadenza effettiva della sessione viene ricontrollata dopo le attese sui lock
 e prima dell'audit; una scadenza sopraggiunta annulla anche le modifiche nella
 stessa transazione. Le correzioni dei contatti lead condividono con l'acquisizione
 il blocco globale e la verifica dei duplicati email/telefono normalizzati,
-escludendo il lead corrente. Due scritture concorrenti non possono rivendicare
+escludendo il lead corrente. Il controllo riguarda i contatti canonici cambiati:
+un duplicato storico invariato, anche con sola variazione di maiuscole o formato,
+non impedisce di correggere territorio o altri campi, né l'altro contatto.
+Due scritture concorrenti non possono rivendicare
 lo stesso contatto. I lead acquisiti senza nome o cognome restano modificabili
 senza inventare dati mancanti; i nomi dei referenti mantengono i propri vincoli.
 
