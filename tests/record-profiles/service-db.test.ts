@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { PrismaClient, type RoleCode } from '@prisma/client';
+import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
+import { saveRecordProfile } from '../../src/lib/record-profiles';
+import { RecordProfileError, personProfileVersion } from '../../src/lib/record-profile-contract';
+const enabled = process.env.RECORD_PROFILES_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
+  requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
+  sentinel: process.env.AI_ORCHESTRATOR_DB_TEST_SENTINEL, appEnvironment: process.env.APP_ENV, nodeEnvironment: process.env.NODE_ENV });
+const db = new PrismaClient();
+test.before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
+test.after(async () => { await db.$disconnect(); });
+const failure = (code: string) => (error: unknown) => error instanceof RecordProfileError && error.code === code;
+async function user(role: RoleCode) {
+  const row = await db.user.create({ data: { name: 'Synthetic profile', email: `profile-${randomUUID()}@example.test`, role, active: true, passwordHash: 'synthetic-unusable' } });
+  const session = await db.internalSession.create({ data: { userId: row.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3_600_000) } });
+  return { userId: row.id, role, active: true, permissionOverrides: [], sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime() / 1000) };
+}
+const companyData = { name: 'Synthetic full company', vatNumber: 'SYNTHETIC', taxCode: 'SYNTHETIC', rea: 'TEST', pec: 'company@example.test',
+  legalAddress: 'Synthetic legal address', operatingAddress: 'Synthetic operating address', region: 'Synthetic', province: 'Test', city: 'Test', legalForm: 'Test',
+  atecoCode: 'TEST', atecoDescription: 'Synthetic activity', incorporationDate: '2024-02-29', activityStartDate: '', activityStatus: 'Test', employees: '0',
+  annualRevenue: '0.00', durcStatus: 'Non verificato', taxRegime: 'Test', notes: 'Synthetic notes' };
+const personData = { firstName: 'Synthetic', lastName: 'Person', email: 'person@example.test', phone: '', taxCode: '', notes: '', role: 'Referente', ownershipPercent: '0' };
+async function fixture() {
+  const admin = await user('admin'), owner = await user('consulente'), outsider = await user('consulente');
+  const client = await db.client.create({ data: { displayName: 'Synthetic client', type: 'societa', consultantId: owner.userId } });
+  const createCompany = { kind: 'new-company', id: randomUUID(), clientId: client.id, data: companyData };
+  return { admin, owner, outsider, client, createCompany };
+}
+test('full company profile saves, null clearing and zero work, and a duplicate create cannot create a second company', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const first = await saveRecordProfile(db, f.owner, f.createCompany);
+  assert.equal(await saveRecordProfile(db, f.owner, f.createCompany), first);
+  const company = await db.company.findUniqueOrThrow({ where: { id: f.createCompany.id } });
+  assert.equal(company.employees, 0); assert.equal(company.annualRevenue?.toString(), '0'); assert.equal(company.activityStartDate, null);
+  await saveRecordProfile(db, f.owner, { kind: 'company', id: company.id, expectedVersion: company.updatedAt.toISOString(), data: { ...companyData, pec: '', annualRevenue: '' } });
+  const cleared = await db.company.findUniqueOrThrow({ where: { id: company.id } });
+  assert.equal(cleared.pec, null); assert.equal(cleared.annualRevenue, null);
+  assert.equal(await db.company.count({ where: { clientId: f.client.id } }), 1);
+  const audit = await db.auditLog.findMany({ where: { entityId: company.id, event: 'record_profile_saved' } });
+  assert.equal(audit.length, 2); assert.ok(!JSON.stringify(audit).includes(companyData.legalAddress));
+});
+test('an outsider or read-only client grant cannot edit; revocation applies to an already-open form', { skip: !enabled }, async () => {
+  const f = await fixture();
+  await assert.rejects(saveRecordProfile(db, f.outsider, f.createCompany), failure('DENIED'));
+  const readOnly = { ...f.outsider, clientReadScope: [f.client.id] };
+  await assert.rejects(saveRecordProfile(db, readOnly, f.createCompany), failure('DENIED'));
+  const override = await db.userPermissionOverride.create({ data: { userId: f.owner.userId, permission: 'company.write', allowed: false } });
+  await assert.rejects(saveRecordProfile(db, f.owner, f.createCompany), failure('DENIED'));
+  await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
+  await db.internalSession.update({ where: { id: f.owner.sessionId }, data: { revokedAt: new Date() } });
+  await assert.rejects(saveRecordProfile(db, f.owner, f.createCompany), failure('DENIED'));
+  assert.equal(await db.company.count({ where: { clientId: f.client.id } }), 0);
+});
+test('reassignment, soft deletion and stale versions are denied without partial writes', { skip: !enabled }, async () => {
+  const f = await fixture(); await saveRecordProfile(db, f.owner, f.createCompany);
+  const company = await db.company.findUniqueOrThrow({ where: { id: f.createCompany.id } });
+  const edit = { kind: 'company', id: company.id, expectedVersion: company.updatedAt.toISOString(), data: { ...companyData, name: 'Changed synthetic' } };
+  await db.client.update({ where: { id: f.client.id }, data: { consultantId: f.outsider.userId } });
+  await assert.rejects(saveRecordProfile(db, f.owner, edit), failure('DENIED'));
+  await saveRecordProfile(db, f.outsider, edit);
+  await assert.rejects(saveRecordProfile(db, f.outsider, edit), failure('STALE'));
+  await db.company.update({ where: { id: company.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(saveRecordProfile(db, f.admin, edit), failure('DENIED'));
+});
+test('person update is bound to its company, rejects stale edits and cannot mutate a shared person through one company', { skip: !enabled }, async () => {
+  const f = await fixture(); await saveRecordProfile(db, f.owner, f.createCompany);
+  const command = { kind: 'new-person', id: randomUUID(), companyId: f.createCompany.id, data: personData };
+  await saveRecordProfile(db, f.owner, command); await saveRecordProfile(db, f.owner, command);
+  assert.equal(await db.companyPerson.count({ where: { companyId: command.companyId } }), 1);
+  let link = await db.companyPerson.findUniqueOrThrow({ where: { id: command.id } });
+  let person = await db.person.findUniqueOrThrow({ where: { id: link.personId } });
+  const edit = { ...command, kind: 'person', expectedVersion: personProfileVersion(person, link), data: { ...personData, role: 'Socio' } };
+  await assert.rejects(saveRecordProfile(db, f.outsider, edit), failure('DENIED'));
+  await saveRecordProfile(db, f.owner, edit);
+  await assert.rejects(saveRecordProfile(db, f.owner, edit), failure('STALE'));
+  const other = await fixture(); await saveRecordProfile(db, other.owner, other.createCompany);
+  await assert.rejects(saveRecordProfile(db, f.admin, { ...edit, companyId: other.createCompany.id }), failure('DENIED'));
+  await db.companyPerson.create({ data: { companyId: other.createCompany.id, personId: person.id, role: 'Referente condiviso' } });
+  link = await db.companyPerson.findUniqueOrThrow({ where: { id: link.id } });
+  person = await db.person.findUniqueOrThrow({ where: { id: person.id } });
+  await assert.rejects(saveRecordProfile(db, f.owner, { ...edit, expectedVersion: personProfileVersion(person, link) }), failure('SHARED_PERSON'));
+});
+test('lead contacts and client identity edit without changing conversion, ownership or commercial status', { skip: !enabled }, async () => {
+  const f = await fixture(), sales = await user('commerciale');
+  const lead = await db.lead.create({ data: { firstName: 'Synthetic', lastName: 'Lead', status: 'vinto', assignedToId: sales.userId, clientId: f.client.id } });
+  const data = { firstName: 'Updated', lastName: 'Synthetic', companyName: '', contactPerson: '', email: 'updated@example.test', phone: '', region: '', province: '', city: '' };
+  await saveRecordProfile(db, sales, { kind: 'lead', id: lead.id, expectedVersion: lead.updatedAt.toISOString(), data });
+  const saved = await db.lead.findUniqueOrThrow({ where: { id: lead.id } });
+  assert.equal(saved.status, 'vinto'); assert.equal(saved.assignedToId, sales.userId); assert.equal(saved.clientId, f.client.id);
+  await saveRecordProfile(db, f.admin, { kind: 'client', id: f.client.id, expectedVersion: f.client.updatedAt.toISOString(), data: { displayName: 'Updated client', type: 'ditta_individuale', notes: '' } });
+  const client = await db.client.findUniqueOrThrow({ where: { id: f.client.id } });
+  assert.equal(client.consultantId, f.owner.userId); assert.equal(client.status, 'attivo');
+});
+test('an audit failure rolls back the profile mutation', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_AUDIT_FAILURE'); } } } }) as unknown as PrismaClient;
+  await assert.rejects(saveRecordProfile(failing, f.owner, f.createCompany), /SYNTHETIC_AUDIT_FAILURE/);
+  assert.equal(await db.company.count({ where: { clientId: f.client.id } }), 0);
+});
