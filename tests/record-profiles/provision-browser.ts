@@ -8,6 +8,9 @@ const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.RECORD_PROFILES_BROWSER_CONFIRMED, '1');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  // Service tests intentionally create live synthetic sessions. Retire them
+  // before the browser server enforces the empty-registry activation preflight.
+  await db.internalSession.updateMany({ where: { revokedAt: null }, data: { revokedAt: new Date() } });
   const password = process.env.RECORD_PROFILES_BROWSER_PASSWORD!, evidence = process.env.RECORD_PROFILES_EVIDENCE!;
   assert.ok(password?.length >= 24 && evidence);
   const passwordHash = await bcrypt.hash(password, 10);
