@@ -161,10 +161,10 @@ function withFinalMailboxBarrier(mailboxId: string, holdMs: number) {
     const acquired = new Promise<void>(resolve => { locked = resolve; });
     const released = new Promise<void>(resolve => { release = resolve; });
     const blocker = db.$transaction(async tx => {
-      await tx.$queryRaw`SELECT id FROM "CommunicationMailbox" WHERE id=${mailboxId} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "CommunicationMailbox" WHERE id=${mailboxId}::uuid FOR UPDATE`;
       locked(); await released;
     }, { timeout: 15_000 });
-    await acquired;
+    await Promise.race([acquired, blocker]);
     const name = 'direct-expiry-' + randomUUID();
     const running = db.$transaction(async tx => {
       await tx.$queryRaw`SELECT set_config('application_name', ${name}, true)`;
