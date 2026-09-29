@@ -27,7 +27,8 @@ export default async function Page({ params, searchParams }: {
   return <div className="space-y-6">
     <PageHeader title={`Perimetro di consultazione: ${user.name}`} description="L’admin consente la lettura di clienti specifici. Le assegnazioni operative e i permessi sulle funzioni e sui dati sensibili restano necessari e separati." />
     <Link href={`/settings/users/${id}`}>Torna al profilo</Link>
-    <p>La revoca di una consultazione aggiuntiva non revoca una responsabilità operativa già assegnata. I cambi sono applicati alla richiesta successiva anche nelle sessioni aperte.</p>
+    <p>La consultazione aggiuntiva apre l’anagrafica del cliente. Le attività assegnate ad altre persone restano riservate. La revoca non annulla una responsabilità operativa già assegnata; i cambi valgono dalla richiesta successiva anche nelle sessioni aperte.</p>
+    {user.role === 'amministrazione' ? <p>Amministrazione dispone della supervisione globale in lettura, entro i permessi sulle singole funzioni. Revocare una consultazione aggiuntiva non elimina questa supervisione.</p> : null}
     {!available ? <p>Non è possibile aggiungere consultazioni a questo account. Le autorizzazioni precedenti restano consultabili e revocabili.</p> : <Card title="Aggiungi un cliente">
       <form method="get" className="flex gap-3"><label>Nome del cliente<input name="q" defaultValue={q} maxLength={120} className="ml-2 rounded-lg border p-2" required /></label><button className="rounded-lg border px-3">Cerca</button></form>
       {q && candidates.length === 0 ? <p>Nessun cliente trovato.</p> : null}

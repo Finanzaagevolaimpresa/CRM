@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AnimatedCounter } from './animated-counter';
 import type { DashboardCounterGroup } from "@/lib/dashboard-counter-groups";
 
 export type DashboardKpi = {
@@ -104,7 +105,7 @@ function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: n
             return <line key={item.label} aria-hidden="true" data-pipeline-boundary={item.label} x1={100 + 90.5 * Math.cos(angle)} y1={100 + 90.5 * Math.sin(angle)} x2={100 + 95 * Math.cos(angle)} y2={100 + 95 * Math.sin(angle)} stroke="#475569" strokeWidth="1.25" />;
           })}
         </svg>
-        <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className={`max-w-full break-all font-black leading-none tracking-tight tabular-nums text-fai-navy ${formatCount(total).length > 7 ? "text-xl" : formatCount(total).length > 5 ? "text-2xl" : "text-4xl"}`}>{formatCount(total)}</span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
+        <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className={`max-w-full break-all font-black leading-none tracking-tight tabular-nums text-fai-navy ${formatCount(total).length > 7 ? "text-xl" : formatCount(total).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={total} /></span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
       </div>
       {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="space-y-2">{visibleSegments.map((item) => <li key={item.label} data-pipeline-legend-label={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" data-pipeline-legend-color={item.color} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
     </section>
@@ -149,7 +150,7 @@ export function DashboardOverview({
               <div aria-hidden="true" className="pointer-events-none absolute -right-4 -top-5 h-32 w-32 rounded-full border-[20px] border-white/[0.04]" />
               <div aria-hidden="true" className="pointer-events-none absolute -bottom-4 right-1 -z-10 rotate-[-12deg] text-white/[0.07]"><KpiIcon tone={kpi.tone} className="h-36 w-36" /></div>
               <div className="relative flex items-start justify-between gap-3"><p className="max-w-[14rem] text-sm font-bold leading-5 text-white/95">{kpi.label}</p><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/10"><KpiIcon tone={kpi.tone} /></span></div>
-              <div className="relative mt-4"><p className={`break-all font-black leading-none tracking-[-0.055em] tabular-nums ${formatCount(kpi.value).length > 7 ? "text-4xl" : "text-6xl"}`}>{formatCount(kpi.value)}</p><p className="mt-3 max-w-[18rem] text-xs leading-5 text-white/85">{kpi.description}</p></div>
+              <div className="relative mt-4"><p className={`break-all font-black leading-none tracking-[-0.055em] tabular-nums ${formatCount(kpi.value).length > 7 ? "text-4xl" : "text-6xl"}`}><AnimatedCounter value={kpi.value} /></p><p className="mt-3 max-w-[18rem] text-xs leading-5 text-white/85">{kpi.description}</p></div>
             </Link>
           ))}
         </div>
@@ -171,7 +172,7 @@ export function DashboardOverview({
                   const width = maximum > 0 ? counter.value / maximum * 100 : 0;
                   const content = <>
                     <span className="min-w-0 break-words text-xs font-bold leading-5 text-slate-600">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
-                    <span className={`mt-3 block break-all font-black leading-none tracking-[-0.04em] tabular-nums ${toneStyles[group.tone].ink} ${formatCount(counter.value).length > 7 ? "text-xl" : formatCount(counter.value).length > 5 ? "text-2xl" : "text-4xl"}`}>{formatCount(counter.value)}</span>
+                    <span className={`mt-3 block break-all font-black leading-none tracking-[-0.04em] tabular-nums ${toneStyles[group.tone].ink} ${formatCount(counter.value).length > 7 ? "text-xl" : formatCount(counter.value).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={counter.value} /></span>
                     {showComparison && <span aria-hidden="true" className="mt-4 block h-1.5 w-full overflow-hidden rounded-full bg-slate-100"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className={`block h-full rounded-full bg-gradient-to-r ${toneStyles[group.tone].bar}`} style={{ width: `${width}%` }} /></span>}
                   </>;
                   const cardClass = "flex min-h-32 min-w-0 flex-col justify-between rounded-2xl border border-white bg-white p-3 shadow-[0_2px_12px_-8px_rgba(5,46,112,0.35)]";

@@ -134,19 +134,16 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     (!project.companyId || companyContextById.has(project.companyId))
     && canViewProject(session, { ...project, client })
   ));
-  const projectById = new Map(projects.map((project) => [project.id, { ...project, client }]));
-  const clientServices = clientServiceRows.filter((service) => {
+  const projectById = new Map(projectRows.filter((project) => !project.companyId || companyContextById.has(project.companyId)).map((project) => [project.id, { ...project, client }]));
+  const serviceContexts = clientServiceRows.map((service) => ({ ...service, client, project: service.projectId ? projectById.get(service.projectId) ?? null : null })).filter((service) => {
     const project = service.projectId ? projectById.get(service.projectId) ?? null : null;
     if (service.companyId && !companyContextById.has(service.companyId)) return false;
     if (service.projectId && !project) return false;
     if (service.companyId && project?.companyId && service.companyId !== project.companyId) return false;
-    return canViewService(session, { ...service, client, project });
+    return true;
   });
-  const serviceById = new Map(clientServices.map((service) => [service.id, {
-    ...service,
-    client,
-    project: service.projectId ? projectById.get(service.projectId) ?? null : null,
-  }]));
+  const clientServices = serviceContexts.filter((service) => canViewService(session, service));
+  const serviceById = new Map(serviceContexts.map((service) => [service.id, service]));
   const contracts = contractRows.filter((contract) => {
     const project = contract.projectId ? projectById.get(contract.projectId) ?? null : null;
     return (!contract.projectId || Boolean(project))
@@ -182,7 +179,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
     if (dossier.projectId && !project) return false;
     if (dossier.clientServiceId && !clientService) return false;
-    return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+    return canViewClientContext(session, { clientId: dossier.clientId, createdById: dossier.createdById, client, project, clientService });
   });
   const bankability = bankabilityRows.filter((assessment) => {
     const project = assessment.projectId ? projectById.get(assessment.projectId) ?? null : null;
@@ -206,8 +203,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     const clientService = practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null;
     if (practice.projectId && !project) return false;
     if (practice.clientServiceId && !clientService) return false;
-    return canViewClientContext(session, { clientId: practice.clientId, client, project, clientService })
-      && canViewTechnicalPractice(session, { ...practice, client });
+    if (project && clientService?.projectId && clientService.projectId !== project.id) return false;
+    return canViewTechnicalPractice(session, { ...practice, client });
   });
   const technicalPracticeById = new Map(technicalPractices.map((practice) => [practice.id, practice]));
   const practiceCommunications = practiceCommunicationRows.filter((communication) => {

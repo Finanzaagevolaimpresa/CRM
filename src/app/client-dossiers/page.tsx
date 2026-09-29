@@ -28,7 +28,7 @@ export default async function Page() {
     const clientService = dossier.clientServiceId ? servicesById.get(dossier.clientServiceId) ?? null : null;
     if (dossier.projectId && !project) return false;
     if (dossier.clientServiceId && !clientService) return false;
-    return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+    return canViewClientContext(session, { clientId: dossier.clientId, createdById: dossier.createdById, client, project, clientService });
   });
 
   return <div className="space-y-6"><PageHeader title="Dossier AI / Bozze" description="Elenco interno delle bozze dossier e pre-analisi salvate nel CRM. Nessuna bozza viene inviata automaticamente al cliente."/><Card title="Bozze dossier">{visibleDossiers.length === 0 ? <EmptyState title="Nessuna bozza disponibile">Le bozze create da output AI o lavorazioni interne appariranno in questa coda protetta.</EmptyState> : <Table headers={['Titolo', 'Cliente', 'Tipo', 'Stato', 'Tracciabilità', 'Azione']} rows={visibleDossiers.map((dossier) => [<span className="font-semibold text-fai-navy" key="t">{dossier.title}</span>, clientsById.get(dossier.clientId)?.displayName ?? '—', dossier.type.replaceAll('_', ' '), <StatusBadge status={dossier.status} key="s" />, <MetaCell key="m" createdAt={dossier.createdAt} updatedAt={dossier.updatedAt} />, <OpenLink href={`/client-dossiers/${dossier.id}`} key="a">Apri</OpenLink>])} />}</Card></div>;

@@ -146,7 +146,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
       const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
       if (!client || (dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;
-      return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+      return canViewClientContext(session, { clientId: dossier.clientId, createdById: dossier.createdById, client, project, clientService });
     });
 
     groups = [
