@@ -23,7 +23,7 @@ test.beforeAll(async () => {
   for (const role of roles) {
     const user = await db.user.create({ data: { name: tag + '-' + role, email: `${tag}-${role}@example.test`, role, passwordHash } });
     users.set(role, user.id);
-    await db.userPermissionOverride.createMany({ data: ['client.read', 'project.read', 'service.read', 'service.write', 'lead.read', 'document.download'].map(permission => ({ userId: user.id, permission, allowed: true })) });
+    await db.userPermissionOverride.createMany({ data: ['client.read', 'project.read', 'service.read', 'service.write', 'technical.read', 'lead.read', 'document.download'].map(permission => ({ userId: user.id, permission, allowed: true })) });
   }
   adminId = users.get('admin')!;
   clientId = (await db.client.create({ data: { type: 'societa', displayName: tag + '-shared-client', salesOwnerId: users.get('commerciale'), consultantId: users.get('consulente') } })).id;
@@ -34,6 +34,26 @@ test.beforeAll(async () => {
   await db.task.create({ data: { clientId, title: foreignTitle, assignedToId: adminId, createdById: users.get('consulente'), dueAt: new Date('2020-01-01') } });
 });
 test.afterAll(() => db.$disconnect());
+
+test('unassigned technical practice follows its service in list, detail, search, report and reassignment', async ({ browser }) => {
+  const project = await db.project.create({ data: { clientId, title: tag + '-inherited-project', consultantId: users.get('backoffice') } });
+  const catalog = await db.serviceCatalog.create({ data: { code: tag, name: tag, category: 'synthetic' } });
+  const service = await db.clientService.create({ data: { clientId, projectId: project.id, assignedToId: users.get('backoffice'), serviceCatalogId: catalog.id } });
+  const practice = await db.technicalPractice.create({ data: { clientId, projectId: project.id, clientServiceId: service.id,
+    title: tag + '-inherited-practice', practiceType: 'synthetic', targetEntity: 'synthetic', createdById: adminId } });
+  const ac = await browser.newContext({ baseURL: origin }), bc = await browser.newContext({ baseURL: origin });
+  const a = await ac.newPage(), b = await bc.newPage(); await login(a, 'consulente'); await login(b, 'backoffice');
+  const verify = async (page: Page, allowed: boolean) => {
+    for (const url of ['/technical-office/practices', '/technical-office/practices/' + practice.id, '/search?q=' + encodeURIComponent(tag)]) {
+      const response = await page.goto(url); expect((await response!.text()).includes(practice.title), url).toBe(allowed);
+    }
+    expect((await page.request.get('/technical-office/practices/' + practice.id + '/operational-report')).status()).toBe(allowed ? 200 : 403);
+  };
+  await verify(a, false); await verify(b, true);
+  await db.clientService.update({ where: { id: service.id }, data: { assignedToId: users.get('consulente') } });
+  await verify(a, true); await verify(b, false);
+  await ac.close(); await bc.close();
+});
 
 for (const role of roles) test(`${role}: shared-client list, search, direct URL and export hide another user's work`, async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin, reducedMotion: 'reduce' });

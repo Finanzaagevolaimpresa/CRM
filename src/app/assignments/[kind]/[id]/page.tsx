@@ -4,6 +4,7 @@ import { Card, PageHeader, formatDateTime } from '@/components/ui';
 import { ResponsibilityAcceptanceForm, ResponsibilityAssignmentForm } from '@/components/responsibility-forms';
 import { requirePermission, hasPermission } from '@/lib/auth';
 import { canViewLead, canViewTechnicalPractice } from '@/lib/access-control';
+import { loadTechnicalPracticeAccessContext } from '@/lib/technical-practice-access';
 import { prisma } from '@/lib/prisma';
 import { readResponsibility, responsibilityContext } from '@/lib/responsibility';
 import { responsibilityAcceptance, responsibilityDecision, responsibilityKind } from '@/lib/responsibility-contract';
@@ -22,7 +23,7 @@ export default async function Page({ params, searchParams }: {
   } else {
     const practice = await prisma.technicalPractice.findFirst({ where: { id, deletedAt: null } });
     const client = practice && await prisma.client.findFirst({ where: { id: practice.clientId, deletedAt: null } });
-    if (!practice || !client || !canViewTechnicalPractice(session, { ...practice, client }) || !await responsibilityContext(prisma, kind, id)) notFound();
+    if (!practice || !client || !canViewTechnicalPractice(session, { ...practice, ...await loadTechnicalPracticeAccessContext(prisma, practice) }) || !await responsibilityContext(prisma, kind, id)) notFound();
   }
   const path = `/assignments/${kind}/${id}`, source = kind === 'Lead' ? `/leads/${id}` : `/technical-office/practices/${id}`;
   let data: Awaited<ReturnType<typeof readResponsibility>>;

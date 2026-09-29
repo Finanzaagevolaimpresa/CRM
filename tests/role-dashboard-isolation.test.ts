@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { canEditProject, canEditService, canEditTask, canViewAiOutput, canViewChecklistItem, canViewClient, canViewClientContext, canViewCommercialOffer, canViewDocument, canViewLead, canViewProject, canViewService, canViewTask, canViewTechnicalPractice } from '../src/lib/access-control';
 import { hasPermission } from '../src/lib/permission-evaluator';
+import { canViewPracticeReadinessWork } from '../src/lib/practice-readiness-access';
 
 const roles = ['commerciale', 'consulente', 'backoffice', 'revisore', 'collaboratore_limitato'] as const;
 const client = { id: 'shared-client', salesOwnerId: 'alice', consultantId: 'alice' };
@@ -11,6 +12,26 @@ const task = { clientId: client.id, projectId: project.id, clientServiceId: serv
 const document = { ...task, uploadedById: 'alice', containsSensitiveData: false, documentCategory: 'altro', type: 'text/plain' };
 const checklist = { ...task, updatedById: 'alice' };
 const practice = { client, technicalOwnerId: 'bob', commercialOwnerId: null };
+
+test('unassigned practice and readiness inherit service, then project, never sibling client ownership', () => {
+  const alice = { userId: 'alice', role: 'consulente' as const }, bob = { ...alice, userId: 'bob' };
+  const linked = { clientId: client.id, client, projectId: project.id, project, clientServiceId: service.id, clientService: service };
+  const lead = { clientId: client.id, assignedToId: 'alice' };
+  for (const context of [linked, { ...linked, clientServiceId: null, clientService: null }]) {
+    assert.equal(canViewTechnicalPractice(alice, context), false);
+    assert.equal(canViewTechnicalPractice(bob, context), true);
+    assert.equal(canViewPracticeReadinessWork(alice, { ...context, lead }), false);
+    assert.equal(canViewPracticeReadinessWork(bob, { ...context, lead }), true);
+  }
+  const reassigned = { ...linked, clientService: { ...service, assignedToId: 'alice' } };
+  assert.equal(canViewTechnicalPractice(alice, reassigned), true);
+  assert.equal(canViewTechnicalPractice(bob, reassigned), false);
+  assert.equal(canViewPracticeReadinessWork(bob, { ...reassigned, lead }), false);
+  assert.equal(canViewTechnicalPractice(bob, { ...linked, project: null }), false);
+  assert.equal(canViewTechnicalPractice(alice, { ...linked, technicalOwnerId: 'alice' }), true);
+  assert.equal(canViewPracticeReadinessWork(alice, { client, lead }), true);
+  assert.equal(canViewPracticeReadinessWork(bob, { client, lead }), false);
+});
 
 for (const role of roles) test(`${role}: owning or sharing a client never overrides another individual's assignment`, () => {
   const actor = { role, userId: 'alice', clientReadScope: [client.id] };

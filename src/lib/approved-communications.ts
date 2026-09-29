@@ -79,7 +79,7 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
   const allowed = technical && 'commercialOwnerId' in practice
-    ? canViewTechnicalPractice(current, { ...practice, client })
+    ? canViewTechnicalPractice(current, { ...practice, client, project: hydratedProject, clientService: hydratedService })
     : canViewClientContext(current, { clientId: client.id, client, project: hydratedProject, clientService: hydratedService });
   if (!allowed) denied();
   return { context, practice, client, project: hydratedProject, service: hydratedService };

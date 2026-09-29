@@ -6,6 +6,9 @@ import type { AuthSession } from '../../src/lib/auth';
 import { getAccessibleDashboardOfferIds, countAccessibleDashboardOffers } from '../../src/lib/dashboard-business-counts';
 import { getAccessibleDashboardTaskCounts, getClientDossierReadAccess, listAccessibleTasks } from '../../src/lib/read-access';
 import { buildOperationalReportMarkdown } from '../../src/lib/operational-report';
+import { loadTechnicalPracticeAccessContext } from '../../src/lib/technical-practice-access';
+import { canViewTechnicalPractice } from '../../src/lib/access-control';
+import { buildDashboardTechnicalCounterContext } from '../../src/lib/dashboard-technical-counter-context';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from './ai-orchestrator-db-test-guard';
 
 const enabled = process.env.ROLE_DASHBOARD_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({ requested: process.env.RUN_DB_TESTS === '1',
@@ -18,6 +21,7 @@ test('same-client assignments agree across complete counters, previews, dossier 
   const prefix = `isolation-${randomUUID()}-`, owner = prefix + 'owner', other = prefix + 'other', clientId = prefix + 'client';
   const session: AuthSession = { userId: owner, role: 'commerciale', active: true, permissionOverrides: [
     { permission: 'project.read', allowed: true }, { permission: 'service.read', allowed: true },
+    { permission: 'technical.read', allowed: true },
   ], clientReadScope: [clientId], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
   const otherSession = { ...session, userId: other };
   const now = new Date('2026-01-02T12:00:00Z'), day = new Date('2026-01-02T00:00:00Z');
@@ -30,7 +34,16 @@ test('same-client assignments agree across complete counters, previews, dossier 
   await prisma.commercialOffer.createMany({ data: Array.from({ length: 122 }, (_, i) => ({ id: prefix + 'offer-' + String(i).padStart(3, '0'), clientId,
     leadId: (i % 2 ? other : owner) + '-lead', createdById: owner, title: 'Synthetic sibling offer', status: 'inviata', taxableAmount: 1, vatAmount: 0, totalAmount: 1 })) });
   await prisma.clientDossier.createMany({ data: [owner, other].map(id => ({ id: id + '-dossier', clientId, title: id, content: 'Synthetic dossier', createdById: id })) });
+  const practice = await prisma.technicalPractice.create({ data: { clientId, projectId: other + '-project', clientServiceId: other + '-service', title: prefix + 'inherited-practice', practiceType: 'synthetic', targetEntity: 'synthetic', createdById: owner } });
   try {
+    const context = await loadTechnicalPracticeAccessContext(prisma, practice);
+    assert.equal(canViewTechnicalPractice(session, { ...practice, ...context }), false);
+    assert.equal(canViewTechnicalPractice(otherSession, { ...practice, ...context }), true);
+    assert.equal(await buildOperationalReportMarkdown(session, { technicalPracticeId: practice.id }), null);
+    assert.ok(await buildOperationalReportMarkdown(otherSession, { technicalPracticeId: practice.id }));
+    const counters = { practices: [practice], clients: [context.client!], projects: [context.project!], services: [context.clientService!], communications: [] };
+    assert.equal(buildDashboardTechnicalCounterContext({ ...counters, session }).visiblePractices.length, 0);
+    assert.equal(buildDashboardTechnicalCounterContext({ ...counters, session: otherSession }).visiblePractices.length, 1);
     const ids = (await getAccessibleDashboardOfferIds(session)).filter(id => id.startsWith(prefix));
     assert.equal(ids.length, 61); assert.ok(ids.every(id => Number(id.slice(-3)) % 2 === 0));
     assert.deepEqual(await countAccessibleDashboardOffers(session), { sent: 61, accepted: 0 });
@@ -48,12 +61,18 @@ test('same-client assignments agree across complete counters, previews, dossier 
     await prisma.task.update({ where: { id: owner + '-task' }, data: { assignedToId: other } });
     assert.equal((await listAccessibleTasks(session, { where: { clientId } })).length, 0);
     assert.equal((await getAccessibleDashboardTaskCounts(session, { now, startOfToday: day, endOfToday: now, next7: now })).open, 0);
+    await prisma.clientService.update({ where: { id: other + '-service' }, data: { assignedToId: owner } });
+    const reassigned = await loadTechnicalPracticeAccessContext(prisma, practice);
+    assert.equal(canViewTechnicalPractice(otherSession, { ...practice, ...reassigned }), false);
+    assert.equal(canViewTechnicalPractice(session, { ...practice, ...reassigned }), true);
+    assert.equal(await buildOperationalReportMarkdown(otherSession, { technicalPracticeId: practice.id }), null);
   } finally {
     // Exact synthetic IDs only, in the guarded disposable CI database.
     await prisma.commercialOffer.deleteMany({ where: { clientId } });
     await prisma.lead.deleteMany({ where: { clientId } });
     await prisma.clientDossier.deleteMany({ where: { clientId } });
     await prisma.task.deleteMany({ where: { clientId } });
+    await prisma.technicalPractice.deleteMany({ where: { clientId } });
     await prisma.clientService.deleteMany({ where: { clientId } });
     await prisma.serviceCatalog.deleteMany({ where: { id: { in: [owner + '-catalog', other + '-catalog'] } } });
     await prisma.project.deleteMany({ where: { clientId } });

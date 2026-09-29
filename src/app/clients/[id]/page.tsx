@@ -204,7 +204,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     if (practice.projectId && !project) return false;
     if (practice.clientServiceId && !clientService) return false;
     if (project && clientService?.projectId && clientService.projectId !== project.id) return false;
-    return canViewTechnicalPractice(session, { ...practice, client });
+    return canViewTechnicalPractice(session, { ...practice, client, project, clientService });
   });
   const technicalPracticeById = new Map(technicalPractices.map((practice) => [practice.id, practice]));
   const practiceCommunications = practiceCommunicationRows.filter((communication) => {

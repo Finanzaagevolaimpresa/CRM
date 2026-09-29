@@ -30,7 +30,6 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const practice = await prisma.technicalPractice.findFirst({ where: { id, deletedAt: null } });
   if (!practice) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non trovata</h1>;
   const client = await prisma.client.findFirst({ where: { id: practice.clientId, deletedAt: null } });
-  if (!client || !canViewTechnicalPractice(session, { ...practice, client })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
 
   const [project, service] = await Promise.all([
     practice.projectId ? prisma.project.findFirst({ where: { id: practice.projectId, deletedAt: null } }) : null,
@@ -43,6 +42,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     : null;
   if (service?.projectId && (!serviceProject || serviceProject.clientId !== practice.clientId)) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
   if (project && serviceProject && project.id !== serviceProject.id) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+  if (!client || !canViewTechnicalPractice(session, { ...practice, client,
+    project: project ? { ...project, client } : null,
+    clientService: service ? { ...service, client, project: serviceProject ? { ...serviceProject, client } : null } : null,
+  })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
 
   const purchasedHandoff = service ? await prisma.auditLog.findFirst({ where: { entityType: 'TechnicalPractice', entityId: practice.id, event: 'purchased_service_handoff' }, select: { id: true } }) : null;
   const canViewDocuments = hasPermission(session, 'document.download');

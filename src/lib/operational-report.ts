@@ -5,6 +5,7 @@ import { prisma } from "./prisma";
 import { listAccessibleAiOutputs, listAccessibleTasks } from "./read-access";
 import { getVisibleEngagementDossierIds } from "./engagement-dossier";
 import { buildDashboardTechnicalCounterContext } from './dashboard-technical-counter-context';
+import { loadTechnicalPracticeAccessContext } from './technical-practice-access';
 
 const DISCLAIMER =
   "Documento interno di lavoro. Finanza Agevola Impresa S.r.l. non eroga finanziamenti, non promette contributi e non garantisce esiti o erogazioni. Offre consulenza tecnica, strategica e di orientamento.";
@@ -75,8 +76,8 @@ export async function buildOperationalReportMarkdown(
     prisma.client.findFirst({ where: { id: clientId, deletedAt: null } }),
     prisma.user.findMany({ where: { active: true } }),
   ]);
-  if (!client || !canViewClient(session, client)) return null;
-  if (practice && (!hasPermission(session, "technical.read") || !canViewTechnicalPractice(session, { ...practice, client }))) return null;
+  if (!client || (!practice && !canViewClient(session, client))) return null;
+  if (practice && (!hasPermission(session, "technical.read") || !canViewTechnicalPractice(session, { ...practice, ...await loadTechnicalPracticeAccessContext(prisma, practice) }))) return null;
   const userOf = (id?: string | null) =>
     users.find((u) => u.id === id)?.name ?? (id ? "Utente non attivo" : "—");
 
@@ -228,7 +229,7 @@ export async function buildOperationalReportMarkdown(
   const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
     clientDossiers.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
   const visibleClientDossiers = clientDossiers.filter((dossier) => {
-    if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
+    if (dossier.practiceReadinessId) return visibleEngagementIds.has(dossier.id);
     const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
     const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
     if ((dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;

@@ -38,3 +38,11 @@ funzionali e sui documenti sensibili ricontrollate. Non ottiene diritti di
 produzione, accesso agli altri dossier o ai documenti generici del cliente.
 Riassegnare il piano o revocare la consultazione impedisce l'accesso successivo.
 I flussi precedenti senza un piano M5 richiedono l'assegnazione corrente del lavoro.
+
+## Coerenza tra percorsi
+
+Una pratica tecnica senza responsabili propri segue prima il servizio, poi il progetto e infine il cliente. Elenco, dettaglio, ricerca, comunicazioni, report e contatori usano lo stesso criterio, anche dopo una riassegnazione. I collegamenti mancanti o incoerenti chiudono l'accesso.
+
+Il percorso preventivo-avvio applica il perimetro operativo anche alle pratiche, agli accrediti, alle revisioni proposte e ai selettori di richieste, offerte, progetti, contratti e servizi. Prima del collegamento a un progetto o servizio vale l'assegnazione del lead originario. I requisiti di scrittura e avvio restano separati.
+
+Il download del revisore M5 usa il piano corrente, la consultazione cliente ancora attiva e la versione documentale inclusa nel materiale validato del dossier corrente. Un URL senza versione non apre un file corrente diverso dallo snapshot; una versione esplicita deve coincidere con quella autorizzata. Il checksum è verificato sui byte restituiti. Il report conserva il dossier autorizzato senza allargare l'accesso ai documenti del cliente. Le prove PostgreSQL e Chromium coprono questi percorsi e i dinieghi dopo riassegnazione, revoca o mancanza del permesso sui sensibili.

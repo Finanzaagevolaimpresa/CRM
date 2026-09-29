@@ -245,7 +245,7 @@ async function loadTechnicalPracticeContext(practiceId: string) {
 
 export async function requireTechnicalPracticeViewAccess(session: AuthSession, practiceId: string) {
   const context = await loadTechnicalPracticeContext(practiceId);
-  if (!canViewTechnicalPractice(session, { ...context.practice, client: context.client })) denyWriteAccess();
+  if (!canViewTechnicalPractice(session, { ...context.practice, client: context.client, project: context.project, clientService: context.clientService })) denyWriteAccess();
   return context;
 }
 

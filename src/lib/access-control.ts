@@ -322,11 +322,20 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
   return document.uploadedById === id && !!document.client && canEditClient(user, document.client);
 }
 
-export function canViewTechnicalPractice(user: Actor, practice: { commercialOwnerId?: string | null; technicalOwnerId?: string | null; client?: (Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) | null }) {
-  if (!practice.client) return false;
+export function canViewTechnicalPractice(user: Actor, practice: ClientScopedContext & { projectId?: string | null; clientServiceId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null }) {
+  if (!practice.client || !hasConsistentClientContext(practice)) return false;
+  if (practice.projectId && (!practice.project || practice.project.id !== practice.projectId)) return false;
+  if (practice.clientServiceId && (!practice.clientService || practice.clientService.id !== practice.clientServiceId)) return false;
+  if (practice.projectId === null && practice.project) return false;
+  if (practice.clientServiceId === null && practice.clientService) return false;
+  if (practice.project && !hasValidProjectContext(practice.project)) return false;
+  if (practice.clientService && !hasValidServiceContext(practice.clientService)) return false;
+  if (practice.project && practice.clientService?.projectId && practice.project.id !== practice.clientService.projectId) return false;
   if (hasGlobalReadAccess(user)) return true;
   const id = getActorId(user);
   if (practice.commercialOwnerId || practice.technicalOwnerId) return practice.commercialOwnerId === id || practice.technicalOwnerId === id;
+  if (practice.clientService) return canViewService(user, practice.clientService);
+  if (practice.project) return canViewProject(user, practice.project);
   return hasClientResponsibility(user, practice.client);
 }
 

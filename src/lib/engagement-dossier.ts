@@ -334,6 +334,46 @@ export async function getEngagementDossierReadAccess(db: Db, claimed: AuthSessio
   }
 }
 
+/** A review assignment authorizes only the exact material version in the current dossier. */
+export async function getEngagementMaterialDownloadAccess(db: Db, claimed: AuthSession, documentId: string, requestedVersionId: string | null = null) {
+  try {
+    return await db.$transaction(async (tx) => {
+      const current = await actor(tx, claimed, 'dossier.read', new Date());
+      if (!hasPermission(current, 'document.download')) return null;
+      const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
+      if (!document?.clientId || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
+      const dossiers = await tx.clientDossier.findMany({ where: {
+        clientId: document.clientId, archivedAt: null, status: { not: 'archiviata' }, practiceReadinessId: { not: null },
+        ...(document.projectId ? { projectId: document.projectId } : {}),
+        ...(document.clientServiceId ? { clientServiceId: document.clientServiceId } : {}),
+      }, select: { id: true } });
+      for (const dossier of dossiers) {
+        try {
+          const context = await scope(tx, current, dossier.id, true);
+          if (!await hasInitialServiceReviewAssignment(tx, current, context)) continue;
+          const currentVersion = context.versions.find(version => version.id === context.dossier.currentVersionId);
+          if (!currentVersion) continue;
+          for (const material of materialSnapshotSchema.parse(currentVersion.materialSnapshot)) {
+            if (material.status !== 'VALIDATED' || material.documentId !== document.id || !material.documentVersionId || !material.checksum
+              || (requestedVersionId && requestedVersionId !== material.documentVersionId)) continue;
+            const version = await tx.documentVersion.findUnique({ where: { id: material.documentVersionId } });
+            if (!version || version.documentId !== document.id || version.checksum !== material.checksum) continue;
+            // A plain document URL must never grant a newer, unsnapshotted file.
+            if (!requestedVersionId && (version.storagePath !== document.storagePath || version.checksum !== document.checksum)) continue;
+            return { versionId: version.id, storagePath: version.storagePath, checksum: material.checksum };
+          }
+        } catch (error) {
+          if (!(error instanceof EngagementDossierError) && !(error instanceof InitialServiceError)) throw error;
+        }
+      }
+      return null;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
+    throw error;
+  }
+}
+
 export async function getVisibleEngagementDossierIds(db: Db, claimed: AuthSession, dossierIds: string[], runtime: Runtime = {}) {
   if (!dossierIds.length) return new Set<string>();
   try {
