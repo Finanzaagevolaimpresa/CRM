@@ -6,6 +6,9 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 const db = new PrismaClient(), root = process.env.CONTRACT_SIGNATURE_EVIDENCE!, password = process.env.CONTRACT_SIGNATURE_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8'));
 test.afterAll(async () => { await db.$disconnect(); });
+test.afterEach(async ({ page }, info) => {
+  if (info.status !== info.expectedStatus) console.log('Synthetic CRM page at failure:', await page.locator('body').innerText());
+});
 test('existing signed document is linked explicitly while payment stays pending', async ({ page }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.CONTRACT_SIGNATURE_DB_CONFIRMED).toBe('1'); expect(f.synthetic).toBe(true);
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
