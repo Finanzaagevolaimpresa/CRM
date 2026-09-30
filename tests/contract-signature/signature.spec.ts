@@ -22,7 +22,10 @@ test('existing signed document is linked explicitly while payment stays pending'
   await upload.locator('input[name="documentCategory"]').fill('contratti');
   await upload.locator('input[name="containsSensitiveData"]').check();
   await upload.getByRole('button', { name: 'Carica', exact: true }).click();
-  await expect(page.locator('#documenti table').getByText('Synthetic signed contract', { exact: true })).toBeVisible();
+  // The document cell contains both its title and nested file-name text.
+  const uploadedRow = page.locator('#documenti table').getByRole('row').filter({ hasText: 'Synthetic signed contract' });
+  await expect(uploadedRow).toHaveCount(1);
+  await expect(uploadedRow.getByRole('link', { name: 'Scarica', exact: true })).toBeVisible();
   await page.goto(`/contracts/${f.contractId}`);
   const document = await db.document.findFirstOrThrow({ where: { clientId: f.clientId, title: 'Synthetic signed contract' } });
   const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
