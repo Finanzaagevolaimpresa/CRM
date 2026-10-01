@@ -161,7 +161,7 @@ node --import tsx tests/pr140-release/state.ts admission > "$evidence/admission.
 node --import tsx tests/practice-readiness-browser/provision.ts
 # Transfer only newly created synthetic sources, before the M2 browser export reads them.
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
-run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 3
+run_browser candidate tests/practice-readiness-browser/playwright.config.ts readiness.spec.ts 4
 node --import tsx tests/pr140-release/state.ts m1-history "$R05_M1_RECOVERY_FIXTURE"
 # Only the fresh, synthetic fixture directory is copied; extraction runs as app UID1001.
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents

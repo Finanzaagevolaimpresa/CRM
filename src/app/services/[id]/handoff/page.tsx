@@ -38,6 +38,7 @@ export default async function Page({ params, searchParams }: {
       prisma.document.findMany({ where: { id: { in: sources.map(item => item.id) }, deletedAt: null } }),
     ]);
     const visibleDocs = await filterFinancialDocuments(prisma, session, docs);
+    const documentProject = project ? { ...project, client } : null;
     const scopeMatches = contract?.clientId === client.id && canonicalSha256(contract.serviceDescription) === receipt.scopeHash;
     return <div className="space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
@@ -50,12 +51,12 @@ export default async function Page({ params, searchParams }: {
         const document = visibleDocs.find(item => item.id === source.id);
         const allowed = document && document.checksum === source.checksumHash && hasPermission(session, 'document.download')
           && canViewDocument(session, { ...document, client: document.clientId === client.id ? client : null,
-            project: document.projectId ? project : null, clientService: document.clientServiceId === id ? { ...service, client, project } : null }, hasPermission(session, 'document.sensitive.read'));
+            project: document.projectId ? documentProject : null, clientService: document.clientServiceId === id ? { ...service, client, project: documentProject } : null }, hasPermission(session, 'document.sensitive.read'));
         return <li key={source.kind}>{source.kind === 'contract' ? 'Incarico firmato' : 'Prova del pagamento'} · versione {source.version} · {allowed ? <Link href={`/documents/${source.id}/download`}>Scarica documento</Link> : 'Consultazione da verificare con l’amministratore'}</li>;
       })}</ul></Card> : null}
       <Card title="Attività dovute"><ul>{tasks.map(task => <li key={task.id}>{task.title} · {task.status} · {formatDateTime(task.dueAt)}</li>)}</ul>
         {tasks.length !== receipt.paths.length && <p>Alcune attività originarie sono archiviate o hanno cambiato collegamento. Verifica lo storico amministrativo.</p>}</Card>
-      {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project }) && <Card title="Carica materiali o elaborati del servizio">
+      {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project: documentProject }) && <Card title="Carica materiali o elaborati del servizio">
         <DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName, generalUploadAllowed: false }]}
           companies={[]} projects={[]} includeProject={false} services={[{ id, clientId: client.id, label: receipt.variantCode }]} serviceAreas={['altro']} />
       </Card>}
