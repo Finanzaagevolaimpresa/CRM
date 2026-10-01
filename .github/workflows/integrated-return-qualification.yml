@@ -1,0 +1,54 @@
+name: Exact R40 R37 application recovery
+on:
+  pull_request:
+    paths:
+      - 'scripts/integrated-release/qualify_pair.py'
+      - 'scripts/integrated-release/return-*.ts'
+      - '.github/workflows/integrated-return-qualification.yml'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  exact-pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11041494760'
+          run-id: '36587091238'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-r40
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11040501304'
+          run-id: '36582124405'
+          repository: Finanzaagevolaimpresa/CRM
+          github-token: ${{ github.token }}
+          path: qualified-r37
+          merge-multiple: true
+      - name: Install qualification tools in the disposable runner
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Verify saved-image recovery and candidate resumption
+        run: python3 -I -B -S scripts/integrated-release/qualify_pair.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r40-r37-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.R05_EVIDENCE_DIR }}/release-receipt.json
+            ${{ env.R05_EVIDENCE_DIR }}/*-summary.json
+            ${{ env.R05_EVIDENCE_DIR }}/*-recovery.json
+            ${{ env.R05_EVIDENCE_DIR }}/after-resume.json
+            ${{ env.R05_EVIDENCE_DIR }}/release-images.tar.gz
+          if-no-files-found: error
+          retention-days: 14
