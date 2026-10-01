@@ -28,9 +28,18 @@ test('sanitizza il nome originale senza conservare separatori di percorso', () =
 
 test('accetta soltanto nomi upload con estensioni consentite', () => {
   assert.doesNotThrow(() => storage.assertSafeUploadName('documento.pdf'));
+  assert.doesNotThrow(() => storage.assertSafeUploadName('archivio.zip'));
   for (const fileName of ['../documento.pdf', 'cartella/documento.pdf', 'documento.exe', 'documento']) {
     assert.throws(() => storage.assertSafeUploadName(fileName), /non valid|non consentita/);
   }
+});
+
+test('conserva i byte ZIP senza estrarli e rifiuta un falso archivio', async () => {
+  const contents = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
+  const saved = await storage.savePrivateDocumentFile({ file: new File([contents], 'archivio.zip', { type: 'application/zip' }), clientId: 'cliente-zip', fileName: 'archivio.zip' });
+  assert.deepEqual(await storage.readPrivateDocument(saved.storagePath), contents);
+  assert.equal(saved.checksum, createHash('sha256').update(contents).digest('hex'));
+  await assert.rejects(storage.savePrivateDocumentFile({ file: new File(['not an archive'], 'falso.zip'), clientId: 'cliente-zip', fileName: 'falso.zip' }), /ZIP riconoscibile/);
 });
 
 test('risolve chiavi POSIX relative alla root e mantiene la compatibilita con le chiavi legacy', () => {

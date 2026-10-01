@@ -2,6 +2,7 @@
 
 import { useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { InteractiveReadyMarker } from '@/components/interactive-ready-marker';
 import { uploadDocumentForBatch } from '@/lib/form-actions';
 import { documentUploadExtensions, uploadSelection, validateUploadSelection, type UploadResult } from '@/lib/document-upload-contract';
 
@@ -27,6 +28,7 @@ export function DocumentBatchUpload({ children, className, submitLabel = 'Carica
     finally { busyRef.current = false; setBusy(false); router.refresh(); }
   }
   return <form action={submit} className={className}>
+    <InteractiveReadyMarker />
     <fieldset disabled={busy} className="contents">
       {children}
       <label className="grid gap-1 text-sm font-bold">Documenti da caricare

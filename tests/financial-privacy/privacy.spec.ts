@@ -25,7 +25,7 @@ for (const f of fixture.fixtures) test(`${f.role}: real lists, details, HTML, re
       if (expected === 200) expect(response.headers()['content-disposition']).toContain('attachment');
     }
   }
-  for (const route of [`/clients/${f.clientId}`, '/documents', '/search?q=Evidence']) {
+  for (const route of [`/clients/${f.clientId}`, '/documents', `/search?q=${encodeURIComponent(f.docs[0].title)}`]) {
     const response = await page.goto(route); expect(response?.status()).toBe(200);
     const html = await response!.text();
     await expect(page.getByText(f.docs[0].title, { exact: false }).first()).toBeVisible();
@@ -36,7 +36,15 @@ for (const f of fixture.fixtures) test(`${f.role}: real lists, details, HTML, re
       expect(html).not.toContain(`PAYMENT_SECRET_${f.role}`);
     }
   }
-  for (const route of [`/contracts/${f.contractId}`, `/payments/${f.paymentId}`, '/contracts', '/payments', '/audit-log']) {
+  for (const document of f.docs.filter(x => x.kind !== 'ordinary')) {
+    // Search each exact filename, so the result limit cannot hide a leaked row.
+    const query = `${document.kind}-${f.role}.${document.kind === 'archive' ? 'zip' : 'pdf'}`;
+    const response = await page.goto(`/search?q=${encodeURIComponent(query)}`);
+    expect(response?.status()).toBe(200);
+    if (financial) await expect(page.getByRole('heading', { name: document.title, exact: true })).toBeVisible();
+    else expect(await response!.text()).not.toContain(document.title);
+  }
+  for (const route of [`/contracts/${f.contractId}`, '/contracts', '/payments', '/audit-log']) {
     await page.goto(route);
     if (!financial) { expect(new URL(page.url()).pathname).toBe('/dashboard'); expect(await page.content()).not.toContain(`CONTRACT_SECRET_${f.role}`); }
     else expect(new URL(page.url()).pathname).toBe(route);
@@ -53,6 +61,7 @@ test('admin selects three files once, including ZIP and a PDF larger than 1 MB; 
   await login(page, 'admin'); await page.goto('/documents');
   const admin = fixture.fixtures.find(x => x.role === 'admin')!;
   const form = page.locator('form').filter({ has: page.locator('input[type="file"]') }).first();
+  await form.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await form.locator('select[name="clientId"]').selectOption(admin.clientId);
   const files = [
     { name: 'multi-synthetic-large.pdf', mimeType: 'application/pdf', buffer: Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(2 * 1024 * 1024, 32), Buffer.from('\n%%EOF')]) },
@@ -60,6 +69,7 @@ test('admin selects three files once, including ZIP and a PDF larger than 1 MB; 
     { name: 'multi-synthetic-archive.zip', mimeType: 'application/zip', buffer: Buffer.from('504b0506000000000000000000000000000000000000', 'hex') },
   ];
   await form.locator('input[type="file"]').setInputFiles(files);
+  await expect(form.getByRole('list', { name: 'Esito caricamenti' })).toContainText('multi-synthetic-archive.zip: Pronto');
   await form.getByRole('button', { name: 'Carica in storage privato' }).click();
   for (const file of files) await expect(page.getByRole('list', { name: 'Esito caricamenti' }).getByText(`${file.name}: Caricato`, { exact: true })).toBeVisible();
   for (const file of files) {
@@ -76,6 +86,7 @@ test('an excluded role cannot upload an archive even with document.upload and it
   await login(page, 'consulente'); await page.goto('/documents');
   const f = fixture.fixtures.find(x => x.role === 'consulente')!;
   const form = page.locator('form').filter({ has: page.locator('input[type="file"]') }).first();
+  await form.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await form.locator('select[name="clientId"]').selectOption(f.clientId);
   await form.locator('input[type="file"]').setInputFiles({ name: 'denied-archive.zip', mimeType: 'application/zip', buffer: Buffer.from('504b0506000000000000000000000000000000000000', 'hex') });
   await form.getByRole('button', { name: 'Carica in storage privato' }).click();

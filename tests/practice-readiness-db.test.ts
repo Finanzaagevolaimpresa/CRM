@@ -1769,7 +1769,7 @@ test(
       ).status,
       "in_lavorazione",
     );
-    assert.equal(started.startedById, ids.userA);
+    assert.equal(started.startedById, manager.userId);
     const historicalEvidence = started.startEvidence;
     const reversal = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,

@@ -297,20 +297,24 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .selectOption(`readiness-browser-contract-${item.key}`);
     await article
       .locator('[name="signedDocumentId"]')
-      .selectOption(`readiness-browser-document-${item.key}`);
+      .selectOption(`readiness-browser-signed-document-${item.key}`);
+    const signedDocumentVersion = await db.documentVersion.findFirstOrThrow({
+      where: { documentId: `readiness-browser-signed-document-${item.key}` },
+      orderBy: { version: "desc" },
+    });
     const documentVersion = await db.documentVersion.findFirstOrThrow({
       where: { documentId: `readiness-browser-document-${item.key}` },
       orderBy: { version: "desc" },
     });
     await article
       .locator('[name="signedDocumentVersionId"]')
-      .selectOption(documentVersion.id);
+      .selectOption(signedDocumentVersion.id);
     await submitAction(
       page,
       article.getByRole("button", { name: "Conferma incarico formalizzato" }),
       `${item.key}:formalizzazione`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText(documentVersion.id, { exact: false })).toBeVisible();
+    await expect(page.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
 
     article = await reloadPractice(page, practice.id);
     await article
@@ -666,7 +670,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     expect(startEvidence.clientServiceId).toBe(
       `readiness-browser-service-${item.key}`,
     );
-    expect(startEvidence.signedDocumentVersionId).toBe(documentVersion.id);
+    expect(startEvidence.signedDocumentVersionId).toBe(signedDocumentVersion.id);
     expect(startEvidence.fundingAmount).toBe("50.00");
     expect(
       (
