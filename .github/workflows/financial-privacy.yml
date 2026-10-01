@@ -52,6 +52,9 @@ jobs:
           value="$(openssl rand -hex 32)"
           echo "::add-mask::$value"
           echo "FINANCIAL_PRIVACY_BROWSER_PASSWORD=$value" >> "$GITHUB_ENV"
+      - name: Compile production bundle against the synthetic database
+        env: { NODE_ENV: production }
+        run: npm run build
       - name: Eight roles, forced allows, private downloads and multiple file upload in Chromium
         shell: bash
         run: |

@@ -57,6 +57,7 @@ async function main() {
         email: "readiness-owner@invalid.test",
         name: "Responsabile Pratiche",
         passwordHash,
+        // This complete journey includes restricted financial operations.
         role: "direzione",
       },
       {
@@ -71,8 +72,7 @@ async function main() {
         email: "readiness-foreign@invalid.test",
         name: "Consulente Estraneo",
         passwordHash,
-        // This complete journey includes restricted financial operations.
-        role: "direzione",
+        role: "consulente",
       },
     ],
   });
