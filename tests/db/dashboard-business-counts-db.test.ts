@@ -113,11 +113,16 @@ test('dashboard offers scan multiple pages and reject dangling or inconsistent l
   }
 });
 
-test('dashboard payment totals require consistent contract projects and preserve the destination list perimeter', { skip: !runDbTests }, async () => {
+test('dashboard payment totals enforce financial roles and reject inconsistent links across pages', { skip: !runDbTests }, async () => {
   const prefix = `${runPrefix}payments-`;
   const owner = actor(`${prefix}owner`, 'consulente');
   const admin = actor(`${prefix}admin`, 'admin');
-  const beforeAdmin = await countAccessibleDashboardPayments(admin);
+  const financialReaders = [admin, actor(`${prefix}administration`, 'amministrazione'), actor(`${prefix}direction`, 'direzione')];
+  const beforeCounts = new Map(await Promise.all(financialReaders.map(async reader =>
+    [reader.role, await countAccessibleDashboardPayments(reader)] as const)));
+  const ownerWithLegacyAllows: AuthSession = { ...owner, permissionOverrides: [
+    { permission: 'payment.read', allowed: true }, { permission: 'contract.read', allowed: true },
+  ] };
   const clientA = `${prefix}client-a`;
   const clientB = `${prefix}client-b`;
   const foreignClient = `${prefix}foreign-client`;
@@ -179,15 +184,24 @@ test('dashboard payment totals require consistent contract projects and preserve
       { ...base, id: `${prefix}reversed`, status: 'stornato' },
       { ...base, id: `${prefix}refunded`, status: 'rimborsato' },
     ] });
-    assert.equal(await countAccessibleDashboardPayments(owner), 121);
-    assert.equal(await countAccessibleDashboardPayments(admin), beforeAdmin + 123);
+    // Assignment and old individual allow overrides must not widen the role ceiling.
+    // Check both the count and canonical detail reader against actual database rows.
+    for (const excluded of [owner, ownerWithLegacyAllows]) {
+      assert.equal(await countAccessibleDashboardPayments(excluded), 0);
+      assert.equal(await getPaymentReadAccess(excluded, rowId(`${prefix}valid-`, 0)), null);
+      assert.equal(await getPaymentReadAccess(excluded, `${prefix}project-only-payment`), null);
+    }
     assert.equal(await countAccessibleDashboardPayments(actor(`${prefix}unrelated`, 'consulente')), 0);
-    // Detail access permits the assigned project, but the payment list requires
-    // client visibility. Its counter must not expose a row absent from that list.
-    assert.ok(await getPaymentReadAccess(owner, `${prefix}project-only-payment`));
-    for (const row of invalid) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
-    // The list and its counter preserve the canonical detail consistency guard.
-    for (const row of invalidProjects) assert.equal(await getPaymentReadAccess(admin, row.id), null, row.id);
+    // Each eligible role must still scan past the first page and reject every
+    // dangling, deleted or cross-client link rather than hiding all payments.
+    for (const reader of financialReaders) {
+      assert.equal(await countAccessibleDashboardPayments(reader), beforeCounts.get(reader.role)! + 123);
+      assert.ok(await getPaymentReadAccess(reader, rowId(`${prefix}valid-`, 0)));
+      assert.ok(await getPaymentReadAccess(reader, `${prefix}project-only-payment`));
+      for (const row of [...invalid, ...invalidProjects]) {
+        assert.equal(await getPaymentReadAccess(reader, row.id), null, `${reader.role}/${row.id}`);
+      }
+    }
   } finally {
     await prisma.payment.deleteMany({ where: { id: { startsWith: prefix } } });
     await prisma.contract.deleteMany({ where: { id: { startsWith: prefix } } });
