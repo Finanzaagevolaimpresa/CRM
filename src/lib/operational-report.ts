@@ -1,4 +1,4 @@
-import { operationalServiceStatus } from './financial-privacy-policy';
+import { operationalServiceStatus } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
 import type { AuthSession } from "./auth";
 import { hasPermission } from "./auth";

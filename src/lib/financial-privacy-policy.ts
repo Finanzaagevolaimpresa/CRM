@@ -16,20 +16,20 @@ export type FinancialDocumentMetadata = {
 };
 
 /** Include legacy free-text classifications; canonical DB bindings are checked separately. */
-export function isFinancialDocument(document: FinancialDocumentMetadata) {
+export function financialDocumentRequirements(document: FinancialDocumentMetadata) {
   const text = [document.serviceArea, document.documentCategory, document.type, document.title, document.fileName]
     .filter(Boolean).join(' ').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return /\.zip$/i.test(document.fileName?.trim() ?? '')
+  const archive = /\.zip$/i.test(document.fileName?.trim() ?? '')
     || [document.mimeType, document.type].some(value => /^(application\/(zip|x-zip-compressed))$/i.test(value ?? ''))
-    || document.documentCategory === 'archivio_riservato'
-    || /contratt|contract|incaric|pagament|payment|bonific|incass|fattur[ae]|invoice/.test(text)
-    || [document.documentCategory, document.type].some(value => /^contabil[ei]$/i.test(value?.trim() ?? ''));
+    || document.documentCategory === 'archivio_riservato';
+  return {
+    contract: archive || /contratt|contract|incaric/.test(text),
+    payment: archive || /pagament|payment|bonific|incass|fattur[ae]|invoice/.test(text)
+      || [document.documentCategory, document.type].some(value => /^contabil[ei]$/i.test(value?.trim() ?? '')),
+  };
 }
 
-export function canAccessFinancialDocumentMetadata(actor: { role: string; active?: boolean }, document: FinancialDocumentMetadata) {
-  return hasFinancialRole(actor) || !isFinancialDocument(document);
-}
-
-export function operationalServiceStatus(actor: { role: string; active?: boolean }, status: string) {
-  return !hasFinancialRole(actor) && status === 'pagato' ? 'disponibile' : status;
+export function isFinancialDocument(document: FinancialDocumentMetadata) {
+  const requirements = financialDocumentRequirements(document);
+  return requirements.contract || requirements.payment;
 }

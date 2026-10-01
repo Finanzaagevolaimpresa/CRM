@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { canEditDocument, canViewChecklistItem, canViewDocument } from '../src/lib/access-control';
-import { financialPermissions, hasFinancialRole, isFinancialDocument, operationalServiceStatus } from '../src/lib/financial-privacy-policy';
+import { financialPermissions, hasFinancialRole, isFinancialDocument } from '../src/lib/financial-privacy-policy';
+import { canAccessFinancialDocumentMetadata, operationalServiceStatus } from '../src/lib/financial-access';
 import { filterFinancialDocuments } from '../src/lib/financial-document-access';
 import { hasPermission } from '../src/lib/permission-evaluator';
 import { roleHasPermission } from '../src/lib/permissions';
@@ -66,3 +67,31 @@ test('binding lookup failure denies the entire read instead of returning unfilte
   const db = { contract: { findMany: fail }, payment: { findMany: fail }, practiceFormalization: { findMany: fail } } as unknown as Parameters<typeof filterFinancialDocuments>[0];
   await assert.rejects(filterFinancialDocuments(db, { role: 'consulente' }, [document]), /DB unavailable/);
 });
+
+for (const role of ['direzione', 'amministrazione'] as const) {
+  for (const denied of ['contract.read', 'payment.read'] as const) test(`${role}: ${denied} deny survives metadata, bindings and operational projections`, async () => {
+    const actor = { role, active: true, userId: 'owner', permissionOverrides: [{ permission: denied, allowed: false }] };
+    const contract = denied !== 'contract.read', payment = denied !== 'payment.read';
+    const cases = [
+      { metadata: { title: 'Contratto firmato' }, allowed: contract },
+      { metadata: { fileName: 'bonifico.pdf' }, allowed: payment },
+      { metadata: { title: 'Contratto e pagamento' }, allowed: false },
+      { metadata: { fileName: 'documenti.zip' }, allowed: false },
+      { metadata: { title: 'Materiale tecnico' }, allowed: true },
+    ];
+    for (const item of cases) {
+      assert.equal(canAccessFinancialDocumentMetadata(actor, item.metadata), item.allowed);
+      assert.equal(canViewDocument(actor, { ...document, ...item.metadata }, true), item.allowed);
+      assert.equal(canViewChecklistItem(actor, { clientId: 'c', client, createdById: 'owner', ...item.metadata }), item.allowed);
+    }
+    const db = {
+      contract: { findMany: async () => [{ signedDocumentId: 'signed' }, { signedDocumentId: 'both' }] },
+      payment: { findMany: async () => [{ accountingDocumentId: 'paid' }, { accountingDocumentId: 'both' }] },
+      practiceFormalization: { findMany: async () => [{ signedDocumentId: 'historic' }] },
+    } as unknown as Parameters<typeof filterFinancialDocuments>[0];
+    const files = ['signed', 'paid', 'historic', 'both', 'ordinary'].map(id => ({ ...document, id }));
+    assert.deepEqual((await filterFinancialDocuments(db, actor, files)).map(x => x.id), contract ? ['signed', 'historic', 'ordinary'] : ['paid', 'ordinary']);
+    assert.equal(operationalServiceStatus(actor, 'pagato'), payment ? 'pagato' : 'disponibile');
+    assert.equal(canViewPaymentListRecord(actor, { payment: { clientId: 'c', contractId: 'k' }, contract: { id: 'k', clientId: 'c', projectId: null }, client, project: null }), payment);
+  });
+}

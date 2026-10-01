@@ -4,7 +4,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), root = process.env.FINANCIAL_PRIVACY_EVIDENCE!, password = process.env.FINANCIAL_PRIVACY_BROWSER_PASSWORD!;
-type Fixture = { role: string; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
+type Fixture = { role: string; key: string; denied: string | null; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
 const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean };
 async function login(page: Page, role: string) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
@@ -14,7 +14,7 @@ async function login(page: Page, role: string) {
 }
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.FINANCIAL_PRIVACY_BROWSER_CONFIRMED).toBe('1'); expect(fixture.synthetic).toBe(true); expect(fixture.overrideDelegationDenied).toBe(true); });
 test.afterAll(async () => { await db.$disconnect(); });
-for (const f of fixture.fixtures) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
+for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
   await login(page, f.role);
   const financial = ['admin', 'amministrazione', 'direzione'].includes(f.role);
   for (const document of f.docs) {
@@ -54,6 +54,41 @@ for (const f of fixture.fixtures) test(`${f.role}: real lists, details, HTML, re
     const text = await report.text();
     for (const doc of f.docs.filter(x => x.kind !== 'ordinary')) expect(text).not.toContain(doc.title);
     expect(text).not.toContain(`PRIVATE_NOTE_${f.role}`); expect(text).not.toContain('pagato');
+  }
+});
+
+for (const f of fixture.fixtures.filter(f => f.denied)) test(`${f.key}: individual deny applies to HTML, exports, handoff and both download routes`, async ({ page }) => {
+  await login(page, f.key);
+  const canReadContract = f.denied !== 'contract.read', canReadPayment = f.denied !== 'payment.read';
+  const permitted = (kind: string) => kind === 'ordinary' || (['signed', 'labelled'].includes(kind) && canReadContract) || (kind === 'paid' && canReadPayment);
+  for (const doc of f.docs) {
+    for (const suffix of ['', `?versionId=${doc.versionId}`]) {
+      expect((await page.request.get(`/documents/${doc.id}/download${suffix}`)).status(), `${f.key}/${doc.kind}${suffix}`).toBe(permitted(doc.kind) ? 200 : 403);
+    }
+  }
+  for (const path of [`/clients/${f.clientId}`, '/documents', `/search?q=${encodeURIComponent(f.key)}`]) {
+    const response = await page.goto(path); expect(response?.status()).toBe(200);
+    const html = await response!.text();
+    expect(html).toContain(f.docs.find(d => d.kind === 'ordinary')!.title);
+    for (const doc of f.docs.filter(d => !permitted(d.kind))) expect(html).not.toContain(doc.title);
+    expect(html).not.toContain(`PRIVATE_NOTE_${f.key}`);
+    if (!canReadContract) expect(html).not.toContain(`CONTRACT_SECRET_${f.key}`);
+    if (!canReadPayment) expect(html).not.toContain(`PAYMENT_SECRET_${f.key}`);
+  }
+  const report = await page.request.get(`/clients/${f.clientId}/operational-report`);
+  expect(report.status()).toBe(200);
+  const reportText = await report.text();
+  expect(reportText).toContain(f.docs.find(d => d.kind === 'ordinary')!.title);
+  for (const doc of f.docs.filter(d => !permitted(d.kind))) expect(reportText).not.toContain(doc.title);
+  if (!canReadPayment) expect(reportText).not.toContain('pagato');
+  const handoff = await page.goto(`/services/${f.serviceId}/handoff`); expect(handoff?.status()).toBe(200);
+  const handoffHtml = await handoff!.text();
+  expect(handoffHtml).toContain('Verifica tecnica sintetica');
+  expect(handoffHtml.includes(`SERVICE_SCOPE_${f.key}`)).toBe(canReadContract);
+  for (const kind of ['signed', 'paid']) {
+    const doc = f.docs.find(d => d.kind === kind)!;
+    expect(handoffHtml.includes(`/documents/${doc.id}/download`)).toBe(permitted(kind));
+    if (!permitted(kind)) expect(handoffHtml).not.toContain(doc.id);
   }
 });
 

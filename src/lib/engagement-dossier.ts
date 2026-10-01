@@ -1,4 +1,3 @@
-import { hasFinancialRole } from './financial-privacy-policy';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
@@ -266,7 +265,7 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
       sourceVersionId: source.id, sourceVersion: source.version, sourceVersionHash: source.contentHash,
       client: { id: context.client.id, name: context.client.displayName }, project: { id: context.project.id, title: context.project.title },
       service: { id: context.service.id, revisionId: revision.id, revisionHash: revision.contentHash, name: revision.publicName, assignedToId: context.service.assignedToId, dueAt: context.service.dueDate?.toISOString() ?? null },
-      engagement: { practiceId: context.practice.id, acceptedOfferRevisionId: offer.id, offerHash: offer.payloadHash, scope: offer.scope, contractId: hasFinancialRole(current) ? context.practice.contractId : null, formalizationId: hasFinancialRole(current) ? context.practice.currentFormalizationId : null, startedAt: context.practice.startedAt.toISOString() },
+      engagement: { practiceId: context.practice.id, acceptedOfferRevisionId: offer.id, offerHash: offer.payloadHash, scope: offer.scope, contractId: hasPermission(current, 'contract.read') ? context.practice.contractId : null, formalizationId: hasPermission(current, 'contract.read') ? context.practice.currentFormalizationId : null, startedAt: context.practice.startedAt.toISOString() },
       materialSnapshotHash: engagementDossierHash(source.materialSnapshot),
       materials: snapshot.map(({ checklistItemId, evidenceId, status, documentVersionId, checksum }) => ({ checklistItemId, evidenceId, status, documentVersionId, checksum })),
       files, notice: 'Trasferimento manuale autorizzato. Nessuna sincronizzazione, approvazione o consegna al cliente.',

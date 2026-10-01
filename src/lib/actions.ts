@@ -1,6 +1,6 @@
 'use server';
 
-import { canAccessFinancialDocumentMetadata, hasFinancialRole } from './financial-privacy-policy';
+import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
 import { appendResponsibilityDecision, requireUnboundServiceAssignment } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
@@ -1394,7 +1394,7 @@ export async function registerPayment(form: FormData) {
 export async function createClientService(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientServiceSchema.parse(clean(form));
-  if (!hasFinancialRole(s) && (data.contractId || data.paymentId || data.paymentStatus || data.status === "pagato")) denyWriteAccess();
+  if ((!financialReadAccess(s).contract && data.contractId) || (!financialReadAccess(s).payment && (data.paymentId || data.paymentStatus || data.status === "pagato"))) denyWriteAccess();
   await requireClientContextWriteAccess(s, data);
   const [catalog, contract, payment] = await Promise.all([
     prisma.serviceCatalog.findFirst({ where: { id: data.serviceCatalogId, active: true }, select: { id: true } }),
@@ -1417,7 +1417,7 @@ export async function createClientService(form: FormData) {
 export async function updateClientServiceStatus(id: string, status: string) {
   const s = await requirePermission("service.write");
   const next = serviceStatusSchema.parse(status);
-  if (!hasFinancialRole(s) && next === "pagato") denyWriteAccess();
+  if (!financialReadAccess(s).payment && next === "pagato") denyWriteAccess();
   const before = await requireServiceEditAccess(s, id);
   const finalStatuses = ["chiuso", "archiviato", "consegnato"];
   if (

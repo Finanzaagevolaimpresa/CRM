@@ -2,9 +2,10 @@ import type { Client, ClientService, Document, DocumentChecklistItem, Lead, Proj
 import type { AuthSession } from './auth';
 import { hasClientReadGrant, type ClientReadScope } from './client-read-perimeter-policy';
 import { hasGlobalReadAccess } from './read-supervision';
-import { canAccessFinancialDocumentMetadata, type FinancialDocumentMetadata } from './financial-privacy-policy';
+import type { FinancialDocumentMetadata } from './financial-privacy-policy';
+import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];

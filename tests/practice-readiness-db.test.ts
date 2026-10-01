@@ -1502,6 +1502,22 @@ test(
     const linked = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
+    const otherContract = await db.contract.create({ data: {
+      clientId: a.client.id, projectId: a.project.id, contractNumber: `OTHER-${suffix}`,
+      serviceName: a.contract.serviceName, taxableAmount: a.contract.taxableAmount,
+      vatAmount: a.contract.vatAmount, totalAmount: a.contract.totalAmount,
+    } });
+    const otherService = await db.clientService.create({ data: {
+      clientId: a.client.id, projectId: a.project.id, serviceCatalogId,
+      contractId: otherContract.id, status: 'richiesto', operationalStatus: 'nuova',
+    } });
+    const operationalRead = (await listAccessiblePracticeReadiness(db, actorA)).find(row => row.id === practice.id)!;
+    assert.equal(operationalRead.contractId, null);
+    assert.deepEqual(operationalRead.linkableServices.map(service => service.id), [a.clientService.id]);
+    assert.deepEqual(Object.keys(operationalRead.linkableServices[0]).sort(), ['id', 'label']);
+    await expectDeniedWithoutEffects(practice.id, () => linkPracticeClientService(db, actorA, {
+      practiceId: practice.id, clientServiceId: otherService.id, expectedVersion: linked.version,
+    }));
     await expectDeniedWithoutEffects(practice.id, () =>
       linkPracticeClientService(db, actorA, {
         practiceId: practice.id,
@@ -2148,4 +2164,51 @@ test('M4 communications reuse readiness identity and fresh client/project scope'
   await assert.rejects(readPracticeCommunications(scoped, actorB, binding), /DENIED/);
   throw new Error('M4_READINESS_FIXTURE_ROLLBACK');
   }), error => error instanceof Error && error.message === 'M4_READINESS_FIXTURE_ROLLBACK');
+});
+
+test('Direzione and Amministrazione individual denies redact readiness and Work manifests independently', { skip: !enabled }, async () => {
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id }, include: { funding: true } });
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: practice.id } });
+  assert.ok(practice.currentFormalizationId && practice.startEvidence && practice.funding.length);
+  const original = await db.user.findUniqueOrThrow({ where: { id: manager.userId } });
+  const permissions = ['dossier.read', 'dossier.write', 'service.read', 'document.download'];
+  const existing = await db.userPermissionOverride.findMany({ where: { userId: manager.userId } });
+  try {
+    for (const permission of permissions) await db.userPermissionOverride.upsert({
+      where: { userId_permission: { userId: manager.userId, permission } },
+      create: { userId: manager.userId, permission, allowed: true }, update: { allowed: true },
+    });
+    for (const role of ['direzione', 'amministrazione'] as const) {
+      await db.user.update({ where: { id: manager.userId }, data: { role } });
+      for (const permission of ['contract.read', 'payment.read'] as const) {
+        const deniedOverride = await db.userPermissionOverride.create({ data: { userId: manager.userId, permission, allowed: false } });
+        try {
+          const row = (await listAccessiblePracticeReadiness(db, manager)).find(item => item.id === practice.id)!;
+          assert.ok(row);
+          assert.equal(row.startEvidence, null);
+          assert.ok(row.materials.some(item => item.documentId === a.document.id));
+          assert.equal(row.contractId, permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(row.currentFormalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(row.signedDocumentId, permission === 'contract.read' ? null : practice.signedDocumentId);
+          assert.equal(row.formalizations.length > 0, permission !== 'contract.read');
+          assert.equal(row.requiredInitialAmount?.toFixed(2) ?? null, permission === 'payment.read' ? null : practice.requiredInitialAmount.toFixed(2));
+          assert.equal(row.funding.length, permission === 'payment.read' ? 0 : practice.funding.length);
+          assert.equal(row.prerequisites.availableFunding === null, permission === 'payment.read');
+          const result = await exportEngagementWorkPackage(db, manager, { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId, packageId: randomUUID(), manualTransferAuthorized: true }, {
+            readDocument: async path => { assert.equal(path, a.documentVersion.storagePath); return Buffer.from('material A'); },
+          });
+          assert.equal(result.receipt.manifest.engagement.contractId, permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(result.receipt.manifest.engagement.formalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(result.receipt.manifest.files.length, 1, 'technical material remains exportable');
+        } finally { await db.userPermissionOverride.delete({ where: { id: deniedOverride.id } }); }
+      }
+    }
+  } finally {
+    await db.user.update({ where: { id: manager.userId }, data: { role: original.role } });
+    for (const permission of permissions) {
+      const previous = existing.find(item => item.permission === permission);
+      if (previous) await db.userPermissionOverride.update({ where: { id: previous.id }, data: { allowed: previous.allowed } });
+      else await db.userPermissionOverride.deleteMany({ where: { userId: manager.userId, permission } });
+    }
+  }
 });

@@ -1,4 +1,4 @@
-import { hasFinancialRole } from './financial-privacy-policy';
+import { financialReadAccess } from './financial-access';
 import { canViewClient, canViewClientContext, canViewProject, type Actor } from './access-control';
 
 type ActiveClientContext = {
@@ -34,7 +34,7 @@ type PreAnalysisListContext = {
 export function canViewPaymentListRecord(session: Actor, {
   payment, contract, client, project,
 }: PaymentListContext): boolean {
-  if (!hasFinancialRole(session)) return false;
+  if (!financialReadAccess(session).payment) return false;
   if (!client || client.deletedAt || client.id !== payment.clientId || !canViewClient(session, client)) return false;
   if (!contract || contract.id !== payment.contractId || contract.clientId !== payment.clientId) return false;
   if (!contract.projectId) return canViewClientContext(session, { clientId: payment.clientId, client });
