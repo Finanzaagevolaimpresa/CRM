@@ -1,0 +1,80 @@
+name: Contract signature qualification
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: contract-signature-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-signature-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-signature-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-signature-auth-not-production
+      AUTH_COOKIE_NAME: signature_test_session
+      APP_ORIGIN: http://127.0.0.1:3039
+      PORT: '3039'
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      CONTRACT_SIGNATURE_DB_CONFIRMED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Check source, type safety and guarded PostgreSQL behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/contract-signature-evidence"
+          mkdir -p "$evidence"
+          echo "CONTRACT_SIGNATURE_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          npm run lint
+          npm run typecheck
+          psql 'postgresql://postgres:synthetic-signature-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          node --import tsx --test tests/contract-signature.test.ts tests/contract-signature/service-db.test.ts | tee "$evidence/database.tap"
+          grep -Eq '^# pass [1-9][0-9]*$' "$evidence/database.tap"
+          grep -Fx '# fail 0' "$evidence/database.tap"
+          grep -Fx '# skipped 0' "$evidence/database.tap"
+          value="$(openssl rand -hex 32)"
+          echo "::add-mask::$value"
+          echo "CONTRACT_SIGNATURE_BROWSER_PASSWORD=$value" >> "$GITHUB_ENV"
+      - name: Real Chromium registration preserves unpaid status
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx tests/contract-signature/provision-browser.ts
+          npm run dev -- --hostname 127.0.0.1 --port 3039 > "$CONTRACT_SIGNATURE_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3039/api/health >/dev/null; then ready=1; break; fi
+            if ! kill -0 "$app_pid" 2>/dev/null; then cat "$CONTRACT_SIGNATURE_EVIDENCE/app.log"; exit 1; fi
+            sleep 1
+          done
+          test "$ready" = 1
+          npx playwright test --config tests/contract-signature/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-signature-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/contract-signature-evidence/
+          if-no-files-found: error
+          retention-days: 14
