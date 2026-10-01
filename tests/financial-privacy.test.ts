@@ -82,7 +82,7 @@ for (const role of ['direzione', 'amministrazione'] as const) {
     for (const item of cases) {
       assert.equal(canAccessFinancialDocumentMetadata(actor, item.metadata), item.allowed);
       assert.equal(canViewDocument(actor, { ...document, ...item.metadata }, true), item.allowed);
-      assert.equal(canViewChecklistItem(actor, { clientId: 'c', client, createdById: 'owner', ...item.metadata }), item.allowed);
+      assert.equal(canViewChecklistItem(actor, { clientId: 'c', client, createdById: 'owner', updatedById: null, ...item.metadata }), item.allowed);
     }
     const db = {
       contract: { findMany: async () => [{ signedDocumentId: 'signed' }, { signedDocumentId: 'both' }] },
