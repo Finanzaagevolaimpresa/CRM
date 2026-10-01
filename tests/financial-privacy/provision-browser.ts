@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
@@ -45,8 +46,11 @@ async function main() {
     fixtures.push({ role, userId: user.id, clientId: client.id, projectId: project.id, serviceId: service.id, contractId: contract.id, paymentId: payment.id, docs });
   }
   const excluded = fixtures.find(x => x.role === 'consulente')!;
-  const denied = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId }, excluded.userId, [{ permission: 'payment.read', allowed: true }]));
+  const session = await db.internalSession.create({ data: { userId: adminId, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3600_000) } });
+  const denied = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId, sessionId: session.id }, excluded.userId, [{ permission: 'payment.read', allowed: true }]));
   assert.equal(denied.ok, false, 'Even admin cannot delegate reserved access to an excluded role');
+  if (!denied.ok) assert.match(denied.message, /Contratti, pagamenti/);
+  await db.internalSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, fixtures, overrideDelegationDenied: true }));
 }

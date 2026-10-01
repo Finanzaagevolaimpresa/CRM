@@ -71,7 +71,8 @@ async function main() {
         email: "readiness-foreign@invalid.test",
         name: "Consulente Estraneo",
         passwordHash,
-        role: "consulente",
+        // This complete journey includes restricted financial operations.
+        role: "direzione",
       },
     ],
   });

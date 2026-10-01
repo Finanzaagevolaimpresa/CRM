@@ -155,7 +155,7 @@ async function createContext(label: string, consultantId: string) {
       clientId: client.id,
       projectId: project.id,
       type: "documento_operativo",
-      title: `Incarico ${label}`,
+      title: `Materiale operativo ${label}`,
       fileName: `${label}.pdf`,
       mimeType: "application/pdf",
       sizeBytes: 10,
@@ -173,6 +173,14 @@ async function createContext(label: string, consultantId: string) {
       checksum: document.checksum,
     },
   });
+  const signedDocument = await db.document.create({ data: {
+    clientId: client.id, projectId: project.id, type: 'contratto', title: `Incarico ${label}`,
+    fileName: `signed-${label}.pdf`, mimeType: 'application/pdf', sizeBytes: 10,
+    storagePath: `synthetic/${suffix}/signed-${label}.pdf`, uploadedById: manager.userId,
+    status: 'verificato', checksum: createHash('sha256').update(`signed ${label}`).digest('hex'),
+  } });
+  const signedVersion = await db.documentVersion.create({ data: { documentId: signedDocument.id, version: 1,
+    storagePath: signedDocument.storagePath, checksum: signedDocument.checksum } });
   const contract = await db.contract.create({
     data: {
       clientId: client.id,
@@ -184,7 +192,7 @@ async function createContext(label: string, consultantId: string) {
       totalAmount: offerAmounts.total,
       status: "firmato",
       signedAt: new Date(),
-      signedDocumentId: document.id,
+      signedDocumentId: signedDocument.id,
     },
   });
   const checklist = await db.documentChecklistItem.create({
@@ -214,6 +222,8 @@ async function createContext(label: string, consultantId: string) {
     offer,
     document,
     documentVersion,
+    signedDocument,
+    signedVersion,
     contract,
     checklist,
     clientService,
@@ -545,11 +555,11 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        formalizePractice(db, actorA, {
+        formalizePractice(db, manager, {
           practiceId: practice.id,
           contractId: a.contract.id,
-          signedDocumentId: a.document.id,
-          signedDocumentVersionId: a.documentVersion.id,
+          signedDocumentId: a.signedDocument.id,
+          signedDocumentVersionId: a.signedVersion.id,
           expectedVersion: practice.version,
         }),
         (error) =>
@@ -564,11 +574,11 @@ test(
       }),
       0,
     );
-    const firstFormalized = await formalizePractice(db, actorA, {
+    const firstFormalized = await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: a.contract.id,
-      signedDocumentId: a.document.id,
-      signedDocumentVersionId: a.documentVersion.id,
+      signedDocumentId: a.signedDocument.id,
+      signedDocumentVersionId: a.signedVersion.id,
       expectedVersion: practice.version,
     });
     const firstFormalizationId = firstFormalized.currentFormalizationId;
@@ -645,11 +655,11 @@ test(
         where: { id: firstFormalizationId },
       }),
     );
-    const secondFormalized = await formalizePractice(db, actorA, {
+    const secondFormalized = await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: a.contract.id,
-      signedDocumentId: a.document.id,
-      signedDocumentVersionId: a.documentVersion.id,
+      signedDocumentId: a.signedDocument.id,
+      signedDocumentVersionId: a.signedVersion.id,
       expectedVersion: revisedPractice.version,
     });
     assert.notEqual(
@@ -1036,8 +1046,8 @@ test(
         formalizePractice(db, actorA, {
           practiceId: practiceB.id,
           contractId: b.contract.id,
-          signedDocumentId: b.document.id,
-          signedDocumentVersionId: b.documentVersion.id,
+          signedDocumentId: b.signedDocument.id,
+          signedDocumentVersionId: b.signedVersion.id,
           expectedVersion: practiceB.version,
         }),
       () =>
@@ -1234,8 +1244,8 @@ test(
       currency: "EUR",
       expectedVersion: practice.version,
     } as const;
-    const declared = await recordPracticeFunding(db, actorB, firstInput);
-    const replay = await recordPracticeFunding(db, actorB, firstInput);
+    const declared = await recordPracticeFunding(db, manager, firstInput);
+    const replay = await recordPracticeFunding(db, manager, firstInput);
     assert.equal(replay.id, declared.id);
     assert.equal(
       await db.practiceFundingEvidence.count({
@@ -1244,12 +1254,12 @@ test(
       1,
     );
     await assert.rejects(
-      recordPracticeFunding(db, actorB, { ...firstInput, amount: "21.00" }),
+      recordPracticeFunding(db, manager, { ...firstInput, amount: "21.00" }),
       (error) =>
         error instanceof PracticeReadinessError && error.code === "CONFLICT",
     );
     await assert.rejects(
-      recordPracticeFunding(db, actorB, {
+      recordPracticeFunding(db, manager, {
         ...firstInput,
         reference: `STALE-${suffix}`,
       }),
@@ -1266,8 +1276,8 @@ test(
       expectedVersion: practice.version,
     };
     const confirmations = await Promise.all([
-      confirmPracticeFunding(db, actorB, confirmationInput),
-      confirmPracticeFunding(db, actorB, confirmationInput),
+      confirmPracticeFunding(db, manager, confirmationInput),
+      confirmPracticeFunding(db, manager, confirmationInput),
     ]);
     assert.equal(confirmations[0].id, confirmations[1].id);
     let history = await db.practiceFundingEvidence.findMany({
@@ -1280,7 +1290,7 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const supplement = await recordPracticeFunding(db, actorB, {
+    const supplement = await recordPracticeFunding(db, manager, {
       practiceId: practice.id,
       reference: `PARTIAL-2-${suffix}`,
       amount: "30.00",
@@ -1290,7 +1300,7 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    await confirmPracticeFunding(db, actorB, {
+    await confirmPracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: supplement.id,
       expectedVersion: practice.version,
@@ -1304,12 +1314,12 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const reversed = await reversePracticeFunding(db, actorB, {
+    const reversed = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmations[0].id,
       expectedVersion: practice.version,
     });
-    const reversedReplay = await reversePracticeFunding(db, actorB, {
+    const reversedReplay = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmations[0].id,
       expectedVersion: practice.version,
@@ -1373,19 +1383,19 @@ test(
       where: { id: practice.id },
     });
     await expectDeniedWithoutEffects(practice.id, () =>
-      formalizePractice(db, actorB, {
+      formalizePractice(db, manager, {
         practiceId: practice.id,
         contractId: b.contract.id,
-        signedDocumentId: b.document.id,
-        signedDocumentVersionId: a.documentVersion.id,
+        signedDocumentId: b.signedDocument.id,
+        signedDocumentVersionId: a.signedVersion.id,
         expectedVersion: practice.version,
       }),
     );
-    await formalizePractice(db, actorB, {
+    await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: b.contract.id,
-      signedDocumentId: b.document.id,
-      signedDocumentVersionId: b.documentVersion.id,
+      signedDocumentId: b.signedDocument.id,
+      signedDocumentVersionId: b.signedVersion.id,
       expectedVersion: practice.version,
     });
     practice = await db.practiceReadiness.findUniqueOrThrow({
@@ -1417,7 +1427,7 @@ test(
       where: { id: practice.id },
     });
     await assert.rejects(
-      startPractice(db, actorB, {
+      startPractice(db, manager, {
         practiceId: practice.id,
         expectedVersion: practice.version,
       }),
@@ -1429,7 +1439,7 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        recordPracticeFunding(db, actorB, {
+        recordPracticeFunding(db, manager, {
           practiceId: practice.id,
           reference: `FAULT-${suffix}`,
           amount: "1.00",
@@ -1451,7 +1461,7 @@ test(
   { skip: !enabled },
   async () => {
     const practice = await ensurePractice(a, actorA);
-    const declared = await recordPracticeFunding(db, actorA, {
+    const declared = await recordPracticeFunding(db, manager, {
       practiceId: practice.id,
       reference: `A-${suffix}`,
       amount: "50.00",
@@ -1461,7 +1471,7 @@ test(
     const funded = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const confirmed = await confirmPracticeFunding(db, actorA, {
+    const confirmed = await confirmPracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: declared.id,
       expectedVersion: funded.version,
@@ -1481,11 +1491,11 @@ test(
       where: { id: practice.id },
     });
     if (!v2.currentFormalizationId) {
-      await formalizePractice(db, actorA, {
+      await formalizePractice(db, manager, {
         practiceId: practice.id,
         contractId: a.contract.id,
-        signedDocumentId: a.document.id,
-        signedDocumentVersionId: a.documentVersion.id,
+        signedDocumentId: a.signedDocument.id,
+        signedDocumentVersionId: a.signedVersion.id,
         expectedVersion: v2.version,
       });
     }
@@ -1631,7 +1641,7 @@ test(
       data: { title: "Materiale A aggiornato dopo attestazione" },
     });
     await assert.rejects(
-      startPractice(db, actorA, {
+      startPractice(db, manager, {
         practiceId: practice.id,
         expectedVersion: v4.version,
       }),
@@ -1712,7 +1722,7 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        startPractice(db, actorA, {
+        startPractice(db, manager, {
           practiceId: practice.id,
           expectedVersion: v4.version,
         }),
@@ -1731,7 +1741,7 @@ test(
       ).status,
       "richiesto",
     );
-    const started = await startPractice(db, actorA, {
+    const started = await startPractice(db, manager, {
       practiceId: practice.id,
       expectedVersion: v4.version,
     });
@@ -1761,7 +1771,7 @@ test(
     );
     assert.equal(started.startedById, ids.userA);
     const historicalEvidence = started.startEvidence;
-    const reversal = await reversePracticeFunding(db, actorA, {
+    const reversal = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmed.id,
       expectedVersion: started.version,

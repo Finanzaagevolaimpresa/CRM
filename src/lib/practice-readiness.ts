@@ -1227,7 +1227,7 @@ export async function formalizePractice(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
-    if (!hasFinancialRole(a)) throw new PracticeReadinessError("DENIED");
+      if (!hasFinancialRole(a)) throw new PracticeReadinessError("DENIED");
       const { practice: p } = await practiceScope(tx, a, input.practiceId);
       const [
         contract,
@@ -1531,7 +1531,10 @@ export async function listAccessiblePracticeReadiness(
             materials,
             formalizations: hasFinancialRole(a) ? formalizations : [],
             prerequisites: {
-              missing: hasFinancialRole(a) ? prerequisites.missing : prerequisites.missing.length ? ["VERIFICA_AMMINISTRATIVA"] : [],
+              missing: hasFinancialRole(a) ? prerequisites.missing : [
+                ...prerequisites.missing.filter(code => !['accredito_iniziale', 'incarico_formalizzato'].includes(code)),
+                ...(prerequisites.missing.some(code => ['accredito_iniziale', 'incarico_formalizzato'].includes(code)) ? ['VERIFICA_AMMINISTRATIVA'] : []),
+              ],
               availableFunding: hasFinancialRole(a) ? prerequisites.paid.toFixed(2) : null,
             },
           });
