@@ -1,3 +1,4 @@
+import { hasPermission } from './permission-evaluator';
 import type { Dossier, Prisma } from '@prisma/client';
 import { canViewClient, canViewCommercialOffer, canViewProject } from './access-control';
 import type { AuthSession } from './auth';
@@ -132,6 +133,7 @@ export async function countAccessibleDashboardOffers(session: AuthSession): Prom
 }
 
 export async function countAccessibleDashboardPayments(session: AuthSession): Promise<number> {
+  if (!hasPermission(session, 'payment.read')) return 0;
   return prisma.$transaction(async (tx) => {
     let count = 0;
     let afterId: string | undefined;

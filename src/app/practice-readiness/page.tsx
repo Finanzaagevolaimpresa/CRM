@@ -1,4 +1,6 @@
 export const dynamic = "force-dynamic";
+import { hasFinancialRole } from '@/lib/financial-privacy-policy';
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { requirePermission, hasPermission } from "@/lib/auth";
 import {
   canViewChecklistItem,
@@ -53,6 +55,7 @@ export default async function Page({
       </div>
     );
   const writable = hasPermission(session, "service.write");
+  const canViewFinancial = hasFinancialRole(session);
   const clientRows = await prisma.client.findMany({
     where: { deletedAt: null },
   });
@@ -94,9 +97,9 @@ export default async function Page({
     prisma.project.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
-    prisma.contract.findMany({
+    canViewFinancial ? prisma.contract.findMany({
       where: { status: "firmato", clientId: { in: clientIds } },
-    }),
+    }) : [],
     prisma.document.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
@@ -161,7 +164,7 @@ export default async function Page({
     "document.sensitive.read",
   );
   const documents = canReadDocuments
-    ? documentRows.filter((document) =>
+    ? (await filterFinancialDocuments(prisma, session, documentRows)).filter((document) =>
         canViewDocument(
           session,
           {
@@ -365,13 +368,13 @@ export default async function Page({
                   <StatusBadge status={p.startedAt ? "avviata" : "in_attesa"} />
                 </div>
                 <p>Residui: {missing.join(", ") || "nessuno"}</p>
-                <p>
+                {canViewFinancial ? <p>
                   Accrediti confermati: € {paid} / €{" "}
-                  {p.requiredInitialAmount.toFixed(2)}
-                </p>
+                  {p.requiredInitialAmount?.toFixed(2)}
+                </p> : null}
                 <p>Pratica operativa: {p.clientServiceId ?? "da collegare"}</p>
                 {hasPermission(session, 'practice_communications.read') ? <p><Link className="font-bold underline" href={`/communications?kind=READINESS&practice=${p.id}`}>Comunicazioni approvate della pratica</Link></p> : null}
-                <div>
+                {canViewFinancial ? <div>
                   <strong>Storico incarichi</strong>
                   {p.formalizations.map((f) => (
                     <p key={f.id}>
@@ -380,10 +383,10 @@ export default async function Page({
                       {f.signedDocumentVersionId}
                     </p>
                   ))}
-                </div>
+                </div> : null}
                 {writable && (
                   <div className="grid gap-3 md:grid-cols-2">
-                    <form action={formalizePracticeAction}>
+                    {canViewFinancial ? <form action={formalizePracticeAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
                         type="hidden"
@@ -442,7 +445,7 @@ export default async function Page({
                       <PrimaryButton type="submit">
                         Conferma incarico formalizzato
                       </PrimaryButton>
-                    </form>
+                    </form> : null}
                     <form action={linkPracticeClientServiceAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
@@ -460,7 +463,7 @@ export default async function Page({
                             (x) =>
                               x.clientId === p.clientId &&
                               x.projectId === p.projectId &&
-                              x.contractId === p.contractId,
+                              (!canViewFinancial || x.contractId === p.contractId),
                           )
                           .map((x) => (
                             <option key={x.id} value={x.id}>
@@ -479,7 +482,7 @@ export default async function Page({
                         Collega pratica operativa in attesa
                       </PrimaryButton>
                     </form>
-                    <form action={recordPracticeFundingAction}>
+                    {canViewFinancial ? <><form action={recordPracticeFundingAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
                         name="reference"
@@ -578,7 +581,7 @@ export default async function Page({
                           </div>
                         );
                       })}
-                    </div>
+                    </div></> : null}
                     <form action={decidePracticeMaterialAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input

@@ -1,3 +1,4 @@
+import { hasFinancialRole } from '@/lib/financial-privacy-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -26,28 +27,29 @@ export default async function Page({ params, searchParams }: {
     clientService: { ...service, client, project: project ? { ...project, client } : null },
   }))) notFound();
   const path = `/services/${id}/handoff`;
+  const canViewFinancial = hasFinancialRole(session);
   if (entry) {
     const receipt = entry.receipt;
     const [contract, tasks, docs] = await Promise.all([
-      prisma.contract.findUnique({ where: { id: receipt.contractId }, select: { serviceDescription: true, clientId: true } }),
+      canViewFinancial ? prisma.contract.findUnique({ where: { id: receipt.contractId }, select: { serviceDescription: true, clientId: true } }) : null,
       prisma.task.findMany({ where: { id: { in: receipt.paths }, clientId: client.id, clientServiceId: id, deletedAt: null }, orderBy: { id: 'asc' } }),
-      prisma.document.findMany({ where: { id: { in: receipt.source.map(item => item.id) }, deletedAt: null } }),
+      canViewFinancial ? prisma.document.findMany({ where: { id: { in: receipt.source.map(item => item.id) }, deletedAt: null } }) : [],
     ]);
     const scopeMatches = contract?.clientId === client.id && canonicalSha256(contract.serviceDescription) === receipt.scopeHash;
     return <div className="space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
-        <p>Incarico e pagamento documentato verificati dall’amministratore al momento del passaggio. La presa in carico personale è registrata separatamente.</p>
+        <p>Passaggio operativo autorizzato dall’amministratore. La presa in carico personale è registrata separatamente.</p>
         <div className="flex gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
         {!practice && <p>La pratica non è attualmente disponibile; la ricevuta storica è conservata.</p>}
       </Card>
-      <Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card>
+      {canViewFinancial ? <><Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card>
       <Card title="Documenti del passaggio"><ul>{receipt.source.map(source => {
         const document = docs.find(item => item.id === source.id);
         const allowed = document && document.checksum === source.checksumHash && hasPermission(session, 'document.download')
           && canViewDocument(session, { ...document, client: document.clientId === client.id ? client : null,
             project: document.projectId ? project : null, clientService: document.clientServiceId === id ? { ...service, client, project } : null }, hasPermission(session, 'document.sensitive.read'));
         return <li key={source.kind}>{source.kind === 'contract' ? 'Incarico firmato' : 'Prova del pagamento'} · versione {source.version} · {allowed ? <Link href={`/documents/${source.id}/download`}>Scarica documento</Link> : 'Consultazione da verificare con l’amministratore'}</li>;
-      })}</ul></Card>
+      })}</ul></Card></> : null}
       <Card title="Attività dovute"><ul>{tasks.map(task => <li key={task.id}>{task.title} · {task.status} · {formatDateTime(task.dueAt)}</li>)}</ul>
         {tasks.length !== receipt.paths.length && <p>Alcune attività originarie sono archiviate o hanno cambiato collegamento. Verifica lo storico amministrativo.</p>}</Card>
       {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project }) && <Card title="Carica materiali o elaborati del servizio">

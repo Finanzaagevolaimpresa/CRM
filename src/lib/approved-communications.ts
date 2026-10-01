@@ -1,3 +1,4 @@
+import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type CommunicationMailbox } from '@prisma/client';
 import { z } from 'zod';
@@ -148,7 +149,7 @@ async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnTy
       || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
       || (doc.projectId && doc.projectId !== scope.project?.id)
       || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-      || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+      || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
         clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) denied();
     let bytes: Buffer;
     try { bytes = await (runtime.readDocument ?? readPrivateDocumentBounded)(version.storagePath, 20 * 1024 * 1024 - total); }
@@ -344,7 +345,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
         if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
           || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
           || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-          || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+          || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) attachmentAccess = false;
       }
       if (!attachmentAccess) continue;
@@ -357,7 +358,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       const candidates = await tx.document.findMany({ where: { clientId: scope.client.id, deletedAt: null }, orderBy: { updatedAt: 'desc' }, take: 100 });
       for (const doc of candidates) {
         if ((doc.projectId && doc.projectId !== scope.project?.id) || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-          || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+          || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) continue;
         const versions = await tx.documentVersion.findMany({ where: { documentId: doc.id }, orderBy: { version: 'desc' }, take: 5 });
         documents.push({ id: doc.id, title: doc.title, versions: versions.map(v => ({ id: v.id, version: v.version })) });

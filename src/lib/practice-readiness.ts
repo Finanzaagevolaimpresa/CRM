@@ -1,3 +1,5 @@
+import { hasFinancialRole } from './financial-privacy-policy';
+import { canAccessFinancialDocument } from './financial-document-access';
 import { loadClientReadScope } from './client-read-perimeter';
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -197,6 +199,7 @@ async function canUseDocument(
     clientService?.projectId && clientService.projectId !== project?.id
       ? await tx.project.findUnique({ where: { id: clientService.projectId } })
       : project;
+  if (!await canAccessFinancialDocument(tx, a, document)) return false;
   return canViewDocument(
     a,
     {
@@ -590,6 +593,7 @@ export async function recordPracticeFunding(
   });
   return fundingTransaction(db, async (tx) => {
     const a = await actor(tx, claimed);
+    if (!hasFinancialRole(a)) throw new PracticeReadinessError("DENIED");
     const { practice } = await practiceScope(tx, a, input.practiceId);
     const old = await tx.practiceFundingEvidence.findFirst({
       where: {
@@ -636,6 +640,7 @@ async function transitionPracticeFunding(
   await assertPracticeReadinessDatabase(db);
   return fundingTransaction(db, async (tx) => {
     const a = await actor(tx, claimed);
+    if (!hasFinancialRole(a)) throw new PracticeReadinessError("DENIED");
     const { practice } = await practiceScope(tx, a, input.practiceId);
     const source = await tx.practiceFundingEvidence.findUnique({
       where: { id: input.evidenceId },
@@ -1222,6 +1227,7 @@ export async function formalizePractice(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
+    if (!hasFinancialRole(a)) throw new PracticeReadinessError("DENIED");
       const { practice: p } = await practiceScope(tx, a, input.practiceId);
       const [
         contract,
@@ -1513,11 +1519,20 @@ export async function listAccessiblePracticeReadiness(
           }
           visible.push({
             ...row,
+            contractId: hasFinancialRole(a) ? row.contractId : null,
+            currentFormalizationId: hasFinancialRole(a) ? row.currentFormalizationId : null,
+            signedDocumentId: hasFinancialRole(a) ? row.signedDocumentId : null,
+            signedDocumentVersionId: hasFinancialRole(a) ? row.signedDocumentVersionId : null,
+            formalizedAt: hasFinancialRole(a) ? row.formalizedAt : null,
+            formalizedById: hasFinancialRole(a) ? row.formalizedById : null,
+            startEvidence: hasFinancialRole(a) ? row.startEvidence : null,
+            requiredInitialAmount: hasFinancialRole(a) ? row.requiredInitialAmount : null,
+            funding: hasFinancialRole(a) ? row.funding : [],
             materials,
-            formalizations,
+            formalizations: hasFinancialRole(a) ? formalizations : [],
             prerequisites: {
-              missing: prerequisites.missing,
-              availableFunding: prerequisites.paid.toFixed(2),
+              missing: hasFinancialRole(a) ? prerequisites.missing : prerequisites.missing.length ? ["VERIFICA_AMMINISTRATIVA"] : [],
+              availableFunding: hasFinancialRole(a) ? prerequisites.paid.toFixed(2) : null,
             },
           });
         } catch (error) {

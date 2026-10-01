@@ -1,4 +1,5 @@
 import type { RoleCode } from '@prisma/client';
+import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 
 export const permissionCatalog = [
   { code: 'user.read', label: 'Leggere utenti', description: 'Visualizza utenti interni e profili.', group: 'utenti e impostazioni' },
@@ -95,6 +96,7 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
 };
 
 export function roleHasPermission(role: RoleCode, permission: Permission) {
+  if (isFinancialPermission(permission) && !hasFinancialRole({ role })) return false;
   if (permission === 'ai.execution.consume') return false;
   if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
     return role === 'admin' || role === 'direzione';

@@ -1,0 +1,18 @@
+# Contract/payment confidentiality and document upload
+
+Only active `admin`, `amministrazione` and `direzione` accounts are eligible for contract/payment access. Existing function permissions and client/document checks still apply. A client grant, assignment, sensitive-document permission or explicit allow override cannot widen that role ceiling. The same ceiling applies to the audit log because its payloads can contain complete financial snapshots. Attempts to delegate these permissions to another role are rejected.
+
+The server guards cover contract/payment pages and loaders, payment counters, document lists/search/checklists, current/versioned downloads, reviewer exceptions, operational reports, dossier work exports and communication attachments. Financial service notes/statuses and readiness funding/formalization history are redacted from operational views. Generic files linked as signed contracts, payment evidence or historical formalizations are restricted even when their labels do not identify their contents. Legacy unlinked files depend on their classification or filename; administrators must classify financial material correctly. Arbitrary free text and the semantic contents of an unclassified PDF are not automatically inspected.
+
+All upload forms now accept up to 20 files selected together, with a 25 MiB limit for each file. One user action sends bounded, sequential per-file requests so a large selection does not require one oversized request. Each file gets its own document record, private storage key, checksum, version and audit entry. The optional title becomes a prefix for multiple files. Results remain visible per file; known validation failures do not resend successful files, while an uncertain response stops further sends and asks the operator to check the list. Server permission/context checks run on each file.
+
+ZIP files are stored unchanged in private storage, checked for a ZIP signature, and downloaded as attachments; the server never extracts or executes them. All ZIP archives are restricted to the three eligible roles because their contents can include reserved financial material. Ordinary technical documents keep their existing access checks. The Next action body ceiling is 26 MiB to accommodate one 25 MiB file plus multipart metadata. An independently configured reverse proxy may need a matching limit at release time; this change does not alter a live proxy.
+
+## Verification
+
+- Pure tests exercise every role, explicit allows, inactive users, ownership, sharing, sensitive access, generic financial bindings, history, bounded queries and fail-closed database errors.
+- Batch tests cover mixed outcomes, shared context, individual titles, pre-validation and uncertain network responses without retries.
+- `financial-privacy.yml` performs repository lint/typecheck/unit tests, then a guarded ephemeral PostgreSQL/Chromium qualification for all eight roles, direct/versioned downloads, HTML, lists, search, reports, prohibited delegation, a multi-file upload with ZIP and a file larger than 1 MiB.
+- Existing ABAC, service isolation and list integrity tests remain applicable. This branch is independent of the contract-signature candidate; integration must rerun that candidate's tests against this ceiling.
+
+No schema migration or data backfill is required. No production action is performed by this PR. A rollback is a source revert plus a separately approved release; it would restore the earlier access policy and remove ZIP uploads, so it must not be used as a routine permission workaround. Existing private file bytes and versions are unchanged.

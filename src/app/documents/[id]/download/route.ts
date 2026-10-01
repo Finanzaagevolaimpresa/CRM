@@ -1,3 +1,4 @@
+import { canAccessFinancialDocument } from '@/lib/financial-document-access';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { hasPermission, requirePermission } from '@/lib/auth';
@@ -16,6 +17,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const document = await prisma.document.findFirst({ where: { id, deletedAt: null } });
   if (!document) return new NextResponse('Documento non trovato', { status: 404 });
+  if (!await canAccessFinancialDocument(prisma, session, document)) return new NextResponse('Non autorizzato', { status: 403 });
 
   const [client, project, clientService] = await Promise.all([
     document.clientId ? prisma.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }) : null,

@@ -1,5 +1,7 @@
 'use server';
 
+import { canAccessFinancialDocumentMetadata, hasFinancialRole } from './financial-privacy-policy';
+import { filterFinancialDocuments } from './financial-document-access';
 import { appendResponsibilityDecision, requireUnboundServiceAssignment } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
@@ -869,17 +871,25 @@ export async function createProjectExpense(form: FormData) {
 export async function uploadDocument(form: FormData) {
   const s = await requirePermission('document.upload');
   const file = form.get('file');
+  if (form.getAll('file').length !== 1) throw new UserFacingActionError('Usa il caricamento multiplo per inviare tutti i file selezionati.');
   if (!(file instanceof File) || file.size <= 0) throw new UserFacingActionError('File obbligatorio');
   const parsed = documentUploadSchema.safeParse(clean(form));
   if (!parsed.success) throw new UserFacingActionError('Controlla i dati del documento: cliente, progetto e servizio devono essere coerenti.');
   const data = parsed.data;
   await requireClientContextWriteAccess(s, data);
   const fileName = sanitizeFileName(file.name);
-  const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
+  if (!canAccessFinancialDocumentMetadata(s, { ...data, fileName, mimeType: file.type })) denyWriteAccess();
+  let saved;
+  try { saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName }); }
+  catch (error) {
+    if (error instanceof Error && /^(File |Estensione |Nome file |Dimensione file |Il file non è)/.test(error.message)) throw new UserFacingActionError(error.message);
+    throw error;
+  }
   const document = await prisma.$transaction(async (tx) => {
     const created = await tx.document.create({ data: {
       ...data,
       title: data.title,
+      documentCategory: /\.zip$/i.test(fileName) ? 'archivio_riservato' : data.documentCategory,
       type: file.type || 'application/octet-stream',
       fileName,
       mimeType: file.type || 'application/octet-stream',
@@ -909,6 +919,7 @@ async function assertChecklistContext(session: AuthSession, clientId: string, cl
 export async function createDocumentChecklistItem(form: FormData) {
   const s = await requirePermission('service.write');
   const data = documentChecklistItemSchema.parse(clean(form));
+  if (!canAccessFinancialDocumentMetadata(s, data)) denyWriteAccess();
   await assertChecklistContext(s, data.clientId, data.clientServiceId, data.projectId, data.documentId);
   const item = await prisma.documentChecklistItem.create({ data: { ...data, createdById: s.userId, updatedById: s.userId } as never });
   await audit(s.userId, 'document_checklist_item_create', 'DocumentChecklistItem', item.id, item);
@@ -1047,7 +1058,7 @@ async function buildClientDossierContent(session: AuthSession, clientId: string,
   }]));
   const projects = [...projectById.values()].filter((project) => canViewProject(session, project));
   const services = [...serviceById.values()].filter((service) => canViewService(session, service));
-  const visibleDocuments = documents.filter((document) => canViewDocument(session, {
+  const visibleDocuments = (await filterFinancialDocuments(prisma, session, documents)).filter((document) => canViewDocument(session, {
     ...document,
     client,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
@@ -1383,6 +1394,7 @@ export async function registerPayment(form: FormData) {
 export async function createClientService(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientServiceSchema.parse(clean(form));
+  if (!hasFinancialRole(s) && (data.contractId || data.paymentId || data.paymentStatus || data.status === "pagato")) denyWriteAccess();
   await requireClientContextWriteAccess(s, data);
   const [catalog, contract, payment] = await Promise.all([
     prisma.serviceCatalog.findFirst({ where: { id: data.serviceCatalogId, active: true }, select: { id: true } }),
@@ -1405,6 +1417,7 @@ export async function createClientService(form: FormData) {
 export async function updateClientServiceStatus(id: string, status: string) {
   const s = await requirePermission("service.write");
   const next = serviceStatusSchema.parse(status);
+  if (!hasFinancialRole(s) && next === "pagato") denyWriteAccess();
   const before = await requireServiceEditAccess(s, id);
   const finalStatuses = ["chiuso", "archiviato", "consegnato"];
   if (
@@ -1622,7 +1635,7 @@ export async function runClientAiAgent(form: FormData) {
     project: item.projectId ? projectById.get(item.projectId) ?? null : null,
   }]));
   const canReadSensitive = hasPermission(s, 'document.sensitive.read');
-  const visibleDocuments = documents.filter((document) => canViewDocument(s, {
+  const visibleDocuments = (await filterFinancialDocuments(prisma, s, documents)).filter((document) => canViewDocument(s, {
     ...document,
     client: access.client,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,

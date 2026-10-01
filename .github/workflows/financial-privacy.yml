@@ -1,0 +1,77 @@
+name: Financial privacy and document upload qualification
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: financial-privacy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-privacy-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-privacy-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      AUTH_SECRET: synthetic-privacy-auth-not-production
+      AUTH_COOKIE_NAME: privacy_test_session
+      APP_ORIGIN: http://127.0.0.1:3042
+      PORT: '3042'
+      INTERNAL_SESSION_MODE: registry
+      LOGIN_THROTTLE_MODE: disabled
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      FINANCIAL_PRIVACY_BROWSER_CONFIRMED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - name: Lint, typecheck and unit regression
+        env: { RUN_DB_TESTS: '0' }
+        run: npm run lint && npm run typecheck && npm test
+      - name: Guarded synthetic PostgreSQL fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/financial-privacy-evidence"
+          mkdir -p "$evidence"
+          echo "FINANCIAL_PRIVACY_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          psql 'postgresql://postgres:synthetic-privacy-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          value="$(openssl rand -hex 32)"
+          echo "::add-mask::$value"
+          echo "FINANCIAL_PRIVACY_BROWSER_PASSWORD=$value" >> "$GITHUB_ENV"
+      - name: Eight roles, forced allows, private downloads and multiple file upload in Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx tests/financial-privacy/provision-browser.ts
+          npm run dev -- --hostname 127.0.0.1 --port 3042 > "$FINANCIAL_PRIVACY_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3042/api/health >/dev/null; then ready=1; break; fi
+            if ! kill -0 "$app_pid" 2>/dev/null; then cat "$FINANCIAL_PRIVACY_EVIDENCE/app.log"; exit 1; fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then cat "$FINANCIAL_PRIVACY_EVIDENCE/app.log"; exit 1; fi
+          npx playwright test --config tests/financial-privacy/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: financial-privacy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/financial-privacy-evidence/
+          if-no-files-found: warn
+          retention-days: 14

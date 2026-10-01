@@ -510,7 +510,7 @@ export default async function Dashboard() {
       formatDateTime(lastTask?.dueAt ?? lastTask?.createdAt),
       lastTask?.title ?? "Nessuna attività aperta",
     ],
-  ];
+  ].filter(([label]) => label !== "Ultimo pagamento registrato" || canReadPayments);
   const taskSummary = [
     [
       "Attività aperte",

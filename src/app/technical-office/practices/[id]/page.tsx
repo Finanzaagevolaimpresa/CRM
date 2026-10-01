@@ -1,3 +1,4 @@
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PracticeCommunicationTemplates } from '@/components/practice-communication-templates';
@@ -67,7 +68,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     client,
     project: item.projectId ? projectById.get(item.projectId) ?? null : null,
   }]));
-  const documents = documentRows.filter((document) => canViewDocument(session, {
+  const documents = (await filterFinancialDocuments(prisma, session, documentRows)).filter((document) => canViewDocument(session, {
     ...document,
     client: document.clientId === client.id ? client : null,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
