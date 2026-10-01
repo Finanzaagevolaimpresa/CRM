@@ -1,3 +1,4 @@
+import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
 import { z } from 'zod';
@@ -96,7 +97,7 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
     const documentIds = [...new Set([item.documentId, row.documentId, version?.documentId].filter((id): id is string => Boolean(id)))];
     for (const documentId of documentIds) {
       const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-      if (!document || document.clientId !== client.id
+      if (!document || !await canAccessFinancialDocument(tx, current, document) || document.clientId !== client.id
         || (document.projectId && document.projectId !== project.id)
         || (document.clientServiceId && document.clientServiceId !== service.id)
         || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))
@@ -248,7 +249,7 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
         tx.documentVersion.findUnique({ where: { id: material.documentVersionId } }),
         tx.document.findUnique({ where: { id: material.documentId } }),
       ]);
-      if (!document || !version || version.documentId !== document.id || version.checksum !== material.checksum) throw new EngagementDossierError('DENIED');
+      if (!document || !version || !await canAccessFinancialDocument(tx, current, document) || version.documentId !== document.id || version.checksum !== material.checksum) throw new EngagementDossierError('DENIED');
       let data: Buffer;
       try { data = await (runtime.readDocument ?? readPrivateDocumentBounded)(version.storagePath, Math.min(25 * 1024 * 1024, WORK_PACKAGE_MAX_BYTES - total)); }
       catch { throw new EngagementDossierError('NOT_READY'); }
@@ -264,7 +265,7 @@ export async function exportEngagementWorkPackage(db: Db, claimed: AuthSession, 
       sourceVersionId: source.id, sourceVersion: source.version, sourceVersionHash: source.contentHash,
       client: { id: context.client.id, name: context.client.displayName }, project: { id: context.project.id, title: context.project.title },
       service: { id: context.service.id, revisionId: revision.id, revisionHash: revision.contentHash, name: revision.publicName, assignedToId: context.service.assignedToId, dueAt: context.service.dueDate?.toISOString() ?? null },
-      engagement: { practiceId: context.practice.id, acceptedOfferRevisionId: offer.id, offerHash: offer.payloadHash, scope: offer.scope, contractId: context.practice.contractId, formalizationId: context.practice.currentFormalizationId, startedAt: context.practice.startedAt.toISOString() },
+      engagement: { practiceId: context.practice.id, acceptedOfferRevisionId: offer.id, offerHash: offer.payloadHash, scope: offer.scope, contractId: hasPermission(current, 'contract.read') ? context.practice.contractId : null, formalizationId: hasPermission(current, 'contract.read') ? context.practice.currentFormalizationId : null, startedAt: context.practice.startedAt.toISOString() },
       materialSnapshotHash: engagementDossierHash(source.materialSnapshot),
       materials: snapshot.map(({ checklistItemId, evidenceId, status, documentVersionId, checksum }) => ({ checklistItemId, evidenceId, status, documentVersionId, checksum })),
       files, notice: 'Trasferimento manuale autorizzato. Nessuna sincronizzazione, approvazione o consegna al cliente.',
@@ -341,7 +342,7 @@ export async function getEngagementMaterialDownloadAccess(db: Db, claimed: AuthS
       const current = await actor(tx, claimed, 'dossier.read', new Date());
       if (!hasPermission(current, 'document.download')) return null;
       const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-      if (!document?.clientId || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
+      if (!document?.clientId || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
       const dossiers = await tx.clientDossier.findMany({ where: {
         clientId: document.clientId, archivedAt: null, status: { not: 'archiviata' }, practiceReadinessId: { not: null },
         ...(document.projectId ? { projectId: document.projectId } : {}),

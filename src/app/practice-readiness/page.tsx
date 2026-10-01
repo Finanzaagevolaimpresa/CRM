@@ -1,9 +1,10 @@
 export const dynamic = "force-dynamic";
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { requirePermission, hasPermission } from "@/lib/auth";
 import {
   canViewChecklistItem,
   canViewDocument,
-  canViewClient, canViewLead, canViewCommercialOffer, canViewProject, canViewService, canViewClientContext,
+  canViewClient, canViewLead, canViewCommercialOffer, canViewProject, canViewClientContext,
   isSensitiveDocument,
 } from "@/lib/access-control";
 import { prisma } from "@/lib/prisma";
@@ -53,6 +54,8 @@ export default async function Page({
       </div>
     );
   const writable = hasPermission(session, "service.write");
+  const canViewContracts = hasPermission(session, 'contract.read');
+  const canViewPayments = hasPermission(session, 'payment.read');
   const clientRows = await prisma.client.findMany({
     where: { deletedAt: null },
   });
@@ -74,7 +77,6 @@ export default async function Page({
     documentRows,
     itemRows,
     proposalRows,
-    serviceRows,
     documentServiceRows,
   ] = await Promise.all([
     listAccessiblePracticeReadiness(prisma, session),
@@ -94,9 +96,9 @@ export default async function Page({
     prisma.project.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
-    prisma.contract.findMany({
+    canViewContracts ? prisma.contract.findMany({
       where: { status: "firmato", clientId: { in: clientIds } },
-    }),
+    }) : [],
     prisma.document.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
@@ -107,14 +109,6 @@ export default async function Page({
       where: { clientId: { in: clientIds } },
       include: { acceptance: true },
       orderBy: { proposedAt: "desc" },
-    }),
-    prisma.clientService.findMany({
-      where: {
-        deletedAt: null,
-        clientId: { in: clientIds },
-        status: "richiesto",
-        operationalStatus: "nuova",
-      },
     }),
     prisma.clientService.findMany({
       where: { deletedAt: null, clientId: { in: clientIds } },
@@ -141,10 +135,6 @@ export default async function Page({
   );
   const canReadDocuments = hasPermission(session, "document.download");
   const projects = [...projectById.values()].filter(project => canViewProject(session, project));
-  const services = serviceRows.filter(service => {
-    const context = documentServiceById.get(service.id);
-    return context && canViewService(session, context);
-  });
   const offers = offerRows.filter(offer => offer.status === 'accettata' && canViewCommercialOffer(session, { ...offer,
     client: offer.clientId ? clientById.get(offer.clientId) ?? null : null, lead: offer.leadId ? leadById.get(offer.leadId) ?? null : null }));
   const offerById = new Map(offerRows.map(offer => [offer.id, offer]));
@@ -161,7 +151,7 @@ export default async function Page({
     "document.sensitive.read",
   );
   const documents = canReadDocuments
-    ? documentRows.filter((document) =>
+    ? (await filterFinancialDocuments(prisma, session, documentRows)).filter((document) =>
         canViewDocument(
           session,
           {
@@ -365,13 +355,13 @@ export default async function Page({
                   <StatusBadge status={p.startedAt ? "avviata" : "in_attesa"} />
                 </div>
                 <p>Residui: {missing.join(", ") || "nessuno"}</p>
-                <p>
+                {canViewPayments ? <p>
                   Accrediti confermati: € {paid} / €{" "}
-                  {p.requiredInitialAmount.toFixed(2)}
-                </p>
+                  {p.requiredInitialAmount?.toFixed(2)}
+                </p> : null}
                 <p>Pratica operativa: {p.clientServiceId ?? "da collegare"}</p>
                 {hasPermission(session, 'practice_communications.read') ? <p><Link className="font-bold underline" href={`/communications?kind=READINESS&practice=${p.id}`}>Comunicazioni approvate della pratica</Link></p> : null}
-                <div>
+                {canViewContracts ? <div>
                   <strong>Storico incarichi</strong>
                   {p.formalizations.map((f) => (
                     <p key={f.id}>
@@ -380,10 +370,10 @@ export default async function Page({
                       {f.signedDocumentVersionId}
                     </p>
                   ))}
-                </div>
+                </div> : null}
                 {writable && (
                   <div className="grid gap-3 md:grid-cols-2">
-                    <form action={formalizePracticeAction}>
+                    {canViewContracts ? <form action={formalizePracticeAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
                         type="hidden"
@@ -442,7 +432,7 @@ export default async function Page({
                       <PrimaryButton type="submit">
                         Conferma incarico formalizzato
                       </PrimaryButton>
-                    </form>
+                    </form> : null}
                     <form action={linkPracticeClientServiceAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
@@ -455,23 +445,9 @@ export default async function Page({
                         aria-label="Pratica operativa"
                         className={field}
                       >
-                        {services
-                          .filter(
-                            (x) =>
-                              x.clientId === p.clientId &&
-                              x.projectId === p.projectId &&
-                              x.contractId === p.contractId,
-                          )
-                          .map((x) => (
+                        {p.linkableServices.map((x) => (
                             <option key={x.id} value={x.id}>
-                              {revisions.find(
-                                (r) =>
-                                  r.serviceCatalogId === x.serviceCatalogId,
-                              )?.serviceCatalog.name ?? "Servizio"}{" "}
-                              ·{" "}
-                              {projects.find(
-                                (project) => project.id === x.projectId,
-                              )?.title ?? "senza progetto"}
+                              {x.label}
                             </option>
                           ))}
                       </select>
@@ -479,7 +455,7 @@ export default async function Page({
                         Collega pratica operativa in attesa
                       </PrimaryButton>
                     </form>
-                    <form action={recordPracticeFundingAction}>
+                    {canViewPayments ? <><form action={recordPracticeFundingAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input
                         name="reference"
@@ -578,7 +554,7 @@ export default async function Page({
                           </div>
                         );
                       })}
-                    </div>
+                    </div></> : null}
                     <form action={decidePracticeMaterialAction}>
                       <input type="hidden" name="practiceId" value={p.id} />
                       <input

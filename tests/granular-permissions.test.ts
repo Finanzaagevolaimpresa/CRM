@@ -19,7 +19,7 @@ test('permesso ereditato consentito e negato', () => {
 });
 
 test('override allow e deny hanno precedenza sul ruolo', () => {
-  assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'audit.read', allowed: true }]), 'audit.read'), true);
+  assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'audit.read', allowed: true }]), 'audit.read'), false);
   assert.equal(hasPermission(session('direzione', [{ permission: 'audit.read', allowed: false }]), 'audit.read'), false);
   assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'project.read', allowed: false }]), 'project.read'), false);
   assert.equal(hasPermission(session('collaboratore_limitato', [{ permission: 'lead.read', allowed: true }]), 'lead.read'), true);
@@ -139,13 +139,13 @@ test('la risoluzione duplicati impone precheck, step-up enforced e revalidation 
   assert.match(registry, /FROM "UserPermissionOverride"[\s\S]*FOR SHARE/u);
 });
 
-test('override immediato senza nuovo login e reset', () => {
+test('override non finanziario immediato senza nuovo login e reset', () => {
   const s = session('collaboratore_limitato');
-  assert.equal(hasPermission(s, 'audit.read'), false);
-  s.permissionOverrides = [{ permission: 'audit.read', allowed: true }];
-  assert.equal(hasPermission(s, 'audit.read'), true);
+  assert.equal(hasPermission(s, 'technical.read'), false);
+  s.permissionOverrides = [{ permission: 'technical.read', allowed: true }];
+  assert.equal(hasPermission(s, 'technical.read'), true);
   s.permissionOverrides = [];
-  assert.equal(hasPermission(s, 'audit.read'), false);
+  assert.equal(hasPermission(s, 'technical.read'), false);
 });
 
 test('azioni proteggono auto-disattivazione, ultimo admin e override admin con transazioni serializzabili', () => {

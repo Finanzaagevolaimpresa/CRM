@@ -27,7 +27,7 @@ type CapturedAction = {
 };
 let currentPhase = "INITIAL";
 
-function docxDocumentXml(bytes: Buffer) {
+function zipEntryText(bytes: Buffer, name: string) {
   // Read the actual document entry, including compressed ZIP entries.
   for (let offset = 0; offset + 30 <= bytes.length && bytes.readUInt32LE(offset) === 0x04034b50;) {
     const flags = bytes.readUInt16LE(offset + 6);
@@ -37,7 +37,7 @@ function docxDocumentXml(bytes: Buffer) {
     const extraLength = bytes.readUInt16LE(offset + 28);
     const start = offset + 30 + nameLength + extraLength;
     if (flags & 8) throw new Error("Unexpected ZIP data descriptor");
-    if (bytes.subarray(offset + 30, offset + 30 + nameLength).toString() === "word/document.xml") {
+    if (bytes.subarray(offset + 30, offset + 30 + nameLength).toString() === name) {
       const entry = bytes.subarray(start, start + length);
       if (method === 0) return entry.toString("utf8");
       if (method === 8) return inflateRawSync(entry).toString("utf8");
@@ -45,8 +45,9 @@ function docxDocumentXml(bytes: Buffer) {
     }
     offset = start + length;
   }
-  throw new Error("DOCX document XML missing");
+  throw new Error(`ZIP entry missing: ${name}`);
 }
+const docxDocumentXml = (bytes: Buffer) => zipEntryText(bytes, 'word/document.xml');
 
 async function expectDossierAbsentFromIndex(page: Page, dossier: { id: string; title: string }) {
   const response = await page.goto(`${app}/client-dossiers`);
@@ -297,20 +298,47 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .selectOption(`readiness-browser-contract-${item.key}`);
     await article
       .locator('[name="signedDocumentId"]')
-      .selectOption(`readiness-browser-document-${item.key}`);
+      .selectOption(`readiness-browser-signed-document-${item.key}`);
+    const signedDocumentVersion = await db.documentVersion.findFirstOrThrow({
+      where: { documentId: `readiness-browser-signed-document-${item.key}` },
+      orderBy: { version: "desc" },
+    });
     const documentVersion = await db.documentVersion.findFirstOrThrow({
       where: { documentId: `readiness-browser-document-${item.key}` },
       orderBy: { version: "desc" },
     });
     await article
       .locator('[name="signedDocumentVersionId"]')
-      .selectOption(documentVersion.id);
+      .selectOption(signedDocumentVersion.id);
     await submitAction(
       page,
       article.getByRole("button", { name: "Conferma incarico formalizzato" }),
       `${item.key}:formalizzazione`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText(documentVersion.id, { exact: false })).toBeVisible();
+    await expect(page.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
+
+    if (item.key === cases[0].key) {
+      const matching = await db.clientService.findUniqueOrThrow({ where: { id: `readiness-browser-service-${item.key}` } });
+      const otherContract = await db.contract.create({ data: {
+        clientId: matching.clientId, projectId: matching.projectId, contractNumber: `OTHER-${item.key}`,
+        serviceName: 'Altro incarico sintetico', taxableAmount: '100', vatAmount: '22', totalAmount: '122',
+      } });
+      const homonymous = await db.clientService.create({ data: {
+        clientId: matching.clientId, projectId: matching.projectId, serviceCatalogId: matching.serviceCatalogId,
+        contractId: otherContract.id, status: 'richiesto', operationalStatus: 'nuova', assignedToId: matching.assignedToId,
+      } });
+      const override = await db.userPermissionOverride.create({ data: { userId: 'readiness-browser-owner', permission: 'contract.read', allowed: false } });
+      try {
+        article = await reloadPractice(page, practice.id);
+        const options = await article.locator('[name="clientServiceId"] option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value));
+        expect(options).toEqual([matching.id]);
+        expect(options).not.toContain(homonymous.id);
+        expect(await article.innerHTML()).not.toContain(matching.contractId!);
+        await article.locator('[name="clientServiceId"]').selectOption(matching.id);
+        await submitAction(page, article.getByRole('button', { name: 'Collega pratica operativa in attesa' }), 'redacted-service-selector');
+        expect((await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } })).clientServiceId).toBe(matching.id);
+      } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+    }
 
     article = await reloadPractice(page, practice.id);
     await article
@@ -666,7 +694,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     expect(startEvidence.clientServiceId).toBe(
       `readiness-browser-service-${item.key}`,
     );
-    expect(startEvidence.signedDocumentVersionId).toBe(documentVersion.id);
+    expect(startEvidence.signedDocumentVersionId).toBe(signedDocumentVersion.id);
     expect(startEvidence.fundingAmount).toBe("50.00");
     expect(
       (
@@ -1253,4 +1281,53 @@ test('M2 Work package returns as a new draft before independent review and simul
   writeFileSync(join(evidenceDir, 'm2-work-roundtrip.json'), JSON.stringify({ status: 'PASS', synthetic: true, realMessagesSent: false, packageId, artifactHash, sourceVersionId: dossier.currentVersionId, importedVersionId: afterImport.currentVersionId, deliveryAuthorizationId: original.id, importIdempotent: true, authorizationRechecked: true }) + '\n', { mode: 0o600 });
   await foreignContext.close();
   await reviewerContext.close();
+});
+
+test('financial read overrides protect readiness HTML and downloadable Work manifests for both supervising roles', async ({ page }) => {
+  await assertSyntheticCatalogDatabase(db);
+  await login(page, 'readiness-owner@invalid.test');
+  const userId = 'readiness-browser-owner';
+  const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, createdById: userId }, orderBy: { createdAt: 'asc' } });
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: dossier.practiceReadinessId! }, include: { funding: true } });
+  expect(practice.currentFormalizationId).toBeTruthy();
+  expect(practice.funding.length).toBeGreaterThan(0);
+  const grants = ['dossier.read', 'dossier.write', 'service.read', 'service.write', 'document.download'];
+  const previous = await db.userPermissionOverride.findMany({ where: { userId } });
+  try {
+    for (const permission of grants) await db.userPermissionOverride.upsert({ where: { userId_permission: { userId, permission } }, create: { userId, permission, allowed: true }, update: { allowed: true } });
+    for (const role of ['direzione', 'amministrazione'] as const) {
+      await db.user.update({ where: { id: userId }, data: { role } });
+      for (const permission of ['contract.read', 'payment.read'] as const) {
+        const override = await db.userPermissionOverride.create({ data: { userId, permission, allowed: false } });
+        try {
+          const response = await page.goto(`${app}/practice-readiness`); expect(response?.status()).toBe(200);
+          const article = page.locator(`#practice-${practice.id}`);
+          const html = await article.innerHTML();
+          expect(html.includes(practice.contractId!)).toBe(permission !== 'contract.read');
+          expect(html.includes(practice.signedDocumentVersionId!)).toBe(permission !== 'contract.read');
+          expect(html.includes('Accrediti confermati')).toBe(permission !== 'payment.read');
+          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(permission !== 'payment.read');
+          const exported = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
+            form: { expectedVersionId: dossier.currentVersionId!, packageId: randomUUID(), manualTransferAuthorized: 'on' },
+            headers: { origin: app }, maxRedirects: 0,
+          });
+          expect(exported.status(), `${role}/${permission}`).toBe(200);
+          const bytes = await exported.body();
+          const manifest = JSON.parse(zipEntryText(bytes, 'manifest.json'));
+          expect(manifest.engagement.contractId).toBe(permission === 'contract.read' ? null : practice.contractId);
+          expect(manifest.engagement.formalizationId).toBe(permission === 'contract.read' ? null : practice.currentFormalizationId);
+          expect(manifest.files.length).toBeGreaterThan(0);
+          for (const file of manifest.files) expect(zipEntryText(bytes, file.name).length).toBeGreaterThan(0);
+        } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+      }
+    }
+  } finally {
+    await db.user.update({ where: { id: userId }, data: { role: user.role } });
+    for (const permission of grants) {
+      const prior = previous.find(item => item.permission === permission);
+      if (prior) await db.userPermissionOverride.update({ where: { id: prior.id }, data: { allowed: prior.allowed } });
+      else await db.userPermissionOverride.deleteMany({ where: { userId, permission } });
+    }
+  }
 });

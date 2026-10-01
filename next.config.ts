@@ -2,6 +2,8 @@ import type { NextConfig } from 'next';
 import { applicationSecurityHeaders } from './src/lib/application-security-policy';
 
 const nextConfig: NextConfig = {
+  // Each selected file is sent separately; 1 MB is reserved for multipart metadata.
+  experimental: { serverActions: { bodySizeLimit: '26mb' } },
   // CORS-mode bootstrap requests retain their concrete origin even with the
   // product's no-referrer policy. The exact loopback host is dev-only.
   crossOrigin: 'anonymous',

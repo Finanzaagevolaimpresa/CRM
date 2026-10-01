@@ -1,3 +1,4 @@
+import { filterFinancialDocuments, canAccessFinancialDocument } from './financial-document-access';
 import { randomUUID, createHash } from 'node:crypto';
 import { Prisma, type ClientDossier, type Client, type Project, type ClientService, type EngagementDossierVersion } from '@prisma/client';
 import { z } from 'zod';
@@ -148,6 +149,7 @@ async function reviewDocument(tx: Tx, current: AuthSession, context: InitialServ
   if (!version || !doc || doc.deletedAt || doc.clientId !== context.client.id || (doc.projectId && doc.projectId !== context.project.id)
     || (doc.clientServiceId && doc.clientServiceId !== context.service.id) || ['respinto','scaduto','archiviato'].includes(doc.status)
     || (doc.validUntil && doc.validUntil.getTime() <= Date.now()) || !hasPermission(current, 'document.download')
+    || !await canAccessFinancialDocument(tx, current, doc)
     || !canViewDocument(current, { ...doc, client: context.client,
       project: doc.projectId ? { ...context.project, client: context.client } : null,
       clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
@@ -194,7 +196,7 @@ export async function initialServiceChoices(tx: Tx, current: AuthSession, contex
   const documents = hasPermission(current, 'document.download') ? await tx.document.findMany({
     where: { clientId: context.client.id, deletedAt: null, OR: [{ projectId: null }, { projectId: context.project.id }] },
     orderBy: { createdAt: 'desc' }, take: 100 }) : [];
-  const visible = documents.filter(doc => (!doc.clientServiceId || doc.clientServiceId === context.service.id) && canViewDocument(current,
+  const visible = (await filterFinancialDocuments(tx, current, documents)).filter(doc => (!doc.clientServiceId || doc.clientServiceId === context.service.id) && canViewDocument(current,
     { ...doc, client: context.client, project: doc.projectId ? { ...context.project, client: context.client } : null,
       clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
     hasPermission(current, 'document.sensitive.read')));

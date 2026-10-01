@@ -42,8 +42,15 @@ export async function syntheticCase(db: PrismaClient, code: InitialServiceCode, 
   const document = await db.document.create({ data: { clientId: client.id, projectId: project.id, type: 'documento_operativo', title: 'Evidenza sintetica M5',
     fileName: 'synthetic-m5.txt', mimeType: 'text/plain', sizeBytes: bytes.length, storagePath, checksum, uploadedById: actors.operator.userId, status: 'verificato' } });
   const documentVersion = await db.documentVersion.create({ data: { documentId: document.id, version: 1, checksum, storagePath } });
+  // Financial evidence is distinct from material an assigned technician may read.
+  const signedBytes = Buffer.from('Synthetic signed engagement M5 ' + code), signedChecksum = createHash('sha256').update(signedBytes).digest('hex');
+  const signedPath = 'synthetic/m5/' + randomUUID() + '.txt';
+  writeFileSync(localPathFromStoragePath(signedPath), signedBytes, { flag: 'wx', mode: 0o600 });
+  const signedDocument = await db.document.create({ data: { clientId: client.id, projectId: project.id, type: 'contratto', title: 'Incarico sintetico M5',
+    fileName: 'signed-m5.txt', mimeType: 'text/plain', sizeBytes: signedBytes.length, storagePath: signedPath, checksum: signedChecksum, uploadedById: actors.admin.userId, status: 'verificato' } });
+  const signedVersion = await db.documentVersion.create({ data: { documentId: signedDocument.id, version: 1, checksum: signedChecksum, storagePath: signedPath } });
   const contract = await db.contract.create({ data: { clientId: client.id, projectId: project.id, contractNumber: 'M5-' + randomUUID(),
-    serviceName: code, taxableAmount: taxable, vatAmount: vat, totalAmount: total, status: 'firmato', signedAt: new Date(), signedDocumentId: document.id } });
+    serviceName: code, taxableAmount: taxable, vatAmount: vat, totalAmount: total, status: 'firmato', signedAt: new Date(), signedDocumentId: signedDocument.id } });
   const checklist = await db.documentChecklistItem.create({ data: { clientId: client.id, projectId: project.id, documentId: document.id, title: 'Materiale iniziale M5', createdById: actors.operator.userId } });
   const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalogRevision.serviceCatalogId,
     contractId: contract.id, assignedToId: actors.operator.userId, status: 'richiesto', operationalStatus: 'nuova' } });
@@ -52,15 +59,15 @@ export async function syntheticCase(db: PrismaClient, code: InitialServiceCode, 
     startupConditions: 'Incarico, pagamento e materiale documentati', requiredInitialAmount: total.toFixed(2), expectedOfferUpdatedAt: offer.updatedAt });
   const practice = await createPracticeReadiness(db, actors.operator, { offerRevisionId: offerRevision.id });
   const version = async () => (await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } })).version;
-  const funding = await recordPracticeFunding(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), reference: 'SYNTHETIC_M5_PAYMENT', amount: total.toFixed(2), currency: 'EUR' });
-  await confirmPracticeFunding(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), evidenceId: funding.id });
+  const funding = await recordPracticeFunding(db, actors.admin, { practiceId: practice.id, expectedVersion: await version(), reference: 'SYNTHETIC_M5_PAYMENT', amount: total.toFixed(2), currency: 'EUR' });
+  await confirmPracticeFunding(db, actors.admin, { practiceId: practice.id, expectedVersion: await version(), evidenceId: funding.id });
   await decidePracticeMaterial(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), checklistItemId: checklist.id,
     documentId: document.id, documentVersionId: documentVersion.id, status: 'VALIDATED' });
-  await formalizePractice(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), contractId: contract.id,
-    signedDocumentId: document.id, signedDocumentVersionId: documentVersion.id });
+  await formalizePractice(db, actors.admin, { practiceId: practice.id, expectedVersion: await version(), contractId: contract.id,
+    signedDocumentId: signedDocument.id, signedDocumentVersionId: signedVersion.id });
   await linkPracticeClientService(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), clientServiceId: service.id });
   await attestPracticeMaterialsComplete(db, actors.operator, { practiceId: practice.id, expectedVersion: await version(), emptyChecklistReason: '' });
-  await startPractice(db, actors.operator, { practiceId: practice.id, expectedVersion: await version() });
+  await startPractice(db, actors.admin, { practiceId: practice.id, expectedVersion: await version() });
   const preAnalysis = await db.preAnalysis.create({ data: { clientId: client.id, projectId: project.id, internalSummary: 'Preanalisi sintetica M5' } });
   const dossier = await createEngagementDossier(db, actors.operator, { practiceReadinessId: practice.id, preAnalysisId: preAnalysis.id,
     title: INITIAL_SERVICES[code].title, content: buildInitialServiceTemplate(code, syntheticTemplate(code)) });

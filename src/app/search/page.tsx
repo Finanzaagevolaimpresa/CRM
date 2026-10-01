@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import type { Prisma } from '@prisma/client';
 import { OpenLink, PrimaryButton } from '@/components/actions';
@@ -107,7 +108,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       project: practice.projectId ? projectById.get(practice.projectId) ?? null : null,
       clientService: practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null,
     }));
-    const visibleDocuments = documents.filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
+    const visibleDocuments = (await filterFinancialDocuments(prisma, session, documents)).filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
     const visibleTasks = tasks;
     const communicationPracticeIds = [...new Set(communications.map((communication) => communication.technicalPracticeId))];
     const communicationPractices = communicationPracticeIds.length

@@ -1,3 +1,5 @@
+import { operationalServiceStatus } from './financial-access';
+import { filterFinancialDocuments } from './financial-document-access';
 import type { AuthSession } from "./auth";
 import { hasPermission } from "./auth";
 import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewService, canViewTechnicalPractice, isSensitiveDocument } from "./access-control";
@@ -198,7 +200,7 @@ export async function buildOperationalReportMarkdown(
       && row.projectId === parent.projectId && row.clientServiceId === parent.clientServiceId;
   });
   const visibleDocuments = hasPermission(session, "document.download")
-    ? documents.filter((document) =>
+    ? (await filterFinancialDocuments(prisma, session, documents)).filter((document) =>
         canViewDocument(
           session,
           {
@@ -396,7 +398,7 @@ export async function buildOperationalReportMarkdown(
         : list(
             visibleServices,
             (s) =>
-              `- ${serviceName(s.id)} · stato ${clean(s.status)} · operativo ${clean(s.operationalStatus)} · owner ${userOf(s.assignedToId)}`,
+              `- ${serviceName(s.id)} · stato ${clean(operationalServiceStatus(session, s.status))} · operativo ${clean(s.operationalStatus)} · owner ${userOf(s.assignedToId)}`,
           ),
       ...(practice
         ? []

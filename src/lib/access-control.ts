@@ -2,8 +2,10 @@ import type { Client, ClientService, Document, DocumentChecklistItem, Lead, Proj
 import type { AuthSession } from './auth';
 import { hasClientReadGrant, type ClientReadScope } from './client-read-perimeter-policy';
 import { hasGlobalReadAccess } from './read-supervision';
+import type { FinancialDocumentMetadata } from './financial-privacy-policy';
+import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -140,7 +142,8 @@ export function canViewClientContext(user: Actor, context: ClientScopedContext) 
   if (context.project) return projectAllowed;
   return clientAllowed;
 }
-export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+  if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
   if (document.clientId && !document.client) return false;
@@ -270,7 +273,7 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   return (!task.createdById || task.createdById === id) && !!task.client && hasClientResponsibility(user, task.client);
 }
 
-export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & {
+export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
@@ -284,13 +287,14 @@ export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   return !!item.client && canEditClient(user, item.client);
 }
 
-export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & {
+export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
   projectId?: string | null;
   clientServiceId?: string | null;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (!canAccessFinancialDocumentMetadata(user, item)) return false;
   if (!hasConsistentClientContext(item)) return false;
   if (!item.client) return false;
   if (item.projectId && (!item.project?.id || item.project.id !== item.projectId)) return false;
@@ -306,11 +310,12 @@ export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   return (!item.createdById || item.createdById === getActorId(user)) && !!item.client && hasClientResponsibility(user, item.client);
 }
 
-export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & {
+export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & {
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }, canReadSensitive = false) {
+  if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
   if (hasGlobalAccess(user)) return true;

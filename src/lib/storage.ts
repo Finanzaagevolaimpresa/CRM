@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'crypto';
 import { mkdir, stat, writeFile, readFile, open } from 'fs/promises';
 import path from 'path';
+import { documentUploadExtensions, documentUploadMaxBytes } from './document-upload-contract';
 
 const provider = process.env.STORAGE_PROVIDER ?? 'local';
 const legacyDefaultRoot = 'storage/private/documents';
 const root = path.resolve(process.cwd(), process.env.LOCAL_DOCUMENT_STORAGE_ROOT ?? legacyDefaultRoot);
-const maxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? 25 * 1024 * 1024);
-const allowedExtensions = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods', '.p7m', '.xml']);
+const configuredMaxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? documentUploadMaxBytes);
+const maxBytes = Number.isSafeInteger(configuredMaxBytes) && configuredMaxBytes > 0 ? Math.min(configuredMaxBytes, documentUploadMaxBytes) : documentUploadMaxBytes;
+const allowedExtensions = new Set<string>(documentUploadExtensions);
 const blockedExtensions = new Set(['.exe', '.bat', '.cmd', '.com', '.js', '.mjs', '.sh', '.ps1', '.vbs', '.scr', '.jar', '.php']);
 
 export function sanitizeFileName(name: string) {
@@ -64,9 +66,13 @@ export async function savePrivateDocumentFile(input: { file: File; clientId: str
   assertStorageSegment(servicePart, 'Client service ID');
   const storagePath = path.posix.join(input.clientId, servicePart, `${randomUUID()}-${input.fileName}`);
   const targetPath = localPathFromStoragePath(storagePath);
+  const buffer = Buffer.from(await input.file.arrayBuffer());
+  if (buffer.length !== input.file.size || buffer.length > maxBytes) throw new Error('Dimensione file non valida');
+  if (path.extname(input.fileName).toLowerCase() === '.zip' && (buffer.length < 22 || ![0x04034b50, 0x06054b50, 0x08074b50].includes(buffer.readUInt32LE(0)))) {
+    throw new Error('Il file non è un archivio ZIP riconoscibile');
+  }
   const dir = path.dirname(targetPath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const buffer = Buffer.from(await input.file.arrayBuffer());
   await writeFile(targetPath, buffer, { flag: 'wx', mode: 0o600 });
   return { storagePath, checksum: createHash('sha256').update(buffer).digest('hex'), sizeBytes: buffer.byteLength };
 }
