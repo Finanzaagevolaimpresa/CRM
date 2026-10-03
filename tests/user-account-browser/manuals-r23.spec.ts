@@ -75,16 +75,19 @@ test('manuals: default limited collaborator, explicit consultation and separate 
   await expect(cp.locator('input[type="file"]')).toHaveCount(0);
   await expect(cp.getByRole('button', { name: 'Salva responsabili', exact: true })).toHaveCount(0);
   await captureManual(cp, 'S05-cliente', 'collaboratore_limitato', 'Lettura del solo cliente concesso, senza upload o gestione delle responsabilità.');
-  await captureManual(cp, 'S05-servizio', 'collaboratore_limitato', 'Servizio nel perimetro di consultazione; nessuna responsabilità attribuita dal permesso di lettura.', cp.locator('#servizi-acquistati').getByRole('heading', { name: 'Servizi acquistati', exact: true }), [cp.locator('#service-' + service.id).getByRole('heading')]);
-  await expect(cp.getByText(document.title, { exact: true }).first()).toBeVisible();
-  await captureManual(cp, 'S05-documenti', 'collaboratore_limitato', 'Documento sintetico consultabile; il profilo base non può caricare documenti.', cp.getByText(document.title, { exact: true }).first());
+  await expect(cp.locator('#service-' + service.id)).toHaveCount(0);
+  await expect(cp.locator('#servizi-acquistati')).toContainText('Nessun servizio acquistato');
+  await captureManual(cp, 'S05-servizio', 'collaboratore_limitato', 'La consultazione del cliente non rende visibili servizi privi di una responsabilità ammessa per questo operatore.', cp.locator('#servizi-acquistati').getByRole('heading', { name: 'Servizi acquistati', exact: true }));
+  await expect(cp.getByText(document.title, { exact: true })).toHaveCount(0);
+  await expect(cp.locator('#documenti')).toContainText('Nessun documento');
+  await captureManual(cp, 'S05-documenti', 'collaboratore_limitato', 'Il documento del servizio fuori perimetro non è consultabile né scaricabile; il profilo base non può caricare documenti.', cp.locator('#documenti').getByRole('heading', { name: 'Documenti', exact: true }));
   if (process.env.R23_MANUAL_EVIDENCE) {
     const hashes = ['S05-cliente', 'S05-servizio', 'S05-documenti'].map(id =>
       JSON.parse(readFileSync(join(process.env.R23_MANUAL_EVIDENCE!, id + '.json'), 'utf8')).sha256);
     expect(new Set(hashes).size, 'Client, service and documents must have distinct screenshots').toBe(3);
     console.log('R29_S05_THREE_DISTINCT_SCREENSHOTS');
   }
-  expect((await cp.request.get(`${origin}/documents/${document.id}/download`)).status()).toBe(200);
+  expect((await cp.request.get(`${origin}/documents/${document.id}/download`)).status()).toBe(403);
   await cp.goto(`${origin}/clients/${foreign.id}`);
   await expect(cp.getByRole('heading', { name: 'Cliente non trovato o non accessibile' })).toBeVisible();
   await cp.goto(origin + '/leads');

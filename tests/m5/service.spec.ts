@@ -134,12 +134,17 @@ test('M5 five service templates, authenticated actors, version-bound reviews, or
       await captureManual(operator, 'S08-consegna-manuale', 'consulente', 'Ricevuta manuale sintetica della versione autorizzata; non è un invio reale.', operator.getByRole('heading', { name: 'Consegne manuali tracciate', exact: true }));
       for (const role of ['sales', 'collaborator']) {
         const context = await browser.newContext({ baseURL: 'http://127.0.0.1:3025' }), reader = await context.newPage();
-        await login(reader, role); await reader.goto('/clients/' + item.clientId);
+        await login(reader, role); const response = await reader.goto('/clients/' + item.clientId);
         await expect(reader.getByRole('heading', { name: 'Fascicolo Cliente Interno — Cliente sintetico M5', exact: true })).toBeVisible();
-        await expect(reader.locator('#service-' + item.serviceId)).toBeVisible();
+        // Client responsibility or a consultation grant never exposes another
+        // operator's assigned service, even after its synthetic delivery.
+        await expect(reader.locator('#service-' + item.serviceId)).toHaveCount(0);
+        await expect(reader.locator('#servizi-acquistati')).toContainText('Nessun servizio acquistato');
+        const html = await response!.text();
+        for (const marker of [item.serviceId, item.dossierId, item.documentVersionId]) expect(html).not.toContain(marker);
         await captureManual(reader, role === 'sales' ? 'S08-continuita-commerciale' : 'S08-consultazione-limitata',
           role === 'sales' ? 'commerciale' : 'collaboratore_limitato',
-          'Dettaglio visibile dello stesso servizio sintetico con i permessi del profilo; la vista non attesta incasso, completamento o recapito della consegna.', reader.locator('#service-' + item.serviceId).getByRole('heading'));
+          'Fascicolo sintetico accessibile; i servizi assegnati ad altri operatori restano esclusi. La consultazione del cliente non attribuisce accesso al lavoro altrui o alle informazioni finanziarie.', reader.locator('#servizi-acquistati').getByRole('heading', { name: 'Servizi acquistati', exact: true }));
         await context.close();
       }
     }
