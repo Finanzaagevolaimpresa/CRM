@@ -29,7 +29,7 @@ export const contractSignatureDeclarationSchema = z.object({
 export const storedContractSignatureDeclarationSchema = z.object({
   version: z.literal(1), evidenceKind: z.literal('DECLARED_NOT_VERIFIED'),
   sequence: z.number().int().positive(), previousDeclarationId: z.string().min(1).max(191).nullable(),
-  declaredSignedAt: signedOn, source: z.string().min(3).max(500), requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  declaredSignedAt: signedOn, source: z.string().min(3).max(4096), requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export function orderedSignatureDeclarations<T extends { id: string; after: unknown }>(rows: T[]) {
   const chain = rows.map(row => {

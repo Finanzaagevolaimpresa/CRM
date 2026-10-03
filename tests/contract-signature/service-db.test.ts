@@ -33,6 +33,15 @@ test('declaration is explicit and append-only; signature, payments and readiness
   assert.equal(await db.practiceReadiness.count({ where: { clientId: f.client.id } }), 0);
   await assert.rejects(declareContractSignature(db, f.admin, { ...declarationInput(f), source: 'Stale different claim' }), failure('STALE'));
 });
+test('declaration survives privacy minimization without storing the submitted personal markers', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const first = await declareContractSignature(db, f.admin, { ...declarationInput(f), source: 'a@b.co; '.repeat(60).trim() });
+  const stored = await db.auditLog.findUniqueOrThrow({ where: { id: first.declarationId } });
+  assert.equal(JSON.stringify(stored.after).includes('a@b.co'), false);
+  assert.equal((stored.after as Prisma.JsonObject).declaredSignedAt, '2026-01-01');
+  const second = await declareContractSignature(db, f.admin, { ...declarationInput(f), expectedDeclarationId: first.declarationId });
+  assert.notEqual(first.declarationId, second.declarationId);
+});
 test('lost declaration response and identical parallel replay reconcile to one audit', { skip: !enabled }, async () => {
   const f = await fixture(), input = declarationInput(f);
   const results = await Promise.all([declareContractSignature(db, f.accounting, input), declareContractSignature(db, f.accounting, input)]);

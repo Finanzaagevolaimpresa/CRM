@@ -168,7 +168,7 @@ test('PERCORSO-01: a new reader reconstructs the completed Dossier Preanalisi fr
   const item = f.cases.find((row: { code: string }) => row.code === 'dossier_preanalisi');
   const dossier = await db.clientDossier.findUniqueOrThrow({ where: { id: item.dossierId } });
   const clientId = dossier.clientId;
-  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: dossier.practiceReadinessId } });
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: dossier.practiceReadinessId! } });
   expect(practice.startedAt).not.toBeNull();
   const client = await db.client.findUniqueOrThrow({ where: { id: clientId } });
   const operator = await db.user.findUniqueOrThrow({ where: { id: f.operatorId } });
