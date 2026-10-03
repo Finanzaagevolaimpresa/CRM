@@ -56,7 +56,7 @@ export function localPathFromStoragePath(storagePath: string) {
   return full;
 }
 
-export async function savePrivateDocumentFile(input: { file: File; clientId: string; clientServiceId?: string; fileName: string }) {
+export async function savePrivateDocumentFile(input: { file: File; clientId: string; clientServiceId?: string; fileName: string; storageToken?: string }) {
   assertLocalProvider();
   if (input.file.size <= 0) throw new Error('File mancante o vuoto');
   if (input.file.size > maxBytes) throw new Error(`File oltre il limite di ${Math.floor(maxBytes / 1024 / 1024)} MB`);
@@ -64,7 +64,8 @@ export async function savePrivateDocumentFile(input: { file: File; clientId: str
   const servicePart = input.clientServiceId || 'generale';
   assertStorageSegment(input.clientId, 'Client ID');
   assertStorageSegment(servicePart, 'Client service ID');
-  const storagePath = path.posix.join(input.clientId, servicePart, `${randomUUID()}-${input.fileName}`);
+  if (input.storageToken && !/^[a-f0-9]{64}$/.test(input.storageToken)) throw new Error('File richiesta non valida');
+  const storagePath = path.posix.join(input.clientId, servicePart, input.storageToken ? `upload-${input.storageToken}` : `${randomUUID()}-${input.fileName}`);
   const targetPath = localPathFromStoragePath(storagePath);
   const buffer = Buffer.from(await input.file.arrayBuffer());
   if (buffer.length !== input.file.size || buffer.length > maxBytes) throw new Error('Dimensione file non valida');
@@ -73,7 +74,13 @@ export async function savePrivateDocumentFile(input: { file: File; clientId: str
   }
   const dir = path.dirname(targetPath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  await writeFile(targetPath, buffer, { flag: 'wx', mode: 0o600 });
+  try { await writeFile(targetPath, buffer, { flag: 'wx', mode: 0o600 }); }
+  catch (error) {
+    if (!input.storageToken || (error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // A transaction can fail after its private file is written. Reuse only exact bytes.
+    const existing = await readPrivateDocumentBounded(storagePath, maxBytes);
+    if (!existing.equals(buffer)) throw new Error('File richiesta già utilizzata con contenuto diverso');
+  }
   return { storagePath, checksum: createHash('sha256').update(buffer).digest('hex'), sizeBytes: buffer.byteLength };
 }
 

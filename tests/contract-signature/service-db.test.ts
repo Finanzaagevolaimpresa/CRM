@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { storeUploadedDocument } from '../../src/lib/document-upload';
+import { localPathFromStoragePath } from '../../src/lib/storage';
 import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
-import { recordContractSignature } from '../../src/lib/contract-signature';
+import { declareContractSignature, recordContractSignature } from '../../src/lib/contract-signature';
 import { ContractSignatureError } from '../../src/lib/contract-signature-policy';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 const enabled = process.env.CONTRACT_SIGNATURE_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
@@ -12,6 +16,52 @@ const db = new PrismaClient();
 test.before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.after(async () => { await db.$disconnect(); });
 const failure = (code: string) => (error: unknown) => error instanceof ContractSignatureError && error.code === code;
+const declarationInput = (f: Awaited<ReturnType<typeof fixture>>) => ({ contractId: f.contract.id, expectedVersion: f.contract.updatedAt.toISOString(),
+  expectedDeclarationId: null, signedOn: '2026-01-01', source: 'Comunicazione sintetica del cliente; PDF da acquisire', confirmed: true });
+
+test('declaration is explicit and append-only; signature, payments and readiness stay unchanged', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const first = await declareContractSignature(db, f.admin, declarationInput(f));
+  const second = await declareContractSignature(db, f.admin, { ...declarationInput(f), expectedDeclarationId: first.declarationId, source: 'Fonte corretta, riferimento sintetico B' });
+  assert.notEqual(first.declarationId, second.declarationId);
+  const rows = await db.auditLog.findMany({ where: { entityId: f.contract.id, event: 'contract_signature_declared' } });
+  assert.equal(rows.length, 2);
+  assert.equal((rows[0].after as Prisma.JsonObject).declaredSignedAt, '2026-01-01');
+  assert.equal((rows.find(row => row.id === first.declarationId)!.after as Prisma.JsonObject).source, declarationInput(f).source);
+  assert.deepEqual(await db.contract.findUniqueOrThrow({ where: { id: f.contract.id } }), f.contract);
+  assert.deepEqual(await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } }), f.payment);
+  assert.equal(await db.practiceReadiness.count({ where: { clientId: f.client.id } }), 0);
+  await assert.rejects(declareContractSignature(db, f.admin, { ...declarationInput(f), source: 'Stale different claim' }), failure('STALE'));
+});
+test('declaration survives privacy minimization without storing the submitted personal markers', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const first = await declareContractSignature(db, f.admin, { ...declarationInput(f), source: 'a@b.co; '.repeat(60).trim() });
+  const stored = await db.auditLog.findUniqueOrThrow({ where: { id: first.declarationId } });
+  assert.equal(JSON.stringify(stored.after).includes('a@b.co'), false);
+  assert.equal((stored.after as Prisma.JsonObject).declaredSignedAt, '2026-01-01');
+  const second = await declareContractSignature(db, f.admin, { ...declarationInput(f), expectedDeclarationId: first.declarationId });
+  assert.notEqual(first.declarationId, second.declarationId);
+});
+test('lost declaration response and identical parallel replay reconcile to one audit', { skip: !enabled }, async () => {
+  const f = await fixture(), input = declarationInput(f);
+  const results = await Promise.all([declareContractSignature(db, f.accounting, input), declareContractSignature(db, f.accounting, input)]);
+  assert.equal(results[0].declarationId, results[1].declarationId);
+  assert.equal(results.filter(row => row.reconciled).length, 1);
+  const replay = await declareContractSignature(db, f.accounting, input);
+  assert.equal(replay.reconciled, true);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.contract.id, event: 'contract_signature_declared' } }), 1);
+  await db.userPermissionOverride.create({ data: { userId: f.accounting.userId, permission: 'contract.write', allowed: false } });
+  await assert.rejects(declareContractSignature(db, f.accounting, input), failure('DENIED'));
+});
+test('declaration rejects other roles, future dates and revoked sessions before writing', { skip: !enabled }, async () => {
+  const f = await fixture(), sales = await user('commerciale');
+  await db.client.update({ where: { id: f.client.id }, data: { salesOwnerId: sales.userId } });
+  await assert.rejects(declareContractSignature(db, sales, declarationInput(f)), failure('DENIED'));
+  await assert.rejects(declareContractSignature(db, f.admin, { ...declarationInput(f), signedOn: '9999-01-01' }), failure('INVALID_DATE'));
+  await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: new Date() } });
+  await assert.rejects(declareContractSignature(db, f.admin, declarationInput(f)), failure('DENIED'));
+  assert.equal(await db.auditLog.count({ where: { entityId: f.contract.id } }), 0);
+});
 async function user(role: RoleCode) {
   const row = await db.user.create({ data: { name: 'Synthetic signature', email: `signature-${randomUUID()}@example.test`, role, active: true, passwordHash: 'synthetic-unusable' } });
   const session = await db.internalSession.create({ data: { userId: row.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3_600_000) } });
@@ -128,4 +178,47 @@ test('session expiry while waiting for the client lock leaves no signature or au
   if (result.status === 'rejected') assert.ok(failure('DENIED')(result.reason));
   assert.equal((await db.contract.findUniqueOrThrow({ where: { id: f.contract.id } })).status, 'da_preparare');
   assert.equal(await db.auditLog.count({ where: { entityId: f.contract.id } }), 0);
+});
+
+function uploadForm(clientId: string, requestId = randomUUID()) {
+  const form = new FormData();
+  form.set('clientId', clientId); form.set('title', 'Synthetic upload'); form.set('uploadRequestId', requestId);
+  form.set('file', new File(['Synthetic document, never customer data.'], 'synthetic.txt', { type: 'text/plain' }));
+  return form;
+}
+test('upload parallel and lost-response replays preserve one document, version, receipt and private file', { skip: !enabled }, async () => {
+  const f = await fixture(), form = uploadForm(f.client.id);
+  const [first, second] = await Promise.all([storeUploadedDocument(db, f.admin, form), storeUploadedDocument(db, f.admin, form)]);
+  const third = await storeUploadedDocument(db, f.admin, form);
+  assert.equal(first.id, second.id); assert.equal(first.id, third.id);
+  assert.equal(await db.document.count({ where: { clientId: f.client.id, title: 'Synthetic upload' } }), 1);
+  assert.equal(await db.documentVersion.count({ where: { documentId: first.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { event: 'document_upload', entityId: first.id } }), 1);
+  assert.equal((await readdir(dirname(localPathFromStoragePath(first.storagePath!)))).length, 1);
+  form.set('title', 'Changed payload under the same key');
+  await assert.rejects(storeUploadedDocument(db, f.admin, form), /dati diversi/);
+  assert.equal(await db.document.count({ where: { clientId: f.client.id, title: 'Changed payload under the same key' } }), 0);
+});
+test('upload replay checks revoked sessions, current permission denial and current client assignment', { skip: !enabled }, async () => {
+  const actor = await user('consulente');
+  const client = await db.client.create({ data: { displayName: 'Synthetic upload scope', type: 'societa', consultantId: actor.userId } });
+  const form = uploadForm(client.id);
+  const document = await storeUploadedDocument(db, actor, form);
+  await db.client.update({ where: { id: client.id }, data: { consultantId: null } });
+  await assert.rejects(storeUploadedDocument(db, actor, form));
+  await db.client.update({ where: { id: client.id }, data: { consultantId: actor.userId } });
+  await db.userPermissionOverride.create({ data: { userId: actor.userId, permission: 'document.upload', allowed: false } });
+  await assert.rejects(storeUploadedDocument(db, actor, form));
+  await db.internalSession.update({ where: { id: actor.sessionId }, data: { revokedAt: new Date() } });
+  await assert.rejects(storeUploadedDocument(db, actor, form));
+  assert.equal(await db.auditLog.count({ where: { event: 'document_upload', entityId: document.id } }), 1);
+});
+test('upload audit failure rolls back metadata and retry reuses the exact private bytes', { skip: !enabled }, async () => {
+  const f = await fixture(), form = uploadForm(f.client.id);
+  const failing = db.$extends({ query: { auditLog: { async create() { throw new Error('SYNTHETIC_UPLOAD_AUDIT_FAILURE'); } } } }) as unknown as PrismaClient;
+  await assert.rejects(storeUploadedDocument(failing, f.admin, form), /SYNTHETIC_UPLOAD_AUDIT_FAILURE/);
+  assert.equal(await db.document.count({ where: { clientId: f.client.id, title: 'Synthetic upload' } }), 0);
+  const saved = await storeUploadedDocument(db, f.admin, form);
+  assert.equal((await readdir(dirname(localPathFromStoragePath(saved.storagePath!)))).length, 1);
+  assert.equal(await db.auditLog.count({ where: { event: 'document_upload', entityId: saved.id } }), 1);
 });
