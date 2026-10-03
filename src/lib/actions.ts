@@ -1,4 +1,5 @@
 'use server';
+import { listAccessiblePracticeReadiness } from './practice-readiness';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
@@ -986,6 +987,11 @@ async function assertTaskContext(session: AuthSession, clientId: string, clientS
 export async function createClientTask(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientTaskSchema.parse(clean(form));
+  if (data.type) {
+    const practiceId = data.type.split(':')[1];
+    const visible = await listAccessiblePracticeReadiness(prisma, s);
+    if (!visible.some(row => row.id === practiceId && row.clientId === data.clientId)) denyWriteAccess();
+  }
   await assertTaskContext(s, data.clientId, data.clientServiceId, data.projectId, data.assignedToId);
   if (data.assignedToId && s.role !== 'admin') denyManualAssignment();
   return withAssignmentGuard(prisma, s, Boolean(data.assignedToId), [{ userId: data.assignedToId }], async tx => {

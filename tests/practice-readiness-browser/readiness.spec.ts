@@ -14,6 +14,7 @@ import { PrismaClient } from "@prisma/client";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
 import { workExportReceiptSchema } from '../../src/lib/engagement-work-package';
+import { parseProgressTaskType } from '../../src/lib/customer-progress-policy';
 
 const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN ?? "http://127.0.0.1:3000";
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
@@ -1330,4 +1331,59 @@ test('financial read overrides protect readiness HTML and downloadable Work mani
       else await db.userPermissionOverride.deleteMany({ where: { userId, permission } });
     }
   }
+});
+
+
+test('PERCORSO-01: a new reader reconstructs the completed Dossier Preanalisi from saved screens', async ({ page, browser }) => {
+  currentPhase = 'PERCORSO01_COMPREHENSION';
+  await assertSyntheticCatalogDatabase(db);
+  const clientId = 'readiness-browser-client-percorso';
+  const practice = await db.practiceReadiness.findFirstOrThrow({ where: { clientId } });
+  expect(practice.startedAt).not.toBeNull();
+  const dossier = await db.clientDossier.findUniqueOrThrow({ where: { practiceReadinessId: practice.id } });
+  expect(dossier.approvedVersionId).toBe(dossier.currentVersionId);
+  const authorization = await db.engagementDossierDeliveryAuthorization.findFirstOrThrow({ where: { dossierId: dossier.id, versionId: dossier.currentVersionId! } });
+  expect((await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { authorizationId: authorization.id } })).outcome).toBe('DELIVERED');
+  const before = await readinessFootprint();
+  await db.task.createMany({ data: Array.from({ length: 12 }, (_, index) => ({ clientId, title: `Unrelated synthetic priority ${index}`, type: `percorso:${practice.id}:verify`, priority: 'urgente' as const, assignedToId: 'readiness-browser-owner', dueAt: new Date('2027-01-01') })) });
+  await login(page, 'readiness-perimeter-admin@invalid.test');
+  await page.goto(`${app}/progress?client=${clientId}`);
+  let card = page.locator(`[data-progress-practice="${practice.id}"]`);
+  await expect(card).toContainText('Consegna della versione corrente registrata');
+  await expect(card).toContainText('Da assegnare'); await expect(card).toContainText('Da pianificare');
+  const planner = card.getByRole('link', { name: 'Assegna e pianifica questa azione' });
+  const planUrl = new URL((await planner.getAttribute('href'))!, app);
+  const type = parseProgressTaskType(planUrl.searchParams.get('progressTask') ?? undefined); expect(type).toBeTruthy();
+  await planner.click();
+  const form = page.locator('#task-scadenze form').filter({ has: page.getByRole('button', { name: 'Crea attività', exact: true }) });
+  await form.locator('[name="assignedToId"]').selectOption('readiness-browser-owner');
+  await form.locator('[name="dueAt"]').fill('2030-01-15');
+  await form.getByRole('button', { name: 'Crea attività', exact: true }).click();
+  await expect.poll(() => db.task.count({ where: { clientId, type: type! } })).toBe(1);
+  const planned = await db.task.findFirstOrThrow({ where: { clientId, type: type! } });
+  expect(planned.assignedToId).toBe('readiness-browser-owner');
+  const owner = await db.user.findUniqueOrThrow({ where: { id: 'readiness-perimeter-admin' } });
+  const reader = await db.user.create({ data: { name: 'New synthetic progress reader', email: `progress-reader-${randomUUID()}@invalid.test`, role: 'admin', active: true, passwordHash: owner.passwordHash } });
+  const readerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Europe/Rome' });
+  let readerPage = await readerContext.newPage();
+  await login(readerPage, reader.email);
+  await readerPage.goto(`${app}/progress?q=${encodeURIComponent('Dossier Preanalisi Percorso')}`);
+  card = readerPage.locator(`[data-progress-practice="${practice.id}"]`);
+  const expected = ['Servizio avviato esplicitamente', 'Consegna della versione corrente registrata', 'Consulta la ricevuta e lo storico', 'Responsabile Pratiche', '15/01/30', dossier.currentVersionId!];
+  for (const answer of expected) await expect(card).toContainText(answer);
+  const observed = await card.innerText();
+  await readerPage.screenshot({ path: join(evidenceDir, 'percorso01-new-reader.png'), fullPage: true });
+  await readerPage.close(); readerPage = await readerContext.newPage();
+  await readerPage.goto(`${app}/progress?client=${clientId}`);
+  for (const answer of expected) await expect(readerPage.locator(`[data-progress-practice="${practice.id}"]`)).toContainText(answer);
+  expect(await readinessFootprint()).toEqual(before);
+  writeFileSync(join(evidenceDir, 'percorso01-comprehension.json'), JSON.stringify({ synthetic: true, operator: 'fresh synthetic account and browser', humanApproval: false,
+    clientId, practiceId: practice.id, dossierId: dossier.id, versionId: dossier.currentVersionId, taskId: planned.id,
+    unrelatedPriorities: 12, expected, observed, reopened: true, businessSnapshotUnchangedByReading: true }));
+  await db.clientReadGrant.create({ data: { userId: reader.id, clientId, active: true, createdById: owner.id, updatedById: owner.id } });
+  await db.user.update({ where: { id: reader.id }, data: { role: 'consulente' } });
+  const denied = await readerPage.goto(`${app}/progress?client=${clientId}`);
+  const deniedHtml = await denied!.text();
+  expect(deniedHtml).not.toContain(practice.id); expect(deniedHtml).not.toContain(dossier.id); expect(deniedHtml).not.toContain(practice.contractId!);
+  await readerContext.close();
 });

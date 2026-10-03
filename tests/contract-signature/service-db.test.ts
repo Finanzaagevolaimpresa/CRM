@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
-import { recordContractSignature } from '../../src/lib/contract-signature';
+import { declareContractSignature, recordContractSignature } from '../../src/lib/contract-signature';
 import { ContractSignatureError } from '../../src/lib/contract-signature-policy';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 const enabled = process.env.CONTRACT_SIGNATURE_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
@@ -12,6 +12,42 @@ const db = new PrismaClient();
 test.before(async () => { if (enabled) await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.after(async () => { await db.$disconnect(); });
 const failure = (code: string) => (error: unknown) => error instanceof ContractSignatureError && error.code === code;
+const declarationInput = (f: Awaited<ReturnType<typeof fixture>>) => ({ contractId: f.contract.id, expectedVersion: f.contract.updatedAt.toISOString(),
+  expectedDeclarationId: null, signedOn: '2026-01-01', source: 'Comunicazione sintetica del cliente; PDF da acquisire', confirmed: true });
+
+test('declaration is explicit and append-only; signature, payments and readiness stay unchanged', { skip: !enabled }, async () => {
+  const f = await fixture();
+  const first = await declareContractSignature(db, f.admin, declarationInput(f));
+  const second = await declareContractSignature(db, f.admin, { ...declarationInput(f), expectedDeclarationId: first.declarationId, source: 'Fonte corretta, riferimento sintetico B' });
+  assert.notEqual(first.declarationId, second.declarationId);
+  const rows = await db.auditLog.findMany({ where: { entityId: f.contract.id, event: 'contract_signature_declared' } });
+  assert.equal(rows.length, 2);
+  assert.equal((rows.find(row => row.id === first.declarationId)!.after as Prisma.JsonObject).source, declarationInput(f).source);
+  assert.deepEqual(await db.contract.findUniqueOrThrow({ where: { id: f.contract.id } }), f.contract);
+  assert.deepEqual(await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } }), f.payment);
+  assert.equal(await db.practiceReadiness.count({ where: { clientId: f.client.id } }), 0);
+  await assert.rejects(declareContractSignature(db, f.admin, { ...declarationInput(f), source: 'Stale different claim' }), failure('STALE'));
+});
+test('lost declaration response and identical parallel replay reconcile to one audit', { skip: !enabled }, async () => {
+  const f = await fixture(), input = declarationInput(f);
+  const results = await Promise.all([declareContractSignature(db, f.accounting, input), declareContractSignature(db, f.accounting, input)]);
+  assert.equal(results[0].declarationId, results[1].declarationId);
+  assert.equal(results.filter(row => row.reconciled).length, 1);
+  const replay = await declareContractSignature(db, f.accounting, input);
+  assert.equal(replay.reconciled, true);
+  assert.equal(await db.auditLog.count({ where: { entityId: f.contract.id, event: 'contract_signature_declared' } }), 1);
+  await db.userPermissionOverride.create({ data: { userId: f.accounting.userId, permission: 'contract.write', allowed: false } });
+  await assert.rejects(declareContractSignature(db, f.accounting, input), failure('DENIED'));
+});
+test('declaration rejects other roles, future dates and revoked sessions before writing', { skip: !enabled }, async () => {
+  const f = await fixture(), sales = await user('commerciale');
+  await db.client.update({ where: { id: f.client.id }, data: { salesOwnerId: sales.userId } });
+  await assert.rejects(declareContractSignature(db, sales, declarationInput(f)), failure('DENIED'));
+  await assert.rejects(declareContractSignature(db, f.admin, { ...declarationInput(f), signedOn: '9999-01-01' }), failure('INVALID_DATE'));
+  await db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: new Date() } });
+  await assert.rejects(declareContractSignature(db, f.admin, declarationInput(f)), failure('DENIED'));
+  assert.equal(await db.auditLog.count({ where: { entityId: f.contract.id } }), 0);
+});
 async function user(role: RoleCode) {
   const row = await db.user.create({ data: { name: 'Synthetic signature', email: `signature-${randomUUID()}@example.test`, role, active: true, passwordHash: 'synthetic-unusable' } });
   const session = await db.internalSession.create({ data: { userId: row.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now() + 3_600_000) } });
