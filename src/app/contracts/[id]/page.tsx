@@ -52,7 +52,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           const value = storedContractSignatureDeclarationSchema.safeParse(row.after);
           return <div key={row.id} className="rounded-xl border p-3">
             <p className="font-semibold">{index === 0 ? 'Dichiarazione corrente' : 'Dichiarazione precedente'} — da verificare sul documento</p>
-            {value.success ? <><p>Data dichiarata: {value.data.signedOn}</p><p>Fonte: {value.data.source}</p></> : <p>Evidenza da verificare: formato non riconosciuto.</p>}
+            {value.success ? <><p>Data dichiarata: {value.data.declaredSignedAt}</p><p>Fonte: {value.data.source}</p></> : <p>Evidenza da verificare: formato non riconosciuto.</p>}
             <p>Registrata da {authors.find(author => author.id === row.actorId)?.name ?? 'Autore non disponibile'} il {formatDateTime(row.createdAt)}.</p>
           </div>;
         })}</div>}

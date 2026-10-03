@@ -20,11 +20,4 @@ export const cases = [
     serviceCode: "progetti_digitali",
     partial: false,
   },
-  {
-    key: "percorso",
-    label: "Dossier Preanalisi Percorso",
-    clientType: "societa",
-    serviceCode: "dossier_preanalisi",
-    partial: false,
-  },
 ] as const;

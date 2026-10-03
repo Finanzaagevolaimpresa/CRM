@@ -10,7 +10,7 @@ import { clientServicePipelineSchema, clientDossierGenerateSchema, clientDossier
 import { hasPermission, requirePermission, type AuthSession } from './auth';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, documentUploadSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
+import { leadSchema, leadCommercialUpdateSchema, leadConvertSchema, leadDuplicateResolutionSchema, commercialLeadInboxInitializeSchema, commercialLeadInboxCommandSchema, commercialLeadInboxAssignSchema, commercialLeadInboxCloseSchema, commercialOfferSchema, clientSchema, projectSchema, preAnalysisSchema, aiOutputApprovalSchema, companySchema, projectExpenseSchema, dossierSchema, contractSchema, paymentSchema, clientServiceSchema, serviceStatusSchema, documentServiceLinkSchema, documentChecklistItemSchema, checklistItemStatusUpdateSchema, checklistItemDocumentLinkSchema, checklistItemIdSchema, clientTaskSchema, taskUpdateSchema, taskIdSchema, technicalPracticeSchema, technicalPracticeUpdateSchema, technicalPracticeStatusUpdateSchema, technicalPracticeAssignSchema, technicalPracticeIdSchema, practiceCommunicationDraftSchema, practiceCommunicationUpdateSchema, practiceCommunicationIdSchema } from './validation';
 import {
   createExternalAiPayload,
   externalAiDataCategories,
@@ -20,7 +20,7 @@ import {
   type ExternalAiPayload,
 } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
-import { sanitizeFileName, savePrivateDocumentFile } from './storage';
+import { storeUploadedDocument } from './document-upload';
 import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, canViewProject, canViewService, isSensitiveDocument, hasGlobalAccess } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
@@ -870,40 +870,12 @@ export async function createProjectExpense(form: FormData) {
 }
 
 export async function uploadDocument(form: FormData) {
-  const s = await requirePermission('document.upload');
-  const file = form.get('file');
-  if (form.getAll('file').length !== 1) throw new UserFacingActionError('Usa il caricamento multiplo per inviare tutti i file selezionati.');
-  if (!(file instanceof File) || file.size <= 0) throw new UserFacingActionError('File obbligatorio');
-  const parsed = documentUploadSchema.safeParse(clean(form));
-  if (!parsed.success) throw new UserFacingActionError('Controlla i dati del documento: cliente, progetto e servizio devono essere coerenti.');
-  const data = parsed.data;
-  await requireClientContextWriteAccess(s, data);
-  const fileName = sanitizeFileName(file.name);
-  if (!canAccessFinancialDocumentMetadata(s, { ...data, fileName, mimeType: file.type })) denyWriteAccess();
-  let saved;
-  try { saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName }); }
+  const actor = await requirePermission('document.upload');
+  try { return await storeUploadedDocument(prisma, actor, form); }
   catch (error) {
     if (error instanceof Error && /^(File |Estensione |Nome file |Dimensione file |Il file non è)/.test(error.message)) throw new UserFacingActionError(error.message);
     throw error;
   }
-  const document = await prisma.$transaction(async (tx) => {
-    const created = await tx.document.create({ data: {
-      ...data,
-      title: data.title,
-      documentCategory: /\.zip$/i.test(fileName) ? 'archivio_riservato' : data.documentCategory,
-      type: file.type || 'application/octet-stream',
-      fileName,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: saved.sizeBytes,
-      storagePath: saved.storagePath,
-      checksum: saved.checksum,
-      uploadedById: s.userId,
-    } as never });
-    await tx.documentVersion.create({ data: { documentId: created.id, version: 1, storagePath: saved.storagePath, checksum: saved.checksum } });
-    return created;
-  });
-  await audit(s.userId, 'document_upload', 'Document', document.id, { documentId: document.id, fileName, sizeBytes: saved.sizeBytes, checksum: saved.checksum });
-  return document;
 }
 
 

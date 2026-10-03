@@ -1,5 +1,5 @@
 import { canAccessFinancialDocument } from './financial-document-access';
-import type { RoleCode } from '@prisma/client';
+import type { Prisma, RoleCode } from '@prisma/client';
 import {
   canAssignService,
   canEditChecklistItem,
@@ -18,6 +18,7 @@ import { hasPermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
+type ContextDb = Pick<Prisma.TransactionClient, 'client' | 'company' | 'project' | 'clientService'>;
 const clientSelect = { id: true, salesOwnerId: true, consultantId: true } as const;
 
 export type ClientWriteContext = {
@@ -77,32 +78,32 @@ export async function requireCommercialOfferTargetAccess(
   return { lead, client };
 }
 
-async function loadProjectContext(projectId: string) {
-  const project = await prisma.project.findFirst({
+async function loadProjectContext(projectId: string, db: ContextDb = prisma) {
+  const project = await db.project.findFirst({
     where: { id: projectId, deletedAt: null },
   });
   if (!project) denyWriteAccess();
   const [client, company] = await Promise.all([
-    prisma.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: clientSelect }),
+    db.client.findFirst({ where: { id: project.clientId, deletedAt: null }, select: clientSelect }),
     project.companyId
-      ? prisma.company.findFirst({ where: { id: project.companyId, clientId: project.clientId, deletedAt: null }, select: { id: true } })
+      ? db.company.findFirst({ where: { id: project.companyId, clientId: project.clientId, deletedAt: null }, select: { id: true } })
       : null,
   ]);
   if (!client || (project.companyId && !company)) denyWriteAccess();
   return { ...project, client };
 }
 
-async function loadServiceContext(serviceId: string) {
-  const service = await prisma.clientService.findFirst({
+async function loadServiceContext(serviceId: string, db: ContextDb = prisma) {
+  const service = await db.clientService.findFirst({
     where: { id: serviceId, deletedAt: null },
   });
   if (!service) denyWriteAccess();
   const [client, company, project] = await Promise.all([
-    prisma.client.findFirst({ where: { id: service.clientId, deletedAt: null }, select: clientSelect }),
+    db.client.findFirst({ where: { id: service.clientId, deletedAt: null }, select: clientSelect }),
     service.companyId
-      ? prisma.company.findFirst({ where: { id: service.companyId, clientId: service.clientId, deletedAt: null }, select: { id: true } })
+      ? db.company.findFirst({ where: { id: service.companyId, clientId: service.clientId, deletedAt: null }, select: { id: true } })
       : null,
-    service.projectId ? loadProjectContext(service.projectId) : null,
+    service.projectId ? loadProjectContext(service.projectId, db) : null,
   ]);
   if (!client || (service.companyId && !company) || (project && project.clientId !== service.clientId)) denyWriteAccess();
   if (company && project?.companyId && project.companyId !== company.id) denyWriteAccess();
@@ -112,14 +113,15 @@ async function loadServiceContext(serviceId: string) {
 export async function requireClientContextWriteAccess(
   session: AuthSession,
   context: ClientWriteContext,
+  db: ContextDb = prisma,
 ) {
   const [client, company, project, clientService] = await Promise.all([
-    prisma.client.findFirst({ where: { id: context.clientId, deletedAt: null }, select: clientSelect }),
+    db.client.findFirst({ where: { id: context.clientId, deletedAt: null }, select: clientSelect }),
     context.companyId
-      ? prisma.company.findFirst({ where: { id: context.companyId, clientId: context.clientId, deletedAt: null }, select: { id: true, clientId: true } })
+      ? db.company.findFirst({ where: { id: context.companyId, clientId: context.clientId, deletedAt: null }, select: { id: true, clientId: true } })
       : null,
-    context.projectId ? loadProjectContext(context.projectId) : null,
-    context.clientServiceId ? loadServiceContext(context.clientServiceId) : null,
+    context.projectId ? loadProjectContext(context.projectId, db) : null,
+    context.clientServiceId ? loadServiceContext(context.clientServiceId, db) : null,
   ]);
   if (!client) denyWriteAccess();
   if (context.companyId && !company) denyWriteAccess();

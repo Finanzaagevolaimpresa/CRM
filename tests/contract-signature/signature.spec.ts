@@ -10,7 +10,7 @@ test.afterEach(async ({ page }, info) => {
   if (info.status !== info.expectedStatus && !page.isClosed()) console.log('Synthetic CRM page at failure:', await page.locator('body').innerText());
 });
 
-test('lost upload response is reconciled by reopening before any retry', async ({ page, context }) => {
+test('lost upload response and exact HTTP replay reconcile to the same saved document', async ({ page, context }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const client = await db.client.create({ data: { displayName: 'Synthetic uncertain upload', type: 'societa' } });
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
@@ -30,6 +30,9 @@ test('lost upload response is reconciled by reopening before any retry', async (
     if (!interrupted && route.request().method() === 'POST' && route.request().headers()['next-action']) {
       interrupted = true;
       const response = await route.fetch(); expect(response.status()).toBe(200);
+      // Identical HTTP replay after commit must reconcile, even before reopening.
+      const replay = await route.fetch(); expect(replay.status()).toBe(200);
+      expect(await replay.text()).toContain('\"ok\":true');
       await route.abort('connectionreset');
     } else await route.continue();
   });

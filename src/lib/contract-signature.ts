@@ -35,7 +35,7 @@ export async function declareContractSignature(db: Db, claimed: AuthSession, raw
     const declaration = await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'Contract', entityId: contract.id,
       event: contractSignatureDeclarationEvent, before: { previousDeclarationId: previous?.id ?? null },
       after: { version: 1, evidenceKind: 'DECLARED_NOT_VERIFIED', sequence: (history[0]?.evidence.sequence ?? 0) + 1,
-        previousDeclarationId: previous?.id ?? null, signedOn: input.signedOn, source: input.source, requestFingerprint } } });
+        previousDeclarationId: previous?.id ?? null, declaredSignedAt: input.signedOn, source: input.source, requestFingerprint } } });
     await unexpired(tx, actor);
     return { contractId: contract.id, clientId: contract.clientId, declarationId: declaration.id, reconciled: false };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });

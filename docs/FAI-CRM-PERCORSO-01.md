@@ -8,9 +8,11 @@ La pianificazione usa un task associato esplicitamente alla pratica e all'azione
 
 ## Dichiarazione e documento
 
-La scheda contratto permette una dichiarazione esplicita della firma con data e fonte. L'audit registra autore, momento, sequenza e dichiarazione precedente. La modifica conserva lo storico; nessun aggiornamento di `Contract.status`, `signedAt`, documento, pagamento o readiness deriva dalla dichiarazione.
+La scheda contratto permette una dichiarazione esplicita della firma con data e fonte. La data persistita usa `declaredSignedAt`, ammesso dal filtro privacy esistente; il filtro non viene indebolito e può minimizzare la fonte. L'audit registra autore, momento, sequenza e dichiarazione precedente. La modifica conserva lo storico; nessun aggiornamento di `Contract.status`, `signedAt`, documento, pagamento o readiness deriva dalla dichiarazione.
 
 Il salvataggio rivalida sessione, ruolo, dinieghi e contesto; serializza sul cliente e sul contratto. Replay identici della dichiarazione restituiscono la ricevuta esistente senza un nuovo audit. Una modifica concorrente richiede rilettura. Le note libere non costituiscono una dichiarazione. Upload, selezione della versione, registrazione della firma, accredito e avvio restano operazioni distinte.
+
+Ogni file del caricamento multiplo porta un identificatore di richiesta. Documento, versione e ricevuta di upload sono atomici; un replay identico rivalida sessione, permessi e assegnazione correnti e restituisce lo stesso documento. La stessa richiesta con metadati o contenuti diversi viene respinta. La copia privata usa un nome deterministico: se la transazione fallisce, una ripresa riusa solo byte identici, senza sovrascrivere o cancellare file. Una copia senza metadati dopo un errore resta privata e deve essere riconciliata, non eliminata automaticamente.
 
 Il percorso usa i record già salvati dopo una riapertura. Gli input non salvati e la selezione locale dei file non vengono promessi come persistenti. Il caricamento interrompe il gruppo su una risposta incerta e richiede la riconciliazione dell'elenco documenti prima di un nuovo invio.
 
@@ -23,10 +25,10 @@ La consegna è riconosciuta soltanto quando riguarda la versione corrente approv
 ## Qualifica richiesta
 
 - `tests/customer-progress.test.ts`: ordine dei prerequisiti, proiezione generica dei dinieghi, versione consegnata, selezione deterministica dei task e dichiarazione esplicita.
-- `tests/contract-signature/service-db.test.ts`: dichiarazione separata dalla firma, storico, replay concorrente e sessioni/permessi correnti; conserva le regressioni della firma.
+- `tests/contract-signature/service-db.test.ts`: dichiarazione separata dalla firma, storico, replay concorrente e sessioni/permessi correnti; upload con ricevuta atomica, replay, riassegnazione e errore audit; conserva le regressioni della firma.
 - `tests/contract-signature/signature.spec.ts`: riapertura prima e dopo upload, dichiarazione che non firma, registrazione della firma con pagamento atteso e perdita della risposta dopo upload realmente salvato.
 - `tests/financial-privacy/privacy.spec.ts`: HTML della nuova scheda per tutti i ruoli e dinieghi finanziari individuali.
-- `tests/practice-readiness-browser/readiness.spec.ts`: il banco completo comprende un caso sintetico Dossier Preanalisi, fonti/versioni, incasso sintetico, avvio, revisione nominativa, approvazione, consegna manuale simulata e replay. Una nuova sessione dimostrativa ricostruisce gli esiti dalla scheda, con dodici priorità estranee, pianificazione esplicita, riapertura e revoca del ruolo.
+- `tests/m5/service.spec.ts`: il banco specifico dei cinque servizi comprende il caso sintetico Dossier Preanalisi, fonti/versioni, incasso sintetico, avvio, revisione nominativa, approvazione, consegna manuale simulata e replay. Una nuova sessione dimostrativa ricostruisce gli esiti dalla scheda, con dodici priorità estranee, pianificazione esplicita, riapertura e revoca del ruolo.
 
 Gli screenshot e i verbali sono generati soltanto dai test realmente eseguiti. La comprensibilità automatizzata non è una firma umana; non attesta AI esterna, email ricevute o adozione produttiva. I risultati del candidato esatto vanno riportati nella PR, distinguendo ogni suite e i controlli saltati.
 

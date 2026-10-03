@@ -79,7 +79,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
       return <Card key={contract.id} title={`${clientById.get(contract.clientId)!.displayName} — ${contract.contractNumber}`}>
         <div className="space-y-2" data-progress-contract={contract.id}>
           <p><b>Firma:</b> {contract.signedAt && contract.signedDocumentId ? 'Registrata con documento collegato' : declaration.success ? 'Dichiarata, da verificare sul documento' : 'Non registrata; nessuna dichiarazione verificabile'}</p>
-          {declaration.success && row ? <><p>Firma dichiarata del {declaration.data.signedOn}; fonte: {declaration.data.source}.</p><p>Registrata da {userName(row.actorId)} il {formatDateTime(row.createdAt)}.</p></> : null}
+          {declaration.success && row ? <><p>Firma dichiarata del {declaration.data.declaredSignedAt}; fonte: {declaration.data.source}.</p><p>Registrata da {userName(row.actorId)} il {formatDateTime(row.createdAt)}.</p></> : null}
           <p><b>Documento:</b> {contract.signedDocumentId ? 'Collegato alla registrazione della firma; versione e disponibilità da consultare nella scheda.' : 'Non ancora collegato alla firma; acquisizione e verifica da completare nella scheda.'}</p>
           {canReadPayments ? <p><b>Pagamenti:</b> {relatedPayments.length ? relatedPayments.map(item => item.status.replaceAll('_', ' ')).join(' · ') : 'Nessun pagamento registrato'}. L’incasso non avvia il servizio automaticamente.</p> : null}
           <SecondaryLink href={`/contracts/${contract.id}`}>Apri dichiarazione, documento e firma</SecondaryLink>
