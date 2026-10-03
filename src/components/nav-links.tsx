@@ -49,6 +49,7 @@ const sections: NavSection[] = [
     title: "Commerciale",
     items: [
       { label: "Lead e offerte", href: "/leads", requiredPermission: "lead.read" },
+      { label: "Acquisizione lead", href: "/leads/acquisition", adminOnly: true },
       { label: "Acquisizioni controllate", href: "/controlled-intakes", requiredPermission: "lead.read" },
       { label: "Revisione duplicati", href: "/leads/duplicates", requiredPermission: "lead.duplicate.resolve" },
       { label: "Offerte", href: "/commercial-offers", requiredPermission: "lead.read" },
@@ -65,6 +66,8 @@ const sections: NavSection[] = [
       { label: "Dossier", href: "/dossiers", requiredPermission: "dossier.read" },
       { label: "Catalogo servizi", href: "/service-catalog", requiredPermission: "service.read" },
       { label: "Pratiche da avviare", href: "/practice-readiness", requiredPermission: "service.read" },
+      { label: "Comunicazioni approvate", href: "/communications", requiredPermission: "practice_communications.read" },
+      { label: "Caselle e risposte", href: "/settings/communications", adminOnly: true },
     ],
   },
   {

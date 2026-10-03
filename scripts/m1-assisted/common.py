@@ -1,0 +1,242 @@
+"""Bounded execution and immutable receipts for the explicit owner release."""
+import datetime
+import contextlib
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+
+class Stop(Exception):
+    def __init__(self, code, **details):
+        super().__init__(code)
+        self.code, self.details = code, details
+
+
+def need(value, code, **details):
+    if not value:
+        raise Stop(code, **details)
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def value_sha(value):
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def decode(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            need(key not in result, 'DUPLICATE_JSON_KEY')
+            result[key] = value
+        return result
+    def bad(_):
+        raise Stop('NONFINITE_JSON')
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=bad)
+
+
+def load(path):
+    need(Path(path).stat().st_size <= 2 * 1024 * 1024, 'JSON_SIZE_LIMIT')
+    return decode(Path(path).read_bytes())
+
+
+def private(path, directory=False):
+    path = Path(path)
+    need(path.is_absolute() and '..' not in path.parts, 'PRIVATE_PATH_INVALID')
+    for p in [path, *path.parents]:
+        s = p.lstat()
+        need(not stat.S_ISLNK(s.st_mode), 'SYMLINK_DENIED')
+        need(not getattr(s, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 1024),
+             'REPARSE_POINT_DENIED')
+        if os.name != 'nt':
+            need(s.st_uid in (0, os.getuid()) and not s.st_mode & 0o022, 'PATH_AUTHORITY')
+    s = path.lstat()
+    if directory:
+        need(stat.S_ISDIR(s.st_mode), 'DIRECTORY_REQUIRED')
+    else:
+        need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1, 'SINGLE_REGULAR_FILE_REQUIRED')
+    return path
+
+
+def exclusive(path, value):
+    path = Path(path)
+    private(path.parent, directory=True)
+    data = value if isinstance(value, bytes) else canonical(value) + b'\n'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    need(path.read_bytes() == data, 'RECEIPT_READBACK_FAILED')
+    if os.name != 'nt':
+        fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return {'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}
+
+
+def module(path, name, expected):
+    observed = digest(private(path))
+    need(observed == expected, 'PROGRAM_HASH_MISMATCH', file=Path(path).name, expectedSha256=expected, observedSha256=observed)
+    spec = importlib.util.spec_from_file_location(name, path)
+    result = importlib.util.module_from_spec(spec)
+    sys.modules[name] = result
+    spec.loader.exec_module(result)
+    return result
+
+
+def error_class(error):
+    raw = error.lower()
+    for needles, category in [
+        ((b'permission denied', b'operation not permitted'), 'PERMISSION_DENIED'),
+        ((b'no space left',), 'NO_SPACE'), ((b'no such file', b'not found'), 'NOT_FOUND'),
+        ((b'cannot connect', b'connection refused'), 'CONNECTION_FAILED'),
+        ((b'timeout', b'timed out', b'deadline'), 'TIMEOUT'),
+    ]:
+        if any(n in raw for n in needles):
+            return category
+    return 'COMMAND_ERROR_REDACTED'
+
+
+@contextlib.contextmanager
+def defer_interruptions():
+    """Do not interrupt an attributed stop; callers preserve the initial failure."""
+    received, previous = [], {}
+    for name in ('SIGINT', 'SIGTERM', 'SIGHUP'):
+        if hasattr(signal, name):
+            number = getattr(signal, name)
+            previous[number] = signal.getsignal(number)
+            signal.signal(number, lambda value, _frame: received.append(value))
+    try:
+        yield received
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+class Commands:
+    def __init__(self, seconds=900, cwd=None):
+        self.wall_end = time.time() + seconds
+        self.mono_end = time.monotonic() + seconds
+        self.cwd = cwd
+        self.groups_quiet = True
+        self.env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/home/faiadmin',
+                    'LANG': 'C', 'LC_ALL': 'C', 'GIT_TERMINAL_PROMPT': '0'}
+
+    def remaining(self, cap):
+        need(self.groups_quiet, 'COMMAND_GROUP_STOP_UNVERIFIED')
+        n = min(cap, self.wall_end - time.time(), self.mono_end - time.monotonic())
+        need(n > 0, 'STAGE_DEADLINE_EXPIRED')
+        return n
+
+    def run(self, command_id, args, *, seconds=60, data=None, source=None, output=None, env=None):
+        need(re.fullmatch('[A-Z0-9_]{1,80}', command_id), 'COMMAND_IDENTIFIER_INVALID')
+        limit = self.remaining(seconds)
+        # Shutdown time is reserved before spawn, inside the original limit.
+        stop_wall, stop_mono = time.time() + limit, time.monotonic() + limit
+        communication_limit = limit - min(5.0, limit / 3)
+        try:
+            p = subprocess.Popen([str(x) for x in args], cwd=self.cwd,
+                env=self.env | (env or {}), stdin=source or (subprocess.PIPE if data is not None else subprocess.DEVNULL),
+                stdout=output or subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        except OSError:
+            raise Stop('COMMAND_START_FAILED', commandId=command_id) from None
+        def alive():
+            try:
+                os.killpg(p.pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+        def remaining_stop():
+            value = min(stop_wall - time.time(), stop_mono - time.monotonic())
+            need(value > 0, 'COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id)
+            return value
+        def settle():
+            self.groups_quiet = False
+            with defer_interruptions():
+                try:
+                    remaining_stop()
+                    if alive():
+                        try:
+                            os.killpg(p.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    p.communicate(timeout=remaining_stop())
+                    while alive():
+                        time.sleep(min(.02, remaining_stop()))
+                    need(p.poll() is not None, 'COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id)
+                    self.groups_quiet = True
+                except BaseException:
+                    raise Stop('COMMAND_GROUP_STOP_UNVERIFIED', commandId=command_id) from None
+        try:
+            out, error = p.communicate(data, timeout=communication_limit)
+        except BaseException:
+            settle()
+            raise Stop('COMMAND_INTERRUPTED_OR_EXPIRED', commandId=command_id, exitCode=p.returncode) from None
+        outlived = alive()
+        if outlived:
+            settle()
+        need(p.returncode == 0, 'COMMAND_FAILED', commandId=command_id, exitCode=p.returncode,
+             errorClass=error_class(error), stderrBytes=len(error), stderrSha256=hashlib.sha256(error).hexdigest())
+        need(not outlived, 'COMMAND_GROUP_OUTLIVED_COMMAND', commandId=command_id)
+        need(output is not None or len(out) <= 8 * 1024 * 1024, 'COMMAND_OUTPUT_LIMIT', commandId=command_id)
+        return out or b''
+
+    def docker(self, command_id, *args, **options):
+        return self.run(command_id, ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', *args], **options)
+
+    def inspect(self, kind, identity):
+        return decode(self.docker('INSPECT_' + kind.upper(), kind, 'inspect', identity))[0]
+
+
+class Stages:
+    """An intent without a durable success is never replay authority."""
+    def __init__(self, root, run_id):
+        self.root, self.run_id = Path(root), run_id
+
+    def result(self, stage):
+        path = self.root / (stage + '.json')
+        return load(private(path)) if path.exists() else None
+
+    def begin(self, stage, dependencies):
+        need(re.fullmatch('[a-z][a-z-]{2,40}', stage), 'STAGE_INVALID')
+        for dependency in dependencies:
+            value = self.result(dependency)
+            need(value and value.get('status') == 'PASS' and value.get('runId') == self.run_id,
+                 'PREDECESSOR_NOT_VERIFIED', predecessor=dependency)
+        need(self.result(stage) is None and not (self.root / (stage + '.intent.json')).exists(),
+             'STAGE_CONSUMED_RECONCILE_ONLY', stage=stage)
+        exclusive(self.root / (stage + '.intent.json'), {'runId': self.run_id, 'stage': stage, 'utc': utc()})
+
+    def complete(self, stage, evidence):
+        need(not set(evidence) & {'protocol', 'runId', 'stage', 'status', 'utc', 'agentRealKeyAccess'},
+             'EVIDENCE_CANNOT_OVERRIDE_STAGE_IDENTITY')
+        result = {'protocol': 'FAI_M1_ASSISTED_STAGE_R21', 'runId': self.run_id, 'stage': stage,
+                  'status': 'PASS', 'utc': utc(), 'agentRealKeyAccess': False, **evidence}
+        exclusive(self.root / (stage + '.json'), result)
+        return result

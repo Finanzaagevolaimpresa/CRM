@@ -87,6 +87,24 @@ test('VNX-02 PHP fixture is accepted byte-for-byte by N10 and N12 TypeScript', {
   assert.equal(createSecureLeadGatewaySignature(secret, signedBytes), fixture.signature);
 });
 
+test('M3 PHP campaign fields remain byte-identical at the N12 gateway boundary', {
+  skip: phpAvailable ? false : 'PHP runtime unavailable; the dedicated CI PHP gate remains mandatory.',
+}, () => {
+  const execution = spawnSync(phpBinary, ['tests/php/vnx02-cross-language-fixture.php', 'campaign'], {
+    cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 32_768,
+  });
+  assert.equal(execution.status, 0, execution.stderr);
+  const fixture = JSON.parse(execution.stdout);
+  const parsed = parseCanonicalSecureLeadGatewayEnvelope(Buffer.from(fixture.body, 'utf8'));
+  assert.equal(canonicalJson(parsed), fixture.body);
+  assert.equal(parsed.idempotency.payloadHash, fixture.payloadHash);
+  assert.equal(parsed.payload.campaignCode, 'AUTUNNO-26');
+  assert.equal(parsed.payload.adCode, 'META:02');
+  assert.equal(parsed.privacy.marketing.decision, 'DENIED');
+  const signedBytes = createSecureLeadGatewaySignedBytes(fixture, Buffer.from(fixture.body));
+  assert.equal(createSecureLeadGatewaySignature(Buffer.from('11'.repeat(32), 'hex'), signedBytes), fixture.signature);
+});
+
 test('VNX-02 is an isolated installable plugin with no browser or CRM runtime surface', () => {
   const files = filesBelow(pluginRoot);
   const relative = files.map((path) => path.slice(pluginRoot.length + 1).replaceAll('\\', '/')).sort();
@@ -100,7 +118,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');
   assert.match(source, /Plugin Name: FAI Secure Lead Connector/u);
-  assert.match(source, /Version: 1\.0\.0/u);
+  assert.match(source, /Version: 1\.1\.0/u);
   assert.match(source, /wpforms_process_complete/u);
   assert.match(source, /FAI_VNX02_CONNECTOR_CONFIG/u);
   assert.match(source, /enabled' => false/u);
@@ -117,7 +135,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
 test('VNX-02 keeps migration count at 43 and makes the pre-N04 guide unusable', () => {
   const migrations = readdirSync(resolve(root, 'prisma/migrations'))
     .filter((name) => statSync(resolve(root, 'prisma/migrations', name)).isDirectory());
-  assert.equal(migrations.length, 48);
+  assert.equal(migrations.length, 49);
   const legacy = readFileSync(resolve(root, 'docs/wordpress-wpforms-crm-integration.md'), 'utf8');
   assert.match(legacy, /percorso storico è revocato/u);
   assert.match(legacy, /non devono essere copiati, distribuiti, configurati/u);
@@ -157,7 +175,7 @@ test('VNX-02 packaging creates one deterministic installable ZIP without key mat
       'tools/package-vnx02-wordpress-connector.mjs', '--output', output,
     ], { cwd: root, encoding: 'utf8', windowsHide: true });
     assert.equal(first.status, 0, first.stderr || 'First packaging run failed.');
-    const artifactPath = join(output, 'fai-secure-lead-connector-1.0.0.zip');
+    const artifactPath = join(output, 'fai-secure-lead-connector-1.1.0.zip');
     const firstBytes = readFileSync(artifactPath);
     assert.equal(firstBytes.readUInt32LE(0), 0x04034b50);
     const firstDigest = createHash('sha256').update(firstBytes).digest('hex');

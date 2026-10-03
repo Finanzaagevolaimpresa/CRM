@@ -1,5 +1,6 @@
 import type { Client, ClientService, CommercialOffer, Lead, PracticeCommunication, Prisma, Project, Task, TechnicalPractice } from '@prisma/client';
-import { canViewClient, canViewCommercialOffer, canViewLead, canViewProject, canViewService, canViewTask, getActorId, hasGlobalAccess, type Actor } from './access-control';
+import { canViewClient, canViewCommercialOffer, canViewLead, canViewProject, canViewService, canViewTask, getActorId, type Actor } from './access-control';
+import { hasGlobalReadAccess } from './read-supervision';
 import { buildDashboardTechnicalCounterContext } from './dashboard-technical-counter-context';
 
 type ClientContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId' | 'deletedAt'>;
@@ -24,7 +25,7 @@ export function buildNotificationAccess(session: Actor, input: {
   const practices = new Map(technical.visiblePractices.map(row => [row.id, row]));
   const leadById = new Map(input.leads.map(row => [row.id, row]));
   const userId = getActorId(session);
-  const global = hasGlobalAccess(session);
+  const global = hasGlobalReadAccess(session);
   const taskWhere: Prisma.TaskWhereInput = global ? {} : { OR: [
     { assignedToId: userId }, { clientId: { in: clientIds } }, { projectId: { in: projectIds } },
     { clientServiceId: { in: serviceIds } },

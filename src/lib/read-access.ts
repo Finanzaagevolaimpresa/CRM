@@ -1,3 +1,4 @@
+import { hasPermission } from './permission-evaluator';
 import type { AiOutput, Prisma, Task } from '@prisma/client';
 import {
   canViewAiOutput,
@@ -49,6 +50,7 @@ type AiRunAccessRecord = Prisma.AiRunGetPayload<{ select: typeof aiRunAccessSele
 
 export type ClientReadContext = {
   clientId: string;
+  createdById?: string | null;
   projectId?: string | null;
   clientServiceId?: string | null;
 };
@@ -125,6 +127,7 @@ export async function requireCommercialOfferReadAccess(session: AuthSession, off
 }
 
 export async function getContractReadAccess(session: AuthSession, contractId: string) {
+  if (!hasPermission(session, 'contract.read')) return null;
   const contract = await prisma.contract.findUnique({ where: { id: contractId } });
   if (!contract) return null;
   const context = await getClientContextReadAccess(session, { clientId: contract.clientId, projectId: contract.projectId });
@@ -132,6 +135,7 @@ export async function getContractReadAccess(session: AuthSession, contractId: st
 }
 
 export async function getPaymentReadAccess(session: AuthSession, paymentId: string) {
+  if (!hasPermission(session, 'payment.read')) return null;
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) return null;
   const contract = await prisma.contract.findFirst({ where: { id: payment.contractId, clientId: payment.clientId } });
@@ -173,6 +177,7 @@ export async function getClientDossierReadAccess(session: AuthSession, dossierId
   if (dossier.practiceReadinessId) return getEngagementDossierReadAccess(prisma, session, dossier.id);
   const context = await getClientContextReadAccess(session, {
     clientId: dossier.clientId,
+    createdById: dossier.createdById,
     clientServiceId: dossier.clientServiceId,
     projectId: dossier.projectId,
   });
@@ -189,7 +194,7 @@ export async function getClientContextReadAccess(session: AuthSession, context: 
   if (context.projectId && (!project || project.clientId !== context.clientId)) return null;
   if (context.clientServiceId && (!clientService || clientService.clientId !== context.clientId)) return null;
   if (project && clientService?.projectId && clientService.projectId !== project.id) return null;
-  const hydrated = { clientId: context.clientId, client, project, clientService };
+  const hydrated = { ...context, client, project, clientService };
   return canViewClientContext(session, hydrated) ? hydrated : null;
 }
 

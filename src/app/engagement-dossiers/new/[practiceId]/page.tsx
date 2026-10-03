@@ -1,11 +1,12 @@
 export const dynamic = 'force-dynamic';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { Card, PageHeader } from '@/components/ui';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { createEngagementDossierAction } from '@/lib/engagement-dossier-actions';
 import { listAccessiblePracticeReadiness } from '@/lib/practice-readiness';
+import { getEngagementDossierReadAccess } from '@/lib/engagement-dossier';
 
 export default async function Page({ params, searchParams }: { params: Promise<{ practiceId: string }>; searchParams: Promise<{ dossierError?: string }> }) {
   const { practiceId } = await params; const session = await requirePermission('dossier.write');
@@ -13,6 +14,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const { dossierError } = await searchParams;
   const practice = (await listAccessiblePracticeReadiness(prisma, session)).find((row) => row.id === practiceId);
   if (!practice?.startedAt || !practice.projectId || !practice.clientServiceId) notFound();
+  const existing = await prisma.clientDossier.findUnique({ where: { practiceReadinessId: practice.id }, select: { id: true } });
+  if (existing) {
+    if (!await getEngagementDossierReadAccess(prisma, session, existing.id)) notFound();
+    redirect(`/client-dossiers/${existing.id}`);
+  }
   const preanalyses = await prisma.preAnalysis.findMany({ where: { clientId: practice.clientId, projectId: practice.projectId }, orderBy: { updatedAt: 'desc' } });
   if (!preanalyses.length) return <div className="space-y-6"><PageHeader title="Nuovo dossier di pratica" description="Serve una preanalisi manuale nello stesso progetto prima di creare il dossier."/><SecondaryLink href={`/preanalyses/new?clientId=${practice.clientId}&projectId=${practice.projectId}`}>Crea preanalisi</SecondaryLink></div>;
   void session;

@@ -1,4 +1,4 @@
-"""Owner-only, finite schema46 backup using unchanged canonical N05 tools.
+"""Owner-only, finite schema46 backup with a sealed N05 image-reference adapter.
 
 The launcher supplies a separately approved packet. There is no deployment,
 migration, restore, SSH configuration, key-file access or automatic admission.
@@ -48,12 +48,40 @@ DIAGNOSTIC_COMMANDS = frozenset({
     "POSTGRES_DATABASE_NAME", "DOCKER_INFO", "DOCKER_IMAGE", "DOCKER_INSPECT",
     "DOCKER_APP_INSPECT", "DOCKER_POSTGRES_INSPECT", "DOCKER_HELPER_INSPECT",
     "DOCKER_EXEC", "DOCKER_PS", "DOCKER_STOP", "DOCKER_START", "DOCKER_RM",
-    "BACKUP_PREFLIGHT", "BACKUP_CREATE", "BACKUP_MANIFEST_VERIFY", "PG_ARCHIVE_READ",
+    "BACKUP_PREFLIGHT", "BACKUP_RESOURCE_PREFLIGHT", "BACKUP_CREATE", "BACKUP_MANIFEST_VERIFY", "PG_ARCHIVE_READ",
 })
+BACKUP_TOOL_PATHS = ("scripts/backup-docker-prod.sh", "scripts/n05/backup-compose.sh",
+                     "scripts/n05/lib.sh", "scripts/n05/verify-backup-manifest.sh")
+
+
+def staged_backup_tools(sources, runtime):
+    """Two reviewed substitutions in a new private copy; never edit the source.
+
+    The production caller supplies only the fixed RUNTIME, not packet paths.
+    Keep the canonical compose/environment/git root while the executable copy
+    lives inside the new run. Accept the exact immutable image ID as well as its
+    qualified tag; all subsequent image/resource/quiescence checks stay intact.
+    """
+    need(set(sources) == set(BACKUP_TOOL_PATHS), "BACKUP_TOOL_MEMBERS")
+    for name, data in sources.items():
+        need(sha_bytes(data) == TOOLS[name], "CANONICAL_TOOL_DRIFT")
+    root = str(runtime)
+    need(root.startswith("/") and re.fullmatch(r"/[A-Za-z0-9_./-]+", root), "BACKUP_SOURCE_ROOT")
+    data = sources["scripts/n05/lib.sh"]
+    old_root = b'N05_REPO_ROOT="$(cd "$N05_LIB_DIR/../.." && pwd)"'
+    old_guard = b'''[[ "$(docker inspect -f '{{.Config.Image}}' "${app_ids[0]}")" == "$APP_IMAGE" ]]'''
+    new_guard = b'''local app_image_reference
+  app_image_reference="$(docker inspect -f '{{.Config.Image}}' "${app_ids[0]}")"
+  [[ "$app_image_reference" == "$APP_IMAGE" || "$app_image_reference" == "$EXPECTED_APP_IMAGE_ID" ]]'''
+    need(data.count(old_root) == data.count(old_guard) == 1, "BACKUP_ADAPTER_SOURCE_CHANGED")
+    data = data.replace(old_root, ("N05_REPO_ROOT='" + root + "'").encode()).replace(old_guard, new_guard)
+    return sources | {"scripts/n05/lib.sh": data}
 
 
 def sanitized_command_error(stderr):
     # Fixed categories only: never return excerpts, arguments or environment.
+    if stderr == b"N05_FAILED|code=LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH\n":
+        return "LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH"
     value = stderr[-65536:].lower()
     for markers, code in (
         ((b"permission denied", b"operation not permitted", b"access is denied"), "ACCESS_DENIED"),
@@ -198,6 +226,9 @@ class Backup:
         self.interruption_requested = False
         self.phase = "PREPARE"
         self.command_failure = self.recovery_command_failure = None
+        self.tool_root = self.work / "backup-tools"
+        self.staged_tools = {}
+        self.image_reference_mode = None
 
     def request_interruption(self, _signum, _frame):
         # Never raise asynchronously inside process settlement or app recovery.
@@ -370,6 +401,9 @@ class Backup:
         need(app["Id"] == self.target["appId"] and app["Image"] == self.target["appImage"] and
              app["RestartCount"] == 0 and app["State"]["Running"] and
              app["State"].get("Health", {}).get("Status") == "healthy", "BASELINE_APP_DRIFT")
+        reference = (app.get("Config") or {}).get("Image")
+        need(reference in (TAG, self.target["appImage"]), "SOURCE_IMAGE_REFERENCE_UNSUPPORTED")
+        self.image_reference_mode = "IMMUTABLE_ID" if reference == self.target["appImage"] else "QUALIFIED_TAG"
 
     def same_source(self, *, healthy=True):
         need(self.command_groups_quiet, "PROCESS_STOP_UNVERIFIED")
@@ -426,6 +460,7 @@ class Backup:
         os.mkdir(self.work, 0o700)
         os.mkdir(self.work / "sets", 0o700)
         os.mkdir(self.work / "configuration", 0o700)
+        self.stage_backup_tools()
         binding = {"project": "fai-crm", "source_app": {"id": self.target["appId"], "image_id": self.target["appImage"]},
                    "candidate": {"id": self.target["appImage"]}, "return_image": {"id": self.target["appImage"]},
                    "postgres": {"id": pg_state["id"], "image": pg_state["image"], "created": pg_state["created"]},
@@ -457,6 +492,34 @@ class Backup:
             need(sha_bytes(read_stable(self.root / name)) == expected, "CANONICAL_TOOL_DRIFT")
         for name, info in self.inputs.items():
             need(sha_bytes(read_stable(self.root / name, secret=name.startswith(".env"))) == info["sha256"], "CONFIGURATION_CHANGED")
+        for name, info in self.staged_tools.items():
+            path = self.tool_root / name
+            need(sha_bytes(read_stable(path)) == info["sha256"] and os.access(path, os.X_OK), "BACKUP_ADAPTER_CHANGED")
+
+    def stage_backup_tools(self):
+        sources = {name: read_stable(self.root / name) for name in BACKUP_TOOL_PATHS}
+        staged = staged_backup_tools(sources, self.root)
+        for folder in (self.tool_root, self.tool_root / "scripts", self.tool_root / "scripts/n05"):
+            os.mkdir(folder, 0o700)
+        for name, data in staged.items():
+            path = self.tool_root / name
+            self.staged_tools[name] = self.write(path, data)
+            os.chmod(path, 0o700)
+        self.write(self.work / "BACKUP_TOOLS.json", {
+            "protocol": "FAI_M1_BACKUP_IMAGE_REFERENCE_ADAPTER_R25",
+            "sourceRoot": str(self.root), "sourceFiles": {name: TOOLS[name] for name in BACKUP_TOOL_PATHS},
+            "stagedFiles": self.staged_tools, "sourceFilesModified": False,
+            "imageReferenceMode": self.image_reference_mode,
+        })
+
+    def resource_preflight(self):
+        # The very same resource guard now runs while app is still healthy.
+        # A metadata mismatch must be diagnosed before stopping the application.
+        self.run(["bash", "-c", 'set -Eeuo pipefail; source "$1"; '
+                  'n05_assert_environment_identity production; '
+                  'n05_assert_authorized_legacy_compose_resources "$2" running',
+                  "backup-resource-preflight", str(self.tool_root / "scripts/n05/lib.sh"), self.target["postgresId"]],
+                 env=self.backup_environment(), cap=120, command_id="BACKUP_RESOURCE_PREFLIGHT")
 
     def backup_environment(self):
         return {"ENV_FILE": str(self.root / ".env.production"), "APP_ENV_FILE": str(self.root / ".env.production"),
@@ -499,7 +562,7 @@ class Backup:
         self.phase = "BACKUP_CREATE"
         self.remaining()
         try:
-            proc = self.spawn([str(self.root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
+            proc = self.spawn([str(self.tool_root / "scripts/backup-docker-prod.sh"), "--create"], cwd=self.root,
                 env=self.environment() | self.backup_environment(), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         except BaseException:
@@ -581,6 +644,7 @@ class Backup:
         self.same_source()
         before_rows = self.rows()
         self.check_inputs()
+        self.resource_preflight()
         self.write(self.work / "LEDGER_BEFORE.json", before_rows)
         need(self.remaining() >= 300, "INSUFFICIENT_QUIESCENCE_BUDGET")
         receipt = None
@@ -594,7 +658,7 @@ class Backup:
                  not app["State"]["Running"] and app["State"]["Pid"] == 0 and not app.get("ExecIDs"), "QUIESCENCE_UNVERIFIED")
             env = self.backup_environment()
             self.phase = "BACKUP_PREFLIGHT"
-            out = self.run([str(self.root / "scripts/backup-docker-prod.sh"), "--preflight"], env=env, cap=120, command_id="BACKUP_PREFLIGHT")
+            out = self.run([str(self.tool_root / "scripts/backup-docker-prod.sh"), "--preflight"], env=env, cap=120, command_id="BACKUP_PREFLIGHT")
             self.write(self.work / "BACKUP_PREFLIGHT.log", out)
             self.write(self.work / "BACKUP_CREATE.log", self.supervise_backup())
             self.phase = "BACKUP_VERIFY"
@@ -621,6 +685,8 @@ class Backup:
                 "checksumsSha256": sha_bytes(read_stable(backup / "SHA256SUMS", secret=True)),
                 "ledgerSha256": sha(before_rows), "fullPgArchiveReadable": True, "databaseNotRestarted": True,
                 "configuration": self.configuration_copies, "activeEnvironmentPrivatelyPreserved": True,
+                "backupToolAdapter": "FIXED_IMAGE_REFERENCE_R25", "imageReferenceMode": self.image_reference_mode,
+                "stagedBackupToolHashes": self.staged_tools,
                 "externalKeyFileReferencesAbsent": True, "realKeyAccess": False, "secretValuesExported": False,
                 "offHostEncryptedCopiesCreated": False, "historicalR11Repeated": False, "migration47Applied": False,
                 "deployPerformed": False, "productionActivation": False}
@@ -693,6 +759,8 @@ def entry_point(packet, program_sha256):
                   "localCommandGroupsQuiet": bool(operation and operation.command_groups_quiet)}
         if operation is not None:
             result["diagnosticVersion"] = 1
+            if operation.image_reference_mode is not None:
+                result["imageReferenceMode"] = operation.image_reference_mode
             if operation.command_failure is not None:
                 result["commandFailure"] = operation.command_failure
             if operation.recovery_command_failure is not None:

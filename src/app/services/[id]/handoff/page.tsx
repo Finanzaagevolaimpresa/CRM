@@ -1,3 +1,4 @@
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -21,33 +22,41 @@ export default async function Page({ params, searchParams }: {
   const entry = await getHandoffReceipt(prisma, id), { client, service, project } = context;
   const practice = entry ? await prisma.technicalPractice.findFirst({ where: { id: entry.receipt.technicalPracticeId, clientId: client.id,
     clientServiceId: id, projectId: service.projectId, deletedAt: null } }) : null;
-  if (session.role !== 'admin' && (!practice || !canViewTechnicalPractice(session, { ...practice, client }))) notFound();
+  if (session.role !== 'admin' && (!practice || !canViewTechnicalPractice(session, { ...practice, client,
+    project: project ? { ...project, client } : null,
+    clientService: { ...service, client, project: project ? { ...project, client } : null },
+  }))) notFound();
   const path = `/services/${id}/handoff`;
+  const canViewContracts = hasPermission(session, 'contract.read');
+  const canViewPayments = hasPermission(session, 'payment.read');
   if (entry) {
     const receipt = entry.receipt;
+    const sources = receipt.source.filter(source => source.kind === 'contract' ? canViewContracts : canViewPayments);
     const [contract, tasks, docs] = await Promise.all([
-      prisma.contract.findUnique({ where: { id: receipt.contractId }, select: { serviceDescription: true, clientId: true } }),
+      canViewContracts ? prisma.contract.findUnique({ where: { id: receipt.contractId }, select: { serviceDescription: true, clientId: true } }) : null,
       prisma.task.findMany({ where: { id: { in: receipt.paths }, clientId: client.id, clientServiceId: id, deletedAt: null }, orderBy: { id: 'asc' } }),
-      prisma.document.findMany({ where: { id: { in: receipt.source.map(item => item.id) }, deletedAt: null } }),
+      prisma.document.findMany({ where: { id: { in: sources.map(item => item.id) }, deletedAt: null } }),
     ]);
+    const visibleDocs = await filterFinancialDocuments(prisma, session, docs);
+    const documentProject = project ? { ...project, client } : null;
     const scopeMatches = contract?.clientId === client.id && canonicalSha256(contract.serviceDescription) === receipt.scopeHash;
     return <div className="space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
-        <p>Incarico e pagamento documentato verificati dall’amministratore al momento del passaggio. La presa in carico personale è registrata separatamente.</p>
+        <p>Passaggio operativo autorizzato dall’amministratore. La presa in carico personale è registrata separatamente.</p>
         <div className="flex gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
         {!practice && <p>La pratica non è attualmente disponibile; la ricevuta storica è conservata.</p>}
       </Card>
-      <Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card>
-      <Card title="Documenti del passaggio"><ul>{receipt.source.map(source => {
-        const document = docs.find(item => item.id === source.id);
+      {canViewContracts ? <Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card> : null}
+      {sources.length ? <Card title="Documenti del passaggio"><ul>{sources.map(source => {
+        const document = visibleDocs.find(item => item.id === source.id);
         const allowed = document && document.checksum === source.checksumHash && hasPermission(session, 'document.download')
           && canViewDocument(session, { ...document, client: document.clientId === client.id ? client : null,
-            project: document.projectId ? project : null, clientService: document.clientServiceId === id ? { ...service, client, project } : null }, hasPermission(session, 'document.sensitive.read'));
+            project: document.projectId ? documentProject : null, clientService: document.clientServiceId === id ? { ...service, client, project: documentProject } : null }, hasPermission(session, 'document.sensitive.read'));
         return <li key={source.kind}>{source.kind === 'contract' ? 'Incarico firmato' : 'Prova del pagamento'} · versione {source.version} · {allowed ? <Link href={`/documents/${source.id}/download`}>Scarica documento</Link> : 'Consultazione da verificare con l’amministratore'}</li>;
-      })}</ul></Card>
+      })}</ul></Card> : null}
       <Card title="Attività dovute"><ul>{tasks.map(task => <li key={task.id}>{task.title} · {task.status} · {formatDateTime(task.dueAt)}</li>)}</ul>
         {tasks.length !== receipt.paths.length && <p>Alcune attività originarie sono archiviate o hanno cambiato collegamento. Verifica lo storico amministrativo.</p>}</Card>
-      {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project }) && <Card title="Carica materiali o elaborati del servizio">
+      {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project: documentProject }) && <Card title="Carica materiali o elaborati del servizio">
         <DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName, generalUploadAllowed: false }]}
           companies={[]} projects={[]} includeProject={false} services={[{ id, clientId: client.id, label: receipt.variantCode }]} serviceAreas={['altro']} />
       </Card>}

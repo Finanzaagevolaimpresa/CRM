@@ -65,7 +65,7 @@ test('admin assignment and unassignment are atomic; ownership immediately contro
   await withAssignmentGuard(db, admin, true, [], tx =>
     tx.lead.update({ where: { id: item.id }, data: { assignedToId: null } }));
   const direction = await actor('direzione');
-  assert.equal(await db.lead.count({ where: { id: item.id, AND: [leadVisibilityWhere(direction)] } }), 0);
+  assert.equal(await db.lead.count({ where: { id: item.id, AND: [leadVisibilityWhere(direction)] } }), 1);
   assert.equal(canViewLead(admin, await db.lead.findUniqueOrThrow({ where: { id: item.id } })), true);
 });
 test('self assignment, direction, permission overrides, revoked sessions and stale admin roles cannot authorize ownership', { skip: !run }, async () => {

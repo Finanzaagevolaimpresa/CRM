@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'crypto';
-import { mkdir, stat, writeFile, readFile } from 'fs/promises';
+import { mkdir, stat, writeFile, readFile, open } from 'fs/promises';
 import path from 'path';
+import { documentUploadExtensions, documentUploadMaxBytes } from './document-upload-contract';
 
 const provider = process.env.STORAGE_PROVIDER ?? 'local';
 const legacyDefaultRoot = 'storage/private/documents';
 const root = path.resolve(process.cwd(), process.env.LOCAL_DOCUMENT_STORAGE_ROOT ?? legacyDefaultRoot);
-const maxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? 25 * 1024 * 1024);
-const allowedExtensions = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx', '.odt', '.ods', '.p7m', '.xml']);
+const configuredMaxBytes = Number(process.env.DOCUMENT_MAX_BYTES ?? documentUploadMaxBytes);
+const maxBytes = Number.isSafeInteger(configuredMaxBytes) && configuredMaxBytes > 0 ? Math.min(configuredMaxBytes, documentUploadMaxBytes) : documentUploadMaxBytes;
+const allowedExtensions = new Set<string>(documentUploadExtensions);
 const blockedExtensions = new Set(['.exe', '.bat', '.cmd', '.com', '.js', '.mjs', '.sh', '.ps1', '.vbs', '.scr', '.jar', '.php']);
 
 export function sanitizeFileName(name: string) {
@@ -64,9 +66,13 @@ export async function savePrivateDocumentFile(input: { file: File; clientId: str
   assertStorageSegment(servicePart, 'Client service ID');
   const storagePath = path.posix.join(input.clientId, servicePart, `${randomUUID()}-${input.fileName}`);
   const targetPath = localPathFromStoragePath(storagePath);
+  const buffer = Buffer.from(await input.file.arrayBuffer());
+  if (buffer.length !== input.file.size || buffer.length > maxBytes) throw new Error('Dimensione file non valida');
+  if (path.extname(input.fileName).toLowerCase() === '.zip' && (buffer.length < 22 || ![0x04034b50, 0x06054b50, 0x08074b50].includes(buffer.readUInt32LE(0)))) {
+    throw new Error('Il file non è un archivio ZIP riconoscibile');
+  }
   const dir = path.dirname(targetPath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const buffer = Buffer.from(await input.file.arrayBuffer());
   await writeFile(targetPath, buffer, { flag: 'wx', mode: 0o600 });
   return { storagePath, checksum: createHash('sha256').update(buffer).digest('hex'), sizeBytes: buffer.byteLength };
 }
@@ -78,4 +84,23 @@ export async function privateDocumentExists(storagePath?: string | null) {
 
 export async function readPrivateDocument(storagePath: string) {
   return readFile(localPathFromStoragePath(storagePath));
+}
+
+export async function readPrivateDocumentBounded(storagePath: string, limit: number) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50 * 1024 * 1024) throw new Error('DOCUMENT_SIZE_LIMIT');
+  const file = await open(localPathFromStoragePath(storagePath), 'r');
+  try {
+    const metadata = await file.stat();
+    if (!metadata.isFile() || metadata.size < 1 || metadata.size > limit) throw new Error('DOCUMENT_SIZE_LIMIT');
+    // Read at most the attested length plus one byte, even if the file grows concurrently.
+    const bytes = Buffer.alloc(metadata.size + 1);
+    let used = 0;
+    while (used < bytes.length) {
+      const { bytesRead } = await file.read(bytes, used, bytes.length - used, null);
+      if (!bytesRead) break;
+      used += bytesRead;
+    }
+    if (used !== metadata.size) throw new Error('DOCUMENT_CHANGED');
+    return bytes.subarray(0, used);
+  } finally { await file.close(); }
 }

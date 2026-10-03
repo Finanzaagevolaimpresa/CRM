@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import { signSessionCookie } from "../../src/lib/session";
@@ -13,6 +13,7 @@ import {
 import { PrismaClient } from "@prisma/client";
 import { assertSyntheticCatalogDatabase } from "../../src/lib/service-catalog-v2-persistence";
 import { cases } from "./fixtures";
+import { workExportReceiptSchema } from '../../src/lib/engagement-work-package';
 
 const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN ?? "http://127.0.0.1:3000";
 const password = process.env.PRACTICE_READINESS_BROWSER_PASSWORD!;
@@ -26,7 +27,7 @@ type CapturedAction = {
 };
 let currentPhase = "INITIAL";
 
-function docxDocumentXml(bytes: Buffer) {
+function zipEntryText(bytes: Buffer, name: string) {
   // Read the actual document entry, including compressed ZIP entries.
   for (let offset = 0; offset + 30 <= bytes.length && bytes.readUInt32LE(offset) === 0x04034b50;) {
     const flags = bytes.readUInt16LE(offset + 6);
@@ -36,7 +37,7 @@ function docxDocumentXml(bytes: Buffer) {
     const extraLength = bytes.readUInt16LE(offset + 28);
     const start = offset + 30 + nameLength + extraLength;
     if (flags & 8) throw new Error("Unexpected ZIP data descriptor");
-    if (bytes.subarray(offset + 30, offset + 30 + nameLength).toString() === "word/document.xml") {
+    if (bytes.subarray(offset + 30, offset + 30 + nameLength).toString() === name) {
       const entry = bytes.subarray(start, start + length);
       if (method === 0) return entry.toString("utf8");
       if (method === 8) return inflateRawSync(entry).toString("utf8");
@@ -44,8 +45,9 @@ function docxDocumentXml(bytes: Buffer) {
     }
     offset = start + length;
   }
-  throw new Error("DOCX document XML missing");
+  throw new Error(`ZIP entry missing: ${name}`);
 }
+const docxDocumentXml = (bytes: Buffer) => zipEntryText(bytes, 'word/document.xml');
 
 async function expectDossierAbsentFromIndex(page: Page, dossier: { id: string; title: string }) {
   const response = await page.goto(`${app}/client-dossiers`);
@@ -296,20 +298,47 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .selectOption(`readiness-browser-contract-${item.key}`);
     await article
       .locator('[name="signedDocumentId"]')
-      .selectOption(`readiness-browser-document-${item.key}`);
+      .selectOption(`readiness-browser-signed-document-${item.key}`);
+    const signedDocumentVersion = await db.documentVersion.findFirstOrThrow({
+      where: { documentId: `readiness-browser-signed-document-${item.key}` },
+      orderBy: { version: "desc" },
+    });
     const documentVersion = await db.documentVersion.findFirstOrThrow({
       where: { documentId: `readiness-browser-document-${item.key}` },
       orderBy: { version: "desc" },
     });
     await article
       .locator('[name="signedDocumentVersionId"]')
-      .selectOption(documentVersion.id);
+      .selectOption(signedDocumentVersion.id);
     await submitAction(
       page,
       article.getByRole("button", { name: "Conferma incarico formalizzato" }),
       `${item.key}:formalizzazione`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText(documentVersion.id, { exact: false })).toBeVisible();
+    await expect(page.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
+
+    if (item.key === cases[0].key) {
+      const matching = await db.clientService.findUniqueOrThrow({ where: { id: `readiness-browser-service-${item.key}` } });
+      const otherContract = await db.contract.create({ data: {
+        clientId: matching.clientId, projectId: matching.projectId, contractNumber: `OTHER-${item.key}`,
+        serviceName: 'Altro incarico sintetico', taxableAmount: '100', vatAmount: '22', totalAmount: '122',
+      } });
+      const homonymous = await db.clientService.create({ data: {
+        clientId: matching.clientId, projectId: matching.projectId, serviceCatalogId: matching.serviceCatalogId,
+        contractId: otherContract.id, status: 'richiesto', operationalStatus: 'nuova', assignedToId: matching.assignedToId,
+      } });
+      const override = await db.userPermissionOverride.create({ data: { userId: 'readiness-browser-owner', permission: 'contract.read', allowed: false } });
+      try {
+        article = await reloadPractice(page, practice.id);
+        const options = await article.locator('[name="clientServiceId"] option').evaluateAll(nodes => nodes.map(node => (node as HTMLOptionElement).value));
+        expect(options).toEqual([matching.id]);
+        expect(options).not.toContain(homonymous.id);
+        expect(await article.innerHTML()).not.toContain(matching.contractId!);
+        await article.locator('[name="clientServiceId"]').selectOption(matching.id);
+        await submitAction(page, article.getByRole('button', { name: 'Collega pratica operativa in attesa' }), 'redacted-service-selector');
+        expect((await db.practiceReadiness.findUniqueOrThrow({ where: { id: practice.id } })).clientServiceId).toBe(matching.id);
+      } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+    }
 
     article = await reloadPractice(page, practice.id);
     await article
@@ -665,7 +694,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     expect(startEvidence.clientServiceId).toBe(
       `readiness-browser-service-${item.key}`,
     );
-    expect(startEvidence.signedDocumentVersionId).toBe(documentVersion.id);
+    expect(startEvidence.signedDocumentVersionId).toBe(signedDocumentVersion.id);
     expect(startEvidence.fundingAmount).toBe("50.00");
     expect(
       (
@@ -744,6 +773,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   const reviewerPage = await reviewerContext.newPage();
   await login(reviewerPage, "readiness-reader@invalid.test");
   for (const [index, dossierId] of dossierIds.entries()) {
+    // A client consultation grant does not expose another operator's work.
+    await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
+    await expect(reviewerPage.getByPlaceholder("Motivazione della decisione")).toHaveCount(0);
+    // This non-M5 fixture has no per-dossier review plan: explicitly assign its
+    // work and materials to the reviewer. The producer retains direction access.
+    const bound = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
+    await db.project.update({ where: { id: bound.projectId! }, data: { consultantId: 'readiness-browser-reader' } });
+    await db.clientService.update({ where: { id: bound.clientServiceId! }, data: { assignedToId: 'readiness-browser-reader' } });
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await reviewerPage.getByPlaceholder("Motivazione della decisione").fill(index === 0 ? "Correggere la prima versione" : "Versione verificata");
     await submitDossierAction(reviewerPage, reviewerPage.getByRole("button", { name: index === 0 ? "Richiedi modifiche" : "Approva questa versione" }), `DOSSIER_REVIEW_${index}`);
@@ -760,10 +797,20 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   expect((await db.clientDossier.findUniqueOrThrow({ where: { id: corrected.id } })).approvedVersionId).toBeTruthy();
 
   for (const [index, dossierId] of dossierIds.entries()) {
+    const exportsBeforeNavigation = await db.engagementDossierExport.count({ where: { dossierId } });
     await page.goto(`${app}/client-dossiers/${dossierId}`);
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('link', { name: 'Esporta approvato .md' }).click();
-    expect((await downloadPromise).suggestedFilename()).toContain('.md');
+    const exportLink = page.getByRole('link', { name: 'Esporta approvato .md', exact: true });
+    await expect(exportLink).toHaveAttribute('download', '');
+    await page.waitForLoadState('networkidle');
+    // Merely displaying an approved dossier must not prefetch or audit an export.
+    expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation);
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 30_000 }),
+      exportLink.click(),
+    ]);
+    expect(await download.failure()).toBeNull();
+    expect(download.suggestedFilename()).toContain('.md');
+    expect(await db.engagementDossierExport.count({ where: { dossierId } })).toBe(exportsBeforeNavigation + 1);
     const approved = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     const version = await db.engagementDossierVersion.findUniqueOrThrow({ where: { id: approved.approvedVersionId! } });
     const clientBeforeExport = await db.client.findUniqueOrThrow({ where: { id: approved.clientId } });
@@ -847,8 +894,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await db.userPermissionOverride.deleteMany({ where: { id: { in: readWriteOverrides.map((row) => row.id) } } });
   }
   await page.goto(creationUrl);
-  await expect(page.locator(`[name="preAnalysisId"] option[value="${protectedPreanalysis.id}"]`)).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Crea dossier versionato" })).toBeVisible();
+  await expect(page).toHaveURL(`${app}/client-dossiers/${protectedDossier.id}`);
+  await expect(page.getByRole("button", { name: "Crea dossier versionato" })).toHaveCount(0);
   const legacy = await db.clientDossier.create({ data: {
     clientId: protectedDossier.clientId, projectId: protectedDossier.projectId,
     clientServiceId: protectedDossier.clientServiceId, type: "dossier_cliente",
@@ -1130,4 +1177,157 @@ test("versioned dossier listings follow current detail access", async ({ page, b
     deniedStates: ["sensitive", "deleted", "permission_revoked", "archived"], nonCanonicalDenied: true,
     legacyPreserved: true, searchCounts: [2, 1, 2], updatedAtOrderPreserved: true, restoredPositive: true,
   }) + "\n", { mode: 0o600 });
+});
+
+test('M2 Work package returns as a new draft before independent review and simulated delivery', async ({ page, browser }) => {
+  await assertSyntheticCatalogDatabase(db);
+  await login(page, 'readiness-owner@invalid.test');
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, createdById: 'readiness-browser-owner' }, orderBy: { createdAt: 'asc' } });
+  await page.goto(`${app}/engagement-dossiers/new/${dossier.practiceReadinessId}`);
+  await expect(page).toHaveURL(`${app}/client-dossiers/${dossier.id}`);
+  const exportForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Scarica pacchetto Work' }) });
+  const packageId = await exportForm.locator('[name="packageId"]').inputValue();
+  await exportForm.locator('[name="manualTransferAuthorized"]').check();
+  const requestPromise = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/work-export'));
+  const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/work-export'), { timeout: 50_000 }).catch(() => null);
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 }).catch(() => null);
+  await exportForm.getByRole('button', { name: 'Scarica pacchetto Work' }).click();
+  const exportResponse = await responsePromise;
+  if (!exportResponse || exportResponse.status() !== 200) {
+    const diagnostic = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
+      form: { expectedVersionId: dossier.currentVersionId!, packageId, manualTransferAuthorized: 'on' },
+      headers: { origin: app }, maxRedirects: 0,
+    });
+    const code = diagnostic.headers()['content-type']?.includes('application/json') ? (await diagnostic.json()).code : null;
+    throw new Error(`M2 browser export status=${exportResponse?.status() ?? 'missing'}, code=${exportResponse?.headers()['x-work-error-code'] ?? 'missing'}; same bound synthetic request status=${diagnostic.status()}, code=${code}`);
+  }
+  expect(exportResponse.headers()['content-type']).toBe('application/zip');
+  const download = await downloadPromise;
+  expect(download).not.toBeNull();
+  expect(download!.suggestedFilename()).toBe(`work-${packageId}.zip`);
+  const exportRequest = await requestPromise;
+  expect((await exportRequest.allHeaders()).origin).toBe(app);
+  expect((await exportRequest.allHeaders())['sec-fetch-site']).toBe('same-origin');
+  expect((await exportRequest.allHeaders()).referer).toBeUndefined();
+  const exported = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
+  expect(exported.status()).toBe(200);
+  const bytes = await exported.body();
+  expect(exported.headers()['x-work-package-id']).toBe(packageId);
+  const artifactHash = createHash('sha256').update(bytes).digest('hex');
+  expect(exported.headers()['x-work-package-sha256']).toBe(artifactHash);
+  const downloadedPath = await download!.path();
+  expect(downloadedPath).not.toBeNull();
+  expect(createHash('sha256').update(readFileSync(downloadedPath!)).digest('hex')).toBe(artifactHash);
+  expect(await db.auditLog.count({ where: { id: packageId, event: 'engagement_work_package_export' } })).toBe(1);
+  const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: packageId } });
+  const receipt = workExportReceiptSchema.parse(exportAudit.after);
+  expect(receipt.artifactHash).toBe(artifactHash);
+  expect(receipt.sourceVersionId).toBe(dossier.currentVersionId);
+  expect(receipt.source.length).toBeGreaterThan(0);
+  expect(bytes.includes(Buffer.from('synthetic/readiness/'))).toBe(false);
+  const foreignContext = await browser.newContext();
+  const foreign = await foreignContext.newPage();
+  await login(foreign, 'readiness-foreign@invalid.test');
+  const denied = await foreign.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: app }, maxRedirects: 0 });
+  expect(denied.status()).toBe(403);
+  expect(await denied.json()).toEqual({ code: 'DENIED' });
+  const crossOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'https://foreign.invalid' }, maxRedirects: 0 });
+  expect(crossOrigin.status()).toBe(403);
+  const opaqueOrigin = await page.request.post(exportRequest.url(), { data: exportRequest.postDataBuffer()!, headers: { 'content-type': exportRequest.headers()['content-type'], origin: 'null', 'sec-fetch-site': 'same-origin' }, maxRedirects: 0 });
+  expect(opaqueOrigin.status()).toBe(403);
+  await page.reload();
+  const returnForm = page.getByRole('form', { name: 'Rientro manuale da Work' });
+  await returnForm.locator('[name="packageBinding"]').selectOption(`${packageId}:${artifactHash}`);
+  await returnForm.locator('[name="workReference"]').fill('WORK-M2-BROWSER-SYNTHETIC');
+  await returnForm.locator('[name="producer"]').selectOption('A04');
+  await returnForm.locator('[name="returnedAtLocal"]').fill('2026-09-26T22:00');
+  await returnForm.locator('[name="title"]').fill('Risultato M2 Work sintetico');
+  await returnForm.locator('[name="content"]').fill('Risultato autonomo sintetico. Fonti: manifest del pacchetto. Limiti: simulazione. Prossimo passo: revisione umana.');
+  const importRequestPromise = page.waitForRequest(request => request.method() === 'POST' && Boolean(request.headers()['next-action']));
+  await submitDossierAction(page, returnForm.getByRole('button', { name: 'Registra risultato Work come nuova bozza' }), 'M2_IMPORT');
+  const importRequest = await importRequestPromise;
+  const afterImport = await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } });
+  expect(afterImport.currentVersionId).not.toBe(dossier.currentVersionId);
+  expect(afterImport.approvedVersionId).toBeNull();
+  const importReplay = await page.request.fetch(importRequest.url(), { method: 'POST', data: importRequest.postDataBuffer()!, headers: { 'next-action': importRequest.headers()['next-action'], 'content-type': importRequest.headers()['content-type'], origin: app, referer: `${app}/client-dossiers/${dossier.id}` }, maxRedirects: 0 });
+  expect(importReplay.status()).toBe(200);
+  expect(importReplay.headers()['x-action-redirect'] ?? '').not.toContain('dossierError=');
+  expect(await db.auditLog.count({ where: { entityId: dossier.id, event: 'engagement_work_result_import' } })).toBe(1);
+  expect((await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } })).currentVersionId).toBe(afterImport.currentVersionId);
+  await page.reload();
+  await page.getByText('Pacchetti e provenienza dei risultati', { exact: false }).click();
+  await expect(page.getByText('WORK-M2-BROWSER-SYNTHETIC', { exact: false })).toBeVisible();
+
+  const reviewerContext = await browser.newContext();
+  const reviewer = await reviewerContext.newPage();
+  await login(reviewer, 'readiness-reader@invalid.test');
+  await reviewer.goto(`${app}/client-dossiers/${dossier.id}`);
+  await reviewer.getByPlaceholder('Motivazione della decisione').fill('Verificati provenienza, fonti e limiti del risultato sintetico');
+  await submitDossierAction(reviewer, reviewer.getByRole('button', { name: 'Approva questa versione' }), 'M2_REVIEW');
+  await page.reload();
+  const authorizationForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Autorizza consegna manuale' }) });
+  await authorizationForm.locator('[name="recipientName"]').fill('Destinatario M2 sintetico');
+  await authorizationForm.locator('[name="recipientAddress"]').fill('m2-browser@invalid.test');
+  await authorizationForm.locator('[name="recipientSynthetic"]').check();
+  await submitDossierAction(page, authorizationForm.getByRole('button', { name: 'Autorizza consegna manuale' }), 'M2_AUTHORIZE');
+  const original = await db.engagementDossierDeliveryAuthorization.findFirstOrThrow({ where: { dossierId: dossier.id, versionId: afterImport.currentVersionId! }, orderBy: { authorizedAt: 'desc' } });
+  const deliveredForm = page.locator('form').filter({ has: page.locator(`[name="authorizationId"][value="${original.id}"]`) });
+  await deliveredForm.locator('[name="reference"]').fill('M2-SIMULATED-DELIVERED');
+  await deliveredForm.locator('[name="deliveredAtLocal"]').fill('2026-09-26T22:15');
+  await deliveredForm.locator('[name="evidenceSynthetic"]').check();
+  await submitDossierAction(page, deliveredForm.getByRole('button', { name: 'Registra esito manuale' }), 'M2_DELIVERED');
+  expect((await db.engagementDossierDeliveryReceipt.findUniqueOrThrow({ where: { authorizationId: original.id } })).outcome).toBe('DELIVERED');
+  await page.screenshot({ path: join(evidenceDir, 'm2-work-roundtrip.png'), fullPage: true });
+  writeFileSync(join(evidenceDir, 'm2-work-roundtrip.json'), JSON.stringify({ status: 'PASS', synthetic: true, realMessagesSent: false, packageId, artifactHash, sourceVersionId: dossier.currentVersionId, importedVersionId: afterImport.currentVersionId, deliveryAuthorizationId: original.id, importIdempotent: true, authorizationRechecked: true }) + '\n', { mode: 0o600 });
+  await foreignContext.close();
+  await reviewerContext.close();
+});
+
+test('financial read overrides protect readiness HTML and downloadable Work manifests for both supervising roles', async ({ page }) => {
+  await assertSyntheticCatalogDatabase(db);
+  await login(page, 'readiness-owner@invalid.test');
+  const userId = 'readiness-browser-owner';
+  const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, createdById: userId }, orderBy: { createdAt: 'asc' } });
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { id: dossier.practiceReadinessId! }, include: { funding: true } });
+  expect(practice.currentFormalizationId).toBeTruthy();
+  expect(practice.funding.length).toBeGreaterThan(0);
+  const grants = ['dossier.read', 'dossier.write', 'service.read', 'service.write', 'document.download'];
+  const previous = await db.userPermissionOverride.findMany({ where: { userId } });
+  try {
+    for (const permission of grants) await db.userPermissionOverride.upsert({ where: { userId_permission: { userId, permission } }, create: { userId, permission, allowed: true }, update: { allowed: true } });
+    for (const role of ['direzione', 'amministrazione'] as const) {
+      await db.user.update({ where: { id: userId }, data: { role } });
+      for (const permission of ['contract.read', 'payment.read'] as const) {
+        const override = await db.userPermissionOverride.create({ data: { userId, permission, allowed: false } });
+        try {
+          const response = await page.goto(`${app}/practice-readiness`); expect(response?.status()).toBe(200);
+          const article = page.locator(`#practice-${practice.id}`);
+          const html = await article.innerHTML();
+          expect(html.includes(practice.contractId!)).toBe(permission !== 'contract.read');
+          expect(html.includes(practice.signedDocumentVersionId!)).toBe(permission !== 'contract.read');
+          expect(html.includes('Accrediti confermati')).toBe(permission !== 'payment.read');
+          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(permission !== 'payment.read');
+          const exported = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
+            form: { expectedVersionId: dossier.currentVersionId!, packageId: randomUUID(), manualTransferAuthorized: 'on' },
+            headers: { origin: app }, maxRedirects: 0,
+          });
+          expect(exported.status(), `${role}/${permission}`).toBe(200);
+          const bytes = await exported.body();
+          const manifest = JSON.parse(zipEntryText(bytes, 'manifest.json'));
+          expect(manifest.engagement.contractId).toBe(permission === 'contract.read' ? null : practice.contractId);
+          expect(manifest.engagement.formalizationId).toBe(permission === 'contract.read' ? null : practice.currentFormalizationId);
+          expect(manifest.files.length).toBeGreaterThan(0);
+          for (const file of manifest.files) expect(zipEntryText(bytes, file.name).length).toBeGreaterThan(0);
+        } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+      }
+    }
+  } finally {
+    await db.user.update({ where: { id: userId }, data: { role: user.role } });
+    for (const permission of grants) {
+      const prior = previous.find(item => item.permission === permission);
+      if (prior) await db.userPermissionOverride.update({ where: { id: prior.id }, data: { allowed: prior.allowed } });
+      else await db.userPermissionOverride.deleteMany({ where: { userId, permission } });
+    }
+  }
 });

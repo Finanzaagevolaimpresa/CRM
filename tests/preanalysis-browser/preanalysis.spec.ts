@@ -125,6 +125,11 @@ test('real manual pre-analysis path, conflict retention and access denials', asy
 
   const protectedRecord = await db.preAnalysis.findUniqueOrThrow({ where: { id: recordId } });
   const protectedAuditCount = await db.auditLog.count({ where: { entityId: recordId } });
+  // The reviewer receives this exact project; a profile consultation alone is
+  // insufficient. Reassignment also withdraws the previous owner's read access.
+  await db.project.update({ where: { id: 'preanalysis-browser-project' }, data: { consultantId: 'preanalysis-browser-read-only' } });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Pre-analisi non trovata' })).toBeVisible();
   for (const identity of [
     { email: 'preanalysis-read-only@invalid.test', label: 'read-only' },
   ]) {

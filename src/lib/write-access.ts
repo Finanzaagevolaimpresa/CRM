@@ -1,3 +1,4 @@
+import { canAccessFinancialDocument } from './financial-document-access';
 import type { RoleCode } from '@prisma/client';
 import {
   canAssignService,
@@ -180,7 +181,7 @@ async function loadDocumentContext(documentId: string) {
 
 export async function requireDocumentEditAccess(session: AuthSession, documentId: string) {
   const document = await loadDocumentContext(documentId);
-  if (!canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
+  if (!await canAccessFinancialDocument(prisma, session, document) || !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
   return document;
 }
 
@@ -199,7 +200,7 @@ export async function requireChecklistEditAccess(session: AuthSession, itemId: s
   if (item.projectId && (!project || project.clientId !== item.clientId)) denyWriteAccess();
   if (item.clientServiceId && (!clientService || clientService.clientId !== item.clientId)) denyWriteAccess();
   if (document && document.clientId !== item.clientId) denyWriteAccess();
-  if (document && !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read'))) denyWriteAccess();
+  if (document && (!await canAccessFinancialDocument(prisma, session, document) || !canEditDocument(session, document, hasPermission(session, 'document.sensitive.read')))) denyWriteAccess();
   const context = { ...item, client, project, clientService };
   if (!canEditChecklistItem(session, context)) denyWriteAccess();
   return context;
@@ -245,7 +246,7 @@ async function loadTechnicalPracticeContext(practiceId: string) {
 
 export async function requireTechnicalPracticeViewAccess(session: AuthSession, practiceId: string) {
   const context = await loadTechnicalPracticeContext(practiceId);
-  if (!canViewTechnicalPractice(session, { ...context.practice, client: context.client })) denyWriteAccess();
+  if (!canViewTechnicalPractice(session, { ...context.practice, client: context.client, project: context.project, clientService: context.clientService })) denyWriteAccess();
   return context;
 }
 

@@ -1,0 +1,137 @@
+# M1: esecuzione assistita del candidato qualificato
+
+Il pacchetto esegue il rilascio autorizzato tramite una sola sessione PowerShell del proprietario. Non dipende da PR154, da un nuovo servizio o dal caricamento di strumenti MCP. Il processo Codex non legge il profilo SSH proprietario e non acquisisce chiavi reali. Sandbox, custodia, ACL, rete e configurazione SSH restano invariate.
+
+Il candidato è `fb645e014653ee87dc64f2439970967192f91b62`; le immagini provengono esclusivamente dall'artifact qualificato del run [36021069464](https://github.com/Finanzaagevolaimpresa/CRM/actions/runs/36021069464). Non vengono ricostruite. Il sorgente viene distribuito con un Git bundle dello stesso candidato e verificato per commit, tree e programmi canonici. Le sole migrazioni ammesse sono `20260920090000_engagement_dossier_approval_delivery_v1` e `20260924100000_admin_client_read_perimeters_v1`.
+
+## Preparazione e qualificazione
+
+`package_builder.py` richiede il PASS sul digest del delta, CI dello stesso HEAD, il bundle candidato e i metadati proprietari non segreti. SID e identità fisiche dei dischi rimangono in `owner-binding.json` nel pacchetto locale; non sono pubblicati nel repository. La compilazione non abilita l'esecuzione senza riesame. Il launcher verifica manifest e file; l'esecuzione Python rifiuta l'identità sandbox, verifica gli eseguibili e l'espansione esatta dell'alias SSH.
+
+La CI prova gli errori del protocollo su Windows/Linux e usa le immagini già salvate per verificare recupero reale di un database sintetico schema46, documenti con proprietà e permessi, prima registrazione della chiave tramite il helper applicativo con audit, diniego di una seconda registrazione e applicazione delle sole migrazioni47/48. Non ripete la qualificazione generale M1. Il controllo del trasporto usa un intervallo reale dell'artifact GitHub e verifica risposta206, Content-Range e dimensione prima dell'uso proprietario.
+
+## Sequenza proprietaria
+
+1. Doppio clic su `AVVIA-M1.cmd`, sotto l'account Windows del proprietario. Non occorre UAC. Il pacchetto controlla SID, hash degli eseguibili, profilo SSH ordinario, host key rigorosa e identità fisiche C:/F:. La policy RemoteSigned riguarda solo il processo PowerShell avviato.
+2. Completa le immagini a blocchi verificati, conservando i 99MB storici e la vecchia ricevuta. Limite trasferimento10minuti, tre tentativi per i soli blocchi con errore transitorio. Errori di autenticazione, TLS, intervallo o hash arrestano subito. La verifica finale usa hash dello ZIP, delle parti e dell'archivio originale.
+3. Trasferisce il pacchetto in una directory nuova sul VPS, riconcilia runtime/risorse/ledger46, verifica strumenti, capacità e prerequisiti. Il server carica immagini già qualificate senza avviare l'app candidata.
+4. La sola decisione nuova è la prima chiave step-up M1 versione1: il terminale mostra la richiesta precisa, con120secondi per confermarla. Viene ammessa soltanto con nessuna chiave precedente, nessuna sessione e un unico amministratore attivo. Mancata conferma arresta prima del backup. Il segreto viene generato e mantenuto sul VPS; la registrazione usa il helper già incluso nell'immagine e produce audit. Non viene ruotata alcuna chiave esistente.
+5. Nuovo backup coerente con PR145, arresto/rientro della sola app esatta, PostgreSQL invariato. Limite canonico20minuti più5di riserva. Cifratura N05 con recipient pubblico autentico e copie del medesimo bundle su C:/F:, verificate per supporto fisico, SHA256 e dimensione.
+6. Ripristino del nuovo dump e dei documenti in container temporanei, senza rete, porte o mount dei volumi produttivi, con risorse limitate e cleanup vincolato agli ID registrati. Verifica ledger46, lettura completa, documenti/UID/GID/permessi e continuità del runtime sorgente.
+7. Provisioning step-up autorizzato e nuova configurazione M1, con copie cifrate C:/F: prima di migrare. Nessun valore segreto viene esportato nei JSON. Le impostazioni estranee al delta devono coincidere con il modello precedente.
+8. Migrazione serializzata46→48 e deploy mediante il controller canonico N05, congelando modelli, immagini, risorse, prove e scadenze. Il rientro applicativo usa esclusivamente `73432464d741164fd76690bbdef65b17d626e6e9`, già qualificato con schema48 e controlli M1. Nessun ripristino del database produttivo.
+9. Verifica app/PostgreSQL, schema48, configurazione, registro chiave, health HTTPS e assenza di riavvio PostgreSQL. La ricevuta tecnica distingue la prova d'uso personale, che richiede login fresco e controlli M1 osservati successivamente.
+
+Ogni limite indicato è un massimo per fase, non una previsione del tempo totale. Le fasi lunghe stampano il passaggio in corso; il download mostra MB e percentuale. Il proprietario non deve ricostruire comandi o inoltrare esiti tra task.
+
+## Arresti e ripresa
+
+Ogni mutazione ha un'intenzione persistita prima dell'avvio e una ricevuta esclusiva al termine. Un'intenzione priva di successo non abilita un retry. Un errore interrompe tutte le fasi successive e avvia una sola riconciliazione in lettura. I JSON locali consentono a Codex di acquisire direttamente l'esito. Un nuovo doppio clic sullo stesso pacchetto esegue soltanto letture: non crea un altro backup e non ripete provisioning, migrazioni o deploy.
+
+Il migratore riserva90secondi entro il limite originario per arresto e verifica dell'identità/stato; i segnali vengono differiti durante la chiusura. Il cleanup del recupero divide la propria riserva fra i container attribuiti e raccoglie gli errori senza saltare le altre risorse. I comandi ordinari riservano preventivamente il tempo di arresto e verificano la cessazione del gruppo anche dopo exit nonzero. Il controller N05 forward/return viene eseguito direttamente nello stesso processo, mantenendo intatta la sua supervisione dei comandi in nuove sessioni e le scadenze canoniche: non è terminato da un wrapper che perderebbe quei figli. Se la cessazione non è verificata, non è ammesso un rientro successivo. Le regressioni includono processi Linux reali, interruzione durante N05, discendente dopo leader nonzero e guasti di cleanup indipendenti. Il provisioning usa inoltre il lock canonico di produzione; l'hash della configurazione cifrata viene ricontrollato prima di modelli, deploy e postcheck.
+
+Una ripresa operativa richiede che Codex identifichi il passaggio esatto e lo stato effettivo. Un backup riuscito non viene ricreato per un errore nella copia; una migrazione eventualmente completata viene accertata dal ledger. Non si cancellano marker, non si sovrascrivono ricevute o file e non si adottano container dopo una risposta di creazione incerta. Se non esiste ancora il pacchetto remoto, l'errore resta locale/trasporto e non è un tentativo backup consumato. Questa prima versione conserva il blocco dei tentativi incerti; non dispone di un retry mutante generico.
+
+## Diagnosi storica e limiti della prova
+
+Il run storico `f81c01f839cb443c90a8f9ff526e7e47` ha registrato `COMMAND_FAILED` dopo un tentativo di quiescenza, senza identificatore del sottocomando. La precedente osservazione proprietaria ha trovato STOP e gli ingressi, senza ricevute backup completate. Sono compatibili arresto app, verifica arresto e preflight canonico: le evidenze non isolano una causa. La diagnosi mirata legge soltanto STOP e metadati dei file, e verifica predicati correnti non mutanti. Non attribuisce il problema a DNS o sandbox, non ripete i due tentativi consumati e non riscrive i programmi storici. Il nuovo backup conserva fase/comando/exit code/classe sanitizzata della PR145.
+
+Il recupero R21 prova database e documenti del **nuovo set in chiaro**, già presente privatamente sul server, in un ambiente Docker distinto sullo stesso host. Non dimostra il recupero dopo perdita del VPS, la decifratura delle copie C:/F: o il ripristino della configurazione privata da quelle copie. Le copie cifrate vengono verificate per identità fisica, bytes, hash e recipient autentico; resta distinta la prova storica R11 schema43. Il riesame deve accettare esplicitamente questo perimetro prima che il pacchetto possa essere compilato. Il guard N05 che vieta `recover` sul server produttivo non è modificato né invocato con identità falsa.
+
+L'immagine di rientro contiene lo stesso codice applicativo del candidato: copre i guasti di avvio/configurazione già provati, non un bug applicativo condiviso. Il controller non revoca sessioni reali per forzare un rientro e non effettua down-migration. La lavorazione dell'autonomia, compresa la riconferma dopo riapertura, rimane separata e non attestata dal rilascio assistito.
+
+La consegna finale deve indicare separatamente eseguito/prova oppure bloccato/causa per backup, copie, recuperabilità, migrazioni, deploy, stato produttivo e prova d'uso. La sola CI non attesta alcuna esecuzione produttiva.
+# R24 — reconciliation of the containerd image store
+
+The read-only R23 observation on 2026-09-26 confirmed Docker 29.6.1 with the
+containerd snapshotter. Both saved images are present with the qualified
+platform, root filesystem layers and source labels. Docker identifies them by
+their OCI manifest digests, whereas the previous preparation used their config
+digests. This establishes the current `INSPECT_IMAGE` failure; it does not
+establish the unrecorded subcommand of the two historical backup failures.
+
+The binding now names those exact manifest digests while retaining the original
+config digests. `qualified_images.py` verifies the saved archive hash, each
+manifest-to-config link, platform, layers, tags and source labels before any
+backup. It requires the observed Docker version and store. It neither builds nor
+loads images, and never substitutes an image based on a tag alone. All subsequent
+restore, migration, forward and return operations use the immutable manifest ID.
+
+A new run receives only the small executable package. The fixed receiver verifies
+the package and exact preparation STOP of consumed run
+`e67bea4040fc4aeb86a0c98ac6178e7e`, refuses any later-stage intent/receipt, and
+copies its already-transferred image archive into the new run. The copy must pass
+SHA256, size and readback checks. Historical files are not written or deleted;
+neither the stopped preparation nor a consumed backup is retried. A partial new
+package remains occupied and requires reconciliation. There is no network image
+download, reload or fallback in this reuse path.
+
+The new delta is checked on Windows/Linux with negative archive/identity/reuse
+tests and against an isolated CI Docker 29.6.1 containerd daemon, using the same
+saved images. That CI run covers the existing restore/key/migration path under
+the newly observed image-ID semantics; it does not requalify the application.
+The production Docker engine, SSH protections and canonical programs are unchanged.
+
+This version still requires one normal owner launch and the existing explicit
+step-up-key decision. Current runtime/ledger, C/F physical identities, recovery
+and stage dependencies remain mandatory. Before the first new backup, any
+failure leaves the existing application running and requires only reconciliation
+of the new package. After that boundary, the existing immutable stage receipts
+and canonical return procedure apply; no destructive database restore is added.
+
+# R25 — backup image-reference reconciliation
+
+The new consumed run `5fa0006c36e64220b86d2c42c1d8159c` passed current
+schema46/image/resource preparation and failed at `BACKUP_PREFLIGHT` before
+creating a set. Its PR145 receipt records exit 1, 56 stderr bytes and SHA256
+`1da95e00e9135672b23f7195b27d790c04361ec2ce200449a492ea037e068dff`.
+These match exactly the canonical public error
+`N05_FAILED|code=LEGACY_APP_CONTAINER_IMAGE_TAG_MISMATCH\n`.
+The stopped app was resumed healthy and the subsequent read-only reconciliation
+also saw it healthy. Later stages were not started. This identifies the guard
+that failed; the receipt does not export the literal container image reference,
+and it does not prove the cause of the older opaque backup failures.
+
+The owner backup program now admits a source container reference only when it
+is either the qualified PR139 tag or the exact already-bound immutable image ID.
+A different alias or ID is rejected before quiescence. It still verifies the tag
+resolves to that image and its original source/tree labels, the container ID and
+creation/configuration, and all persistence/resource boundaries.
+
+The active source checkout and historical program/receipt bytes remain unchanged.
+The new backup creates a private, per-run copy of four hash-pinned N05 scripts.
+Only its copied library has two explicit substitutions: retain the original
+fixed source root, and accept the exact bound ID alongside the qualified tag in
+the container-reference predicate. The immediately following actual-image-ID
+check and all other guards remain unchanged. The copied executables are verified
+again at each input boundary and their hashes are receipted. There is no Docker
+wrapper that falsifies observations, retagging, source edit or permissive fallback.
+The resource guard also runs against the live healthy app before the stop;
+the full canonical preflight still requires quiescence before dump creation.
+
+A new package must reconcile the exact prior manifest and STOP hash, agreement
+of both PR145 receipts, absence of a completed/partial set and absence of every
+later-stage intent or receipt. Fresh runtime/ledger/key checks remain mandatory.
+The old attempt is never replayed, cleared or overwritten. New source-image
+references outside the two strict forms stop before application downtime.
+
+Antonio's explicit console confirmation for the first step-up key version1 was
+also provided in this task. A review-bound package may preserve precisely that
+existing decision after reconciling that consumed run. It cannot authorize a
+rotation, another version or an existing key. The provisioning transaction still
+requires zero prior keys, one active administrator, zero active sessions and
+writes the same audit. No additional general consent or repeated key prompt is
+needed for this same release. The owner launch remains required by the assisted
+execution channel.
+
+Tests cover the exact historical error fingerprint, tag and digest references,
+wrong alias/image/labels/volumes, failure before stop, unchanged source bytes,
+receipt disagreement and later effects. CI additionally recreates the real
+failure on an isolated Docker 29.6.1/containerd daemon using the saved image,
+then runs the corrected live guard, complete preflight, pg_dump/documents backup
+and app restart. Those synthetic resources and test database never contact
+production; existing restore/provision/47-48 qualifications also remain in CI.
+
+
+Docker references: [containerd image store](https://docs.docker.com/engine/storage/containerd/)
+and [isolated CI daemon setup](https://github.com/docker/setup-docker-action).

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import test from "node:test";
+import { readPracticeCommunications, saveApprovedMessageDraft } from '../src/lib/approved-communications';
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   attestPracticeMaterialsComplete,
@@ -18,6 +19,7 @@ import {
   startPractice,
 } from "../src/lib/practice-readiness";
 import { prepareServiceCatalogV2 } from "../src/lib/service-catalog-v2-persistence";
+import { workAuditEvidence, workExportEvidence, workExportReceiptSchema } from '../src/lib/engagement-work-package';
 import {
   authorizeEngagementDossierDelivery,
   createEngagementDossier,
@@ -28,6 +30,8 @@ import {
   recordEngagementDossierDelivery,
   reviewEngagementDossierVersion,
   reviseEngagementDossier,
+  exportEngagementWorkPackage,
+  importEngagementWorkResult,
 } from "../src/lib/engagement-dossier";
 import {
   assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -151,14 +155,14 @@ async function createContext(label: string, consultantId: string) {
       clientId: client.id,
       projectId: project.id,
       type: "documento_operativo",
-      title: `Incarico ${label}`,
+      title: `Materiale operativo ${label}`,
       fileName: `${label}.pdf`,
       mimeType: "application/pdf",
       sizeBytes: 10,
       storagePath: `synthetic/${suffix}/${label}.pdf`,
       uploadedById: consultantId,
       status: "verificato",
-      checksum: randomBytes(32).toString("hex"),
+      checksum: createHash('sha256').update(`material ${label}`).digest('hex'),
     },
   });
   const documentVersion = await db.documentVersion.create({
@@ -169,6 +173,14 @@ async function createContext(label: string, consultantId: string) {
       checksum: document.checksum,
     },
   });
+  const signedDocument = await db.document.create({ data: {
+    clientId: client.id, projectId: project.id, type: 'contratto', title: `Incarico ${label}`,
+    fileName: `signed-${label}.pdf`, mimeType: 'application/pdf', sizeBytes: 10,
+    storagePath: `synthetic/${suffix}/signed-${label}.pdf`, uploadedById: manager.userId,
+    status: 'verificato', checksum: createHash('sha256').update(`signed ${label}`).digest('hex'),
+  } });
+  const signedVersion = await db.documentVersion.create({ data: { documentId: signedDocument.id, version: 1,
+    storagePath: signedDocument.storagePath, checksum: signedDocument.checksum } });
   const contract = await db.contract.create({
     data: {
       clientId: client.id,
@@ -180,7 +192,7 @@ async function createContext(label: string, consultantId: string) {
       totalAmount: offerAmounts.total,
       status: "firmato",
       signedAt: new Date(),
-      signedDocumentId: document.id,
+      signedDocumentId: signedDocument.id,
     },
   });
   const checklist = await db.documentChecklistItem.create({
@@ -210,6 +222,8 @@ async function createContext(label: string, consultantId: string) {
     offer,
     document,
     documentVersion,
+    signedDocument,
+    signedVersion,
     contract,
     checklist,
     clientService,
@@ -541,11 +555,11 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        formalizePractice(db, actorA, {
+        formalizePractice(db, manager, {
           practiceId: practice.id,
           contractId: a.contract.id,
-          signedDocumentId: a.document.id,
-          signedDocumentVersionId: a.documentVersion.id,
+          signedDocumentId: a.signedDocument.id,
+          signedDocumentVersionId: a.signedVersion.id,
           expectedVersion: practice.version,
         }),
         (error) =>
@@ -560,11 +574,11 @@ test(
       }),
       0,
     );
-    const firstFormalized = await formalizePractice(db, actorA, {
+    const firstFormalized = await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: a.contract.id,
-      signedDocumentId: a.document.id,
-      signedDocumentVersionId: a.documentVersion.id,
+      signedDocumentId: a.signedDocument.id,
+      signedDocumentVersionId: a.signedVersion.id,
       expectedVersion: practice.version,
     });
     const firstFormalizationId = firstFormalized.currentFormalizationId;
@@ -641,11 +655,11 @@ test(
         where: { id: firstFormalizationId },
       }),
     );
-    const secondFormalized = await formalizePractice(db, actorA, {
+    const secondFormalized = await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: a.contract.id,
-      signedDocumentId: a.document.id,
-      signedDocumentVersionId: a.documentVersion.id,
+      signedDocumentId: a.signedDocument.id,
+      signedDocumentVersionId: a.signedVersion.id,
       expectedVersion: revisedPractice.version,
     });
     assert.notEqual(
@@ -1032,8 +1046,8 @@ test(
         formalizePractice(db, actorA, {
           practiceId: practiceB.id,
           contractId: b.contract.id,
-          signedDocumentId: b.document.id,
-          signedDocumentVersionId: b.documentVersion.id,
+          signedDocumentId: b.signedDocument.id,
+          signedDocumentVersionId: b.signedVersion.id,
           expectedVersion: practiceB.version,
         }),
       () =>
@@ -1230,8 +1244,8 @@ test(
       currency: "EUR",
       expectedVersion: practice.version,
     } as const;
-    const declared = await recordPracticeFunding(db, actorB, firstInput);
-    const replay = await recordPracticeFunding(db, actorB, firstInput);
+    const declared = await recordPracticeFunding(db, manager, firstInput);
+    const replay = await recordPracticeFunding(db, manager, firstInput);
     assert.equal(replay.id, declared.id);
     assert.equal(
       await db.practiceFundingEvidence.count({
@@ -1240,12 +1254,12 @@ test(
       1,
     );
     await assert.rejects(
-      recordPracticeFunding(db, actorB, { ...firstInput, amount: "21.00" }),
+      recordPracticeFunding(db, manager, { ...firstInput, amount: "21.00" }),
       (error) =>
         error instanceof PracticeReadinessError && error.code === "CONFLICT",
     );
     await assert.rejects(
-      recordPracticeFunding(db, actorB, {
+      recordPracticeFunding(db, manager, {
         ...firstInput,
         reference: `STALE-${suffix}`,
       }),
@@ -1262,8 +1276,8 @@ test(
       expectedVersion: practice.version,
     };
     const confirmations = await Promise.all([
-      confirmPracticeFunding(db, actorB, confirmationInput),
-      confirmPracticeFunding(db, actorB, confirmationInput),
+      confirmPracticeFunding(db, manager, confirmationInput),
+      confirmPracticeFunding(db, manager, confirmationInput),
     ]);
     assert.equal(confirmations[0].id, confirmations[1].id);
     let history = await db.practiceFundingEvidence.findMany({
@@ -1276,7 +1290,7 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const supplement = await recordPracticeFunding(db, actorB, {
+    const supplement = await recordPracticeFunding(db, manager, {
       practiceId: practice.id,
       reference: `PARTIAL-2-${suffix}`,
       amount: "30.00",
@@ -1286,7 +1300,7 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    await confirmPracticeFunding(db, actorB, {
+    await confirmPracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: supplement.id,
       expectedVersion: practice.version,
@@ -1300,12 +1314,12 @@ test(
     practice = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const reversed = await reversePracticeFunding(db, actorB, {
+    const reversed = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmations[0].id,
       expectedVersion: practice.version,
     });
-    const reversedReplay = await reversePracticeFunding(db, actorB, {
+    const reversedReplay = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmations[0].id,
       expectedVersion: practice.version,
@@ -1369,19 +1383,19 @@ test(
       where: { id: practice.id },
     });
     await expectDeniedWithoutEffects(practice.id, () =>
-      formalizePractice(db, actorB, {
+      formalizePractice(db, manager, {
         practiceId: practice.id,
         contractId: b.contract.id,
-        signedDocumentId: b.document.id,
-        signedDocumentVersionId: a.documentVersion.id,
+        signedDocumentId: b.signedDocument.id,
+        signedDocumentVersionId: a.signedVersion.id,
         expectedVersion: practice.version,
       }),
     );
-    await formalizePractice(db, actorB, {
+    await formalizePractice(db, manager, {
       practiceId: practice.id,
       contractId: b.contract.id,
-      signedDocumentId: b.document.id,
-      signedDocumentVersionId: b.documentVersion.id,
+      signedDocumentId: b.signedDocument.id,
+      signedDocumentVersionId: b.signedVersion.id,
       expectedVersion: practice.version,
     });
     practice = await db.practiceReadiness.findUniqueOrThrow({
@@ -1413,7 +1427,7 @@ test(
       where: { id: practice.id },
     });
     await assert.rejects(
-      startPractice(db, actorB, {
+      startPractice(db, manager, {
         practiceId: practice.id,
         expectedVersion: practice.version,
       }),
@@ -1425,7 +1439,7 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        recordPracticeFunding(db, actorB, {
+        recordPracticeFunding(db, manager, {
           practiceId: practice.id,
           reference: `FAULT-${suffix}`,
           amount: "1.00",
@@ -1447,7 +1461,7 @@ test(
   { skip: !enabled },
   async () => {
     const practice = await ensurePractice(a, actorA);
-    const declared = await recordPracticeFunding(db, actorA, {
+    const declared = await recordPracticeFunding(db, manager, {
       practiceId: practice.id,
       reference: `A-${suffix}`,
       amount: "50.00",
@@ -1457,7 +1471,7 @@ test(
     const funded = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
-    const confirmed = await confirmPracticeFunding(db, actorA, {
+    const confirmed = await confirmPracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: declared.id,
       expectedVersion: funded.version,
@@ -1477,17 +1491,33 @@ test(
       where: { id: practice.id },
     });
     if (!v2.currentFormalizationId) {
-      await formalizePractice(db, actorA, {
+      await formalizePractice(db, manager, {
         practiceId: practice.id,
         contractId: a.contract.id,
-        signedDocumentId: a.document.id,
-        signedDocumentVersionId: a.documentVersion.id,
+        signedDocumentId: a.signedDocument.id,
+        signedDocumentVersionId: a.signedVersion.id,
         expectedVersion: v2.version,
       });
     }
     const linked = await db.practiceReadiness.findUniqueOrThrow({
       where: { id: practice.id },
     });
+    const otherContract = await db.contract.create({ data: {
+      clientId: a.client.id, projectId: a.project.id, contractNumber: `OTHER-${suffix}`,
+      serviceName: a.contract.serviceName, taxableAmount: a.contract.taxableAmount,
+      vatAmount: a.contract.vatAmount, totalAmount: a.contract.totalAmount,
+    } });
+    const otherService = await db.clientService.create({ data: {
+      clientId: a.client.id, projectId: a.project.id, serviceCatalogId,
+      contractId: otherContract.id, status: 'richiesto', operationalStatus: 'nuova',
+    } });
+    const operationalRead = (await listAccessiblePracticeReadiness(db, actorA)).find(row => row.id === practice.id)!;
+    assert.equal(operationalRead.contractId, null);
+    assert.deepEqual(operationalRead.linkableServices.map(service => service.id), [a.clientService.id]);
+    assert.deepEqual(Object.keys(operationalRead.linkableServices[0]).sort(), ['id', 'label']);
+    await expectDeniedWithoutEffects(practice.id, () => linkPracticeClientService(db, actorA, {
+      practiceId: practice.id, clientServiceId: otherService.id, expectedVersion: linked.version,
+    }));
     await expectDeniedWithoutEffects(practice.id, () =>
       linkPracticeClientService(db, actorA, {
         practiceId: practice.id,
@@ -1627,7 +1657,7 @@ test(
       data: { title: "Materiale A aggiornato dopo attestazione" },
     });
     await assert.rejects(
-      startPractice(db, actorA, {
+      startPractice(db, manager, {
         practiceId: practice.id,
         expectedVersion: v4.version,
       }),
@@ -1708,7 +1738,7 @@ test(
     process.env.PRACTICE_READINESS_TEST_FAIL_AUDIT = "1";
     try {
       await assert.rejects(
-        startPractice(db, actorA, {
+        startPractice(db, manager, {
           practiceId: practice.id,
           expectedVersion: v4.version,
         }),
@@ -1727,7 +1757,7 @@ test(
       ).status,
       "richiesto",
     );
-    const started = await startPractice(db, actorA, {
+    const started = await startPractice(db, manager, {
       practiceId: practice.id,
       expectedVersion: v4.version,
     });
@@ -1755,9 +1785,9 @@ test(
       ).status,
       "in_lavorazione",
     );
-    assert.equal(started.startedById, ids.userA);
+    assert.equal(started.startedById, manager.userId);
     const historicalEvidence = started.startEvidence;
-    const reversal = await reversePracticeFunding(db, actorA, {
+    const reversal = await reversePracticeFunding(db, manager, {
       practiceId: practice.id,
       evidenceId: confirmed.id,
       expectedVersion: started.version,
@@ -2029,4 +2059,156 @@ test("dossier access, export and delivery recheck current authority and roll bac
   }
   assert.ok(await getEngagementDossierReadAccess(db, actorA, dossier.id));
   assert.equal((await recordEngagementDossierDelivery(db, actorA, receiptInput)).id, receipt.id);
+});
+
+test('M2 manual Work roundtrip is bound, atomic, revocable and idempotent before separate approval and delivery', { skip: !enabled }, async () => {
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: { not: null }, clientId: a.client.id } });
+  const deniedWork = (error: unknown) => error instanceof EngagementDossierError && error.code === 'DENIED';
+  const conflictWork = (error: unknown) => error instanceof EngagementDossierError && error.code === 'CONFLICT';
+  const notReady = (error: unknown) => error instanceof EngagementDossierError && error.code === 'NOT_READY';
+  const exportInput = { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId, packageId: randomUUID(), manualTransferAuthorized: true };
+  const runtime = { readDocument: async (path: string) => {
+    assert.equal(path, a.documentVersion.storagePath);
+    return Buffer.from('material A');
+  } };
+  const footprint = async () => ({
+    dossier: await db.clientDossier.findUniqueOrThrow({ where: { id: dossier.id } }),
+    versions: await db.engagementDossierVersion.count({ where: { dossierId: dossier.id } }),
+    audits: await db.auditLog.count({ where: { entityId: dossier.id, entityType: 'ClientDossier' } }),
+    authorizations: await db.engagementDossierDeliveryAuthorization.count({ where: { dossierId: dossier.id } }),
+  });
+  let before = await footprint();
+  await assert.rejects(exportEngagementWorkPackage(db, actorB, exportInput, runtime), deniedWork);
+  await assert.rejects(exportEngagementWorkPackage(db, actorA, exportInput, { ...runtime, failAudit: true }), conflictWork);
+  await assert.rejects(exportEngagementWorkPackage(db, actorA, exportInput, { readDocument: async () => Buffer.from('CORRUPTED') }), notReady);
+  assert.deepEqual(await footprint(), before);
+  const exported = await exportEngagementWorkPackage(db, actorA, exportInput, runtime);
+  const collision = { ...workExportEvidence(exported.receipt.manifest, exported.receipt.manifestHash, exported.receipt.artifactHash),
+    serviceRevisionId: '00000000-0000-4000-8000-000000000003' };
+  const sanitized = await db.$queryRaw<Array<{ evidence: unknown }>>`SELECT audit_sanitize_json_n04_v1(${JSON.stringify(workAuditEvidence(collision))}::jsonb) AS evidence`;
+  assert.deepEqual(workExportReceiptSchema.parse(sanitized[0].evidence), collision);
+  assert.equal(exported.receipt.artifactHash, createHash('sha256').update(exported.archive).digest('hex'));
+  assert.equal(exported.receipt.manifest.files.length, 1);
+  assert.ok(!exported.archive.includes(Buffer.from(a.documentVersion.storagePath)));
+  before = await footprint();
+  const replayExport = await exportEngagementWorkPackage(db, actorA, exportInput, runtime);
+  assert.deepEqual(replayExport, exported);
+  assert.deepEqual(await footprint(), before);
+  const input = { dossierId: dossier.id, packageId: exportInput.packageId, packageArtifactHash: exported.receipt.artifactHash,
+    expectedVersionId: dossier.currentVersionId, title: 'Risultato Work verificabile', content: 'Risultato manuale sintetico con fonti e limiti',
+    workReference: 'WORK-M2-DB-SYNTHETIC', producer: 'A04', returnedAt: '2026-09-26T22:00:00+02:00' };
+  await assert.rejects(importEngagementWorkResult(db, actorA, { ...input, packageArtifactHash: '0'.repeat(64) }), deniedWork);
+  await assert.rejects(importEngagementWorkResult(db, actorB, input), deniedWork);
+  await assert.rejects(importEngagementWorkResult(db, actorA, input, { failAudit: true }), conflictWork);
+  assert.deepEqual(await footprint(), before);
+  const imported = await importEngagementWorkResult(db, actorA, input);
+  assert.equal(imported.content, input.content);
+  assert.equal((await footprint()).dossier.approvedVersionId, null);
+  before = await footprint();
+  assert.equal((await importEngagementWorkResult(db, actorA, { ...input, returnedAt: '2026-09-26T20:00:00Z' })).id, imported.id);
+  await assert.rejects(importEngagementWorkResult(db, actorA, { ...input, content: 'Different return against consumed base' }), conflictWork);
+  assert.deepEqual(await footprint(), before);
+  const reopened = await getEngagementDossierReadAccess(db, actorA, dossier.id);
+  assert.equal(reopened?.engagementHistory.work.packages[0].artifactHash, exported.receipt.artifactHash);
+  assert.equal(reopened?.engagementHistory.work.imports[0].versionId, imported.id);
+  assert.equal(reopened?.engagementHistory.work.imports[0].workReference, input.workReference);
+  assert.equal(reopened?.engagementHistory.work.imports[0].returnedAt, '2026-09-26T20:00:00.000Z');
+  await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: ids.manager } });
+  try {
+    await assert.rejects(importEngagementWorkResult(db, actorA, input), deniedWork);
+    await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    assert.deepEqual(await footprint(), before);
+  } finally { await db.internalSession.update({ where: { id: ids.sessionA }, data: { revokedAt: null, revokedReason: null, revokedByUserId: null } }); }
+  const override = await db.userPermissionOverride.create({ data: { userId: ids.userA, permission: 'document.download', allowed: false } });
+  try {
+    await assert.rejects(exportEngagementWorkPackage(db, actorA, { ...exportInput, expectedVersionId: imported.id, packageId: randomUUID() }, runtime), deniedWork);
+    assert.deepEqual(await footprint(), before);
+  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  const exportAudit = await db.auditLog.findUniqueOrThrow({ where: { id: exportInput.packageId } });
+  await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: { ...(exportAudit.after as Record<string, Prisma.InputJsonValue>), materialSnapshotHash: '0'.repeat(64) } } });
+  try {
+    assert.equal(await getEngagementDossierReadAccess(db, actorA, dossier.id), null);
+    await assert.rejects(importEngagementWorkResult(db, actorA, input), deniedWork);
+  } finally { await db.auditLog.update({ where: { id: exportAudit.id }, data: { after: exportAudit.after as Prisma.InputJsonValue } }); }
+
+  const review = { dossierId: dossier.id, versionId: imported.id, versionHash: imported.contentHash, decision: 'APPROVED', note: 'Revisione del risultato Work sintetico' };
+  await assert.rejects(reviewEngagementDossierVersion(db, actorA, review), deniedWork);
+  await reviewEngagementDossierVersion(db, manager, review);
+  const authorization = await authorizeEngagementDossierDelivery(db, manager, { dossierId: dossier.id, versionId: imported.id, versionHash: imported.contentHash, recipients: [{ kind: 'CLIENT', name: 'M2 sintetico', address: 'm2@invalid.test', synthetic: true }] });
+  const delivered = await recordEngagementDossierDelivery(db, actorA, { authorizationId: authorization.id, outcome: 'DELIVERED', evidence: { reference: 'SIMULATED-M2-DELIVERED', deliveredAt: new Date(), synthetic: true } });
+  assert.equal(delivered.outcome, 'DELIVERED');
+  const next = await reviseEngagementDossier(db, actorA, { dossierId: dossier.id, expectedVersionId: imported.id, title: imported.title, content: 'Modifica dopo consegna' });
+  assert.equal((await footprint()).dossier.approvedVersionId, null);
+  assert.equal((await importEngagementWorkResult(db, actorA, input)).id, imported.id);
+  assert.equal((await footprint()).dossier.currentVersionId, next.id);
+});
+
+
+test('M4 communications reuse readiness identity and fresh client/project scope', { skip: !enabled }, async () => {
+  const context = a;
+  const practice = await ensurePractice(a, actorA);
+  // Immutable communication evidence is deliberately rolled back in this test.
+  // The existing readiness fixture cleanup must not delete its history.
+  await assert.rejects(db.$transaction(async tx => {
+  const scoped = { $transaction: (callback: (client: Prisma.TransactionClient) => Promise<unknown>) => callback(tx) } as unknown as Pick<PrismaClient, '$transaction'>;
+  const box = await tx.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  const binding = { kind: 'READINESS' as const, id: practice.id };
+  const saved = await saveApprovedMessageDraft(scoped, actorA, { messageId: randomUUID(), expectedRevision: 0, context: binding,
+    mailboxId: box.id, replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [],
+    subject: 'Synthetic M4 readiness message', body: 'Context is the existing M2 practice.', attachmentVersionIds: [], classification: 'ORDINARY' });
+  const page = await readPracticeCommunications(scoped, actorA, binding);
+  assert.equal(page.messages[0].id, saved.id);
+  assert.equal(page.messages[0].snapshot.clientId, context.client.id);
+  assert.equal(page.messages[0].readinessId, practice.id);
+  await assert.rejects(readPracticeCommunications(scoped, actorB, binding), /DENIED/);
+  throw new Error('M4_READINESS_FIXTURE_ROLLBACK');
+  }), error => error instanceof Error && error.message === 'M4_READINESS_FIXTURE_ROLLBACK');
+});
+
+test('Direzione and Amministrazione individual denies redact readiness and Work manifests independently', { skip: !enabled }, async () => {
+  const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id }, include: { funding: true } });
+  const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: practice.id } });
+  assert.ok(practice.currentFormalizationId && practice.startEvidence && practice.funding.length);
+  const original = await db.user.findUniqueOrThrow({ where: { id: manager.userId } });
+  const permissions = ['dossier.read', 'dossier.write', 'service.read', 'document.download'];
+  const existing = await db.userPermissionOverride.findMany({ where: { userId: manager.userId } });
+  try {
+    for (const permission of permissions) await db.userPermissionOverride.upsert({
+      where: { userId_permission: { userId: manager.userId, permission } },
+      create: { userId: manager.userId, permission, allowed: true }, update: { allowed: true },
+    });
+    for (const role of ['direzione', 'amministrazione'] as const) {
+      await db.user.update({ where: { id: manager.userId }, data: { role } });
+      for (const permission of ['contract.read', 'payment.read'] as const) {
+        const deniedOverride = await db.userPermissionOverride.create({ data: { userId: manager.userId, permission, allowed: false } });
+        try {
+          const row = (await listAccessiblePracticeReadiness(db, manager)).find(item => item.id === practice.id)!;
+          assert.ok(row);
+          assert.equal(row.startEvidence, null);
+          assert.ok(row.materials.some(item => item.documentId === a.document.id));
+          assert.equal(row.contractId, permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(row.currentFormalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(row.signedDocumentId, permission === 'contract.read' ? null : practice.signedDocumentId);
+          assert.equal(row.formalizations.length > 0, permission !== 'contract.read');
+          assert.equal(row.requiredInitialAmount?.toFixed(2) ?? null, permission === 'payment.read' ? null : practice.requiredInitialAmount.toFixed(2));
+          assert.equal(row.funding.length, permission === 'payment.read' ? 0 : practice.funding.length);
+          assert.equal(row.prerequisites.availableFunding === null, permission === 'payment.read');
+          const result = await exportEngagementWorkPackage(db, manager, { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId, packageId: randomUUID(), manualTransferAuthorized: true }, {
+            readDocument: async path => { assert.equal(path, a.documentVersion.storagePath); return Buffer.from('material A'); },
+          });
+          assert.equal(result.receipt.manifest.engagement.contractId, permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(result.receipt.manifest.engagement.formalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(result.receipt.manifest.files.length, 1, 'technical material remains exportable');
+        } finally { await db.userPermissionOverride.delete({ where: { id: deniedOverride.id } }); }
+      }
+    }
+  } finally {
+    await db.user.update({ where: { id: manager.userId }, data: { role: original.role } });
+    for (const permission of permissions) {
+      const previous = existing.find(item => item.permission === permission);
+      if (previous) await db.userPermissionOverride.update({ where: { id: previous.id }, data: { allowed: previous.allowed } });
+      else await db.userPermissionOverride.deleteMany({ where: { userId: manager.userId, permission } });
+    }
+  }
 });

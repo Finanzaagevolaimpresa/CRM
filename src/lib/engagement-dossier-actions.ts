@@ -4,7 +4,9 @@ import { redirect } from 'next/navigation';
 import { Prisma } from '@prisma/client';
 import { requirePermission } from './auth';
 import { prisma } from './prisma';
-import { authorizeEngagementDossierDelivery, createEngagementDossier, EngagementDossierError, recordEngagementDossierDelivery, reviewEngagementDossierVersion, reviseEngagementDossier } from './engagement-dossier';
+import { requireEnforcedPrivilegedMutation } from './privileged-access';
+import { getEngagementDossierReadAccess } from './engagement-dossier';
+import { authorizeEngagementDossierDelivery, createEngagementDossier, EngagementDossierError, importEngagementWorkResult, recordEngagementDossierDelivery, reviewEngagementDossierVersion, reviseEngagementDossier } from './engagement-dossier';
 
 async function execute(form: FormData, operation: (actor: Awaited<ReturnType<typeof requirePermission>>, value: Record<string, unknown>) => Promise<unknown>) {
   const actor = await requirePermission('dossier.read');
@@ -28,10 +30,22 @@ export async function reviseEngagementDossierAction(form: FormData) {
   await execute(form, (actor, value) => reviseEngagementDossier(prisma, actor, value));
   revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
+export async function importEngagementWorkResultAction(form: FormData) {
+  const [packageId, packageArtifactHash] = String(form.get('packageBinding') ?? '').split(':');
+  await execute(form, (actor, value) => importEngagementWorkResult(prisma, actor, { ...value, packageId, packageArtifactHash }));
+  revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
+}
 export async function reviewEngagementDossierVersionAction(form: FormData) {
+  const session = await requirePermission('dossier.approve');
+  const context = await getEngagementDossierReadAccess(prisma, session, String(form.get('dossierId')));
+  if (context?.engagementHistory.initialService && form.get('decision') === 'APPROVED')
+    await requireEnforcedPrivilegedMutation(session, 'M5_SERVICE_APPROVAL');
   await execute(form, (actor, value) => reviewEngagementDossierVersion(prisma, actor, value)); revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }
 export async function authorizeEngagementDossierDeliveryAction(form: FormData) {
+  const session = await requirePermission('dossier.approve');
+  const context = await getEngagementDossierReadAccess(prisma, session, String(form.get('dossierId')));
+  if (context?.engagementHistory.initialService) await requireEnforcedPrivilegedMutation(session, 'M5_SERVICE_APPROVAL');
   const recipients = [{ kind: String(form.get('recipientKind')), name: String(form.get('recipientName')), address: String(form.get('recipientAddress')), synthetic: form.get('recipientSynthetic') === 'on' }];
   await execute(form, (actor, value) => authorizeEngagementDossierDelivery(prisma, actor, { ...value, recipients })); revalidatePath(`/client-dossiers/${String(form.get('dossierId'))}`);
 }

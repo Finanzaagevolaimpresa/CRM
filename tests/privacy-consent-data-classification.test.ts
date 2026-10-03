@@ -45,7 +45,7 @@ const leadBusinessEventFields = [
   'catalogReference.serviceVersion', 'payload.firstName', 'payload.lastName',
   'payload.companyName', 'payload.email', 'payload.phone', 'payload.city', 'payload.region',
   'payload.interestText', 'payload.serviceInterestText', 'payload.message',
-  'payload.sourcePagePath', 'payload.requestedAmount.currency',
+  'payload.sourcePagePath', 'payload.campaignCode', 'payload.adCode', 'payload.requestedAmount.currency',
   'payload.requestedAmount.minorUnits', 'idempotency.canonicalizationVersion',
   'idempotency.keyDigest', 'idempotency.payloadHash',
 ] as const;
@@ -97,7 +97,7 @@ async function withShadowRoute<T>(operation: () => Promise<T>) {
 
 test('N04 migration 35 is additive, transactional and leaves registries empty', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 48);
+  assert.equal(names.length, 49);
   assert.equal(names[34], '20260817120000_privacy_consent_data_classification_foundation_v1');
   assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);

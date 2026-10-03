@@ -22,7 +22,7 @@ async function main() {
   await db.userPermissionOverride.create({ data: { userId: ids.overrideDenied, permission: 'project.write', allowed: true } });
   await db.client.create({ data: { id: ids.client, type: 'societa', displayName: 'Cliente Sintetico Preanalisi', consultantId: ids.owner } });
   await db.clientReadGrant.create({ data: { userId: ids.readOnly, clientId: ids.client, active: true, createdById: 'preanalysis-perimeter-admin', updatedById: 'preanalysis-perimeter-admin' } });
-  await db.project.create({ data: { id: ids.project, clientId: ids.client, title: 'Progetto Sintetico Preanalisi', consultantId: ids.noRead } });
+  await db.project.create({ data: { id: ids.project, clientId: ids.client, title: 'Progetto Sintetico Preanalisi', consultantId: ids.owner } });
   process.stdout.write('{"preanalysisBrowserProvision":"ready"}\n');
 }
 void main().catch(() => { process.stderr.write('PREANALYSIS_BROWSER_PROVISION_FAILED\n'); process.exitCode = 1; }).finally(() => db.$disconnect());

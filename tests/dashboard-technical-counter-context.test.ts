@@ -7,8 +7,8 @@ const admin: Actor = { userId: 'admin', role: 'admin' };
 const commerciale: Actor = { userId: 'commerciale', role: 'commerciale' };
 const consulente: Actor = { userId: 'consulente', role: 'consulente' };
 const client = { id: 'client', salesOwnerId: 'other-sales', consultantId: 'other-consultant', deletedAt: null };
-const project = { id: 'project', clientId: client.id, deletedAt: null };
-const service = { id: 'service', clientId: client.id, projectId: project.id, deletedAt: null };
+const project = { id: 'project', clientId: client.id, consultantId: null, deletedAt: null };
+const service = { id: 'service', clientId: client.id, projectId: project.id, assignedToId: null, deletedAt: null };
 const practice = {
   id: 'practice', clientId: client.id, projectId: project.id, clientServiceId: service.id,
   commercialOwnerId: null, technicalOwnerId: null, deletedAt: null,
@@ -25,6 +25,17 @@ const input = {
   communications: [communication],
 };
 const deletedAt = new Date('2026-08-01T00:00:00Z');
+
+test('unowned practice counters follow the current service assignment, not the client owner', () => {
+  const context = { ...input, clients: [{ ...client, consultantId: 'alice' }],
+    projects: [{ ...project, consultantId: 'bob' }], services: [{ ...service, assignedToId: 'bob' }] };
+  const alice: Actor = { role: 'consulente', userId: 'alice' }, bob: Actor = { role: 'consulente', userId: 'bob' };
+  assert.equal(buildDashboardTechnicalCounterContext({ ...context, session: alice }).visiblePractices.length, 0);
+  assert.equal(buildDashboardTechnicalCounterContext({ ...context, session: bob }).commsToReview, 1);
+  const reassigned = { ...context, services: [{ ...service, assignedToId: 'alice' }] };
+  assert.equal(buildDashboardTechnicalCounterContext({ ...reassigned, session: bob }).visiblePractices.length, 0);
+  assert.equal(buildDashboardTechnicalCounterContext({ ...reassigned, session: alice }).commsToReview, 1);
+});
 
 test('a valid graph retains original practice fields and distinct communication totals', () => {
   const approved = { ...communication, id: 'approved', status: 'approvata' as const };

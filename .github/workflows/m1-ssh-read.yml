@@ -1,0 +1,27 @@
+name: M1 fixed SSH read delegation
+on:
+  pull_request:
+    paths:
+      - 'scripts/m1-read-delegate/**'
+      - '.github/workflows/m1-ssh-read.yml'
+      - 'docs/M1_SSH_READ_DELEGATION_R23.md'
+permissions:
+  contents: read
+jobs:
+  bounded-read:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.14' }
+      - if: runner.os == 'Windows'
+        run: python -I -B -S scripts/m1-read-delegate/test_delegate.py
+      - if: runner.os == 'Linux'
+        run: sudo -n "$(command -v python)" -I -B -S scripts/m1-read-delegate/test_delegate.py

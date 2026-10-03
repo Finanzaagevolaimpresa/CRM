@@ -1,5 +1,7 @@
 'use server';
 
+import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
+import { filterFinancialDocuments } from './financial-document-access';
 import { appendResponsibilityDecision, requireUnboundServiceAssignment } from './responsibility';
 import { Prisma, type AiAgentConfigVersion } from '@prisma/client';
 import { prisma } from './prisma';
@@ -18,7 +20,7 @@ import {
 } from './ai';
 import { buildClientServiceLabel } from './client-service-label';
 import { sanitizeFileName, savePrivateDocumentFile } from './storage';
-import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, isSensitiveDocument, hasGlobalAccess } from './access-control';
+import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, canViewProject, canViewService, isSensitiveDocument, hasGlobalAccess } from './access-control';
 import { UserFacingActionError } from './action-errors';
 import { AI_AGENT_CODES } from './ai-agent-configs';
 import { isPrimaryOperationalAiAgent } from './ai-agent-catalog';
@@ -869,17 +871,25 @@ export async function createProjectExpense(form: FormData) {
 export async function uploadDocument(form: FormData) {
   const s = await requirePermission('document.upload');
   const file = form.get('file');
+  if (form.getAll('file').length !== 1) throw new UserFacingActionError('Usa il caricamento multiplo per inviare tutti i file selezionati.');
   if (!(file instanceof File) || file.size <= 0) throw new UserFacingActionError('File obbligatorio');
   const parsed = documentUploadSchema.safeParse(clean(form));
   if (!parsed.success) throw new UserFacingActionError('Controlla i dati del documento: cliente, progetto e servizio devono essere coerenti.');
   const data = parsed.data;
   await requireClientContextWriteAccess(s, data);
   const fileName = sanitizeFileName(file.name);
-  const saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName });
+  if (!canAccessFinancialDocumentMetadata(s, { ...data, fileName, mimeType: file.type })) denyWriteAccess();
+  let saved;
+  try { saved = await savePrivateDocumentFile({ file, clientId: data.clientId, clientServiceId: data.clientServiceId, fileName }); }
+  catch (error) {
+    if (error instanceof Error && /^(File |Estensione |Nome file |Dimensione file |Il file non è)/.test(error.message)) throw new UserFacingActionError(error.message);
+    throw error;
+  }
   const document = await prisma.$transaction(async (tx) => {
     const created = await tx.document.create({ data: {
       ...data,
       title: data.title,
+      documentCategory: /\.zip$/i.test(fileName) ? 'archivio_riservato' : data.documentCategory,
       type: file.type || 'application/octet-stream',
       fileName,
       mimeType: file.type || 'application/octet-stream',
@@ -909,6 +919,7 @@ async function assertChecklistContext(session: AuthSession, clientId: string, cl
 export async function createDocumentChecklistItem(form: FormData) {
   const s = await requirePermission('service.write');
   const data = documentChecklistItemSchema.parse(clean(form));
+  if (!canAccessFinancialDocumentMetadata(s, data)) denyWriteAccess();
   await assertChecklistContext(s, data.clientId, data.clientServiceId, data.projectId, data.documentId);
   const item = await prisma.documentChecklistItem.create({ data: { ...data, createdById: s.userId, updatedById: s.userId } as never });
   await audit(s.userId, 'document_checklist_item_create', 'DocumentChecklistItem', item.id, item);
@@ -1019,14 +1030,14 @@ function dossierLine(label: string, value: unknown) { return `- ${label}: ${valu
 function money(value: unknown) { return value ? `€ ${Number(value).toLocaleString('it-IT')}` : '—'; }
 function dateLabel(value?: Date | null) { return value ? value.toLocaleDateString('it-IT') : '—'; }
 
-async function assertClientDossierContext(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string) {
-  const access = await requireClientContextReadAccess(session, { clientId, clientServiceId, projectId });
+async function assertClientDossierContext(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string, createdById?: string) {
+  const access = await requireClientContextReadAccess(session, { clientId, clientServiceId, projectId, ...(createdById ? { createdById } : {}) });
   if (!canViewClient(session, access.client)) denyWriteAccess();
   return access;
 }
 
 async function buildClientDossierContent(session: AuthSession, clientId: string, clientServiceId?: string, projectId?: string) {
-  const [agentConfig, client, companies, services, serviceCatalog, projects, checklist, documents, tasks] = await Promise.all([
+  const [agentConfig, client, companies, serviceRows, serviceCatalog, projectRows, checklist, documents, tasks] = await Promise.all([
     prisma.aiAgent.findUniqueOrThrow({ where: { code: AI_AGENT_CODES.dossierCliente } }),
     prisma.client.findUniqueOrThrow({ where: { id: clientId } }),
     prisma.company.findMany({ where: { clientId, deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
@@ -1039,13 +1050,15 @@ async function buildClientDossierContent(session: AuthSession, clientId: string,
   ]);
   if (!agentConfig.active) throw new UserFacingActionError(`Agente ${AI_AGENT_CODES.dossierCliente} disattivato: riattivarlo da Impostazioni > Agenti AI per generare il dossier.`);
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
-  const projectById = new Map(projects.map((project) => [project.id, { ...project, client }]));
-  const serviceById = new Map(services.map((service) => [service.id, {
+  const projectById = new Map(projectRows.map((project) => [project.id, { ...project, client }]));
+  const serviceById = new Map(serviceRows.map((service) => [service.id, {
     ...service,
     client,
     project: service.projectId ? projectById.get(service.projectId) ?? null : null,
   }]));
-  const visibleDocuments = documents.filter((document) => canViewDocument(session, {
+  const projects = [...projectById.values()].filter((project) => canViewProject(session, project));
+  const services = [...serviceById.values()].filter((service) => canViewService(session, service));
+  const visibleDocuments = (await filterFinancialDocuments(prisma, session, documents)).filter((document) => canViewDocument(session, {
     ...document,
     client,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
@@ -1070,7 +1083,7 @@ async function buildClientDossierContent(session: AuthSession, clientId: string,
     '## 2. Inquadramento attività', companies.length ? companies.map((c) => `- ${c.name}: ${[c.legalForm, c.atecoCode, c.atecoDescription, c.city, c.province].filter(Boolean).join(' · ') || 'dati da completare'}`).join('\n') : '- Dati aziendali non ancora completi.', '',
     '## 3. Obiettivo richiesto', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)} · pratica: ${s.practiceType ?? '—'} · importo richiesto: ${money(s.requestedAmount)} · investimento previsto: ${money(s.plannedInvestment)}`).join('\n') : '- Nessun servizio/pratica collegato.', projects.length ? projects.map((p) => `- Progetto ${p.title}: richiesto ${money(p.requestedAmount)}, investimento ${money(p.totalInvestment)}, stato ${p.status}.`).join('\n') : '- Nessun progetto di investimento collegato.', '',
     '## 4. Stato documentale', visibleChecklist.length ? visibleChecklist.map((i) => `- ${i.title}: ${i.status.replaceAll('_', ' ')}${i.documentId ? ' · documento collegato' : ''}${i.notes ? ` · ${i.notes}` : ''}`).join('\n') : '- Checklist documentale non disponibile o non ancora popolata.', visibleDocuments.length ? visibleDocuments.map((d) => `- Documento caricato: ${d.title} (${d.documentCategory}, stato ${d.status})`).join('\n') : '- Nessun documento visibile per il ruolo corrente.', '',
-    '## 5. Stato operativo pratica', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)}: pipeline ${String(s.operationalStatus).replaceAll('_', ' ')}, servizio ${String(s.status).replaceAll('_', ' ')}. Note: ${s.operationalNotes ?? s.internalNotes ?? '—'}`).join('\n') : '- Nessuna pipeline servizio presente.', '',
+    '## 5. Stato operativo pratica', services.length ? services.map((s) => `- ${catalogName(s.serviceCatalogId)}: pipeline ${String(s.operationalStatus).replaceAll('_', ' ')}. Note: ${s.operationalNotes ?? '—'}`).join('\n') : '- Nessuna pipeline servizio presente.', '',
     '## 6. Attività/scadenze aperte', tasks.length ? tasks.map((t) => `- ${t.title}: ${t.status.replaceAll('_', ' ')} · priorità ${t.priority} · scadenza ${dateLabel(t.dueAt)}${t.description ? ` · ${t.description}` : ''}`).join('\n') : '- Nessuna attività aperta rilevante.', '',
     '## 7. Prime criticità emerse', '- Verificare completezza documentale, coerenza importi richiesti/investimento e condizioni operative prima della revisione.', '',
     '## 8. Scenario A - obiettivo massimo realistico', projects.map((p) => p.scenarioA).filter(Boolean).join('\n') || '- Da completare dopo revisione consulente.', '',
@@ -1207,7 +1220,7 @@ export async function updateClientDossier(form: FormData) {
   const data = clientDossierUpdateSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
   if (before.practiceReadinessId) throw new UserFacingActionError('Usa le azioni della versione esatta del dossier.');
-  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined, before.createdById);
   if (before.status === 'archiviata' && data.status !== 'archiviata') throw new UserFacingActionError('Un dossier archiviato non può essere riaperto dalla modifica generica.');
   const substantiveChange = before.title !== data.title || before.type !== data.type || before.content !== data.content;
   if (data.status === 'revisionata' && (before.status !== 'revisionata' || substantiveChange)) {
@@ -1287,7 +1300,7 @@ export async function archiveClientDossier(form: FormData) {
   const data = clientDossierIdSchema.parse(clean(form));
   const before = await prisma.clientDossier.findUniqueOrThrow({ where: { id: data.id } });
   if (before.practiceReadinessId) throw new UserFacingActionError('L’archiviazione generica non è disponibile per un dossier versionato.');
-  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined);
+  await assertClientDossierContext(s, before.clientId, before.clientServiceId ?? undefined, before.projectId ?? undefined, before.createdById);
   if (before.status === 'archiviata') return before;
   const now = nextConcurrencyTimestamp(before.updatedAt);
   return prisma.$transaction(async (tx) => {
@@ -1312,7 +1325,7 @@ export async function auditClientDossierExport(id: string, format: 'markdown' | 
   const s = await requirePermission('dossier.read');
   const dossier = await prisma.clientDossier.findUniqueOrThrow({ where: { id } });
   if (dossier.practiceReadinessId) throw new UserFacingActionError('Usa l’esportazione della versione approvata del dossier.');
-  await requireClientContextReadAccess(s, { clientId: dossier.clientId, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId });
+  await requireClientContextReadAccess(s, { clientId: dossier.clientId, createdById: dossier.createdById, clientServiceId: dossier.clientServiceId, projectId: dossier.projectId });
   await audit(s.userId, 'client_dossier_export', 'ClientDossier', dossier.id, { dossierId: dossier.id, clientId: dossier.clientId, format });
   return dossier;
 }
@@ -1381,6 +1394,7 @@ export async function registerPayment(form: FormData) {
 export async function createClientService(form: FormData) {
   const s = await requirePermission('service.write');
   const data = clientServiceSchema.parse(clean(form));
+  if ((!financialReadAccess(s).contract && data.contractId) || (!financialReadAccess(s).payment && (data.paymentId || data.paymentStatus || data.status === "pagato"))) denyWriteAccess();
   await requireClientContextWriteAccess(s, data);
   const [catalog, contract, payment] = await Promise.all([
     prisma.serviceCatalog.findFirst({ where: { id: data.serviceCatalogId, active: true }, select: { id: true } }),
@@ -1403,6 +1417,7 @@ export async function createClientService(form: FormData) {
 export async function updateClientServiceStatus(id: string, status: string) {
   const s = await requirePermission("service.write");
   const next = serviceStatusSchema.parse(status);
+  if (!financialReadAccess(s).payment && next === "pagato") denyWriteAccess();
   const before = await requireServiceEditAccess(s, id);
   const finalStatuses = ["chiuso", "archiviato", "consegnato"];
   if (
@@ -1620,7 +1635,7 @@ export async function runClientAiAgent(form: FormData) {
     project: item.projectId ? projectById.get(item.projectId) ?? null : null,
   }]));
   const canReadSensitive = hasPermission(s, 'document.sensitive.read');
-  const visibleDocuments = documents.filter((document) => canViewDocument(s, {
+  const visibleDocuments = (await filterFinancialDocuments(prisma, s, documents)).filter((document) => canViewDocument(s, {
     ...document,
     client: access.client,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
@@ -2066,6 +2081,7 @@ async function getActivePracticeCommunication(id: string) {
 export async function createPracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationDraftSchema.parse(clean(form));
+  if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara i messaggi esterni da Comunicazioni approvate della pratica.');
   const practice = await requireTechnicalPracticeEditAccess(s, data.technicalPracticeId);
   const communication = await prisma.practiceCommunication.create({ data: {
     technicalPracticeId: practice.id, clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId,
@@ -2079,6 +2095,7 @@ export async function createPracticeCommunicationDraft(form: FormData) {
 export async function updatePracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationUpdateSchema.parse(clean(form));
+  if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara una versione in Comunicazioni approvate della pratica.');
   const before = await getActivePracticeCommunication(data.id);
   if (!['bozza','da_revisionare'].includes(before.status)) throw new UserFacingActionError('Solo bozze o comunicazioni da revisionare possono essere modificate.');
   await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
@@ -2091,6 +2108,7 @@ export async function approvePracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.review');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
+  if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Le comunicazioni esterne richiedono l’approvazione esatta in Comunicazioni approvate.');
   await getPracticeForCommunication(before.technicalPracticeId, s);
   if (before.status !== 'da_revisionare' || before.createdById === s.userId) denyWriteAccess();
   const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'approvata', reviewedById: s.userId, reviewedAt: new Date() } });
@@ -2102,6 +2120,7 @@ export async function markPracticeCommunicationAsUsed(form: FormData) {
   const s = await requirePermission('practice_communications.mark_used');
   const data = practiceCommunicationIdSchema.parse(clean(form));
   const before = await getActivePracticeCommunication(data.id);
+  if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Registra gli invii esterni nel flusso Comunicazioni approvate, con destinatari e ricevuta.');
   if (before.status !== 'approvata') throw new UserFacingActionError('Solo comunicazioni approvate possono essere segnate come usate/inviate manualmente.');
   const practice = await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
   const now = new Date();

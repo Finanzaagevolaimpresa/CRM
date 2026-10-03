@@ -249,6 +249,8 @@ final class ConnectorConfig
             'serviceInterestText',
             'message',
             'sourcePagePath',
+            'campaignCode',
+            'adCode',
             'requestedAmount',
         );
         if (!is_array($value) || array_is_list($value) || $value === array()) {

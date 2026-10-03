@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "incremental": false, "types": ["node", "next/image-types/global"] },
+  "include": ["../../src/**/*.ts", "../../src/**/*.tsx", "../record-profiles.test.ts", "./service-db.test.ts"],
+  "exclude": ["../../node_modules"]
+}

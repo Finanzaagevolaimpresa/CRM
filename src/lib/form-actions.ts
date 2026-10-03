@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { createLead, updateLeadCommercial, convertLeadToClient, resolveLeadDuplicateCaseAction, initializeCommercialLeadInboxAction, claimCommercialLeadInboxAction, assignCommercialLeadInboxAction, unassignCommercialLeadInboxAction, recordCommercialLeadFirstResponseAction, closeCommercialLeadInboxAction, reopenCommercialLeadInboxAction, createCommercialOffer, updateCommercialOffer, createProject, registerDocument, createPreAnalysis, updatePreAnalysis, createDossier, createContract, registerPayment, runMockAgent, reviewAiOutput, approveAiOutput, updateClientServiceStatus, assignClientService, linkDocumentToService, uploadDocument, createDocumentChecklistItem, createStandardDocumentChecklist, updateDocumentChecklistItemStatus, linkDocumentToChecklistItem, unlinkDocumentFromChecklistItem, deactivateDocumentChecklistItem, createClientTask, updateClientTask, completeClientTask, updateClientServicePipeline, generateClientDossier, updateClientDossier, approveClientDossier, archiveClientDossier, runClientAiAgent, createClientDossierFromAiOutput, createTechnicalPractice, updateTechnicalPractice, updateTechnicalPracticeStatus, assignTechnicalPractice, archiveTechnicalPractice, createPracticeCommunicationDraft, updatePracticeCommunicationDraft, approvePracticeCommunicationDraft, markPracticeCommunicationAsUsed, archivePracticeCommunication } from './actions';
 import { UserFacingActionError } from './action-errors';
+import type { UploadResult } from './document-upload-contract';
 export async function createLeadAndRedirect(form: FormData) { await createLead(form); revalidatePath('/leads'); revalidatePath('/leads/inbox'); redirect('/leads?created=1'); }
 export async function updateLeadStatus(form: FormData) { await updateLeadCommercial(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard'); }
 export async function updateLeadCommercialAndRedirect(form: FormData) { await updateLeadCommercial(form); const id=String(form.get('id')||''); revalidatePath(`/leads/${id}`); revalidatePath('/leads'); revalidatePath('/dashboard'); }
@@ -26,6 +27,17 @@ async function uploadErrorRedirectUrl(message: string, fallback = '/documents') 
   const url = new URL(referer ?? fallback, 'http://localhost');
   url.searchParams.set('uploadError', message);
   return `${url.pathname}${url.search}${url.hash}`;
+}
+export async function uploadDocumentForBatch(form: FormData): Promise<UploadResult> {
+  try {
+    const document = await uploadDocument(form);
+    revalidatePath('/documents');
+    if (document.clientId) revalidatePath(`/clients/${document.clientId}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof UserFacingActionError) return { ok: false, message: error.message };
+    throw error;
+  }
 }
 export async function uploadDocumentAndRefresh(form: FormData) {
   try {

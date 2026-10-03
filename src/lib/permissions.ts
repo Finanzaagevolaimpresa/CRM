@@ -1,4 +1,5 @@
 import type { RoleCode } from '@prisma/client';
+import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 
 export const permissionCatalog = [
   { code: 'user.read', label: 'Leggere utenti', description: 'Visualizza utenti interni e profili.', group: 'utenti e impostazioni' },
@@ -86,7 +87,7 @@ export function isPermission(value: unknown): value is Permission { return typeo
 export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = {
   admin: ['*'],
   direzione: ['assignment.accept','technical.read','technical.write','technical.assign','technical.status','technical.admin','practice_communications.read','practice_communications.write','practice_communications.review','practice_communications.mark_used','user.read','settings.manage','lead.read','lead.duplicate.resolve','lead.inbox.assign','client.read','company.read','project.read','document.download','document.sensitive.read','ai.execution.request','ai.review','ai_agents.read','ai_agents.write','dossier.read','dossier.write','dossier.approve','legal.read','privacy.evidence.read','contract.read','payment.read','audit.read','service.read','service.write','service.assign','service.close'],
-  commerciale: ['assignment.accept','technical.read','practice_communications.read','lead.read','lead.write','lead.inbox.claim','client.read','client.write','company.read','project.read','service.read','service.assign','ai.execution.request'],
+  commerciale: ['assignment.accept','technical.read','practice_communications.read','practice_communications.write','lead.read','lead.write','lead.inbox.claim','client.read','client.write','company.read','project.read','service.read','service.assign','ai.execution.request'],
   consulente: ['assignment.accept','technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','company.write','project.read','project.write','service.read','service.write','service.assign','document.upload','document.download','ai.execution.request','ai.review','dossier.read','dossier.write'],
   revisore: ['technical.read','practice_communications.read','practice_communications.review','lead.read','client.read','company.read','project.read','document.download','document.sensitive.read','ai.execution.request','ai.review','dossier.read','dossier.approve','legal.read','service.read'],
   backoffice: ['assignment.accept','technical.read','technical.write','technical.status','practice_communications.read','practice_communications.write','practice_communications.mark_used','lead.read','client.read','company.read','project.read','document.upload','document.download','service.read','service.write','dossier.read','ai.execution.request'],
@@ -95,6 +96,7 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
 };
 
 export function roleHasPermission(role: RoleCode, permission: Permission) {
+  if (isFinancialPermission(permission) && !hasFinancialRole({ role })) return false;
   if (permission === 'ai.execution.consume') return false;
   if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {
     return role === 'admin' || role === 'direzione';

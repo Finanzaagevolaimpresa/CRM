@@ -1,3 +1,4 @@
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PracticeCommunicationTemplates } from '@/components/practice-communication-templates';
@@ -30,7 +31,6 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const practice = await prisma.technicalPractice.findFirst({ where: { id, deletedAt: null } });
   if (!practice) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non trovata</h1>;
   const client = await prisma.client.findFirst({ where: { id: practice.clientId, deletedAt: null } });
-  if (!client || !canViewTechnicalPractice(session, { ...practice, client })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
 
   const [project, service] = await Promise.all([
     practice.projectId ? prisma.project.findFirst({ where: { id: practice.projectId, deletedAt: null } }) : null,
@@ -43,6 +43,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     : null;
   if (service?.projectId && (!serviceProject || serviceProject.clientId !== practice.clientId)) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
   if (project && serviceProject && project.id !== serviceProject.id) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
+  if (!client || !canViewTechnicalPractice(session, { ...practice, client,
+    project: project ? { ...project, client } : null,
+    clientService: service ? { ...service, client, project: serviceProject ? { ...serviceProject, client } : null } : null,
+  })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
 
   const purchasedHandoff = service ? await prisma.auditLog.findFirst({ where: { entityType: 'TechnicalPractice', entityId: practice.id, event: 'purchased_service_handoff' }, select: { id: true } }) : null;
   const canViewDocuments = hasPermission(session, 'document.download');
@@ -64,7 +68,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     client,
     project: item.projectId ? projectById.get(item.projectId) ?? null : null,
   }]));
-  const documents = documentRows.filter((document) => canViewDocument(session, {
+  const documents = (await filterFinancialDocuments(prisma, session, documentRows)).filter((document) => canViewDocument(session, {
     ...document,
     client: document.clientId === client.id ? client : null,
     project: document.projectId ? projectById.get(document.projectId) ?? null : null,
@@ -132,14 +136,9 @@ export default async function Page({ params, searchParams }: { params: Promise<{
 
     <Card title="Aggiornamenti cliente / commerciale">
       <p className="mb-4 rounded-2xl bg-fai-orange/10 p-3 text-xs font-bold text-fai-orange">Nessun invio automatico: prepara bozze modificabili, fai revisionare e segna come usata/inviata solo dopo comunicazione manuale. Non promettere contributi, finanziamenti o approvazioni.</p>
+      <p className="mb-4"><Link className="font-bold underline" href={`/communications?kind=TECHNICAL&practice=${practice.id}`}>Apri comunicazioni approvate con destinatari, allegati e ricevute</Link>. Le bozze precedenti restano nello storico; non autorizzano un invio.</p>
       {canCommWrite ? <div className="mb-5 grid gap-4 lg:grid-cols-2">
-        <form action={createPracticeCommunicationDraftAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
-          <input type="hidden" name="technicalPracticeId" value={practice.id}/><input type="hidden" name="type" value="cliente"/>
-          <select name="channel" defaultValue="email" className="rounded-xl border p-2"><option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="telefono">Telefono</option><option value="pec">PEC</option></select>
-          <select name="title" className="rounded-xl border p-2">{practiceCommunicationTemplates.filter((template) => template.category === 'cliente').map((template) => <option key={template.id} value={template.suggestedTitle}>{template.name}</option>)}</select>
-          <textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates[0]?.suggestedText ?? ''} />
-          <select name="status" defaultValue="da_revisionare" className="rounded-xl border p-2"><option value="bozza">Bozza</option><option value="da_revisionare">Da revisionare</option></select><PrimaryButton type="submit">Crea bozza cliente</PrimaryButton>
-        </form>
+
         <form action={createPracticeCommunicationDraftAndRefresh} className="grid gap-3 rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
           <input type="hidden" name="technicalPracticeId" value={practice.id}/><input type="hidden" name="type" value="commerciale"/><input type="hidden" name="channel" value="nota_interna"/>
           <input name="title" className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates.find((template) => template.category === 'commerciale')?.suggestedTitle ?? 'Aggiornamento commerciale interno'}/><textarea name="content" rows={5} className="rounded-xl border p-2" defaultValue={practiceCommunicationTemplates.find((template) => template.category === 'commerciale')?.suggestedText ?? ''} /><textarea name="internalNote" rows={2} className="rounded-xl border p-2" placeholder="Nota interna opzionale"/>
@@ -150,11 +149,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <span key="title" className="font-semibold text-fai-navy">{c.title}<br/><span className="text-xs font-normal text-slate-500">Creata da {userOf(c.createdById)}</span></span>,
         `${c.type} · ${c.channel}`, <StatusBadge key="s" status={c.status}/>, <span key="content" className="line-clamp-4 whitespace-pre-wrap text-sm">{c.content}</span>,
         <span key="dates">{formatDateTime(c.reviewedAt)}<br/><span className="text-xs text-slate-500">Uso: {formatDateTime(c.usedAt)}</span></span>,
-        <div key="actions" className="grid gap-2">{canCommReview && c.status !== 'approvata' && c.status !== 'usata_inviata' ? <form action={approvePracticeCommunicationDraftAndRefresh}><input type="hidden" name="id" value={c.id}/><PrimaryButton type="submit">Approva</PrimaryButton></form> : null}{canCommUsed && c.status === 'approvata' ? <form action={markPracticeCommunicationAsUsedAndRefresh}><input type="hidden" name="id" value={c.id}/><PrimaryButton type="submit">Segna usata/inviata</PrimaryButton></form> : null}{canCommWrite && c.status !== 'archiviata' ? <form action={archivePracticeCommunicationAndRefresh}><input type="hidden" name="id" value={c.id}/><button className="rounded-xl border px-3 py-2 text-xs font-bold" type="submit">Archivia</button></form> : null}</div>
+        <div key="actions" className="grid gap-2">{canCommReview && c.type !== 'cliente' && c.channel === 'nota_interna' && c.status !== 'approvata' && c.status !== 'usata_inviata' ? <form action={approvePracticeCommunicationDraftAndRefresh}><input type="hidden" name="id" value={c.id}/><PrimaryButton type="submit">Approva</PrimaryButton></form> : null}{canCommUsed && c.type !== 'cliente' && c.channel === 'nota_interna' && c.status === 'approvata' ? <form action={markPracticeCommunicationAsUsedAndRefresh}><input type="hidden" name="id" value={c.id}/><PrimaryButton type="submit">Segna usata/inviata</PrimaryButton></form> : null}{canCommWrite && c.status !== 'archiviata' ? <form action={archivePracticeCommunicationAndRefresh}><input type="hidden" name="id" value={c.id}/><button className="rounded-xl border px-3 py-2 text-xs font-bold" type="submit">Archivia</button></form> : null}</div>
       ])} />}
       <p className="mt-4 text-xs text-slate-500">Integrazione AI futura: eventuali bozze assistite resteranno non attive e sempre da revisionare manualmente.</p>
     </Card>
-    {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={canCommWrite} placeholderContext={templatePlaceholderContext} /></Card> : null}
+    {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={false} placeholderContext={templatePlaceholderContext} /></Card> : null}
 
     <Card title="Documenti collegati / fascicolo">{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Documento privato']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <Link key="c" className="font-bold text-fai-blue underline" href={`/documents/${d.id}/download`}>Scarica documento</Link>])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
