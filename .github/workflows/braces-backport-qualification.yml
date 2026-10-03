@@ -1,0 +1,66 @@
+name: Braces backport technical qualification
+on:
+  pull_request:
+    paths:
+      - 'scripts/dependency-qualification/braces/**'
+      - '.github/workflows/braces-backport-qualification.yml'
+      - 'package.json'
+      - 'package-lock.json'
+permissions: { contents: read }
+concurrency:
+  group: braces-backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - name: Verify exact candidate and install the unchanged CRM lock cleanly
+        run: |
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          test ! -d node_modules
+          npm ci --ignore-scripts
+          git diff --exit-code -- package.json package-lock.json
+      - uses: actions/checkout@v4
+        with:
+          repository: micromatch/braces
+          ref: 28d440b5dd449dbf1fe6f3506cf94ecca4d02660
+          fetch-depth: 0
+          persist-credentials: false
+          path: node_modules/.cache/braces-qualification/upstream
+      - name: Verify immutable provenance and prepare separate original and candidate copies
+        run: node scripts/dependency-qualification/braces/prepare.mjs
+      - name: Record currently published compatible parent versions without changing dependencies
+        run: node scripts/dependency-qualification/braces/registry-snapshot.mjs
+      - name: Generate and retain the upstream test-tool lock, then install it cleanly
+        working-directory: node_modules/.cache/braces-qualification/upstream
+        run: |
+          test ! -d node_modules
+          npm install --package-lock-only --ignore-scripts
+          node -e 'const fs=require("node:fs"),c=require("node:crypto");fs.writeFileSync("../evidence/upstream-lock.sha256",c.createHash("sha256").update(fs.readFileSync("package-lock.json")).digest("hex")+"\n");fs.copyFileSync("package-lock.json","../evidence/upstream-package-lock.json")'
+          npm ci --ignore-scripts
+          npm ls --depth=0 > ../evidence/upstream-tools.txt
+          node --version > ../evidence/node-version.txt
+          npm --version > ../evidence/npm-version.txt
+      - name: Qualify complete immutable upstream suites and security counterproofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/dependency-qualification/braces/upstream-suite.mjs baseline
+          node scripts/dependency-qualification/braces/upstream-suite.mjs candidate
+          node scripts/dependency-qualification/braces/upstream-suite.mjs upstream
+          node --test scripts/dependency-qualification/braces/qualify.mjs | tee node_modules/.cache/braces-qualification/evidence/security-consumers.tap
+          node scripts/dependency-qualification/braces/finalize.mjs
+      - name: Retain public, synthetic qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: braces-backport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: node_modules/.cache/braces-qualification/evidence/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true

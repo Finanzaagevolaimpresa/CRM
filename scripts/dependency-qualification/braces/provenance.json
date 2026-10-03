@@ -1,0 +1,66 @@
+{
+  "upstream": "https://github.com/micromatch/braces/pull/72",
+  "upstreamBase": "e53730e6f935498326c72d768889ac194eedc0e0",
+  "upstreamHead": "28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+  "patchSha256": "4a770a9c404494c30b9bd8fd26e2e2e6517214697205691ea403377f24c0a48f",
+  "patchFiles": [
+    "lib/compile.js",
+    "lib/constants.js",
+    "lib/expand.js",
+    "lib/parse.js",
+    "lib/stringify.js"
+  ],
+  "protocol": "BRACES_BACKPORT_QUALIFICATION_R105",
+  "advisory": "GHSA-vfj7-8cjw-p6xm",
+  "license": "MIT; see UPSTREAM-LICENSE",
+  "npmVersion": "3.0.3",
+  "npmIntegrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
+  "files": {
+    "index.js": {
+      "baseline": "332ea07c7b006361aad12aa994ca75dc1db8e8382b884909e2f38f10b85c88a4",
+      "candidate": "332ea07c7b006361aad12aa994ca75dc1db8e8382b884909e2f38f10b85c88a4"
+    },
+    "lib/compile.js": {
+      "baseline": "dc98f22eee3d511785d92a00758d5f0d48efed5f5813bdecc2de430c529b5c9f",
+      "candidate": "b651f7715e6db8942ce61d3394357b4d81c8ece88240aa31a458ea1165edd195",
+      "prototypeWindowsSha256": "7b1ee4b35ea0890e7b6cba2e278dd324bed27bd75dc65d55e5e7fb625894d66e"
+    },
+    "lib/constants.js": {
+      "baseline": "c18ac5adb57308f1ce42a28552da3a31f5d83709743ebd9a636336813a744d4b",
+      "candidate": "f9fb688959232eee3e6ad7906a5b0e3234815db49ee857ef86983d65b917dc7c",
+      "prototypeWindowsSha256": "c32c88300d7dfa79ff85b7d739de3aa010b794a267f46b55f77b6f4819b75e4a"
+    },
+    "lib/expand.js": {
+      "baseline": "41ccc196ebfa7b7781a634e721eb744e4e7bcb54cba427a7e3d6806a1b9e58f7",
+      "candidate": "7ea3e14c2b2b256ef244fd3d83b8fcaa20aa2232b4e6d768c3bb6ab567f66cf5",
+      "prototypeWindowsSha256": "9c9b180e68f1208aa91b27987c20ad4833c8acd408b209c3c065ec8c0222c134"
+    },
+    "lib/parse.js": {
+      "baseline": "e572166565f15fa6ad9865ae49d678218e32aabfd1b3720f6d0d43d39800d310",
+      "candidate": "72aabaadaa555cdfbd07fbd7c7f743373e4dc8eec04a97550cc57bbeec30eb6c",
+      "prototypeWindowsSha256": "ebdd340fa6393e5ef19fc5fcf366c9e051ca0ba53d6cc60249e6084f9da4d521"
+    },
+    "lib/stringify.js": {
+      "baseline": "379f22d77bfa1478341ccd49c5e4267464aabcbba03558bab332aac23fc6f23a",
+      "candidate": "49dc2d8bafa74f34715a18a845bcb82ce66caaf3bab4cf117998e06b1f9a50a9",
+      "prototypeWindowsSha256": "039e44358843423667bcaa355c776adf30c9d8de6ef9dd5712ef25ebb9475de4"
+    },
+    "lib/utils.js": {
+      "baseline": "b5a7596aa67730412b3c029ef09e84e6b67b8e445cffd35d1d295549c89066c7",
+      "candidate": "b5a7596aa67730412b3c029ef09e84e6b67b8e445cffd35d1d295549c89066c7"
+    },
+    "LICENSE": {
+      "baseline": "35bdd8a44339719441900fb50fbefc5e2dca1ca662cbaed7a687de842c8b70f2",
+      "candidate": "35bdd8a44339719441900fb50fbefc5e2dca1ca662cbaed7a687de842c8b70f2"
+    },
+    "package.json": {
+      "baseline": "56f08b888a4f30dc7cf8a7dbb36ffe92b737912ba36abe9d069d32167c957ac7",
+      "candidate": "56f08b888a4f30dc7cf8a7dbb36ffe92b737912ba36abe9d069d32167c957ac7"
+    }
+  },
+  "prototypePatchSha256": "0621243322f4def3225f28a77e4924e96ddfa5eca92736a15b9dbaab168ace95",
+  "upstreamRelease": "74b2db2938fad48a2ea54a9c8bf27a37a62c350d",
+  "releaseTestFiles": 12,
+  "referenceTestFiles": 14,
+  "backportPatchSha256": "46950af71ea8af287eb98ecf88af97b944ccee4e49ab1f734eab24ba17f8cc5c"
+}
