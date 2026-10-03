@@ -1,0 +1,108 @@
+import { test, expect, type Page } from '@playwright/test';
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
+import { savePrivateDocumentFile } from '../../src/lib/storage';
+import { captureManual } from '../manuals-r23/capture';
+
+const db = new PrismaClient(), password = process.env.M1_BROWSER_PASSWORD!;
+test.afterAll(() => db.$disconnect());
+test('manuals: default limited collaborator, explicit consultation and separate commercial pipeline', async ({ browser }) => {
+  test.skip(process.env.PRIVILEGED_ACCESS_MODE !== 'enforced', 'Consultation grants require enforced admin step-up.');
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  expect(password.length).toBeGreaterThanOrEqual(24);
+  const suffix = randomUUID(), passwordHash = await bcrypt.hash(password, 4);
+  const admin = await db.user.create({ data: { name: 'Admin dimostrativo R23', email: `r23-admin-${suffix}@example.test`, role: 'admin', passwordHash } });
+  const collaborator = await db.user.create({ data: { name: 'Collaboratore dimostrativo R23', email: `r23-reader-${suffix}@example.test`, role: 'collaboratore_limitato', passwordHash } });
+  const sales = await db.user.create({ data: { name: 'Commerciale dimostrativo R23', email: `r23-sales-${suffix}@example.test`, role: 'commerciale', passwordHash } });
+  await db.applicationKeyVersion.upsert({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } },
+    create: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) }, update: {} });
+  const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente dimostrativo R23', salesOwnerId: sales.id } });
+  const foreign = await db.client.create({ data: { type: 'societa', displayName: 'Cliente fuori perimetro R23' } });
+  const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto dimostrativo R23' } });
+  const catalog = await db.serviceCatalog.create({ data: { code: 'R23-' + suffix, name: 'Servizio dimostrativo R23', category: 'sintetico', active: false } });
+  const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalog.id } });
+  const file = new File(['Documento interamente sintetico per il manuale del collaboratore.'], 'r23-dimostrativo.txt', { type: 'text/plain' });
+  const stored = await savePrivateDocumentFile({ file, clientId: client.id, clientServiceId: service.id, fileName: file.name });
+  const document = await db.document.create({ data: { ...stored, clientId: client.id, clientServiceId: service.id, type: 'altro',
+    title: 'Materiale dimostrativo R23', fileName: file.name, mimeType: file.type, uploadedById: admin.id, status: 'verificato' } });
+  const lead = await db.lead.create({ data: { firstName: 'Persona', lastName: 'Dimostrativa', companyName: 'Lead dimostrativo R23', assignedToId: sales.id, clientId: client.id } });
+  await db.commercialOffer.create({ data: { leadId: lead.id, clientId: client.id, title: 'Offerta dimostrativa R23', taxableAmount: 100, vatAmount: 22, totalAmount: 122, createdById: sales.id } });
+  const ac = await browser.newContext(), cc = await browser.newContext(), sc = await browser.newContext();
+  const ap = await ac.newPage(), cp = await cc.newPage(), sp = await sc.newPage();
+  async function login(page: Page, email: string) {
+    await page.goto('http://127.0.0.1:3015/login');
+    await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
+    await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
+  }
+  // Contexts use an explicit origin so all later relative navigations are bounded.
+  const origin = 'http://127.0.0.1:3015';
+  await login(ap, admin.email); await login(cp, collaborator.email); await login(sp, sales.email);
+  await cp.goto(`${origin}/clients/${client.id}`);
+  await expect(cp.getByRole('heading', { name: 'Cliente non trovato o non accessibile' })).toBeVisible();
+  await ap.goto(origin + '/settings/security'); await ap.getByLabel('Password corrente').fill(password);
+  await ap.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(ap).toHaveURL(/status=active/);
+  await ap.goto(`${origin}/settings/users/${collaborator.id}/perimeter?q=Cliente%20dimostrativo%20R23`);
+  await ap.getByRole('form', { name: 'Consultazione ' + client.displayName, exact: true }).getByRole('button', { name: 'Consenti consultazione' }).click();
+  await expect.poll(() => db.clientReadGrant.findUnique({ where: { userId_clientId: { userId: collaborator.id, clientId: client.id } } }).then(row => row?.active)).toBe(true);
+  await captureManual(ap, 'S01-perimetro', 'admin', 'Consultazione esplicita di un solo cliente, distinta dalla responsabilità operativa.');
+  await ap.goto(origin + '/settings/users');
+  await expect(ap.getByRole('cell', { name: collaborator.name, exact: true })).toBeVisible();
+  await captureManual(ap, 'S01-account', 'admin', 'Inventario degli account sintetici e dei profili; i comandi di gestione sono mostrati nelle viste dedicate.', ap.getByRole('cell', { name: collaborator.name, exact: true }));
+  await ap.goto(`${origin}/settings/users/${collaborator.id}`);
+  await expect(ap.locator('select[name="permission:document.upload"]')).toHaveValue('inherit');
+  if (process.env.R23_MANUAL_EVIDENCE) {
+    const rejectedId = 'S01-outside-viewport-rejected';
+    await expect(captureManual(ap, rejectedId, 'admin', 'Negative viewport regression: must never emit an image.',
+      ap.locator('select[name="permission:document.upload"]').locator('..'),
+      [ap.getByRole('heading', { name: 'Profilo utente', exact: true })])).rejects.toThrow(/evidence must be inside the screenshot/);
+    expect(existsSync(join(process.env.R23_MANUAL_EVIDENCE, rejectedId + '.png'))).toBe(false);
+    expect(existsSync(join(process.env.R23_MANUAL_EVIDENCE, rejectedId + '.json'))).toBe(false);
+    console.log('R29_CAPTURE_OUTSIDE_VIEWPORT_REJECTED_WITHOUT_SCREENSHOT');
+  }
+  await captureManual(ap, 'S01-permessi', 'admin', 'Permesso di caricamento documenti ereditato dal profilo e negato al collaboratore limitato; nessuna eccezione operativa aggiunta.', ap.locator('select[name="permission:document.upload"]').locator('..'));
+  await ap.goto(origin + '/settings/assignment-exceptions');
+  await expect(ap.getByRole('heading', { name: 'Coda eccezioni delle assegnazioni' })).toBeVisible();
+  await captureManual(ap, 'S01-eccezioni', 'admin', 'Navigazione nella coda delle eccezioni: la categoria Lead mostrata è vuota; i contatori delle altre categorie non ne mostrano il dettaglio.');
+  await cp.goto(`${origin}/clients/${client.id}`);
+  await expect(cp.getByRole('heading', { name: 'Fascicolo Cliente Interno — ' + client.displayName, exact: true })).toBeVisible();
+  expect(await db.userPermissionOverride.count({ where: { userId: collaborator.id } })).toBe(0);
+  await expect(cp.locator('input[type="file"]')).toHaveCount(0);
+  await expect(cp.getByRole('button', { name: 'Salva responsabili', exact: true })).toHaveCount(0);
+  await captureManual(cp, 'S05-cliente', 'collaboratore_limitato', 'Lettura del solo cliente concesso, senza upload o gestione delle responsabilità.');
+  await expect(cp.locator('#service-' + service.id)).toHaveCount(0);
+  await expect(cp.locator('#servizi-acquistati')).toContainText('Nessun servizio acquistato');
+  await captureManual(cp, 'S05-servizio', 'collaboratore_limitato', 'La consultazione del cliente non rende visibili servizi privi di una responsabilità ammessa per questo operatore.', cp.locator('#servizi-acquistati').getByRole('heading', { name: 'Servizi acquistati', exact: true }));
+  await expect(cp.getByText(document.title, { exact: true })).toHaveCount(0);
+  await expect(cp.locator('#documenti')).toContainText('Nessun documento');
+  await captureManual(cp, 'S05-documenti', 'collaboratore_limitato', 'Il documento del servizio fuori perimetro non è consultabile né scaricabile; il profilo base non può caricare documenti.', cp.locator('#documenti').getByRole('heading', { name: 'Documenti', exact: true }));
+  if (process.env.R23_MANUAL_EVIDENCE) {
+    const hashes = ['S05-cliente', 'S05-servizio', 'S05-documenti'].map(id =>
+      JSON.parse(readFileSync(join(process.env.R23_MANUAL_EVIDENCE!, id + '.json'), 'utf8')).sha256);
+    expect(new Set(hashes).size, 'Client, service and documents must have distinct screenshots').toBe(3);
+    console.log('R29_S05_THREE_DISTINCT_SCREENSHOTS');
+  }
+  expect((await cp.request.get(`${origin}/documents/${document.id}/download`)).status()).toBe(403);
+  await cp.goto(`${origin}/clients/${foreign.id}`);
+  await expect(cp.getByRole('heading', { name: 'Cliente non trovato o non accessibile' })).toBeVisible();
+  await cp.goto(origin + '/leads');
+  await expect(cp.getByRole('heading', { name: 'Pipeline commerciale lead' })).toHaveCount(0);
+  await sp.goto(origin + '/leads');
+  const leadRow = sp.getByRole('row').filter({ has: sp.locator(`a[href="/leads/${lead.id}"]`) });
+  await expect(leadRow).toHaveCount(1); await expect(leadRow).toContainText(lead.companyName!);
+  await captureManual(sp, 'S04-pipeline', 'commerciale', 'Riga del lead sintetico assegnato al commerciale, nella parte visibile della pipeline; la presenza del lead manuale non prova consenso marketing.', leadRow.getByRole('cell').first());
+  await sp.goto(`${origin}/leads/${lead.id}`);
+  await captureManual(sp, 'S04-lead', 'commerciale', 'Scheda del lead manuale interamente sintetico.');
+  await sp.goto(`${origin}/leads/${lead.id}/requests`);
+  await expect(sp.getByRole('heading', { name: 'Richieste e provenienza', exact: true })).toBeVisible();
+  await captureManual(sp, 'S04-richieste', 'commerciale', 'Le richieste restano distinte dal lead e dalle offerte; nessuna richiesta è inventata dal semplice inserimento manuale.');
+  await sp.goto(origin + '/commercial-offers');
+  await expect(sp.getByText('Offerta dimostrativa R23', { exact: true })).toBeVisible();
+  await captureManual(sp, 'S04-offerte', 'commerciale', 'Offerta sintetica separata dal lead e dalle richieste.');
+  await ac.close(); await cc.close(); await sc.close();
+});

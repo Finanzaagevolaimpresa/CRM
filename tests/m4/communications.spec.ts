@@ -1,3 +1,4 @@
+import { captureManual } from '../manuals-r23/capture';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -53,6 +54,13 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('PENDING');
   await admin.goto(target); await expect(admin).toHaveURL(/\/communications\?kind=TECHNICAL/);
   await expect(admin.getByText('In approvazione', { exact: true })).toBeVisible();
+  const messageHeading = admin.getByRole('heading', { name: 'M4 synthetic approved email · v1', exact: true });
+  const messageCard = admin.locator('section').filter({ has: messageHeading });
+  const messageBody = messageCard.locator('div.whitespace-pre-wrap');
+  await expect(messageBody).toHaveText('Synthetic exact body; no real delivery.');
+  await expect(messageBody).toBeVisible();
+  await expect(messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })).toBeVisible();
+  await captureManual(admin, 'S07-versione-esatta', 'admin', 'Messaggio sintetico in approvazione con destinatari, testo e allegato della versione esatta.', messageHeading, [messageBody, messageCard.getByRole('button', { name: 'Approva versione 1', exact: true })]);
   await admin.getByLabel('Approvo questo messaggio esatto', { exact: false }).check();
   await admin.getByRole('button', { name: 'Approva versione 1', exact: true }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('APPROVED');
@@ -66,6 +74,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   expect(decoded).toEqual({ protocol: 'FAI_APPROVED_MANUAL_EMAIL_V1', bcc: ['archive@invalid.test'], material: f.documentHash });
   const attempt = await db.communicationAttempt.findFirstOrThrow({ where: { messageId: message.id } }); expect(attempt.artifactHash).toBe(archiveHash);
   await expect(operator.getByRole('heading', { name: 'Registra l’esito manuale' })).toBeVisible();
+  await captureManual(operator, 'S07-pacchetto-esito', 'consulente', 'Modulo per dichiarare l’esito manuale, ancora da registrare. Il download completato è verificato dal test, non dalla schermata; nessuna email inviata.', operator.getByRole('heading', { name: 'Registra l’esito manuale' }));
   const evidence = operator.locator('form').filter({ has: operator.locator('input[name="intent"][value="evidence"]') });
   await evidence.getByLabel('Riferimento della ricevuta esterna').fill('SYNTHETIC_UNCERTAIN'); await evidence.getByRole('button', { name: 'Registra dichiarazione' }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).state).toBe('UNCERTAIN');
@@ -85,6 +94,7 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await incoming.getByRole('button', { name: 'Acquisisci risposta' }).click();
   await expect.poll(async () => db.communicationReply.count({ where: { messageId: message.id } })).toBe(1);
   await operator.reload(); await expect(operator.getByText('Synthetic acquired response', { exact: true })).toBeVisible();
+  await captureManual(operator, 'S07-risposta-sintetica', 'consulente', 'Risposta sintetica acquisita manualmente e collegata al messaggio, con riferimento della prova dichiarata; nessun provider reale contattato.', operator.getByText('Synthetic acquired response', { exact: true }));
   const before = await db.communicationAttempt.count({ where: { messageId: message.id } });
   await db.user.update({ where: { id: f.operatorId }, data: { active: false } }); await operator.reload(); await expect(operator).toHaveURL(/\/login/);
   expect(await db.communicationAttempt.count({ where: { messageId: message.id } })).toBe(before);

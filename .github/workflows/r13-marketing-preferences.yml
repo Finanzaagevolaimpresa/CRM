@@ -1,0 +1,72 @@
+name: R13 dormant marketing preferences
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: r13-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-r13-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      AUTH_SECRET: synthetic-r13-build-only-not-production
+      NEXT_TELEMETRY_DISABLED: '1'
+      AI_PROVIDER: mock
+      AI_ORCHESTRATOR_WORKER_ENABLED: '0'
+      AI_EXTERNAL_PROVIDERS_ENABLED: 'false'
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind exact candidate and preserve schema49
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          git diff --exit-code afcdaee5bc718088890a289997ad6fbd72433e79 HEAD -- prisma/schema.prisma prisma/migrations
+          mkdir -p "$RUNNER_TEMP/r13-evidence"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/r13-evidence/candidate.txt"
+          psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+      - name: Seven real PostgreSQL cases, no skipped tests
+        env:
+          RUN_R13_DB_TESTS: '1'
+          RUN_DB_TESTS: '1'
+          AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+          AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/db/marketing-preferences-r13-db.test.ts | tee "$RUNNER_TEMP/r13-evidence/postgresql.tap"
+          grep -Fx '# pass 7' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
+          test "$(psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -Atc "SELECT to_regclass('public.\"MarketingPreferenceEvent\"') IS NULL")" = t
+      - name: Lint, unit tests, full typecheck and build with locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run lint 2>&1 | tee "$RUNNER_TEMP/r13-evidence/lint.log"
+          npm test 2>&1 | tee "$RUNNER_TEMP/r13-evidence/unit.tap"
+          npm run typecheck 2>&1 | tee "$RUNNER_TEMP/r13-evidence/typecheck.log"
+          npm run build 2>&1 | tee "$RUNNER_TEMP/r13-evidence/build.log"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r13-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r13-evidence
+          if-no-files-found: error
+          retention-days: 14

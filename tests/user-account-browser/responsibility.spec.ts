@@ -1,3 +1,4 @@
+import { captureManual } from '../manuals-r23/capture';
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -72,10 +73,17 @@ test('department does not grant access; actual admin decisions and personal acce
   await tech.goto(path); await expect(tech.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
   expect(await acceptances()).toHaveLength(0);
   await assign(ids.tech); await expect.poll(async () => (await decisions()).length).toBe(2);
+  await admin.goto(search);
+  await expect(admin.getByText('Referente tecnico: ' + tag + '-tech', { exact: true })).toBeVisible();
+  await captureManual(admin, 'S02-decisione', 'admin', 'Decisione corrente registrata con il referente tecnico; la sua presa in carico personale è ancora da confermare.', admin.getByRole('heading', { name: 'Decisione corrente', exact: true }));
+  await tech.goto('/assignments?kind=TechnicalPractice');
+  await expect(tech.getByRole('link', { name: tag + '-practice', exact: true })).toBeVisible();
+  await captureManual(tech, 'S02-assegnazioni', 'consulente', 'Stesso caso sintetico nella coda personale del referente tecnico.');
   await tech.goto('/assignments?kind=TechnicalPractice'); await tech.getByRole('link', { name: tag + '-practice', exact: true }).click();
   await capture(tech, path); await tech.getByRole('button', { name: 'Confermo la presa in carico tecnico', exact: true }).click();
   const acceptedRequest = await captured(tech); await expect.poll(async () => (await acceptances()).length).toBe(1);
   const history = await acceptances(); expect(history[0].actorId).toBe(ids.tech);
+  await captureManual(tech, 'S02-accettazione', 'consulente', 'Conferma personale registrata dal referente corrente, distinta dalla decisione admin.');
   await replay(tech, acceptedRequest); expect(await acceptances()).toEqual(history);
   const denied = await replay(admin, acceptedRequest); expect(await denied.text()).toContain('Solo il referente individuale corrente');
   await replay(other, acceptedRequest); expect(await acceptances()).toEqual(history);
