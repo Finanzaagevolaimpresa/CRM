@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import type { Prisma } from '@prisma/client';
 import { OpenLink, PrimaryButton } from '@/components/actions';
@@ -103,8 +104,11 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     const serviceById = new Map(services.map((service) => [service.id, { ...service, client: clientById.get(service.clientId) ?? null, project: service.projectId ? projectById.get(service.projectId) ?? null : null }]));
 
     const visibleClients = clients.filter((client) => canViewClient(session, client));
-    const visiblePractices = technicalPractices.filter((practice) => canViewTechnicalPractice(session, { ...practice, client: clientById.get(practice.clientId) ?? null }));
-    const visibleDocuments = documents.filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
+    const visiblePractices = technicalPractices.filter((practice) => canViewTechnicalPractice(session, { ...practice, client: clientById.get(practice.clientId) ?? null,
+      project: practice.projectId ? projectById.get(practice.projectId) ?? null : null,
+      clientService: practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null,
+    }));
+    const visibleDocuments = (await filterFinancialDocuments(prisma, session, documents)).filter((document) => canViewDocument(session, { ...document, client: document.clientId ? clientById.get(document.clientId) : null, project: document.projectId ? projectById.get(document.projectId) : null, clientService: document.clientServiceId ? serviceById.get(document.clientServiceId) : null }, canReadSensitive));
     const visibleTasks = tasks;
     const communicationPracticeIds = [...new Set(communications.map((communication) => communication.technicalPracticeId))];
     const communicationPractices = communicationPracticeIds.length
@@ -117,6 +121,8 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       return canViewTechnicalPractice(session, {
         ...practice,
         client: clientById.get(practice.clientId) ?? null,
+        project: practice.projectId ? projectById.get(practice.projectId) ?? null : null,
+        clientService: practice.clientServiceId ? serviceById.get(practice.clientServiceId) ?? null : null,
       });
     });
     const visibleLeads = leads.filter((lead) => canViewLead(session, lead));
@@ -141,12 +147,12 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     const visibleEngagementIds = await getVisibleEngagementDossierIds(prisma, session,
       dossierRows.filter((dossier) => dossier.practiceReadinessId).map((dossier) => dossier.id));
     const visibleDossiers = dossierRows.filter((dossier) => {
-      if (dossier.practiceReadinessId && !visibleEngagementIds.has(dossier.id)) return false;
+      if (dossier.practiceReadinessId) return visibleEngagementIds.has(dossier.id);
       const client = clientById.get(dossier.clientId) ?? null;
       const project = dossier.projectId ? projectById.get(dossier.projectId) ?? null : null;
       const clientService = dossier.clientServiceId ? serviceById.get(dossier.clientServiceId) ?? null : null;
       if (!client || (dossier.projectId && !project) || (dossier.clientServiceId && !clientService)) return false;
-      return canViewClientContext(session, { clientId: dossier.clientId, client, project, clientService });
+      return canViewClientContext(session, { clientId: dossier.clientId, createdById: dossier.createdById, client, project, clientService });
     });
 
     groups = [

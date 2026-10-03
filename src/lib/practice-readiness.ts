@@ -1,3 +1,4 @@
+import { canAccessFinancialDocument } from './financial-document-access';
 import { loadClientReadScope } from './client-read-perimeter';
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -6,11 +7,14 @@ import { canonicalSha256 } from "./canonical-json";
 import {
   canEditClient,
   canViewChecklistItem,
-  canViewClient,
+  canViewCommercialOffer,
+  canViewService,
   canViewDocument,
   isSensitiveDocument,
 } from "./access-control";
 import { hasPermission } from "./permission-evaluator";
+import { canViewPracticeReadinessWork } from './practice-readiness-access';
+import { loadTechnicalPracticeAccessContext } from './technical-practice-access';
 import { lockAuthoritativeInternalSession } from "./internal-session-registry";
 import { engagementFeatureEnabled } from "./internal-engagement-mode";
 import {
@@ -165,9 +169,11 @@ async function practiceScope(
     !lead ||
     lead.deletedAt ||
     lead.clientId !== client.id ||
-    (write ? !canEditClient(a, client) : !canViewClient(a, client))
+    (write && !canEditClient(a, client))
   )
     throw new PracticeReadinessError("DENIED");
+  const context = await loadTechnicalPracticeAccessContext(tx, practice);
+  if (!canViewPracticeReadinessWork(a, { ...practice, ...context, lead })) throw new PracticeReadinessError('DENIED');
   return { practice, client, project, intake, lead };
 }
 
@@ -192,6 +198,7 @@ async function canUseDocument(
     clientService?.projectId && clientService.projectId !== project?.id
       ? await tx.project.findUnique({ where: { id: clientService.projectId } })
       : project;
+  if (!await canAccessFinancialDocument(tx, a, document)) return false;
   return canViewDocument(
     a,
     {
@@ -357,8 +364,10 @@ export async function proposePracticeOfferRevision(
         !client ||
         client.deletedAt ||
         !canEditClient(a, client) ||
+        !canViewPracticeReadinessWork(a, { client, projectId: input.projectId, project: project ? { ...project, client } : null, lead }) ||
         !offer ||
         offer.deletedAt ||
+        !canViewCommercialOffer(a, { ...offer, client, lead }) ||
         offer.clientId !== client.id ||
         offer.leadId !== lead.id ||
         offer.updatedAt.getTime() !== input.expectedOfferUpdatedAt.getTime() ||
@@ -505,6 +514,7 @@ export async function createPracticeReadiness(
       )
         throw new PracticeReadinessError("DENIED");
       const acceptedAt = new Date();
+      if (!canViewPracticeReadinessWork(a, { client, projectId: revision.projectId, project: project ? { ...project, client } : null, lead })) throw new PracticeReadinessError('DENIED');
       const evidenceHash = canonicalSha256({
         offerRevisionId: revision.id,
         payloadHash: revision.payloadHash,
@@ -582,6 +592,7 @@ export async function recordPracticeFunding(
   });
   return fundingTransaction(db, async (tx) => {
     const a = await actor(tx, claimed);
+    if (!hasPermission(a, 'payment.read')) throw new PracticeReadinessError("DENIED");
     const { practice } = await practiceScope(tx, a, input.practiceId);
     const old = await tx.practiceFundingEvidence.findFirst({
       where: {
@@ -628,6 +639,7 @@ async function transitionPracticeFunding(
   await assertPracticeReadinessDatabase(db);
   return fundingTransaction(db, async (tx) => {
     const a = await actor(tx, claimed);
+    if (!hasPermission(a, 'payment.read')) throw new PracticeReadinessError("DENIED");
     const { practice } = await practiceScope(tx, a, input.practiceId);
     const source = await tx.practiceFundingEvidence.findUnique({
       where: { id: input.evidenceId },
@@ -1214,6 +1226,7 @@ export async function formalizePractice(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
+      if (!hasPermission(a, 'contract.read')) throw new PracticeReadinessError("DENIED");
       const { practice: p } = await practiceScope(tx, a, input.practiceId);
       const [
         contract,
@@ -1324,7 +1337,7 @@ export async function linkPracticeClientService(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
-      const { practice } = await practiceScope(tx, a, input.practiceId);
+      const { practice, client, project } = await practiceScope(tx, a, input.practiceId);
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${input.clientServiceId} FOR UPDATE`;
       const [service, revision] = await Promise.all([
         tx.clientService.findUnique({ where: { id: input.clientServiceId } }),
@@ -1346,6 +1359,8 @@ export async function linkPracticeClientService(
         !revision ||
         service.serviceCatalogId !== revision.serviceCatalogId
       )
+        throw new PracticeReadinessError("DENIED");
+      if (!canViewService(a, { ...service, client, project: project ? { ...project, client } : null }))
         throw new PracticeReadinessError("DENIED");
       const row = await tx.practiceReadiness.update({
         where: { id: practice.id, version: input.expectedVersion },
@@ -1458,6 +1473,8 @@ export async function listAccessiblePracticeReadiness(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed, "service.read");
+      const canReadContracts = hasPermission(a, 'contract.read');
+      const canReadPayments = hasPermission(a, 'payment.read');
       const rows = await tx.practiceReadiness.findMany({
         include: {
           funding: true,
@@ -1469,8 +1486,26 @@ export async function listAccessiblePracticeReadiness(
       const visible = [];
       for (const row of rows) {
         try {
-          await practiceScope(tx, a, row.id, false);
+          const { client, project } = await practiceScope(tx, a, row.id, false);
           const prerequisites = await resolvePrerequisites(tx, row.id, a);
+          // Resolve link eligibility against the complete authoritative context,
+          // before concealing contract identifiers from operational readers.
+          const linkableServices: { id: string; label: string }[] = [];
+          if (!row.startedAt && row.currentFormalizationId && hasPermission(a, 'service.write') && canEditClient(a, client)) {
+            const revision = await tx.serviceCatalogRevision.findUnique({ where: { id: row.serviceRevisionId } });
+            if (revision) {
+              const candidates = await tx.clientService.findMany({ where: {
+                clientId: row.clientId, projectId: row.projectId, contractId: row.contractId,
+                serviceCatalogId: revision.serviceCatalogId, deletedAt: null,
+                status: 'richiesto', operationalStatus: 'nuova',
+              }, orderBy: { id: 'asc' } });
+              for (const service of candidates) {
+                if (canViewService(a, { ...service, client, project: project ? { ...project, client } : null })) {
+                  linkableServices.push({ id: service.id, label: `${revision.publicName} · ${project?.title ?? 'senza progetto'}` });
+                }
+              }
+            }
+          }
           const materials = [];
           for (const material of row.materials) {
             const item = await tx.documentChecklistItem.findUnique({
@@ -1494,7 +1529,7 @@ export async function listAccessiblePracticeReadiness(
               materials.push(material);
           }
           const formalizations = [];
-          for (const formalization of row.formalizations) {
+          for (const formalization of canReadContracts ? row.formalizations : []) {
             const document = await tx.document.findUnique({
               where: { id: formalization.signedDocumentId },
             });
@@ -1503,11 +1538,23 @@ export async function listAccessiblePracticeReadiness(
           }
           visible.push({
             ...row,
+            contractId: canReadContracts ? row.contractId : null,
+            currentFormalizationId: canReadContracts ? row.currentFormalizationId : null,
+            signedDocumentId: canReadContracts ? row.signedDocumentId : null,
+            signedDocumentVersionId: canReadContracts ? row.signedDocumentVersionId : null,
+            formalizedAt: canReadContracts ? row.formalizedAt : null,
+            formalizedById: canReadContracts ? row.formalizedById : null,
+            startEvidence: canReadContracts && canReadPayments ? row.startEvidence : null,
+            requiredInitialAmount: canReadPayments ? row.requiredInitialAmount : null,
+            funding: canReadPayments ? row.funding : [],
             materials,
-            formalizations,
+            linkableServices,
+            formalizations: canReadContracts ? formalizations : [],
             prerequisites: {
-              missing: prerequisites.missing,
-              availableFunding: prerequisites.paid.toFixed(2),
+              missing: [...new Set(prerequisites.missing.map(code =>
+                (code === 'accredito_iniziale' && !canReadPayments) || (code === 'incarico_formalizzato' && !canReadContracts)
+                  ? 'VERIFICA_AMMINISTRATIVA' : code))],
+              availableFunding: canReadPayments ? prerequisites.paid.toFixed(2) : null,
             },
           });
         } catch (error) {

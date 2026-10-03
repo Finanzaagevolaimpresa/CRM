@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "incremental": false, "types": ["node", "next/image-types/global"] },
+  "include": ["../../src/**/*.ts", "../../src/**/*.tsx", "../access-control.test.ts", "../client-read-perimeter.test.ts", "../role-dashboard-isolation.test.ts", "../dashboard-technical-counter-context.test.ts", "../db/role-dashboard-isolation-db.test.ts", "../m5/service-db.test.ts", "../m4/communications-db.test.ts", "../db/manual-assignment-db.test.ts", "../db/manual-preanalysis-db.test.ts"],
+  "exclude": ["../../node_modules"]
+}

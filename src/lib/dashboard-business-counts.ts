@@ -1,3 +1,4 @@
+import { hasPermission } from './permission-evaluator';
 import type { Dossier, Prisma } from '@prisma/client';
 import { canViewClient, canViewCommercialOffer, canViewProject } from './access-control';
 import type { AuthSession } from './auth';
@@ -54,6 +55,37 @@ function canAccessClientProjectRecord(
 
 export type DashboardAccessibleOfferCounts = { sent: number; accepted: number };
 
+// All offer widgets use exact authorized IDs, including refused and follow-up
+// counts. A client-level SQL OR must never override a different lead assignee.
+export async function getAccessibleDashboardOfferIds(session: AuthSession): Promise<string[]> {
+  return prisma.$transaction(async (tx) => {
+    const visible: string[] = [];
+    let afterId: string | undefined;
+    while (true) {
+      const offers = await tx.commercialOffer.findMany({
+        where: { deletedAt: null, ...(afterId ? { id: { gt: afterId } } : {}) },
+        orderBy: { id: 'asc' }, take: batchSize,
+        select: { id: true, createdById: true, leadId: true, clientId: true },
+      });
+      if (!offers.length) break;
+      const [leads, clients] = await Promise.all([
+        tx.lead.findMany({ where: { id: { in: offers.flatMap(row => row.leadId ? [row.leadId] : []) }, deletedAt: null },
+          select: { id: true, assignedToId: true, clientId: true } }),
+        tx.client.findMany({ where: { id: { in: offers.flatMap(row => row.clientId ? [row.clientId] : []) }, deletedAt: null }, select: clientSelect }),
+      ]);
+      const leadById = new Map(leads.map(row => [row.id, row]));
+      const clientById = new Map(clients.map(row => [row.id, row]));
+      for (const offer of offers) if (canViewCommercialOffer(session, { ...offer,
+        lead: offer.leadId ? leadById.get(offer.leadId) ?? null : null,
+        client: offer.clientId ? clientById.get(offer.clientId) ?? null : null,
+      })) visible.push(offer.id);
+      afterId = offers[offers.length - 1].id;
+      if (offers.length < batchSize) break;
+    }
+    return visible;
+  }, transactionOptions);
+}
+
 // These totals intentionally do not reuse bounded UI previews. Every candidate
 // is visited in one snapshot; an error rejects the total instead of truncating it.
 export async function countAccessibleDashboardOffers(session: AuthSession): Promise<DashboardAccessibleOfferCounts> {
@@ -101,6 +133,7 @@ export async function countAccessibleDashboardOffers(session: AuthSession): Prom
 }
 
 export async function countAccessibleDashboardPayments(session: AuthSession): Promise<number> {
+  if (!hasPermission(session, 'payment.read')) return 0;
   return prisma.$transaction(async (tx) => {
     let count = 0;
     let afterId: string | undefined;

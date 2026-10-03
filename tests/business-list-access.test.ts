@@ -15,13 +15,13 @@ const paymentContext = { payment, contract, client, project };
 const preAnalysisContext = { preAnalysis, client, project, company };
 const deletedAt = new Date('2026-09-01T00:00:00Z');
 
-test('valid payment and pre-analysis parents are visible to their assigned consultant', () => {
-  assert.equal(canViewPaymentListRecord(consultant, paymentContext), true);
+test('valid financial parents are visible to administration, pre-analysis to its consultant', () => {
+  assert.equal(canViewPaymentListRecord(admin, paymentContext), true);
   assert.equal(canViewPreAnalysisListRecord(consultant, preAnalysisContext), true);
 });
 
 test('payment without a contract project does not require a project', () => {
-  assert.equal(canViewPaymentListRecord(consultant, {
+  assert.equal(canViewPaymentListRecord(admin, {
     ...paymentContext, contract: { ...contract, projectId: null }, project: null,
   }), true);
   assert.equal(canViewPreAnalysisListRecord(consultant, {
@@ -72,7 +72,7 @@ test('project-only ownership does not bypass the required client visibility', ()
 test('parents already selected by deletedAt null may omit that property', () => {
   const activeClient = { id: client.id, salesOwnerId: client.salesOwnerId, consultantId: client.consultantId };
   const activeProject = { id: project.id, clientId: project.clientId, consultantId: project.consultantId };
-  assert.equal(canViewPaymentListRecord(consultant, { ...paymentContext, client: activeClient, project: activeProject }), true);
+  assert.equal(canViewPaymentListRecord(admin, { ...paymentContext, client: activeClient, project: activeProject }), true);
   assert.equal(canViewPreAnalysisListRecord(consultant, {
     ...preAnalysisContext, client: activeClient, project: activeProject, company: { id: company.id, clientId: company.clientId },
   }), true);
@@ -91,10 +91,10 @@ test('the shared predicates yield matching authorized list IDs and aggregate cou
     { id: 'deleted-company', context: { ...preAnalysisContext, company: { ...company, deletedAt } } },
     { id: 'wrong-project', context: { ...preAnalysisContext, project: { ...project, clientId: 'other' } } },
   ];
-  const paymentList = paymentRecords.filter(({ context }) => canViewPaymentListRecord(consultant, context));
+  const paymentList = paymentRecords.filter(({ context }) => canViewPaymentListRecord(admin, context));
   const preAnalysisList = preAnalysisRecords.filter(({ context }) => canViewPreAnalysisListRecord(consultant, context));
   assert.deepEqual(paymentList.map(({ id }) => id), ['valid', 'without-project']);
   assert.deepEqual(preAnalysisList.map(({ id }) => id), ['valid', 'without-company']);
-  assert.equal(paymentRecords.reduce((count, { context }) => count + Number(canViewPaymentListRecord(consultant, context)), 0), paymentList.length);
+  assert.equal(paymentRecords.reduce((count, { context }) => count + Number(canViewPaymentListRecord(admin, context)), 0), paymentList.length);
   assert.equal(preAnalysisRecords.reduce((count, { context }) => count + Number(canViewPreAnalysisListRecord(consultant, context)), 0), preAnalysisList.length);
 });

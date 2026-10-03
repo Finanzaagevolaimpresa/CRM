@@ -57,6 +57,7 @@ async function main() {
         email: "readiness-owner@invalid.test",
         name: "Responsabile Pratiche",
         passwordHash,
+        // This complete journey includes restricted financial operations.
         role: "direzione",
       },
       {
@@ -171,7 +172,7 @@ async function main() {
         clientId: client.id,
         projectId: project.id,
         type: "documento_operativo",
-        title: `Incarico ${item.label}`,
+        title: `Materiale operativo ${item.label}`,
         fileName: `${item.key}.pdf`,
         mimeType: "application/pdf",
         sizeBytes: 10,
@@ -191,6 +192,17 @@ async function main() {
         checksum: document.checksum,
       },
     });
+    // Operational evidence must be distinct from the confidential signed contract.
+    const signedDocument = await db.document.create({ data: {
+      ...document,
+      id: `readiness-browser-signed-document-${item.key}`,
+      type: 'incarico', title: `Incarico ${item.label}`,
+      fileName: `signed-${item.key}.pdf`, storagePath: `synthetic/readiness/signed-${item.key}.pdf`,
+      checksum: createHash('sha256').update(`signed-document-${item.key}`).digest('hex'),
+    } });
+    await db.documentVersion.create({ data: {
+      documentId: signedDocument.id, version: 1, storagePath: signedDocument.storagePath, checksum: signedDocument.checksum,
+    } });
     const sensitiveDocument = await db.document.create({
       data: {
         id: `readiness-browser-sensitive-document-${item.key}`,
@@ -210,7 +222,7 @@ async function main() {
           .digest("hex"),
       },
     });
-    for (const [source, bytes] of [[document, `document-${item.key}`], [sensitiveDocument, `sensitive-document-${item.key}`]] as const) {
+    for (const [source, bytes] of [[document, `document-${item.key}`], [signedDocument, `signed-document-${item.key}`], [sensitiveDocument, `sensitive-document-${item.key}`]] as const) {
       const path = localPathFromStoragePath(source.storagePath);
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       writeFileSync(path, bytes, { flag: 'wx', mode: 0o600 });
@@ -235,7 +247,7 @@ async function main() {
         totalAmount: total,
         status: "firmato",
         signedAt: new Date(),
-        signedDocumentId: document.id,
+        signedDocumentId: signedDocument.id,
       },
     });
     await db.documentChecklistItem.create({

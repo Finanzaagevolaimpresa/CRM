@@ -1,8 +1,10 @@
+import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type CommunicationMailbox } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { canViewClientContext, canViewDocument, canViewTechnicalPractice } from './access-control';
+import { canViewDocument, canViewTechnicalPractice } from './access-control';
+import { canViewPracticeReadinessWork } from './practice-readiness-access';
 import { loadClientReadScope } from './client-read-perimeter';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
@@ -78,9 +80,18 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
     || (write && service?.status === 'sospeso') || (write && project?.status === 'archiviato')) denied();
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
-  const allowed = technical && 'commercialOwnerId' in practice
-    ? canViewTechnicalPractice(current, { ...practice, client })
-    : canViewClientContext(current, { clientId: client.id, client, project: hydratedProject, clientService: hydratedService });
+  let allowed = false;
+  if (technical && 'commercialOwnerId' in practice) {
+    allowed = canViewTechnicalPractice(current, { ...practice, client, project: hydratedProject, clientService: hydratedService });
+  } else if (!technical && 'controlledIntakeId' in practice) {
+    await tx.$queryRaw`SELECT "id" FROM "ControlledIntake" WHERE "id"=${practice.controlledIntakeId}::uuid FOR SHARE`;
+    const intake = await tx.controlledIntake.findUnique({ where: { id: practice.controlledIntakeId } });
+    if (!intake) denied();
+    await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id"=${intake.leadId} FOR SHARE`;
+    const lead = await tx.lead.findUnique({ where: { id: intake.leadId } });
+    if (!lead || lead.deletedAt || lead.clientId !== client.id) denied();
+    allowed = canViewPracticeReadinessWork(current, { ...practice, client, lead, project: hydratedProject, clientService: hydratedService });
+  }
   if (!allowed) denied();
   return { context, practice, client, project: hydratedProject, service: hydratedService };
 }
@@ -138,7 +149,7 @@ async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnTy
       || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
       || (doc.projectId && doc.projectId !== scope.project?.id)
       || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-      || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+      || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
         clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) denied();
     let bytes: Buffer;
     try { bytes = await (runtime.readDocument ?? readPrivateDocumentBounded)(version.storagePath, 20 * 1024 * 1024 - total); }
@@ -334,7 +345,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
         if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
           || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
           || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-          || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+          || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) attachmentAccess = false;
       }
       if (!attachmentAccess) continue;
@@ -347,7 +358,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       const candidates = await tx.document.findMany({ where: { clientId: scope.client.id, deletedAt: null }, orderBy: { updatedAt: 'desc' }, take: 100 });
       for (const doc of candidates) {
         if ((doc.projectId && doc.projectId !== scope.project?.id) || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-          || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
+          || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) continue;
         const versions = await tx.documentVersion.findMany({ where: { documentId: doc.id }, orderBy: { version: 'desc' }, take: 5 });
         documents.push({ id: doc.id, title: doc.title, versions: versions.map(v => ({ id: v.id, version: v.version })) });

@@ -1,4 +1,5 @@
 import type { RoleCode, UserPermissionOverride } from '@prisma/client';
+import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 import {
   adminOnlyAiExecutionPermissions,
   isPermission,
@@ -26,6 +27,7 @@ export interface PermissionDecision {
 
 export function evaluatePermission(session: PermissionSession, permission: Permission): PermissionDecision {
   if (!isPermission(permission) || session.active !== true) return { allowed: false, source: 'ROLE' };
+  if (isFinancialPermission(permission) && !hasFinancialRole(session)) return { allowed: false, source: 'ROLE' };
   if (permission === 'ai.execution.consume') {
     return { allowed: false, source: session.role === 'admin' ? 'ADMIN' : 'ROLE' };
   }

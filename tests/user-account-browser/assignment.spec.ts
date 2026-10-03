@@ -48,7 +48,7 @@ async function replay(page: Page, request: Request, oldTimestamp: string, newTim
   });
 }
 
-test('search applies lead visibility before the result limit for commercial and direction sessions', async ({ browser }) => {
+test('search filters commercial assignments before the limit and includes unassigned leads for direction', async ({ browser }) => {
   const query = 'r05-search-window-' + fixtureRun;
   const visible = await db.lead.create({ data: { firstName: 'Visible', lastName: query, assignedToId: salesId, updatedAt: new Date('2026-01-01T00:00:00Z') } });
   await db.lead.createMany({ data: Array.from({ length: 13 }, (_, index) => ({ firstName: `Hidden ${index}`, lastName: query, assignedToId: null })) });
@@ -57,8 +57,8 @@ test('search applies lead visibility before the result limit for commercial and 
     const page = await context.newPage();
     await login(page, identity);
     await page.goto('/search?q=' + encodeURIComponent(query));
-    await expect(page.locator('a[href="/leads/' + visible.id + '"]')).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: /^Hidden / })).toHaveCount(0);
+    await expect(page.locator('a[href="/leads/' + visible.id + '"]')).toHaveCount(identity === 'sales' ? 1 : 0);
+    await expect(page.getByRole('heading', { name: /^Hidden / })).toHaveCount(identity === 'sales' ? 0 : 12);
     await context.close();
   }
 });

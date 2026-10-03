@@ -1,10 +1,11 @@
+import { filterFinancialDocuments, canAccessFinancialDocument } from './financial-document-access';
 import { randomUUID, createHash } from 'node:crypto';
 import { Prisma, type ClientDossier, type Client, type Project, type ClientService, type EngagementDossierVersion } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
-import { canViewClientContext, canViewDocument } from './access-control';
+import { canViewClient, canViewClientContext, canViewDocument } from './access-control';
 import { redactAuditPayload } from './data-classification';
 import { readPrivateDocumentBounded } from './storage';
 import { canonicalSha256 } from './canonical-json';
@@ -101,14 +102,22 @@ export async function readInitialServiceState(tx: Tx, context: InitialServiceCon
   return { code, definition: INITIAL_SERVICES[code], plan, planHash: plan ? initialServicePlanHash(plan) : null,
     version, active, allReviews, assessment };
 }
+// A client consultation grant alone never opens work. The latest admin plan
+// explicitly assigns a human reviewer to this exact dossier and service.
+export async function hasInitialServiceReviewAssignment(tx: Tx, current: AuthSession, context: InitialServiceContext) {
+  if (!hasPermission(current, 'dossier.approve') || !canViewClient(current, context.client)) return false;
+  const state = await readInitialServiceState(tx, context);
+  return state?.plan?.humanReviewerIds.includes(current.userId) === true;
+}
 async function livePerson(tx: Tx, context: InitialServiceContext, userId: string, approve: boolean) {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR SHARE`;
   const row = await tx.user.findUnique({ where: { id: userId }, include: { permissionOverrides: true } });
   if (!row?.active || row.deletedAt || !hasPermission(row, approve ? 'dossier.approve' : 'dossier.write')) denied();
   const current = { userId, role: row.role, active: row.active, permissionOverrides: row.permissionOverrides,
     expiresAt: Math.floor(Date.now() / 1000) + 60, clientReadScope: await loadClientReadScope(tx, userId) } satisfies AuthSession;
-  if (!canViewClientContext(current, { clientId: context.client.id, client: context.client, project: { ...context.project, client: context.client },
-    clientService: { ...context.service, client: context.client, project: { ...context.project, client: context.client } } })) denied();
+  if (approve ? !canViewClient(current, context.client) || !hasPermission(current, 'dossier.read')
+    : !canViewClientContext(current, { clientId: context.client.id, client: context.client, project: { ...context.project, client: context.client },
+      clientService: { ...context.service, client: context.client, project: { ...context.project, client: context.client } } })) denied();
   return current;
 }
 export async function configureInitialService(tx: Tx, current: AuthSession, context: InitialServiceContext, raw: unknown, runtime: InitialServiceRuntime = {}) {
@@ -140,6 +149,7 @@ async function reviewDocument(tx: Tx, current: AuthSession, context: InitialServ
   if (!version || !doc || doc.deletedAt || doc.clientId !== context.client.id || (doc.projectId && doc.projectId !== context.project.id)
     || (doc.clientServiceId && doc.clientServiceId !== context.service.id) || ['respinto','scaduto','archiviato'].includes(doc.status)
     || (doc.validUntil && doc.validUntil.getTime() <= Date.now()) || !hasPermission(current, 'document.download')
+    || !await canAccessFinancialDocument(tx, current, doc)
     || !canViewDocument(current, { ...doc, client: context.client,
       project: doc.projectId ? { ...context.project, client: context.client } : null,
       clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
@@ -186,7 +196,7 @@ export async function initialServiceChoices(tx: Tx, current: AuthSession, contex
   const documents = hasPermission(current, 'document.download') ? await tx.document.findMany({
     where: { clientId: context.client.id, deletedAt: null, OR: [{ projectId: null }, { projectId: context.project.id }] },
     orderBy: { createdAt: 'desc' }, take: 100 }) : [];
-  const visible = documents.filter(doc => (!doc.clientServiceId || doc.clientServiceId === context.service.id) && canViewDocument(current,
+  const visible = (await filterFinancialDocuments(tx, current, documents)).filter(doc => (!doc.clientServiceId || doc.clientServiceId === context.service.id) && canViewDocument(current,
     { ...doc, client: context.client, project: doc.projectId ? { ...context.project, client: context.client } : null,
       clientService: doc.clientServiceId ? { ...context.service, client: context.client, project: { ...context.project, client: context.client } } : null },
     hasPermission(current, 'document.sensitive.read')));

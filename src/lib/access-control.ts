@@ -1,8 +1,11 @@
 import type { Client, ClientService, Document, DocumentChecklistItem, Lead, Project, RoleCode, Task, User } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { hasClientReadGrant, type ClientReadScope } from './client-read-perimeter-policy';
+import { hasGlobalReadAccess } from './read-supervision';
+import type { FinancialDocumentMetadata } from './financial-privacy-policy';
+import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -16,6 +19,7 @@ type ServiceAccessContext = Pick<ClientService, 'clientId' | 'assignedToId'> & {
 };
 type ClientScopedContext = {
   clientId?: string | null;
+  createdById?: string | null;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
@@ -87,7 +91,7 @@ function hasValidServiceContext(service: ServiceAccessContext) {
 }
 
 export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) {
-  if (hasGlobalAccess(user)) return true;
+  if (hasGlobalReadAccess(user)) return true;
   if (hasClientReadGrant(user, client.id)) return true;
   const id = getActorId(user);
   if (user.role === 'commerciale') return client.salesOwnerId === id;
@@ -96,33 +100,34 @@ export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
     && (client.salesOwnerId === id || client.consultantId === id);
 }
 export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
-  if (user.role === 'admin') return true;
+  if (hasGlobalReadAccess(user)) return true;
   if (lead.assignedToId === null) return false;
-  if (user.role === 'direzione') return true;
   return lead.assignedToId === getActorId(user);
+}
+function hasClientResponsibility(user: Actor, client: Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) {
+  return canViewClient({ ...user, clientReadScope: [] }, client);
 }
 export function canViewProject(user: Actor, project: ProjectAccessContext) {
   const client = project.client;
   if (!client || !hasValidProjectContext(project)) return false;
-  if (hasGlobalAccess(user)) return true;
-  const id = getActorId(user);
-  if (user.role === 'commerciale') return canViewClient(user, client);
-  if (['consulente', 'backoffice', 'collaboratore_limitato'].includes(user.role)) return project.consultantId === id || canViewClient(user, client);
-  return canViewClient(user, client);
+  if (hasGlobalReadAccess(user)) return true;
+  if (project.consultantId) return project.consultantId === getActorId(user);
+  return hasClientResponsibility(user, client);
 }
 export function canViewService(user: Actor, service: ServiceAccessContext) {
   if (!hasValidServiceContext(service)) return false;
-  if (hasGlobalAccess(user)) return true;
-  if (service.assignedToId === getActorId(user)) return true;
-  if (service.project && canViewProject(user, service.project)) return true;
-  return !!service.client && canViewClient(user, service.client);
+  if (hasGlobalReadAccess(user)) return true;
+  if (service.assignedToId) return service.assignedToId === getActorId(user);
+  if (service.project) return canViewProject(user, service.project);
+  return !!service.client && hasClientResponsibility(user, service.client);
 }
 
 export function canViewClientContext(user: Actor, context: ClientScopedContext) {
   if (!hasConsistentClientContext(context) || !context.client) return false;
   if (context.project && !hasValidProjectContext(context.project)) return false;
   if (context.clientService && !hasValidServiceContext(context.clientService)) return false;
-  const clientAllowed = canViewClient(user, context.client);
+  const clientAllowed = hasClientResponsibility(user, context.client)
+    && (hasGlobalReadAccess(user) || !('createdById' in context) || context.createdById === getActorId(user));
   const projectAllowed = context.project ? canViewProject(user, context.project) : false;
   const serviceAllowed = context.clientService ? canViewService(user, context.clientService) : false;
 
@@ -131,13 +136,14 @@ export function canViewClientContext(user: Actor, context: ClientScopedContext) 
     const selectedProjectId = 'id' in context.project ? context.project.id : undefined;
     if (serviceProjectId && (!selectedProjectId || serviceProjectId !== selectedProjectId)) return false;
     if (!serviceProjectId) return serviceAllowed && projectAllowed;
-    return serviceAllowed || projectAllowed;
+    return serviceAllowed;
   }
   if (context.clientService) return serviceAllowed;
   if (context.project) return projectAllowed;
   return clientAllowed;
 }
-export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+  if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
   if (document.clientId && !document.client) return false;
@@ -149,14 +155,13 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
   if (document.projectId && document.clientService?.projectId && document.clientService.projectId !== document.projectId) return false;
   if (document.project && !hasValidProjectContext(document.project)) return false;
   if (document.clientService && !hasValidServiceContext(document.clientService)) return false;
-  if (hasGlobalAccess(user)) return true;
+  if (hasGlobalReadAccess(user)) return true;
   const id = getActorId(user);
   // Uploading a client document records provenance, not a permanent access grant.
   if (!document.clientId && document.uploadedById === id) return true;
-  if (document.clientService && canViewService(user, document.clientService)) return true;
-  if (document.project && canViewProject(user, document.project)) return true;
-  if (document.client && canViewClient(user, document.client)) return true;
-  return false;
+  if (document.clientService) return canViewService(user, document.clientService);
+  if (document.project) return canViewProject(user, document.project);
+  return document.uploadedById === id && !!document.client && hasClientResponsibility(user, document.client);
 }
 
 export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
@@ -171,15 +176,16 @@ export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccess
   if (offer.leadId && !offer.lead) return false;
   if (offer.clientId && !offer.client) return false;
   if (offer.lead?.clientId && offer.clientId && offer.lead.clientId !== offer.clientId) return false;
-  if (hasGlobalAccess(user)) return true;
+  if (hasGlobalReadAccess(user)) return true;
 
   const id = getActorId(user);
   if (!offer.leadId && !offer.clientId && offer.createdById === id) return true;
-  if (offer.lead && canViewLead(user, offer.lead)) return true;
-  return !!offer.client && canViewClient(user, offer.client);
+  if (offer.lead) return canViewLead(user, offer.lead);
+  return (!offer.createdById || offer.createdById === id) && !!offer.client && hasClientResponsibility(user, offer.client);
 }
 
 export function canEditCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
+  if (!canViewCommercialOffer(user, offer)) return false;
   if (offer.leadId && !offer.lead) return false;
   if (offer.clientId && !offer.client) return false;
   if (offer.lead?.clientId && offer.clientId && offer.lead.clientId !== offer.clientId) return false;
@@ -201,6 +207,7 @@ export function canEditClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
 }
 
 export function canEditProject(user: Actor, project: ProjectAccessContext) {
+  if (!canViewProject(user, project)) return false;
   if (!hasConsistentClientContext({ clientId: project.clientId, client: project.client })) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['consulente', 'backoffice'].includes(user.role)) return false;
@@ -209,6 +216,7 @@ export function canEditProject(user: Actor, project: ProjectAccessContext) {
 }
 
 export function canEditService(user: Actor, service: ServiceAccessContext) {
+  if (!canViewService(user, service)) return false;
   if (!hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project })) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['consulente', 'backoffice'].includes(user.role)) return false;
@@ -227,6 +235,7 @@ export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (!canViewTask(user, task)) return false;
   if (!hasConsistentClientContext(task)) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['commerciale', 'consulente', 'backoffice'].includes(user.role)) return false;
@@ -255,20 +264,21 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   if (task.projectId && task.clientService?.projectId && task.clientService.projectId !== task.projectId) return false;
   if (task.project && !hasValidProjectContext(task.project)) return false;
   if (task.clientService && !hasValidServiceContext(task.clientService)) return false;
-  if (hasGlobalAccess(user)) return true;
+  if (hasGlobalReadAccess(user)) return true;
   const id = getActorId(user);
-  if (task.assignedToId === id) return true;
-  if (!task.clientId && !task.assignedToId && task.createdById === id) return true;
-  if (task.clientService && canViewService(user, task.clientService)) return true;
-  if (task.project && canViewProject(user, task.project)) return true;
-  return !!task.client && canViewClient(user, task.client);
+  if (task.assignedToId) return task.assignedToId === id;
+  if (!task.clientId) return task.createdById === id;
+  if (task.clientService) return canViewService(user, task.clientService);
+  if (task.project) return canViewProject(user, task.project);
+  return (!task.createdById || task.createdById === id) && !!task.client && hasClientResponsibility(user, task.client);
 }
 
-export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & {
+export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (!canViewChecklistItem(user, item)) return false;
   if (!hasConsistentClientContext(item)) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['consulente', 'backoffice'].includes(user.role)) return false;
@@ -277,13 +287,14 @@ export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   return !!item.client && canEditClient(user, item.client);
 }
 
-export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & {
+export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
   projectId?: string | null;
   clientServiceId?: string | null;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (!canAccessFinancialDocumentMetadata(user, item)) return false;
   if (!hasConsistentClientContext(item)) return false;
   if (!item.client) return false;
   if (item.projectId && (!item.project?.id || item.project.id !== item.projectId)) return false;
@@ -293,35 +304,44 @@ export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   if (item.projectId && item.clientService?.projectId && item.clientService.projectId !== item.projectId) return false;
   if (item.project && !hasValidProjectContext(item.project)) return false;
   if (item.clientService && !hasValidServiceContext(item.clientService)) return false;
-  if (hasGlobalAccess(user)) return true;
-  if (item.clientService && canViewService(user, item.clientService)) return true;
-  if (item.project && canViewProject(user, item.project)) return true;
-  return !!item.client && canViewClient(user, item.client);
+  if (hasGlobalReadAccess(user)) return true;
+  if (item.clientService) return canViewService(user, item.clientService);
+  if (item.project) return canViewProject(user, item.project);
+  return (!item.createdById || item.createdById === getActorId(user)) && !!item.client && hasClientResponsibility(user, item.client);
 }
 
-export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & {
+export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & {
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }, canReadSensitive = false) {
+  if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['commerciale', 'consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);
   if (!document.clientId && !document.project && !document.clientService && document.uploadedById === id) return true;
-  if (document.clientService && canEditService(user, document.clientService)) return true;
-  if (document.project && canEditProject(user, document.project)) return true;
-  return !!document.client && canEditClient(user, document.client);
+  if (document.clientService) return canViewService(user, document.clientService) && canEditService(user, document.clientService);
+  if (document.project) return canViewProject(user, document.project) && canEditProject(user, document.project);
+  return document.uploadedById === id && !!document.client && canEditClient(user, document.client);
 }
 
-export function canViewTechnicalPractice(user: Actor, practice: { commercialOwnerId?: string | null; technicalOwnerId?: string | null; client?: (Pick<Client, 'salesOwnerId' | 'consultantId'> & { id?: string }) | null }) {
-  if (!practice.client) return false;
-  if (hasGlobalAccess(user)) return true;
+export function canViewTechnicalPractice(user: Actor, practice: ClientScopedContext & { projectId?: string | null; clientServiceId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null }) {
+  if (!practice.client || !hasConsistentClientContext(practice)) return false;
+  if (practice.projectId && (!practice.project || practice.project.id !== practice.projectId)) return false;
+  if (practice.clientServiceId && (!practice.clientService || practice.clientService.id !== practice.clientServiceId)) return false;
+  if (practice.projectId === null && practice.project) return false;
+  if (practice.clientServiceId === null && practice.clientService) return false;
+  if (practice.project && !hasValidProjectContext(practice.project)) return false;
+  if (practice.clientService && !hasValidServiceContext(practice.clientService)) return false;
+  if (practice.project && practice.clientService?.projectId && practice.project.id !== practice.clientService.projectId) return false;
+  if (hasGlobalReadAccess(user)) return true;
   const id = getActorId(user);
-  if (practice.commercialOwnerId === id || practice.technicalOwnerId === id) return true;
-  if (practice.client && canViewClient(user, practice.client)) return true;
-  return false;
+  if (practice.commercialOwnerId || practice.technicalOwnerId) return practice.commercialOwnerId === id || practice.technicalOwnerId === id;
+  if (practice.clientService) return canViewService(user, practice.clientService);
+  if (practice.project) return canViewProject(user, practice.project);
+  return hasClientResponsibility(user, practice.client);
 }
 
 export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwnerId?: string | null }) {
@@ -351,9 +371,10 @@ export function hasConsistentAiContext(output: AiOutputAccessContext) {
 
 export function canViewAiOutput(user: Actor, output: AiOutputAccessContext) {
   if (!hasConsistentAiContext(output)) return false;
-  if (!output.clientId) return hasGlobalAccess(user);
+  if (!output.clientId) return hasGlobalReadAccess(user);
   return canViewClientContext(user, {
     clientId: output.clientId,
+    createdById: output.run?.createdById,
     client: output.client,
     project: output.project,
     clientService: output.clientService,

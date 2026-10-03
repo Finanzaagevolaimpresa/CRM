@@ -1,3 +1,4 @@
+import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 import { Prisma, type RoleCode, type User } from '@prisma/client';
 import { serializableOptions } from './serializable';
 import { internalSessionMode } from './session';
@@ -138,6 +139,9 @@ export async function updatePermissionOverridesWithAudit(tx: Tx, actor: Privileg
   if (user.role === 'admin') {
     await auditBlocked(tx, actor, user.id, { overrides: 'admin_immune' });
     return denied('Gli admin sono immuni dagli override.');
+  }
+  if (!hasFinancialRole(user) && overrides.some(item => item.allowed && isFinancialPermission(item.permission))) {
+    return denied('Contratti, pagamenti e relativo audit sono riservati ad Admin, Amministrazione e Direzione.');
   }
   const before = user.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed }));
   await tx.userPermissionOverride.deleteMany({ where: { userId: user.id } });

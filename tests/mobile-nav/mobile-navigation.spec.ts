@@ -299,8 +299,10 @@ test("i contatori delle comunicazioni restano leggibili senza autorizzare destin
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(1);
   await expect(technical).toContainText("Comunicazioni da revisionare");
   await expect(technical).toContainText("Approvate non utilizzate");
-  await expect(technical.getByText("5", { exact: true })).toBeVisible();
-  await expect(technical.getByText("4", { exact: true })).toBeVisible();
+  await expect(technical.locator('[data-counter-final="5"] > [aria-hidden="true"]')).toHaveText('5');
+  await expect(technical.locator('[data-counter-final="4"] > [aria-hidden="true"]')).toHaveText('4');
+  await expect(technical.locator('[data-counter-final="5"] > .sr-only')).toHaveText('5');
+  await expect(technical.locator('[data-counter-final="4"] > .sr-only')).toHaveText('4');
   await expect(technical.getByText("Pratiche tecniche attive", { exact: true })).toHaveCount(0);
   await expect(technical.locator("a, button, [role='link'], [role='button']")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
