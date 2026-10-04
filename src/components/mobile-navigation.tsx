@@ -96,7 +96,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           ref={mobileLogoRef}
           href="/dashboard"
           onClick={closeAfterNavigation}
-          className="flex min-w-0 flex-1 items-center rounded-xl focus:outline-none focus:ring-2 focus:ring-fai-lime"
+          className="flex min-w-0 flex-1 items-center rounded-xl focus:outline-compat focus:ring-2 focus:ring-fai-lime"
         >
           <SidebarLogo compact />
           <span className="sr-only">Gestionale CRM</span>
@@ -106,7 +106,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           type="button"
           aria-controls={panelId}
           aria-expanded={open}
-          className="min-h-12 shrink-0 rounded-xl border border-white/25 bg-white/10 px-4 text-sm font-black focus:outline-none focus:ring-2 focus:ring-fai-lime"
+          className="min-h-12 shrink-0 rounded-xl border border-white/25 bg-white/10 px-4 text-sm font-black focus:outline-compat focus:ring-2 focus:ring-fai-lime"
           onClick={() => setOpen((current) => !current)}
         >
           {open ? "Chiudi menu" : "Apri menu"}
@@ -120,7 +120,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
         <Link
           ref={desktopLogoRef}
           href="/dashboard"
-          className="mb-3 hidden shrink-0 rounded-2xl focus:outline-none focus:ring-2 focus:ring-fai-lime md:flex"
+          className="mb-3 hidden shrink-0 rounded-2xl focus:outline-compat focus:ring-2 focus:ring-fai-lime md:flex"
         >
           <SidebarLogo />
           <span className="sr-only">Gestionale CRM</span>
@@ -132,7 +132,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} onNavigate={closeAfterNavigation} />
         </div>
         <form action={logoutAction} className="mt-3 shrink-0 border-t border-white/15 pt-3">
-          <button className="min-h-11 w-full rounded-xl bg-white/8 px-3 py-2 text-left text-sm font-bold text-white transition hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-fai-lime" type="submit">Esci dal CRM</button>
+          <button className="min-h-11 w-full rounded-xl bg-white/8 px-3 py-2 text-left text-sm font-bold text-white transition hover:bg-white/15 focus:outline-compat focus:ring-2 focus:ring-fai-lime" type="submit">Esci dal CRM</button>
         </form>
       </div>
     </aside>

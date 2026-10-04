@@ -61,7 +61,7 @@ export default async function Page() {
   const clientOf = (id: string) => clients.find((client) => client.id === id)?.displayName ?? 'Cliente';
   const userOf = (id?: string | null) => users.find((user) => user.id === id)?.name ?? 'Da assegnare';
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Ufficio Tecnico" description="Dashboard operativa per progettare, preparare e monitorare pratiche verso enti e portali. Nessun invio automatico: ogni aggiornamento cliente va verificato prima dell’invio." />
     <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">Lista pratiche</SecondaryLink><SecondaryLink href="/technical-office/practices?new=1">Nuova pratica</SecondaryLink></div>
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{buckets.map(([status, label]) => <Stat key={status} label={label} value={count(status)} description={status.replaceAll('_', ' ')} tone={status.includes('approv') ? 'green' : status.includes('resp') || status.includes('integrazione') ? 'orange' : 'blue'} />)}</section>

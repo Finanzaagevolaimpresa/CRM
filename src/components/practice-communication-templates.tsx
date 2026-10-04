@@ -144,7 +144,7 @@ export function PracticeCommunicationTemplates({
     );
 
   return (
-    <div className="space-y-4">
+    <div className="crm-space-y-4">
       <p className="rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold leading-5 text-fai-blue">
         I dati disponibili vengono compilati automaticamente; verificare sempre
         il testo prima dell’approvazione.
@@ -155,13 +155,13 @@ export function PracticeCommunicationTemplates({
         dell’invio manuale.
       </p>
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-3 lg:col-span-2">
+        <div className="crm-space-y-3 lg:col-span-2">
           {templates.map((template) => {
             const compiled = compileTemplate(template, placeholderContext);
             return (
               <article
                 key={template.id}
-                className={`rounded-2xl border p-4 shadow-sm transition ${selected?.id === template.id ? "border-fai-blue bg-fai-blue/5 ring-1 ring-fai-blue/20" : "border-slate-200 bg-white hover:border-fai-blue/30"}`}
+                className={`rounded-2xl border p-4 shadow-xs transition ${selected?.id === template.id ? "border-fai-blue bg-fai-blue/5 ring-1 ring-fai-blue/20" : "border-slate-200 bg-white hover:border-fai-blue/30"}`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <button

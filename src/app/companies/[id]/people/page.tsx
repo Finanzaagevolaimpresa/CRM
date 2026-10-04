@@ -17,7 +17,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const memberships = await prisma.companyPerson.findMany({ where: { companyId: id }, orderBy: { id: 'asc' } });
   const people = await prisma.person.findMany({ where: { id: { in: memberships.map(link => link.personId) }, deletedAt: null } });
   const byId = new Map(people.map(person => [person.id, person]));
-  return <div className="space-y-6"><PageHeader title="Gestisci referenti" description={`Titolari, soci, amministratori e persone di contatto di ${context.company.name}.`} />
+  return <div className="crm-space-y-6"><PageHeader title="Gestisci referenti" description={`Titolari, soci, amministratori e persone di contatto di ${context.company.name}.`} />
     <SecondaryLink href={`/companies/${id}`}>Torna all’azienda</SecondaryLink>
     {memberships.length === 0 && <EmptyState title="Nessun referente inserito" />}
     {memberships.map(link => { const person = byId.get(link.personId); return person ? <Card key={link.id} title={`${person.firstName} ${person.lastName}`}>

@@ -28,7 +28,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     }
   }
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Contratto — ${contract.contractNumber}`} description="Contratto interno con stato e gestione manuale di invio/firma." />
     <SecondaryLink href="/contracts">← Torna alla lista</SecondaryLink>
     <Card title="Dati contratto">
@@ -43,7 +43,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
     {canRecord ? <Card title="Registra il contratto firmato">{documents.length ? <ContractSignatureForm contractId={contract.id}
       expectedVersion={contract.updatedAt.toISOString()} documents={documents} today={signatureCalendarDay()} />
-      : <div className="space-y-3"><p>Carica il contratto firmato nella sezione Contratti del fascicolo cliente, con lo stesso progetto di questa scheda e senza collegarlo a un servizio. Poi torna qui per registrare la firma.</p>
+      : <div className="crm-space-y-3"><p>Carica il contratto firmato nella sezione Contratti del fascicolo cliente, con lo stesso progetto di questa scheda e senza collegarlo a un servizio. Poi torna qui per registrare la firma.</p>
         <SecondaryLink href={`/clients/${contract.clientId}#documenti`}>Apri documenti del cliente</SecondaryLink></div>}</Card> : null}
   </div>;
 }

@@ -19,7 +19,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     dossier.reviewedById ? prisma.user.findUnique({ where: { id: dossier.reviewedById } }) : null,
   ]);
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Dossier — ${dossier.title}`} description="Contenuto interno del dossier nel perimetro cliente/progetto autorizzato." />
     <div className="flex flex-wrap gap-3"><SecondaryLink href="/dossiers">← Torna alla lista</SecondaryLink><DisabledAction>Export PDF</DisabledAction><DisabledAction>Export DOCX</DisabledAction></div>
     <Hint>Funzione prevista, non ancora attiva nel MVP: gli export non vengono generati automaticamente.</Hint>

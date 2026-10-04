@@ -18,7 +18,7 @@ export default async function AssignmentExceptionsPage({ searchParams }: { searc
   if (query.after && !/^[A-Za-z0-9_-]{1,128}$/u.test(query.after)) notFound();
   const result = await withSerializableTransaction(prisma, tx => loadAssignmentExceptions(tx, session, kind, query.after));
   const users = new Map(result.users.map(user => [user.id, user]));
-  return <div className="space-y-6"><Card title="Coda eccezioni delle assegnazioni">
+  return <div className="crm-space-y-6"><Card title="Coda eccezioni delle assegnazioni">
     <p>Riferimenti conservati di utenti sospesi o rimossi. L’amministratore può aprire la scheda e riassegnare; una sospensione non trasferisce automaticamente le attività. Sono inclusi anche i riferimenti storici a lavori completati.</p>
     <nav aria-label="Tipo di assegnazione" className="mt-4 flex flex-wrap gap-4">{exceptionKinds.map(key => <Link key={key} aria-current={kind === key ? 'page' : undefined} href={`/settings/assignment-exceptions?kind=${key}`}>{labels[key]} ({result.counts[key]})</Link>)}</nav>
   </Card><Card title={labels[kind]}>

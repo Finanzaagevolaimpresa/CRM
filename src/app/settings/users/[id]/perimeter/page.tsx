@@ -24,7 +24,7 @@ export default async function Page({ params, searchParams }: {
       orderBy: { id: 'asc' }, take: 26, select: { id: true, displayName: true, readGrants: { where: { userId: id }, select: { active: true, version: true } } } }) : [],
   ]);
   const href = (values: Record<string, string>) => `/settings/users/${id}/perimeter?${new URLSearchParams(values)}`;
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Perimetro di consultazione: ${user.name}`} description="L’admin consente la lettura di clienti specifici. Le assegnazioni operative e i permessi sulle funzioni e sui dati sensibili restano necessari e separati." />
     <Link href={`/settings/users/${id}`}>Torna al profilo</Link>
     <p>La consultazione aggiuntiva apre l’anagrafica del cliente. Le attività assegnate ad altre persone restano riservate. La revoca non annulla una responsabilità operativa già assegnata; i cambi valgono dalla richiesta successiva anche nelle sessioni aperte.</p>
@@ -32,11 +32,11 @@ export default async function Page({ params, searchParams }: {
     {!available ? <p>Non è possibile aggiungere consultazioni a questo account. Le autorizzazioni precedenti restano consultabili e revocabili.</p> : <Card title="Aggiungi un cliente">
       <form method="get" className="flex gap-3"><label>Nome del cliente<input name="q" defaultValue={q} maxLength={120} className="ml-2 rounded-lg border p-2" required /></label><button className="rounded-lg border px-3">Cerca</button></form>
       {q && candidates.length === 0 ? <p>Nessun cliente trovato.</p> : null}
-      <ul className="space-y-3">{candidates.slice(0, 25).map(client => <li key={client.id} className="rounded-xl border p-3"><p className="font-bold">{client.displayName}</p>{client.readGrants[0]?.active ? <p>Consultazione già consentita.</p> : <ClientReadPerimeterForm userId={id} clientId={client.id} version={client.readGrants[0]?.version ?? 0} active label={client.displayName} />}</li>)}</ul>
+      <ul className="crm-space-y-3">{candidates.slice(0, 25).map(client => <li key={client.id} className="rounded-xl border p-3"><p className="font-bold">{client.displayName}</p>{client.readGrants[0]?.active ? <p>Consultazione già consentita.</p> : <ClientReadPerimeterForm userId={id} clientId={client.id} version={client.readGrants[0]?.version ?? 0} active label={client.displayName} />}</li>)}</ul>
       {candidates.length > 25 ? <Link href={href({ q, after: candidates[24].id })}>Altri clienti</Link> : null}
     </Card>}
     <Card title="Consultazioni e revoche">
-      {grants.length === 0 ? <p>Nessuna consultazione aggiuntiva in questa pagina.</p> : <ul className="space-y-3">{grants.slice(0, 50).map(grant => <li key={grant.id} className="rounded-xl border p-3">
+      {grants.length === 0 ? <p>Nessuna consultazione aggiuntiva in questa pagina.</p> : <ul className="crm-space-y-3">{grants.slice(0, 50).map(grant => <li key={grant.id} className="rounded-xl border p-3">
         <p className="font-bold">{grant.client.displayName}</p><p>{grant.active ? 'Consentita' : 'Revocata'}{grant.client.deletedAt ? ' · cliente archiviato, consultazione non disponibile' : ''}</p>
         <p>Decisione di {grant.updatedBy.name} · {grant.updatedAt.toISOString()} · revisione {grant.version}</p>
         {grant.active || (available && !grant.client.deletedAt) ? <ClientReadPerimeterForm userId={id} clientId={grant.clientId} version={grant.version} active={!grant.active} label={grant.client.displayName} /> : null}

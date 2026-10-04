@@ -17,7 +17,7 @@ export default async function Page({ params, searchParams }: {
   const search = (await searchParams) ?? {};
   const page = await readLeadAcquisitions(prisma, actor, { leadId: id, page: search.page })
     .catch((error: unknown) => { if (error instanceof LeadAcquisitionDenied) notFound(); throw error; });
-  return <div className="space-y-6"><PageHeader title="Richieste e provenienza" description="Ogni invio acquisito rimane distinto, anche quando viene collegato allo stesso lead. Il collegamento conserva il contenuto originale della nuova richiesta." />
+  return <div className="crm-space-y-6"><PageHeader title="Richieste e provenienza" description="Ogni invio acquisito rimane distinto, anche quando viene collegato allo stesso lead. Il collegamento conserva il contenuto originale della nuova richiesta." />
     <SecondaryLink href={`/leads/${id}`}>Torna al lead</SecondaryLink>
     <LeadAcquisitionList items={page.items} />
     <PaginationNav pathname={`/leads/${id}/requests`} params={{}} {...page} />

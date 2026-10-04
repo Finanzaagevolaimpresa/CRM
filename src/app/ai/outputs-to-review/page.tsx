@@ -15,7 +15,7 @@ export default async function Page() {
   });
   const canApprove = hasPermission(session, 'ai.approve');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Output AI da revisionare" description="Coda protetta per fascicolo: generatore, revisore e approvazione sono controllati lato server. Gli output segnalati non sono approvabili." />
     <Card title="Coda revisione">
       {contexts.length === 0 ? <EmptyState title="Nessun output in attesa">Non risultano output accessibili da revisionare.</EmptyState> : <Table

@@ -962,6 +962,9 @@ jobs:
       - name: Verify DB tests skip without DATABASE_URL
         run: env -u DATABASE_URL npm run test:db
 
+      - name: Prepare immutable CSS compiler for archived application startup tests
+        run: node scripts/prepare-historical-postcss.mjs
+
       - name: Run PostgreSQL integration tests
         run: RUN_DB_TESTS=1 AI_ORCHESTRATOR_DB_TESTS_CONFIRMED=1 AI_ORCHESTRATOR_DB_TEST_SENTINEL=FAI_CRM_EPHEMERAL_TEST_ONLY_V1 npm run test:db
 

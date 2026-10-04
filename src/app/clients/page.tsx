@@ -48,7 +48,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
   const ownerLabel = (client: (typeof clients)[number]) => userName(client.consultantId) ?? userName(client.salesOwnerId) ?? 'Da assegnare';
   const mainStatus = (clientId: string) => mainStatusByClient.get(clientId);
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <header>
       <h1 className="text-3xl font-bold text-fai-navy">Clienti</h1>
       <p className="mt-2 text-fai-gray">Lista clienti reale collegata a Prisma. Apri il fascicolo interno per consultare servizi, documenti, output AI e attività operative.</p>

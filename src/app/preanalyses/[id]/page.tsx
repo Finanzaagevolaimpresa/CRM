@@ -26,7 +26,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     pre.approvedById ? prisma.user.findUnique({ where: { id: pre.approvedById } }) : null,
   ]);
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Dettaglio pre-analisi" description="Bozza interna accessibile nel fascicolo autorizzato, con revisione umana obbligatoria." />
     <div className="flex flex-wrap gap-3"><SecondaryLink href={`/clients/${pre.clientId}#pre-analisi`}>← Torna al fascicolo cliente</SecondaryLink><SecondaryLink href={`/projects/${pre.projectId}`}>Torna al progetto</SecondaryLink></div>
     <Card title="Dati"><p>Cliente: {client?.displayName ?? '—'}</p><p>Progetto: {project?.title ?? '—'}</p><p>Stato: <StatusBadge status={pre.status} /></p><TimestampMeta createdAt={pre.createdAt} updatedAt={pre.updatedAt} createdBy={reviewer?.name ?? pre.reviewedById} updatedBy={approver?.name ?? pre.approvedById} /></Card>

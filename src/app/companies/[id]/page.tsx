@@ -18,7 +18,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const personById = new Map(personRows.map(person => [person.id, person]));
   const canWrite = hasPermission(session, 'company.write') && canEditClient(session, context.client);
   const values = recordProfileValues(company, companyProfileFields);
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Azienda — ${company.name}`} description="Dati camerali, sede, ATECO, DURC, fatturato e persone collegate." />
     <SecondaryLink href={`/clients/${company.clientId}`}>← Torna al fascicolo cliente</SecondaryLink>
     {canWrite && <div className="flex flex-wrap gap-3"><SecondaryLink href={`/companies/${id}/edit`}>Modifica azienda</SecondaryLink><SecondaryLink href={`/companies/${id}/people`}>Gestisci referenti</SecondaryLink></div>}
