@@ -24,6 +24,7 @@ const fixture = `<!doctype html><html><head><meta charset="utf-8"></head><body>
 <section data-probe class="divide-y divide-gray-200 rounded-xl bg-white"><p data-probe class="p-3">Riga uno</p><p data-probe class="p-3">Riga due</p></section>
 <section data-probe class="rounded-2xl bg-gradient-to-r from-fai-blue to-fai-green p-4 text-white">Gradiente FAI</section>
 <nav data-probe class="sticky top-0 z-40 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-sm"><span class="md:hidden">Menu mobile</span><span class="hidden md:inline">Navigazione desktop</span></nav>
+<section class="grid grid-cols-2 gap-4 p-3"><div data-probe class="rounded-xl bg-white p-3 ring-1 ring-inset ring-fai-blue">Bordo interno</div><div data-probe class="rounded-xl bg-white p-3 ring-2 ring-fai-lime ring-offset-2">Bordo distanziato</div></section>
 </main></body></html>`;
 const migrated = fixture.replaceAll('shadow-sm', 'shadow-xs').replaceAll('outline-none', 'outline-compat').replaceAll('bg-gradient-to-r', 'bg-linear-to-r/srgb')
   .replace(/\bspace-y-(\d+(?:\.\d+)?)/g, 'crm-space-y-$1').replaceAll('divide-y', 'crm-divide-y').replaceAll('divide-gray-', 'crm-divide-gray-');
