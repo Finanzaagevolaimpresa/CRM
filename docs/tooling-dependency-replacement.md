@@ -1,6 +1,6 @@
 # Tooling dependency replacement (R106)
 
-This candidate removes all installed paths to `braces`, `micromatch`, and
+This candidate removes all candidate dependency paths to `braces`, `micromatch`, and
 `chokidar`. The baseline is main commit
 `85fa76d3d1c110da44c892859a70f9151b79cb7f`. The runtime dependency declarations
 and the versions of its 95 runtime packages are unchanged. No Prisma schema,
@@ -67,6 +67,17 @@ differences, and hashes are retained as synthetic CI artifacts for 30 days.
 The existing mobile fixture separately exercises real navigation, permission
 filtered counters, reduced motion, accessible final values, and incremental
 CSS rebuilding after a synthetic source-file change and restoration.
+
+Three existing PostgreSQL tests rebuild archived PR86/88/90 applications using
+today's runtime dependencies. Their unchanged CSS needs the earlier PostCSS
+compiler. The CI prepares a separate cache from the immutable baseline lock
+(SHA256 `ed90c9daff9986071da926b3c5b75c769ba35319bd19563b6c49d9a86821559d`),
+without install scripts, and resolves those archived fixtures' PostCSS plugins
+to Tailwind 3.4.19 / autoprefixer 10.5.2 there. This historical toolchain retains
+its known advisory and is used only on controlled archived CSS, like the
+before/after comparison baseline. It is not part of the candidate lock or
+production build context. Fixture business code, CSS, schema, startup/health
+checks and database assertions are unchanged; no failed test is skipped.
 
 ## Keep both audit paths fail-closed
 

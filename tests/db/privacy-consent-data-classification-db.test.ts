@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
 import { createWebsiteLeadPrivacyEvidence, PrivacyContractUnavailableError } from '../../src/lib/privacy-evidence';
 import {
@@ -328,6 +329,7 @@ test('exact PR90 application starts healthy on additive schema 35', { skip: !run
   writeFileSync(archive, execFileSync('git', ['archive', 'fc35c2c6feb0927f4170d0be3893d9c9ba6cbcd5'], { maxBuffer: 50 * 1024 * 1024 }));
   execFileSync('tar', ['-xf', archive, '-C', app]);
   execFileSync('cp', ['-al', resolve('node_modules'), join(app, 'node_modules')]);
+  bindHistoricalPostcssToolchain(app);
   const next = join(app, 'node_modules/.bin/next');
   const port = 32_935;
   execFileSync(next, ['build'], {
