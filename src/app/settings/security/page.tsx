@@ -28,7 +28,7 @@ export default async function SecurityPage({
   const { status } = await searchParams;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Sicurezza operazioni privilegiate"
         description="Conferma breve della password per operazioni amministrative su utenti, permessi e controlli AI. Il token è HttpOnly, dura cinque minuti ed è valido soltanto con la sessione corrente."
@@ -56,7 +56,7 @@ export default async function SecurityPage({
 
       {readiness.mode === 'enforced' && readiness.keyReady ? (
         <Card title="Conferma identità amministrativa">
-          <form action={establishPrivilegedStepUpAction} className="max-w-lg space-y-4">
+          <form action={establishPrivilegedStepUpAction} className="max-w-lg crm-space-y-4">
             <label className="block text-sm font-bold text-fai-navy">
               Password corrente
               <input

@@ -45,7 +45,7 @@ export default async function Page({
   const session = await requirePermission("service.read");
   if (!engagementFeatureEnabled(process.env.PRACTICE_READINESS_MODE))
     return (
-      <div className="space-y-6">
+      <div className="crm-space-y-6">
         <PageHeader
           title="Pratiche da preventivo ad avvio"
           description="Percorso di avvio non attivo."
@@ -199,7 +199,7 @@ export default async function Page({
     orderBy: { version: "desc" },
   });
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Pratiche da preventivo ad avvio"
         description="Richiesta, accettazione, incarico, accrediti e materiali restano verifiche distinte. L’avvio è sempre esplicito."
@@ -310,7 +310,7 @@ export default async function Page({
           {proposals
             .filter((x) => !x.acceptance)
             .map((x) => (
-              <article key={x.id} className="space-y-2 border-b py-3">
+              <article key={x.id} className="crm-space-y-2 border-b py-3">
                 <strong>
                   {x.scope} · revisione {x.revision}
                 </strong>
@@ -348,7 +348,7 @@ export default async function Page({
               <article
                 key={p.id}
                 id={`practice-${p.id}`}
-                className="space-y-3 border-b py-4"
+                className="crm-space-y-3 border-b py-4"
               >
                 <div className="flex justify-between">
                   <strong>Pratica {p.id}</strong>
@@ -490,7 +490,7 @@ export default async function Page({
                         Dichiara accredito
                       </PrimaryButton>
                     </form>
-                    <div className="space-y-2">
+                    <div className="crm-space-y-2">
                       {p.funding.map((e) => {
                         const current = !p.funding.some(
                           (next) => next.predecessorId === e.id,
@@ -629,7 +629,7 @@ export default async function Page({
                         Registra decisione materiale
                       </PrimaryButton>
                     </form>
-                    <div className="space-y-1">
+                    <div className="crm-space-y-1">
                       <strong>Storico materiali</strong>
                       {p.materials.map((m) => (
                         <p

@@ -371,42 +371,81 @@ export function parseNpmLockInventory(contents: Uint8Array): NpmLockInventory {
   }
 
   const coordinates = new Set<string>();
+  const registryPackages = new Set<string>();
+  const bundledPackages: Array<{ path: string; name: string }> = [];
+  const validName = (value: unknown): value is string => typeof value === 'string'
+    && /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(value);
   let entryCount = 0;
   for (const [packagePath, packageValue] of Object.entries(lockfile.packages)) {
     if (packagePath === '') continue;
-    const name = npmPackageNameFromPath(packagePath);
-    if (!name || !isRecord(packageValue)) {
+    const installedName = npmPackageNameFromPath(packagePath);
+    if (!validName(installedName) || !isRecord(packageValue)) {
       throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
     }
 
+    // npm aliases retain the real published identity in `name`; querying the
+    // directory's alias instead would hide findings against the actual package.
+    const name = Object.hasOwn(packageValue, 'name') ? packageValue.name : installedName;
     const version = packageValue.version;
     const resolvedUrl = packageValue.resolved;
     const integrity = packageValue.integrity;
     if (
-      typeof version !== 'string'
-      || version.length === 0
-      || /[\u0000-\u001f\u007f]/.test(version)
-      || typeof resolvedUrl !== 'string'
-      || typeof integrity !== 'string'
-      || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)
+      !validName(name)
+      || typeof version !== 'string'
+      || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)
       || packageValue.link === true
-      || (Object.hasOwn(packageValue, 'name') && packageValue.name !== name)
     ) {
       throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
     }
 
-    let resolvedPackageUrl: URL;
-    try {
-      resolvedPackageUrl = new URL(resolvedUrl);
-    } catch {
-      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
-    }
-    if (resolvedPackageUrl.origin !== 'https://registry.npmjs.org') {
-      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    if (packageValue.inBundle === true) {
+      // Bundled entries have no individual tarball. Admit only explicitly named,
+      // direct children of a verified registry bundle; still scan every child.
+      if (name !== installedName || Object.hasOwn(packageValue, 'resolved') || Object.hasOwn(packageValue, 'integrity')) {
+        throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+      }
+      bundledPackages.push({ path: packagePath, name });
+    } else {
+      if (typeof resolvedUrl !== 'string' || typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
+        throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+      }
+      let resolvedPackageUrl: URL;
+      try {
+        resolvedPackageUrl = new URL(resolvedUrl);
+      } catch {
+        throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+      }
+      const tarballName = name.slice(name.lastIndexOf('/') + 1);
+      if (resolvedPackageUrl.href !== resolvedUrl || resolvedUrl !== `https://registry.npmjs.org/${name}/-/${tarballName}-${version}.tgz`) {
+        throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+      }
+      registryPackages.add(packagePath);
     }
 
     entryCount += 1;
     coordinates.add(inventoryCoordinate(name, version));
+  }
+
+  for (const child of bundledPackages) {
+    const parentPath = child.path.slice(0, child.path.lastIndexOf('/node_modules/'));
+    const parent = lockfile.packages[parentPath];
+    if (!registryPackages.has(parentPath) || !isRecord(parent)
+      || !Array.isArray(parent.bundleDependencies) || !parent.bundleDependencies.includes(child.name)
+      || !isRecord(parent.dependencies) || typeof parent.dependencies[child.name] !== 'string') {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+  }
+  for (const parentPath of registryPackages) {
+    const parent = lockfile.packages[parentPath] as Record<string, unknown>;
+    if (!Object.hasOwn(parent, 'bundleDependencies')) continue;
+    if (!Array.isArray(parent.bundleDependencies) || new Set(parent.bundleDependencies).size !== parent.bundleDependencies.length) {
+      throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+    }
+    for (const name of parent.bundleDependencies) {
+      if (!validName(name) || !bundledPackages.some(child => child.path === `${parentPath}/node_modules/${name}`)) {
+        throw new DependencyAuditGateError('OSV_LOCKFILE_INVENTORY_INVALID');
+      }
+    }
   }
 
   if (entryCount === 0 || coordinates.size === 0) {

@@ -37,7 +37,7 @@ export default async function Page({
   const session = await requirePermission('lead.read');
   const mode = commercialLeadInboxMode();
   if (mode !== 'enforced') {
-    return <div className="space-y-6">
+    return <div className="crm-space-y-6">
       <PageHeader title="Commercial Lead Inbox" description="Foundation N14 dormiente: nessuna policy o activation è attiva." />
       <SecondaryLink href="/leads">← Torna alla pipeline</SecondaryLink>
       <EmptyState title="Inbox non attiva">Il deploy foundation non iscrive Lead e non avvia SLA.</EmptyState>
@@ -86,19 +86,19 @@ export default async function Page({
   const canManage = session.role === 'admin' && hasPermission(session, 'lead.inbox.assign') && readiness.active;
   const canWork = hasPermission(session, 'lead.write');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Commercial Lead Inbox" description="Coda N14 con attribution immutabile e SLA first-response continuo 24x7 UTC." />
     <div className="flex flex-wrap gap-3">
       <SecondaryLink href="/leads">← Pipeline</SecondaryLink>
       {queues.map((queue) => <SecondaryLink key={queue} href={`/leads/inbox?queue=${queue}`}>{queue}</SecondaryLink>)}
     </div>
     <Card title={`Coda: ${selectedQueue}`}>
-      {page.items.length === 0 ? <EmptyState title="Nessun item">La coda selezionata è vuota.</EmptyState> : <div className="space-y-4">
+      {page.items.length === 0 ? <EmptyState title="Nessun item">La coda selezionata è vuota.</EmptyState> : <div className="crm-space-y-4">
         {page.items.map((item) => {
           const cycle = item.slaCycles[0];
           const overdue = Boolean(cycle && !cycle.closedAt && !cycle.firstResponseAt && cycle.dueAt <= now);
           const owned = item.lead.assignedToId === session.userId;
-          return <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          return <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <a className="font-extrabold text-fai-blue underline" href={`/leads/${item.lead.id}`}>{item.lead.companyName || `${item.lead.firstName} ${item.lead.lastName}`}</a>

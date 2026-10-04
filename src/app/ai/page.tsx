@@ -36,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader title="AI interno" description="Agenti e output AI sono strumenti interni: ogni contenuto resta bozza fino alla revisione umana obbligatoria." />
       <div className="grid gap-4 md:grid-cols-2">
         <Card title="Azioni rapide">
@@ -51,7 +51,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
           ) : activeAgents.length === 0 ? (
             <EmptyState title="Nessun agente attivo">Riattivare almeno un agente da Impostazioni &gt; Agenti AI per generare una bozza interna.</EmptyState>
           ) : (
-            <form action={runMockAiAndRedirect} className="space-y-3">
+            <form action={runMockAiAndRedirect} className="crm-space-y-3">
               <input type="hidden" name="requestKey" value={quickRunRequestKey ?? ''} />
               {replacementSource ? <input type="hidden" name="supersedesRequestId" value={replacementSource.id} /> : null}
               {replacementSource ? <p className="rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-900 ring-1 ring-amber-200">Richiesta sostitutiva: integra il prompt prima dell’invio. La richiesta chiusa resta immutabile.</p> : null}

@@ -41,7 +41,7 @@ export default async function Page() {
   await requirePermission('legal.read');
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Legale / Compliance AI"
         description="Area interna per revisione di contratti, PEC, contestazioni, privacy, disclaimer e comunicazioni sensibili. Non fornisce consulenza legale automatica al cliente."
@@ -61,11 +61,11 @@ export default async function Page() {
 
       <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
         <Card title="Presidi di revisione">
-          <div className="space-y-3">
+          <div className="crm-space-y-3">
             {queues.map(([label, , description]) => (
               <div
                 key={label}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs"
               >
                 <Badge tone={label.includes("AI") ? "purple" : "blue"}>
                   {label}

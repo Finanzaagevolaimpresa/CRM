@@ -22,7 +22,7 @@ export default async function Page() {
   const hasWarnings = checks.some((check) => check.status === 'Attenzione' || check.status === 'Non configurato');
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Diagnostica sistema"
         description="Controlli admin di readiness produzione: verifica configurazione, database, storage, segreti presenti e backup senza esporre valori sensibili o dati cliente."
@@ -39,7 +39,7 @@ export default async function Page() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {checks.map((check) => (
-          <section key={check.title} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/70">
+          <section key={check.title} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs shadow-slate-200/70">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-black text-fai-navy">{check.title}</h2>
@@ -48,7 +48,7 @@ export default async function Page() {
               <StatusBadge status={check.status} />
             </div>
             {check.details?.length ? (
-              <ul className="mt-4 space-y-2 text-xs leading-5 text-slate-600">
+              <ul className="mt-4 crm-space-y-2 text-xs leading-5 text-slate-600">
                 {check.details.map((detail) => (
                   <li key={detail} className="rounded-2xl bg-slate-50 px-3 py-2 ring-1 ring-slate-200">{detail}</li>
                 ))}

@@ -11,8 +11,8 @@ function Submit() {
 export function DirectEmailTestForm({ token, message, action }: {
   token: string; message: Message; action: (form: FormData) => Promise<void>;
 }) {
-  return <form action={action} className="space-y-4">
-    <dl className="space-y-2 break-words rounded-xl border p-4">
+  return <form action={action} className="crm-space-y-4">
+    <dl className="crm-space-y-2 break-words rounded-xl border p-4">
       <div><dt className="font-bold">Da / Rispondi a</dt><dd>{message.from} / {message.replyTo}</dd></div>
       <div><dt className="font-bold">Destinatario controllato</dt><dd>{message.to}</dd></div>
       <div><dt className="font-bold">Oggetto</dt><dd>{message.subject}</dd></div>

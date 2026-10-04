@@ -6,7 +6,7 @@ export function ExceptionTaskForm({ id, updatedAt, assignedToId, users }: {
   id: string; updatedAt: string; assignedToId: string | null; users: Array<{ id: string; name: string }>;
 }) {
   const [state, action, pending] = useActionState(assignExceptionTask, { ok: false, message: '' });
-  return <form action={action} aria-label="Riassegna attività" className="space-y-4">
+  return <form action={action} aria-label="Riassegna attività" className="crm-space-y-4">
     <input type="hidden" name="id" value={id} /><input type="hidden" name="updatedAt" value={updatedAt} />
     <label className="block">Nuovo responsabile
       <select name="assignedToId" required defaultValue={users.some(user => user.id === assignedToId) ? assignedToId! : ''} className="block w-full rounded-xl border p-3">

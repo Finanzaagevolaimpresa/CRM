@@ -7,7 +7,7 @@ export function ContractSignatureForm({ contractId, expectedVersion, documents, 
   contractId: string; expectedVersion: string; documents: { versionId: string; title: string; version: number }[]; today: string;
 }) {
   const [state, action, pending] = useActionState(recordContractSignatureAction, { error: null });
-  return <form action={action} className="space-y-4">
+  return <form action={action} className="crm-space-y-4">
     <input type="hidden" name="contractId" value={contractId} /><input type="hidden" name="expectedVersion" value={expectedVersion} />
     <p>Registra una firma già acquisita sul documento. Il pagamento e l’avvio della pratica restano operazioni separate.</p>
     <div><label htmlFor="contract-signature-document" className="block font-semibold">Documento firmato *</label><select id="contract-signature-document" name="signedDocumentVersionId" required defaultValue="" className="mt-1 block w-full rounded-xl border p-3">

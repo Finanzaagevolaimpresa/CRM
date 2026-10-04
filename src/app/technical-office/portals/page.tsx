@@ -7,5 +7,5 @@ import { requirePermission } from '@/lib/auth';
 export default async function Page() {
   await requirePermission('technical.read');
 
-  return <div className="space-y-6"><PageHeader title="Enti / Portali" description="Area in preparazione per riferimenti operativi a enti, portali e canali di deposito manuale."/><Card title="Stato lavorazione"><div className="space-y-4"><StatusBadge status="in preparazione" /><EmptyState title="Vista in preparazione">Questa pagina non contiene credenziali, integrazioni attive o invii automatici.</EmptyState><SecondaryLink href="/technical-office">Vai a Ufficio Tecnico</SecondaryLink></div></Card></div>;
+  return <div className="crm-space-y-6"><PageHeader title="Enti / Portali" description="Area in preparazione per riferimenti operativi a enti, portali e canali di deposito manuale."/><Card title="Stato lavorazione"><div className="crm-space-y-4"><StatusBadge status="in preparazione" /><EmptyState title="Vista in preparazione">Questa pagina non contiene credenziali, integrazioni attive o invii automatici.</EmptyState><SecondaryLink href="/technical-office">Vai a Ufficio Tecnico</SecondaryLink></div></Card></div>;
 }

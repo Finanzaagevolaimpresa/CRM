@@ -11,7 +11,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const session = await requirePermission('client.write'), { id } = await params;
   const client = await prisma.client.findFirst({ where: { id, deletedAt: null } });
   if (!client || !canEditClient(session, client)) notFound();
-  return <div className="space-y-6"><PageHeader title="Modifica anagrafica cliente" description="Denominazione, tipo e note del fascicolo. I dati fiscali e le sedi si compilano nella scheda azienda." />
+  return <div className="crm-space-y-6"><PageHeader title="Modifica anagrafica cliente" description="Denominazione, tipo e note del fascicolo. I dati fiscali e le sedi si compilano nella scheda azienda." />
     <SecondaryLink href={`/clients/${id}`}>Annulla e torna al cliente</SecondaryLink>
     <Card title={client.displayName}><RecordProfileForm fields={clientProfileFields} values={recordProfileValues(client, clientProfileFields)} clientType={client.type}
       hidden={{ kind: 'client', id, expectedVersion: client.updatedAt.toISOString() }} /></Card></div>;

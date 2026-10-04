@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import test, { after, before, beforeEach } from 'node:test';
 import { NextRequest } from 'next/server';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
 import { POST } from '../../src/app/api/integrations/website/leads/route';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './ai-orchestrator-db-test-guard';
 
@@ -262,6 +263,7 @@ test('exact PR86 application starts healthy on schema 32 and leaves N01 tables i
   writeFileSync(archive, execFileSync('git', ['archive', '9697bd4e3fa69a7712ce7218da7237d909fa66de'], { maxBuffer: 50 * 1024 * 1024 }));
   execFileSync('tar', ['-xf', archive, '-C', app]);
   symlinkSync(resolve('node_modules'), join(app, 'node_modules'), 'dir');
+  bindHistoricalPostcssToolchain(app);
   const port = 32_191;
   execFileSync(resolve('node_modules/.bin/next'), ['build', '--webpack'], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED:'1' }, stdio:'pipe', timeout:120_000, maxBuffer:20*1024*1024 });
   const server = spawn(resolve('node_modules/.bin/next'), ['start', '-p', String(port)], { cwd: app, env: { ...process.env, NEXT_TELEMETRY_DISABLED:'1' }, stdio:'ignore' });

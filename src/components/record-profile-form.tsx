@@ -10,12 +10,12 @@ export function RecordProfileForm({ fields, values, hidden, clientType, submitLa
   const [state, action, pending] = useActionState(saveRecordProfileAction, { error: null });
   const [draft, setDraft] = useState<Record<string, string>>({ ...values, ...(clientType === undefined ? {} : { type: clientType }) });
   const update = (name: string, value: string) => setDraft(current => ({ ...current, [name]: value }));
-  return <form action={action} className="space-y-5">
+  return <form action={action} className="crm-space-y-5">
     <p className="text-sm text-slate-600">I campi con * sono obbligatori. Gli altri possono essere completati in seguito.</p>
     {Object.entries(hidden).map(([name, value]) => <input type="hidden" key={name} name={name} value={value} />)}
     <div className="grid gap-4 md:grid-cols-2">
-      {clientType !== undefined && <label className="space-y-1 font-semibold">Tipo cliente *<select name="type" value={draft.type} onChange={event => update('type', event.target.value)} className="block w-full rounded-xl border p-3">{clientTypes.map(type => <option value={type} key={type}>{type.replaceAll('_', ' ')}</option>)}</select></label>}
-      {fields.map(field => <label key={field.name} className={`space-y-1 font-semibold ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}>
+      {clientType !== undefined && <label className="crm-space-y-1 font-semibold">Tipo cliente *<select name="type" value={draft.type} onChange={event => update('type', event.target.value)} className="block w-full rounded-xl border p-3">{clientTypes.map(type => <option value={type} key={type}>{type.replaceAll('_', ' ')}</option>)}</select></label>}
+      {fields.map(field => <label key={field.name} className={`crm-space-y-1 font-semibold ${field.type === 'textarea' ? 'md:col-span-2' : ''}`}>
         {field.label}{field.required ? ' *' : ''}
         {field.type === 'textarea' ? <textarea className="block min-h-28 w-full rounded-xl border p-3 font-normal" name={field.name} value={draft[field.name] ?? ''} onChange={event => update(field.name, event.target.value)} maxLength={field.max ?? 200} />
           : <input className="block w-full rounded-xl border p-3 font-normal" name={field.name} type={field.type ?? 'text'} value={draft[field.name] ?? ''} onChange={event => update(field.name, event.target.value)} required={field.required}

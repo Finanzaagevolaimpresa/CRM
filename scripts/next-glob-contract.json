@@ -1,0 +1,8 @@
+{
+  "nextPlugin": "16.3.8",
+  "consumer": "dist/utils/get-root-dirs.js",
+  "consumerSha256": "886677432990a735e5ebdfb345ff1cbd40e264f9947a8432eeeb254b3a926bde",
+  "rootMode": "default-only",
+  "replacement": "tinyglobby@0.2.17",
+  "reason": "No CRM settings.next.rootDir; custom roots require an explicit compatibility qualification."
+}

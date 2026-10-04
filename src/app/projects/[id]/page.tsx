@@ -40,7 +40,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     preAnalysis, client, project, company: preAnalysis.companyId ? companyById.get(preAnalysis.companyId) ?? null : null,
   }));
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
     {session.role === 'admin' && <Card title="Responsabile del progetto"><ManualAssignmentForm kind="project" id={project.id} updatedAt={project.updatedAt.toISOString()} technicalOwnerId={project.consultantId} users={assignmentUsers} /></Card>}

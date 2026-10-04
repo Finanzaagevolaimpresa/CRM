@@ -82,7 +82,7 @@ export default async function AiAuthorizationDetailPage({ params }: { params: Pr
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Dettaglio autorizzazione AI"
         description="Ledger persistente, binding del grant e decisione Admin separata dalla richiesta."

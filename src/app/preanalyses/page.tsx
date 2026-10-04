@@ -32,7 +32,7 @@ export default async function Page() {
   });
   const canWrite = hasPermission(session, 'project.write');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Pre-analisi" description="Bozze interne nel perimetro autorizzato: nessun output viene considerato approvato senza controllo umano." />
     {canWrite ? <Card title="Crea pre-analisi"><p className="text-sm text-slate-600">Avvia la bozza dal fascicolo cliente o dalla scheda progetto: il contesto sarà vincolato e verificato dal server.</p></Card> : null}
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pre-analisi disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Progetto', 'Stato', 'Sintesi', 'Tracciabilità', 'Azione']} rows={visibleItems.map((item) => [clientById.get(item.clientId)?.displayName ?? '—', projectById.get(item.projectId)?.title ?? '—', <StatusBadge status={item.status} key="s" />, item.internalSummary ?? 'Bozza interna', <MetaCell key="m" createdAt={item.createdAt} updatedAt={item.updatedAt} />, <Link className="font-bold text-fai-blue underline" href={`/preanalyses/${item.id}`} key="a">Apri</Link>])} />}</Card>

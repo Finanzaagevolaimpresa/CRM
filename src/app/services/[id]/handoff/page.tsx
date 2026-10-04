@@ -40,7 +40,7 @@ export default async function Page({ params, searchParams }: {
     const visibleDocs = await filterFinancialDocuments(prisma, session, docs);
     const documentProject = project ? { ...project, client } : null;
     const scopeMatches = contract?.clientId === client.id && canonicalSha256(contract.serviceDescription) === receipt.scopeHash;
-    return <div className="space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
+    return <div className="crm-space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
         <p>Passaggio operativo autorizzato dall’amministratore. La presa in carico personale è registrata separatamente.</p>
         <div className="flex gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
@@ -70,7 +70,7 @@ export default async function Page({ params, searchParams }: {
   const candidates = await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: [...technicalRoles] },
     ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true } });
   const currentOwner = service.assignedToId ? await prisma.user.findUnique({ where: { id: service.assignedToId }, select: { name: true } }) : null;
-  return <div className="space-y-6"><PageHeader title="Affida il servizio acquistato al tecnico" description={`${client.displayName} · ${preview.catalog.name}`} />
+  return <div className="crm-space-y-6"><PageHeader title="Affida il servizio acquistato al tecnico" description={`${client.displayName} · ${preview.catalog.name}`} />
     <Link href={`/clients/${client.id}#servizi-acquistati`}>Torna al servizio acquistato</Link>
     <Card title="Incarico e pagamento"><p>Incarico {preview.contract.contractNumber}, firmato il {formatDateTime(preview.contract.signedAt)}.</p>
       <p className="whitespace-pre-wrap">{preview.contract.serviceDescription}</p>

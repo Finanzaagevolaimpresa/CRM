@@ -42,7 +42,7 @@ export default async function Page({ params, searchParams }: {
   const candidates = session.role === 'admin' ? await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: ['admin', 'direzione', 'commerciale', 'consulente', 'backoffice'] },
     ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true, role: true } }) : [];
   const choices = [...new Map([...named.filter(user => [currentState?.commercialOwnerId, currentState?.technicalOwnerId].includes(user.id)).map(user => ({ ...user, name: nameOf(user.id) })), ...candidates.slice(0, 25)].map(user => [user.id, user])).values()];
-  return <div className="space-y-6"><PageHeader title="Responsabilità e presa in carico" description="La decisione dell’amministratore e la conferma personale del referente sono registrazioni distinte." />
+  return <div className="crm-space-y-6"><PageHeader title="Responsabilità e presa in carico" description="La decisione dell’amministratore e la conferma personale del referente sono registrazioni distinte." />
     <div className="flex gap-4"><Link href={source}>Torna alla scheda</Link><Link href="/assignments">Le mie assegnazioni</Link></div>
     <Card title="Decisione corrente">
       <p>Commerciale: {nameOf(currentState?.commercialOwnerId)}</p>
@@ -65,7 +65,7 @@ export default async function Page({ params, searchParams }: {
       <ResponsibilityAssignmentForm key={`${data.current?.id ?? 'initial'}:${q}:${after ?? ''}`} kind={kind} id={id} entryId={data.current?.id ?? ''}
         updatedAt={data.context.updatedAt.toISOString()} state={data.context.state} department={data.current?.decision.departmentCode ?? null} users={choices} />
     </Card>}
-    <Card title="Storico delle decisioni e conferme"><ol className="space-y-3">{snapshots.map(({ row, decision, acceptance }) => <li key={row.id} className="rounded-xl border p-3">
+    <Card title="Storico delle decisioni e conferme"><ol className="crm-space-y-3">{snapshots.map(({ row, decision, acceptance }) => <li key={row.id} className="rounded-xl border p-3">
       <p>{decision.success ? (decision.data.allowed ? 'Decisione amministrativa' : 'Variazione da riconfermare') : acceptance.success ? `Presa in carico ${acceptance.data.role}` : 'Registrazione da verificare'} · {nameOf(row.actorId)} · {formatDateTime(row.createdAt)}</p>
       {decision.success && <><p>Commerciale: {nameOf(decision.data.state.commercialOwnerId)} · tecnico: {nameOf(decision.data.state.technicalOwnerId)} · reparto: {decision.data.departmentCode ?? 'Non indicato'}</p><p>{decision.data.reason}</p></>}
       {acceptance.success && <p>Conferma riferita alla decisione {acceptance.data.decisionId}</p>}
