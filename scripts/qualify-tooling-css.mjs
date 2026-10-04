@@ -25,7 +25,8 @@ const fixture = `<!doctype html><html><head><meta charset="utf-8"></head><body>
 <section data-probe class="rounded-2xl bg-gradient-to-r from-fai-blue to-fai-green p-4 text-white">Gradiente FAI</section>
 <nav data-probe class="sticky top-0 z-40 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-sm"><span class="md:hidden">Menu mobile</span><span class="hidden md:inline">Navigazione desktop</span></nav>
 </main></body></html>`;
-const migrated = fixture.replaceAll('shadow-sm', 'shadow-xs').replaceAll('outline-none', 'outline-hidden').replaceAll('bg-gradient-to-r', 'bg-linear-to-r/srgb');
+const migrated = fixture.replaceAll('shadow-sm', 'shadow-xs').replaceAll('outline-none', 'outline-compat').replaceAll('bg-gradient-to-r', 'bg-linear-to-r/srgb')
+  .replace(/\bspace-y-(\d+(?:\.\d+)?)/g, 'crm-space-y-$1').replaceAll('divide-y', 'crm-divide-y').replaceAll('divide-gray-', 'crm-divide-gray-');
 const config = beforeRequire('tailwindcss/loadConfig')(join(baseline, 'tailwind.config.ts'));
 config.content = [{ raw: fixture, extension: 'html' }];
 const beforeCss = (await beforeRequire('postcss')([beforeRequire('tailwindcss')(config), beforeRequire('autoprefixer')()]).process(readFileSync(join(baseline, 'src/app/globals.css'), 'utf8'), { from: join(baseline, 'src/app/globals.css') })).css;
@@ -36,14 +37,24 @@ writeFileSync(join(evidence, 'baseline.css'), beforeCss);
 writeFileSync(join(evidence, 'candidate.css'), afterCss);
 
 async function describe(page) {
-  return page.locator('[data-probe]').evaluateAll(elements => elements.map(element => {
+  return page.locator('[data-probe]').evaluateAll(elements => {
+    // CSS Color 4 can serialize identical sRGB colors as rgba() or oklab().
+    // Compare their rendered bytes, while independently retaining pixel checks.
+    const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+    const context = canvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+    const colorBytes = value => {
+      context.clearRect(0, 0, 1, 1); context.fillStyle = value; context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].join(',');
+    };
+    return elements.map(element => {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     return {
       rect: [rect.x, rect.y, rect.width, rect.height].map(value => Math.round(value * 100) / 100),
-      style: Object.fromEntries(['display', 'color', 'backgroundColor', 'fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'borderTopWidth', 'borderTopColor', 'borderRadius', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'opacity', 'cursor', 'outlineStyle', 'outlineWidth', 'outlineOffset'].map(name => [name, style[name]])),
+      style: Object.fromEntries(['display', 'color', 'backgroundColor', 'fontFamily', 'fontSize', 'lineHeight', 'fontWeight', 'borderTopWidth', 'borderTopColor', 'borderRadius', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'opacity', 'cursor', 'outlineStyle', 'outlineWidth', 'outlineOffset'].map(name => [name, ['color', 'backgroundColor', 'borderTopColor'].includes(name) ? colorBytes(style[name]) : style[name]])),
     };
-  }));
+    });
+  });
 }
 
 async function comparePixels(page, first, second) {
@@ -77,6 +88,11 @@ try {
           await left.setContent(fixture); await left.addStyleTag({ content: beforeCss });
           await right.setContent(migrated); await right.addStyleTag({ content: afterCss });
           await left.locator('input').focus(); await right.locator('input').focus();
+          // Measure settled focus styles, not arbitrary points in the real 160ms transition.
+          await Promise.all([left, right].map(page => page.evaluate(async () => {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            await Promise.all(document.getAnimations().map(animation => animation.finished));
+          })));
           const descriptions = [await describe(left), await describe(right)];
           const first = await left.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide' });
           const second = await right.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide' });

@@ -33,7 +33,7 @@ export default async function Page() {
   });
   const canWrite = hasPermission(session, 'project.write');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Dossier" description="Dossier operativi nel perimetro cliente/progetto autorizzato." />
     {canWrite ? <Card title="Crea dossier"><form action={createDossierAndRedirect} className="grid gap-3 md:grid-cols-5"><select className="rounded-xl border p-3" name="clientId" required>{visibleClients.map((client) => <option key={client.id} value={client.id}>{client.displayName}</option>)}</select><select className="rounded-xl border p-3" name="projectId" required>{visibleProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}</select><input className="rounded-xl border p-3" name="title" placeholder="Titolo" required/><input className="rounded-xl border p-3" name="type" placeholder="Tipo" defaultValue="operativo" required/><PrimaryButton type="submit">Crea dossier</PrimaryButton></form></Card> : null}
     <Card title="Elenco operativo">{visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono dossier disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Titolo', 'Cliente', 'Tipo', 'Stato', 'Tracciabilità', 'Azione']} rows={visibleItems.map((item) => [<span className="font-semibold text-fai-navy" key="n">{item.title}</span>, clientById.get(item.clientId)?.displayName ?? '—', item.type, <StatusBadge status={item.status} key="s" />, <MetaCell key="m" createdAt={item.createdAt} updatedAt={item.updatedAt} owner={item.modifiedById ?? null} />, <Link className="font-bold text-fai-blue underline" href={`/dossiers/${item.id}`} key="a">Apri</Link>])} />}</Card>

@@ -53,7 +53,7 @@ interface DashboardProps {
   };
 }
 
-const inputClass = 'w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 outline-hidden transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20';
+const inputClass = 'w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 outline-compat transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20';
 const labelClass = 'block text-xs font-black uppercase tracking-wide text-fai-navy';
 
 function hashPreview(value: string) {
@@ -103,7 +103,7 @@ function ReasonFields({ idPrefix, emergency = false }: { idPrefix: string; emerg
   const reasonId = `${idPrefix}-reason`;
   const confirmationId = `${idPrefix}-confirmation`;
   return (
-    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+    <div className="crm-space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
       <div>
         <label className={labelClass} htmlFor={reasonCodeId}>Reason code</label>
         <select
@@ -152,7 +152,7 @@ function ReasonFields({ idPrefix, emergency = false }: { idPrefix: string; emerg
 function GlobalPolicyForm({ global, requestId }: { global: GlobalRevisionView; requestId: string }) {
   const policy = global.policy;
   return (
-    <form action={updateAiOrchestratorGlobalPolicyAction} className="space-y-4">
+    <form action={updateAiOrchestratorGlobalPolicyAction} className="crm-space-y-4">
       <input type="hidden" name="requestId" value={requestId} />
       <input type="hidden" name="expectedVersion" value={global.version} />
       <input type="hidden" name="expectedRevisionHash" value={global.revisionHash} />
@@ -221,7 +221,7 @@ function GlobalPolicyForm({ global, requestId }: { global: GlobalRevisionView; r
 
 function ScopePolicyForm({ scope, requestId }: { scope: ScopeRevisionView; requestId: string }) {
   return (
-    <form action={updateAiOrchestratorScopePolicyAction} className="space-y-4">
+    <form action={updateAiOrchestratorScopePolicyAction} className="crm-space-y-4">
       <input type="hidden" name="requestId" value={requestId} />
       <input type="hidden" name="expectedVersion" value={scope.version} />
       <input type="hidden" name="expectedRevisionHash" value={scope.revisionHash} />
@@ -247,7 +247,7 @@ function ScopePolicyForm({ scope, requestId }: { scope: ScopeRevisionView; reque
 
 function EmergencyStopForm({ requestId }: { requestId: string }) {
   return (
-    <form action={engageAiOrchestratorEmergencyStopAction} className="space-y-4">
+    <form action={engageAiOrchestratorEmergencyStopAction} className="crm-space-y-4">
       <input type="hidden" name="requestId" value={requestId} />
       <p className="rounded-2xl bg-red-50 p-4 text-sm font-bold leading-6 text-red-800 ring-1 ring-red-200">Operazione monotona e CAS-less: forza la policy desiderata globale su STOPPED, disabilita la state machine desiderata e inserisce entrambi i kill switch. Non avvia né arresta un worker reale in questa Foundation.</p>
       <ReasonFields idPrefix="emergency" emergency />
@@ -264,7 +264,7 @@ export function AiOrchestratorAdminDashboard(props: DashboardProps) {
   const canMutate = props.mutationIntegritySafe;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader title="AI Orchestrator · Admin Control Center" description="Vista privata della configurazione desiderata e dei gate effettivi Foundation. Questa UI registra policy append-only ma non è collegata a worker, coda, runtime, dispatch o provider esterni." />
 
       <div className="rounded-3xl border border-fai-orange/30 bg-fai-orange/10 p-5 shadow-xs">
@@ -342,7 +342,7 @@ export function AiOrchestratorAdminDashboard(props: DashboardProps) {
 
       <Card title="Scope selezionato" action={props.selectedScope ? <Badge tone="blue">{props.selectedScope.scopeType}</Badge> : undefined}>
         {!props.selectedScope ? <EmptyState title="Selezionare uno scope canonico" /> : (
-          <div className="space-y-4">
+          <div className="crm-space-y-4">
             <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
               <p><span className="font-extrabold text-fai-navy">Codice:</span> {props.selectedScope.scopeCode}</p>
               <p><span className="font-extrabold text-fai-navy">Versione:</span> {props.selectedScope.version}</p>

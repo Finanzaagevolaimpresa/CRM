@@ -16,7 +16,7 @@ export default async function NotificationsPage() {
   const notifications = await getInternalNotifications(session);
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Notifiche"
         description="Priorità operative interne e notifiche persistenti delle richieste AI destinate all’Admin, senza invii automatici o canali esterni."
@@ -31,7 +31,7 @@ export default async function NotificationsPage() {
             Non risultano autorizzazioni AI da decidere, task scaduti, attività in scadenza oggi, comunicazioni da gestire, pratiche tecniche aperte o follow-up commerciali per il tuo ruolo.
           </EmptyState>
         ) : (
-          <div className="space-y-3">
+          <div className="crm-space-y-3">
             {notifications.map((notification) => (
               <article
                 className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs shadow-slate-200/70 md:grid-cols-[1.4fr_0.9fr_0.7fr_0.9fr_auto] md:items-center"
@@ -43,11 +43,11 @@ export default async function NotificationsPage() {
                     {notification.related ?? "Nessun cliente o pratica collegata"}
                   </p>
                 </div>
-                <div className="space-y-1">
+                <div className="crm-space-y-1">
                   <p className="text-[0.65rem] font-black uppercase tracking-wide text-slate-400">Categoria</p>
                   <Badge tone="purple">{notification.category}</Badge>
                 </div>
-                <div className="space-y-1">
+                <div className="crm-space-y-1">
                   <p className="text-[0.65rem] font-black uppercase tracking-wide text-slate-400">Priorità</p>
                   <Badge tone={priorityTone[notification.priority]}>{notification.priority}</Badge>
                 </div>

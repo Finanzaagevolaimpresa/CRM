@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 // tinyglobby is NOT a general drop-in replacement for fast-glob's directory API.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const require = createRequire(join(root, 'package.json'));
+const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+assert.equal(manifest.overrides?.['@next/eslint-plugin-next@16.3.8']?.['fast-glob'], 'npm:tinyglobby@0.2.17', 'The qualified scoped replacement override has changed.');
 const pluginFile = require.resolve('@next/eslint-plugin-next/package.json');
 const pluginRequire = createRequire(pluginFile);
 const plugin = JSON.parse(readFileSync(pluginFile, 'utf8'));

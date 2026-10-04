@@ -55,7 +55,7 @@ export default async function AiAuthorizationsPage() {
   }));
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Autorizzazioni AI"
         description="Richieste persistenti e decisioni Admin separate. L’approvazione non avvia l’AI: nessun consumer operativo è attivo."

@@ -27,8 +27,8 @@ export function PreAnalysisForm({ action, hidden, values = {}, creating = false 
     if (formRef.current) formRef.current.dataset.preanalysisFormReady = 'true';
     if (fieldsetRef.current) fieldsetRef.current.disabled = false;
   }, []);
-  return <form ref={formRef} data-preanalysis-form-ready="false" action={formAction} className="space-y-5">
-    <fieldset ref={fieldsetRef} disabled className="space-y-5 disabled:opacity-70">
+  return <form ref={formRef} data-preanalysis-form-ready="false" action={formAction} className="crm-space-y-5">
+    <fieldset ref={fieldsetRef} disabled className="crm-space-y-5 disabled:opacity-70">
       {Object.entries(hidden).map(([name, value]) => <input key={name} type="hidden" name={name} value={name === 'version' ? state.version ?? value : value} />)}
       {fields.map(([name, label, help]) => <label key={name} className="block text-sm font-bold text-fai-navy">{label}<span className="mt-1 block text-xs font-normal text-slate-500">{help} Massimo 5.000 caratteri.</span><textarea name={name} value={draft[name]} onChange={(event) => setDraft((current) => ({ ...current, [name]: event.target.value }))} maxLength={5000} rows={name === 'internalSummary' ? 4 : 6} className="mt-2 w-full rounded-xl border border-slate-200 p-3 font-normal text-slate-900" /></label>)}
       {state.message ? <p role="status" className={`rounded-xl p-3 text-sm font-semibold ${state.status === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'}`}>{state.message}</p> : null}

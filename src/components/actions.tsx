@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-const base = 'inline-flex items-center justify-center rounded-2xl px-4 py-2.5 text-sm font-extrabold transition focus:outline-hidden focus:ring-2 focus:ring-fai-lime focus:ring-offset-2 disabled:cursor-not-allowed';
+const base = 'inline-flex items-center justify-center rounded-2xl px-4 py-2.5 text-sm font-extrabold transition focus:outline-compat focus:ring-2 focus:ring-fai-lime focus:ring-offset-2 disabled:cursor-not-allowed';
 export function PrimaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) { return <button {...props} className={`${base} bg-linear-to-r/srgb from-fai-blue to-fai-green text-white shadow-lg shadow-fai-blue/15 hover:-translate-y-0.5 hover:shadow-xl disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-500 ${props.className ?? ''}`} />; }
 export function SecondaryLink({ href, children }: { href: string; children: React.ReactNode }) { return <Link className={`${base} border border-fai-blue/15 bg-white/90 text-fai-blue shadow-xs hover:-translate-y-0.5 hover:bg-fai-blue/10`} href={href}>{children}</Link>; }
 export function DownloadLink({ href, children }: { href: string; children: React.ReactNode }) { return <a className={`${base} border border-fai-blue/15 bg-white/90 text-fai-blue shadow-xs hover:-translate-y-0.5 hover:bg-fai-blue/10`} href={href} download>{children}</a>; }

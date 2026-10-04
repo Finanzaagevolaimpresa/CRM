@@ -14,7 +14,7 @@ export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWr
   const assigned = human ? plan?.humanReviewerIds[next === 'HUMAN_1' ? 0 : 1] : plan?.responsibleUserId;
   const binding = <><input type="hidden" name="dossierId" value={dossierId}/><input type="hidden" name="expectedVersionId" value={state.version.id}/><input type="hidden" name="expectedPlanHash" value={state.planHash ?? ''}/></>;
   const people = choices.users.map(user => <option key={user.id} value={user.id}>{user.name} · {user.role}</option>);
-  return <section className="space-y-4" aria-label="Percorso servizio iniziale">
+  return <section className="crm-space-y-4" aria-label="Percorso servizio iniziale">
     <Card title={state.definition.title}>
       <p>{state.definition.outcome}</p>
       <p className="mt-2"><strong>Materiali:</strong> {state.definition.materials.join('; ')}.</p>
@@ -62,6 +62,6 @@ export function InitialServiceWorkflow({ state, choices, dossierId, admin, canWr
         <PrimaryButton type="submit">{human ? 'Registra il mio giudizio umano' : 'Registra attestazione manuale'}</PrimaryButton>
       </form>
     </Card> : null}
-    <Card title="Traccia delle revisioni del servizio"><ul className="space-y-2">{state.allReviews.map((entry,index) => <li key={index}>{entry.review.stage} · {entry.review.decision} · {entry.review.reference} · {entry.review.recordedAt}<br/><span className="text-sm">Versione {entry.review.versionId} · autore {entry.review.actorId} · {entry.review.note}</span></li>)}</ul></Card>
+    <Card title="Traccia delle revisioni del servizio"><ul className="crm-space-y-2">{state.allReviews.map((entry,index) => <li key={index}>{entry.review.stage} · {entry.review.decision} · {entry.review.reference} · {entry.review.recordedAt}<br/><span className="text-sm">Versione {entry.review.versionId} · autore {entry.review.actorId} · {entry.review.note}</span></li>)}</ul></Card>
   </section>;
 }

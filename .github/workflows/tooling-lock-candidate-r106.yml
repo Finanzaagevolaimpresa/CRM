@@ -34,6 +34,9 @@ jobs:
         with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc }
+      - name: Pin the canonical audit client for the real counterproof
+        if: runner.os == 'Linux'
+        run: npm install --global npm@11.16.0 --ignore-scripts --no-audit --fund=false
       - run: npm ci --ignore-scripts
       - run: node scripts/verify-next-glob-contract.mjs
       - run: node scripts/qualify-next-glob-guard.mjs

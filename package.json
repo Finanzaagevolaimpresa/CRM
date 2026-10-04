@@ -9,7 +9,7 @@
     "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
     "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
-    "lint": "node scripts/verify-next-glob-contract.mjs && eslint . --max-warnings 0",
+    "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit --incremental false",
     "guard:build-context": "node scripts/vnx00a-build-context-guard.mjs",
     "verify:quality": "npm run lint && npm test && npm run typecheck",

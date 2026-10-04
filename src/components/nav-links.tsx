@@ -148,11 +148,11 @@ export function NavLinks({
 }) {
   const pathname = usePathname();
   return (
-    <nav className="space-y-4 pb-1" aria-label="Navigazione principale">
+    <nav className="crm-space-y-4 pb-1" aria-label="Navigazione principale">
       {getVisibleNavItems({ role, effectivePermissions }).map((section) => {
         const visibleItems = section.items;
         return (
-          <div key={section.title} className="space-y-1.5">
+          <div key={section.title} className="crm-space-y-1.5">
             <p className="px-3 text-[0.62rem] font-black uppercase tracking-[0.16em] text-white/45">
               {section.title}
             </p>
@@ -162,7 +162,7 @@ export function NavLinks({
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
-                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-hidden focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
+                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-compat focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
                   href={href}
                   key={href}
                   onClick={onNavigate}

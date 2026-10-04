@@ -23,7 +23,7 @@ export default async function Page() {
   const externalRuntimeConfigured = controlPolicy.effectiveExternalProvidersEnabled && controlPolicy.allowedModels.length > 0;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader title="Agenti AI interni" description="Control Plane server-side per provider, modelli autorizzati e prompt degli agenti interni CRM FAI. Nessuna chiave API viene mostrata o salvata da questa pagina." />
 
       <Card title="Kill switch provider esterni" action={<Badge tone={externalRuntimeConfigured ? 'green' : 'orange'}>{externalRuntimeConfigured ? 'gate aperto' : 'fail-closed'}</Badge>}>
@@ -51,12 +51,12 @@ export default async function Page() {
         </div>
 
         <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_420px]">
-          <div className="space-y-3 text-sm leading-6 text-slate-700">
+          <div className="crm-space-y-3 text-sm leading-6 text-slate-700">
             <p className="rounded-2xl bg-fai-orange/10 p-4 font-bold text-fai-orange ring-1 ring-fai-orange/20">Fail-closed: gate ambiente e switch database devono essere entrambi attivi; una allowlist vuota o un modello non autorizzato blocca comunque una futura esecuzione esterna.</p>
             <p>Questa pagina configura soltanto il Control Plane e non esegue AI. Ogni futura esecuzione, inclusi mock e diagnostica, richiede una richiesta persistente, una decisione Admin separata e un grant monouso valido; i permessi storici `ai.run` e `ai.external.run` non possono sostituire tale autorizzazione.</p>
             <p className="text-xs text-slate-500">Ultimo aggiornamento switch: {controlPolicy.updatedAt ? controlPolicy.updatedAt.toLocaleString('it-IT') : 'nessuna configurazione salvata; default disabilitato'}.</p>
           </div>
-          {canManageControlPlane ? <form action={updateAiControlSetting} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+          {canManageControlPlane ? <form action={updateAiControlSetting} className="crm-space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
             <input type="hidden" name="expectedUpdatedAt" value={controlPolicy.updatedAt?.toISOString() ?? ''} />
             <label className="flex items-start gap-2 text-sm font-bold text-fai-navy">
               <input type="checkbox" name="externalProvidersEnabled" defaultChecked={controlPolicy.databaseEnabled} className="mt-1 h-4 w-4 rounded border-slate-300" />
@@ -74,7 +74,7 @@ export default async function Page() {
         {agents.map((agent) => (
           <Card key={agent.id} title={`${agent.name} · ${agent.code}`} action={<div className="flex flex-wrap gap-2"><Badge tone={agent.provider === 'openai' ? 'orange' : 'gray'}>{agent.provider}</Badge><Badge tone={agent.active ? 'green' : 'gray'}>{agent.active ? 'attivo' : 'non attivo'}</Badge></div>}>
             <div className="grid gap-4 text-sm leading-6 text-slate-700 lg:grid-cols-2">
-              <div className="space-y-3">
+              <div className="crm-space-y-3">
                 <p><span className="font-extrabold text-fai-navy">Categoria:</span> <Badge tone="blue">{getAiAgentCategory(agent.code)}</Badge></p>
                 <p><span className="font-extrabold text-fai-navy">Descrizione:</span> {agent.description || '—'}</p>
                 <p><span className="font-extrabold text-fai-navy">Ambito operativo:</span> {agent.operationalScope || '—'}</p>
@@ -88,7 +88,7 @@ export default async function Page() {
                 </div>
                 <TimestampMeta createdAt={agent.createdAt} updatedAt={agent.updatedAt} />
               </div>
-              {canWrite ? <form action={updateAiAgentConfig} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              {canWrite ? <form action={updateAiAgentConfig} className="crm-space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                 <input type="hidden" name="id" value={agent.id} />
                 <input type="hidden" name="expectedConfigVersion" value={agent.configVersion} />
                 <label className="block text-xs font-black uppercase tracking-wide text-fai-navy" htmlFor={`provider-${agent.id}`}>Provider</label>
@@ -103,7 +103,7 @@ export default async function Page() {
                 </select>
                 <p className="text-xs leading-5 text-slate-500">OpenAI richiede un modello della allowlist; mock richiede “Nessun modello”. La lista viene dalla configurazione server e non può essere ampliata da questo form.</p>
                 <label className="block text-xs font-black uppercase tracking-wide text-fai-navy" htmlFor={`prompt-${agent.id}`}>Istruzioni / prompt di sistema</label>
-                <textarea id={`prompt-${agent.id}`} name="systemPrompt" defaultValue={agent.systemPrompt} className="min-h-56 w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-hidden transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20" />
+                <textarea id={`prompt-${agent.id}`} name="systemPrompt" defaultValue={agent.systemPrompt} className="min-h-56 w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700 outline-compat transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20" />
                 <label className="flex items-center gap-2 text-sm font-bold text-fai-navy"><input type="checkbox" name="active" defaultChecked={agent.active} className="h-4 w-4 rounded border-slate-300" /> Agente attivo</label>
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><strong>Suggerimento miglioramento prompt:</strong> eventuali proposte, incluse quelle dell’agente governance, devono essere valutate da admin/direzione. Nessun prompt viene modificato automaticamente; il salvataggio manuale resta tracciato in audit log.</div>
                 <button className="rounded-2xl bg-fai-navy px-5 py-3 text-sm font-black text-white transition hover:bg-fai-blue" type="submit">Salva configurazione</button>

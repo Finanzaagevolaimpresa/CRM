@@ -116,7 +116,7 @@ export function MetaCell({
   owner?: string | null;
 }) {
   return (
-    <div className="space-y-1 text-xs leading-5 text-slate-500">
+    <div className="crm-space-y-1 text-xs leading-5 text-slate-500">
       <div>
         <span className="font-black uppercase tracking-wide text-slate-600">
           Creato il
@@ -162,7 +162,7 @@ export function ActivityTimeline({
       </EmptyState>
     );
   return (
-    <ol className="relative space-y-4 before:absolute before:left-4 before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-linear-to-b/srgb before:from-fai-lime before:via-fai-blue/30 before:to-transparent">
+    <ol className="relative crm-space-y-4 before:absolute before:left-4 before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-linear-to-b/srgb before:from-fai-lime before:via-fai-blue/30 before:to-transparent">
       {events.map((event) => (
         <li key={event.id} className="relative pl-11">
           <span className="absolute left-2 top-5 h-4 w-4 rounded-full border-2 border-white bg-fai-lime shadow-lg shadow-fai-lime/30" />

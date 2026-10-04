@@ -37,7 +37,7 @@ export default async function Page({
   const session = await requirePermission('lead.read');
   const mode = commercialLeadInboxMode();
   if (mode !== 'enforced') {
-    return <div className="space-y-6">
+    return <div className="crm-space-y-6">
       <PageHeader title="Commercial Lead Inbox" description="Foundation N14 dormiente: nessuna policy o activation è attiva." />
       <SecondaryLink href="/leads">← Torna alla pipeline</SecondaryLink>
       <EmptyState title="Inbox non attiva">Il deploy foundation non iscrive Lead e non avvia SLA.</EmptyState>
@@ -86,14 +86,14 @@ export default async function Page({
   const canManage = session.role === 'admin' && hasPermission(session, 'lead.inbox.assign') && readiness.active;
   const canWork = hasPermission(session, 'lead.write');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Commercial Lead Inbox" description="Coda N14 con attribution immutabile e SLA first-response continuo 24x7 UTC." />
     <div className="flex flex-wrap gap-3">
       <SecondaryLink href="/leads">← Pipeline</SecondaryLink>
       {queues.map((queue) => <SecondaryLink key={queue} href={`/leads/inbox?queue=${queue}`}>{queue}</SecondaryLink>)}
     </div>
     <Card title={`Coda: ${selectedQueue}`}>
-      {page.items.length === 0 ? <EmptyState title="Nessun item">La coda selezionata è vuota.</EmptyState> : <div className="space-y-4">
+      {page.items.length === 0 ? <EmptyState title="Nessun item">La coda selezionata è vuota.</EmptyState> : <div className="crm-space-y-4">
         {page.items.map((item) => {
           const cycle = item.slaCycles[0];
           const overdue = Boolean(cycle && !cycle.closedAt && !cycle.firstResponseAt && cycle.dueAt <= now);

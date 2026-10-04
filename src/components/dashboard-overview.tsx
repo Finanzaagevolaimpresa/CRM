@@ -107,7 +107,7 @@ function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: n
         </svg>
         <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className={`max-w-full break-all font-black leading-none tracking-tight tabular-nums text-fai-navy ${formatCount(total).length > 7 ? "text-xl" : formatCount(total).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={total} /></span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
       </div>
-      {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="space-y-2">{visibleSegments.map((item) => <li key={item.label} data-pipeline-legend-label={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" data-pipeline-legend-color={item.color} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
+      {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="crm-space-y-2">{visibleSegments.map((item) => <li key={item.label} data-pipeline-legend-label={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" data-pipeline-legend-color={item.color} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
     </section>
   );
 }
@@ -130,7 +130,7 @@ export function DashboardOverview({
   counterGroups?: DashboardCounterGroup[];
 }) {
   return (
-    <section aria-labelledby="dashboard-heading" className="space-y-6">
+    <section aria-labelledby="dashboard-heading" className="crm-space-y-6">
       <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="min-w-0">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-fai-green">Panoramica operativa</p>
@@ -138,15 +138,15 @@ export function DashboardOverview({
           <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{summary}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link href="/search" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-hidden focus:ring-2 focus:ring-fai-lime">Cerca nel CRM</Link>
-          <Link href="/notifications" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-hidden focus:ring-2 focus:ring-fai-lime">Notifiche</Link>
+          <Link href="/search" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime">Cerca nel CRM</Link>
+          <Link href="/notifications" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime">Notifiche</Link>
         </div>
       </div>
 
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(17rem,1fr)]">
         <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           {kpis.map((kpi) => (
-            <Link key={kpi.label} href={kpi.href} className={`group relative isolate flex min-h-48 min-w-0 flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br/srgb p-5 text-white shadow-[0_12px_32px_-20px_rgba(5,46,112,0.65)] ring-1 ring-black/5 hover:ring-2 hover:ring-fai-lime focus:outline-hidden focus:ring-2 focus:ring-fai-lime ${toneStyles[kpi.tone].hero}`}>
+            <Link key={kpi.label} href={kpi.href} className={`group relative isolate flex min-h-48 min-w-0 flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br/srgb p-5 text-white shadow-[0_12px_32px_-20px_rgba(5,46,112,0.65)] ring-1 ring-black/5 hover:ring-2 hover:ring-fai-lime focus:outline-compat focus:ring-2 focus:ring-fai-lime ${toneStyles[kpi.tone].hero}`}>
               <div aria-hidden="true" className="pointer-events-none absolute -right-4 -top-5 h-32 w-32 rounded-full border-[20px] border-white/[0.04]" />
               <div aria-hidden="true" className="pointer-events-none absolute -bottom-4 right-1 -z-10 rotate-[-12deg] text-white/[0.07]"><KpiIcon tone={kpi.tone} className="h-36 w-36" /></div>
               <div className="relative flex items-start justify-between gap-3"><p className="max-w-[14rem] text-sm font-bold leading-5 text-white/95">{kpi.label}</p><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/10"><KpiIcon tone={kpi.tone} /></span></div>
@@ -157,7 +157,7 @@ export function DashboardOverview({
         <PipelineChart pipeline={pipeline} />
       </div>
 
-      {counterGroups.length > 0 && <section aria-labelledby="counter-areas-heading" className="space-y-4">
+      {counterGroups.length > 0 && <section aria-labelledby="counter-areas-heading" className="crm-space-y-4">
         <div className="flex items-center gap-3"><span aria-hidden="true" className="h-7 w-1.5 rounded-full bg-fai-lime" /><h2 id="counter-areas-heading" className="text-xl font-black tracking-tight text-fai-navy">Contatori per area</h2></div>
         <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
           {counterGroups.map((group) => {
@@ -176,7 +176,7 @@ export function DashboardOverview({
                     {showComparison && <span aria-hidden="true" className="mt-4 block h-1.5 w-full overflow-hidden rounded-full bg-slate-100"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className={`block h-full rounded-full bg-linear-to-r/srgb ${toneStyles[group.tone].bar}`} style={{ width: `${width}%` }} /></span>}
                   </>;
                   const cardClass = "flex min-h-32 min-w-0 flex-col justify-between rounded-2xl border border-white bg-white p-3 shadow-[0_2px_12px_-8px_rgba(5,46,112,0.35)]";
-                  return counter.href ? <Link key={counter.label} href={counter.href} className={`${cardClass} hover:ring-1 hover:ring-fai-green/30 focus:outline-hidden focus:ring-2 focus:ring-fai-lime`}>{content}</Link> : <div key={counter.label} className={cardClass}>{content}</div>;
+                  return counter.href ? <Link key={counter.label} href={counter.href} className={`${cardClass} hover:ring-1 hover:ring-fai-green/30 focus:outline-compat focus:ring-2 focus:ring-fai-lime`}>{content}</Link> : <div key={counter.label} className={cardClass}>{content}</div>;
                 })}
               </div>
             </section>;
@@ -187,13 +187,13 @@ export function DashboardOverview({
       <section aria-labelledby="dashboard-priorities-heading" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs">
         <div className="flex items-start justify-between gap-4"><div><h2 id="dashboard-priorities-heading" className="text-xl font-black text-fai-navy">Priorità</h2><p className="mt-1 text-sm text-slate-500">Le prossime attività autorizzate per urgenza.</p></div><span className="rounded-full bg-fai-lime/20 px-3 py-1 text-xs font-black tabular-nums text-fai-green">{priorities.length}</span></div>
         {priorities.length === 0 ? <p className="mt-6 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">Nessuna priorità operativa al momento.</p> : (
-          <ol className="mt-4 divide-y divide-slate-100">
-            {priorities.map((item) => <li key={item.id} className="py-3"><Link href={item.href} className="block min-h-11 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-fai-lime"><span className="text-[0.65rem] font-black uppercase tracking-wide text-fai-green">{item.type}</span><span className="mt-1 block font-bold text-fai-navy">{item.title}</span><span className="mt-1 flex flex-wrap justify-between gap-2 text-xs text-slate-500"><span>{item.related}</span><span>{item.date}</span></span></Link></li>)}
+          <ol className="mt-4 crm-divide-y crm-divide-slate-100">
+            {priorities.map((item) => <li key={item.id} className="py-3"><Link href={item.href} className="block min-h-11 rounded-lg focus:outline-compat focus:ring-2 focus:ring-fai-lime"><span className="text-[0.65rem] font-black uppercase tracking-wide text-fai-green">{item.type}</span><span className="mt-1 block font-bold text-fai-navy">{item.title}</span><span className="mt-1 flex flex-wrap justify-between gap-2 text-xs text-slate-500"><span>{item.related}</span><span>{item.date}</span></span></Link></li>)}
           </ol>
         )}
       </section>
 
-      {shortcuts.length > 0 && <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shortcuts.map((shortcut) => <Link key={shortcut.href} href={shortcut.href} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs focus:outline-hidden focus:ring-2 focus:ring-fai-lime"><span className="font-black text-fai-navy">{shortcut.label}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{shortcut.description}</span><span className="mt-3 block text-xs font-black uppercase tracking-wide text-fai-green">Apri area →</span></Link>)}</div>}
+      {shortcuts.length > 0 && <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shortcuts.map((shortcut) => <Link key={shortcut.href} href={shortcut.href} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime"><span className="font-black text-fai-navy">{shortcut.label}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{shortcut.description}</span><span className="mt-3 block text-xs font-black uppercase tracking-wide text-fai-green">Apri area →</span></Link>)}</div>}
     </section>
   );
 }

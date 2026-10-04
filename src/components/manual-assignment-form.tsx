@@ -12,7 +12,7 @@ export function ManualAssignmentForm({ kind, id, updatedAt, commercialOwnerId, t
   const [state, action, pending] = useActionState(kind === 'client' ? assignClientOwners : assignProjectOwner, { ok: false, message: '' });
   const sales = users.filter(user => ['admin', 'direzione', 'commerciale'].includes(user.role));
   const technicians = users.filter(user => ['admin', 'direzione', 'consulente', 'backoffice'].includes(user.role));
-  return <form action={action} aria-label="Assegna responsabili" className="space-y-3">
+  return <form action={action} aria-label="Assegna responsabili" className="crm-space-y-3">
     <input type="hidden" name="id" value={id} />
     <input type="hidden" name="updatedAt" value={updatedAt} />
     {kind === 'client' ? <label className="block">Responsabile commerciale

@@ -42,7 +42,7 @@ export default async function Page({
   }
   const decisionsAvailable = readiness.active && registrySession;
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader
       title="Revisione possibili duplicati"
       description="Coda protetta N13: confronta soltanto i segnali necessari e registra una decisione non distruttiva."
@@ -57,7 +57,7 @@ export default async function Page({
     </EmptyState>}
     {page.items.length === 0 ? <EmptyState title="Nessun caso aperto">
       Non risultano proiezioni N13 in attesa di decisione.
-    </EmptyState> : <div className="space-y-5">
+    </EmptyState> : <div className="crm-space-y-5">
       {page.items.map((item) => <Card
         key={item.caseId}
         title={`Caso ricevuto ${formatDateTime(item.incoming.occurredAt)}`}
@@ -87,7 +87,7 @@ export default async function Page({
           Caso ad alta cardinalità: sono mostrati i primi {item.visibleCandidateCount} candidati su {item.candidateCount},
           secondo il ranking N13 deterministico. Tutti gli snapshot restano conservati; la decisione operatore non è automatica.
         </p>}
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 crm-space-y-3">
           {item.candidates.map((candidate) => <article
             key={candidate.leadId}
             className="rounded-2xl border border-slate-200 bg-white p-4"
