@@ -68,11 +68,20 @@ async function comparePixels(page, first, second) {
     const left = await pixels(a); const right = await pixels(b);
     if (left.width !== right.width || left.height !== right.height) return { dimensionsDiffer: true, dimensions: [[left.width, left.height], [right.width, right.height]] };
     let changed = 0; let maximum = 0;
+    const changedSamples = [];
+    let xMin = left.width; let yMin = left.height; let xMax = -1; let yMax = -1;
     for (let i = 0; i < left.data.length; i += 4) {
       let delta = 0; for (let c = 0; c < 4; c++) delta = Math.max(delta, Math.abs(left.data[i + c] - right.data[i + c]));
-      maximum = Math.max(maximum, delta); if (delta > 4) changed++;
+      maximum = Math.max(maximum, delta);
+      if (delta > 4) {
+        changed++;
+        const x = (i / 4) % left.width; const y = Math.floor(i / 4 / left.width);
+        xMin = Math.min(xMin, x); yMin = Math.min(yMin, y); xMax = Math.max(xMax, x); yMax = Math.max(yMax, y);
+        if (changedSamples.length < 30) changedSamples.push({ x, y, before: [...left.data.slice(i, i + 4)], after: [...right.data.slice(i, i + 4)] });
+      }
     }
-    return { changedPixelsAboveFour: changed, maximumChannelDelta: maximum, totalPixels: left.width * left.height };
+    return { changedPixelsAboveFour: changed, maximumChannelDelta: maximum, totalPixels: left.width * left.height,
+      changedBounds: changed ? [xMin, yMin, xMax, yMax] : null, changedSamples };
   }, [first.toString('base64'), second.toString('base64')]);
 }
 
@@ -97,6 +106,13 @@ try {
           const first = await left.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide' });
           const second = await right.screenshot({ fullPage: true, animations: 'disabled', caret: 'hide' });
           const pixels = await comparePixels(right, first, second);
+          if (pixels.changedPixelsAboveFour > 0) {
+            const effects = await Promise.all([left, right].map(page => page.locator('[data-probe]').evaluateAll(elements => elements.map((element, index) => {
+              const style = getComputedStyle(element); const rect = element.getBoundingClientRect();
+              return { probe: index, rect: [rect.x, rect.y, rect.width, rect.height], boxShadow: style.boxShadow, backgroundImage: style.backgroundImage };
+            }))));
+            console.log(JSON.stringify({ engine: name, width, effectDifferences: effects[0].flatMap((effect, index) => JSON.stringify(effect) === JSON.stringify(effects[1][index]) ? [] : [{ before: effect, after: effects[1][index] }]) }));
+          }
           const entry = { engine: name, width, computedStylesEqual: JSON.stringify(descriptions[0]) === JSON.stringify(descriptions[1]), pixels };
           report.cases.push(entry);
           writeFileSync(join(evidence, `${name}-${width}-before.png`), first);
