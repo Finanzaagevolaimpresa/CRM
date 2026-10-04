@@ -8,6 +8,7 @@ import { localPathFromStoragePath } from '../../src/lib/storage';
 import { Prisma, PrismaClient, type RoleCode } from '@prisma/client';
 import { declareContractSignature, recordContractSignature } from '../../src/lib/contract-signature';
 import { ContractSignatureError } from '../../src/lib/contract-signature-policy';
+import { getContractReadAccess, getPaymentReadAccess } from '../../src/lib/read-access';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 const enabled = process.env.CONTRACT_SIGNATURE_DB_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
   requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1', databaseUrl: process.env.DATABASE_URL,
@@ -18,6 +19,33 @@ test.after(async () => { await db.$disconnect(); });
 const failure = (code: string) => (error: unknown) => error instanceof ContractSignatureError && error.code === code;
 const declarationInput = (f: Awaited<ReturnType<typeof fixture>>) => ({ contractId: f.contract.id, expectedVersion: f.contract.updatedAt.toISOString(),
   expectedDeclarationId: null, signedOn: '2026-01-01', source: 'Comunicazione sintetica del cliente; PDF da acquisire', confirmed: true });
+
+test('canonical financial reads reject missing, deleted and foreign project links while accepting active or absent links', { skip: !enabled }, async () => {
+  const f = await fixture();
+  assert.ok(await getContractReadAccess(f.admin, f.contract.id));
+  const active = await db.project.create({ data: { clientId: f.client.id, title: 'Synthetic active financial project' } });
+  await db.contract.update({ where: { id: f.contract.id }, data: { projectId: active.id } });
+  assert.ok(await getContractReadAccess(f.admin, f.contract.id));
+  await db.project.update({ where: { id: active.id }, data: { deletedAt: new Date() } });
+  assert.equal(await getContractReadAccess(f.admin, f.contract.id), null);
+  assert.equal(await getPaymentReadAccess(f.admin, f.payment.id), null);
+  const otherClient = await db.client.create({ data: { displayName: 'Synthetic foreign financial client', type: 'societa' } });
+  const foreign = await db.project.create({ data: { clientId: otherClient.id, title: 'Synthetic foreign financial project' } });
+  for (const projectId of [foreign.id, `missing-${randomUUID()}`]) {
+    await db.contract.update({ where: { id: f.contract.id }, data: { projectId } });
+    assert.equal(await getContractReadAccess(f.admin, f.contract.id), null);
+    assert.equal(await getPaymentReadAccess(f.admin, f.payment.id), null);
+  }
+});
+
+test('canonical payment reads reject a client different from the contract without hiding the valid contract', { skip: !enabled }, async () => {
+  const f = await fixture();
+  assert.ok(await getPaymentReadAccess(f.admin, f.payment.id));
+  const otherClient = await db.client.create({ data: { displayName: 'Synthetic mismatched payment client', type: 'societa' } });
+  await db.payment.update({ where: { id: f.payment.id }, data: { clientId: otherClient.id, status: 'incassato' } });
+  assert.equal(await getPaymentReadAccess(f.admin, f.payment.id), null);
+  assert.ok(await getContractReadAccess(f.admin, f.contract.id));
+});
 
 test('declaration is explicit and append-only; signature, payments and readiness stay unchanged', { skip: !enabled }, async () => {
   const f = await fixture();

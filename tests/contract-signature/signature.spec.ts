@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
+import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), root = process.env.CONTRACT_SIGNATURE_EVIDENCE!, password = process.env.CONTRACT_SIGNATURE_BROWSER_PASSWORD!;
@@ -8,6 +9,99 @@ const f = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8'));
 test.afterAll(async () => { await db.$disconnect(); });
 test.afterEach(async ({ page }, info) => {
   if (info.status !== info.expectedStatus && !page.isClosed()) console.log('Synthetic CRM page at failure:', await page.locator('body').innerText());
+});
+
+async function loginProgressReader(page: Page, email = 'signature-admin@example.test') {
+  await page.goto('/login');
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.getByLabel('Email', { exact: true }).fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Login interno' }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+}
+
+test('progress omits contracts and declaration HTML when the referenced project is deleted, missing or from another client', async ({ page }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const client = await db.client.create({ data: { displayName: 'Synthetic project-link projection', type: 'societa' } });
+  const otherClient = await db.client.create({ data: { displayName: 'Synthetic foreign project client', type: 'societa' } });
+  const active = await db.project.create({ data: { clientId: client.id, title: 'Synthetic active project' } });
+  const deleted = await db.project.create({ data: { clientId: client.id, title: 'Synthetic deleted project', deletedAt: new Date() } });
+  const foreign = await db.project.create({ data: { clientId: otherClient.id, title: 'Synthetic foreign project' } });
+  const actor = await db.user.create({ data: { name: `HIDDEN_DECLARATION_AUTHOR_${randomUUID()}`, email: `hidden-${randomUUID()}@example.test`, role: 'admin', passwordHash: 'synthetic-unusable' } });
+  const hidden = [];
+  for (const projectId of [deleted.id, `missing-${randomUUID()}`, foreign.id]) {
+    const contract = await db.contract.create({ data: { clientId: client.id, projectId, contractNumber: `HIDDEN_CONTRACT_${randomUUID()}`,
+      serviceName: 'Synthetic hidden financial record', taxableAmount: '100', vatAmount: '22', totalAmount: '122' } });
+    const source = `HIDDEN_DECLARATION_SOURCE_${randomUUID()}`;
+    const declaration = await db.auditLog.create({ data: { actorId: actor.id, entityType: 'Contract', entityId: contract.id, event: 'contract_signature_declared',
+      after: { version: 1, evidenceKind: 'DECLARED_NOT_VERIFIED', sequence: 1, previousDeclarationId: null, declaredSignedAt: '2026-01-01', source, requestFingerprint: 'a'.repeat(64) } } });
+    hidden.push({ contract, source, declaration });
+  }
+  const visible = [];
+  for (const projectId of [active.id, null]) visible.push(await db.contract.create({ data: { clientId: client.id, projectId,
+    contractNumber: `VISIBLE_CONTRACT_${randomUUID()}`, serviceName: 'Synthetic visible financial record', taxableAmount: '100', vatAmount: '22', totalAmount: '122' } }));
+  await loginProgressReader(page);
+  for (const row of hidden) {
+    await page.goto(`/contracts/${row.contract.id}`);
+    await expect(page.getByRole('heading', { name: 'Contratto non trovato', exact: true })).toBeVisible();
+  }
+  const response = await page.goto(`/progress?client=${client.id}`);
+  expect(response?.status()).toBe(200);
+  const html = await response!.text();
+  await expect(page.locator('[data-progress-contract]')).toHaveCount(2);
+  for (const contract of visible) await expect(page.locator(`[data-progress-contract="${contract.id}"]`)).toBeVisible();
+  for (const row of hidden) {
+    await expect(page.locator(`[data-progress-contract="${row.contract.id}"]`)).toHaveCount(0);
+    for (const marker of [row.contract.id, row.contract.contractNumber, row.source, actor.name]) expect(html).not.toContain(marker);
+    expect(await db.contract.findUniqueOrThrow({ where: { id: row.contract.id } })).toEqual(row.contract);
+    expect(await db.auditLog.findUniqueOrThrow({ where: { id: row.declaration.id } })).toEqual(row.declaration);
+  }
+  await page.screenshot({ path: join(root, 'progress-project-links.png'), fullPage: true });
+});
+
+test('progress includes only payments whose client matches the displayed contract, including raw HTML', async ({ page }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const client = await db.client.create({ data: { displayName: 'Synthetic payment-link projection', type: 'societa' } });
+  const otherClient = await db.client.create({ data: { displayName: 'Synthetic inconsistent payment client', type: 'societa' } });
+  const contract = await db.contract.create({ data: { clientId: client.id, contractNumber: randomUUID(), serviceName: 'Synthetic payment comparison', taxableAmount: '100', vatAmount: '22', totalAmount: '122' } });
+  const invalidOnly = await db.contract.create({ data: { clientId: client.id, contractNumber: randomUUID(), serviceName: 'Synthetic invalid-only payments', taxableAmount: '100', vatAmount: '22', totalAmount: '122' } });
+  const good = await db.payment.create({ data: { contractId: contract.id, clientId: client.id, taxableAmount: '100', vatAmount: '22', totalAmount: '122', status: 'da_incassare' } });
+  const bad = await db.payment.create({ data: { contractId: contract.id, clientId: otherClient.id, taxableAmount: '100', vatAmount: '22', totalAmount: '122', status: 'incassato' } });
+  const badOnly = await db.payment.create({ data: { contractId: invalidOnly.id, clientId: otherClient.id, taxableAmount: '100', vatAmount: '22', totalAmount: '122', status: 'stornato' } });
+  await loginProgressReader(page);
+  const response = await page.goto(`/progress?client=${client.id}`);
+  expect(response?.status()).toBe(200);
+  const html = await response!.text();
+  const card = page.locator(`[data-progress-contract="${contract.id}"]`);
+  await expect(card).toContainText('Pagamenti: da incassare');
+  await expect(card).not.toContainText('incassato');
+  await expect(page.locator(`[data-progress-contract="${invalidOnly.id}"]`)).toContainText('Nessun pagamento registrato');
+  for (const marker of ['incassato', 'stornato', bad.id, badOnly.id]) expect(html).not.toContain(marker);
+  for (const payment of [good, bad, badOnly]) expect(await db.payment.findUniqueOrThrow({ where: { id: payment.id } })).toEqual(payment);
+  await page.screenshot({ path: join(root, 'progress-payment-links.png'), fullPage: true });
+});
+
+test('progress retains independent contract and payment permission denials', async ({ page, context }) => {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const admin = await db.user.findUniqueOrThrow({ where: { email: 'signature-admin@example.test' } });
+  for (const denied of ['contract.read', 'payment.read'] as const) {
+    const user = await db.user.create({ data: { name: 'Synthetic financial projection reader', email: `progress-${randomUUID()}@example.test`, role: 'amministrazione', active: true, passwordHash: admin.passwordHash } });
+    await db.userPermissionOverride.create({ data: { userId: user.id, permission: denied, allowed: false } });
+    await context.clearCookies();
+    await loginProgressReader(page, user.email);
+    const response = await page.goto(`/progress?client=${f.clientId}`);
+    expect(response?.status()).toBe(200);
+    const html = await response!.text();
+    const card = page.locator(`[data-progress-contract="${f.contractId}"]`);
+    if (denied === 'contract.read') {
+      await expect(card).toHaveCount(0);
+      expect(html).not.toContain(f.contractId);
+    } else {
+      await expect(card).toBeVisible();
+      await expect(card).not.toContainText('Pagamenti:');
+      expect(html).not.toContain('da incassare');
+    }
+  }
 });
 
 test('lost upload response and exact HTTP replay reconcile to the same saved document', async ({ page, context }) => {

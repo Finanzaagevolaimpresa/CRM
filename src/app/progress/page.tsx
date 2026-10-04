@@ -31,10 +31,19 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
     .filter(row => canViewTask(session, { ...row, client: row.clientId ? clientById.get(row.clientId) ?? null : null,
       project: row.projectId ? projectById.get(row.projectId) ?? null : null, clientService: row.clientServiceId ? serviceById.get(row.clientServiceId) ?? null : null })) : [];
   const contracts = canReadContracts ? (await prisma.contract.findMany({ where: { clientId: { in: clientIds } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }))
-    .filter(row => canViewClientContext(session, { ...row, client: clientById.get(row.clientId) ?? null, project: row.projectId ? projectById.get(row.projectId) ?? null : null })) : [];
+    .filter(row => {
+      const project = row.projectId ? projectById.get(row.projectId) ?? null : null;
+      // Match getClientContextReadAccess: a declared project must exist, be active,
+      // and belong to this client before applying the separate financial permission.
+      if (row.projectId && (!project || project.clientId !== row.clientId)) return false;
+      return canViewClientContext(session, { ...row, client: clientById.get(row.clientId) ?? null, project });
+    }) : [];
   const contractIds = contracts.map(row => row.id);
   const declarations = contractIds.length ? await prisma.auditLog.findMany({ where: { entityType: 'Contract', entityId: { in: contractIds }, event: contractSignatureDeclarationEvent }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }) : [];
-  const payments = canReadPayments && contractIds.length ? await prisma.payment.findMany({ where: { contractId: { in: contractIds } } }) : [];
+  // Match getPaymentReadAccess's contract/client pair, not merely the contract ID.
+  const payments = canReadPayments && contractIds.length ? await prisma.payment.findMany({
+    where: { OR: contracts.map(contract => ({ contractId: contract.id, clientId: contract.clientId })) },
+  }) : [];
   const users = await prisma.user.findMany({ where: { id: { in: [...new Set([...declarations.flatMap(row => row.actorId ? [row.actorId] : []), ...tasks.flatMap(row => row.assignedToId ? [row.assignedToId] : []), ...practices.flatMap(row => row.startedById ? [row.startedById] : [])])] } }, select: { id: true, name: true } });
   const userName = (id: string | null) => id ? users.find(user => user.id === id)?.name ?? 'Responsabile non disponibile' : 'Da assegnare';
   const practiceCards = [];
