@@ -35,7 +35,7 @@ export default async function Page() {
     clientService: task.clientServiceId ? serviceById.get(task.clientServiceId) ?? null : null,
   }));
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Attività e scadenze"
         description="Attività interne, priorità, assegnazioni e deadline operative."

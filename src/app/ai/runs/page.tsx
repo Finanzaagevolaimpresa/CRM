@@ -13,7 +13,7 @@ export default async function Page() {
     : [];
   const agentName = new Map(agents.map((agent) => [agent.id, agent.name]));
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="AI runs" description="Storico dei soli run coerenti con i fascicoli accessibili. Mostra stato runtime ed eventuale avvio dell’egress, senza esporre input o output completi." />
     <Card title="Run recenti">
       {runs.length === 0 ? <EmptyState title="Nessun run accessibile" /> : <Table

@@ -33,7 +33,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     .map(item => item.row).slice(0, 30);
   const authors = await prisma.user.findMany({ where: { id: { in: declarations.flatMap(row => row.actorId ? [row.actorId] : []) } }, select: { id: true, name: true } });
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Contratto — ${contract.contractNumber}`} description="Contratto interno con stato e gestione manuale di invio/firma." />
     <SecondaryLink href="/contracts">← Torna alla lista</SecondaryLink>
     <Card title="Dati contratto">
@@ -48,7 +48,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
     <Card title="Dichiarazione della firma">
       {declarations.length === 0 ? <p>Nessuna dichiarazione salvata. Eventuali note libere non attestano la firma.</p> :
-        <div className="space-y-3">{declarations.map((row, index) => {
+        <div className="crm-space-y-3">{declarations.map((row, index) => {
           const value = storedContractSignatureDeclarationSchema.safeParse(row.after);
           return <div key={row.id} className="rounded-xl border p-3">
             <p className="font-semibold">{index === 0 ? 'Dichiarazione corrente' : 'Dichiarazione precedente'} — da verificare sul documento</p>
@@ -63,7 +63,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     </Card>
     {canRecord ? <Card title="Registra il contratto firmato">{documents.length ? <ContractSignatureForm contractId={contract.id}
       expectedVersion={contract.updatedAt.toISOString()} documents={documents} today={signatureCalendarDay()} />
-      : <div className="space-y-3"><p>Carica il contratto firmato nella sezione Contratti del fascicolo cliente, con lo stesso progetto di questa scheda e senza collegarlo a un servizio. Poi torna qui per registrare la firma.</p>
+      : <div className="crm-space-y-3"><p>Carica il contratto firmato nella sezione Contratti del fascicolo cliente, con lo stesso progetto di questa scheda e senza collegarlo a un servizio. Poi torna qui per registrare la firma.</p>
         <SecondaryLink href={`/clients/${contract.clientId}#documenti`}>Apri documenti del cliente</SecondaryLink></div>}</Card> : null}
   </div>;
 }

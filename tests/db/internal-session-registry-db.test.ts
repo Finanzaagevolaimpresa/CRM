@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { after, afterEach, before, beforeEach } from "node:test";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
 import {
   assertRegistryActivationReady,
   authoritativeInternalSessionLookupQuery,
@@ -980,6 +981,7 @@ test(
     execFileSync("tar", ["-xf", archive, "-C", root]);
     rmSync(archive);
     symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
+    bindHistoricalPostcssToolchain(root);
     const runtimeEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       AUTH_SECRET: "synthetic-pr88-only",

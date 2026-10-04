@@ -8,7 +8,7 @@ export function ContractSignatureDeclarationForm({ contractId, expectedVersion, 
   contractId: string; expectedVersion: string; expectedDeclarationId: string | null; today: string;
 }) {
   const [state, action, pending] = useActionState(declareContractSignatureAction, { error: null });
-  return <form action={action} className="space-y-3">
+  return <form action={action} className="crm-space-y-3">
     <InteractiveReadyMarker />
     <input type="hidden" name="contractId" value={contractId} /><input type="hidden" name="expectedVersion" value={expectedVersion} />
     <input type="hidden" name="expectedDeclarationId" value={expectedDeclarationId ?? ''} />

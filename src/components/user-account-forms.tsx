@@ -14,8 +14,8 @@ export function UserAccountForms({ user, own, admin, available }: {
   const [passwordState, passwordAction, passwordPending] = useActionState(own ? saveOwnPassword : adminResetPassword, initialAccountFormState);
   const [revokeState, revokeAction, revokePending] = useActionState(revokeAllAccountSessions, initialAccountFormState);
   if (!available) return <p role="status">La gestione del profilo e delle sessioni non è disponibile. Contatta un amministratore.</p>;
-  return <div className="space-y-6">
-    <form action={profileAction} aria-label="Modifica profilo" className="space-y-3">
+  return <div className="crm-space-y-6">
+    <form action={profileAction} aria-label="Modifica profilo" className="crm-space-y-3">
       <h3 className="text-lg font-bold">Dati professionali</h3>
       <input type="hidden" name="userId" value={user.id} />
       <label className="block">Nome<input className={field} name="name" defaultValue={user.name} required maxLength={120} /></label>
@@ -24,7 +24,7 @@ export function UserAccountForms({ user, own, admin, available }: {
       <button className={button} disabled={profilePending}>Salva profilo</button>
       <p role="status">{profileState.message}</p>
     </form>
-    <form action={passwordAction} aria-label={own ? 'Cambia password' : 'Reimposta password'} className="space-y-3">
+    <form action={passwordAction} aria-label={own ? 'Cambia password' : 'Reimposta password'} className="crm-space-y-3">
       <h3 className="text-lg font-bold">{own ? 'Cambia password' : 'Reimposta password'}</h3>
       <input type="hidden" name="userId" value={user.id} />
       {own && <label className="block">Password attuale<input className={field} type="password" name="currentPassword" autoComplete="current-password" required /></label>}
@@ -34,7 +34,7 @@ export function UserAccountForms({ user, own, admin, available }: {
       <button className={button} disabled={passwordPending}>{own ? 'Aggiorna password' : 'Reimposta password'}</button>
       <p role="status">{passwordState.message}</p>
     </form>
-    <form action={revokeAction} aria-label="Revoca sessioni" className="space-y-3">
+    <form action={revokeAction} aria-label="Revoca sessioni" className="crm-space-y-3">
       <input type="hidden" name="userId" value={user.id} />
       <h3 className="text-lg font-bold">Accessi aperti</h3>
       <p className="text-sm">Chiudi tutte le sessioni dell’account.{own ? ' Anche questa sessione verrà chiusa.' : ' Il prossimo accesso richiederà la password.'}</p>

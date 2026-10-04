@@ -29,7 +29,7 @@ export default async function Page({ params, searchParams }: {
     [current, history] = await Promise.all([readCommercialOrigin(prisma, id), readCommercialOriginHistory(prisma, id, before)]);
   } catch (error) {
     if (!(error instanceof UserFacingActionError)) throw error;
-    return <div className="space-y-4"><PageHeader title="Provenienza da verificare" description={error.message} /><SecondaryLink href={`/clients/${id}`}>Fascicolo cliente</SecondaryLink></div>;
+    return <div className="crm-space-y-4"><PageHeader title="Provenienza da verificare" description={error.message} /><SecondaryLink href={`/clients/${id}`}>Fascicolo cliente</SecondaryLink></div>;
   }
   const referencedIds = [...new Set([
     client.salesOwnerId, client.consultantId, current?.snapshot.acquiredById, current?.snapshot.contractedById,
@@ -49,11 +49,11 @@ export default async function Page({ params, searchParams }: {
   const selectedIds = new Set([current?.snapshot.acquiredById, current?.snapshot.contractedById]);
   const choices = [...new Map([...referencedUsers.filter(user => selectedIds.has(user.id)), ...candidates.slice(0, 25)].map(user => [user.id, user])).values()];
   const path = `/clients/${id}/commercial-origin`;
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title={`Provenienza commerciale — ${client.displayName}`} description="Identità documentate per acquisizione e contratto, distinte dai responsabili operativi attuali." />
     <SecondaryLink href={`/clients/${id}`}>Fascicolo cliente</SecondaryLink>
     <Card title="Origine documentata">
-      {current ? <div className="space-y-2 text-sm"><p>Acquisizione: {nameOf(current.snapshot.acquiredById)}</p><p>Contrattualizzazione: {nameOf(current.snapshot.contractedById)}</p><p>Riferimento: {current.snapshot.sourceReference}</p><p>Revisione {current.snapshot.revision}</p></div>
+      {current ? <div className="crm-space-y-2 text-sm"><p>Acquisizione: {nameOf(current.snapshot.acquiredById)}</p><p>Contrattualizzazione: {nameOf(current.snapshot.contractedById)}</p><p>Riferimento: {current.snapshot.sourceReference}</p><p>Revisione {current.snapshot.revision}</p></div>
         : <EmptyState title="Provenienza non ancora documentata">Il responsabile attuale non viene considerato automaticamente il commerciale originario.</EmptyState>}
       <p className="mt-4 text-sm">Responsabile commerciale attuale: {nameOf(client.salesOwnerId)}. Responsabile tecnico attuale: {nameOf(client.consultantId)}.</p>
       <p className="mt-2 text-sm text-slate-600">La provenienza non assegna attività e non concede accesso al fascicolo.</p>
@@ -65,7 +65,7 @@ export default async function Page({ params, searchParams }: {
       {candidates.length > 25 && <Link className="mt-3 inline-block underline" href={`${path}?${new URLSearchParams({ q, after: candidates[24].id })}`}>Altre identità</Link>}
     </Card>}
     <Card title="Storico della provenienza">
-      {history.entries.length ? <ol className="space-y-4">{history.entries.map(entry => <li key={entry.id} className="rounded-xl border p-3">
+      {history.entries.length ? <ol className="crm-space-y-4">{history.entries.map(entry => <li key={entry.id} className="rounded-xl border p-3">
         <h3 className="font-bold">Revisione {entry.snapshot.revision}</h3>
         <p>Registrata da {nameOf(entry.actorId)} il {formatDateTime(entry.createdAt)}</p>
         <p>Acquisizione: {nameOf(entry.snapshot.acquiredById)} · Contrattualizzazione: {nameOf(entry.snapshot.contractedById)}</p>

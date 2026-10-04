@@ -51,7 +51,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     : null;
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader title="Diagnostica provider AI" description="Pannello admin/direzione per verificare la configurazione e richiedere separatamente una futura diagnostica, senza contattare il provider o esporre chiavi e dati cliente." />
 
       <Card title="Control Plane provider esterni" action={<Badge tone={externalRuntimeReady ? 'green' : 'orange'}>{externalRuntimeReady ? 'pronto' : 'fail-closed'}</Badge>}>
@@ -119,11 +119,11 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       </Card>
 
       <Card title="Richiesta diagnostica provider" action={<Badge tone="purple">server-side</Badge>}>
-        <div className="space-y-4 text-sm leading-6 text-slate-700">
+        <div className="crm-space-y-4 text-sm leading-6 text-slate-700">
           <p>Il comando prepara il fingerprint del test tecnico minimale e crea richiesta, ledger, audit e notifiche Admin nella stessa transazione. Non usa dati cliente, non riserva un AiRun e non chiama alcun provider. L’eventuale approvazione resta separata e non avvia l’esecuzione.</p>
           {replacementSource ? <p className="rounded-2xl bg-amber-50 p-4 font-bold text-amber-900 ring-1 ring-amber-200">Richiesta sostitutiva: verifica o integra la configurazione diagnostica prima del nuovo invio. La richiesta chiusa resta immutabile.</p> : null}
           {message ? <div className={`rounded-2xl p-4 font-bold ring-1 ${status === 'ok' ? 'bg-fai-teal/10 text-fai-green ring-fai-teal/20' : 'bg-fai-orange/10 text-fai-orange ring-fai-orange/20'}`}>{status === 'ok' ? 'ok' : 'errore controllato'} · {message}</div> : null}
-          <form action={runAiProviderDiagnosticTest} className="space-y-3">
+          <form action={runAiProviderDiagnosticTest} className="crm-space-y-3">
             <input type="hidden" name="requestKey" value={diagnosticRequestKey} />
             {replacementSource ? <input type="hidden" name="supersedesRequestId" value={replacementSource.id} /> : null}
             {replacementSource ? <label className="block rounded-2xl bg-amber-50 p-4 text-amber-950 ring-1 ring-amber-200">

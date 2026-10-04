@@ -65,7 +65,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
       <Nav role={profile === "admin" ? "admin" : "commerciale"} effectivePermissions={permissions} notificationCount={123} />
       <div data-testid="page-content" className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
         <header className="border-b bg-white px-4 py-2"><p className="break-words text-xs font-bold text-slate-500">Fixture sintetica isolata dei componenti reali — nessuna autenticazione o permission server verificata qui</p></header>
-        <main className="space-y-6 p-4 md:p-6">
+        <main className="crm-space-y-6 p-4 md:p-6">
           <span className="sr-only">Contenuto commerciale raggiungibile</span>
           <DashboardOverview
             greeting="Buongiorno, Operatore."

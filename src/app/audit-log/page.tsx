@@ -55,7 +55,7 @@ export default async function Page() {
   const userById = new Map(users.map((user) => [user.id, user]));
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Audit log"
         description="Registro interno degli eventi già tracciati dal CRM FAI: accessi, documenti, utenti, ruoli e variazioni operative. La pagina usa il modello AuditLog esistente e non espone percorsi di storage privati."
@@ -84,14 +84,14 @@ export default async function Page() {
               const actor = log.actorId ? userById.get(log.actorId) : null;
               return [
                 formatDateTime(log.createdAt),
-                <div className="space-y-1" key="event">
+                <div className="crm-space-y-1" key="event">
                   <Badge tone={eventLabels[log.event] ? 'green' : 'blue'}>{log.event}</Badge>
                   <p className="text-xs font-semibold text-slate-500">{eventLabels[log.event] ?? 'Evento operativo'}</p>
                 </div>,
                 actor ? `${actor.name} (${actor.email}) · ${actor.role}` : log.actorId ? `Utente non trovato (${log.actorId})` : 'Sistema',
                 <span key="entity">{log.entityType ?? '—'}<br /><span className="text-xs text-slate-500">{log.entityId ?? '—'}</span></span>,
                 log.ipAddress ?? '—',
-                <div className="max-w-md space-y-1 text-xs leading-5" key="details">
+                <div className="max-w-md crm-space-y-1 text-xs leading-5" key="details">
                   <p><span className="font-black text-slate-600">Before:</span> {summarizePayload(log.before)}</p>
                   <p><span className="font-black text-slate-600">After:</span> {summarizePayload(log.after)}</p>
                 </div>,

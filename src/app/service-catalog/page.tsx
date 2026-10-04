@@ -29,7 +29,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
       selected = candidate;
     } catch { selectionError = 'La selezione non è valida, non è ancora disponibile oppure la tipologia digitale non è compatibile con il servizio.'; }
   }
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Catalogo servizi" description={`Composizione ${FAI_SERVICE_CATALOG_V2_VERSION}. Consultazione interna: richiesta, preventivo e incarico restano fasi separate.`} />
     {params.preparation === 'complete' ? <p role="status">Revisioni interne disponibili.</p> : null}
     {params.preparation === 'denied' ? <p role="alert">Preparazione non consentita oppure catalogo da riconciliare.</p> : null}

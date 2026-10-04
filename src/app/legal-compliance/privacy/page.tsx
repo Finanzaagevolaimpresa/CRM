@@ -20,7 +20,7 @@ export default async function Page() {
     }),
   ]);
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Privacy e consensi" description="Registro interno minimizzato e in sola lettura. Le versioni devono essere validate prima dell’attivazione dei canali di acquisizione." />
     <Card title="Versioni informative">
       {notices.length === 0 ? <EmptyState title="Nessuna informativa registrata">La fondazione resta fail-closed finché una versione validata non viene registrata con finalità, base giuridica e hash espliciti.</EmptyState> : <Table

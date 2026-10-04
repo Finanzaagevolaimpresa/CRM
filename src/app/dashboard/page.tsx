@@ -764,7 +764,7 @@ export default async function Dashboard() {
     preReview, dossierBozza, aiReview, pendingAiAuthorizationRequestCount,
   });
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <DashboardOverview
         greeting={`Buongiorno${dashboardUser?.name ? `, ${dashboardUser.name.split(" ")[0]}` : ""}.`}
         summary={`${priorityItems.length} priorità operative nel tuo perimetro. Conteggi aggiornati dai dati CRM correnti.`}
@@ -774,9 +774,9 @@ export default async function Dashboard() {
         shortcuts={dashboardShortcuts}
         counterGroups={dashboardCounterGroups}
       />
-      <details className="group rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
-        <div className="space-y-6 border-t border-slate-100 p-5">
+      <details className="group rounded-2xl border border-slate-200 bg-white shadow-xs">
+        <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-compat focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
+        <div className="crm-space-y-6 border-t border-slate-100 p-5">
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {priorityStats.map(([l, v, d, h, t]) => <Stat key={String(l)} label={String(l)} value={Number(v)} description={String(d)} href={String(h)} tone={t} />)}
           </section>
@@ -876,7 +876,7 @@ export default async function Dashboard() {
       </Card>
       <section className="grid gap-5 md:grid-cols-2">
         <Card title="Priorità interne">
-          <div className="space-y-3 text-sm leading-7 text-slate-600">
+          <div className="crm-space-y-3 text-sm leading-7 text-slate-600">
             {[
               "Revisionare gli output AI prima di qualsiasi utilizzo operativo.",
               "Richiamare lead e clienti con prossima azione o attività aperte.",

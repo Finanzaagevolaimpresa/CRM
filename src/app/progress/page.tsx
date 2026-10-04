@@ -51,7 +51,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
     const href = context && ['review', 'delivery', 'delivered'].includes(step.key) ? `/client-dossiers/${context.dossier.id}` : `/practice-readiness#practice-${practice.id}`;
     const version = history?.versions.find(row => row.id === context?.dossier.currentVersionId);
     practiceCards.push(<Card key={practice.id} title={`${clientById.get(practice.clientId)!.displayName} — percorso`}>
-      <div data-progress-practice={practice.id} className="space-y-2">
+      <div data-progress-practice={practice.id} className="crm-space-y-2">
         <p><b>Stato:</b> {practice.startedAt ? 'Servizio avviato esplicitamente' : 'Servizio non avviato'}</p>
         <p><b>Motivo:</b> {step.reason}</p><p><b>Prossima azione:</b> {step.action}</p>
         <p><b>Responsabile dell’azione:</b> {userName(task?.assignedToId ?? null)}</p>
@@ -66,7 +66,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
       </div>
     </Card>);
   }
-  return <div className="space-y-6"><PageHeader title="Stato e prossime azioni" description="Dati salvati e verifiche distinte. Una dichiarazione non sostituisce un documento verificato; l’avvio richiede un’azione esplicita." />
+  return <div className="crm-space-y-6"><PageHeader title="Stato e prossime azioni" description="Dati salvati e verifiche distinte. Una dichiarazione non sostituisce un documento verificato; l’avvio richiede un’azione esplicita." />
     <form method="get" className="flex flex-wrap gap-3">{query.client ? <input type="hidden" name="client" value={query.client} /> : null}
       <label>Cerca cliente<input name="q" defaultValue={query.q ?? ''} maxLength={100} className="ml-2 rounded-xl border p-2" /></label><button type="submit" className="rounded-xl border px-4">Cerca</button><Link href="/progress">Tutti i clienti accessibili</Link></form>
     <p>{clients.length} clienti accessibili corrispondenti · {practices.length} percorsi. L’elenco non si limita alle prime dieci priorità.</p>
@@ -77,7 +77,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
       const declaration = storedContractSignatureDeclarationSchema.safeParse(row?.after);
       const relatedPayments = payments.filter(item => item.contractId === contract.id);
       return <Card key={contract.id} title={`${clientById.get(contract.clientId)!.displayName} — ${contract.contractNumber}`}>
-        <div className="space-y-2" data-progress-contract={contract.id}>
+        <div className="crm-space-y-2" data-progress-contract={contract.id}>
           <p><b>Firma:</b> {contract.signedAt && contract.signedDocumentId ? 'Registrata con documento collegato' : declaration.success ? 'Dichiarata, da verificare sul documento' : 'Non registrata; nessuna dichiarazione verificabile'}</p>
           {declaration.success && row ? <><p>Firma dichiarata del {declaration.data.declaredSignedAt}; fonte: {declaration.data.source}.</p><p>Registrata da {userName(row.actorId)} il {formatDateTime(row.createdAt)}.</p></> : null}
           <p><b>Documento:</b> {contract.signedDocumentId ? 'Collegato alla registrazione della firma; versione e disponibilità da consultare nella scheda.' : 'Non ancora collegato alla firma; acquisizione e verifica da completare nella scheda.'}</p>

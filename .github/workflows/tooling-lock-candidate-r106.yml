@@ -1,0 +1,77 @@
+name: Tooling removal compatibility
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'eslint.config.mjs'
+      - 'postcss.config.js'
+      - 'tailwind.config.ts'
+      - 'config/**'
+      - 'src/**'
+      - 'scripts/*glob*'
+      - 'scripts/qualify-tooling-css.mjs'
+      - 'scripts/qualify-lock-inventory.ts'
+      - 'scripts/npm-audit-gate.ts'
+      - 'tests/npm-audit-gate.test.ts'
+      - 'tests/tooling-dependency-contract.test.ts'
+      - 'tests/mobile-nav/**'
+      - '.github/workflows/tooling-lock-candidate-r106.yml'
+permissions: { contents: read }
+concurrency:
+  group: tooling-removal-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  lint-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - name: Pin the canonical audit client for the real counterproof
+        if: runner.os == 'Linux'
+        run: npm install --global npm@11.16.0 --ignore-scripts --no-audit --fund=false
+      - run: npm ci --ignore-scripts
+      - run: node scripts/verify-next-glob-contract.mjs
+      - run: node scripts/qualify-next-glob-guard.mjs
+      - name: Qualify actual alias and bundle inventory with the unchanged pinned OSV scanner
+        if: runner.os == 'Linux'
+        run: node --import tsx scripts/qualify-lock-inventory.ts
+      - run: git diff --exit-code -- package.json package-lock.json
+  css-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - run: npm ci --ignore-scripts
+      - uses: actions/checkout@v4
+        with:
+          ref: 85fa76d3d1c110da44c892859a70f9151b79cb7f
+          persist-credentials: false
+          path: node_modules/.cache/tooling-r106/baseline
+      - name: Install the immutable comparison toolchain only in the isolated test cache
+        working-directory: node_modules/.cache/tooling-r106/baseline
+        run: |
+          test "$(git rev-parse HEAD)" = '85fa76d3d1c110da44c892859a70f9151b79cb7f'
+          npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: Compare real compiled styles in three browser engines and four viewport widths
+        run: node scripts/qualify-tooling-css.mjs
+      - name: Preserve synthetic comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tooling-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: node_modules/.cache/tooling-r106/evidence/
+          retention-days: 30
+          if-no-files-found: error
+          include-hidden-files: true

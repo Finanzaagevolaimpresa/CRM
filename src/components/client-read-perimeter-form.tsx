@@ -7,7 +7,7 @@ export function ClientReadPerimeterForm({ userId, clientId, version, active, lab
   userId: string; clientId: string; version: number; active: boolean; label: string;
 }) {
   const [state, action, pending] = useActionState(updateClientReadPerimeter, { ok: false, message: '' });
-  return <form action={action} aria-label={`Consultazione ${label}`} className="space-y-2">
+  return <form action={action} aria-label={`Consultazione ${label}`} className="crm-space-y-2">
     <input type="hidden" name="userId" value={userId} />
     <input type="hidden" name="clientId" value={clientId} />
     <input type="hidden" name="expectedVersion" value={version} />

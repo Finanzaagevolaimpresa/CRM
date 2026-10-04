@@ -18,7 +18,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
   ])
     .catch((error: unknown) => { if (error instanceof LeadAcquisitionDenied) notFound(); throw error; });
   const [page, summary] = data;
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Acquisizione lead" description="Ricevute persistite nel CRM, richieste da elaborare, ambiguità e tentativi. Il successo mostrato dal form non sostituisce una ricevuta CRM." />
     <div className="flex flex-wrap gap-3"><SecondaryLink href="/leads">Pipeline e prossime azioni</SecondaryLink><SecondaryLink href="/leads/inbox">Coda e assegnazioni</SecondaryLink><SecondaryLink href="/leads/duplicates">Risolvi identità ambigue</SecondaryLink><SecondaryLink href="/practice-readiness">Servizi acquistati e percorso tecnico</SecondaryLink></div>
     <Card title="Fonti e risultati registrati">
