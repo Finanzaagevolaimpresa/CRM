@@ -34,7 +34,7 @@ export default async function NotificationsPage() {
           <div className="space-y-3">
             {notifications.map((notification) => (
               <article
-                className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/70 md:grid-cols-[1.4fr_0.9fr_0.7fr_0.9fr_auto] md:items-center"
+                className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs shadow-slate-200/70 md:grid-cols-[1.4fr_0.9fr_0.7fr_0.9fr_auto] md:items-center"
                 key={notification.id}
               >
                 <div>
@@ -56,7 +56,7 @@ export default async function NotificationsPage() {
                   <p className="mt-1 text-sm font-bold text-slate-700">{formatDateTime(notification.date)}</p>
                 </div>
                 <Link
-                  className="inline-flex justify-center rounded-xl bg-fai-green px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-sm transition hover:bg-fai-navy"
+                  className="inline-flex justify-center rounded-xl bg-fai-green px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-xs transition hover:bg-fai-navy"
                   href={notification.href}
                 >
                   Apri

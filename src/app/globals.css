@@ -1,6 +1,9 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "../styles/tailwind-v3-preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@config "../../tailwind.config.ts";
+@source "../**/*.{ts,tsx}";
 
 :root {
   --fai-bg: #f4f7fb;

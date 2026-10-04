@@ -774,8 +774,8 @@ export default async function Dashboard() {
         shortcuts={dashboardShortcuts}
         counterGroups={dashboardCounterGroups}
       />
-      <details className="group rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-none focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
+      <details className="group rounded-2xl border border-slate-200 bg-white shadow-xs">
+        <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
         <div className="space-y-6 border-t border-slate-100 p-5">
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {priorityStats.map(([l, v, d, h, t]) => <Stat key={String(l)} label={String(l)} value={Number(v)} description={String(d)} href={String(h)} tone={t} />)}

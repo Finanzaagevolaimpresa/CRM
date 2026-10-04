@@ -9,7 +9,7 @@
     "test:wordpress-connector": "php tests/php/vnx02-wordpress-secure-lead-connector.test.php && php tests/php/vnx02-wordpress-scheduling.test.php",
     "test:vnx03:e2e": "bash scripts/vnx03/run-e2e.sh",
     "package:wordpress-connector": "node tools/package-vnx02-wordpress-connector.mjs",
-    "lint": "eslint . --max-warnings 0",
+    "lint": "node scripts/verify-next-glob-contract.mjs && eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit --incremental false",
     "guard:build-context": "node scripts/vnx00a-build-context-guard.mjs",
     "verify:quality": "npm run lint && npm test && npm run typecheck",
@@ -43,14 +43,19 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "autoprefixer": "^10.4.20",
     "eslint": "^9.0.0",
     "eslint-config-next": "16.3.8",
     "postcss": "^8.5.23",
-    "tailwindcss": "^3.4.14",
-    "typescript": "^5.6.3"
+    "tailwindcss": "4.3.3",
+    "typescript": "^5.6.3",
+    "@tailwindcss/postcss": "4.3.3"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
+  },
+  "overrides": {
+    "@next/eslint-plugin-next@16.3.8": {
+      "fast-glob": "npm:tinyglobby@0.2.17"
+    }
   }
 }

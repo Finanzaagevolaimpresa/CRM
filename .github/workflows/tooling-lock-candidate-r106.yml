@@ -1,0 +1,34 @@
+name: Resolve isolated R106 tooling candidate
+on:
+  push:
+    branches: ['codex/braces-removal-r106']
+    paths:
+      - 'package.json'
+      - '.github/workflows/tooling-lock-candidate-r106.yml'
+permissions: { contents: read }
+jobs:
+  lock-candidate:
+    if: github.repository == 'Finanzaagevolaimpresa/CRM' && github.ref == 'refs/heads/codex/braces-removal-r106'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.sha }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - name: Resolve the published packages and verify the isolated candidate
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci --ignore-scripts
+          node scripts/verify-next-glob-contract.mjs
+          npm audit --audit-level=low
+          git diff --exit-code -- . ':!package-lock.json'
+      - name: Commit only the real generated lock on the dedicated proposal branch
+        run: |
+          if git diff --quiet -- package-lock.json; then exit 0; fi
+          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
+          test "$(git ls-remote origin refs/heads/codex/braces-removal-r106 | cut -f1)" = '${{ github.sha }}'
+          git add -- package-lock.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Resolve published tooling replacements for R106 qualification'
+          git push origin HEAD:refs/heads/codex/braces-removal-r106

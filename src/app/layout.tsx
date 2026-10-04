@@ -28,8 +28,8 @@ export default async function RootLayout({
                   <p className="text-xs font-medium text-slate-500">Output AI soggetti a revisione umana</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Link href="/search" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-none focus:ring-2 focus:ring-fai-lime">Ricerca</Link>
-                  <Link href="/notifications" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-none focus:ring-2 focus:ring-fai-lime">Notifiche{notificationCount > 0 ? ` · ${notificationCount > 99 ? "99+" : notificationCount}` : ""}</Link>
+                  <Link href="/search" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-hidden focus:ring-2 focus:ring-fai-lime">Ricerca</Link>
+                  <Link href="/notifications" className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-fai-navy focus:outline-hidden focus:ring-2 focus:ring-fai-lime">Notifiche{notificationCount > 0 ? ` · ${notificationCount > 99 ? "99+" : notificationCount}` : ""}</Link>
                   <span className="rounded-xl bg-fai-green/10 px-4 py-2 text-sm font-extrabold capitalize text-fai-green ring-1 ring-fai-green/15">
                     {session ? session.role.replaceAll("_", " ") : "Utente interno"}
                   </span>

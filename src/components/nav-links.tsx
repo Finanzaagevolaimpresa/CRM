@@ -162,7 +162,7 @@ export function NavLinks({
               return (
                 <Link
                   aria-current={active ? "page" : undefined}
-                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-none focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
+                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-hidden focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
                   href={href}
                   key={href}
                   onClick={onNavigate}

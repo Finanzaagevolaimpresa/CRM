@@ -53,7 +53,7 @@ interface DashboardProps {
   };
 }
 
-const inputClass = 'w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 outline-none transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20';
+const inputClass = 'w-full rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 outline-hidden transition focus:border-fai-blue focus:ring-2 focus:ring-fai-blue/20';
 const labelClass = 'block text-xs font-black uppercase tracking-wide text-fai-navy';
 
 function hashPreview(value: string) {
@@ -267,7 +267,7 @@ export function AiOrchestratorAdminDashboard(props: DashboardProps) {
     <div className="space-y-6">
       <PageHeader title="AI Orchestrator · Admin Control Center" description="Vista privata della configurazione desiderata e dei gate effettivi Foundation. Questa UI registra policy append-only ma non è collegata a worker, coda, runtime, dispatch o provider esterni." />
 
-      <div className="rounded-3xl border border-fai-orange/30 bg-fai-orange/10 p-5 shadow-sm">
+      <div className="rounded-3xl border border-fai-orange/30 bg-fai-orange/10 p-5 shadow-xs">
         <p className="text-xs font-black uppercase tracking-[0.18em] text-fai-orange">Stato contrattuale permanente</p>
         <h2 className="mt-1 text-xl font-black text-fai-navy">Configurazione desiderata, non operativa</h2>
         <p className="mt-2 text-sm leading-6 text-slate-700">Ogni valore inserito resta subordinato a Foundation lock, approvazione umana, gate ambiente/database e barriera fisica PostgreSQL. Nessuna modifica in questa pagina autorizza esecuzione o dispatch.</p>

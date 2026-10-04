@@ -1,0 +1,28 @@
+{
+  "source": "tailwindcss@3.4.19",
+  "sourceLicense": "MIT, Copyright (c) Tailwind Labs, Inc.",
+  "purpose": "Preserve the previous base styles and published RGB palette while replacing the compiler; no parser or executable dependency is copied.",
+  "consumerSha256": "886677432990a735e5ebdfb345ff1cbd40e264f9947a8432eeeb254b3a926bde",
+  "transformedFiles": [
+    "src/app/clients/[id]/page.tsx",
+    "src/app/dashboard/page.tsx",
+    "src/app/documents/page.tsx",
+    "src/app/layout.tsx",
+    "src/app/leads/inbox/page.tsx",
+    "src/app/legal-compliance/page.tsx",
+    "src/app/login/page.tsx",
+    "src/app/notifications/page.tsx",
+    "src/app/search/page.tsx",
+    "src/app/settings/ai-agents/page.tsx",
+    "src/app/settings/system/page.tsx",
+    "src/components/actions.tsx",
+    "src/components/ai-orchestrator-admin-dashboard.tsx",
+    "src/components/dashboard-overview.tsx",
+    "src/components/mobile-navigation.tsx",
+    "src/components/nav-links.tsx",
+    "src/components/pagination-nav.tsx",
+    "src/components/practice-communication-templates.tsx",
+    "src/components/ui.tsx",
+    "tests/mobile-nav/fixture/app/layout.tsx"
+  ]
+}

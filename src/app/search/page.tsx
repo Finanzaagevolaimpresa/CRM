@@ -42,7 +42,7 @@ function ResultsSection({ group }: { group: ResultGroup }) {
     <Card title={`${group.title} (${group.items.length})`}>
       <div className="grid gap-3">
         {group.items.map((item) => (
-          <div key={`${item.category}-${item.id}`} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:border-fai-blue/25 hover:shadow-md">
+          <div key={`${item.category}-${item.id}`} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs transition hover:border-fai-blue/25 hover:shadow-md">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0 space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
@@ -176,7 +176,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       <PageHeader title="Ricerca globale" description="Trova clienti, pratiche, documenti, task, comunicazioni, lead, offerte e contenuti interni autorizzati da un unico punto del CRM." />
       <Card title="Cerca nel CRM">
         <form action="/search" className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <input aria-label="Termine di ricerca" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-inner outline-none transition focus:border-fai-blue focus:ring-2 focus:ring-fai-lime/40" defaultValue={q} name="q" placeholder="Cerca nome cliente, email, pratica, documento, comunicazione…" />
+          <input aria-label="Termine di ricerca" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-inner outline-hidden transition focus:border-fai-blue focus:ring-2 focus:ring-fai-lime/40" defaultValue={q} name="q" placeholder="Cerca nome cliente, email, pratica, documento, comunicazione…" />
           <PrimaryButton type="submit">Cerca</PrimaryButton>
         </form>
         <p className="mt-3 text-xs font-semibold text-slate-500">La ricerca mostra solo categorie e record coerenti con ruolo e permessi della sessione corrente.</p>

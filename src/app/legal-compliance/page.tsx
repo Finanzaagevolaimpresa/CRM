@@ -65,7 +65,7 @@ export default async function Page() {
             {queues.map(([label, , description]) => (
               <div
                 key={label}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs"
               >
                 <Badge tone={label.includes("AI") ? "purple" : "blue"}>
                   {label}

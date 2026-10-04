@@ -39,7 +39,7 @@ export default async function Page() {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {checks.map((check) => (
-          <section key={check.title} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/70">
+          <section key={check.title} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs shadow-slate-200/70">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-black text-fai-navy">{check.title}</h2>

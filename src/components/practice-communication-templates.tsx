@@ -161,7 +161,7 @@ export function PracticeCommunicationTemplates({
             return (
               <article
                 key={template.id}
-                className={`rounded-2xl border p-4 shadow-sm transition ${selected?.id === template.id ? "border-fai-blue bg-fai-blue/5 ring-1 ring-fai-blue/20" : "border-slate-200 bg-white hover:border-fai-blue/30"}`}
+                className={`rounded-2xl border p-4 shadow-xs transition ${selected?.id === template.id ? "border-fai-blue bg-fai-blue/5 ring-1 ring-fai-blue/20" : "border-slate-200 bg-white hover:border-fai-blue/30"}`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <button

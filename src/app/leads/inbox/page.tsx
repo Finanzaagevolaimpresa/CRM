@@ -98,7 +98,7 @@ export default async function Page({
           const cycle = item.slaCycles[0];
           const overdue = Boolean(cycle && !cycle.closedAt && !cycle.firstResponseAt && cycle.dueAt <= now);
           const owned = item.lead.assignedToId === session.userId;
-          return <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          return <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <a className="font-extrabold text-fai-blue underline" href={`/leads/${item.lead.id}`}>{item.lead.companyName || `${item.lead.firstName} ${item.lead.lastName}`}</a>
