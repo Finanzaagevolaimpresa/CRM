@@ -1,34 +1,68 @@
-name: Resolve isolated R106 tooling candidate
+name: Tooling removal compatibility
 on:
-  push:
-    branches: ['codex/braces-removal-r106']
+  pull_request:
     paths:
       - 'package.json'
+      - 'package-lock.json'
+      - 'eslint.config.mjs'
+      - 'postcss.config.js'
+      - 'tailwind.config.ts'
+      - 'config/**'
+      - 'src/**'
+      - 'scripts/*glob*'
+      - 'scripts/qualify-tooling-css.mjs'
+      - 'tests/tooling-dependency-contract.test.ts'
+      - 'tests/mobile-nav/**'
       - '.github/workflows/tooling-lock-candidate-r106.yml'
 permissions: { contents: read }
+concurrency:
+  group: tooling-removal-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
-  lock-candidate:
-    if: github.repository == 'Finanzaagevolaimpresa/CRM' && github.ref == 'refs/heads/codex/braces-removal-r106'
-    runs-on: ubuntu-latest
+  lint-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    permissions: { contents: write }
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.sha }}' }
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc }
-      - name: Resolve the published packages and verify the isolated candidate
+      - run: npm ci --ignore-scripts
+      - run: node scripts/verify-next-glob-contract.mjs
+      - run: node scripts/qualify-next-glob-guard.mjs
+      - run: git diff --exit-code -- package.json package-lock.json
+  css-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc }
+      - run: npm ci --ignore-scripts
+      - uses: actions/checkout@v4
+        with:
+          ref: 85fa76d3d1c110da44c892859a70f9151b79cb7f
+          persist-credentials: false
+          path: node_modules/.cache/tooling-r106/baseline
+      - name: Install the immutable comparison toolchain only in the isolated test cache
+        working-directory: node_modules/.cache/tooling-r106/baseline
         run: |
-          npm install --package-lock-only --ignore-scripts
+          test "$(git rev-parse HEAD)" = '85fa76d3d1c110da44c892859a70f9151b79cb7f'
           npm ci --ignore-scripts
-          node scripts/verify-next-glob-contract.mjs
-          npm audit --audit-level=low
-          git diff --exit-code -- . ':!package-lock.json'
-      - name: Commit only the real generated lock on the dedicated proposal branch
-        run: |
-          if git diff --quiet -- package-lock.json; then exit 0; fi
-          test "$(git rev-parse HEAD)" = '${{ github.sha }}'
-          test "$(git ls-remote origin refs/heads/codex/braces-removal-r106 | cut -f1)" = '${{ github.sha }}'
-          git add -- package-lock.json
-          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Resolve published tooling replacements for R106 qualification'
-          git push origin HEAD:refs/heads/codex/braces-removal-r106
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: Compare real compiled styles in three browser engines and four viewport widths
+        run: node scripts/qualify-tooling-css.mjs
+      - name: Preserve synthetic comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tooling-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: node_modules/.cache/tooling-r106/evidence/
+          retention-days: 30
+          if-no-files-found: error
+          include-hidden-files: true

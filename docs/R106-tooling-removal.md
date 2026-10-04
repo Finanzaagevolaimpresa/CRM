@@ -19,7 +19,7 @@ The proposal replaces the Tailwind compiler with the published `tailwindcss@4.3.
 
 An unqualified alias is unsafe: on this workstation `globSync('src', { onlyDirectories: true })` returned one directory with fast-glob and 77 with tinyglobby. Static/absolute paths and advanced brace patterns also differ. This proposal does **not** claim generic API equivalence.
 
-The CRM uses the default single project root and no `settings.next.rootDir`. In this mode the pinned Next consumer returns `context.cwd` without calling a glob implementation. Before every lint, and in the normal unit suite, the new contract verifies the exact plugin version, exact consumer hash, sole import site, genuine replacement identity, effective configuration entries, default-root result, and absence of braces/micromatch/chokidar from the lock. Custom roots or a changed consumer fail closed and require fresh qualification. No ESLint rule is disabled or downgraded.
+The CRM uses the default single project root and no `settings.next.rootDir`. In this mode the pinned Next consumer returns `context.cwd` without calling a glob implementation. On ESLint configuration loading, before the affected rule receives the effective context (including direct ESLint and IDE integrations), and in the normal unit suite, the new contract verifies the exact plugin version, exact consumer hash, sole import site, genuine replacement identity, effective configuration entries, default-root result, and absence of braces/micromatch/chokidar from the lock. Custom roots or a changed consumer fail closed and require fresh qualification. No ESLint rule is disabled or downgraded.
 
 ## CSS and browser impact
 
@@ -31,7 +31,7 @@ Tailwind 4 requires Firefox 128+, compared with the current Next default of Fire
 
 ## Verification and adoption boundary
 
-The short-lived lock-resolution workflow is restricted to `codex/braces-removal-r106`; it can commit only the genuine generated package lock to that branch after a clean installation, contract checks and the unchanged low-threshold npm audit. It has no production access and cannot merge. Before review, replace this bootstrap with read-only qualification.
+The one-time lock-resolution run `37183064587` generated and committed the genuine lock only on the dedicated branch. Node 22.23.3, npm 10.9.9, clean install, the installed consumer contract and full npm audit passed (zero vulnerabilities). This is bootstrap evidence; the normal CI still must run the mandated npm 11.16.0 audit on the final HEAD. The workflow now has read-only permissions and verifies the direct ESLint contract on Linux and Windows plus real compiled CSS in Chromium, Firefox and WebKit. It cannot commit, merge or access production.
 
 No main update, merge, production deploy, migration, real-data write, or closure of other PRs is included. Reverting the candidate diff restores the old toolchain and its known audit blocker; no database rollback is involved. Record actual before/after lock and CI evidence, not just this proposed graph.
 

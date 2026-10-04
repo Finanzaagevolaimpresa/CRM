@@ -1,4 +1,22 @@
 import { expect, test } from "@playwright/test";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
+test("il nuovo compilatore ricompila le utility quando cambia il file sorgente", async ({ page }) => {
+  const file = resolve("tests/mobile-nav/fixture/app/layout.tsx");
+  const original = await readFile(file, "utf8");
+  expect(original).toContain("text-[#112233]");
+  await page.goto("/?profile=admin");
+  const probe = page.getByTestId("tooling-watch-probe");
+  await expect(probe).toHaveCSS("color", "rgb(17, 34, 51)");
+  try {
+    await writeFile(file, original.replace("text-[#112233]", "text-[#332211]"), "utf8");
+    await expect(probe).toHaveCSS("color", "rgb(51, 34, 17)", { timeout: 30_000 });
+  } finally {
+    await writeFile(file, original, "utf8");
+  }
+  await expect(probe).toHaveCSS("color", "rgb(17, 34, 51)", { timeout: 30_000 });
+});
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
