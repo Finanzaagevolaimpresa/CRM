@@ -11,6 +11,9 @@ on:
       - 'src/**'
       - 'scripts/*glob*'
       - 'scripts/qualify-tooling-css.mjs'
+      - 'scripts/qualify-lock-inventory.ts'
+      - 'scripts/npm-audit-gate.ts'
+      - 'tests/npm-audit-gate.test.ts'
       - 'tests/tooling-dependency-contract.test.ts'
       - 'tests/mobile-nav/**'
       - '.github/workflows/tooling-lock-candidate-r106.yml'
@@ -34,6 +37,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: node scripts/verify-next-glob-contract.mjs
       - run: node scripts/qualify-next-glob-guard.mjs
+      - name: Qualify actual alias and bundle inventory with the unchanged pinned OSV scanner
+        if: runner.os == 'Linux'
+        run: node --import tsx scripts/qualify-lock-inventory.ts
       - run: git diff --exit-code -- package.json package-lock.json
   css-compatibility:
     runs-on: ubuntu-latest

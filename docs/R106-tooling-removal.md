@@ -36,3 +36,11 @@ The one-time lock-resolution run `37183064587` generated and committed the genui
 No main update, merge, production deploy, migration, real-data write, or closure of other PRs is included. Reverting the candidate diff restores the old toolchain and its known audit blocker; no database rollback is involved. Record actual before/after lock and CI evidence, not just this proposed graph.
 
 Sources: [Tailwind upgrade guide](https://tailwindcss.com/docs/upgrade-guide), [Next consumer](https://github.com/vercel/next.js/blob/v16.3.8/packages/eslint-plugin-next/src/utils/get-root-dirs.ts), [tinyglobby compatibility](https://superchupu.dev/tinyglobby/comparison), [Next browser support](https://nextjs.org/docs/architecture/supported-browsers).
+
+## Explicit inventory parser compatibility correction
+
+The original inventory parser rejected every npm alias and every bundled entry. Its fixed 486/477 test snapshot also necessarily became stale. The new genuine lock has 472 entries and 463 distinct name/version coordinates. All 95 previous runtime entries retain their versions.
+
+The inventory now uses the real package name for aliases only with a canonical registry tarball URL matching that exact name and version plus the existing SHA-512 integrity requirement. This strengthens URL identity checks rather than accepting a registry host alone. The six bundled WASM dependencies in Tailwind's optional archive have no independent URLs: each must be an explicitly declared direct child of a verified registry bundle, with a matching declaration and dependency entry. Missing, orphaned, renamed, external or ambiguous entries still fail closed. Every bundled package remains in the vulnerability inventory, including on platforms where it is not installed.
+
+This is a declared parser change, not an unchanged implementation of the gate. The npm version, both audit scopes, severity threshold, scanner version, empty exclusion configuration, error handling and complete OSV inventory comparison remain unchanged. Counterproofs keep a disguised braces alias identified as braces and keep findings blocking. The real pinned OSV scanner must also reconcile all 463 coordinates before this compatibility change can pass review.

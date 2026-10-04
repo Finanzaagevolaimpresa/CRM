@@ -417,8 +417,65 @@ test('OSV runs only after bounded npm service unavailability and verifies the fu
 
 test('the authorized package-lock inventory is complete and deterministic', () => {
   const inventory = parseNpmLockInventory(readFileSync('package-lock.json'));
-  assert.equal(inventory.entryCount, 486);
-  assert.equal(inventory.coordinates.size, 477);
+  assert.equal(inventory.entryCount, 472);
+  assert.equal(inventory.coordinates.size, 463);
+  assert.ok(inventory.coordinates.has(JSON.stringify(['tinyglobby', '0.2.17'])));
+  assert.ok(!inventory.coordinates.has(JSON.stringify(['fast-glob', '0.2.17'])));
+  assert.ok(inventory.coordinates.has(JSON.stringify(['@napi-rs/wasm-runtime', '1.1.4'])));
+});
+
+test('a registry alias is scanned under its genuine name and cannot disguise braces', async () => {
+  const lock = JSON.parse(SYNTHETIC_LOCKFILE.toString());
+  lock.packages['node_modules/innocent-alias'] = {
+    name: 'braces', version: '3.0.3', resolved: 'https://registry.npmjs.org/braces/-/braces-3.0.3.tgz', integrity: 'sha512-YQ==',
+  };
+  const bytes = Buffer.from(JSON.stringify(lock));
+  const inventory = parseNpmLockInventory(bytes);
+  assert.ok(inventory.coordinates.has(JSON.stringify(['braces', '3.0.3'])));
+  assert.ok(!inventory.coordinates.has(JSON.stringify(['innocent-alias', '3.0.3'])));
+  const fallback = fallbackOptions([
+    osvVersionResult(),
+    result({ exitCode: 1, stdout: osvReport({ vulnerability: true, packages: [{ name: 'braces', version: '3.0.3' }, { name: 'alpha', version: '1.0.0' }, { name: 'parent', version: '2.0.0' }] }) }),
+  ], fallbackFiles({ lockfile: bytes }));
+  await expectGateError(runOsvFallback(fallback.options), 'OSV_FINDINGS_DETECTED');
+});
+
+test('alias identities reject mismatched names, versions, registry URLs and links', () => {
+  const good = { name: 'braces', version: '3.0.3', resolved: 'https://registry.npmjs.org/braces/-/braces-3.0.3.tgz', integrity: 'sha512-YQ==' };
+  for (const changes of [
+    { name: 'tinyglobby' }, { name: '../braces' }, { version: '3.0.4' }, { version: 'npm:braces@3.0.3' },
+    { resolved: 'https://example.invalid/braces/-/braces-3.0.3.tgz' },
+    { resolved: 'https://registry.npmjs.org/braces/-/braces-3.0.3.tgz?alias=other' },
+    { resolved: 'https://someone@registry.npmjs.org/braces/-/braces-3.0.3.tgz' },
+    { integrity: '' }, { link: true },
+  ]) {
+    const lock = JSON.parse(SYNTHETIC_LOCKFILE.toString());
+    lock.packages['node_modules/innocent-alias'] = { ...good, ...changes };
+    assert.throws(() => parseNpmLockInventory(Buffer.from(JSON.stringify(lock))), { code: 'OSV_LOCKFILE_INVENTORY_INVALID' });
+  }
+});
+
+test('every explicitly bundled dependency is scanned and orphaned or omitted children fail closed', () => {
+  const makeLock = () => {
+    const lock = JSON.parse(SYNTHETIC_LOCKFILE.toString());
+    lock.packages['node_modules/parent'].bundleDependencies = ['braces'];
+    lock.packages['node_modules/parent'].dependencies = { braces: '3.0.3' };
+    lock.packages['node_modules/parent/node_modules/braces'] = { version: '3.0.3', inBundle: true };
+    return lock;
+  };
+  const inventory = parseNpmLockInventory(Buffer.from(JSON.stringify(makeLock())));
+  assert.ok(inventory.coordinates.has(JSON.stringify(['braces', '3.0.3'])));
+  for (const mutate of [
+    (lock: ReturnType<typeof makeLock>) => { delete lock.packages['node_modules/parent/node_modules/braces']; },
+    (lock: ReturnType<typeof makeLock>) => { lock.packages['node_modules/parent'].bundleDependencies = []; },
+    (lock: ReturnType<typeof makeLock>) => { delete lock.packages['node_modules/parent'].integrity; },
+    (lock: ReturnType<typeof makeLock>) => { delete lock.packages['node_modules/parent'].dependencies; },
+    (lock: ReturnType<typeof makeLock>) => { lock.packages['node_modules/parent/node_modules/braces'].name = 'tinyglobby'; },
+    (lock: ReturnType<typeof makeLock>) => { lock.packages['node_modules/parent/node_modules/braces'].resolved = 'https://example.invalid/fake.tgz'; },
+  ]) {
+    const lock = makeLock(); mutate(lock);
+    assert.throws(() => parseNpmLockInventory(Buffer.from(JSON.stringify(lock))), { code: 'OSV_LOCKFILE_INVENTORY_INVALID' });
+  }
 });
 
 test('npm vulnerabilities, malformed reports and non-transient errors never activate OSV', async () => {

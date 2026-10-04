@@ -86,7 +86,14 @@ try {
           writeFileSync(join(evidence, `${name}-${width}-before.png`), first);
           writeFileSync(join(evidence, `${name}-${width}-after.png`), second);
           if (!entry.computedStylesEqual) writeFileSync(join(evidence, `${name}-${width}-differences.json`), JSON.stringify(descriptions, null, 2));
-          console.log(JSON.stringify(entry));
+          const differences = descriptions[0].flatMap((item, index) => {
+            const other = descriptions[1][index];
+            const changes = {};
+            if (JSON.stringify(item.rect) !== JSON.stringify(other.rect)) changes.rect = [item.rect, other.rect];
+            for (const key of Object.keys(item.style)) if (item.style[key] !== other.style[key]) changes[key] = [item.style[key], other.style[key]];
+            return Object.keys(changes).length ? [{ probe: index, changes }] : [];
+          });
+          console.log(JSON.stringify({ ...entry, differences: differences.slice(0, 12) }));
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }

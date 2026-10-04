@@ -2,6 +2,18 @@ import { expect, test } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+test("contatore accessibile e movimento ridotto restano equivalenti dopo la migrazione CSS", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/?profile=admin");
+  const counter = page.locator('[data-counter-final="7"]').first();
+  await expect(counter.locator('[aria-hidden="true"]')).toHaveText("7");
+  await expect(counter.locator(".sr-only")).toHaveText("7");
+  await expect(counter.locator(".sr-only")).toHaveCSS("position", "absolute");
+  await expect(counter.locator(".sr-only")).toHaveCSS("width", "1px");
+  await expect(counter.locator(".sr-only")).toHaveCSS("height", "1px");
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+});
+
 test("il nuovo compilatore ricompila le utility quando cambia il file sorgente", async ({ page }) => {
   const file = resolve("tests/mobile-nav/fixture/app/layout.tsx");
   const original = await readFile(file, "utf8");
