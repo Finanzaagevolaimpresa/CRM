@@ -33,7 +33,7 @@ function scalar(value: QueryValue) {
 
 function IntegrityFailure() {
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader title="AI Orchestrator · Admin Control Center" description="Vista privata del Control Plane Foundation." />
       <Card title="Accesso fail-closed" action={<Badge tone="orange">modifiche bloccate</Badge>}>
         <p className="rounded-2xl bg-red-50 p-4 text-sm font-bold leading-6 text-red-800 ring-1 ring-red-200">La verifica di integrità del ledger o dei gate non è stata superata. Nessun modulo di modifica è disponibile e non viene eseguita alcuna query di fallback.</p>

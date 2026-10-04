@@ -18,7 +18,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
   if (!context?.project) return <PageHeader title="Contesto non accessibile" description="Cliente e progetto non corrispondono oppure non appartengono al tuo perimetro." />;
   const client = await prisma.client.findUnique({ where: { id: clientId }, select: { displayName: true } });
   const editable = hasPermission(session, 'project.write') && canEditProject(session, { ...context.project, client: context.client });
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Nuova pre-analisi interna" description="Bozza manuale: nessuna valutazione o decisione finanziaria viene generata automaticamente." />
     <SecondaryLink href={`/projects/${projectId}`}>← Torna al progetto</SecondaryLink>
     <Card title="Contesto vincolato"><p><strong>Cliente:</strong> {client?.displayName ?? 'Cliente'}</p><p><strong>Progetto:</strong> {context.project.title}</p></Card>

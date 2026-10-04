@@ -34,7 +34,7 @@ export default async function Page() {
   ]);
 
   return (
-    <div className="space-y-6">
+    <div className="crm-space-y-6">
       <PageHeader
         title="Ruoli e permessi"
         description="Matrice dei ruoli interni FAI e dei permessi effettivi applicati server-side. Questa sezione non crea area cliente pubblica e non abilita invii automatici."
@@ -43,7 +43,7 @@ export default async function Page() {
         <Table headers={['Ruolo', 'Cosa può vedere/fare', 'Permessi effettivi']} rows={rows} />
       </Card>
       <Card title="Regole di sicurezza applicate">
-        <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-fai-gray">
+        <ul className="list-disc crm-space-y-2 pl-5 text-sm leading-6 text-fai-gray">
           <li>Le pagine settings e audit sono protette server-side con permessi dedicati.</li>
           <li>Admin e direzione possono consultare utenti, ruoli, audit log e gestire le bozze dossier/pre-analisi e la configurazione degli agenti AI interni.</li>
           <li>Ogni ruolo può soltanto richiedere l&apos;uso dell&apos;AI nel proprio perimetro; approvazione, rifiuto, revoca e audit completo sono riservati all&apos;Admin.</li>

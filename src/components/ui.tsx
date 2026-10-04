@@ -116,7 +116,7 @@ export function MetaCell({
   owner?: string | null;
 }) {
   return (
-    <div className="space-y-1 text-xs leading-5 text-slate-500">
+    <div className="crm-space-y-1 text-xs leading-5 text-slate-500">
       <div>
         <span className="font-black uppercase tracking-wide text-slate-600">
           Creato il
@@ -162,11 +162,11 @@ export function ActivityTimeline({
       </EmptyState>
     );
   return (
-    <ol className="relative space-y-4 before:absolute before:left-4 before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-gradient-to-b before:from-fai-lime before:via-fai-blue/30 before:to-transparent">
+    <ol className="relative crm-space-y-4 before:absolute before:left-4 before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-linear-to-b/srgb before:from-fai-lime before:via-fai-blue/30 before:to-transparent">
       {events.map((event) => (
         <li key={event.id} className="relative pl-11">
           <span className="absolute left-2 top-5 h-4 w-4 rounded-full border-2 border-white bg-fai-lime shadow-lg shadow-fai-lime/30" />
-          <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm shadow-slate-200/70 transition hover:border-fai-blue/25 hover:shadow-md">
+          <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-xs shadow-slate-200/70 transition hover:border-fai-blue/25 hover:shadow-md">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <Badge tone="purple">{event.type}</Badge>
               <span>{formatDateTime(event.date)}</span>
@@ -202,11 +202,11 @@ export function Card({
   return (
     <section
       id={id}
-      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5"
+      className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-4 shadow-xs md:p-5"
     >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <p className="mb-1 h-1 w-10 rounded-full bg-gradient-to-r from-fai-lime to-fai-orange" />
+          <p className="mb-1 h-1 w-10 rounded-full bg-linear-to-r/srgb from-fai-lime to-fai-orange" />
           <h2 className="text-lg font-extrabold tracking-tight text-fai-navy">
             {title}
           </h2>
@@ -226,7 +226,7 @@ export function EmptyState({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-fai-blue/25 bg-gradient-to-br from-white to-fai-bg p-8 text-center shadow-inner">
+    <div className="rounded-2xl border border-dashed border-fai-blue/25 bg-linear-to-br/srgb from-white to-fai-bg p-8 text-center shadow-inner">
       <p className="font-extrabold text-fai-navy">{title}</p>
       <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-500">
         {children ??
@@ -257,12 +257,12 @@ export function Stat({
     lime: "from-fai-lime to-fai-green",
   }[tone];
   const box = (
-    <div className="group relative flex h-full min-h-32 flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 ring-1 ring-slate-900/5 transition duration-200 hover:-translate-y-0.5 hover:border-fai-blue/25 hover:shadow-md">
+    <div className="group relative flex h-full min-h-32 flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs shadow-slate-200/70 ring-1 ring-slate-900/5 transition duration-200 hover:-translate-y-0.5 hover:border-fai-blue/25 hover:shadow-md">
       <div
-        className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${toneClass}`}
+        className={`absolute inset-x-0 top-0 h-1 bg-linear-to-r/srgb ${toneClass}`}
       />
       <div
-        className={`bg-gradient-to-br ${toneClass} bg-clip-text text-3xl font-black tracking-tight text-transparent`}
+        className={`bg-linear-to-br/srgb ${toneClass} bg-clip-text text-3xl font-black tracking-tight text-transparent`}
       >
         {value}
       </div>
@@ -296,9 +296,9 @@ export function Table({
   rows: Array<Array<React.ReactNode>>;
 }) {
   return (
-    <div className="max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm" tabIndex={0} aria-label="Tabella scorrevole orizzontalmente">
+    <div className="max-w-full overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-xs" tabIndex={0} aria-label="Tabella scorrevole orizzontalmente">
       <table className="min-w-[42rem] w-full text-sm">
-        <thead className="bg-gradient-to-r from-slate-50 to-fai-bg text-left text-xs uppercase tracking-wider text-slate-500">
+        <thead className="bg-linear-to-r/srgb from-slate-50 to-fai-bg text-left text-xs uppercase tracking-wider text-slate-500">
           <tr>
             {headers.map((h, index) => (
               <th

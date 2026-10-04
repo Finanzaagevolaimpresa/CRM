@@ -27,7 +27,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ r
       unavailable = 'Test non disponibile: verifica autorizzazione, responsabile e qualifica della casella comunicazioni.';
     }
   }
-  return <div className="space-y-6"><PageHeader title="Test di invio diretto" description="Una prova tecnica dalla casella comunicazioni a un solo destinatario controllato." />
+  return <div className="crm-space-y-6"><PageHeader title="Test di invio diretto" description="Una prova tecnica dalla casella comunicazioni a un solo destinatario controllato." />
     <Link href="/settings/communications">Torna alle caselle</Link>
     {query.result && !outcomes[query.result] ? <p role="status">Operazione non eseguita. Riapri il riepilogo e verifica accesso e configurazione.</p> : null}
     <Card title="Test email">

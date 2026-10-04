@@ -30,7 +30,7 @@ export default async function Page() {
   });
   const canWrite = hasPermission(session, 'payment.write');
 
-  return <div className="space-y-6">
+  return <div className="crm-space-y-6">
     <PageHeader title="Pagamenti" description="Scadenze, incassi e note amministrative collegate ai contratti accessibili." />
     {canWrite ? <Card title="Registra pagamento">
       <form action={registerPaymentAndRefresh} className="grid gap-3 md:grid-cols-5">
