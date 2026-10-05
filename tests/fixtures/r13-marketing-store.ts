@@ -37,6 +37,11 @@ export class MemoryPreferenceStore implements PreferenceStore {
     if (!row || row.canonicalNoticeText !== text) throw new Error('SYNTHETIC_RECEIPT_INVALID');
     return row;
   }
+  // Synthetic in-process coordinator only: this queue has no expiring transaction.
+  // It is not a production transport or proof of crash-safe external delivery.
+  withFinalHandoff<T>(contactKey: string, operation: (tx: PreferenceTransaction) => Promise<T>): Promise<T> {
+    return this.withContact(contactKey, operation);
+  }
   withContact<T>(contactKey: string, operation: (tx: PreferenceTransaction) => Promise<T>): Promise<T> {
     const run = this.tail.then(async () => {
       let state: Snapshot = structuredClone(this.rows.get(contactKey)

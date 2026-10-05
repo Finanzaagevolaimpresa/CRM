@@ -62,6 +62,9 @@ export class PostgresPreferenceStore implements PreferenceStore {
       canonicalNoticeText, email: envelope.payload.email, occurredAt, kind: row.decision as 'GRANTED' | 'DENIED' };
   }
 
+  // Prisma can expire this transaction before an external callback settles. This
+  // adapter deliberately has no withFinalHandoff: consent and withdrawal persistence
+  // remain available, but MarketingPreferences refuses any sender callback here.
   async withContact<T>(contactKey: string, operation: (tx: PreferenceTransaction) => Promise<T>): Promise<T> {
     return withSerializableTransaction(this.db, async db => {
       await db.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${contactKey}, 1300))`);

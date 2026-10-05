@@ -6,9 +6,11 @@ import { canonicalSha256 } from '../src/lib/canonical-json';
 import { createLeadSubmittedEventV1 } from '../src/lib/lead-event-contract';
 import { BUSINESS_LEAD_PRIVACY_EVIDENCE_HASH_DOMAIN } from '../src/lib/privacy-evidence';
 import { PostgresPreferenceStore } from '../src/lib/marketing-preferences/postgres-store';
+import { MarketingPreferences } from '../src/lib/marketing-preferences/service';
+import { emailContactKey } from '../src/lib/marketing-preferences/policy';
 import { SerializableConflictError } from '../src/lib/serializable';
 import { syntheticLeadEventInputV1 } from './fixtures/n10-lead-event-v1';
-import { id, SYNTHETIC_EMAIL, SYNTHETIC_NOTICE } from './fixtures/r13-marketing-store';
+import { EPOCH, id, SYNTHETIC_EMAIL, SYNTHETIC_KEY, SYNTHETIC_NOTICE } from './fixtures/r13-marketing-store';
 
 function receipt(decision: 'GRANTED' | 'DENIED' = 'GRANTED') {
   const input = syntheticLeadEventInputV1();
@@ -88,4 +90,18 @@ test('PostgreSQL transactions request serializable isolation and never retry an 
   } as unknown as PrismaClient;
   await assert.rejects(new PostgresPreferenceStore(client).withContact('unused', async () => undefined), SerializableConflictError);
   assert.equal(calls, 1);
+});
+
+test('the real Prisma adapter refuses a handoff before opening a transaction or invoking external code', async () => {
+  let transactions = 0, admissionReads = 0, callbacks = 0;
+  const store = new PostgresPreferenceStore({
+    $transaction: async () => { transactions++; throw new Error('TIMED_TRANSACTION_MUST_NOT_BE_USED'); },
+  } as unknown as PrismaClient);
+  const preferences = new MarketingPreferences(store, SYNTHETIC_KEY, async () => { admissionReads++; return null; });
+  const result = await preferences.atFinalHandoff(SYNTHETIC_EMAIL, {
+    contactKey: emailContactKey(SYNTHETIC_EMAIL, SYNTHETIC_KEY), revision: 1, epoch: EPOCH,
+    policyVersion: 'synthetic', selectedAt: '2026-09-28T10:00:00.000Z', expiresAt: '2028-09-28T10:00:00.000Z',
+  }, async () => ++callbacks);
+  assert.deepEqual(result, { admitted: false, reason: 'HANDOFF_SERIALIZATION_UNAVAILABLE' });
+  assert.deepEqual({ transactions, admissionReads, callbacks }, { transactions: 0, admissionReads: 0, callbacks: 0 });
 });

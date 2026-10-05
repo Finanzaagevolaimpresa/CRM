@@ -18,8 +18,12 @@ export interface PreferenceTransaction {
 export interface PreferenceStore {
   // Must verify the immutable source envelope, receipt and notice before returning a choice.
   verifiedChoice(receiptId: string, canonicalNoticeText: string): Promise<VerifiedChoice>;
-  // Lock this contact across the full callback, including a final handoff. No automatic retries.
+  // Bounded database operations only. A transaction lease cannot fence an external effect.
   withContact<T>(contactKey: string, operation: (tx: PreferenceTransaction) => Promise<T>): Promise<T>;
+  // Optional, separately qualified boundary: exclusion must survive until the actual
+  // handoff settles, including an uncertain outcome. Never infer this from withContact,
+  // a longer transaction timeout, or a timer racing the external callback. No retries.
+  withFinalHandoff?<T>(contactKey: string, operation: (tx: PreferenceTransaction) => Promise<T>): Promise<T>;
 }
 export type SelectionTicket = Readonly<{
   contactKey: string; revision: number; epoch: string; policyVersion: string;
@@ -136,8 +140,9 @@ export class MarketingPreferences {
 
   /**
    * The final boundary for a FUTURE qualified sender, including queued messages.
-   * No provider is composed here. Hold the contact lock until handoff completes;
-   * never retry this callback automatically after an ambiguous transport outcome.
+   * No provider is composed here. Stores with only a timed transaction are denied
+   * before any callback or admission read. A qualified coordinator must keep the
+   * contact excluded until handoff settles; uncertain transport is never retried.
    */
   async atFinalHandoff<T>(email: string, ticket: SelectionTicket, handoff: () => Promise<T>): Promise<
     { admitted: true; value: T } | { admitted: false; reason: string }
@@ -146,7 +151,10 @@ export class MarketingPreferences {
     let handoffStarted = false;
     try {
       if (emailContactKey(email, this.key) !== ticket.contactKey) return { admitted: false, reason: 'RECIPIENT_MISMATCH' };
-      return await this.store.withContact(ticket.contactKey, async tx => {
+      if (typeof this.store.withFinalHandoff !== 'function') {
+        return { admitted: false, reason: 'HANDOFF_SERIALIZATION_UNAVAILABLE' };
+      }
+      return await this.store.withFinalHandoff(ticket.contactKey, async tx => {
         const ready = await this.checkedReadiness();
         const snapshot = await tx.snapshot();
         const now = await tx.now();

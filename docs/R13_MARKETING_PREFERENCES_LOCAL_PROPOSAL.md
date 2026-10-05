@@ -1,10 +1,18 @@
 # R13 — Preferenze marketing: proposta dormiente e collaudo R23
 
+## Confine finale PostgreSQL — correzione P1 del 5 ottobre 2026
+
+Il lock di una transazione Prisma può scadere mentre un callback esterno continua. L'adattatore PostgreSQL offre quindi soltanto `withContact`, per operazioni sul registro, e non implementa il coordinatore opzionale `withFinalHandoff`. Il servizio ne richiede la presenza prima di leggere l'ammissione o invocare un mittente: in sua assenza restituisce `HANDOFF_SERIALIZATION_UNAVAILABLE`. Non esiste un fallback alla transazione né un aumento del timeout presentato come garanzia di invio.
+
+Scelte, selezione, blocchi e revoche restano disponibili nell'adattatore proposto; un ticket positivo non abilita il callback PostgreSQL. Solo la fixture sintetica in memoria implementa un coordinatore senza scadenza, per provare l'ordinamento e gli esiti incerti. Non è una qualifica di invio produttivo: un futuro coordinatore reale richiederà una soluzione separata, verificata anche in caso di timeout, caduta del processo e risultato esterno incerto. Il runtime resta `null`, senza route, provider, nuove dipendenze o migrazioni operative.
+
+Le regressioni verificano assenza di callback e di transazioni di ripiego, attesa di una revoca durante il callback sintetico e soppressione concorrente effettivamente persistita in PostgreSQL con un client a timeout breve. Il workflow richiede otto casi PostgreSQL superati e zero skip. Le descrizioni e i conteggi delle consegne precedenti sotto restano storici.
+
 ## Prosecuzione R23
 
 La Cabina R23 ha proposto la pubblicazione del ramo, una PR in bozza e i collaudi su GitHub Actions. La richiesta diretta di procedere è stata acquisita dalla Cabina R24. Questo perimetro supera il precedente limite alla consegna locale, senza autorizzare merge, rilascio, applicazione della proposta SQL alla produzione o collegamento del modulo al sito.
 
-Il workflow `r13-marketing-preferences.yml` installa il lockfile, verifica che schema e 49 migrazioni operative siano invariati, esegue tutti e sette i casi PostgreSQL in uno schema temporaneo di un database sintetico dedicato, poi lint, unit test, typecheck e build. Il controllo fallisce in presenza di test SQL saltati. I risultati effettivi sono quelli del run associato all'HEAD della PR; la sola presenza del workflow non attesta il superamento delle prove.
+Il workflow `r13-marketing-preferences.yml` installa il lockfile, verifica che schema e 49 migrazioni operative siano invariati, esegue tutti gli otto casi PostgreSQL in uno schema temporaneo di un database sintetico dedicato, poi lint, unit test, typecheck e build. Il controllo fallisce in presenza di test SQL saltati. I risultati effettivi sono quelli del run associato all'HEAD della PR; la sola presenza del workflow non attesta il superamento delle prove.
 
 I collaudi Chromium M1, M4 e M5 acquisiscono inoltre le viste S01–S08 richieste per i manuali. Le immagini provengono dall'applicazione esistente con utenti e pratiche sintetici, includono profilo, pagina, commit e impronta del PNG e rimangono artefatti CI separati dai manuali. Il collaboratore viene verificato anche con il profilo base e zero eccezioni di permesso. Le prove M4 registrano dichiarazioni sintetiche senza contattare provider o inviare email; non qualificano alcuna casella reale. Prima dell'integrazione nei manuali occorre controllare gli artefatti e il risultato del relativo job.
 
@@ -35,7 +43,7 @@ Il consenso positivo deriva esclusivamente da una ricevuta N04 legata a un `Busi
 
 Una ricevuta valida non rende automaticamente il contatto ammissibile. Occorrono policy approvata, intervallo di efficacia valido, coppia esatta ID/hash dell'informativa qualificata per email, impronta della chiave coerente e attestazione recente della completezza della riconciliazione. L'epoch dell'attestazione deve corrispondere a quella registrata nel database. L'attestazione deve comprendere gli ingressi N04 e tutte le richieste di blocco; non può essere un semplice flag memorizzato. Il relativo fornitore di attestazioni non è implementato o configurato da questa patch.
 
-L'attestazione e la selezione scadono al massimo dopo 60 secondi. Il controllo finale rilegge lo stato, verifica anche il destinatario e mantiene il lock del contatto durante il callback di consegna. Una revoca già confermata invalida la selezione precedente. Un errore dopo l'avvio del callback produce un esito incerto e vieta retry automatici; non equivale a mancato invio. Nessun provider reale è incluso o invocato. L'integrazione futura deve qualificare anche idempotenza del trasporto e confine effettivo della consegna.
+L'attestazione e la selezione scadono al massimo dopo 60 secondi. Il controllo finale verifica il destinatario e richiede un coordinatore qualificato distinto dalle transazioni a scadenza. Se presente, rilegge lo stato sotto quel coordinatore; una revoca già confermata invalida la selezione precedente. Nell'adattatore PostgreSQL questo confine manca deliberatamente e ogni callback viene negato. Un errore dopo l'avvio di un callback ammesso dal coordinatore sintetico produce un esito incerto e vieta retry automatici; non equivale a mancato invio. Nessun provider reale è incluso o invocato. L'integrazione futura deve qualificare idempotenza, persistenza del coordinamento e confine effettivo della consegna.
 
 ## Scadenze proposte
 

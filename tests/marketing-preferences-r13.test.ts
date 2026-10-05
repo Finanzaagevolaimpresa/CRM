@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MarketingWithdrawalForm } from '../src/components/marketing-withdrawal-form';
 import { addCalendarMonths, emailContactKey, eventSchema, PROPOSED_POLICY, retentionPlan, stripStoredFields } from '../src/lib/marketing-preferences/policy';
-import { MarketingPreferences } from '../src/lib/marketing-preferences/service';
+import { MarketingPreferences, type PreferenceTransaction } from '../src/lib/marketing-preferences/service';
 import { createWithdrawalPost, marketingWithdrawalRuntime } from '../src/lib/marketing-preferences/withdrawal-http';
 import { choice, EPOCH, id, MemoryPreferenceStore, readiness, SYNTHETIC_EMAIL, SYNTHETIC_KEY, SYNTHETIC_NOTICE } from './fixtures/r13-marketing-store';
 
@@ -187,6 +187,48 @@ test('final handoff and withdrawal share the lock; an ambiguous handoff is never
   let attempts = 0;
   await assert.rejects(next.service.atFinalHandoff(SYNTHETIC_EMAIL, selected.ticket, async () => { attempts++; throw new Error('synthetic transport failure'); }), /OUTCOME_UNCERTAIN_DO_NOT_RETRY/u);
   assert.equal(attempts, 1);
+});
+
+test('a consent-capable store without a handoff coordinator cannot invoke a sender or fall back to its transaction', async () => {
+  const f = fixture(); await f.grant();
+  const { ticket } = await f.service.select(SYNTHETIC_EMAIL); assert.ok(ticket);
+  let transactionCalls = 0, admissionCalls = 0, callbacks = 0;
+  const boundedStore = {
+    verifiedChoice: f.store.verifiedChoice.bind(f.store),
+    withContact: async <T,>(key: string, operation: (tx: PreferenceTransaction) => Promise<T>) => {
+      transactionCalls++;
+      return f.store.withContact(key, operation);
+    },
+  };
+  const bounded = new MarketingPreferences(boundedStore, SYNTHETIC_KEY, async () => {
+    admissionCalls++; return { ...readiness(), checkedAt: f.store.clock };
+  });
+  assert.deepEqual(await bounded.atFinalHandoff(SYNTHETIC_EMAIL, ticket, async () => ++callbacks),
+    { admitted: false, reason: 'HANDOFF_SERIALIZATION_UNAVAILABLE' });
+  assert.deepEqual({ transactionCalls, admissionCalls, callbacks }, { transactionCalls: 0, admissionCalls: 0, callbacks: 0 });
+  assert.equal(await bounded.suppressPublic(SYNTHETIC_EMAIL, id(2)), 'RECORDED');
+  assert.equal((await bounded.select(SYNTHETIC_EMAIL)).decision.eligible, false);
+});
+
+test('the synthetic non-expiring coordinator keeps a concurrent suppression pending until the callback actually settles', async () => {
+  const f = fixture(); await f.grant();
+  const { ticket } = await f.service.select(SYNTHETIC_EMAIL); assert.ok(ticket);
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let effects = 0, suppressed = false;
+  const final = f.service.atFinalHandoff(SYNTHETIC_EMAIL, ticket, async () => {
+    enter(); await pending; effects++; return 'synthetic-only';
+  });
+  await entered;
+  const withdrawal = f.service.suppressPublic(SYNTHETIC_EMAIL, id(2)).then(result => { suppressed = true; return result; });
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(effects, 0); assert.equal(suppressed, false);
+  } finally { release(); }
+  assert.deepEqual(await final, { admitted: true, value: 'synthetic-only' });
+  assert.equal(await withdrawal, 'RECORDED'); assert.equal(effects, 1);
+  assert.equal((await f.service.select(SYNTHETIC_EMAIL)).decision.eligible, false);
 });
 
 test('a selection for one recipient cannot be reused for a different recipient', async () => {

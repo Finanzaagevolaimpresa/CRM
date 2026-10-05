@@ -41,7 +41,7 @@ jobs:
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/r13-evidence/candidate.txt"
           psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-      - name: Seven real PostgreSQL cases, no skipped tests
+      - name: Eight real PostgreSQL cases including timed handoff denial, no skipped tests
         env:
           RUN_R13_DB_TESTS: '1'
           RUN_DB_TESTS: '1'
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test tests/db/marketing-preferences-r13-db.test.ts | tee "$RUNNER_TEMP/r13-evidence/postgresql.tap"
-          grep -Fx '# pass 7' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
+          grep -Fx '# pass 8' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/r13-evidence/postgresql.tap"
           test "$(psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -Atc "SELECT to_regclass('public.\"MarketingPreferenceEvent\"') IS NULL")" = t

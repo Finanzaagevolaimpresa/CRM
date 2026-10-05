@@ -195,3 +195,43 @@ test('SQL public suppression invalidates a previously eligible selection before 
   assert.equal((await qualifiedSynthetic.select(source.email)).decision.eligible, false);
   assert.deepEqual(await client().privacyEvidenceReceipt.findUniqueOrThrow({ where: { id: source.receipt.id } }), source.receipt);
 });
+
+test('SQL refuses a sender on a timed transaction while concurrent suppression still commits', { skip: !enabled }, async () => {
+  const source = await persistedSyntheticChoice(105, 'GRANTED');
+  await client().$executeRaw(Prisma.sql`
+    INSERT INTO "MarketingPreferenceEpoch" ("singleton", "epoch", "reconciled") VALUES (true, ${EPOCH}::UUID, true)
+    ON CONFLICT ("singleton") DO NOTHING
+  `);
+  const freshReadiness = async () => {
+    const [clock] = await client().$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT clock_timestamp() AS "now"`);
+    return { ...readiness(), checkedAt: clock.now.toISOString(),
+      approvedEmailNotices: [{ noticeVersionId: source.noticeVersionId, contentHash: source.noticeHash }] };
+  };
+  const normal = new MarketingPreferences(new PostgresPreferenceStore(client()), SYNTHETIC_KEY, freshReadiness);
+  await normal.recordChoice(source.receipt.id, SYNTHETIC_NOTICE);
+  const selected = await normal.select(source.email);
+  assert.equal(selected.decision.eligible, true); assert.ok(selected.ticket);
+  const url = new URL(process.env.DATABASE_URL!); url.searchParams.set('schema', schema);
+  const timed = new PrismaClient({ datasources: { db: { url: url.toString() } },
+    transactionOptions: { timeout: 100, maxWait: 2000 } });
+  let callbacks = 0, effects = 0;
+  let runningCallback: Promise<string> | null = null;
+  let withdrawal: Promise<unknown> | null = null;
+  try {
+    const bounded = new MarketingPreferences(new PostgresPreferenceStore(timed), SYNTHETIC_KEY, freshReadiness);
+    const handoff = bounded.atFinalHandoff(source.email, selected.ticket, () => {
+      callbacks++;
+      runningCallback = new Promise<string>(resolve => setTimeout(() => { effects++; resolve('synthetic-only'); }, 250));
+      return runningCallback;
+    });
+    withdrawal = normal.suppressPublic(source.email, id(451));
+    const [result, suppressed] = await Promise.all([handoff, withdrawal]);
+    assert.deepEqual(result, { admitted: false, reason: 'HANDOFF_SERIALIZATION_UNAVAILABLE' });
+    assert.equal(suppressed, 'RECORDED'); assert.equal(callbacks, 0); assert.equal(effects, 0);
+    assert.equal((await normal.select(source.email)).decision.eligible, false);
+    assert.deepEqual(await client().privacyEvidenceReceipt.findUniqueOrThrow({ where: { id: source.receipt.id } }), source.receipt);
+  } finally {
+    await Promise.allSettled([runningCallback, withdrawal]);
+    await timed.$disconnect();
+  }
+});
