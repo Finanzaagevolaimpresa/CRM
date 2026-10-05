@@ -25,6 +25,7 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=10
     env:
       DATABASE_URL: postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test?schema=public
+      R23_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
       APP_ENV: test
       NODE_ENV: development
       AUTH_SECRET: synthetic-m5-browser-auth-not-production
@@ -53,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          echo "R23_MANUAL_EVIDENCE=$RUNNER_TEMP/r23-manuals-m5" >> "$GITHUB_ENV"
           evidence="$RUNNER_TEMP/m5-evidence"
           mkdir -p "$evidence"
           echo "M5_EVIDENCE=$evidence" >> "$GITHUB_ENV"
@@ -114,5 +116,6 @@ jobs:
             ${{ runner.temp }}/m5-evidence/percorso01-comprehension.json
             ${{ runner.temp }}/m5-evidence/percorso01-new-reader.png
             ${{ runner.temp }}/m5-evidence/app.log
+            ${{ runner.temp }}/r23-manuals-m5
           if-no-files-found: error
           retention-days: 14
