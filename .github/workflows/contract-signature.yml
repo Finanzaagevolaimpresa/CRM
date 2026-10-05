@@ -48,7 +48,7 @@ jobs:
           npm run typecheck
           psql 'postgresql://postgres:synthetic-signature-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          node --import tsx --test tests/contract-signature.test.ts tests/contract-signature/service-db.test.ts | tee "$evidence/database.tap"
+          node --import tsx --test tests/customer-progress.test.ts tests/contract-signature.test.ts tests/contract-signature/service-db.test.ts | tee "$evidence/database.tap"
           grep -Eq '^# pass [1-9][0-9]*$' "$evidence/database.tap"
           grep -Fx '# fail 0' "$evidence/database.tap"
           grep -Fx '# skipped 0' "$evidence/database.tap"

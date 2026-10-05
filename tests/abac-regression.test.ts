@@ -156,9 +156,15 @@ test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', 
 });
 
 test('documenti e checklist invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'prisma.$transaction');
-  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'tx.document.create');
-  assertGuardsBeforeMutation('uploadDocument', ['requireClientContextWriteAccess'], 'tx.documentVersion.create');
+  assertGuardsBeforeMutation('uploadDocument', ['requirePermission'], 'storeUploadedDocument');
+  const uploadPath = resolve(process.cwd(), 'src/lib/document-upload.ts');
+  const uploadSource = ts.createSourceFile(uploadPath, readFileSync(uploadPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  // The guarded service owns file, document, version and atomic success receipt.
+  // PostgreSQL tests additionally exercise revoked sessions and reassignment on replay.
+  for (const mutation of ['savePrivateDocumentFile', 'tx.document.create', 'tx.documentVersion.create', 'tx.auditLog.create']) {
+    assertGuardsBeforeMutation('storeUploadedDocument', ['lockAuthoritativeInternalSession', 'hasPermission', 'requireClientContextWriteAccess', 'canAccessFinancialDocumentMetadata', 'assertLive'], mutation, uploadSource);
+  }
+  assert.match(functionBody('storeUploadedDocument', uploadSource), /requireClientContextWriteAccess\(actor, data, tx\)/);
   assertGuardsBeforeMutation(
     'linkDocumentToService',
     ['requireDocumentEditAccess', 'requireServiceEditAccess'],

@@ -17,6 +17,14 @@ test.afterAll(async () => { await db.$disconnect(); });
 for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
   await login(page, f.role);
   const financial = ['admin', 'amministrazione', 'direzione'].includes(f.role);
+  const progress = await page.goto(`/progress?client=${f.clientId}`); expect(progress?.status()).toBe(200);
+  const progressHtml = await progress!.text();
+  expect(progressHtml.includes(`data-progress-contract="${f.contractId}"`)).toBe(financial);
+  if (!financial) {
+    expect(progressHtml).not.toContain(f.contractId); expect(progressHtml).not.toContain(f.paymentId);
+    expect(progressHtml).not.toContain(`CONTRACT_SECRET_${f.role}`); expect(progressHtml).not.toContain(`PAYMENT_SECRET_${f.role}`);
+    expect(progressHtml).not.toContain('pagato');
+  }
   for (const document of f.docs) {
     const expected = financial || document.kind === 'ordinary' ? 200 : 403;
     for (const suffix of ['', `?versionId=${document.versionId}`]) {
@@ -60,6 +68,11 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
 for (const f of fixture.fixtures.filter(f => f.denied)) test(`${f.key}: individual deny applies to HTML, exports, handoff and both download routes`, async ({ page }) => {
   await login(page, f.key);
   const canReadContract = f.denied !== 'contract.read', canReadPayment = f.denied !== 'payment.read';
+  const progress = await page.goto(`/progress?client=${f.clientId}`); expect(progress?.status()).toBe(200);
+  const progressHtml = await progress!.text();
+  expect(progressHtml.includes(`data-progress-contract="${f.contractId}"`)).toBe(canReadContract);
+  if (!canReadContract) expect(progressHtml).not.toContain(f.contractId);
+  if (!canReadPayment) { expect(progressHtml).not.toContain('pagato'); expect(progressHtml).not.toContain('Pagamenti:'); }
   const permitted = (kind: string) => kind === 'ordinary' || (['signed', 'labelled'].includes(kind) && canReadContract) || (kind === 'paid' && canReadPayment);
   for (const doc of f.docs) {
     for (const suffix of ['', `?versionId=${doc.versionId}`]) {

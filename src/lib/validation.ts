@@ -1,3 +1,4 @@
+import { parseProgressTaskType } from './customer-progress-policy';
 import { z } from 'zod';
 import { permissionCodes } from './permissions';
 
@@ -99,7 +100,7 @@ export const documentUploadSchema = z.object({ clientId: id, companyId: id.optio
 
 export const taskStatusSchema = z.enum(['aperta','in_lavorazione','completata','annullata']);
 export const taskPrioritySchema = z.enum(['bassa','media','alta','urgente']);
-export const clientTaskSchema = z.object({ clientId: id, clientServiceId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, status: taskStatusSchema.optional(), priority: taskPrioritySchema.default('media'), assignedToId: id.optional(), dueAt: date.optional() });
+export const clientTaskSchema = z.object({ type: z.string().max(80).refine(value => parseProgressTaskType(value) !== null).optional(), clientId: id, clientServiceId: id.optional(), projectId: id.optional(), title: z.string().trim().min(1).max(200), description: optionalText, status: taskStatusSchema.optional(), priority: taskPrioritySchema.default('media'), assignedToId: id.optional(), dueAt: date.optional() });
 export const taskUpdateSchema = z.object({ id, status: taskStatusSchema, priority: taskPrioritySchema, assignedToId: id.optional(), dueAt: date.optional() });
 export const taskIdSchema = z.object({ id });
 
