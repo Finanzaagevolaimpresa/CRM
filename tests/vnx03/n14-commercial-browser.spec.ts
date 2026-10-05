@@ -129,7 +129,7 @@ async function submitSyntheticLead(page: Page) {
   await page.goto(`${wordpressUrl}/vnx03-allowed/`, { waitUntil: 'networkidle' });
   const prefix = '#wpforms-900001-field_';
   await page.locator(`${prefix}1`).fill('Browser');
-  await page.locator(`${prefix}2`).fill('Commerciale');
+  await page.locator(`${prefix}1-last`).fill('Commerciale');
   await page.locator(`${prefix}3`).fill('commercial-browser@vnx03.invalid');
   await page.locator(`${prefix}4`).fill('VNX03 N14 Browser');
   await page.locator(`${prefix}5`).fill('+390200000014');
