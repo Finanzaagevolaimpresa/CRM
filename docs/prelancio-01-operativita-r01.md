@@ -60,9 +60,12 @@ autorizzazione separata all'avvio. I dinieghi individuali e il tetto di ruolo
 contratti/pagamenti restano applicati anche al nuovo riepilogo.
 
 Il cliente con stato persistito `sospeso` mostra un impedimento generico.
-Creazione/avanzamento di un servizio, handoff dell'acquisto e avvio della pratica
+Creazione/avanzamento di un servizio, handoff dell'acquisto, avvio della pratica
+e creazione/modifica/cambio stato di una pratica tecnica in uno stato operativo
 rileggono e bloccano il cliente nella transazione prima delle scritture.
 Sono ancora possibili la preparazione di una richiesta e la sospensione/chiusura;
+per le pratiche tecniche restano ammessi `da_progettare`, `respinta`, `archiviata`.
+La pagina aperta prima della sospensione non evita la rilettura transazionale.
 nessuna etichetta di servizio può aggirare la sospensione. La firma da sola non
 sospende o riattiva automaticamente un cliente: la decisione sul dato reale
 rimane esplicita, tracciata e separata dall'installazione del software.
@@ -70,9 +73,14 @@ rimane esplicita, tracciata e separata dall'installazione del software.
 Raccordo puntuale del caso SILVER già acquisito, da eseguire solo con consenso
 specifico alle scritture e valori correnti nuovamente verificati:
 
-1. Individuare la sola scheda cliente, contratto e versione documentale esistenti;
-   verificare hash/versione e conservare le dichiarazioni precedenti.
-2. Collegare la firma certificata del **24/09/2026** alla versione già acquisita.
+1. Individuare la sola scheda cliente e il contratto esistenti. L'originale firmato
+   è acquisito **solo localmente sull'MSI**: il controllo del 05/10 non lo trova
+   negli allegati CRM. Dopo autorizzazione specifica, verificare di nuovo l'assenza
+   per hash e caricare una sola volta l'originale con classificazione finanziaria
+   riservata, versione documentale e audit. Se nel frattempo è già presente,
+   verificare e riusare quella versione; non creare duplicati.
+2. Verificare hash/versione e collegare la firma certificata del **24/09/2026**
+   alla versione effettivamente presente nel CRM.
    Il **21/09/2026** riportato nell'intestazione non è la data di firma.
    Usare la registrazione firma esistente con controllo versione e audit.
 3. Impostare la sola scheda cliente esistente a `sospeso`, con audit e confronto
@@ -82,8 +90,11 @@ specifico alle scritture e valori correnti nuovamente verificati:
    presa in carico, e la prossima azione «verificare la ricezione del pagamento».
    Nome e scadenza non sono inventati: confermare il responsabile già registrato
    e la scadenza concordata nel preflight del caso.
-5. Rileggere le stesse righe e gli audit; verificare assenza di nuovi clienti,
-   contratti, documenti, incassi, servizi o pratiche. I ruoli esclusi vedono solo
+5. Rileggere le stesse righe e gli audit; l'unico nuovo documento ammesso è
+   l'eventuale originale previsto al punto1, con la sua versione e il suo audit.
+   Verificare assenza di duplicati, nuovi clienti, contratti, pagamenti, incassi,
+   servizi o pratiche. Non inventare una riga Payment per indicare l'attesa.
+   I ruoli esclusi vedono solo
    l'impedimento, mai importi, dettagli della firma o motivazioni economiche.
 
 Nessun dato del cliente, identificatore privato o documento è incluso nella PR.

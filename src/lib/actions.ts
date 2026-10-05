@@ -1,5 +1,5 @@
 'use server';
-import { assertClientOperational } from './client-operational-hold';
+import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
@@ -1919,6 +1919,7 @@ export async function createTechnicalPractice(form: FormData) {
   if (assignmentRequested && s.role !== 'admin') denyManualAssignment();
   if (assignmentRequested) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignmentRequested, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    await assertTechnicalPracticeOperational(tx, [data.clientId], data.status);
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
     await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
     await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: assignmentRequested, reason: 'Apertura pratica: responsabilità iniziali, presa in carico non registrata', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
@@ -1997,7 +1998,8 @@ export async function updateTechnicalPractice(form: FormData) {
   const updateData = { ...data, commercialOwnerId: commercialAssignment, technicalOwnerId: technicalAssignment, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData, commercialOwnerId: commercialAssignment === undefined ? before.commercialOwnerId : commercialAssignment, technicalOwnerId: technicalAssignment === undefined ? before.technicalOwnerId : technicalAssignment })) return before;
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
-    const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: updateData as never });
+    await assertTechnicalPracticeOperational(tx, [before.clientId, data.clientId], updateData.status);
+    const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId, updatedAt: before.updatedAt, deletedAt: null }, data: updateData as never });
     await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     if (ownerChanged || contextChanged) await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: ownerChanged && !contextChanged, reason: contextChanged ? 'Contesto della pratica modificato' : 'Responsabili della pratica modificati', departmentCode: contextChanged ? null : undefined, state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
     if (before.status !== practice.status) await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
@@ -2011,13 +2013,13 @@ export async function updateTechnicalPracticeStatus(form: FormData) {
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
   const updateData = { status: data.status, clientVisibleStatus: data.clientVisibleStatus, submittedAt: data.submittedAt ?? before.submittedAt, protocolNumber: data.protocolNumber, integrationRequestNote: data.integrationRequestNote, lastClientUpdateAt: data.lastClientUpdateAt, nextClientUpdateAt: data.nextClientUpdateAt };
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData })) return before;
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: updateData });
-  if (before.status !== practice.status) {
-    await audit(s.userId, 'technical_practice_status_change', 'TechnicalPractice', practice.id, { before, after: practice });
-  } else {
-    await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice });
-  }
-  return practice;
+  return prisma.$transaction(async tx => {
+    await assertTechnicalPracticeOperational(tx, [before.clientId], updateData.status);
+    const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId, updatedAt: before.updatedAt, deletedAt: null }, data: updateData });
+    const event = before.status !== practice.status ? 'technical_practice_status_change' : 'technical_practice_update';
+    await audit(s.userId, event, 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    return practice;
+  });
 }
 
 export async function assignTechnicalPractice(form: FormData) {

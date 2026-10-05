@@ -12,3 +12,12 @@ export async function lockClientOperationalAdmission(db: Prisma.TransactionClien
 export async function assertClientOperational(db: Prisma.TransactionClient, clientId: string) {
   if (!await lockClientOperationalAdmission(db, clientId)) throw new UserFacingActionError(CLIENT_OPERATIONAL_HOLD_MESSAGE);
 }
+
+// Only initial preparation and stopping states remain available during a hold.
+// Read both contexts when moving a practice so reparenting cannot bypass it.
+export async function assertTechnicalPracticeOperational(
+  db: Prisma.TransactionClient, clientIds: readonly string[], status: string,
+) {
+  if (['da_progettare', 'respinta', 'archiviata'].includes(status)) return;
+  for (const clientId of [...new Set(clientIds)].sort()) await assertClientOperational(db, clientId);
+}
