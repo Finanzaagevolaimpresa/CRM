@@ -262,3 +262,25 @@ export async function assertRegistryActivationReady(db: PrismaClient) {
   if ((await countLiveInternalSessions(db)) !== 0n)
     throw new Error("INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED");
 }
+
+// Written only by an explicitly authorized activation/reconciliation procedure,
+// never by startup or login. Before a rollback to legacy this receipt must be
+// disabled; a later activation must pass the original zero-live-session gate.
+export const REGISTRY_ACTIVATION_RECEIPT = 'INTERNAL_SESSION_REGISTRY_ACTIVATED_V1';
+
+export async function assertRegistryStartupReady(db: PrismaClient) {
+  const receipt = await db.applicationFeatureGate.findUnique({
+    where: { code: REGISTRY_ACTIVATION_RECEIPT },
+    select: { enabled: true, version: true },
+  });
+  if (!receipt) {
+    // Preserve the first-activation protection for installations without proof.
+    return assertRegistryActivationReady(db);
+  }
+  if (!receipt.enabled || receipt.version !== 1) {
+    throw new Error('INTERNAL_SESSION_REGISTRY_ACTIVATION_RECEIPT_INVALID');
+  }
+  // A restart of an already activated registry preserves its sessions. Reading
+  // the authoritative store is still mandatory; DB/schema failures propagate.
+  await countLiveInternalSessions(db);
+}

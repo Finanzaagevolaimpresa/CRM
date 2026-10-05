@@ -13,8 +13,7 @@ function vnx03_form_data(string $title): array
 {
     return array(
         'fields' => array(
-            '1' => array('id' => '1', 'type' => 'text', 'label' => 'First name', 'required' => '1', 'size' => 'medium'),
-            '2' => array('id' => '2', 'type' => 'text', 'label' => 'Last name', 'required' => '1', 'size' => 'medium'),
+            '1' => array('id' => '1', 'type' => 'name', 'format' => 'first-last', 'label' => 'Name', 'required' => '1', 'size' => 'medium'),
             '3' => array('id' => '3', 'type' => 'email', 'label' => 'Email', 'required' => '1', 'size' => 'medium'),
             '4' => array('id' => '4', 'type' => 'text', 'label' => 'Company', 'required' => '0', 'size' => 'medium'),
             '5' => array('id' => '5', 'type' => 'text', 'label' => 'Phone', 'required' => '0', 'size' => 'medium'),

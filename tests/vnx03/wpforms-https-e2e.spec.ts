@@ -118,7 +118,7 @@ async function submitForm(
   await page.goto(`${wordpressUrl}/${input.slug}/`, { waitUntil: 'networkidle' });
   const prefix = `#wpforms-${input.formId}-field_`;
   await page.locator(`${prefix}1`).fill(input.firstName);
-  await page.locator(`${prefix}2`).fill(input.lastName);
+  await page.locator(`${prefix}1-last`).fill(input.lastName);
   await page.locator(`${prefix}3`).fill(input.email);
   await page.locator(`${prefix}4`).fill(input.company);
   await page.locator(`${prefix}5`).fill(input.phone);

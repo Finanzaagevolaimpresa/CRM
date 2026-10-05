@@ -17,6 +17,8 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
 import {
   assertRegistryActivationReady,
+  assertRegistryStartupReady,
+  REGISTRY_ACTIVATION_RECEIPT,
   authoritativeInternalSessionLookupQuery,
   countLiveInternalSessions,
   createInternalSession,
@@ -930,7 +932,7 @@ test(
 );
 
 test(
-  "N02 Next.js startup blocks registry activation with a live session",
+  "N02 Next.js startup blocks unproven registry activation with a live session",
   { skip: !run },
   async () => {
     const savedMode = process.env.INTERNAL_SESSION_MODE;
@@ -959,6 +961,45 @@ test(
     }
   },
 );
+
+test('PRELANCIO proven registry restart preserves valid sessions and rejects revoked/expired sessions', { skip: !run }, async () => {
+  const user = await createSyntheticUser();
+  const valid = await issueSession(user.id), revoked = await issueSession(user.id), expired = await issueSession(user.id);
+  await db.$transaction(tx => revokeInternalSession(tx, revoked.row.id, 'INTERNAL_SINGLE', user.id));
+  await db.$executeRaw`UPDATE "InternalSession" SET "expiresAt"=CURRENT_TIMESTAMP WHERE "id"=${expired.row.id}::uuid`;
+  await db.applicationFeatureGate.create({ data: { code: REGISTRY_ACTIVATION_RECEIPT, enabled: true, version: 1, updatedById: user.id } });
+  try {
+    const before = await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } });
+    const audits = await db.auditLog.count();
+    // Fresh client connections simulate a separate process after each restart.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const processResult = execFileSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+        env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'registry' }, encoding: 'utf8', timeout: 30_000,
+      });
+      assert.match(processResult, /PRELAUNCH_REGISTRY_STARTUP_ADMITTED/);
+      const restarted = new PrismaClient();
+      try {
+        await assertRegistryStartupReady(restarted);
+        assert.equal((await resolveInternalSession(restarted, valid.token))?.userId, user.id);
+        assert.equal(await resolveInternalSession(restarted, revoked.token), null);
+        assert.equal(await resolveInternalSession(restarted, expired.token), null);
+        assert.equal(await resolveInternalSession(restarted, 'legacy:cookie'), null);
+      } finally { await restarted.$disconnect(); }
+    }
+    assert.deepEqual(await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } }), before);
+    assert.equal(await db.auditLog.count(), audits);
+    const token = createRegistrySessionToken();
+    assert.ok(await createRegistryLoginSession(db, { userId: user.id, tokenDigest: await digestRegistrySessionToken(token.bytes) }));
+    await db.$transaction(tx => revokeAllInternalSessions(tx, user.id, 'INTERNAL_GLOBAL', user.id));
+    await assertRegistryStartupReady(db);
+    assert.equal(await resolveInternalSession(db, valid.token), null);
+    assert.equal(await resolveInternalSession(db, token.token), null);
+    await db.applicationFeatureGate.update({ where: { code: REGISTRY_ACTIVATION_RECEIPT }, data: { enabled: false } });
+    await assert.rejects(assertRegistryStartupReady(db), /RECEIPT_INVALID/);
+  } finally {
+    await db.applicationFeatureGate.delete({ where: { code: REGISTRY_ACTIVATION_RECEIPT } });
+  }
+});
 
 test(
   "exact PR88 starts on additive schema 34 and leaves N02/N03 inert",

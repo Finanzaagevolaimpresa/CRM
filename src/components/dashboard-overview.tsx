@@ -19,37 +19,6 @@ export type DashboardPriority = {
   href: string;
 };
 
-const toneStyles = {
-  blue: {
-    badge: "bg-blue-50 text-fai-blue ring-blue-100",
-    hero: "from-[#052E70] via-[#043E8B] to-[#0b547f]",
-    surface: "from-blue-50/80 to-white",
-    ink: "text-fai-blue",
-    bar: "from-[#043E8B] to-[#367abb]",
-  },
-  green: {
-    badge: "bg-emerald-50 text-fai-green ring-emerald-100",
-    hero: "from-[#064c36] via-[#00693F] to-[#397d36]",
-    surface: "from-emerald-50/80 to-white",
-    ink: "text-fai-green",
-    bar: "from-[#00693F] to-[#81CC2A]",
-  },
-  orange: {
-    badge: "bg-orange-50 text-fai-orange ring-orange-100",
-    hero: "from-[#743510] via-[#95400c] to-[#aa4c0e]",
-    surface: "from-orange-50/80 to-white",
-    ink: "text-[#a7460b]",
-    bar: "from-[#b55013] to-[#F68712]",
-  },
-  purple: {
-    badge: "bg-violet-50 text-fai-purple ring-violet-100",
-    hero: "from-[#2c2055] via-[#3D2974] to-[#63418c]",
-    surface: "from-violet-50/80 to-white",
-    ink: "text-fai-purple",
-    bar: "from-[#3D2974] to-[#8666b4]",
-  },
-};
-
 // One distinct swatch for each of the fourteen service states, including zero states.
 const pipelineColors = [
   "#043E8B", "#00693F", "#81CC2A", "#F68712", "#3D2974", "#62778F", "#C2416B",
@@ -146,11 +115,11 @@ export function DashboardOverview({
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(17rem,1fr)]">
         <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           {kpis.map((kpi) => (
-            <Link key={kpi.label} href={kpi.href} className={`group relative isolate flex min-h-48 min-w-0 flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br/srgb p-5 text-white shadow-[0_12px_32px_-20px_rgba(5,46,112,0.65)] ring-1 ring-black/5 hover:ring-2 hover:ring-fai-lime focus:outline-compat focus:ring-2 focus:ring-fai-lime ${toneStyles[kpi.tone].hero}`}>
+            <Link key={kpi.label} href={kpi.href} data-tone={kpi.tone} className="crm-counter-panel crm-counter-hero group relative isolate flex min-h-48 min-w-0 flex-col justify-between overflow-hidden rounded-3xl p-5 text-white">
               <div aria-hidden="true" className="pointer-events-none absolute -right-4 -top-5 h-32 w-32 rounded-full border-[20px] border-white/[0.04]" />
               <div aria-hidden="true" className="pointer-events-none absolute -bottom-4 right-1 -z-10 rotate-[-12deg] text-white/[0.07]"><KpiIcon tone={kpi.tone} className="h-36 w-36" /></div>
               <div className="relative flex items-start justify-between gap-3"><p className="max-w-[14rem] text-sm font-bold leading-5 text-white/95">{kpi.label}</p><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/10"><KpiIcon tone={kpi.tone} /></span></div>
-              <div className="relative mt-4"><p className={`break-all font-black leading-none tracking-[-0.055em] tabular-nums ${formatCount(kpi.value).length > 7 ? "text-4xl" : "text-6xl"}`}><AnimatedCounter value={kpi.value} /></p><p className="mt-3 max-w-[18rem] text-xs leading-5 text-white/85">{kpi.description}</p></div>
+              <div className="relative mt-4"><p className={`crm-counter-number break-all font-black leading-none tracking-[-0.04em] tabular-nums ${formatCount(kpi.value).length > 7 ? "text-4xl" : "text-6xl"}`}><AnimatedCounter value={kpi.value} /></p><p className="mt-3 max-w-[18rem] text-xs leading-5 text-white/85">{kpi.description}</p></div>
             </Link>
           ))}
         </div>
@@ -163,20 +132,20 @@ export function DashboardOverview({
           {counterGroups.map((group) => {
             const maximum = Math.max(0, ...group.counters.map((counter) => counter.value));
             const showComparison = group.counters.length > 1;
-            return <section key={group.id} aria-labelledby={`counter-area-${group.id}`} className={`min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-linear-to-br/srgb p-4 shadow-[0_8px_24px_-20px_rgba(5,46,112,0.4)] ${toneStyles[group.tone].surface}`}>
-              <div className="flex items-center gap-3"><span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white shadow-xs ring-1 ${toneStyles[group.tone].badge}`}><AreaIcon id={group.id} /></span><h3 id={`counter-area-${group.id}`} className="min-w-0 text-base font-black leading-5 text-fai-navy">{group.title}</h3></div>
-              <p className="mt-3 text-xs leading-5 text-slate-600">{group.description}</p>
-              {showComparison && <p className="mt-1 text-[0.65rem] leading-5 text-slate-500">Scala dei conteggi: 0–{formatCount(maximum)}</p>}
+            return <section key={group.id} data-tone={group.tone} aria-labelledby={`counter-area-${group.id}`} className="crm-counter-panel min-w-0 overflow-hidden rounded-3xl p-4">
+              <div className="flex items-center gap-3"><span className="crm-counter-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"><AreaIcon id={group.id} /></span><h3 id={`counter-area-${group.id}`} className="min-w-0 text-base font-black leading-5 text-white">{group.title}</h3></div>
+              <p className="mt-3 text-xs leading-5 text-slate-300">{group.description}</p>
+              {showComparison && <p className="mt-1 text-[0.65rem] leading-5 text-slate-300">Scala dei conteggi: 0–{formatCount(maximum)} · confronto, non avanzamento</p>}
               <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,8.5rem),1fr))] gap-3">
                 {group.counters.map((counter) => {
                   const width = maximum > 0 ? counter.value / maximum * 100 : 0;
                   const content = <>
-                    <span className="min-w-0 break-words text-xs font-bold leading-5 text-slate-600">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
-                    <span className={`mt-3 block break-all font-black leading-none tracking-[-0.04em] tabular-nums ${toneStyles[group.tone].ink} ${formatCount(counter.value).length > 7 ? "text-xl" : formatCount(counter.value).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={counter.value} /></span>
-                    {showComparison && <span aria-hidden="true" className="mt-4 block h-1.5 w-full overflow-hidden rounded-full bg-slate-100"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className={`block h-full rounded-full bg-linear-to-r/srgb ${toneStyles[group.tone].bar}`} style={{ width: `${width}%` }} /></span>}
+                    <span className="min-w-0 break-words text-xs font-bold leading-5 text-slate-300">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
+                    <span className={`crm-counter-number mt-3 block break-all font-black leading-none tracking-[-0.04em] tabular-nums text-white ${formatCount(counter.value).length > 7 ? "text-xl" : formatCount(counter.value).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={counter.value} /></span>
+                    {showComparison && <span aria-hidden="true" className="mt-4 block h-1.5 w-full overflow-hidden rounded-full bg-white/10"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className="crm-counter-bar block h-full rounded-full" style={{ width: `${width}%` }} /></span>}
                   </>;
-                  const cardClass = "flex min-h-32 min-w-0 flex-col justify-between rounded-2xl border border-white bg-white p-3 shadow-[0_2px_12px_-8px_rgba(5,46,112,0.35)]";
-                  return counter.href ? <Link key={counter.label} href={counter.href} className={`${cardClass} hover:ring-1 hover:ring-fai-green/30 focus:outline-compat focus:ring-2 focus:ring-fai-lime`}>{content}</Link> : <div key={counter.label} className={cardClass}>{content}</div>;
+                  const cardClass = "crm-counter-cell flex min-h-32 min-w-0 flex-col justify-between rounded-2xl p-3";
+                  return counter.href ? <Link key={counter.label} href={counter.href} className={cardClass}>{content}</Link> : <div key={counter.label} className={cardClass}>{content}</div>;
                 })}
               </div>
             </section>;

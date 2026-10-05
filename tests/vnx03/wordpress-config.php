@@ -52,13 +52,13 @@ define('FAI_VNX02_CONNECTOR_CONFIG', array(
             'form_code' => 'VNX03_SYNTHETIC_WPFORMS',
             'form_version' => 'v1',
             'field_map' => array(
-                'firstName' => 1,
-                'lastName' => 2,
+                'firstName' => array('field_id' => 1, 'part' => 'first'),
+                'lastName' => array('field_id' => 1, 'part' => 'last'),
                 'email' => 3,
                 'companyName' => 4,
                 'phone' => 5,
                 'requestedAmount' => 6,
-                'message' => 7,
+                'message' => array('parts' => array(array('field_id' => 7, 'label' => 'Descrizione'))),
             ),
             'requested_amount_mode' => 'EUR_MAJOR_DECIMAL',
             'privacy' => array(

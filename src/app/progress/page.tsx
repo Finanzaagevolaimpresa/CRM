@@ -10,6 +10,7 @@ import { nextProgressAction, progressTaskType, selectProgressTask } from '@/lib/
 import { contractSignatureDeclarationEvent, storedContractSignatureDeclarationSchema, orderedSignatureDeclarations } from '@/lib/contract-signature-policy';
 import { Card, EmptyState, PageHeader, formatDateTime } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
+import { contractOperationalState, contractOperationalLabel } from '@/lib/contract-operational-state';
 
 export default async function Page({ searchParams }: { searchParams: Promise<{ client?: string; q?: string }> }) {
   const session = await requirePermission('client.read');
@@ -87,6 +88,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
       const relatedPayments = payments.filter(item => item.contractId === contract.id);
       return <Card key={contract.id} title={`${clientById.get(contract.clientId)!.displayName} — ${contract.contractNumber}`}>
         <div className="crm-space-y-2" data-progress-contract={contract.id}>
+          <p><b>Operatività:</b> {contractOperationalLabel(session, contractOperationalState(contract, relatedPayments))}</p>
           <p><b>Firma:</b> {contract.signedAt && contract.signedDocumentId ? 'Registrata con documento collegato' : declaration.success ? 'Dichiarata, da verificare sul documento' : 'Non registrata; nessuna dichiarazione verificabile'}</p>
           {declaration.success && row ? <><p>Firma dichiarata del {declaration.data.declaredSignedAt}; fonte: {declaration.data.source}.</p><p>Registrata da {userName(row.actorId)} il {formatDateTime(row.createdAt)}.</p></> : null}
           <p><b>Documento:</b> {contract.signedDocumentId ? 'Collegato alla registrazione della firma; versione e disponibilità da consultare nella scheda.' : 'Non ancora collegato alla firma; acquisizione e verifica da completare nella scheda.'}</p>

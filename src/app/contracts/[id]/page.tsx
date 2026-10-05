@@ -9,6 +9,8 @@ import { ContractSignatureForm } from '@/components/contract-signature-form';
 import { canRecordContractSignature, contractCanRecordSignature, isSignatureDocument, signatureCalendarDay } from '@/lib/contract-signature-policy';
 import { contractSignatureDeclarationEvent, storedContractSignatureDeclarationSchema, orderedSignatureDeclarations } from '@/lib/contract-signature-policy';
 import { ContractSignatureDeclarationForm } from '@/components/contract-signature-declaration-form';
+import { contractOperationalState, contractOperationalLabel } from '@/lib/contract-operational-state';
+import { hasPermission } from '@/lib/permission-evaluator';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('contract.read');
@@ -16,6 +18,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const context = await getContractReadAccess(session, id);
   if (!context) return <PageHeader title="Contratto non trovato" description="Il record richiesto non esiste o non è accessibile." />;
   const { contract } = context;
+  const payments = hasPermission(session, 'payment.read') ? await prisma.payment.findMany({ where: { contractId: contract.id, clientId: contract.clientId } }) : [];
+  const operationalLabel = contractOperationalLabel(session, contractOperationalState(contract, payments));
   const client = await prisma.client.findFirst({ where: { id: contract.clientId, deletedAt: null } });
   const project = contract.projectId ? await prisma.project.findFirst({ where: { id: contract.projectId, deletedAt: null } }) : null;
   const canRecord = !!client && (!contract.projectId || !!project) && canRecordContractSignature(session, client, project)
@@ -40,7 +44,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>
       <p>Servizio: {contract.serviceName}</p>
       <p>Totale: € {Number(contract.totalAmount).toLocaleString('it-IT')}</p>
-      <p>Stato: <StatusBadge status={contract.status} /></p>
+      <p>Stato della firma: <StatusBadge status={contract.status} /></p>
+      <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 font-semibold" data-contract-operational-state>{operationalLabel}</p>
       {contract.signedAt ? <p>Firma registrata: {new Intl.DateTimeFormat('it-IT', { timeZone: 'UTC' }).format(contract.signedAt)}</p> : null}
       {contract.status === 'firmato' ? <p>La firma è registrata. Il pagamento si verifica separatamente nella sezione Pagamenti.</p> : null}
       <p className="mt-2 text-sm text-fai-gray">{contract.notes ?? 'Nessun dato presente'}</p>

@@ -513,7 +513,7 @@ final class EventContract
             if (!is_string($name) || !array_key_exists($name, self::PAYLOAD_FIELDS)) {
                 throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID);
             }
-            $value = self::fieldValue($fields, $fieldId, false);
+            $value = self::mappedFieldValue($fields, $fieldId, $name);
             if ($name === 'requestedAmount') {
                 $amount = self::requestedAmount($value, $requestedAmountMode);
                 if ($amount !== null) {
@@ -532,6 +532,28 @@ final class EventContract
     /**
      * @param array<int|string, mixed> $fields
      */
+    private static function mappedFieldValue(array $fields, mixed $source, string $name): string
+    {
+        if (is_int($source)) { return self::fieldValue($fields, $source, false); }
+        if (!is_array($source)) { throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID); }
+        if ($name === 'message' && isset($source['parts']) && is_array($source['parts'])) {
+            $lines = array();
+            foreach ($source['parts'] as $part) {
+                $value = self::fieldValue($fields, $part['field_id'] ?? null, false);
+                if ($value !== '') { $lines[] = $part['label'] . ': ' . $value; }
+            }
+            return implode("\n", $lines); // The existing 4000-character/body bounds still apply; never truncate.
+        }
+        $expectedPart = $name === 'firstName' ? 'first' : ($name === 'lastName' ? 'last' : null);
+        $id = $source['field_id'] ?? null;
+        $field = is_int($id) ? ($fields[$id] ?? null) : null;
+        if (!$expectedPart || ($source['part'] ?? null) !== $expectedPart || !is_array($field)
+            || ($field['type'] ?? null) !== 'name' || !is_string($field[$expectedPart] ?? null)) {
+            throw new ConnectorException(ConnectorException::FORM_MAPPING_INVALID);
+        }
+        return $field[$expectedPart]; // Sanitized WPForms properties, not the raw POST or a split full name.
+    }
+
     private static function fieldValue(array $fields, mixed $fieldId, bool $privacy): string
     {
         if (!is_int($fieldId) || $fieldId < 1 || !array_key_exists($fieldId, $fields)) {

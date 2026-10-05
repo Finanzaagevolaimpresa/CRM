@@ -214,11 +214,13 @@ final class ConnectorConfig
             throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
         }
         $privacy = self::privacy($value['privacy'] ?? null);
-        $allFieldIds = array_merge(
-            array_values($fieldMap),
-            array($privacy['service']['field_id'], $privacy['marketing']['field_id'])
-        );
-        if (count(array_unique($allFieldIds, SORT_REGULAR)) !== count($allFieldIds)) {
+        $mappedIds = array();
+        foreach ($fieldMap as $source) {
+            foreach (self::sourceIds($source) as $id) { $mappedIds[] = $id; }
+        }
+        if ($privacy['service']['field_id'] === $privacy['marketing']['field_id']
+            || in_array($privacy['service']['field_id'], $mappedIds, true)
+            || in_array($privacy['marketing']['field_id'], $mappedIds, true)) {
             throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
         }
         $catalogReference = self::catalogReference($value['catalog_reference'] ?? null);
@@ -233,7 +235,7 @@ final class ConnectorConfig
     }
 
     /**
-     * @return array<string, int>
+     * @return array<string, mixed>
      */
     private static function fieldMap(mixed $value): array
     {
@@ -257,19 +259,54 @@ final class ConnectorConfig
             throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
         }
         $output = array();
+        $used = array();
         foreach ($value as $field => $fieldId) {
-            if (!is_string($field) || !in_array($field, $allowed, true) || !is_int($fieldId) || $fieldId < 1) {
+            if (!is_string($field) || !in_array($field, $allowed, true)) {
                 throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+            }
+            if (is_array($fieldId) && in_array($field, array('firstName', 'lastName'), true)) {
+                self::assertExactKeys($fieldId, array('field_id', 'part'));
+                if (!is_int($fieldId['field_id']) || $fieldId['field_id'] < 1
+                    || $fieldId['part'] !== ($field === 'firstName' ? 'first' : 'last')) {
+                    throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+                }
+            } elseif (is_array($fieldId) && $field === 'message') {
+                self::assertExactKeys($fieldId, array('parts'));
+                if (!is_array($fieldId['parts']) || !array_is_list($fieldId['parts']) || count($fieldId['parts']) < 1 || count($fieldId['parts']) > 12) {
+                    throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+                }
+                foreach ($fieldId['parts'] as $part) {
+                    if (!is_array($part)) { throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID); }
+                    self::assertExactKeys($part, array('field_id', 'label'));
+                    if (!is_int($part['field_id']) || $part['field_id'] < 1 || !is_string($part['label'])
+                        || preg_match('/\A[\p{L}\p{N} .\/_-]{1,80}\z/uD', $part['label']) !== 1) {
+                        throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+                    }
+                }
+            } elseif (!is_int($fieldId) || $fieldId < 1) {
+                throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+            }
+            foreach (self::sourceIds($fieldId) as $id) {
+                $part = is_array($fieldId) ? ($fieldId['part'] ?? 'value') : 'value';
+                if (isset($used[$id]) && ($part === 'value' || in_array('value', $used[$id], true) || in_array($part, $used[$id], true))) {
+                    throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
+                }
+                $used[$id][] = $part;
             }
             $output[$field] = $fieldId;
         }
         if (!array_key_exists('email', $output) && !array_key_exists('phone', $output)) {
             throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
         }
-        if (count(array_unique(array_values($output), SORT_REGULAR)) !== count($output)) {
-            throw new ConnectorException(ConnectorException::CONFIGURATION_INVALID);
-        }
         return $output;
+    }
+
+    /** @return array<int> */
+    private static function sourceIds(mixed $source): array
+    {
+        if (is_int($source)) { return array($source); }
+        if (isset($source['parts'])) { return array_column($source['parts'], 'field_id'); }
+        return array($source['field_id']);
     }
 
     /**

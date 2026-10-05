@@ -1,0 +1,25 @@
+name: Prelaunch counters and operational policy
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: prelaunch-counters-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  counters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci && npx playwright install --with-deps chromium
+      - run: node --import tsx --test tests/registry-startup.test.ts tests/contract-operational-state.test.ts tests/dashboard-counter-groups.test.ts
+      - run: npx playwright test --config tests/prelaunch-ui/playwright.config.ts
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prelaunch-counters-${{ github.event.pull_request.head.sha }}
+          path: artifacts/prelaunch-ui/screenshots/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,4 +1,5 @@
 import { canAccessFinancialDocument } from './financial-document-access';
+import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -1132,6 +1133,7 @@ export async function startPractice(
       )
         throw new PracticeReadinessError("CONFLICT");
       if (state.missing.length) throw new PracticeReadinessError("NOT_READY");
+      if (!await lockClientOperationalAdmission(tx, state.practice.clientId)) throw new PracticeReadinessError('NOT_READY');
       const evidence = {
         offerRevisionId: state.revision!.id,
         offerSnapshotHash: state.revision!.payloadHash,

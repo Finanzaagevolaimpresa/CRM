@@ -5,6 +5,52 @@
 @config "../../tailwind.config.ts";
 @source "../**/*.{ts,tsx}";
 
+@layer components {
+  .crm-counter-panel {
+    --counter-accent: #5ce0f1;
+    color: #f0f9ff;
+    border: 1px solid #28465c;
+    background: radial-gradient(ellipse at 100% 0%, #11384b 0%, transparent 62%), #091a2d;
+    box-shadow: inset 0 1px 0 #5ce0f11a, 0 12px 28px -22px #041424;
+  }
+  .crm-counter-panel[data-tone="green"], .crm-counter-panel[data-tone="orange"] {
+    --counter-accent: #a3e66c;
+    background: radial-gradient(ellipse at 100% 0%, #173a39 0%, transparent 62%), #091a2d;
+  }
+  .crm-counter-icon {
+    color: var(--counter-accent);
+    border: 1px solid #496579;
+    background: #ffffff08;
+  }
+  .crm-counter-cell {
+    border: 1px solid #355166;
+    background: #03112080;
+    transition: border-color 180ms ease, background-color 180ms ease;
+  }
+  .crm-counter-number { text-shadow: 0 0 24px #5ce0f11f; }
+  .crm-counter-bar {
+    background: linear-gradient(90deg, #1b9fb5, var(--counter-accent));
+    transform-origin: left;
+    animation: crm-counter-reveal 480ms cubic-bezier(.2,.7,.3,1) both;
+  }
+  .crm-counter-hero { transition: border-color 180ms ease, box-shadow 180ms ease; }
+  a.crm-counter-hero:hover, a.crm-counter-cell:hover { border-color: var(--counter-accent); }
+  a.crm-counter-hero:focus-visible, a.crm-counter-cell:focus-visible {
+    outline: 3px solid #c3f394;
+    outline-offset: -4px;
+    border-color: #c3f394;
+  }
+  @keyframes crm-counter-reveal { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @media (prefers-reduced-motion: reduce) {
+    .crm-counter-bar { animation: none; }
+    .crm-counter-hero, .crm-counter-cell { transition: none; }
+  }
+  @media (forced-colors: active) {
+    .crm-counter-panel, .crm-counter-cell { border: 1px solid CanvasText; }
+    .crm-counter-bar { background: Highlight; }
+  }
+}
+
 @utility crm-space-y-* {
   & > :not([hidden]) ~ :not([hidden]) {
     --tw-space-y-reverse: 0;

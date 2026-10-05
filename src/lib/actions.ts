@@ -1,4 +1,5 @@
 'use server';
+import { assertClientOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
@@ -1386,6 +1387,7 @@ export async function createClientService(form: FormData) {
   await requireActiveUser(data.assignedToId);
   if (data.assignedToId && s.role !== 'admin') denyManualAssignment();
   return withAssignmentGuard(prisma, s, Boolean(data.assignedToId), [{ userId: data.assignedToId }], async tx => {
+    if (data.status && !['richiesto', 'sospeso', 'chiuso', 'archiviato'].includes(data.status)) await assertClientOperational(tx, data.clientId);
     const service = await tx.clientService.create({ data: data as never });
     await audit(s.userId, 'client_service_create', 'ClientService', service.id, service, tx);
     return service;
@@ -1407,6 +1409,7 @@ export async function updateClientServiceStatus(id: string, status: string) {
   return prisma.$transaction(
     async (tx) => {
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${id} FOR UPDATE`;
+      if (!['richiesto', 'sospeso', 'chiuso', 'archiviato'].includes(next)) await assertClientOperational(tx, before.clientId);
       if (
         await tx.practiceReadiness.findUnique({
           where: { clientServiceId: id },
@@ -1479,6 +1482,7 @@ export async function updateClientServicePipeline(form: FormData) {
       if (assigneeChanged) await authorizeManualAssignment(tx, s, [{ userId: nextAssignedToId }]);
       if (assigneeChanged) await requireUnboundServiceAssignment(tx, data.id);
       await tx.$queryRaw`SELECT id FROM "ClientService" WHERE id=${data.id} FOR UPDATE`;
+      if (!['nuova', 'chiusa', 'archiviata'].includes(data.operationalStatus)) await assertClientOperational(tx, before.clientId);
       if (
         await tx.practiceReadiness.findUnique({
           where: { clientServiceId: data.id },

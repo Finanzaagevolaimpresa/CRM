@@ -6,7 +6,7 @@ namespace FAI\VNX02;
 
 final class Plugin
 {
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
     public const CRON_HOOK = 'fai_vnx02_secure_lead_queue';
 
     public static function register(string $pluginFile): void

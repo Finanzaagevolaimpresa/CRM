@@ -162,6 +162,7 @@ test('declared signature survives reopening, then an existing signed document is
   await expect(page.getByText('Dichiarazione corrente — da verificare sul documento')).toBeVisible();
   const beforeUpload = await db.contract.findUniqueOrThrow({ where: { id: f.contractId } });
   expect(beforeUpload.status).toBe('da_preparare'); expect(beforeUpload.signedAt).toBeNull();
+  await expect(page.locator('[data-contract-operational-state]')).toHaveText('Operatività sospesa · firma da raccordare e pagamento da verificare');
   expect(await db.document.count({ where: { clientId: f.clientId } })).toBe(0);
   await page.screenshot({ path: join(root, 'declaration-before-upload.png'), fullPage: true });
   await page.close(); page = await context.newPage();
@@ -193,6 +194,7 @@ test('declared signature survives reopening, then an existing signed document is
   await page.getByRole('button', { name: 'Registra firma già acquisita', exact: true }).click();
   await expect(page.getByText('La firma è registrata. Il pagamento si verifica separatamente nella sezione Pagamenti.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Registra firma già acquisita', exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-contract-operational-state]')).toHaveText('Operatività sospesa · in attesa di pagamento verificato');
   const saved = await db.contract.findUniqueOrThrow({ where: { id: f.contractId } });
   expect(saved.status).toBe('firmato'); expect(saved.signedDocumentId).toBe(document.id);
   expect((await db.payment.findUniqueOrThrow({ where: { id: f.paymentId } })).status).toBe('da_incassare');

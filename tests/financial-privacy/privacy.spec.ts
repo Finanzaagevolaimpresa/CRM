@@ -63,6 +63,19 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
     for (const doc of f.docs.filter(x => x.kind !== 'ordinary')) expect(text).not.toContain(doc.title);
     expect(text).not.toContain(`PRIVATE_NOTE_${f.role}`); expect(text).not.toContain('pagato');
   }
+  const beforeHold = await db.client.findUniqueOrThrow({ where: { id: f.clientId } });
+  await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
+  try {
+    const response = await page.goto(`/clients/${f.clientId}`);
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText('Operatività sospesa. Rivolgiti al responsabile per la verifica interna.', { exact: true })).toBeVisible();
+    if (!financial) {
+      const html = await response!.text();
+      for (const marker of [f.contractId, f.paymentId, `CONTRACT_SECRET_${f.role}`, `PAYMENT_SECRET_${f.role}`, 'in attesa di pagamento verificato']) expect(html).not.toContain(marker);
+    }
+  } finally {
+    await db.client.update({ where: { id: f.clientId }, data: { status: beforeHold.status } });
+  }
 });
 
 for (const f of fixture.fixtures.filter(f => f.denied)) test(`${f.key}: individual deny applies to HTML, exports, handoff and both download routes`, async ({ page }) => {
