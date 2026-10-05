@@ -992,6 +992,11 @@ test('PRELANCIO proven registry restart preserves valid sessions and rejects rev
     }
     assert.deepEqual(await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } }), before);
     assert.equal(await db.auditLog.count(), audits);
+    const legacyAttempt = spawnSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+      env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'legacy' }, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.equal(legacyAttempt.status, 1);
+    assert.match(legacyAttempt.stderr, /PRELAUNCH_REGISTRY_STARTUP_DENIED/);
     const token = createRegistrySessionToken();
     assert.ok(await createRegistryLoginSession(db, { userId: user.id, tokenDigest: await digestRegistrySessionToken(token.bytes) }));
     await db.$transaction(tx => revokeAllInternalSessions(tx, user.id, 'INTERNAL_GLOBAL', user.id));
@@ -1003,6 +1008,10 @@ test('PRELANCIO proven registry restart preserves valid sessions and rejects rev
       after: { enabled: false, version: 1, mode: 'registry' }, createdAt: new Date(receipt.createdAt.getTime() + 60_000),
     } });
     await assert.rejects(assertRegistryStartupReady(db), /RECEIPT_INVALID/);
+    const legacyAfterDisable = execFileSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+      env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'legacy' }, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.match(legacyAfterDisable, /PRELAUNCH_REGISTRY_STARTUP_ADMITTED/);
   } finally {
     await db.auditLog.deleteMany({ where: { entityType: REGISTRY_ACTIVATION_ENTITY, actorId: user.id } });
   }

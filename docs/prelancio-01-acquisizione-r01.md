@@ -40,11 +40,33 @@ Nel DOM osservato **non è presente** una scelta marketing Sì/No. Non associare
 il consenso alla richiesta di servizio, alla dichiarazione B2B o all'informativa
 obbligatoria. Il ramo marketing non può essere inventato dal connettore.
 
-Proposta editoriale da pubblicare solo dopo verifica dell'informativa esatta:
-domanda separata «Desideri ricevere comunicazioni promozionali da FAI?», opzioni
-«Sì» e «No», nessun Sì preselezionato, rifiuto senza ostacolo alla richiesta.
+La scelta Sì/No per la preparazione è già deliberata: non richiede una nuova
+decisione generica. Si preservano le etichette della proposta Q05/R43 recuperata,
+da pubblicare solo dopo verifica dell'informativa esatta:
+
+- Domanda: «Vuoi ricevere via email comunicazioni promozionali sui servizi FAI?»
+- Sì: «Si, desidero ricevere comunicazioni promozionali via email.»
+- No: «No, non desidero ricevere comunicazioni promozionali via email.»
+
+Radio senza preselezione, risposta esplicita Sì o No, rifiuto senza ostacolo alla
+richiesta; l'assenza di risposta non viene trasformata in DENIED. Il callback
+confronta l'etichetta sanitizzata, non `value_raw`. L'ID110 è solo una fixture.
 Canali, titolare, revoca e finalità devono corrispondere al testo effettivo.
 La scelta non autorizza campagne o invii. R13 rimane dormiente.
+
+Fonte Q05 recuperata sull'MSI: `MAPPING_PROPOSTO.json`, 5.410 byte,
+SHA256 `a3715eceaa550865977d7866dc7fbff2ba4105c255a149aeb9b1897dc04247ec`
+ricontrollato sui byte il 05/10. Il mapping minimo storico resta supportato;
+nome composto e message.parts sono opzioni aggiuntive del candidato1.2.0.
+Q05 non attestava accesso produttivo alla richiesta originale completa.
+La proposta R43 di conservazione e revoca resta una proposta: non è resa policy
+approvata o funzione attiva da questo documento. Non pubblicare un richiamo alla
+pagina Preferenze email prima che esistenza e blocco siano qualificati.
+
+La Cabina ha recuperato una decisione commerciale sul solo VAE190; la fonte
+descrive un facsimile, non la destinazione definitiva della campagna. Responsabile
+N14/SLA e identità amministrativa WordPress non risultano attestati nelle fonti
+recuperate. Tali limiti restano distinti dalla preparazione software già eseguita.
 
 Per l'installazione servono ID effettivo del nuovo campo, valori sanitizzati
 Sì/No, codice/versione delle due informative e hash dei testi approvati, versione

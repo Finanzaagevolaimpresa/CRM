@@ -35,7 +35,10 @@ verifica autorizzata si può inserire la singola ricevuta audit, senza
 modificare o revocare sessioni. In assenza di prova non registrare la ricevuta.
 
 Qualunque futuro passaggio a legacy richiede disabilitazione esplicita della
-ricevuta PRIMA del cambio. Una successiva riattivazione passa nuovamente dal
+ricevuta PRIMA del cambio. Il nuovo runtime verifica la continuità anche all'avvio
+legacy e nega tale avvio se la ricevuta è ancora abilitata o non valida.
+Questa verifica non esiste nel vecchio runtime R108: il piano di rollback deve
+eseguire il controllo prima della sostituzione. Una successiva riattivazione passa nuovamente dal
 controllo originario a zero sessioni; la ricevuta precedente non è riutilizzabile
 come consenso. Un rollback verso R108 in registry conserva la sua vecchia
 guardia: con sessioni valide il riavvio non è qualificato. Nessun rollback,

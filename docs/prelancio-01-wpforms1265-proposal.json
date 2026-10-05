@@ -26,5 +26,9 @@
   "catalog_reference": null,
   "serviceNoticeFieldObserved": 19,
   "marketingChoiceFieldObserved": null,
+  "marketingPreparationDecision": "EXPLICIT_YES_NO_ALREADY_SELECTED",
+  "marketingProposedQuestion": "Vuoi ricevere via email comunicazioni promozionali sui servizi FAI?",
+  "marketingProposedChoices": ["Si, desidero ricevere comunicazioni promozionali via email.", "No, non desidero ricevere comunicazioni promozionali via email."],
+  "marketingDefaultChoice": null,
   "unresolved": ["campaign target", "form version", "service callback exact choice", "marketing field and exact choices", "approved notice codes versions hashes", "WordPress installation authority", "gateway and private key provisioning authority", "N14 owner and live test authority"]
 }

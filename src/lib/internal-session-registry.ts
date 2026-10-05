@@ -270,7 +270,7 @@ export async function assertRegistryActivationReady(db: PrismaClient) {
 export const REGISTRY_ACTIVATION_RECEIPT = 'internal_session_registry_continuity';
 export const REGISTRY_ACTIVATION_ENTITY = 'InternalSessionRegistry';
 
-export async function assertRegistryStartupReady(db: PrismaClient) {
+async function registryContinuityState(db: PrismaClient): Promise<boolean | null> {
   const receipts = await db.auditLog.findMany({
     where: { entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry' },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -278,20 +278,33 @@ export async function assertRegistryStartupReady(db: PrismaClient) {
     select: { event: true, actorId: true, after: true, createdAt: true },
   });
   const receipt = receipts[0];
-  if (!receipt) {
-    // Preserve the first-activation protection for installations without proof.
-    return assertRegistryActivationReady(db);
-  }
+  if (!receipt) return null;
   const value = receipt.after;
   if (
     receipt.event !== REGISTRY_ACTIVATION_RECEIPT || !receipt.actorId ||
     !value || typeof value !== 'object' || Array.isArray(value) ||
-    value.enabled !== true || value.version !== 1 || value.mode !== 'registry' ||
+    typeof value.enabled !== 'boolean' || value.version !== 1 || value.mode !== 'registry' ||
     (receipts[1] && receipts[1].createdAt.getTime() === receipt.createdAt.getTime())
   ) {
     throw new Error('INTERNAL_SESSION_REGISTRY_ACTIVATION_RECEIPT_INVALID');
   }
+  return value.enabled;
+}
+
+export async function assertRegistryStartupReady(db: PrismaClient) {
+  const continuity = await registryContinuityState(db);
+  // Preserve the first-activation protection for installations without proof.
+  if (continuity === null) return assertRegistryActivationReady(db);
+  if (!continuity) throw new Error('INTERNAL_SESSION_REGISTRY_ACTIVATION_RECEIPT_INVALID');
   // A restart of an already activated registry preserves its sessions. Reading
   // the authoritative store is still mandatory; DB/schema failures propagate.
   await countLiveInternalSessions(db);
+}
+
+export async function assertLegacyStartupReady(db: PrismaClient) {
+  // A runtime with this correction cannot silently leave a proven registry and
+  // later reuse its old proof. The explicit disabling event must come first.
+  if (await registryContinuityState(db)) {
+    throw new Error('INTERNAL_SESSION_REGISTRY_CONTINUITY_BLOCKS_LEGACY');
+  }
 }

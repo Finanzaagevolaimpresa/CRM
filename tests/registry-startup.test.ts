@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PrismaClient } from '@prisma/client';
-import { assertRegistryActivationReady, assertRegistryStartupReady, REGISTRY_ACTIVATION_RECEIPT, REGISTRY_ACTIVATION_ENTITY } from '../src/lib/internal-session-registry';
+import { assertRegistryActivationReady, assertRegistryStartupReady, assertLegacyStartupReady, REGISTRY_ACTIVATION_RECEIPT, REGISTRY_ACTIVATION_ENTITY } from '../src/lib/internal-session-registry';
 
 function receipt(after: unknown = { enabled: true, version: 1, mode: 'registry' }) {
   return { event: REGISTRY_ACTIVATION_RECEIPT, actorId: 'synthetic-admin', after, createdAt: new Date('2026-10-05T10:00:00Z') };
@@ -50,4 +50,10 @@ test('unavailable audit and session stores fail closed', async () => {
   await assert.rejects(assertRegistryStartupReady(fixture([receipt()], 0n, true).db), /STORE_UNAVAILABLE/);
   const db = { auditLog: { findMany: async () => { throw new Error('AUDIT_UNAVAILABLE'); } } } as unknown as PrismaClient;
   await assert.rejects(assertRegistryStartupReady(db), /AUDIT_UNAVAILABLE/);
+});
+test('a proven registry cannot switch to legacy until continuity is explicitly disabled', async () => {
+  await assert.rejects(assertLegacyStartupReady(fixture([receipt()], 3n).db), /CONTINUITY_BLOCKS_LEGACY/);
+  await assert.doesNotReject(assertLegacyStartupReady(fixture([], 0n).db));
+  await assert.doesNotReject(assertLegacyStartupReady(fixture([receipt({ enabled: false, version: 1, mode: 'registry' })], 0n).db));
+  await assert.rejects(assertLegacyStartupReady(fixture([receipt({ enabled: false, version: 2, mode: 'registry' })], 0n).db), /RECEIPT_INVALID/);
 });
