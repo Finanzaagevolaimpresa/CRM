@@ -88,7 +88,9 @@ function vnx03_create_form(int $id, string $title, array $data): void
     if (
         !is_array($stored)
         || ($stored['id'] ?? null) !== $id
-        || count($stored['fields'] ?? array()) !== 9
+        || count($stored['fields'] ?? array()) !== 8
+        || ($stored['fields'][1]['type'] ?? null) !== 'name'
+        || ($stored['fields'][1]['format'] ?? null) !== 'first-last'
         || ($stored['settings']['ajax_submit'] ?? null) !== '0'
     ) {
         throw new RuntimeException('VNX03_FORM_VERIFY_FAILED');
