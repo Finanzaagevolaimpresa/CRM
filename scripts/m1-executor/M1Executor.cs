@@ -99,7 +99,7 @@ namespace Fai.M1 {
                 while((row=Marshal.PtrToStringUni(p)).Length>0) { int end=row.IndexOf('='); if(end>0) names.Add(row.Substring(0,end)); p=IntPtr.Add(p,(row.Length+1)*2); }
                 foreach(string name in names) Data.Need(SetEnvironmentVariable(name,null),"ENVIRONMENT_SANITIZATION_FAILED");
             } finally { FreeEnvironmentStrings(block); }
-            Data.Need(SetEnvironmentVariable("SystemRoot",@"C:\Windows") && SetEnvironmentVariable("WINDIR",@"C:\Windows") && SetEnvironmentVariable("PATH",@"C:\Windows\System32") && SetEnvironmentVariable("USERPROFILE",@"C:\Users\Utente") && SetEnvironmentVariable("PROGRAMDATA",@"C:\ProgramData"),"ENVIRONMENT_SANITIZATION_FAILED");
+            Data.Need(SetEnvironmentVariable("SystemRoot",@"C:\Windows") && SetEnvironmentVariable("SystemDrive","C:") && SetEnvironmentVariable("WINDIR",@"C:\Windows") && SetEnvironmentVariable("PATH",@"C:\Windows\System32") && SetEnvironmentVariable("USERPROFILE",@"C:\Users\Utente") && SetEnvironmentVariable("PROGRAMDATA",@"C:\ProgramData"),"ENVIRONMENT_SANITIZATION_FAILED");
         }
         [StructLayout(LayoutKind.Sequential)] struct BasicLimit { internal long PerProcess,PerJob; internal uint Flags; internal UIntPtr MinWs,MaxWs; internal uint Active; internal UIntPtr Affinity; internal uint Priority,Scheduling; }
         [StructLayout(LayoutKind.Sequential)] struct IoCounters { internal ulong A,B,C,D,E,F; }
@@ -124,6 +124,10 @@ namespace Fai.M1 {
                 // Win32 OpenSSH exits silently with 255 if PROGRAMDATA is absent,
                 // even for -G. Supply this fixed OS path, not inherited values.
                 si.EnvironmentVariables["PROGRAMDATA"]=@"C:\ProgramData";
+                // Framework SHGetFolderPath(CommonApplicationData) also needs
+                // SystemDrive. Without it the historical core builds a relative
+                // StateRoot and fails before SSH. Never inherit this value.
+                si.EnvironmentVariables["SystemDrive"]="C:";
                 p.StartInfo=si; Data.Need(p.Start(),"CHILD_START_FAILED");
                 // No reviewed payload is sent until lifetime containment exists.
                 if(!AssignProcessToJobObject(job,p.Handle)) { p.Kill(); p.WaitForExit(5000); throw new Denied("JOB_ASSIGN_FAILED"); }

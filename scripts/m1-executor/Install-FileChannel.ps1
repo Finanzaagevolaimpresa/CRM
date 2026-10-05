@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$PackagePath,
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$ManifestSha256,
     [ValidatePattern('^[A-Za-z0-9:/._#?=-]{10,240}$')][string]$ReviewReference,
-    [switch]$ValidatePackageOnly
+    [switch]$ValidatePackageOnly,
+    [switch]$UpgradeExisting
 )
 $ErrorActionPreference='Stop'
 function Channel-Sha([byte[]]$Bytes) {
@@ -62,15 +63,63 @@ $channelCode='C:\Program Files\FAI-CRM-M1-CHANNEL-R18'
 $channelState='C:\ProgramData\FAI-CRM-M1-CHANNEL-R18'
 $channelInbox='C:\Users\Utente\.codex\visualizations\2026\09\21\01a0c20b-b096-78a3-b6f6-db9153b914fe\m1-owner-channel-r18'
 foreach ($channelRoot in @($channelCode,$channelState,$channelInbox)) {
-    if (Test-Path -LiteralPath $channelRoot) { throw 'CHANNEL_PATH_OCCUPIED_RECONCILE_FIRST' }
+    if ($UpgradeExisting) {
+        if (-not (Test-Path -LiteralPath $channelRoot -PathType Container)) { throw 'CHANNEL_UPGRADE_INSTALLATION_MISSING' }
+        Channel-NoLinks $channelRoot
+    } elseif (Test-Path -LiteralPath $channelRoot) { throw 'CHANNEL_PATH_OCCUPIED_RECONCILE_FIRST' }
     Channel-NoLinks ([IO.Path]::GetDirectoryName($channelRoot))
 }
 $channelRun=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run',$true)
 if ($null -eq $channelRun) { throw 'OWNER_RUN_KEY_UNAVAILABLE' }
 $channelAssembly=[Reflection.Assembly]::Load($channelBytes['M1FileChannel.exe'])
 $channelParentLocks=$channelAssembly.GetType('Fai.M1.FileChannelInstallSupport').GetMethod('HoldInstallationParents').Invoke($null,@())
+$channelClientLock=$null;$channelLifetimeLock=$null
 try {
-    if ($null -ne $channelRun.GetValue('FAI-CRM-M1-CHANNEL-R18',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)) { throw 'CHANNEL_RUN_VALUE_OCCUPIED' }
+    $channelCurrentRun=$channelRun.GetValue('FAI-CRM-M1-CHANNEL-R18',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($UpgradeExisting) {
+        # Only the exact installed PR153 package is eligible. Keep its bytes,
+        # admission, ACLs, historical STOP and receipts; never reinstall over it.
+        $channelPrior='0c1eacf5ab56062e050f1e4f82008e8a7488e660bf9cfa9b00a46628387da7a5'
+        if ($ManifestSha256 -eq $channelPrior -or (Test-Path -LiteralPath (Join-Path $channelCode $ManifestSha256.Substring(0,16)))) { throw 'CHANNEL_UPGRADE_TARGET_OCCUPIED' }
+        $channelPriorExe=Join-Path (Join-Path $channelCode $channelPrior.Substring(0,16)) 'M1FileChannel.exe'
+        if ($channelCurrentRun -ne ('"'+$channelPriorExe+'"')) { throw 'CHANNEL_UPGRADE_REGISTRATION_CHANGED' }
+        [void]$channelAssembly.GetType('Fai.M1.FileChannelInstallSupport').GetMethod('VerifyUpgradeInstallation').Invoke($null,@($channelOwner.Value))
+        $channelClientLock=$channelAssembly.GetType('Fai.M1.FileChannelInstallSupport').GetMethod('AcquireUpgradeClientLock').Invoke($null,@())
+        foreach ($channelPending in @((Join-Path $channelInbox 'request.json'),(Join-Path $channelState 'pending.json'),(Join-Path $channelState 'owner-stop.json'))) {
+            if (Test-Path -LiteralPath $channelPending) { throw 'CHANNEL_UPGRADE_PENDING_RECONCILE_FIRST' }
+        }
+        $channelReadyPath=Join-Path $channelState 'ready.json'
+        Channel-NoLinks $channelReadyPath
+        $channelReady=[IO.File]::ReadAllText($channelReadyPath)|ConvertFrom-Json
+        if ($channelReady.protocol -ne 'FAI_M1_FILE_CHANNEL_READY_R18' -or $channelReady.manifestSha256 -ne $channelPrior -or $channelReady.sessionId -notmatch '^[a-f0-9]{32}$') { throw 'CHANNEL_UPGRADE_READY_CHANGED' }
+        $channelReceiptPath=Join-Path $channelState 'installation-receipt.json'
+        Channel-NoLinks $channelReceiptPath
+        $channelPriorReceipt=[IO.File]::ReadAllText($channelReceiptPath)|ConvertFrom-Json
+        if ($channelPriorReceipt.manifestSha256 -ne $channelPrior) { throw 'CHANNEL_UPGRADE_RECEIPT_CHANGED' }
+        $channelStop=Join-Path $channelState 'owner-stop.json'
+        $channelStopStream=[IO.File]::Open($channelStop,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try {
+            $channelStopBytes=[Text.Encoding]::UTF8.GetBytes('{"protocol":"FAI_M1_OWNER_STOP_FOR_UPGRADE_R19"}')
+            $channelStopStream.Write($channelStopBytes,0,$channelStopBytes.Length);$channelStopStream.Flush($true)
+        } finally {$channelStopStream.Dispose()}
+        # Wait for the existing lifetime lock, never terminate or restart an
+        # in-flight provider. Stop on timeout and retain the owner-stop marker.
+        $channelDeadline=[DateTime]::UtcNow.AddSeconds(185)
+        do {
+            try {$channelLifetimeLock=[IO.File]::Open((Join-Path $channelState 'channel.lock'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+            catch [IO.IOException] {if (($_.Exception.HResult -band 65535) -notin @(32,33)) {throw}}
+            if ($channelLifetimeLock) {break}
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $channelDeadline)
+        if (-not $channelLifetimeLock) {throw 'CHANNEL_UPGRADE_STOP_TIMEOUT'}
+        $channelStoppedPath=Join-Path $channelState ('stopped-'+$channelReady.sessionId+'.json')
+        Channel-NoLinks $channelStoppedPath
+        $channelStopped=[IO.File]::ReadAllText($channelStoppedPath)|ConvertFrom-Json
+        if ($channelStopped.protocol -ne 'FAI_M1_CHANNEL_STOPPED_R18' -or $channelStopped.sessionId -ne $channelReady.sessionId) {throw 'CHANNEL_UPGRADE_STOP_NOT_CONFIRMED'}
+        foreach ($channelPending in @((Join-Path $channelInbox 'request.json'),(Join-Path $channelState 'pending.json'))) {
+            if (Test-Path -LiteralPath $channelPending) {throw 'CHANNEL_UPGRADE_PENDING_RECONCILE_FIRST'}
+        }
+    } elseif ($null -ne $channelCurrentRun) { throw 'CHANNEL_RUN_VALUE_OCCUPIED' }
     $channelAdmins=[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
     $channelSystem=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
     $channelOffline=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxOffline')).Translate([Security.Principal.SecurityIdentifier])
@@ -91,9 +140,11 @@ try {
         $channelDescriptor=$channelAcl.GetSecurityDescriptorBinaryForm()
         [void]$channelAssembly.GetType('Fai.M1.FileChannelInstallSupport').GetMethod('CreateProtectedDirectory').Invoke($null,@($Path,$channelDescriptor))
     }
-    Channel-NewDirectory $channelCode Code
-    Channel-NewDirectory $channelState State
-    Channel-NewDirectory $channelInbox Inbox
+    if (-not $UpgradeExisting) {
+        Channel-NewDirectory $channelCode Code
+        Channel-NewDirectory $channelState State
+        Channel-NewDirectory $channelInbox Inbox
+    }
     $channelInstall=Join-Path $channelCode $ManifestSha256.Substring(0,16)
     Channel-NewDirectory $channelInstall Code
     foreach ($channelName in $channelNames) { [IO.File]::WriteAllBytes((Join-Path $channelInstall $channelName),$channelBytes[$channelName]) }
@@ -111,11 +162,21 @@ try {
     }
     $channelCommand='"'+(Join-Path $channelInstall 'M1FileChannel.exe')+'"'
     if ($channelCommand.Length -gt 260) { throw 'CHANNEL_RUN_COMMAND_LIMIT' }
+    if ($UpgradeExisting) {
+        # Renames are confined to the checked state root and preserve old bytes.
+        [IO.File]::Move((Join-Path $channelState 'installation-receipt.json'),(Join-Path $channelState ('installation-receipt-before-'+$ManifestSha256.Substring(0,16)+'.json')))
+        [IO.File]::Move((Join-Path $channelState 'owner-stop.json'),(Join-Path $channelState ('owner-stop-upgraded-'+$ManifestSha256.Substring(0,16)+'.json')))
+    }
     $channelRun.SetValue('FAI-CRM-M1-CHANNEL-R18',$channelCommand,[Microsoft.Win32.RegistryValueKind]::String)
     $channelReceipt=[ordered]@{protocol='FAI_M1_FILE_CHANNEL_INSTALL_RECEIPT_R18';status='INSTALLED_NOT_STARTED_OR_QUALIFIED';
         manifestSha256=$ManifestSha256;installedDirectory=$channelInstall;reviewReference=$ReviewReference;
         ownerLogonStartup=$true;remoteConnectionAttempted=$false;productionMutationCapability=$false;credentialsChanged=$false;
-        existingMcpUnchanged=$true;existingAclUnchanged=$true;custodyPolicyUnchanged=$true}
+        existingMcpUnchanged=$true;existingAclUnchanged=$true;custodyPolicyUnchanged=$true;
+        upgradePerformed=[bool]$UpgradeExisting;historicalBytesPreserved=$true}
     [IO.File]::WriteAllText((Join-Path $channelState 'installation-receipt.json'),($channelReceipt|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
     $channelReceipt|ConvertTo-Json -Compress
-} finally { $channelParentLocks.Dispose();$channelRun.Dispose() }
+} finally {
+    if ($channelLifetimeLock) {$channelLifetimeLock.Dispose()}
+    if ($channelClientLock) {$channelClientLock.Dispose()}
+    $channelParentLocks.Dispose();$channelRun.Dispose()
+}

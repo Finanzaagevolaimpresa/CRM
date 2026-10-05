@@ -102,6 +102,8 @@ jobs:
           done
           test "$ready" = 1
           npx playwright test --config tests/m5/playwright.config.ts
+          test -s "$M5_EVIDENCE/percorso01-comprehension.json"
+          test -s "$M5_EVIDENCE/percorso01-new-reader.png"
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -111,6 +113,8 @@ jobs:
             ${{ runner.temp }}/m5-evidence/database.tap
             ${{ runner.temp }}/m5-evidence/five-service-proof.json
             ${{ runner.temp }}/m5-evidence/browser-proof.json
+            ${{ runner.temp }}/m5-evidence/percorso01-comprehension.json
+            ${{ runner.temp }}/m5-evidence/percorso01-new-reader.png
             ${{ runner.temp }}/m5-evidence/app.log
             ${{ runner.temp }}/r23-manuals-m5
           if-no-files-found: error

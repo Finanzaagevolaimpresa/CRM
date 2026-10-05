@@ -52,6 +52,10 @@ internal static class TestExecutor {
             Assert((bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="STOP",code="SSH_DNS_FAILED"}))))["isError"],"STOP is a tool error");
             Assert(!(bool)Data.Obj(StrictJson.Parse(Data.Encode(Server.ToolResult(new {status="READ_CONFIRMED"}))))["isError"],"read success is not a tool error");
             string child=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"TestChild.exe");
+            Environment.SetEnvironmentVariable("SystemDrive","Z:");
+            Environment.SetEnvironmentVariable("FAI_SYNTHETIC_INHERITED_VALUE","synthetic-only");
+            var folders=SshCommand.RunContained(child,"known-folders",null,5);
+            Assert(folders.Exit==0 && folders.Output=="WINDOWS_KNOWN_FOLDERS_OK" && folders.Error=="","Framework known folders with fixed sanitized environment");
             // OpenSSH -G expands only this fresh synthetic profile. No connection,
             // owner profile, key file or known_hosts contents are accessed.
             string fixture=Path.Combine(Path.GetDirectoryName(child),"synthetic-ssh-config");

@@ -20,6 +20,28 @@ export const contractSignatureSchema = z.object({
   contractId: z.string().min(1).max(191), expectedVersion: z.string().datetime(),
   signedDocumentVersionId: z.string().min(1).max(191), signedOn, confirmed: z.literal(true),
 }).strict();
+export const contractSignatureDeclarationEvent = 'contract_signature_declared';
+export const contractSignatureDeclarationSchema = z.object({
+  contractId: z.string().min(1).max(191), expectedVersion: z.string().datetime(),
+  expectedDeclarationId: z.string().min(1).max(191).nullable(),
+  signedOn, source: z.string().trim().min(3).max(500), confirmed: z.literal(true),
+}).strict();
+export const storedContractSignatureDeclarationSchema = z.object({
+  version: z.literal(1), evidenceKind: z.literal('DECLARED_NOT_VERIFIED'),
+  sequence: z.number().int().positive(), previousDeclarationId: z.string().min(1).max(191).nullable(),
+  declaredSignedAt: signedOn, source: z.string().min(3).max(4096), requestFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export function orderedSignatureDeclarations<T extends { id: string; after: unknown }>(rows: T[]) {
+  const chain = rows.map(row => {
+    const parsed = storedContractSignatureDeclarationSchema.safeParse(row.after);
+    if (!parsed.success) throw new ContractSignatureError('STALE');
+    return { row, evidence: parsed.data };
+  }).sort((a, b) => a.evidence.sequence - b.evidence.sequence);
+  for (const [index, item] of chain.entries()) {
+    if (item.evidence.sequence !== index + 1 || item.evidence.previousDeclarationId !== (chain[index - 1]?.row.id ?? null)) throw new ContractSignatureError('STALE');
+  }
+  return chain.reverse();
+}
 export const unsignedContractStatuses = ['da_preparare', 'preparato', 'inviato_manualmente', 'non_firmato'] as const;
 export function contractCanRecordSignature(status: Contract['status']) {
   return (unsignedContractStatuses as readonly string[]).includes(status);

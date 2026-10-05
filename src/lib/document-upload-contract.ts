@@ -24,6 +24,7 @@ export async function uploadSelection(files: File[], metadata: FormData, send: (
   for (const [index, file] of files.entries()) {
     const form = new FormData();
     for (const [key, value] of metadata) if (key !== 'file' && key !== 'title') form.append(key, value);
+    form.set('uploadRequestId', crypto.randomUUID());
     form.set('file', file);
     form.set('title', (title ? (files.length === 1 ? title : `${title} — ${file.name}`) : file.name).slice(0, 200));
     try { progress({ index, result: await send(form) }); }
