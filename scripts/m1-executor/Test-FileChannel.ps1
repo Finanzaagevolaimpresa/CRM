@@ -20,6 +20,8 @@ $channelPackage=Join-Path $channelTest 'package'
 $channelSha=(Get-FileHash -LiteralPath (Join-Path $channelPackage 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 & (Join-Path $PSScriptRoot 'Install-FileChannel.ps1') -PackagePath $channelPackage -ManifestSha256 $channelSha -ValidatePackageOnly
 & (Join-Path $PSScriptRoot 'New-FileChannelLauncher.ps1') -PackagePath $channelPackage -ManifestSha256 $channelSha -ReviewReference 'synthetic-review-not-an-approval' -OutputDirectory (Join-Path $channelTest 'launcher')
+& (Join-Path $PSScriptRoot 'New-FileChannelLauncher.ps1') -PackagePath $channelPackage -ManifestSha256 $channelSha -ReviewReference 'synthetic-review-not-an-approval' -OutputDirectory (Join-Path $channelTest 'upgrade-launcher') -UpgradeExisting
+if (-not ([IO.File]::ReadAllText((Join-Path $channelTest 'upgrade-launcher\INSTALLA_CANALE_M1_R18.ps1')).Contains('-UpgradeExisting:$true'))) {throw 'UPGRADE_LAUNCHER_MODE_MISSING'}
 # Run the real executable from a synthetic, non-installed path; admission must
 # refuse before provider execution, SSH, owner profile or private-key access.
 $channelProbe=Start-Process -FilePath (Join-Path $channelPackage 'M1FileChannel.exe') -WindowStyle Hidden -PassThru -Wait

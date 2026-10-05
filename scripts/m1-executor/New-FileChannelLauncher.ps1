@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$PackagePath,
     [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$ManifestSha256,
     [Parameter(Mandatory=$true)][ValidatePattern('^[A-Za-z0-9:/._#?=-]{10,240}$')][string]$ReviewReference,
-    [Parameter(Mandatory=$true)][string]$OutputDirectory
+    [Parameter(Mandatory=$true)][string]$OutputDirectory,
+    [switch]$UpgradeExisting
 )
 $ErrorActionPreference='Stop'
 $channelPackage=(Resolve-Path -LiteralPath $PackagePath).ProviderPath
@@ -36,7 +37,7 @@ $bytes=[IO.File]::ReadAllBytes('@@PACKAGE@@\Install-FileChannel.ps1')
 $hasher=[Security.Cryptography.SHA256]::Create()
 try {$actual=([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hasher.Dispose()}
 if ($actual -ne '@@INSTALLER@@') {throw 'INSTALLER_HASH_MISMATCH'}
-& ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($bytes))) -PackagePath '@@PACKAGE@@' -ManifestSha256 '@@MANIFEST@@' -ReviewReference '@@REVIEW@@'
+& ([scriptblock]::Create([Text.UTF8Encoding]::new($false,$true).GetString($bytes))) -PackagePath '@@PACKAGE@@' -ManifestSha256 '@@MANIFEST@@' -ReviewReference '@@REVIEW@@' -UpgradeExisting:@@UPGRADE@@
 exit 0
 } catch {
     $failure=$_.Exception
@@ -56,6 +57,11 @@ exit 0
         'CHANNEL_FILE_OPEN_FAILED' {120}
         'CHANNEL_LINK_OR_TYPE_DENIED' {121}
         'CHANNEL_PATH_CHANGED' {122}
+        'CHANNEL_UPGRADE_PENDING_RECONCILE_FIRST' {123}
+        'CHANNEL_UPGRADE_STOP_TIMEOUT' {124}
+        'CHANNEL_UPGRADE_STOP_NOT_CONFIRMED' {125}
+        'CHANNEL_UPGRADE_REGISTRATION_CHANGED' {126}
+        'CHANNEL_UPGRADE_TARGET_OCCUPIED' {127}
         default {199}
     }
     exit $code
@@ -73,7 +79,10 @@ if ((Get-FileHash -LiteralPath $launchExe -Algorithm SHA256).Hash.ToLowerInvaria
 $launchWorker=Start-Process -FilePath $launchExe -WindowStyle Hidden -PassThru
 $launchDeadline=[DateTime]::UtcNow.AddSeconds(15)
 do {
-    if (Test-Path -LiteralPath (Join-Path $launchState 'ready.json')) {break}
+    if (Test-Path -LiteralPath (Join-Path $launchState 'ready.json')) {
+        $launchCandidateReady=[IO.File]::ReadAllText((Join-Path $launchState 'ready.json'))|ConvertFrom-Json
+        if ($launchCandidateReady.manifestSha256 -eq $launchManifest) {break}
+    }
     if ($launchWorker.HasExited) {throw 'OWNER_CHANNEL_START_FAILED'}
     Start-Sleep -Milliseconds 250
 } while ([DateTime]::UtcNow -lt $launchDeadline)
@@ -88,6 +97,7 @@ $channelLauncher=$channelTemplate.Replace('@@END_INNER@@',"'@").
     Replace('@@MANIFEST@@',$ManifestSha256).
     Replace('@@INSTALLER@@',$channelManifest.files.'Install-FileChannel.ps1').
     Replace('@@EXE@@',$channelManifest.files.'M1FileChannel.exe').
+    Replace('@@UPGRADE@@',('$'+([bool]$UpgradeExisting).ToString().ToLowerInvariant())).
     Replace('@@REVIEW@@',$ReviewReference)
 $channelPs1=Join-Path $channelOut 'INSTALLA_CANALE_M1_R18.ps1'
 [IO.File]::WriteAllText($channelPs1,$channelLauncher,[Text.UTF8Encoding]::new($false))
