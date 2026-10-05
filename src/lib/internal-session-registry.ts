@@ -263,21 +263,32 @@ export async function assertRegistryActivationReady(db: PrismaClient) {
     throw new Error("INTERNAL_SESSION_REGISTRY_ACTIVATION_BLOCKED");
 }
 
-// Written only by an explicitly authorized activation/reconciliation procedure,
-// never by startup or login. Before a rollback to legacy this receipt must be
-// disabled; a later activation must pass the original zero-live-session gate.
-export const REGISTRY_ACTIVATION_RECEIPT = 'INTERNAL_SESSION_REGISTRY_ACTIVATED_V1';
+// Append-only operational evidence, written only by an explicitly authorized
+// activation/reconciliation procedure, never by startup or login. A later
+// disabled receipt invalidates continuity before a return to legacy. The next
+// activation must pass the original zero-live-session gate again.
+export const REGISTRY_ACTIVATION_RECEIPT = 'internal_session_registry_continuity';
+export const REGISTRY_ACTIVATION_ENTITY = 'InternalSessionRegistry';
 
 export async function assertRegistryStartupReady(db: PrismaClient) {
-  const receipt = await db.applicationFeatureGate.findUnique({
-    where: { code: REGISTRY_ACTIVATION_RECEIPT },
-    select: { enabled: true, version: true },
+  const receipts = await db.auditLog.findMany({
+    where: { entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 2,
+    select: { event: true, actorId: true, after: true, createdAt: true },
   });
+  const receipt = receipts[0];
   if (!receipt) {
     // Preserve the first-activation protection for installations without proof.
     return assertRegistryActivationReady(db);
   }
-  if (!receipt.enabled || receipt.version !== 1) {
+  const value = receipt.after;
+  if (
+    receipt.event !== REGISTRY_ACTIVATION_RECEIPT || !receipt.actorId ||
+    !value || typeof value !== 'object' || Array.isArray(value) ||
+    value.enabled !== true || value.version !== 1 || value.mode !== 'registry' ||
+    (receipts[1] && receipts[1].createdAt.getTime() === receipt.createdAt.getTime())
+  ) {
     throw new Error('INTERNAL_SESSION_REGISTRY_ACTIVATION_RECEIPT_INVALID');
   }
   // A restart of an already activated registry preserves its sessions. Reading

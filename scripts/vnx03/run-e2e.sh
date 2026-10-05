@@ -284,7 +284,7 @@ wpforms_version="$("${wp_quiet[@]}" plugin get wpforms-lite --field=version)"
 connector_version="$("${wp_quiet[@]}" plugin get fai-secure-lead-connector --field=version)"
 [[ "$wordpress_version" == '7.1' ]] || fail 'VNX03_WORDPRESS_VERSION_MISMATCH'
 [[ "$wpforms_version" == "$WPFORMS_VERSION" ]] || fail 'VNX03_WPFORMS_VERSION_MISMATCH'
-[[ "$connector_version" == '1.1.0' ]] || fail 'VNX03_CONNECTOR_VERSION_MISMATCH'
+[[ "$connector_version" == '1.2.0' ]] || fail 'VNX03_CONNECTOR_VERSION_MISMATCH'
 
 export VNX03_RUNTIME_WORDPRESS_VERSION="$wordpress_version"
 export VNX03_RUNTIME_WPFORMS_VERSION="$wpforms_version"

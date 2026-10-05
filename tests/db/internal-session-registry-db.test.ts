@@ -19,6 +19,7 @@ import {
   assertRegistryActivationReady,
   assertRegistryStartupReady,
   REGISTRY_ACTIVATION_RECEIPT,
+  REGISTRY_ACTIVATION_ENTITY,
   authoritativeInternalSessionLookupQuery,
   countLiveInternalSessions,
   createInternalSession,
@@ -967,7 +968,10 @@ test('PRELANCIO proven registry restart preserves valid sessions and rejects rev
   const valid = await issueSession(user.id), revoked = await issueSession(user.id), expired = await issueSession(user.id);
   await db.$transaction(tx => revokeInternalSession(tx, revoked.row.id, 'INTERNAL_SINGLE', user.id));
   await db.$executeRaw`UPDATE "InternalSession" SET "expiresAt"=CURRENT_TIMESTAMP WHERE "id"=${expired.row.id}::uuid`;
-  await db.applicationFeatureGate.create({ data: { code: REGISTRY_ACTIVATION_RECEIPT, enabled: true, version: 1, updatedById: user.id } });
+  const receipt = await db.auditLog.create({ data: {
+    event: REGISTRY_ACTIVATION_RECEIPT, entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry', actorId: user.id,
+    after: { enabled: true, version: 1, mode: 'registry' },
+  } });
   try {
     const before = await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } });
     const audits = await db.auditLog.count();
@@ -994,10 +998,13 @@ test('PRELANCIO proven registry restart preserves valid sessions and rejects rev
     await assertRegistryStartupReady(db);
     assert.equal(await resolveInternalSession(db, valid.token), null);
     assert.equal(await resolveInternalSession(db, token.token), null);
-    await db.applicationFeatureGate.update({ where: { code: REGISTRY_ACTIVATION_RECEIPT }, data: { enabled: false } });
+    await db.auditLog.create({ data: {
+      event: REGISTRY_ACTIVATION_RECEIPT, entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry', actorId: user.id,
+      after: { enabled: false, version: 1, mode: 'registry' }, createdAt: new Date(receipt.createdAt.getTime() + 60_000),
+    } });
     await assert.rejects(assertRegistryStartupReady(db), /RECEIPT_INVALID/);
   } finally {
-    await db.applicationFeatureGate.delete({ where: { code: REGISTRY_ACTIVATION_RECEIPT } });
+    await db.auditLog.deleteMany({ where: { entityType: REGISTRY_ACTIVATION_ENTITY, actorId: user.id } });
   }
 });
 

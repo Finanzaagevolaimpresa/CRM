@@ -11,10 +11,16 @@ non certifica un rilascio o un ingresso reale dal sito nel CRM.
 `assertRegistryActivationReady` conserva la protezione di prima attivazione:
 nessuna sessione valida non revocata. `assertRegistryStartupReady`, chiamato
 dalla strumentazione Next in modalità registry, riconosce una precedente
-attivazione solo mediante `ApplicationFeatureGate` con codice
-`INTERNAL_SESSION_REGISTRY_ACTIVATED_V1`, `enabled=true`, `version=1`.
+attivazione solo mediante una ricevuta operativa in `AuditLog`: evento
+`internal_session_registry_continuity`, `entityType=InternalSessionRegistry`,
+`entityId=registry`, attore identificato e `after={enabled:true,version:1,mode:"registry"}`.
+Si legge l'evento più recente del perimetro; due eventi con lo stesso timestamp,
+un evento non riconosciuto o un payload malformato impediscono l'avvio.
 Una ricevuta assente usa la protezione originaria; una ricevuta disabilitata,
 di versione sconosciuta o un archivio non leggibile impediscono l'avvio.
+Le decisioni si aggiungono senza sovrascrivere la storia; `enabled:false` in una
+nuova ricevuta invalida quella precedente. Non si modifica `ApplicationFeatureGate`,
+la cui allowlist rimane invariata. Schema e 49 migrazioni restano identici alla base.
 La ricevuta non viene mai creata o aggiornata da startup, login o session refresh.
 Lettura delle sessioni e autorizzazione di ciascuna richiesta restano obbligatorie.
 
@@ -25,7 +31,7 @@ registrare la ricevuta nella stessa operazione controllata, con audit e identit�
 Admin verificata. Per l'installazione già in registry occorre invece riconciliare
 esplicitamente l'attivazione documentata R108: verificare immagine/configurazione
 effettive, assenza di ritorni a legacy e continuità delle prove. Solo dopo tale
-verifica autorizzata si può inserire la singola ricevuta e il suo audit, senza
+verifica autorizzata si può inserire la singola ricevuta audit, senza
 modificare o revocare sessioni. In assenza di prova non registrare la ricevuta.
 
 Qualunque futuro passaggio a legacy richiede disabilitazione esplicita della
