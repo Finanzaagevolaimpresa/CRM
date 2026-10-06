@@ -124,6 +124,18 @@ L'ambiente MSI ha Node 24.18.0/npm 11.16.0; la CI usa `.nvmrc` e lockfile del
 repository. La suite completa Windows contiene controlli POSIX e hash dei file
 con checkout CRLF: il suo esito non sostituisce quello Linux previsto.
 
+Riesame P2-01/P2-02: aggiunte prove PostgreSQL sugli stati tecnici e sulla
+sospensione concorrente, più prove browser delle tre azioni effettive per Admin
+e consulente con pagina già aperta, righe/audit invariati al diniego e percorsi
+di preparazione/arresto ancora ammessi. La precisazione sul singolo upload non
+approva né sostituisce il piano operativo privato.
+
+Il controllo dipendenze del 06/10 ha rilevato source-map-js1.2.1, dipendenza
+transitiva: [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+Il lockfile aggiorna esclusivamente questa risoluzione alla patch1.2.2 con
+integrità npm verificata; package.json, schema e49 migrazioni restano invariati.
+Audit e CI completi devono superare nuovamente i controlli su questo HEAD.
+
 Prima di presentare il gate operativo: commit/tree esatti, CI verde, PASS del
 revisore indipendente sul nuovo delta, piano di backup/copia cifrata/ripristino,
 identità runtime fresca e rollback applicabile. Richiedere decisioni distinte:

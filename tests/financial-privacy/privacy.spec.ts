@@ -190,8 +190,15 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
       await form.getByRole('button', { name: buttonName, exact: true }).click();
       const response = await pending;
       expect(response.status()).toBe(500);
-      expect(await response.text()).toContain('Operatività sospesa');
       expect(await technicalFootprint(f.clientId)).toEqual(before);
+      // Check the actual RSC denial and guard, independently of Chromium's
+      // accented-text representation in the development error envelope.
+      const failureLine = (await response.text()).split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
+      expect(failureLine).toBeTruthy();
+      const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
+      expect(failure.name).toBe('UserFacingActionError');
+      expect(failure.message).toContain('sospesa. Rivolgiti al responsabile per la verifica interna.');
+      expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalPracticeOperational')).toBe(true);
     } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); }
   });
 }
