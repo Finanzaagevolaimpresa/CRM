@@ -1,0 +1,34 @@
+{
+  "kind": "NON_INSTALLABLE_MAPPING_PROPOSAL",
+  "enabled": false,
+  "formIdObserved": 1265,
+  "observedPublicPath": "/contatti/",
+  "campaignDestinationConfirmed": false,
+  "field_map": {
+    "firstName": { "field_id": 1, "part": "first" },
+    "lastName": { "field_id": 1, "part": "last" },
+    "email": 2, "phone": 3, "companyName": 4,
+    "serviceInterestText": 5, "interestText": 9,
+    "message": { "parts": [
+      { "field_id": 6, "label": "Fase del progetto" },
+      { "field_id": 7, "label": "Riferimento" },
+      { "field_id": 8, "label": "URL di riferimento" },
+      { "field_id": 10, "label": "Descrizione" },
+      { "field_id": 11, "label": "Interventi" },
+      { "field_id": 12, "label": "Tipologia investimento" },
+      { "field_id": 13, "label": "Fascia investimento dichiarata" },
+      { "field_id": 14, "label": "Tempi" },
+      { "field_id": 15, "label": "Documenti disponibili" },
+      { "field_id": 17, "label": "Note" }
+    ] }
+  },
+  "requested_amount_mode": null,
+  "catalog_reference": null,
+  "serviceNoticeFieldObserved": 19,
+  "marketingChoiceFieldObserved": null,
+  "marketingPreparationDecision": "EXPLICIT_YES_NO_ALREADY_SELECTED",
+  "marketingProposedQuestion": "Vuoi ricevere via email comunicazioni promozionali sui servizi FAI?",
+  "marketingProposedChoices": ["Si, desidero ricevere comunicazioni promozionali via email.", "No, non desidero ricevere comunicazioni promozionali via email."],
+  "marketingDefaultChoice": null,
+  "unresolved": ["campaign target", "form version", "service callback exact choice", "marketing field and exact choices", "approved notice codes versions hashes", "WordPress installation authority", "gateway and private key provisioning authority", "N14 owner and live test authority"]
+}

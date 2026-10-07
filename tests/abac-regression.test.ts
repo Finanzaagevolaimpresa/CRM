@@ -242,13 +242,13 @@ test('gli stati finali dei servizi richiedono service.close prima della mutazion
 });
 
 test('pratiche tecniche invocano le guardie ABAC prima delle scritture', () => {
-  assertGuardsBeforeMutation('createTechnicalPractice', ['requireClientContextWriteAccess', 'withAssignmentGuard'], 'tx.technicalPractice.create');
+  assertGuardsBeforeMutation('createTechnicalPractice', ['requireClientContextWriteAccess', 'withAssignmentGuard', 'assertTechnicalPracticeOperational'], 'tx.technicalPractice.create');
   assertGuardsBeforeMutation(
     'updateTechnicalPractice',
-    ['requireTechnicalPracticeEditAccess', 'requireClientContextWriteAccess', 'withAssignmentGuard'],
+    ['requireTechnicalPracticeEditAccess', 'requireClientContextWriteAccess', 'withAssignmentGuard', 'assertTechnicalPracticeOperational'],
     'tx.technicalPractice.update',
   );
-  assertGuardsBeforeMutation('updateTechnicalPracticeStatus', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
+  assertGuardsBeforeMutation('updateTechnicalPracticeStatus', ['requireTechnicalPracticeEditAccess', 'assertTechnicalPracticeOperational'], 'tx.technicalPractice.update');
   assertGuardsBeforeMutation('assignTechnicalPractice', ['requireTechnicalPracticeEditAccess', 'withAssignmentGuard'], 'tx.technicalPractice.update');
   assertGuardsBeforeMutation('archiveTechnicalPractice', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
 });

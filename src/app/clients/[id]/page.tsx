@@ -21,6 +21,7 @@ import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access'
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
 import { parseProgressTaskType } from '@/lib/customer-progress-policy';
+import { clientHasOperationalHold, CLIENT_OPERATIONAL_HOLD_MESSAGE } from '@/lib/contract-operational-state';
 
 const serviceSections = [
   ['overview', 'Overview'],
@@ -297,6 +298,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' ? !isRedundantOperationalAudit(event, allTimelineEvents) : event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="crm-space-y-8">
+    {clientHasOperationalHold(client.status) ? <Card title="Operatività sospesa"><p>{CLIENT_OPERATIONAL_HOLD_MESSAGE}</p></Card> : null}
     <PageHeader title={`Fascicolo Cliente Interno — ${client.displayName}`} description="Scheda operativa interna FAI: servizi acquistati, documenti per sezione, output AI in bozza con revisione umana obbligatoria e audit."/><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2"><SecondaryLink href="/clients">← Torna alla lista</SecondaryLink><SecondaryLink href="/practice-readiness">Pratiche da preventivo ad avvio</SecondaryLink><SecondaryLink href={`/progress?client=${encodeURIComponent(client.id)}`}>Stato e prossime azioni</SecondaryLink><SecondaryLink href={`/clients/${client.id}/commercial-origin`}>Provenienza commerciale</SecondaryLink><SecondaryLink href={`/clients/${client.id}/operational-report`}>Esporta fascicolo completo</SecondaryLink><SecondaryLink href={`/clients/${client.id}/operational-report/docx`}>Report Word</SecondaryLink></div><div className="flex flex-wrap gap-2"><StatusBadge status={client.status} /><span className="rounded-full bg-white px-3 py-1 text-xs font-black uppercase tracking-wide text-fai-navy ring-1 ring-slate-200">Operatore: {userOf(client.consultantId)}</span></div></div>
     <nav className="sticky top-20 z-10 flex flex-wrap gap-2 rounded-[1.5rem] border border-white/75 bg-white/88 p-3 shadow-xl shadow-slate-200/60 ring-1 ring-slate-900/5 backdrop-blur-xl">{serviceSections.filter(([section]) => (section !== 'contratti' || canViewContracts) && (section !== 'pagamenti' || canViewPayments)).map(([id, label]) => <a className="rounded-full bg-fai-blue/8 px-3 py-2 text-xs font-black text-fai-blue ring-1 ring-fai-blue/10 transition hover:-translate-y-0.5 hover:bg-fai-blue hover:text-white hover:shadow-lg hover:shadow-fai-blue/15 focus:outline-compat focus:ring-2 focus:ring-fai-lime" href={`#${id}`} key={id}>{label}</a>)}</nav>
 

@@ -1757,6 +1757,16 @@ test(
       ).status,
       "richiesto",
     );
+    await db.client.update({ where: { id: a.client.id }, data: { status: 'sospeso' } });
+    try {
+      await assert.rejects(startPractice(db, manager, {
+        practiceId: practice.id, expectedVersion: v4.version,
+      }), error => error instanceof PracticeReadinessError && error.code === 'NOT_READY');
+      assert.deepEqual(await footprint(practice.id), beforeStart);
+      assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: a.clientService.id } })).status, 'richiesto');
+    } finally {
+      await db.client.update({ where: { id: a.client.id }, data: { status: a.client.status } });
+    }
     const started = await startPractice(db, manager, {
       practiceId: practice.id,
       expectedVersion: v4.version,

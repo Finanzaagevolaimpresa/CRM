@@ -18,6 +18,16 @@ after(async () => { if (admitted) { await cleanupPurchasedFixtures(db, fixtures)
 async function fixture() { const f = await purchasedFixture(db); fixtures.push(f); return f; }
 const tx = <T>(work: Parameters<typeof withSerializableTransaction<T>>[1]) => withSerializableTransaction(db, work);
 
+test('PRELANCIO suspended client cannot be handed off even with a previously qualified paid service', { skip: !enabled }, async () => {
+  const f = await fixture();
+  await db.client.update({ where: { id: f.client.id }, data: { status: 'sospeso' } });
+  await assert.rejects(previewPurchasedServiceHandoff(db, f.service.id), /Operatività sospesa/);
+  await assert.rejects(tx(t => handoffPurchasedService(t, f.admin, f.input, true)), /Operatività sospesa/);
+  assert.equal(await db.technicalPractice.count({ where: { clientServiceId: f.service.id } }), 0);
+  assert.equal(await db.task.count({ where: { clientServiceId: f.service.id } }), 0);
+  assert.equal(await getHandoffReceipt(db, f.service.id), null);
+});
+
 test('existing paid purchase opens one practice without a lead, sale or commercial owner; personal acceptance is separate', { skip: !enabled }, async () => {
   const f = await fixture(), serviceBefore = await db.clientService.findUniqueOrThrow({ where: { id: f.service.id } });
   const entry = await tx(t => handoffPurchasedService(t, f.admin, f.input, true)), r = entry.receipt;

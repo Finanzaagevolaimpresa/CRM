@@ -6,6 +6,8 @@ import { authorizeManualAssignment, type AssignmentActor } from './manual-assign
 import { appendResponsibilityDecision, technicalRoles } from './responsibility';
 import { canonicalSha256 } from './canonical-json';
 import { readPrivateDocument } from './storage';
+import { assertClientOperational } from './client-operational-hold';
+import { clientHasOperationalHold, CLIENT_OPERATIONAL_HOLD_MESSAGE } from './contract-operational-state';
 
 type Db = Prisma.TransactionClient | PrismaClient;
 const id = z.string().min(1).max(128), hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -61,6 +63,7 @@ async function evidence(db: Db, documentId: string | null, context: Awaited<Retu
 // This is a handoff of an existing purchase. It never creates an offer, contract, payment, client or readiness authorization.
 export async function previewPurchasedServiceHandoff(db: Db, serviceId: string) {
   const context = await purchasedServiceContext(db, serviceId), { service } = context;
+  if (clientHasOperationalHold(context.client.status)) return deny(CLIENT_OPERATIONAL_HOLD_MESSAGE);
   if (['sospeso', 'chiuso', 'archiviato', 'consegnato'].includes(service.status)) return deny('Il servizio non è aperto per un nuovo passaggio.');
   const contract = service.contractId ? await db.contract.findUnique({ where: { id: service.contractId } }) : null;
   const payment = service.paymentId ? await db.payment.findUnique({ where: { id: service.paymentId } }) : null;
@@ -94,6 +97,7 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
     return existing; // An HTTP retry never reapplies assignments, recreates tasks or overwrites subsequent work.
   }
   const preview = await previewPurchasedServiceHandoff(tx, input.serviceId);
+  await assertClientOperational(tx, preview.client.id);
   if (preview.expectedHash !== input.expectedHash) return deny('Incarico, pagamento o servizio cambiati. Riapri e verifica il riepilogo.');
   if (new Set(input.activities).size !== input.activities.length) return deny('Elimina le attività duplicate prima del passaggio.');
   for (const item of preview.documents) {

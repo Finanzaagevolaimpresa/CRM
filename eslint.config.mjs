@@ -13,6 +13,7 @@ export default defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "artifacts/prelaunch-ui/**",
     "next-env.d.ts",
   ]),
 ]);

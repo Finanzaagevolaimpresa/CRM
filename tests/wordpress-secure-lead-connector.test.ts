@@ -118,7 +118,7 @@ test('VNX-02 is an isolated installable plugin with no browser or CRM runtime su
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');
   assert.match(source, /Plugin Name: FAI Secure Lead Connector/u);
-  assert.match(source, /Version: 1\.1\.0/u);
+  assert.match(source, /Version: 1\.2\.0/u);
   assert.match(source, /wpforms_process_complete/u);
   assert.match(source, /FAI_VNX02_CONNECTOR_CONFIG/u);
   assert.match(source, /enabled' => false/u);
@@ -175,7 +175,7 @@ test('VNX-02 packaging creates one deterministic installable ZIP without key mat
       'tools/package-vnx02-wordpress-connector.mjs', '--output', output,
     ], { cwd: root, encoding: 'utf8', windowsHide: true });
     assert.equal(first.status, 0, first.stderr || 'First packaging run failed.');
-    const artifactPath = join(output, 'fai-secure-lead-connector-1.1.0.zip');
+    const artifactPath = join(output, 'fai-secure-lead-connector-1.2.0.zip');
     const firstBytes = readFileSync(artifactPath);
     assert.equal(firstBytes.readUInt32LE(0), 0x04034b50);
     const firstDigest = createHash('sha256').update(firstBytes).digest('hex');

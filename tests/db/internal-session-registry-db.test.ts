@@ -17,6 +17,9 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
 import {
   assertRegistryActivationReady,
+  assertRegistryStartupReady,
+  REGISTRY_ACTIVATION_RECEIPT,
+  REGISTRY_ACTIVATION_ENTITY,
   authoritativeInternalSessionLookupQuery,
   countLiveInternalSessions,
   createInternalSession,
@@ -930,7 +933,7 @@ test(
 );
 
 test(
-  "N02 Next.js startup blocks registry activation with a live session",
+  "N02 Next.js startup blocks unproven registry activation with a live session",
   { skip: !run },
   async () => {
     const savedMode = process.env.INTERNAL_SESSION_MODE;
@@ -959,6 +962,60 @@ test(
     }
   },
 );
+
+test('PRELANCIO proven registry restart preserves valid sessions and rejects revoked/expired sessions', { skip: !run }, async () => {
+  const user = await createSyntheticUser();
+  const valid = await issueSession(user.id), revoked = await issueSession(user.id), expired = await issueSession(user.id);
+  await db.$transaction(tx => revokeInternalSession(tx, revoked.row.id, 'INTERNAL_SINGLE', user.id));
+  await db.$executeRaw`UPDATE "InternalSession" SET "expiresAt"=CURRENT_TIMESTAMP WHERE "id"=${expired.row.id}::uuid`;
+  const receipt = await db.auditLog.create({ data: {
+    event: REGISTRY_ACTIVATION_RECEIPT, entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry', actorId: user.id,
+    after: { enabled: true, version: 1, mode: 'registry' },
+  } });
+  try {
+    const before = await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } });
+    const audits = await db.auditLog.count();
+    // Fresh client connections simulate a separate process after each restart.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const processResult = execFileSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+        env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'registry' }, encoding: 'utf8', timeout: 30_000,
+      });
+      assert.match(processResult, /PRELAUNCH_REGISTRY_STARTUP_ADMITTED/);
+      const restarted = new PrismaClient();
+      try {
+        await assertRegistryStartupReady(restarted);
+        assert.equal((await resolveInternalSession(restarted, valid.token))?.userId, user.id);
+        assert.equal(await resolveInternalSession(restarted, revoked.token), null);
+        assert.equal(await resolveInternalSession(restarted, expired.token), null);
+        assert.equal(await resolveInternalSession(restarted, 'legacy:cookie'), null);
+      } finally { await restarted.$disconnect(); }
+    }
+    assert.deepEqual(await db.internalSession.findMany({ where: { userId: user.id }, orderBy: { id: 'asc' } }), before);
+    assert.equal(await db.auditLog.count(), audits);
+    const legacyAttempt = spawnSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+      env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'legacy' }, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.equal(legacyAttempt.status, 1);
+    assert.match(legacyAttempt.stderr, /PRELAUNCH_REGISTRY_STARTUP_DENIED/);
+    const token = createRegistrySessionToken();
+    assert.ok(await createRegistryLoginSession(db, { userId: user.id, tokenDigest: await digestRegistrySessionToken(token.bytes) }));
+    await db.$transaction(tx => revokeAllInternalSessions(tx, user.id, 'INTERNAL_GLOBAL', user.id));
+    await assertRegistryStartupReady(db);
+    assert.equal(await resolveInternalSession(db, valid.token), null);
+    assert.equal(await resolveInternalSession(db, token.token), null);
+    await db.auditLog.create({ data: {
+      event: REGISTRY_ACTIVATION_RECEIPT, entityType: REGISTRY_ACTIVATION_ENTITY, entityId: 'registry', actorId: user.id,
+      after: { enabled: false, version: 1, mode: 'registry' }, createdAt: new Date(receipt.createdAt.getTime() + 60_000),
+    } });
+    await assert.rejects(assertRegistryStartupReady(db), /RECEIPT_INVALID/);
+    const legacyAfterDisable = execFileSync(process.execPath, ['--import', 'tsx', 'tests/db/registry-startup-process.ts'], {
+      env: { ...process.env, NEXT_RUNTIME: 'nodejs', INTERNAL_SESSION_MODE: 'legacy' }, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.match(legacyAfterDisable, /PRELAUNCH_REGISTRY_STARTUP_ADMITTED/);
+  } finally {
+    await db.auditLog.deleteMany({ where: { entityType: REGISTRY_ACTIVATION_ENTITY, actorId: user.id } });
+  }
+});
 
 test(
   "exact PR88 starts on additive schema 34 and leaves N02/N03 inert",

@@ -10,7 +10,7 @@ COPY tools/package-vnx02-wordpress-connector.mjs ./tools/package-vnx02-wordpress
 
 RUN mkdir -p /out \
   && node tools/package-vnx02-wordpress-connector.mjs --output /out >/tmp/package.log \
-  && printf '%s  %s\n' "$CONNECTOR_SHA256" /out/fai-secure-lead-connector-1.1.0.zip \
+  && printf '%s  %s\n' "$CONNECTOR_SHA256" /out/fai-secure-lead-connector-1.2.0.zip \
     | sha256sum -c -
 
 FROM wordpress:7.1-php8.4-apache@sha256:b8f37de278183840a09f5a4b5bf5ec9f09177a9984d2fe5cc072b4388128bd9d
@@ -40,7 +40,7 @@ RUN curl --fail --silent --show-error --location \
     --output /usr/local/bin/wp \
     https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar
 
-COPY --from=connector /out/fai-secure-lead-connector-1.1.0.zip /opt/vnx03/fai-secure-lead-connector.zip
+COPY --from=connector /out/fai-secure-lead-connector-1.2.0.zip /opt/vnx03/fai-secure-lead-connector.zip
 COPY tests/vnx03/wordpress-config.php /opt/vnx03/wordpress-config.php
 COPY tests/vnx03/setup-wordpress.php /opt/vnx03/setup-wordpress.php
 COPY tests/vnx03/wp-state.php /opt/vnx03/wp-state.php

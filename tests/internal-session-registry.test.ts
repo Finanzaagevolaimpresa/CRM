@@ -37,8 +37,9 @@ test('N02 middleware is syntactic only', () => {
   const auth = readFileSync('src/lib/auth.ts', 'utf8'); assert.match(auth, /resolveInternalSession/);
   const instrumentation = readFileSync('src/instrumentation.ts', 'utf8');
   assert.match(instrumentation, /NEXT_RUNTIME !== ["']nodejs["']/);
-  assert.match(instrumentation, /internalSessionMode\(\) !== ["']registry["']/);
-  assert.match(instrumentation, /assertRegistryActivationReady\(prisma\)/);
+  assert.match(instrumentation, /internalSessionMode\(\) === ["']registry["']/);
+  assert.match(instrumentation, /assertRegistryStartupReady\(prisma\)/);
+  assert.match(instrumentation, /assertLegacyStartupReady\(prisma\)/);
 });
 test('N02 migration and privacy are exact', () => {
   assert.equal(readdirSync('prisma/migrations').length, 49);

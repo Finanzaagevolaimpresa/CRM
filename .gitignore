@@ -14,5 +14,6 @@ tsconfig.tsbuildinfo
 .env.production.*
 backups/
 /dist/
+/artifacts/prelaunch-ui/
 .bootstrap-admin*
 /CRM TXT.txt

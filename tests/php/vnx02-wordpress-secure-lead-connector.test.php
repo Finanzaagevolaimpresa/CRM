@@ -137,6 +137,54 @@ vnx02_test('WPForms fields become a strict canonical N10 event with stable sourc
     vnx02_true(preg_match('/\A[0-9a-f]{64}\z/D', $envelope->businessKeyDigest) === 1);
 });
 
+vnx02_test('PRELANCIO compound name and explicit message parts preserve the actual form semantics', function (): void {
+    $configuration = vnx02_synthetic_config();
+    $map = &$configuration['forms'][900001]['field_map'];
+    $map['firstName'] = array('field_id' => 30, 'part' => 'first');
+    $map['lastName'] = array('field_id' => 30, 'part' => 'last');
+    $map['message'] = array('parts' => array(
+        array('field_id' => 31, 'label' => 'Obiettivo'),
+        array('field_id' => 32, 'label' => 'Fascia investimento'),
+    ));
+    unset($map['requestedAmount']);
+    $configuration['forms'][900001]['requested_amount_mode'] = null;
+    $form = ConnectorConfig::fromArray($configuration)->form(900001);
+    $fields = vnx02_synthetic_fields();
+    $fields[30] = array('type' => 'name', 'first' => 'Nome composto', 'last' => 'Cognome composto', 'value' => 'IGNORED FULL NAME');
+    $fields[31] = array('value' => 'Richiesta sintetica');
+    $fields[32] = array('value' => 'Da definire / non applicabile');
+    $event = EventContract::create($fields, 900001, 700001, $form);
+    vnx02_same('Nome composto', $event->event['payload']['firstName']);
+    vnx02_same('Cognome composto', $event->event['payload']['lastName']);
+    vnx02_same("Obiettivo: Richiesta sintetica\nFascia investimento: Da definire / non applicabile", $event->event['payload']['message']);
+    vnx02_true(!isset($event->event['payload']['requestedAmount']));
+    vnx02_same('DENIED', $event->event['privacy']['marketing']['decision']);
+    vnx02_same($event->body, EventContract::parseAndVerify($event->body)->body);
+    unset($fields[30]['last']);
+    vnx02_throws(ConnectorException::FORM_MAPPING_INVALID, fn () => EventContract::create($fields, 900001, 700001, $form));
+    $configuration['forms'][900001]['privacy']['service']['field_id'] = 30;
+    vnx02_throws(ConnectorException::CONFIGURATION_INVALID, fn () => ConnectorConfig::fromArray($configuration));
+});
+
+vnx02_test('PRELANCIO compound mapping rejects ambiguous, duplicate, privacy-overlapping and unbounded input', function (): void {
+    foreach (array(
+        array('firstName' => array('field_id' => 30, 'part' => 'last')),
+        array('email' => array('field_id' => 30, 'part' => 'first')),
+        array('message' => array('parts' => array(array('field_id' => 30, 'label' => 'One'), array('field_id' => 30, 'label' => 'Two')))),
+        array('message' => array('parts' => array(array('field_id' => 30, 'label' => '<script>')))),
+        array('firstName' => array('field_id' => 30, 'part' => 'first'), 'lastName' => 30),
+    ) as $mapping) {
+        $configuration = vnx02_synthetic_config();
+        $configuration['forms'][900001]['field_map'] = array_replace($configuration['forms'][900001]['field_map'], $mapping);
+        vnx02_throws(ConnectorException::CONFIGURATION_INVALID, fn () => ConnectorConfig::fromArray($configuration));
+    }
+    $configuration = vnx02_synthetic_config();
+    $configuration['forms'][900001]['field_map']['message'] = array('parts' => array(array('field_id' => 30, 'label' => 'Text')));
+    $form = ConnectorConfig::fromArray($configuration)->form(900001);
+    $fields = vnx02_synthetic_fields(); $fields[30] = array('value' => str_repeat('x', 4000));
+    vnx02_throws(ConnectorException::LEAD_EVENT_INVALID, fn () => EventContract::create($fields, 900001, 700001, $form));
+});
+
 vnx02_test('M3 optional campaign mapping preserves privacy and rejects URL or contact attribution', function (): void {
     $configuration = vnx02_synthetic_config();
     $configuration['forms'][900001]['field_map']['campaignCode'] = 15;

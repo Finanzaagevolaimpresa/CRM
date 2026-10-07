@@ -63,6 +63,19 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
     for (const doc of f.docs.filter(x => x.kind !== 'ordinary')) expect(text).not.toContain(doc.title);
     expect(text).not.toContain(`PRIVATE_NOTE_${f.role}`); expect(text).not.toContain('pagato');
   }
+  const beforeHold = await db.client.findUniqueOrThrow({ where: { id: f.clientId } });
+  await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
+  try {
+    const response = await page.goto(`/clients/${f.clientId}`);
+    expect(response?.status()).toBe(200);
+    await expect(page.getByText('Operatività sospesa. Rivolgiti al responsabile per la verifica interna.', { exact: true })).toBeVisible();
+    if (!financial) {
+      const html = await response!.text();
+      for (const marker of [f.contractId, f.paymentId, `CONTRACT_SECRET_${f.role}`, `PAYMENT_SECRET_${f.role}`, 'in attesa di pagamento verificato']) expect(html).not.toContain(marker);
+    }
+  } finally {
+    await db.client.update({ where: { id: f.clientId }, data: { status: beforeHold.status } });
+  }
 });
 
 for (const f of fixture.fixtures.filter(f => f.denied)) test(`${f.key}: individual deny applies to HTML, exports, handoff and both download routes`, async ({ page }) => {
@@ -140,4 +153,88 @@ test('an excluded role cannot upload an archive even with document.upload and it
   await form.getByRole('button', { name: 'Carica in storage privato' }).click();
   await expect(page.getByRole('list', { name: 'Esito caricamenti' })).toContainText('Risorsa non disponibile');
   expect(await db.document.count({ where: { clientId: f.clientId, fileName: 'denied-archive.zip' } })).toBe(0);
+});
+
+async function technicalFootprint(clientId: string) {
+  const practices = await db.technicalPractice.findMany({ where: { clientId }, orderBy: { id: 'asc' } });
+  const audits = await db.auditLog.findMany({ where: { entityId: { in: practices.map(p => p.id) } }, orderBy: { id: 'asc' } });
+  return { practices, audits };
+}
+
+for (const role of ['admin', 'consulente']) for (const action of ['create', 'edit', 'status'] as const) {
+  test(`P2-01 ${role}: real ${action} action on a page opened before suspension preserves rows and audit`, async ({ page }) => {
+    const f = fixture.fixtures.find(item => item.role === role && !item.denied)!;
+    await login(page, role);
+    const practice = await db.technicalPractice.create({ data: { clientId: f.clientId, title: `Synthetic held ${role} ${action}`, practiceType: 'synthetic', targetEntity: 'synthetic', technicalOwnerId: f.userId, createdById: f.userId } });
+    await page.goto(action === 'create' ? '/technical-office/practices?new=1' : `/technical-office/practices/${practice.id}`);
+    const buttonName = action === 'create' ? 'Crea pratica' : action === 'edit' ? 'Salva dati' : 'Salva stato';
+    const form = page.locator('form').filter({ has: page.getByRole('button', { name: buttonName, exact: true }) });
+    await expect(form).toBeVisible();
+    if (action === 'create') {
+      await form.locator('[name="clientId"]').selectOption(f.clientId);
+      await form.locator('[name="title"]').fill(`Forbidden held creation ${role}`);
+      await form.locator('[name="practiceType"]').fill('synthetic');
+      await form.locator('[name="targetEntity"]').fill('synthetic');
+    }
+    if (action === 'status') await form.locator('[name="status"]').selectOption('presentata');
+    else {
+      // Exercise the actual server action with an explicitly supplied status,
+      // including the creation/edit forms that do not normally render it.
+      await form.evaluate(node => { const field = document.createElement('input'); field.type = 'hidden'; field.name = 'status'; field.value = 'presentata'; node.appendChild(field); });
+    }
+    // The browser already holds the form; only the authoritative DB changes.
+    await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
+    const before = await technicalFootprint(f.clientId);
+    try {
+      const pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
+      await form.getByRole('button', { name: buttonName, exact: true }).click();
+      const response = await pending;
+      expect(response.status()).toBe(500);
+      expect(await technicalFootprint(f.clientId)).toEqual(before);
+      // Check the actual RSC denial and guard, independently of Chromium's
+      // accented-text representation in the development error envelope.
+      const failureLine = (await response.text()).split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
+      expect(failureLine).toBeTruthy();
+      const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
+      expect(failure.name).toBe('UserFacingActionError');
+      expect(failure.message).toContain('sospesa. Rivolgiti al responsabile per la verifica interna.');
+      expect(failure.stack.some(frame => frame[0].trim() === 'assertTechnicalPracticeOperational')).toBe(true);
+    } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); }
+  });
+}
+
+test('P2-01 real preparation, ordinary preparation edit and stopping actions remain available during hold', async ({ page }) => {
+  const f = fixture.fixtures.find(item => item.role === 'admin')!;
+  await login(page, 'admin');
+  await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
+  try {
+    await page.goto('/technical-office/practices?new=1');
+    const form = page.locator('form').filter({ has: page.getByRole('button', { name: 'Crea pratica', exact: true }) });
+    await form.locator('[name="clientId"]').selectOption(f.clientId);
+    await form.locator('[name="title"]').fill('Synthetic preparation during hold');
+    await form.locator('[name="practiceType"]').fill('synthetic');
+    await form.locator('[name="targetEntity"]').fill('synthetic');
+    await form.getByRole('button', { name: 'Crea pratica', exact: true }).click();
+    await expect(page).toHaveURL(/\/technical-office\/practices\/[^/?]+$/);
+    const id = new URL(page.url()).pathname.split('/').at(-1)!;
+    expect((await db.technicalPractice.findUniqueOrThrow({ where: { id } })).status).toBe('da_progettare');
+    const edit = page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva dati', exact: true }) });
+    await edit.locator('[name="title"]').fill('Synthetic preparation edited during hold');
+    let pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
+    await edit.getByRole('button', { name: 'Salva dati', exact: true }).click();
+    expect((await pending).status()).toBe(200);
+    expect((await db.technicalPractice.findUniqueOrThrow({ where: { id } })).title).toBe('Synthetic preparation edited during hold');
+    for (const status of ['respinta', 'archiviata']) {
+      await page.goto(`/technical-office/practices/${id}`);
+      const stateForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Salva stato', exact: true }) });
+      await stateForm.locator('[name="status"]').selectOption(status);
+      pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
+      await stateForm.getByRole('button', { name: 'Salva stato', exact: true }).click();
+      expect((await pending).status()).toBe(200);
+      expect((await db.technicalPractice.findUniqueOrThrow({ where: { id } })).status).toBe(status);
+    }
+    expect(await db.auditLog.count({ where: { entityId: id, event: 'technical_practice_create' } })).toBe(1);
+    expect(await db.auditLog.count({ where: { entityId: id, event: 'technical_practice_update' } })).toBe(1);
+    expect(await db.auditLog.count({ where: { entityId: id, event: 'technical_practice_status_change' } })).toBe(2);
+  } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); }
 });

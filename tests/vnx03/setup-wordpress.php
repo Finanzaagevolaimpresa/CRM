@@ -13,8 +13,7 @@ function vnx03_form_data(string $title): array
 {
     return array(
         'fields' => array(
-            '1' => array('id' => '1', 'type' => 'text', 'label' => 'First name', 'required' => '1', 'size' => 'medium'),
-            '2' => array('id' => '2', 'type' => 'text', 'label' => 'Last name', 'required' => '1', 'size' => 'medium'),
+            '1' => array('id' => '1', 'type' => 'name', 'format' => 'first-last', 'label' => 'Name', 'required' => '1', 'size' => 'medium'),
             '3' => array('id' => '3', 'type' => 'email', 'label' => 'Email', 'required' => '1', 'size' => 'medium'),
             '4' => array('id' => '4', 'type' => 'text', 'label' => 'Company', 'required' => '0', 'size' => 'medium'),
             '5' => array('id' => '5', 'type' => 'text', 'label' => 'Phone', 'required' => '0', 'size' => 'medium'),
@@ -89,7 +88,9 @@ function vnx03_create_form(int $id, string $title, array $data): void
     if (
         !is_array($stored)
         || ($stored['id'] ?? null) !== $id
-        || count($stored['fields'] ?? array()) !== 9
+        || count($stored['fields'] ?? array()) !== 8
+        || ($stored['fields'][1]['type'] ?? null) !== 'name'
+        || ($stored['fields'][1]['format'] ?? null) !== 'first-last'
         || ($stored['settings']['ajax_submit'] ?? null) !== '0'
     ) {
         throw new RuntimeException('VNX03_FORM_VERIFY_FAILED');
