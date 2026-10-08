@@ -16,6 +16,14 @@ async function login(page: Page, role: RoleCode) {
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
+async function expectCountersMatchServer(page: Page) {
+  await expect.poll(() => page.locator('[data-counter-final]').evaluateAll(nodes => nodes.length > 0 && nodes.every(node => {
+    const expected = Number(node.getAttribute('data-counter-final')).toLocaleString('it-IT');
+    return node.querySelector('[aria-hidden]')?.getAttribute('data-display-value') === expected
+      && Array.from(node.querySelectorAll('[data-digit]')).map(digit => digit.getAttribute('data-digit')).join('') === expected
+      && node.querySelector('.sr-only')?.textContent === expected;
+  }))).toBe(true);
+}
 test.beforeAll(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   expect(password.length).toBeGreaterThanOrEqual(24);
@@ -74,7 +82,7 @@ for (const role of roles) test(`${role}: shared-client list, search, direct URL 
   const text = await report.text(); expect(text.includes(foreignTitle)).toBe(supervisor); expect(text.includes(ownTitle)).toBe(own);
   await page.goto('/dashboard');
   const counters = page.locator('[data-counter-final]'); await expect(counters.first()).toBeVisible();
-  expect(await counters.evaluateAll(nodes => nodes.every(node => node.querySelector('[aria-hidden]')?.textContent === Number(node.getAttribute('data-counter-final')).toLocaleString('it-IT')))).toBe(true);
+  await expectCountersMatchServer(page);
   await context.close();
 });
 
@@ -82,7 +90,7 @@ test('an already-open task form cannot write after reassignment; motion preferen
   const context = await browser.newContext({ baseURL: origin, reducedMotion: 'no-preference' });
   const page = await context.newPage(); await login(page, 'consulente');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect.poll(() => page.locator('[data-counter-final]').evaluateAll(nodes => nodes.length > 0 && nodes.every(node => node.querySelector('[aria-hidden]')?.textContent === Number(node.getAttribute('data-counter-final')).toLocaleString('it-IT')))).toBe(true);
+  await expectCountersMatchServer(page);
   await page.goto('/tasks'); const form = page.locator('form').filter({ has: page.locator(`input[name="id"][value="${taskId}"]`) });
   await expect(form.getByRole('button', { name: 'Completa', exact: true })).toBeVisible();
   await db.task.update({ where: { id: taskId }, data: { assignedToId: adminId } });
