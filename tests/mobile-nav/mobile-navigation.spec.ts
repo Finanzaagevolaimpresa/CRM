@@ -1,13 +1,19 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+
+async function expectDigitalValue(counter: Locator, value: string) {
+  await expect(counter.locator('[aria-hidden="true"]')).toHaveAttribute('data-display-value', value);
+  expect(await counter.locator('[data-digit]').evaluateAll(digits => digits.map(digit => digit.getAttribute('data-digit')).join(''))).toBe(value);
+  await expect(counter.locator('.sr-only')).toHaveText(value);
+}
 
 test("contatore accessibile e movimento ridotto restano equivalenti dopo la migrazione CSS", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/?profile=admin");
   const counter = page.locator('[data-counter-final="7"]').first();
-  await expect(counter.locator('[aria-hidden="true"]')).toHaveText("7");
-  await expect(counter.locator(".sr-only")).toHaveText("7");
+  await expectDigitalValue(counter, '7');
+  await expect(counter.locator('svg[data-digit="7"] polygon[data-lit="true"]')).toHaveCount(3);
   await expect(counter.locator(".sr-only")).toHaveCSS("position", "absolute");
   await expect(counter.locator(".sr-only")).toHaveCSS("width", "1px");
   await expect(counter.locator(".sr-only")).toHaveCSS("height", "1px");
@@ -329,10 +335,8 @@ test("i contatori delle comunicazioni restano leggibili senza autorizzare destin
   await expect(areas.getByRole("heading", { level: 3 })).toHaveCount(1);
   await expect(technical).toContainText("Comunicazioni da revisionare");
   await expect(technical).toContainText("Approvate non utilizzate");
-  await expect(technical.locator('[data-counter-final="5"] > [aria-hidden="true"]')).toHaveText('5');
-  await expect(technical.locator('[data-counter-final="4"] > [aria-hidden="true"]')).toHaveText('4');
-  await expect(technical.locator('[data-counter-final="5"] > .sr-only')).toHaveText('5');
-  await expect(technical.locator('[data-counter-final="4"] > .sr-only')).toHaveText('4');
+  await expectDigitalValue(technical.locator('[data-counter-final="5"]'), '5');
+  await expectDigitalValue(technical.locator('[data-counter-final="4"]'), '4');
   await expect(technical.getByText("Pratiche tecniche attive", { exact: true })).toHaveCount(0);
   await expect(technical.locator("a, button, [role='link'], [role='button']")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
