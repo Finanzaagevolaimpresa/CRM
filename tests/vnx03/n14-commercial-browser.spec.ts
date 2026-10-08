@@ -25,11 +25,16 @@ function compose(arguments_: readonly string[], timeout = 180_000) {
   });
 }
 
-function assertState(checkpoint: 'projected' | 'assigned' | 'contacted') {
+function assertState(checkpoint: 'projected' | 'assigned' | 'contacted' | 'accepted' | 'scheduled') {
   const output = compose(['run', '--rm', '-T', '-e', 'COMMERCIAL_LEAD_INBOX_MODE=enforced',
     '-e', `VNX03_N14_CHECKPOINT=${checkpoint}`, 'harness', 'node', '--import', 'tsx',
     'tests/vnx03/assert-n14-state.ts']);
   assert.match(output, new RegExp(`"checkpoint":"${checkpoint}"`, 'u'));
+  const line = output.split('\n').find((value) => value.startsWith('{"checkpoint":'));
+  assert.ok(line);
+  const receipt = JSON.parse(line) as { snapshotSha256: string };
+  assert.match(receipt.snapshotSha256, /^[a-f0-9]{64}$/u);
+  return receipt.snapshotSha256;
 }
 
 function assertRejection(scenario: 'stale_assignment' | 'foreign_first_response', code: string) {
@@ -146,7 +151,7 @@ async function submitSyntheticLead(page: Page) {
   assert.match(consumer, /"projectedNew":1/u);
 }
 
-test('R05 N14 qualifies admin assignment, conflict, ownership visibility and first response', async ({ browser, page }) => {
+test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptance and dated next action', async ({ browser, page }) => {
   test.setTimeout(5 * 60_000);
   mkdirSync(evidenceDirectory, { recursive: true });
   await submitSyntheticLead(page);
@@ -293,6 +298,81 @@ test('R05 N14 qualifies admin assignment, conflict, ownership visibility and fir
   await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-commercial-inbox.png'), fullPage: false });
   assertState('contacted');
 
+  // Assignment and first response must not imply the owner's personal acceptance.
+  await ownerWorkPage.goto(`${crmUrl}${leadHref}`);
+  await ownerWorkPage.getByRole('link', { name: 'Richieste e provenienza', exact: true }).click();
+  await expect(ownerWorkPage.getByText('Fonte: WORDPRESS · modulo VNX03_SYNTHETIC_WPFORMS', { exact: false })).toBeVisible();
+  await expect(ownerWorkPage.getByText('Synthetic N14 browser qualification only.', { exact: true })).toBeVisible();
+  await expect(ownerWorkPage.getByText('Informativa e consensi sono consultabili dagli utenti autorizzati.', { exact: true })).toBeVisible();
+  await ownerWorkPage.getByRole('link', { name: 'Torna al lead', exact: true }).click();
+  await ownerWorkPage.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true }).click();
+  const acceptanceUrl = ownerWorkPage.url();
+  await expect(ownerWorkPage.getByText('Presa in carico commerciale: da confermare', { exact: true })).toBeVisible();
+  await adminPage.goto(acceptanceUrl);
+  await expect(adminPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
+  await otherPage.goto(acceptanceUrl);
+  await expect(otherPage.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
+
+  // Capture the actual bound React action, rather than inventing its identifier or body.
+  const acceptanceRequestPromise = ownerWorkPage.waitForRequest((request) =>
+    request.method() === 'POST' && request.url() === acceptanceUrl && Boolean(request.headers()['next-action']));
+  await ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click();
+  const acceptanceRequest = await acceptanceRequestPromise;
+  const acceptanceReply = await acceptanceRequest.response();
+  assert.ok(acceptanceReply);
+  assert.equal(acceptanceReply.status(), 200);
+  assert.equal(responseMediaType(acceptanceReply), 'text/x-component');
+  await expect(ownerWorkPage.getByText('Presa in carico commerciale: registrata il', { exact: false })).toBeVisible();
+  const acceptedSnapshot = assertState('accepted');
+  const acceptanceBody = acceptanceRequest.postDataBuffer();
+  assert.ok(acceptanceBody);
+  const replayAcceptance = (actingPage: Page) => actingPage.request.post(acceptanceUrl, {
+    headers: { origin: new URL(crmUrl).origin, 'next-action': acceptanceRequest.headers()['next-action']!,
+      'content-type': acceptanceRequest.headers()['content-type']! },
+    data: acceptanceBody,
+  });
+  const replay = await replayAcceptance(ownerWorkPage);
+  assert.equal(replay.status(), 200);
+  assert.match(await replay.text(), /Presa in carico personale registrata/u);
+  assert.equal(assertState('accepted'), acceptedSnapshot, 'Personal acceptance replay changed rows or audit');
+  for (const actingPage of [adminPage, otherPage]) {
+    const denial = await replayAcceptance(actingPage);
+    assert.equal(denial.status(), 200); // Controlled action failure is encoded in the RSC payload.
+    assert.match(await denial.text(), /Solo il referente individuale corrente/u);
+    assert.equal(assertState('accepted'), acceptedSnapshot, 'Foreign acceptance changed rows or audit');
+  }
+  await ownerWorkPage.reload();
+  await expect(ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true })).toHaveCount(0);
+  await expect(ownerWorkPage.getByText('Presa in carico commerciale: registrata il', { exact: false })).toBeVisible();
+  await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-personal-acceptance.png'), fullPage: false });
+
+  await ownerWorkPage.getByRole('link', { name: 'Torna alla scheda', exact: true }).click();
+  await ownerWorkPage.locator('input[name="nextActionNote"]').fill('PRELANCIO02 synthetic follow-up');
+  await ownerWorkPage.locator('input[name="nextActionDate"]').fill('2030-10-15T10:30');
+  const nextActionReply = ownerWorkPage.waitForResponse((response) => response.request().method() === 'POST'
+    && response.request().url() === `${crmUrl}${leadHref}` && Boolean(response.request().headers()['next-action']));
+  await ownerWorkPage.getByRole('button', { name: 'Salva aggiornamenti', exact: true }).click();
+  const saved = await nextActionReply;
+  assert.ok([200, 303].includes(saved.status()));
+  await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
+  assertState('scheduled');
+  await ownerWorkPage.reload();
+  await expect(ownerWorkPage.locator('input[name="nextActionNote"]')).toHaveValue('PRELANCIO02 synthetic follow-up');
+  await expect(ownerWorkPage.locator('input[name="nextActionDate"]')).toHaveValue('2030-10-15T10:30');
+  await ownerWorkPage.goto(`${crmUrl}/leads`);
+  const scheduledRow = ownerWorkPage.getByRole('row').filter({ hasText: 'VNX03 N14 Browser' });
+  await expect(scheduledRow).toContainText('PRELANCIO02 synthetic follow-up');
+  await expect(scheduledRow).toContainText('15/10/2030');
+  await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-next-action.png'), fullPage: false });
+  const scheduledSnapshot = assertState('scheduled');
+  writeCheckpoint('personal-handoff', {
+    sourceReceiptProjectionAndPrivacyCorrelated: true, explicitOwnerAcceptance: true,
+    acceptanceReplayIdempotent: true, adminCannotAcceptForOwner: true, otherCommercialDenied: true,
+    denialRowsAndAuditUnchanged: true, nextActionNoteAndDatePersisted: true,
+    nextActionUtc: '2030-10-15T10:30:00.000Z', nextActionVisibleInLeadList: true,
+    dateScope: 'Synthetic UTC fixture; not a business SLA', snapshotSha256: scheduledSnapshot,
+  });
+
   writeFileSync(join(evidenceDirectory, 'n14-browser.json'), `${JSON.stringify({
     synthetic: true, registryLogin: true, ownerPersistedAfterReload: true,
     assignmentResponsesObserved: responses.length, assignmentHttpStatuses, assignmentContentTypes,
@@ -302,6 +382,8 @@ test('R05 N14 qualifies admin assignment, conflict, ownership visibility and fir
     secondCommercialMutationRejected: true, rejectedMutationStatus: rejectedMutation.status,
     firstResponseObserved: true, firstResponseHttpStatus: firstResponse.status(),
     firstResponseContentType, firstResponseUiAppliedBeforeReload: true, firstResponseRecorded: true,
+    sourceReceiptProjectionAndPrivacyCorrelated: true, personalAcceptanceCompleted: true,
+    acceptanceReplayAndForeignDenialsUnchanged: true, datedNextActionCompleted: true,
     n15Effects: 0,
   }, null, 2)}\n`, { mode: 0o600 });
   await other.close();

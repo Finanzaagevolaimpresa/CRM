@@ -24,6 +24,7 @@ $vnx03AllowedScenarios = array(
     'bad_hmac',
     'untrusted_ca',
     'wrong_hostname',
+    'capture_key_missing',
 );
 if (!in_array($vnx03Scenario, $vnx03AllowedScenarios, true)) {
     $vnx03Scenario = 'disabled';
@@ -46,7 +47,8 @@ define('FAI_VNX02_CONNECTOR_CONFIG', array(
     'gateway_key_files' => array(
         'vnx03-wordpress-key-v1' => $vnx03GatewayKeyFile,
     ),
-    'queue_key_file' => '/run/vnx03-secrets/queue-key.b64',
+    'queue_key_file' => $vnx03Scenario === 'capture_key_missing'
+        ? '/run/vnx03-secrets/queue-key.absent.b64' : '/run/vnx03-secrets/queue-key.b64',
     'forms' => array(
         900001 => array(
             'form_code' => 'VNX03_SYNTHETIC_WPFORMS',

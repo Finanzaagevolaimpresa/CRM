@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FAI Secure Lead Connector
  * Description: Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the N12 gateway.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Text Domain: fai-secure-lead-connector
