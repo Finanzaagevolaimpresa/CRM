@@ -305,7 +305,12 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await expect(ownerWorkPage.getByText('Descrizione: Synthetic N14 browser qualification only.', { exact: true })).toBeVisible();
   await expect(ownerWorkPage.getByText('Informativa e consensi sono consultabili dagli utenti autorizzati.', { exact: true })).toBeVisible();
   await ownerWorkPage.getByRole('link', { name: 'Torna al lead', exact: true }).click();
-  await ownerWorkPage.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true }).click();
+  await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
+  const acceptanceLink = ownerWorkPage.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true });
+  const acceptanceHref = await acceptanceLink.getAttribute('href');
+  assert.ok(acceptanceHref);
+  await acceptanceLink.click();
+  await expect(ownerWorkPage).toHaveURL(new URL(acceptanceHref, crmUrl).href);
   const acceptanceUrl = ownerWorkPage.url();
   await expect(ownerWorkPage.getByText('Presa in carico commerciale: da confermare', { exact: true })).toBeVisible();
   await adminPage.goto(acceptanceUrl);
@@ -314,10 +319,14 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await expect(otherPage.getByRole('heading', { name: 'Responsabilità e presa in carico', exact: true })).toHaveCount(0);
 
   // Capture the actual bound React action, rather than inventing its identifier or body.
+  writeCheckpoint('acceptance-page', { path: new URL(acceptanceUrl).pathname, expectedOrigin: new URL(acceptanceUrl).origin === new URL(crmUrl).origin });
   const acceptanceRequestPromise = ownerWorkPage.waitForRequest((request) =>
-    request.method() === 'POST' && request.url() === acceptanceUrl && Boolean(request.headers()['next-action']));
-  await ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click();
-  const acceptanceRequest = await acceptanceRequestPromise;
+    request.method() === 'POST' && request.url() === acceptanceUrl, { timeout: 20_000 });
+  const [acceptanceRequest] = await Promise.all([acceptanceRequestPromise,
+    ownerWorkPage.getByRole('button', { name: 'Confermo la presa in carico commerciale', exact: true }).click()]);
+  writeCheckpoint('acceptance-request', { path: new URL(acceptanceRequest.url()).pathname,
+    reactActionHeaderPresent: Boolean(acceptanceRequest.headers()['next-action']) });
+  assert.ok(acceptanceRequest.headers()['next-action'], 'Acceptance must use the observed React action');
   const acceptanceReply = await acceptanceRequest.response();
   assert.ok(acceptanceReply);
   assert.equal(acceptanceReply.status(), 200);
@@ -347,10 +356,11 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await ownerWorkPage.screenshot({ path: join(evidenceDirectory, 'n14-personal-acceptance.png'), fullPage: false });
 
   await ownerWorkPage.getByRole('link', { name: 'Torna alla scheda', exact: true }).click();
+  await expect(ownerWorkPage).toHaveURL(`${crmUrl}${leadHref}`);
   await ownerWorkPage.locator('input[name="nextActionNote"]').fill('PRELANCIO02 synthetic follow-up');
   await ownerWorkPage.locator('input[name="nextActionDate"]').fill('2030-10-15T10:30');
   const nextActionReply = ownerWorkPage.waitForResponse((response) => response.request().method() === 'POST'
-    && response.request().url() === `${crmUrl}${leadHref}` && Boolean(response.request().headers()['next-action']));
+    && response.request().url() === `${crmUrl}${leadHref}` && Boolean(response.request().headers()['next-action']), { timeout: 30_000 });
   await ownerWorkPage.getByRole('button', { name: 'Salva aggiornamenti', exact: true }).click();
   const saved = await nextActionReply;
   assert.ok([200, 303].includes(saved.status()));
