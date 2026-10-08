@@ -74,7 +74,7 @@ function PipelineChart({ pipeline }: { pipeline: Array<{ label: string; value: n
             return <line key={item.label} aria-hidden="true" data-pipeline-boundary={item.label} x1={100 + 90.5 * Math.cos(angle)} y1={100 + 90.5 * Math.sin(angle)} x2={100 + 95 * Math.cos(angle)} y2={100 + 95 * Math.sin(angle)} stroke="#475569" strokeWidth="1.25" />;
           })}
         </svg>
-        <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className={`max-w-full break-all font-black leading-none tracking-tight tabular-nums text-fai-navy ${formatCount(total).length > 7 ? "text-xl" : formatCount(total).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={total} /></span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
+        <div className="pointer-events-none absolute inset-0 flex min-w-0 flex-col items-center justify-center px-9 text-center"><span className="crm-counter-pipeline w-full"><AnimatedCounter value={total} /></span><span className="mt-2 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-slate-500">Servizi totali</span></div>
       </div>
       {total === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">Nessun servizio visibile nella pipeline corrente.</p> : <ul className="crm-space-y-2">{visibleSegments.map((item) => <li key={item.label} data-pipeline-legend-label={item.label} className="flex min-w-0 items-center gap-2 text-xs"><span aria-hidden="true" data-pipeline-legend-color={item.color} className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="min-w-0 flex-1 break-words font-semibold capitalize text-slate-600">{item.label}</span><span className="shrink-0 font-black tabular-nums text-fai-navy">{formatCount(item.value)}</span></li>)}</ul>}
     </section>
@@ -115,11 +115,10 @@ export function DashboardOverview({
       <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(17rem,1fr)]">
         <div className="grid min-w-0 gap-4 sm:grid-cols-2">
           {kpis.map((kpi) => (
-            <Link key={kpi.label} href={kpi.href} data-tone={kpi.tone} className="crm-counter-panel crm-counter-hero group relative isolate flex min-h-48 min-w-0 flex-col justify-between overflow-hidden rounded-3xl p-5 text-white">
-              <div aria-hidden="true" className="pointer-events-none absolute -right-4 -top-5 h-32 w-32 rounded-full border-[20px] border-white/[0.04]" />
-              <div aria-hidden="true" className="pointer-events-none absolute -bottom-4 right-1 -z-10 rotate-[-12deg] text-white/[0.07]"><KpiIcon tone={kpi.tone} className="h-36 w-36" /></div>
-              <div className="relative flex items-start justify-between gap-3"><p className="max-w-[14rem] text-sm font-bold leading-5 text-white/95">{kpi.label}</p><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/20 bg-white/10"><KpiIcon tone={kpi.tone} /></span></div>
-              <div className="relative mt-4"><p className={`crm-counter-number break-all font-black leading-none tracking-[-0.04em] tabular-nums ${formatCount(kpi.value).length > 7 ? "text-4xl" : "text-6xl"}`}><AnimatedCounter value={kpi.value} /></p><p className="mt-3 max-w-[18rem] text-xs leading-5 text-white/85">{kpi.description}</p></div>
+            <Link key={kpi.label} href={kpi.href} data-tone={kpi.tone} className="crm-counter-panel crm-counter-hero group flex min-w-0 flex-col rounded-2xl p-4">
+              <div className="flex min-h-11 items-center gap-3"><span className="crm-counter-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"><KpiIcon tone={kpi.tone} /></span><p className="min-w-0 text-sm font-bold leading-5 text-fai-navy">{kpi.label}</p></div>
+              <div className="crm-counter-readout mt-4 flex-1 px-4 py-6"><AnimatedCounter value={kpi.value} /><p className="mt-5 text-center text-xs leading-5 text-slate-600">{kpi.description}</p></div>
+              <span className="crm-counter-hero-footer mt-4 flex min-h-10 items-center justify-center gap-3 pt-3 text-xs font-bold">Apri area <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-4 w-4"><path d="M3 10h13m-5-5 5 5-5 5" /></svg></span>
             </Link>
           ))}
         </div>
@@ -132,19 +131,19 @@ export function DashboardOverview({
           {counterGroups.map((group) => {
             const maximum = Math.max(0, ...group.counters.map((counter) => counter.value));
             const showComparison = group.counters.length > 1;
-            return <section key={group.id} data-tone={group.tone} aria-labelledby={`counter-area-${group.id}`} className="crm-counter-panel min-w-0 overflow-hidden rounded-3xl p-4">
-              <div className="flex items-center gap-3"><span className="crm-counter-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"><AreaIcon id={group.id} /></span><h3 id={`counter-area-${group.id}`} className="min-w-0 text-base font-black leading-5 text-white">{group.title}</h3></div>
-              <p className="mt-3 text-xs leading-5 text-slate-300">{group.description}</p>
-              {showComparison && <p className="mt-1 text-[0.65rem] leading-5 text-slate-300">Scala dei conteggi: 0–{formatCount(maximum)} · confronto, non avanzamento</p>}
+            return <section key={group.id} data-tone={group.tone} aria-labelledby={`counter-area-${group.id}`} className="crm-counter-panel min-w-0 rounded-2xl p-4">
+              <div className="flex items-center gap-3"><span className="crm-counter-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"><AreaIcon id={group.id} /></span><h3 id={`counter-area-${group.id}`} className="min-w-0 text-base font-black leading-5 text-fai-navy">{group.title}</h3></div>
+              <p className="mt-3 text-xs leading-5 text-slate-600">{group.description}</p>
+              {showComparison && <p className="mt-1 text-[0.65rem] leading-5 text-slate-600">Scala dei conteggi: 0–{formatCount(maximum)} · confronto, non avanzamento</p>}
               <div className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,8.5rem),1fr))] gap-3">
                 {group.counters.map((counter) => {
                   const width = maximum > 0 ? counter.value / maximum * 100 : 0;
                   const content = <>
-                    <span className="min-w-0 break-words text-xs font-bold leading-5 text-slate-300">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
-                    <span className={`crm-counter-number mt-3 block break-all font-black leading-none tracking-[-0.04em] tabular-nums text-white ${formatCount(counter.value).length > 7 ? "text-xl" : formatCount(counter.value).length > 5 ? "text-2xl" : "text-4xl"}`}><AnimatedCounter value={counter.value} /></span>
-                    {showComparison && <span aria-hidden="true" className="mt-4 block h-1.5 w-full overflow-hidden rounded-full bg-white/10"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className="crm-counter-bar block h-full rounded-full" style={{ width: `${width}%` }} /></span>}
+                    <span className="min-w-0 break-words text-xs font-bold leading-5 text-fai-navy">{counter.label}<span className="sr-only"> — {counter.description}</span></span>
+                    <AnimatedCounter value={counter.value} />
+                    {showComparison && <span aria-hidden="true" className="crm-counter-scale mt-4 block h-2 w-full overflow-hidden"><span data-counter-value={counter.value} data-counter-max={maximum} data-counter-width={width} className="crm-counter-bar block h-full" style={{ width: `${width}%` }} /></span>}
                   </>;
-                  const cardClass = "crm-counter-cell flex min-h-32 min-w-0 flex-col justify-between rounded-2xl p-3";
+                  const cardClass = "crm-counter-cell flex min-h-36 min-w-0 flex-col justify-between rounded-xl p-3";
                   return counter.href ? <Link key={counter.label} href={counter.href} className={cardClass}>{content}</Link> : <div key={counter.label} className={cardClass}>{content}</div>;
                 })}
               </div>
