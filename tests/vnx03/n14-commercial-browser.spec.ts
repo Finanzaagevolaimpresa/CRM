@@ -302,7 +302,7 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   await ownerWorkPage.goto(`${crmUrl}${leadHref}`);
   await ownerWorkPage.getByRole('link', { name: 'Richieste e provenienza', exact: true }).click();
   await expect(ownerWorkPage.getByText('Fonte: WORDPRESS · modulo VNX03_SYNTHETIC_WPFORMS', { exact: false })).toBeVisible();
-  await expect(ownerWorkPage.getByText('Synthetic N14 browser qualification only.', { exact: true })).toBeVisible();
+  await expect(ownerWorkPage.getByText('Descrizione: Synthetic N14 browser qualification only.', { exact: true })).toBeVisible();
   await expect(ownerWorkPage.getByText('Informativa e consensi sono consultabili dagli utenti autorizzati.', { exact: true })).toBeVisible();
   await ownerWorkPage.getByRole('link', { name: 'Torna al lead', exact: true }).click();
   await ownerWorkPage.getByRole('link', { name: 'Responsabilità e presa in carico', exact: true }).click();

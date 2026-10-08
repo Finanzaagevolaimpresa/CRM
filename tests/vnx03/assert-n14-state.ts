@@ -42,6 +42,7 @@ async function main() {
   assert.equal(receipt.requests.length, 1);
   assert.equal(receipt.inboxEventId, inbox.id);
   assert.equal(event.payload.email, lead.email);
+  assert.equal(event.payload.message, 'Descrizione: Synthetic N14 browser qualification only.');
   assert.equal(lead.source, 'N10:WORDPRESS:VNX03_SYNTHETIC_WPFORMS:v1');
   assert.deepEqual([item.sourceSystem, item.formCode, item.formVersion],
     [event.source.systemCode, event.source.formCode, event.source.formVersion]);
