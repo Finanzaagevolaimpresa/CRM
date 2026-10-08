@@ -34,6 +34,8 @@ async function main() {
   const event = parseLeadSubmittedEventV1(JSON.parse(inbox.envelopeJson));
   assert.equal(ledger.leadId, lead.id);
   assert.equal(ledger.state, 'PROJECTED_NEW');
+  assert.equal(ledger.sourceRecordHash, inbox.recordHash);
+  assert.equal(ledger.privacyEvidenceCount, 2);
   assert.equal(inbox.state, 'PROCESSED');
   assert.equal(inbox.attemptCount, 1);
   assert.ok(receipt);
@@ -56,9 +58,14 @@ async function main() {
     assert.equal(evidence.sourceSystem, event.source.systemCode);
     assert.equal(evidence.formCode, event.source.formCode);
     assert.equal(evidence.formVersion, event.source.formVersion);
+    assert.equal(evidence.businessInboxEventId, inbox.id);
+    assert.equal(evidence.leadId, null);
+    assert.equal(evidence.websiteLeadReceiptId, null);
+    assert.equal(evidence.sourceEvidenceDigest, event.idempotency.payloadHash);
   }
-  assert.equal(item.privacyEvidenceReceiptId,
-    inbox.privacyEvidence.find(({ purposeCode }) => purposeCode === 'SERVICE_REQUEST_FOLLOW_UP')!.id);
+  // N13 provenance is bound through the projection ledger and its inbox event;
+  // the direct privacy receipt on an N14 item belongs only to the legacy N01 origin.
+  assert.equal(item.privacyEvidenceReceiptId, null);
   const leadAudits = await db.auditLog.findMany({
     where: { entityType: 'Lead', entityId: lead.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
