@@ -119,6 +119,17 @@ async function submitForm(
 ) {
   if (!options.reuseForm) await page.goto(`${wordpressUrl}/${input.slug}/`, { waitUntil: 'networkidle' });
   const prefix = `#wpforms-${input.formId}-field_`;
+  try {
+    await expect(page.locator(`${prefix}1`)).toBeVisible({ timeout: 10_000 });
+  } catch (error) {
+    writeFileSync(join(evidenceDirectory, 'wpforms-missing-form.json'), `${JSON.stringify({
+      formId: input.formId, expectedPath: `/${input.slug}/`, currentPath: new URL(page.url()).pathname,
+      formCount: await page.locator(`#wpforms-form-${input.formId}`).count(),
+      captureErrorExpected: Boolean(options.captureError), synthetic: true,
+    }, null, 2)}\n`, { mode: 0o600 });
+    await page.screenshot({ path: join(evidenceDirectory, 'wpforms-missing-form.png'), fullPage: false });
+    throw error;
+  }
   await page.locator(`${prefix}1`).fill(input.firstName);
   await page.locator(`${prefix}1-last`).fill(input.lastName);
   await page.locator(`${prefix}3`).fill(input.email);

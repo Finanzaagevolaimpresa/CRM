@@ -22,7 +22,12 @@ $data['settings']['confirmations'] = array('1' => array(
     'message' => 'VNX03_SYNTHETIC_CONFIRMATION', 'message_scroll' => '1',
     'redirect' => WP_HOME . '/vnx03-capture-must-not-redirect/',
 ));
-if (wp_update_post(array('ID' => 900001, 'post_content' => wp_slash(wpforms_encode($data))), true) !== 900001) {
+// wpforms_encode already adds the slash layer consumed by wp_update_post.
+if (wp_update_post(array('ID' => 900001, 'post_content' => wpforms_encode($data)), true) !== 900001) {
     throw new RuntimeException('VNX03_CAPTURE_FIXTURE_UPDATE_FAILED');
+}
+$stored = wpforms_decode(get_post(900001)->post_content);
+if ($stored !== $data) {
+    throw new RuntimeException('VNX03_CAPTURE_FIXTURE_ROUND_TRIP_FAILED');
 }
 echo "VNX03_CAPTURE_FIXTURE_READY\n";
