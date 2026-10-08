@@ -212,7 +212,7 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
   // A late capture failure must retain the form instead of confirming or redirecting.
   for (const mode of ['redirect', 'ajax'] as const) {
     compose(['exec', '-T', '--user', '33:33', '-e', 'HOME=/tmp', '-e', `VNX03_CAPTURE_RESPONSE_MODE=${mode}`,
-      'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '/opt/vnx03/capture-response-mode.php']);
+      'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '--use-include', '/opt/vnx03/capture-response-mode.php']);
     setConnectorScenario('capture_key_missing');
     await submitForm(page, {
       formId: 900001, slug: 'vnx03-allowed', firstName: 'Capture', lastName: 'Failure',
@@ -223,7 +223,7 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
     assertCrm('empty');
   }
   compose(['exec', '-T', '--user', '33:33', '-e', 'HOME=/tmp', '-e', 'VNX03_CAPTURE_RESPONSE_MODE=message',
-    'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '/opt/vnx03/capture-response-mode.php']);
+    'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '--use-include', '/opt/vnx03/capture-response-mode.php']);
   setConnectorScenario('normal');
 
   await submitForm(page, {
