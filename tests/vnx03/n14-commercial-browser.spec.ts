@@ -335,19 +335,34 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   const acceptedSnapshot = assertState('accepted');
   const acceptanceBody = acceptanceRequest.postDataBuffer();
   assert.ok(acceptanceBody);
-  const replayAcceptance = (actingPage: Page) => actingPage.request.post(acceptanceUrl, {
-    headers: { origin: new URL(crmUrl).origin, 'next-action': acceptanceRequest.headers()['next-action']!,
-      'content-type': acceptanceRequest.headers()['content-type']! },
-    data: acceptanceBody,
-  });
-  const replay = await replayAcceptance(ownerWorkPage);
-  assert.equal(replay.status(), 200);
-  assert.match(await replay.text(), /Presa in carico personale registrata/u);
+  // Preserve the observed Next action protocol, including routing context. Cookies
+  // are deliberately not copied: each replay uses only the acting context's session.
+  const actionHeaders = Object.fromEntries(['accept', 'content-type', 'next-action',
+    'next-router-state-tree', 'next-url', 'x-deployment-id', 'origin', 'referer']
+    .flatMap((name) => acceptanceRequest.headers()[name] ? [[name, acceptanceRequest.headers()[name]!]] : []));
+  assert.equal(actionHeaders.accept, 'text/x-component');
+  assert.equal(actionHeaders.origin, new URL(crmUrl).origin);
+  assert.ok(actionHeaders['next-router-state-tree']);
+  const replayAcceptance = async (actingPage: Page, identity: 'owner' | 'admin' | 'other') => {
+    const response = await actingPage.request.post(acceptanceRequest.url(), {
+      headers: actionHeaders, data: acceptanceBody, maxRedirects: 0, timeout: 20_000,
+    });
+    const body = await response.text();
+    const contentType = response.headers()['content-type']?.split(';', 1)[0];
+    writeCheckpoint(`acceptance-replay-${identity}`, { httpStatus: response.status(), contentType,
+      redirected: Boolean(response.headers()['location'] || response.headers()['x-action-redirect']),
+      expectedSuccess: body.includes('Presa in carico personale registrata'),
+      expectedDenial: body.includes('Solo il referente individuale corrente'),
+      emptyObject: body.trim() === '{}' });
+    assert.equal(response.status(), 200);
+    assert.equal(contentType, 'text/x-component');
+    return body;
+  };
+  assert.match(await replayAcceptance(ownerWorkPage, 'owner'), /Presa in carico personale registrata/u);
   assert.equal(assertState('accepted'), acceptedSnapshot, 'Personal acceptance replay changed rows or audit');
-  for (const actingPage of [adminPage, otherPage]) {
-    const denial = await replayAcceptance(actingPage);
-    assert.equal(denial.status(), 200); // Controlled action failure is encoded in the RSC payload.
-    assert.match(await denial.text(), /Solo il referente individuale corrente/u);
+  for (const [identity, actingPage] of [['admin', adminPage], ['other', otherPage]] as const) {
+    // Controlled action failure is encoded in the RSC payload, never inferred from HTTP alone.
+    assert.match(await replayAcceptance(actingPage, identity), /Solo il referente individuale corrente/u);
     assert.equal(assertState('accepted'), acceptedSnapshot, 'Foreign acceptance changed rows or audit');
   }
   await ownerWorkPage.reload();
