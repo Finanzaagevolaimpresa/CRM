@@ -337,25 +337,36 @@ test('PRELANCIO02 qualifies website receipt, admin assignment, personal acceptan
   assert.ok(acceptanceBody);
   // Preserve the observed Next action protocol, including routing context. Cookies
   // are deliberately not copied: each replay uses only the acting context's session.
-  const actionHeaders = Object.fromEntries(['accept', 'content-type', 'next-action',
-    'next-router-state-tree', 'next-url', 'x-deployment-id', 'origin', 'referer']
-    .flatMap((name) => acceptanceRequest.headers()[name] ? [[name, acceptanceRequest.headers()[name]!]] : []));
+  const headerEntries = await Promise.all(['accept', 'content-type', 'next-action',
+    'next-router-state-tree', 'next-url', 'x-deployment-id', 'origin']
+    .map(async (name) => [name, await acceptanceRequest.headerValue(name)] as const));
+  const actionHeaders: Record<string, string> = {};
+  for (const [name, value] of headerEntries) if (value !== null) actionHeaders[name] = value;
   assert.equal(actionHeaders.accept, 'text/x-component');
   assert.equal(actionHeaders.origin, new URL(crmUrl).origin);
   assert.ok(actionHeaders['next-router-state-tree']);
   const replayAcceptance = async (actingPage: Page, identity: 'owner' | 'admin' | 'other') => {
-    const response = await actingPage.request.post(acceptanceRequest.url(), {
-      headers: actionHeaders, data: acceptanceBody, maxRedirects: 0, timeout: 20_000,
-    });
-    const body = await response.text();
-    const contentType = response.headers()['content-type']?.split(';', 1)[0];
-    writeCheckpoint(`acceptance-replay-${identity}`, { httpStatus: response.status(), contentType,
-      redirected: Boolean(response.headers()['location'] || response.headers()['x-action-redirect']),
+    // Use the actual browser cookie policy on the bank's loopback HTTP origin;
+    // APIRequestContext does not send Secure cookies to 127.0.0.1 in this version.
+    assert.equal(new URL(actingPage.url()).origin, new URL(crmUrl).origin);
+    const response = await actingPage.evaluate(async ({ url, headers, bytes }) => {
+      if (new URL(url).origin !== location.origin) throw new Error('VNX03_REPLAY_ORIGIN_MISMATCH');
+      const result = await fetch(url, { method: 'POST', headers, body: new Uint8Array(bytes),
+        credentials: 'same-origin', redirect: 'manual', signal: AbortSignal.timeout(20_000) });
+      return { status: result.status, contentType: result.headers.get('content-type')?.split(';', 1)[0],
+        redirected: result.type === 'opaqueredirect' || Boolean(result.headers.get('location') || result.headers.get('x-action-redirect')),
+        body: await result.text() };
+    }, { url: acceptanceRequest.url(), headers: Object.fromEntries(Object.entries(actionHeaders).filter(([name]) => name !== 'origin')),
+      bytes: [...acceptanceBody] });
+    const { body, contentType } = response;
+    writeCheckpoint(`acceptance-replay-${identity}`, { httpStatus: response.status, contentType,
+      transport: 'browser_same_origin_fetch', redirected: response.redirected,
       expectedSuccess: body.includes('Presa in carico personale registrata'),
       expectedDenial: body.includes('Solo il referente individuale corrente'),
       emptyObject: body.trim() === '{}' });
-    assert.equal(response.status(), 200);
+    assert.equal(response.status, 200);
     assert.equal(contentType, 'text/x-component');
+    assert.equal(response.redirected, false);
     return body;
   };
   assert.match(await replayAcceptance(ownerWorkPage, 'owner'), /Presa in carico personale registrata/u);
