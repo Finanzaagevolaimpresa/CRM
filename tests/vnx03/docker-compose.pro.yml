@@ -3,6 +3,8 @@
 services:
   wordpress:
     build:
+      context: .
+      dockerfile: tests/vnx03/Dockerfile.wordpress
       secrets:
         - wpforms_pro
 secrets:
