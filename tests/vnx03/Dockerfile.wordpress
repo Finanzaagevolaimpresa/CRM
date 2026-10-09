@@ -33,13 +33,49 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /opt/vnx03
 
-RUN --mount=type=secret,id=wpforms_pro \
+RUN --mount=type=secret,id=wpforms_pro_00 \
+    --mount=type=secret,id=wpforms_pro_01 \
+    --mount=type=secret,id=wpforms_pro_02 \
+    --mount=type=secret,id=wpforms_pro_03 \
+    --mount=type=secret,id=wpforms_pro_04 \
+    --mount=type=secret,id=wpforms_pro_05 \
+    --mount=type=secret,id=wpforms_pro_06 \
+    --mount=type=secret,id=wpforms_pro_07 \
+    --mount=type=secret,id=wpforms_pro_08 \
+    --mount=type=secret,id=wpforms_pro_09 \
+    --mount=type=secret,id=wpforms_pro_10 \
+    --mount=type=secret,id=wpforms_pro_11 \
+    --mount=type=secret,id=wpforms_pro_12 \
+    --mount=type=secret,id=wpforms_pro_13 \
+    --mount=type=secret,id=wpforms_pro_14 \
+    --mount=type=secret,id=wpforms_pro_15 \
+    --mount=type=secret,id=wpforms_pro_16 \
+    --mount=type=secret,id=wpforms_pro_17 \
+    --mount=type=secret,id=wpforms_pro_18 \
+    --mount=type=secret,id=wpforms_pro_19 \
+    --mount=type=secret,id=wpforms_pro_20 \
+    --mount=type=secret,id=wpforms_pro_21 \
+    --mount=type=secret,id=wpforms_pro_22 \
+    --mount=type=secret,id=wpforms_pro_23 \
+    --mount=type=secret,id=wpforms_pro_24 \
+    --mount=type=secret,id=wpforms_pro_25 \
+    --mount=type=secret,id=wpforms_pro_26 \
+    --mount=type=secret,id=wpforms_pro_27 \
+    --mount=type=secret,id=wpforms_pro_28 \
+    --mount=type=secret,id=wpforms_pro_29 \
+    --mount=type=secret,id=wpforms_pro_30 \
+    --mount=type=secret,id=wpforms_pro_31 \
   case "$WPFORMS_EDITION" in \
     lite) curl --fail --silent --show-error --location \
     --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 180 \
     --output /opt/vnx03/wpforms.zip \
     https://downloads.wordpress.org/plugin/wpforms-lite.2.0.1.1.zip ;; \
-    pro) test -s /run/secrets/wpforms_pro && cp /run/secrets/wpforms_pro /opt/vnx03/wpforms.zip ;; \
+    pro) : > /opt/vnx03/wpforms.zip; i=0; \
+      while [ "$i" -lt 32 ]; do \
+        part="$(printf '/run/secrets/wpforms_pro_%02d' "$i")"; \
+        test -f "$part" && cat "$part" >> /opt/vnx03/wpforms.zip || exit 65; \
+        i=$((i + 1)); \
+      done ;; \
     *) exit 64 ;; \
   esac \
   && printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms.zip | sha256sum -c -

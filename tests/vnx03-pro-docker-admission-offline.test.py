@@ -1,6 +1,7 @@
 """Exercise actual admission shell with substituted Docker, no daemon or DB."""
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -161,7 +162,7 @@ repo_root="$1"; runtime_dir="$2"; docker_context=synthetic-local
 COMPOSE_PROJECT_NAME=fai-vnx03-offline-1
 source_commit=1111111111111111111111111111111111111111
 source_tree=2222222222222222222222222222222222222222
-WORDPRESS_IMAGE=synthetic-wordpress; WPFORMS_SHA256=synthetic-wpforms
+WORDPRESS_IMAGE=synthetic-wordpress; WPFORMS_SHA256="$SYNTHETIC_PACKAGE_SHA"
 VNX03_CONNECTOR_SHA256=synthetic-connector; WP_CLI_SHA256=synthetic-cli
 pro_build_arguments=(--builder "$docker_context")
 fail() { printf '%s\n' "$1"; exit 2; }
@@ -179,6 +180,7 @@ docker() {
 }
 compose=(fake_compose)
 source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+pro_stage_build_input
 pro_build_images
 '''
 
@@ -186,8 +188,11 @@ pro_build_images
 class OfflineProBuildTransport(unittest.TestCase):
     def exercise(self, mutate=lambda model: None, env=None):
         with tempfile.TemporaryDirectory(prefix="pro build ") as directory:
-            target = Path(directory)
-            package = target / "input with spaces.zip"
+            target = Path(directory) / "fai-vnx03.Ab1234"
+            target.mkdir()
+            package = Path(directory) / "input with spaces.zip"
+            package.write_bytes(b"synthetic input, no vendor bytes" * 24000)
+            package_sha = hashlib.sha256(package.read_bytes()).hexdigest()
             model = {"group": {"default": {"targets": ["harness", "crm", "wordpress"]}}, "target": {}}
             for name in ("harness", "crm", "wordpress"):
                 item = {"context": str(ROOT), "dockerfile": "tests/vnx03/Dockerfile.crm",
@@ -200,15 +205,16 @@ class OfflineProBuildTransport(unittest.TestCase):
                     item.pop("target")
                     item["dockerfile"] = "tests/vnx03/Dockerfile.wordpress"
                     item["args"] = {"WORDPRESS_IMAGE": "synthetic-wordpress", "WPFORMS_EDITION": "pro",
-                                    "WPFORMS_SHA256": "synthetic-wpforms", "CONNECTOR_SHA256": "synthetic-connector",
+                                    "WPFORMS_SHA256": package_sha, "CONNECTOR_SHA256": "synthetic-connector",
                                     "WP_CLI_SHA256": "synthetic-cli"}
-                    item["secret"] = ["id=wpforms_pro,type=file,src=" + package.as_posix()]
+                    item["secret"] = [f"id=wpforms_pro_{i:02d},type=file,src=" + (target / "pro-package" / f"{i:02d}").as_posix() for i in range(32)]
                 model["target"][name] = item
             mutate(model)
             encoded = json.dumps(model)
             (target / "model").write_text(encoded, encoding="utf-8")
             clean = os.environ.copy()
             clean.update({"VNX03_PRO_PYTHON": Path(sys.executable).as_posix(),
+                          "SYNTHETIC_PACKAGE_SHA": package_sha,
                           "VNX03_PRO_PACKAGE": package.as_posix(), **(env or {})})
             result = subprocess.run([BASH, "--noprofile", "--norc", "-c", BUILD_SHELL, "offline-pro-build",
                                      ROOT.as_posix(), target.as_posix()], env=clean, text=True,
@@ -217,12 +223,13 @@ class OfflineProBuildTransport(unittest.TestCase):
             calls = calls_path.read_bytes().decode().split("\0")[:-1] if calls_path.exists() else []
             if result.returncode == 0:
                 # Exact rendered configuration reaches Buildx; no lossy rewrite
-                # of digest pins, build arguments, secret or local image tags.
+                # of digest pins, build arguments, context or local image tags.
                 self.assertEqual((target / "pro-bake.json").read_text(encoding="utf-8"), encoded)
                 self.assertEqual(calls, ["--context", CONTEXT, "buildx", "bake", "--builder", CONTEXT,
                                         "--file", (target / "pro-bake.json").as_posix(), "--progress", "plain",
                                         "--allow", "fs.read=" + ROOT.as_posix(), "--allow",
-                                        "fs.read=" + package.as_posix(), "harness", "crm", "wordpress"])
+                                        "fs.read=" + (target / "pro-package").as_posix(), "harness", "crm", "wordpress"])
+                self.assertEqual(b"".join((target / "pro-package" / f"{i:02d}").read_bytes() for i in range(32)), package.read_bytes())
             return result, calls
 
     def test_explicit_context_and_builder_preserve_complete_rendered_input(self):
@@ -261,6 +268,9 @@ class OfflineProBuildTransport(unittest.TestCase):
                      lambda m: m["target"]["crm"].update(dockerfile="../Dockerfile"),
                      lambda m: m["target"]["crm"].update(secret=["id=private,env=TOKEN"]),
                      lambda m: m["target"]["wordpress"].update(secret=["id=wpforms_pro,type=env,env=TOKEN"]),
+                     lambda m: m["target"]["wordpress"].update(contexts={"wpforms_pro": "https://remote.invalid/archive"}),
+                     lambda m: m["target"]["wordpress"]["secret"].append("id=extra,type=file,src=/private"),
+                     lambda m: m["target"]["crm"].update(contexts={"wpforms_pro": "/private"}),
                      lambda m: m["target"]["wordpress"]["args"].update(WORDPRESS_IMAGE="foreign:latest"),
                      lambda m: m["target"]["wordpress"]["args"].update(WPFORMS_SHA256="other"),
                      lambda m: m["target"]["wordpress"].update(pull=False)]

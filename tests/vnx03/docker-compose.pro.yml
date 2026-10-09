@@ -1,12 +1,105 @@
-# Local Pro input only. This adds no runtime service, network or mount.
-# The ZIP is a BuildKit build input, never committed or uploaded to CI.
+# Local Pro input only. No additional build context or runtime mount.
+# Fixed bounded parts are reassembled and checked against the full ZIP digest.
 services:
   wordpress:
     build:
       context: .
       dockerfile: tests/vnx03/Dockerfile.wordpress
       secrets:
-        - wpforms_pro
+        - wpforms_pro_00
+        - wpforms_pro_01
+        - wpforms_pro_02
+        - wpforms_pro_03
+        - wpforms_pro_04
+        - wpforms_pro_05
+        - wpforms_pro_06
+        - wpforms_pro_07
+        - wpforms_pro_08
+        - wpforms_pro_09
+        - wpforms_pro_10
+        - wpforms_pro_11
+        - wpforms_pro_12
+        - wpforms_pro_13
+        - wpforms_pro_14
+        - wpforms_pro_15
+        - wpforms_pro_16
+        - wpforms_pro_17
+        - wpforms_pro_18
+        - wpforms_pro_19
+        - wpforms_pro_20
+        - wpforms_pro_21
+        - wpforms_pro_22
+        - wpforms_pro_23
+        - wpforms_pro_24
+        - wpforms_pro_25
+        - wpforms_pro_26
+        - wpforms_pro_27
+        - wpforms_pro_28
+        - wpforms_pro_29
+        - wpforms_pro_30
+        - wpforms_pro_31
 secrets:
-  wpforms_pro:
-    file: ${VNX03_PRO_PACKAGE:?VNX03_PRO_PACKAGE_REQUIRED}
+  wpforms_pro_00:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/00
+  wpforms_pro_01:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/01
+  wpforms_pro_02:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/02
+  wpforms_pro_03:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/03
+  wpforms_pro_04:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/04
+  wpforms_pro_05:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/05
+  wpforms_pro_06:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/06
+  wpforms_pro_07:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/07
+  wpforms_pro_08:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/08
+  wpforms_pro_09:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/09
+  wpforms_pro_10:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/10
+  wpforms_pro_11:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/11
+  wpforms_pro_12:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/12
+  wpforms_pro_13:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/13
+  wpforms_pro_14:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/14
+  wpforms_pro_15:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/15
+  wpforms_pro_16:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/16
+  wpforms_pro_17:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/17
+  wpforms_pro_18:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/18
+  wpforms_pro_19:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/19
+  wpforms_pro_20:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/20
+  wpforms_pro_21:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/21
+  wpforms_pro_22:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/22
+  wpforms_pro_23:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/23
+  wpforms_pro_24:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/24
+  wpforms_pro_25:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/25
+  wpforms_pro_26:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/26
+  wpforms_pro_27:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/27
+  wpforms_pro_28:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/28
+  wpforms_pro_29:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/29
+  wpforms_pro_30:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/30
+  wpforms_pro_31:
+    file: ${VNX03_PRO_BUILD_INPUT:?VNX03_PRO_BUILD_INPUT_REQUIRED}/31

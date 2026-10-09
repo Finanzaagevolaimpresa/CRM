@@ -260,6 +260,7 @@ if [[ "$WPFORMS_EDITION" == 'lite' ]]; then
 else
   # The admitted local input is rechecked by Dockerfile at build time.
   printf '%s  %s\n' "$WPFORMS_SHA256" "$VNX03_PRO_PACKAGE" | sha256sum -c - >/dev/null
+  pro_stage_build_input
 fi
 download_and_verify "$WP_CLI_URL" "$artifacts_dir/wp-cli.phar" "$WP_CLI_SHA256"
 node tools/package-vnx02-wordpress-connector.mjs --output "$artifacts_dir" \

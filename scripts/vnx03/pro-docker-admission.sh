@@ -16,6 +16,14 @@ pro_bind_builder() {
   pro_build_arguments=(--builder "$docker_context")
 }
 
+pro_stage_build_input() {
+  "$VNX03_PRO_PYTHON" -I -B -S "$repo_root/scripts/vnx03/pro-docker-admission.py" \
+    stage --package "$VNX03_PRO_PACKAGE" --runtime-directory "$runtime_dir" \
+    --repository "$repo_root" --wpforms-sha "$WPFORMS_SHA256" \
+    || fail 'VNX03_PRO_BUILD_INPUT_STAGING_FAILED'
+  export VNX03_PRO_BUILD_INPUT="$runtime_dir/pro-package"
+}
+
 pro_build_images() {
   # Compose 5.5.1 launches standalone Buildx with DOCKER_HOST as well as
   # DOCKER_CONTEXT. Its CLI dependency can then resolve the default context.
@@ -26,12 +34,13 @@ pro_build_images() {
   "$VNX03_PRO_PYTHON" -I -B -S "$repo_root/scripts/vnx03/pro-docker-admission.py" \
     bake --model "$runtime_dir/pro-bake.json" --project "$COMPOSE_PROJECT_NAME" \
     --repository "$repo_root" --package "$VNX03_PRO_PACKAGE" --head "$source_commit" \
+    --runtime-directory "$runtime_dir" --package-directory "$VNX03_PRO_BUILD_INPUT" \
     --tree "$source_tree" --wordpress-image "$WORDPRESS_IMAGE" \
     --connector-sha "$VNX03_CONNECTOR_SHA256" --wpforms-sha "$WPFORMS_SHA256" \
     --wp-cli-sha "$WP_CLI_SHA256" || fail 'VNX03_PRO_BUILD_MODEL_REJECTED'
   docker --context "$docker_context" buildx bake "${pro_build_arguments[@]}" \
     --file "$runtime_dir/pro-bake.json" --progress plain \
-    --allow "fs.read=$repo_root" --allow "fs.read=$VNX03_PRO_PACKAGE" \
+    --allow "fs.read=$repo_root" --allow "fs.read=$VNX03_PRO_BUILD_INPUT" \
     harness crm wordpress
 }
 
