@@ -33,7 +33,9 @@ jobs:
         run: |
           python3 -I -B -S tests/vnx03-pro-package-offline.test.py
           python3 -I -B -S tests/vnx03-pro-profile-offline.test.py
+          python3 -I -B -S tests/vnx03-pro-docker-admission-offline.test.py
           bash -n scripts/vnx03/wpforms-profile.sh
+          bash -n scripts/vnx03/pro-docker-admission.sh
       - name: Install locked dependencies and browser
         run: |
           npm ci

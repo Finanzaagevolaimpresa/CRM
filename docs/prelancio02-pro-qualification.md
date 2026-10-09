@@ -48,10 +48,24 @@ Il profilo Pro richiede inoltre queste variabili nel solo processo di prova:
 
 `DOCKER_HOST` non è ammesso nel profilo Pro. L'endpoint deve essere locale e
 contesto/Engine devono coincidere. Il pipe `dockerDesktopLinuxEngine` è ammesso
-soltanto per Pro con questi binding. Le risorse del progetto devono essere
-assenti prima della prima creazione: collisioni o inventari incerti fermano il
-banco senza rimuovere risorse pregresse. Git Bash converte solo i percorsi host;
-i percorsi del container non vengono riscritti da MSYS.
+soltanto per Pro con questi binding. La selezione Buildx è distinta dal contesto:
+il profilo rifiuta `BUILDX_BUILDER`, `BUILDKIT_HOST`, `DOCKER_BUILDKIT`,
+`COMPOSE_DOCKER_CLI_BUILD` e `COMPOSE_BAKE` valorizzati. Ispeziona senza bootstrap
+il builder nominato dal contesto, ammette soltanto un nodo `running` con driver
+`docker` ed endpoint uguale al contesto verificato, quindi passa esplicitamente
+`--builder` alla build. Un diverso builder predefinito persistente non è usato.
+Le chiamate successive conservano il medesimo `DOCKER_CONTEXT` nel solo processo.
+Il [driver docker](https://docs.docker.com/build/builders/drivers/docker/) è
+integrato nell'Engine; la [selezione esplicita Compose](https://docs.docker.com/reference/cli/docker/compose/build/)
+evita di delegare l'input commerciale al builder predefinito.
+
+Le risorse del progetto devono essere assenti prima della prima creazione.
+Oltre alle etichette, sono confrontati i nomi effettivi del modello Compose con
+l'inventario completo di volumi, reti e container: anche un volume omonimo senza
+etichette o con etichette estranee ferma il banco. Nomi esterni al progetto,
+risorse external, collisioni o inventari incerti fermano prima dell'abilitazione
+del cleanup, senza rimuovere risorse pregresse. Git Bash converte solo i percorsi
+host; i percorsi del container non vengono riscritti da MSYS.
 
 ## Perimetro di prova e recupero
 
@@ -77,6 +91,9 @@ non è un rollback produttivo né autorizza installazione, chiavi o attivazione.
 `tests/vnx03-pro-package-offline.test.py` controlla byte sintetici, strutture ZIP,
 identità dichiarata e rifiuti, senza estrarre o eseguire PHP.
 `tests/vnx03-pro-profile-offline.test.py` controlla la selezione e i rifiuti del
-profilo mediante Bash/Python, senza Docker, DB, PHP o rete. Il job N14 li esegue
-prima della qualifica Lite già esistente. La prova Pro deve produrre le proprie
+profilo mediante Bash/Python, senza Docker, DB, PHP o rete.
+`tests/vnx03-pro-docker-admission-offline.test.py` esercita le ammissioni reali
+Bash/Python con Docker interamente sostituito: override, builder remoto/ambiguo,
+inventari falliti e nomi occupati non possono trasferire input o invocare cleanup.
+Il job N14 li esegue prima della qualifica Lite già esistente. La prova Pro deve produrre le proprie
 ricevute `runtime.json`, `n14-runtime.json`, browser e cleanup sul target esatto.

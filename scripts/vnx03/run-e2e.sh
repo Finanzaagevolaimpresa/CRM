@@ -58,6 +58,8 @@ case "$VNX03_QUALIFICATION_PROFILE" in
 esac
 
 source "$repo_root/scripts/vnx03/wpforms-profile.sh"
+source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+pro_build_arguments=()
 
 docker_context="$(docker context show)"
 docker_endpoint="$(docker context inspect "$docker_context" --format '{{ (index .Endpoints "docker").Host }}')"
@@ -73,6 +75,10 @@ if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
     || fail 'VNX03_PRO_DOCKER_CONTEXT_MISMATCH'
   [[ "$(docker info --format '{{.ID}}')" == "$VNX03_EXPECTED_DOCKER_ENGINE_ID" ]] \
     || fail 'VNX03_PRO_DOCKER_ENGINE_MISMATCH'
+  pro_bind_builder
+  # Pin subsequent Docker/Compose calls (including browser helpers) to the
+  # verified context without changing the user's persistent selection.
+  export DOCKER_CONTEXT="$docker_context"
 fi
 docker info --format '{{.ServerVersion}} {{.OSType}}' | grep -Eq '^[^ ]+ linux$' \
   || fail 'VNX03_LINUX_DOCKER_REQUIRED'
@@ -287,6 +293,7 @@ export VNX03_WORDPRESS_NONCE_SALT="$(openssl rand -base64 48 | tr -d '\n')"
 
 "${compose[@]}" config --quiet
 if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  pro_require_resource_names_absent
   # Cleanup may own only a newly allocated project. Reject historical/colliding
   # resources before setting the mutation flag that enables the cleanup trap.
   prior_containers="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
@@ -309,7 +316,7 @@ if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
   done
 fi
 compose_resources_created=true
-"${compose[@]}" build --pull harness crm wordpress
+"${compose[@]}" build "${pro_build_arguments[@]}" --pull harness crm wordpress
 "${compose[@]}" up -d --wait --wait-timeout 180 postgres mysql
 "${compose[@]}" run --rm -T materials bash tests/vnx03/init-materials.sh
 "${compose[@]}" run --rm -T harness bash -lc \
