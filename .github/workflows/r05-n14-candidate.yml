@@ -21,6 +21,11 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
+      - name: Match the admitted MSI Compose renderer
+        uses: docker/setup-compose-action@2fe291b7677a45ee1269ec56a42604c143505e7e # v1
+        with:
+          version: v5.5.1
+          cache-binary: false
       - name: Bind exact head, tree and additive schema49 with immutable prefix48
         run: |
           test "$(git rev-parse HEAD)" = "$VNX03_EXPECTED_SOURCE_COMMIT"

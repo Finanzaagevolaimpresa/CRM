@@ -139,3 +139,8 @@ un archivio di oltre 15 MiB, costruisce con Compose/Bake e il Dockerfile effetti
 poi rimuove solo le tre immagini del progetto esclusivo. Non usa il pacchetto
 commerciale, non avvia WordPress o DB e non sostituisce il collaudo funzionale Pro.
 La ricevuta distinta `pro-build-transport.json` espone questi limiti e la pulizia.
+Il job fissa Compose 5.5.1 tramite l'azione ufficiale Docker vincolata a commit,
+per confrontare lo stesso modello del banco MSI. Il renderer 2.38.2 del runner
+produce opzioni di output ed etichette diverse: quel modello resta rifiutato,
+senza allentare l'ammissione o cambiare Docker sull'MSI. In caso di arresto il
+modello sintetico effettivamente generato viene conservato nell'artifact CI.

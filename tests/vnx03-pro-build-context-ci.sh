@@ -56,6 +56,7 @@ export VNX03_PRO_PYTHON="$(command -v python3)"
 source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
 pro_bind_builder
 docker compose version
+[[ "$(docker compose version --short)" == 5.5.1 ]] || fail PRO_CI_COMPOSE_VERSION_MISMATCH
 docker buildx version
 
 # Supply only nonsecret fixture values to render the existing Compose model.
