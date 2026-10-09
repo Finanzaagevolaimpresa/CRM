@@ -43,7 +43,7 @@ jobs:
           test "$status" -ne 0
           grep -Fq VNX03_SYNTHETIC_CONFIRMATION_MISSING <<<"$output"
           VNX03_SYNTHETIC_E2E_CONFIRMED=1 bash scripts/vnx03/run-e2e.sh --preflight-only
-      - name: Qualify candidate WPForms and admin assignment browser
+      - name: Qualify candidate WPForms, assignment and personal handoff browser
         env:
           VNX03_SYNTHETIC_E2E_CONFIRMED: "1"
           VNX03_EVIDENCE_DIR: ${{ runner.temp }}/r05-n14-candidate-evidence
@@ -62,8 +62,19 @@ jobs:
             assert.equal(receipt.profile, 'candidate-schema49');
             assert.equal(receipt.migrations, 49);
             assert.equal(receipt.productionContact, false);
-            if (file === 'n14-runtime.json') assert.equal(receipt.adminAssignmentBrowserCompleted, true);
+            if (file === 'n14-runtime.json') {
+              assert.equal(receipt.adminAssignmentBrowserCompleted, true);
+              assert.equal(receipt.personalAcceptanceBrowserCompleted, true);
+              assert.equal(receipt.datedNextActionBrowserCompleted, true);
+            }
           }
+          const browser = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/n14-browser.json`, 'utf8'));
+          for (const key of ['sourceReceiptProjectionAndPrivacyCorrelated', 'personalAcceptanceCompleted',
+            'acceptanceReplayAndForeignDenialsUnchanged', 'datedNextActionCompleted']) assert.equal(browser[key], true);
+          const producer = JSON.parse(readFileSync(`${process.env.VNX03_EVIDENCE_DIR}/browser.json`, 'utf8'));
+          for (const key of ['captureFailureVisibleWithoutConfirmation', 'captureFailureFormValuesRetained',
+            'correctedSubmissionRecovered']) assert.equal(producer[key], true);
+          assert.deepEqual(producer.captureFailureModes, ['message', 'redirect', 'ajax']);
           console.log('R05_N14_CANDIDATE_RECEIPTS_VERIFIED');
           JS
       - name: Upload separate candidate evidence

@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 // Separate processes model wp-config constants changing between WordPress requests.
 $scenarios = array('missing', 'disabled', 'invalid', 'empty', 'pending', 'leased', 'expired',
-    'existing', 'database-unavailable', 'schedule-failure');
+    'existing', 'database-unavailable', 'schedule-failure',
+    'capture-invalid', 'capture-unavailable', 'capture-disabled', 'capture-excluded', 'capture-invalid-config');
 if ($argc === 1) {
     foreach ($scenarios as $scenario) {
         $process = proc_open(array(PHP_BINARY, __FILE__, $scenario), array(
@@ -36,8 +37,8 @@ require __DIR__ . '/vnx02-bootstrap.php';
 require $pluginRoot . '/includes/class-plugin.php';
 define('ABSPATH', '/synthetic-wordpress/');
 if ($scenario !== 'missing') {
-    $configuration = vnx02_synthetic_config($scenario !== 'disabled');
-    if ($scenario === 'invalid') {
+    $configuration = vnx02_synthetic_config(!in_array($scenario, array('disabled', 'capture-disabled'), true));
+    if (in_array($scenario, array('invalid', 'capture-invalid-config'), true)) {
         unset($configuration['queue_key_file']);
     }
     define('FAI_VNX02_CONNECTOR_CONFIG', $configuration);
@@ -60,7 +61,7 @@ $wpdb = new class ($scenario) {
         if (!str_starts_with($sql, 'SELECT ')) {
             throw new RuntimeException('SYNTHETIC_RECOVERY_MUST_NOT_WRITE_QUEUE');
         }
-        if ($this->scenario === 'database-unavailable') {
+        if (in_array($this->scenario, array('database-unavailable', 'capture-unavailable'), true)) {
             return false;
         }
         $this->value = str_contains($sql, 'information_schema.tables') ? 1
@@ -87,6 +88,27 @@ function register_deactivation_hook(string $unused, callable $callback): void
 function add_action(string $hook, callable $callback, int $priority = 10, int $acceptedArgs = 1): void
 {
     $GLOBALS['hooks'][$hook] = $callback;
+}
+function add_filter(string $hook, callable $callback, int $priority = 10, int $acceptedArgs = 1): void
+{
+    $GLOBALS['hooks'][$hook] = $callback;
+}
+function esc_html(string $value): string { return htmlspecialchars($value, ENT_QUOTES, 'UTF-8'); }
+function wpforms(): object
+{
+    static $instance;
+    if ($instance === null) {
+        $instance = new class {
+            public object $process;
+            public function __construct() { $this->process = (object) array('errors' => array()); }
+            public function obj(string $name): object
+            {
+                vnx02_schedule_assert($name === 'process');
+                return $this->process;
+            }
+        };
+    }
+    return $instance;
 }
 function get_option(string $name, mixed $default = false): mixed
 {
@@ -116,6 +138,28 @@ function wp_clear_scheduled_hook(string $hook): void
 }
 
 FAI\VNX02\Plugin::register('/synthetic-wordpress/plugin.php');
+if (str_starts_with($scenario, 'capture-')) {
+    $formId = $scenario === 'capture-excluded' ? 900002 : 900001;
+    $fields = vnx02_synthetic_fields();
+    unset($fields[14]); // An incomplete service notice must never look acquired.
+    $hooks['wpforms_process_complete']($fields, array(), array('id' => $formId), 0);
+    $expectedFailure = !in_array($scenario, array('capture-disabled', 'capture-excluded'), true);
+    $errors = wpforms()->obj('process')->errors;
+    vnx02_schedule_assert(isset($errors[$formId]['header']) === $expectedFailure);
+    $redirect = array(array('type' => 'redirect', 'redirect' => 'https://synthetic.invalid/thanks'));
+    $guard = $hooks['wpforms_process_entry_confirmation_redirect_confirmations'];
+    $result = $guard($redirect, array('id' => $formId));
+    if ($expectedFailure) {
+        vnx02_schedule_assert($errors[$formId]['header'] === esc_html(FAI\VNX02\Plugin::CAPTURE_ERROR_MESSAGE));
+        vnx02_schedule_assert($result === array(array('type' => 'message', 'message' => $errors[$formId]['header'])));
+        vnx02_schedule_assert(!str_contains(json_encode($errors), '@'));
+    } else {
+        vnx02_schedule_assert($result === $redirect && $wpdb->queries === array());
+    }
+    vnx02_schedule_assert($guard($redirect, array('id' => 900003)) === $redirect);
+    vnx02_schedule_assert($events === array());
+    exit(0);
+}
 vnx02_schedule_assert($hooks['init'] === array(FAI\VNX02\Plugin::class, 'recoverQueue'));
 vnx02_schedule_assert(is_callable($hooks['activation']) && is_callable($hooks['deactivation']));
 vnx02_schedule_assert($events === array());

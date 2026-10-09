@@ -3,7 +3,7 @@ Contributors: fai
 Tags: wpforms, crm, webhook
 Requires at least: 6.5
 Requires PHP: 8.1
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 
 Server-side, fail-closed WPForms producer for fai.lead-event.v1 and the FAI N12 gateway.
 
@@ -97,6 +97,14 @@ submission IDs, receipts, nonces, signatures, key IDs, file paths, URLs, excepti
 details are never logged by this plugin.
 
 == Future installation and rollback ==
+
+Version 1.2.1 makes a capture failure visible through the WPForms process error,
+retains the form for correction, and suppresses its confirmation redirect for
+that request only. Message and AJAX responses also stay in the error path.
+Disabled and unconfigured forms are unchanged. An uncertain enqueue is reported
+as unconfirmed, not as proof that nothing was persisted. Notifications or payments
+performed earlier by WPForms are not made atomic by this callback; qualify the
+actual request form and its other integrations before enabling the connector.
 
 1. Verify the ZIP and source revision in an isolated environment.
 2. Confirm Legal/DPO-approved privacy identities and exact WPForms field/choice values.

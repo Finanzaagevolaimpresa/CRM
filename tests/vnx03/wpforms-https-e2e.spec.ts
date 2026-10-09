@@ -24,6 +24,7 @@ const project = requiredEnvironment('COMPOSE_PROJECT_NAME');
 const composeFile = requiredEnvironment('VNX03_COMPOSE_FILE');
 const wordpressUrl = requiredEnvironment('VNX03_WORDPRESS_PUBLIC_URL');
 const evidenceDirectory = requiredEnvironment('VNX03_EVIDENCE_DIR');
+const captureError = 'Non è stato possibile confermare la ricezione della richiesta. Verifica i dati e riprova, oppure contatta FAI.';
 
 test.use({ screenshot: 'off', trace: 'off', video: 'off' });
 
@@ -114,9 +115,21 @@ async function submitForm(
     service: boolean;
     marketing: 'SYNTHETIC_MARKETING_GRANTED' | 'SYNTHETIC_MARKETING_DENIED';
   }>,
+  options: Readonly<{ captureError?: boolean; reuseForm?: boolean }> = {},
 ) {
-  await page.goto(`${wordpressUrl}/${input.slug}/`, { waitUntil: 'networkidle' });
+  if (!options.reuseForm) await page.goto(`${wordpressUrl}/${input.slug}/`, { waitUntil: 'networkidle' });
   const prefix = `#wpforms-${input.formId}-field_`;
+  try {
+    await expect(page.locator(`${prefix}1`)).toBeVisible({ timeout: 10_000 });
+  } catch (error) {
+    writeFileSync(join(evidenceDirectory, 'wpforms-missing-form.json'), `${JSON.stringify({
+      formId: input.formId, expectedPath: `/${input.slug}/`, currentPath: new URL(page.url()).pathname,
+      formCount: await page.locator(`#wpforms-form-${input.formId}`).count(),
+      captureErrorExpected: Boolean(options.captureError), synthetic: true,
+    }, null, 2)}\n`, { mode: 0o600 });
+    await page.screenshot({ path: join(evidenceDirectory, 'wpforms-missing-form.png'), fullPage: false });
+    throw error;
+  }
   await page.locator(`${prefix}1`).fill(input.firstName);
   await page.locator(`${prefix}1-last`).fill(input.lastName);
   await page.locator(`${prefix}3`).fill(input.email);
@@ -130,9 +143,15 @@ async function submitForm(
   await page.locator(`input[name="wpforms[fields][9]"][value="${input.marketing}"]`).check();
   const startedAt = Date.now();
   await page.locator(`#wpforms-submit-${input.formId}`).click();
-  await expect(page.getByText('VNX03_SYNTHETIC_CONFIRMATION', { exact: true })).toBeVisible({
-    timeout: 20_000,
-  });
+  if (options.captureError) {
+    await expect(page.getByText(captureError, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('VNX03_SYNTHETIC_CONFIRMATION', { exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(`${wordpressUrl}/${input.slug}/`);
+    await expect(page.locator(`${prefix}3`)).toHaveValue(input.email);
+    await expect(page.locator(`${prefix}7`)).toHaveValue('Synthetic VNX-03 browser qualification only.');
+  } else {
+    await expect(page.getByText('VNX03_SYNTHETIC_CONFIRMATION', { exact: true })).toBeVisible({ timeout: 20_000 });
+  }
   return Date.now() - startedAt;
 }
 
@@ -201,6 +220,23 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
   assert.equal(wordpressState().rows.length, 0);
   assertCrm('empty');
 
+  // A late capture failure must retain the form instead of confirming or redirecting.
+  for (const mode of ['redirect', 'ajax'] as const) {
+    compose(['exec', '-T', '--user', '33:33', '-e', 'HOME=/tmp', '-e', `VNX03_CAPTURE_RESPONSE_MODE=${mode}`,
+      'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '--use-include', '/opt/vnx03/capture-response-mode.php']);
+    setConnectorScenario('capture_key_missing');
+    await submitForm(page, {
+      formId: 900001, slug: 'vnx03-allowed', firstName: 'Capture', lastName: 'Failure',
+      email: 'capture-error@vnx03.invalid', company: 'VNX03 Capture Failure', phone: '+390200000099',
+      amount: '100.00', service: true, marketing: 'SYNTHETIC_MARKETING_DENIED',
+    }, { captureError: true });
+    assert.equal(wordpressState().rows.length, 0);
+    assertCrm('empty');
+  }
+  compose(['exec', '-T', '--user', '33:33', '-e', 'HOME=/tmp', '-e', 'VNX03_CAPTURE_RESPONSE_MODE=message',
+    'wordpress', 'wp', '--path=/var/www/html', '--quiet', 'eval-file', '--use-include', '/opt/vnx03/capture-response-mode.php']);
+  setConnectorScenario('normal');
+
   await submitForm(page, {
     formId: 900001,
     slug: 'vnx03-allowed',
@@ -212,7 +248,8 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
     amount: '3000.00',
     service: false,
     marketing: 'SYNTHETIC_MARKETING_DENIED',
-  });
+  }, { captureError: true });
+  await page.screenshot({ path: join(evidenceDirectory, 'wpforms-capture-error.png'), fullPage: false });
   assert.equal(wordpressState().rows.length, 0);
   assertCrm('empty');
 
@@ -229,7 +266,7 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
     amount: '125000.50',
     service: true,
     marketing: 'SYNTHETIC_MARKETING_GRANTED',
-  });
+  }, { reuseForm: true });
   assert.ok(outageSubmissionMs < 15_000);
   await page.screenshot({
     path: join(evidenceDirectory, 'wpforms-confirmation.png'),
@@ -388,7 +425,9 @@ test('authentic WPForms UI reaches N12/N11/VNX-01/N13 over verified HTTPS', asyn
 
   writeFileSync(join(evidenceDirectory, 'browser.json'), `${JSON.stringify({
     browserVersion: browser.version(),
-    authenticWpformsSubmissions: 8,
+    authenticWpformsSubmissions: 10,
+    captureFailureVisibleWithoutConfirmation: true, captureFailureFormValuesRetained: true,
+    captureFailureModes: ['message', 'redirect', 'ajax'], correctedSubmissionRecovered: true,
     projectedLeads: 2,
     marketingGranted: 1,
     marketingDenied: 1,
