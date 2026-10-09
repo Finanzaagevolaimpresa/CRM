@@ -1,4 +1,5 @@
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+ARG WORDPRESS_IMAGE=wordpress:7.1-php8.4-apache@sha256:b8f37de278183840a09f5a4b5bf5ec9f09177a9984d2fe5cc072b4388128bd9d
 
 FROM ${NODE_IMAGE} AS connector
 
@@ -13,9 +14,10 @@ RUN mkdir -p /out \
   && printf '%s  %s\n' "$CONNECTOR_SHA256" /out/fai-secure-lead-connector-1.2.1.zip \
     | sha256sum -c -
 
-FROM wordpress:7.1-php8.4-apache@sha256:b8f37de278183840a09f5a4b5bf5ec9f09177a9984d2fe5cc072b4388128bd9d
+FROM ${WORDPRESS_IMAGE}
 
 ARG WPFORMS_SHA256
+ARG WPFORMS_EDITION=lite
 ARG WP_CLI_SHA256
 
 RUN apt-get update \
@@ -31,11 +33,18 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p /opt/vnx03
 
-RUN curl --fail --silent --show-error --location \
+RUN --mount=type=secret,id=wpforms_pro \
+  case "$WPFORMS_EDITION" in \
+    lite) curl --fail --silent --show-error --location \
     --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 180 \
-    --output /opt/vnx03/wpforms-lite.zip \
-    https://downloads.wordpress.org/plugin/wpforms-lite.2.0.1.1.zip \
-  && curl --fail --silent --show-error --location \
+    --output /opt/vnx03/wpforms.zip \
+    https://downloads.wordpress.org/plugin/wpforms-lite.2.0.1.1.zip ;; \
+    pro) test -s /run/secrets/wpforms_pro && cp /run/secrets/wpforms_pro /opt/vnx03/wpforms.zip ;; \
+    *) exit 64 ;; \
+  esac \
+  && printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms.zip | sha256sum -c -
+
+RUN curl --fail --silent --show-error --location \
     --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 180 \
     --output /usr/local/bin/wp \
     https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar
@@ -47,11 +56,11 @@ COPY tests/vnx03/capture-response-mode.php /opt/vnx03/capture-response-mode.php
 COPY tests/vnx03/wp-state.php /opt/vnx03/wp-state.php
 COPY tests/vnx03/wordpress-entrypoint.sh /usr/local/bin/vnx03-wordpress-entrypoint.sh
 
-RUN printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms-lite.zip | sha256sum -c - \
+RUN printf '%s  %s\n' "$WPFORMS_SHA256" /opt/vnx03/wpforms.zip | sha256sum -c - \
   && printf '%s  %s\n' "$WP_CLI_SHA256" /usr/local/bin/wp | sha256sum -c - \
-  && unzip -t /opt/vnx03/wpforms-lite.zip >/dev/null \
+  && unzip -t /opt/vnx03/wpforms.zip >/dev/null \
   && unzip -t /opt/vnx03/fai-secure-lead-connector.zip >/dev/null \
-  && chmod 0644 /opt/vnx03/wpforms-lite.zip /opt/vnx03/fai-secure-lead-connector.zip \
+  && chmod 0644 /opt/vnx03/wpforms.zip /opt/vnx03/fai-secure-lead-connector.zip \
   && chmod 0755 /usr/local/bin/wp /usr/local/bin/vnx03-wordpress-entrypoint.sh \
   && printf '%s\n' \
     'curl.cainfo="/etc/ssl/certs/ca-certificates.crt"' \

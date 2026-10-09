@@ -1,0 +1,10 @@
+# Local Pro input only. This adds no runtime service, network or mount.
+# The ZIP is a BuildKit build input, never committed or uploaded to CI.
+services:
+  wordpress:
+    build:
+      secrets:
+        - wpforms_pro
+secrets:
+  wpforms_pro:
+    file: ${VNX03_PRO_PACKAGE:?VNX03_PRO_PACKAGE_REQUIRED}

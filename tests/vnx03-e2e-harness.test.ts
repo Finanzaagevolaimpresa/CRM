@@ -29,6 +29,7 @@ test('VNX-03 schema banks are explicit and reject unknown profiles', () => {
 
 test('VNX-03 pins official WPForms, WordPress, database and browser inputs', () => {
   const runner = source('scripts/vnx03/run-e2e.sh');
+  const profile = source('scripts/vnx03/wpforms-profile.sh');
   const compose = source('tests/vnx03/docker-compose.yml');
   const wordpress = source('tests/vnx03/Dockerfile.wordpress');
   const packageJson = JSON.parse(source('package.json')) as {
@@ -36,9 +37,10 @@ test('VNX-03 pins official WPForms, WordPress, database and browser inputs', () 
   };
 
   assert.equal(packageJson.devDependencies['@playwright/test'], '1.63.0');
-  assert.match(runner, /WPFORMS_VERSION='2\.0\.1\.1'/u);
-  assert.match(runner, /downloads\.wordpress\.org\/plugin\/wpforms-lite\.2\.0\.1\.1\.zip/u);
-  assert.match(runner, /WPFORMS_SHA256='[0-9a-f]{64}'/u);
+  assert.match(runner, /source "\$repo_root\/scripts\/vnx03\/wpforms-profile\.sh"/u);
+  assert.match(profile, /WPFORMS_VERSION='2\.0\.1\.1'/u);
+  assert.match(profile, /downloads\.wordpress\.org\/plugin\/wpforms-lite\.2\.0\.1\.1\.zip/u);
+  assert.match(profile, /WPFORMS_SHA256='[0-9a-f]{64}'/u);
   assert.match(runner, /WP_CLI_VERSION='2\.12\.0'/u);
   assert.match(runner, /WP_CLI_SHA256='[0-9a-f]{64}'/u);
   assert.match(wordpress, /wordpress:7\.1-php8\.4-apache@sha256:[0-9a-f]{64}/u);

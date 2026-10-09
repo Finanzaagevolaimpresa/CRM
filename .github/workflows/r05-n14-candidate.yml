@@ -29,6 +29,11 @@ jobs:
           VNX03_EXPECTED_SOURCE_TREE="$expected_tree" node scripts/vnx03/verify-candidate-communications-scope.mjs
       - name: Exercise negative candidate guards
         run: node --test tests/vnx03-candidate-scope.test.mjs tests/r05-perimeter-schema-guard.test.mjs
+      - name: Verify offline WPForms package and profile admission
+        run: |
+          python3 -I -B -S tests/vnx03-pro-package-offline.test.py
+          python3 -I -B -S tests/vnx03-pro-profile-offline.test.py
+          bash -n scripts/vnx03/wpforms-profile.sh
       - name: Install locked dependencies and browser
         run: |
           npm ci
