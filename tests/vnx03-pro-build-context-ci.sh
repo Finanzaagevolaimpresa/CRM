@@ -18,6 +18,11 @@ cleanup() {
   local code=$? clean=true image ids
   trap - EXIT
   set +e
+  # Preserve the generated nonsecret model before cleanup, also on admission
+  # failure: runner Compose versions must be diagnosed from their actual output.
+  if [[ -f "$runtime_dir/pro-bake.json" ]]; then
+    cp "$runtime_dir/pro-bake.json" "$evidence_dir/pro-build-model.json"
+  fi
   if [[ "$cleanup_owned" == true ]]; then
     for image in "${image_names[@]}"; do
       ids="$(docker --context "$docker_context" image ls -q --no-trunc "$image")" || { clean=false; continue; }
@@ -50,6 +55,8 @@ export DOCKER_CONTEXT="$docker_context"
 export VNX03_PRO_PYTHON="$(command -v python3)"
 source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
 pro_bind_builder
+docker compose version
+docker buildx version
 
 # Supply only nonsecret fixture values to render the existing Compose model.
 python3 -I -B -S - "$repo_root/tests/vnx03/docker-compose.yml" > "$runtime_dir/variable-names" <<'PY'
