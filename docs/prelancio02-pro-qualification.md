@@ -139,6 +139,25 @@ un archivio di oltre 15 MiB, costruisce con Compose/Bake e il Dockerfile effetti
 poi rimuove solo le tre immagini del progetto esclusivo. Non usa il pacchetto
 commerciale, non avvia WordPress o DB e non sostituisce il collaudo funzionale Pro.
 La ricevuta distinta `pro-build-transport.json` espone questi limiti e la pulizia.
+
+Il tentativo locale R04 ha verificato la ricomposizione del vero ZIP Pro e la
+build, poi si è fermato su `init-materials.sh`: il checkout Windows aveva
+convertito gli LF del blob Git in CRLF, invalidando `set -Eeuo pipefail` in
+Linux. Nessun test funzionale Pro è stato eseguito; cleanup verificato.
+Anche l'entrypoint WordPress viene copiato dal checkout nell'immagine.
+Gli attributi `text eol=lf` sono quindi limitati agli script shell del banco
+VNX03, compresa la prova CI del trasporto. Non cambiano la configurazione Git
+globale né il contenuto canonico degli script, già LF nei blob.
+`tests/vnx03-shell-checkout-offline.test.py` usa i veri filtri Git con
+`core.autocrlf=true` limitato al comando, confronta i byte del checkout e verifica
+la sintassi di tutti gli script del banco. Per i due entrypoint esegue soltanto
+le prime due righe, preventivamente confrontate con una lista consentita:
+l'header LF passa, quello CRLF riproduce l'errore nella CI Linux. Il solo controllo
+negativo è esplicitamente saltato su Windows, dove Git Bash accetta CRLF;
+i confronti dei byte e dei filtri Git restano obbligatori anche sull'MSI.
+Un percorso di controllo esterno al banco conserva la conversione Windows. Nessun Docker, DB o corpo
+degli script viene eseguito; questo controllo non qualifica Pro.
+
 Il job fissa Compose 5.5.1 tramite l'azione ufficiale Docker vincolata a commit,
 per confrontare lo stesso modello del banco MSI. Il renderer 2.38.2 del runner
 produce opzioni di output ed etichette diverse: quel modello resta rifiutato,
