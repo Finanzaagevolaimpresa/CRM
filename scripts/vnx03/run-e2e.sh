@@ -316,7 +316,11 @@ if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
   done
 fi
 compose_resources_created=true
-"${compose[@]}" build "${pro_build_arguments[@]}" --pull harness crm wordpress
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  pro_build_images
+else
+  "${compose[@]}" build --pull harness crm wordpress
+fi
 "${compose[@]}" up -d --wait --wait-timeout 180 postgres mysql
 "${compose[@]}" run --rm -T materials bash tests/vnx03/init-materials.sh
 "${compose[@]}" run --rm -T harness bash -lc \

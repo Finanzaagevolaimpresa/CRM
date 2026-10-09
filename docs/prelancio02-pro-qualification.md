@@ -56,8 +56,24 @@ il builder nominato dal contesto, ammette soltanto un nodo `running` con driver
 `--builder` alla build. Un diverso builder predefinito persistente non è usato.
 Le chiamate successive conservano il medesimo `DOCKER_CONTEXT` nel solo processo.
 Il [driver docker](https://docs.docker.com/build/builders/drivers/docker/) è
-integrato nell'Engine; la [selezione esplicita Compose](https://docs.docker.com/reference/cli/docker/compose/build/)
-evita di delegare l'input commerciale al builder predefinito.
+integrato nell'Engine.
+
+Per Pro, `compose build --print --pull` rende la definizione equivalente dei tre
+target. Il banco verifica contesti e Dockerfile locali, commit/tree, argomenti,
+digest, unico input Pro, etichette e tag esclusivi, output `type=docker` e assenza
+di opzioni ulteriori. Passa poi quel JSON inalterato a
+`docker --context <verificato> buildx bake --builder <verificato>`, concedendo
+lettura soltanto al checkout e allo ZIP già ammesso. Nessun push o builder nuovo.
+La via Lite resta invariata. Errori di renderizzazione o identità fermano prima
+di Buildx; un errore di build non avvia retry o percorsi alternativi.
+
+Questo raccordo evita il processo Buildx standalone di
+[Compose 5.5.1](https://github.com/docker/compose/blob/v5.5.1/pkg/compose/shellout.go),
+che propaga insieme `DOCKER_CONTEXT` e `DOCKER_HOST`. Nella
+[CLI 29.7.2](https://github.com/docker/cli/blob/v29.7.2/cli/command/cli.go)
+il secondo può selezionare `default` in assenza del flag globale esplicito.
+Il primo banco Pro si è fermato durante tale selezione, prima dei test funzionali;
+cleanup verificato. La correzione del trasporto non vale come qualifica Pro.
 
 Le risorse del progetto devono essere assenti prima della prima creazione.
 Oltre alle etichette, sono confrontati i nomi effettivi del modello Compose con
@@ -95,5 +111,7 @@ profilo mediante Bash/Python, senza Docker, DB, PHP o rete.
 `tests/vnx03-pro-docker-admission-offline.test.py` esercita le ammissioni reali
 Bash/Python con Docker interamente sostituito: override, builder remoto/ambiguo,
 inventari falliti e nomi occupati non possono trasferire input o invocare cleanup.
+I test del trasporto sostituiscono anche la build: controllano propagazione del
+contesto, input inalterato, percorsi con spazi, dinieghi e nessun retry implicito.
 Il job N14 li esegue prima della qualifica Lite già esistente. La prova Pro deve produrre le proprie
 ricevute `runtime.json`, `n14-runtime.json`, browser e cleanup sul target esatto.

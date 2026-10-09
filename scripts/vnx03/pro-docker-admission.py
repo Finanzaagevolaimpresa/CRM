@@ -55,6 +55,44 @@ def verify_resources(model, project, inventories):
     return {"resourceNamesAbsent": True, "counts": {k: len(v) for k, v in expected.items()}}
 
 
+def verify_bake(model, args):
+    services = {"harness", "crm", "wordpress"}
+    require(re.fullmatch(r"fai-vnx03-[a-z0-9-]+", args.project), "PRO_PROJECT_INVALID")
+    require(all(re.fullmatch(r"[0-9a-f]{40}", v) for v in (args.head, args.tree)), "PRO_SOURCE_INVALID")
+    require(set(model) == {"group", "target"} and set(model["target"]) == services, "PRO_BUILD_TARGETS_INVALID")
+    group = model["group"]
+    require(set(group) == {"default"} and set(group["default"]) == {"targets"}
+            and sorted(group["default"]["targets"]) == sorted(services), "PRO_BUILD_GROUP_INVALID")
+    root = Path(args.repository).resolve()
+    package = Path(args.package).resolve()
+    allowed = {"context", "dockerfile", "args", "labels", "tags", "target", "pull", "output", "secret"}
+    for name, target in model["target"].items():
+        require(set(target) <= allowed, "PRO_BUILD_UNEXPECTED_OPTION")
+        require(Path(target["context"]).resolve() == root, "PRO_BUILD_CONTEXT_INVALID")
+        dockerfile = "Dockerfile.wordpress" if name == "wordpress" else "Dockerfile.crm"
+        require((root / target["dockerfile"]).resolve() == root / "tests" / "vnx03" / dockerfile,
+                "PRO_BUILD_DOCKERFILE_INVALID")
+        require(target["tags"] == [args.project + "-" + name + ":" + args.head], "PRO_BUILD_TAG_INVALID")
+        require(target["pull"] is True and target["output"] == ["type=docker"], "PRO_BUILD_OUTPUT_INVALID")
+        labels = target["labels"]
+        require(set(labels) == {"com.docker.compose.project", "com.docker.compose.service", "com.docker.compose.version"}
+                and labels["com.docker.compose.project"] == args.project
+                and labels["com.docker.compose.service"] == name, "PRO_BUILD_LABELS_INVALID")
+        if name == "wordpress":
+            require("target" not in target, "PRO_BUILD_STAGE_INVALID")
+            require(target["args"] == {"WORDPRESS_IMAGE": args.wordpress_image, "WPFORMS_EDITION": "pro",
+                    "WPFORMS_SHA256": args.wpforms_sha, "CONNECTOR_SHA256": args.connector_sha,
+                    "WP_CLI_SHA256": args.wp_cli_sha}, "PRO_BUILD_ARGS_INVALID")
+            prefix = "id=wpforms_pro,type=file,src="
+            secrets = target["secret"]
+            require(len(secrets) == 1 and secrets[0].startswith(prefix)
+                    and Path(secrets[0][len(prefix):]).resolve() == package, "PRO_BUILD_SECRET_INVALID")
+        else:
+            require(target.get("target") == name and "secret" not in target, "PRO_BUILD_STAGE_OR_SECRET_INVALID")
+            require(target["args"] == {"SOURCE_COMMIT": args.head, "SOURCE_TREE": args.tree}, "PRO_BUILD_ARGS_INVALID")
+    return {"buildModelBound": True, "targets": sorted(services), "output": "local-docker"}
+
+
 def read_bounded(path):
     with Path(path).open("r", encoding="utf-8-sig") as stream:
         text = stream.read(2 * 1024 * 1024 + 1)
@@ -72,12 +110,18 @@ def main():
     resources.add_argument("--model", required=True)
     for kind in ("volumes", "networks", "containers"):
         resources.add_argument("--" + kind, required=True)
+    bake = sub.add_parser("bake")
+    for key in ("model", "project", "repository", "package", "head", "tree", "wordpress-image",
+                "connector-sha", "wpforms-sha", "wp-cli-sha"):
+        bake.add_argument("--" + key, required=True)
     args = parser.parse_args()
     try:
         if args.mode == "builder":
             text = sys.stdin.read(2 * 1024 * 1024 + 1)
             require(len(text) <= 2 * 1024 * 1024, "PRO_METADATA_TOO_LARGE")
             result = verify_builder(text, args.context)
+        elif args.mode == "bake":
+            result = verify_bake(json.loads(read_bounded(args.model)), args)
         else:
             inventories = {kind: set(read_bounded(getattr(args, kind)).splitlines())
                            for kind in ("volumes", "networks", "containers")}

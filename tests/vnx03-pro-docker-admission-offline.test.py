@@ -1,5 +1,6 @@
 """Exercise actual admission shell with substituted Docker, no daemon or DB."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -152,6 +153,122 @@ class OfflineDockerAdmission(unittest.TestCase):
     def test_unrelated_resource_names_are_preserved_and_do_not_block(self):
         result, _ = self.exercise(volumes="historical-data\n", networks="historical-network\n", containers="historical-container\n")
         self.assertEqual(result.returncode, 0)
+
+
+BUILD_SHELL = r'''
+set -Eeuo pipefail
+repo_root="$1"; runtime_dir="$2"; docker_context=synthetic-local
+COMPOSE_PROJECT_NAME=fai-vnx03-offline-1
+source_commit=1111111111111111111111111111111111111111
+source_tree=2222222222222222222222222222222222222222
+WORDPRESS_IMAGE=synthetic-wordpress; WPFORMS_SHA256=synthetic-wpforms
+VNX03_CONNECTOR_SHA256=synthetic-connector; WP_CLI_SHA256=synthetic-cli
+pro_build_arguments=(--builder "$docker_context")
+fail() { printf '%s\n' "$1"; exit 2; }
+fake_compose() {
+  [[ "$*" == 'build --print --pull harness crm wordpress' ]] || return 74
+  [[ "${RENDER_FAIL:-0}" == 0 ]] || return 75
+  cat "$runtime_dir/model"
+}
+docker() {
+  printf '%s\0' "$@" >> "$runtime_dir/build-calls"
+  # Simulate the context disagreement from the standalone child. Global
+  # --context must reach Docker, not be placed after compose/buildx.
+  [[ "$1" == --context && "$2" == synthetic-local && "$3" == buildx && "$4" == bake ]] || return 73
+  return "${BUILD_RESULT:-0}"
+}
+compose=(fake_compose)
+source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+pro_build_images
+'''
+
+
+class OfflineProBuildTransport(unittest.TestCase):
+    def exercise(self, mutate=lambda model: None, env=None):
+        with tempfile.TemporaryDirectory(prefix="pro build ") as directory:
+            target = Path(directory)
+            package = target / "input with spaces.zip"
+            model = {"group": {"default": {"targets": ["harness", "crm", "wordpress"]}}, "target": {}}
+            for name in ("harness", "crm", "wordpress"):
+                item = {"context": str(ROOT), "dockerfile": "tests/vnx03/Dockerfile.crm",
+                        "args": {"SOURCE_COMMIT": "1" * 40, "SOURCE_TREE": "2" * 40},
+                        "labels": {"com.docker.compose.project": PROJECT, "com.docker.compose.service": name,
+                                   "com.docker.compose.version": "5.5.1"},
+                        "tags": [PROJECT + "-" + name + ":" + "1" * 40],
+                        "target": name, "pull": True, "output": ["type=docker"]}
+                if name == "wordpress":
+                    item.pop("target")
+                    item["dockerfile"] = "tests/vnx03/Dockerfile.wordpress"
+                    item["args"] = {"WORDPRESS_IMAGE": "synthetic-wordpress", "WPFORMS_EDITION": "pro",
+                                    "WPFORMS_SHA256": "synthetic-wpforms", "CONNECTOR_SHA256": "synthetic-connector",
+                                    "WP_CLI_SHA256": "synthetic-cli"}
+                    item["secret"] = ["id=wpforms_pro,type=file,src=" + package.as_posix()]
+                model["target"][name] = item
+            mutate(model)
+            encoded = json.dumps(model)
+            (target / "model").write_text(encoded, encoding="utf-8")
+            clean = os.environ.copy()
+            clean.update({"VNX03_PRO_PYTHON": Path(sys.executable).as_posix(),
+                          "VNX03_PRO_PACKAGE": package.as_posix(), **(env or {})})
+            result = subprocess.run([BASH, "--noprofile", "--norc", "-c", BUILD_SHELL, "offline-pro-build",
+                                     ROOT.as_posix(), target.as_posix()], env=clean, text=True,
+                                    capture_output=True, timeout=20)
+            calls_path = target / "build-calls"
+            calls = calls_path.read_bytes().decode().split("\0")[:-1] if calls_path.exists() else []
+            if result.returncode == 0:
+                # Exact rendered configuration reaches Buildx; no lossy rewrite
+                # of digest pins, build arguments, secret or local image tags.
+                self.assertEqual((target / "pro-bake.json").read_text(encoding="utf-8"), encoded)
+                self.assertEqual(calls, ["--context", CONTEXT, "buildx", "bake", "--builder", CONTEXT,
+                                        "--file", (target / "pro-bake.json").as_posix(), "--progress", "plain",
+                                        "--allow", "fs.read=" + ROOT.as_posix(), "--allow",
+                                        "fs.read=" + package.as_posix(), "harness", "crm", "wordpress"])
+            return result, calls
+
+    def test_explicit_context_and_builder_preserve_complete_rendered_input(self):
+        result, _ = self.exercise(env={"DOCKER_CONTEXT": "foreign-default"})
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_render_failure_never_reaches_builder(self):
+        result, calls = self.exercise(env={"RENDER_FAIL": "1"})
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(calls, [])
+
+    def test_builder_failure_is_propagated_without_retry_or_fallback(self):
+        result, calls = self.exercise(env={"BUILD_RESULT": "42"})
+        self.assertEqual(result.returncode, 42)
+        self.assertEqual(calls.count("bake"), 1)
+
+    def test_remote_context_export_or_extra_targets_never_reach_builder(self):
+        def extra_target(model):
+            model["target"]["extra"] = copy.deepcopy(model["target"]["harness"])
+        mutations = [extra_target,
+                     lambda m: m["target"]["harness"].update(context="https://remote.invalid/source"),
+                     lambda m: m["target"]["harness"].update(output=["type=registry"]),
+                     lambda m: m["target"]["harness"].update(tags=["foreign:latest"]),
+                     lambda m: m["target"]["harness"].update(ssh=["default"]),
+                     lambda m: m["target"]["harness"].update(entitlements=["security.insecure"]),
+                     lambda m: m["group"]["default"].update(targets=["harness", "crm", "wordpress", "harness"])]
+        for mutation in mutations:
+            with self.subTest(mutation=mutations.index(mutation)):
+                result, calls = self.exercise(mutation)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(calls, [])
+
+    def test_drifted_source_stage_secret_or_args_never_reach_builder(self):
+        mutations = [lambda m: m["target"]["crm"]["args"].update(SOURCE_TREE="3" * 40),
+                     lambda m: m["target"]["crm"].update(target="other"),
+                     lambda m: m["target"]["crm"].update(dockerfile="../Dockerfile"),
+                     lambda m: m["target"]["crm"].update(secret=["id=private,env=TOKEN"]),
+                     lambda m: m["target"]["wordpress"].update(secret=["id=wpforms_pro,type=env,env=TOKEN"]),
+                     lambda m: m["target"]["wordpress"]["args"].update(WORDPRESS_IMAGE="foreign:latest"),
+                     lambda m: m["target"]["wordpress"]["args"].update(WPFORMS_SHA256="other"),
+                     lambda m: m["target"]["wordpress"].update(pull=False)]
+        for mutation in mutations:
+            with self.subTest(mutation=mutations.index(mutation)):
+                result, calls = self.exercise(mutation)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
