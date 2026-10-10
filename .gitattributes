@@ -2,3 +2,6 @@
 scripts/vnx03/*.sh text eol=lf
 tests/vnx03/*.sh text eol=lf
 tests/vnx03-pro-build-context-ci.sh text eol=lf
+
+# Historical migration checksums must survive Windows checkout and image COPY.
+prisma/migrations/*/migration.sql text eol=lf

@@ -1,7 +1,9 @@
-"""Exercise real Git checkout filters and Bash headers; no bank/runtime is started."""
+"""Exercise Git filters, SQL checksums and Bash headers; no bank/runtime is started."""
 
+import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -86,6 +88,47 @@ class ShellCheckout(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b"invalid option name", result.stderr)
                 self.assertNotIn(b"VNX03_HEADER_ONLY", result.stdout)
+
+
+class MigrationCheckout(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.migrations = git("ls-files", "-z", "--", "prisma/migrations/*/migration.sql").decode().strip("\0").split("\0")
+        if not cls.migrations or any(not path for path in cls.migrations):
+            raise AssertionError("VNX03_MIGRATIONS_MISSING")
+
+    def test_windows_checkout_preserves_canonical_migration_bytes(self):
+        for path in self.migrations:
+            with self.subTest(path=path):
+                blob = git("show", f"HEAD:{path}")
+                self.assertNotIn(b"\r", blob)
+                self.assertEqual(checkout(path), blob)
+
+    def test_current_sql_build_input_matches_canonical_blob(self):
+        for path in self.migrations:
+            with self.subTest(path=path):
+                self.assertEqual((ROOT / path).read_bytes(), git("show", f"HEAD:{path}"))
+
+    def guarded_migration(self):
+        guard = git("show", "HEAD:prisma/migrations/20260826150000_n13_n14_projection_attribution_corrective_v1/migration.sql")
+        checks = re.findall(rb"WHERE migration_name = '([^']+)'\s+AND checksum = '([0-9a-f]{64})'", guard)
+        self.assertEqual(len(checks), 2)  # The existing pre/post guards must agree.
+        self.assertEqual(checks[0], checks[1])
+        name, expected = (value.decode("ascii") for value in checks[0])
+        path = f"prisma/migrations/{name}/migration.sql"
+        self.assertIn(path, self.migrations)
+        return path, expected
+
+    def test_existing_checksum_guard_accepts_windows_checkout(self):
+        path, expected = self.guarded_migration()
+        self.assertEqual(hashlib.sha256(checkout(path)).hexdigest(), expected)
+
+    def test_unprotected_crlf_control_fails_existing_checksum_guard(self):
+        path, expected = self.guarded_migration()
+        canonical = git("show", f"HEAD:{path}")
+        control = checkout(path, "outside-vnx03-checkout-control.sql")
+        self.assertEqual(control, canonical.replace(b"\n", b"\r\n"))
+        self.assertNotEqual(hashlib.sha256(control).hexdigest(), expected)
 
 
 if __name__ == "__main__":

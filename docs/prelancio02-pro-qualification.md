@@ -158,6 +158,23 @@ i confronti dei byte e dei filtri Git restano obbligatori anche sull'MSI.
 Un percorso di controllo esterno al banco conserva la conversione Windows. Nessun Docker, DB o corpo
 degli script viene eseguito; questo controllo non qualifica Pro.
 
+Nel tentativo locale R05 gli script LF hanno superato l'inizializzazione dei
+materiali TLS. Il banco si è fermato durante la migrazione 43, prima delle prove
+funzionali Pro; cleanup verificato. Il log Prisma conserva l'errore di transazione
+abortita, non la prima eccezione PostgreSQL. Il confronto offline dimostra un
+ulteriore disallineamento: i 49 file SQL copiati nell'immagine dal checkout Windows
+avevano CRLF. Il digest del file della migrazione 42 nel checkout era diverso
+da quello dei byte canonici richiesto dai due controlli della migrazione 43. Questa
+evidenza non sostituisce un nuovo collaudo runtime.
+
+Anche `prisma/migrations/*/migration.sql` conserva ora gli LF tramite attributi
+Git: nessuna migrazione aggiunta o riscritta, nessun checksum storico aggiornato
+e nessun controllo rimosso. Lo stesso test offline già eseguito dal job N14
+confronta i veri filtri Windows e gli input SQL di build con tutti i blob Git;
+verifica il digest richiesto dai controlli esistenti e rifiuta il corrispondente
+input CRLF di controllo. Non esegue SQL o Prisma. La prova negativa passa anche
+su Windows e resta distinta dallo SKIP locale del solo header Bash CRLF.
+
 Il job fissa Compose 5.5.1 tramite l'azione ufficiale Docker vincolata a commit,
 per confrontare lo stesso modello del banco MSI. Il renderer 2.38.2 del runner
 produce opzioni di output ed etichette diverse: quel modello resta rifiutato,
