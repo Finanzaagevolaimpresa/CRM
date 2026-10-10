@@ -180,3 +180,21 @@ per confrontare lo stesso modello del banco MSI. Il renderer 2.38.2 del runner
 produce opzioni di output ed etichette diverse: quel modello resta rifiutato,
 senza allentare l'ammissione o cambiare Docker sull'MSI. In caso di arresto il
 modello sintetico effettivamente generato viene conservato nell'artifact CI.
+
+Il tentativo Pro R07 ha superato installazione, migrazioni e avvio del browser,
+poi si e fermato su `after_granted_admission`: l'asserzione dell'identita sorgente
+ammetteva soltanto `WPFORM:900001:EPHEMERAL:<32 hex>`, il caso senza entry persistita.
+Il contratto PHP esistente produce invece `WPFORM:900001:ENTRY:<intero positivo>`
+quando WPForms fornisce un entry ID. Il valore concreto dell'invio R07 non e
+stato conservato nel log minimizzato: non viene ricostruito retroattivamente.
+Il collaudo Pro e rimasto incompleto e il cleanup e verificato.
+
+Il browser ora passa esplicitamente l'edizione selezionata a ogni asserzione DB
+e richiede la stessa edizione nella risposta. Il controllo delle identita e
+separato per profilo: Lite conserva il predicato EPHEMERAL; Pro richiede ENTRY
+con intero positivo canonico, senza accettare l'alternativa Lite. Edizione assente
+o sconosciuta, altro form e identificativi malformati restano bloccanti.
+I controlli di conteggio, envelope canonico, provenienza, hash/idempotenza,
+privacy, proiezione e replay non cambiano. Non cambia il connector o il CRM.
+Le regressioni offline usano anche l'identita ENTRY della fixture PHP esistente;
+non sostituiscono la nuova esecuzione completa Pro da autorizzare separatamente.

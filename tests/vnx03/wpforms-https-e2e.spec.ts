@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { requireWpformsEdition } from './submission-identity';
 
 type QueueRow = Readonly<{
   status: string;
@@ -24,6 +25,7 @@ const project = requiredEnvironment('COMPOSE_PROJECT_NAME');
 const composeFile = requiredEnvironment('VNX03_COMPOSE_FILE');
 const wordpressUrl = requiredEnvironment('VNX03_WORDPRESS_PUBLIC_URL');
 const evidenceDirectory = requiredEnvironment('VNX03_EVIDENCE_DIR');
+const wpformsEdition = requireWpformsEdition(process.env.VNX03_WPFORMS_EDITION);
 const captureError = 'Non è stato possibile confermare la ricezione della richiesta. Verifica i dati e riprova, oppure contatta FAI.';
 
 test.use({ screenshot: 'off', trace: 'off', video: 'off' });
@@ -82,10 +84,12 @@ function assertCrm(checkpoint: string) {
   const output = compose([
     'run', '--rm', '-T',
     '-e', `VNX03_ASSERT_CHECKPOINT=${checkpoint}`,
+    '-e', `VNX03_WPFORMS_EDITION=${wpformsEdition}`,
     'harness',
     'node', '--import', 'tsx', 'tests/vnx03/assert-state.ts',
   ], 180_000);
   assert.match(output, new RegExp(`"checkpoint":"${checkpoint}"`, 'u'));
+  assert.match(output, new RegExp(`"wpformsEdition":"${wpformsEdition}"`, 'u'));
 }
 
 function runConsumer() {

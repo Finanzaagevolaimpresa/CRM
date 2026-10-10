@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { qualificationSchema } from './schema-profile';
+import { assertWpformsSubmissionId, requireWpformsEdition } from './submission-identity';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { canonicalJson } from '../../src/lib/canonical-json';
 import {
@@ -83,13 +84,13 @@ async function databaseIdentity() {
   assert.equal(Number(migrations[0]?.count), qualificationSchema().migrations);
 }
 
-function verifyEnvelope(raw: string, expected: ExpectedEvent): LeadSubmittedEventV1 {
+function verifyEnvelope(raw: string, expected: ExpectedEvent, edition: 'lite' | 'pro'): LeadSubmittedEventV1 {
   const parsed = parseLeadSubmittedEventV1(JSON.parse(raw) as unknown);
   assert.equal(canonicalJson(parsed), raw);
   assert.equal(parsed.source.systemCode, 'WORDPRESS');
   assert.equal(parsed.source.formCode, 'VNX03_SYNTHETIC_WPFORMS');
   assert.equal(parsed.source.formVersion, 'v1');
-  assert.match(parsed.source.submissionId, /^WPFORM:900001:EPHEMERAL:[0-9a-f]{32}$/u);
+  assertWpformsSubmissionId(parsed.source.submissionId, edition);
   assert.equal(parsed.payload.email, expected.email);
   assert.equal(parsed.payload.firstName, expected.firstName);
   assert.equal(parsed.payload.lastName, expected.lastName);
@@ -102,7 +103,7 @@ function verifyEnvelope(raw: string, expected: ExpectedEvent): LeadSubmittedEven
   return parsed;
 }
 
-async function verifyBusinessEvents(checkpoint: string) {
+async function verifyBusinessEvents(checkpoint: string, edition: 'lite' | 'pro') {
   const rows = await db.businessInboxEvent.findMany({ orderBy: { createdAt: 'asc' } });
   const parsed = rows.map((row) => ({ row, event: parseLeadSubmittedEventV1(JSON.parse(row.envelopeJson)) }));
   const granted = parsed.find(({ event }) => event.payload.email === expectedEvents.granted.email);
@@ -110,13 +111,13 @@ async function verifyBusinessEvents(checkpoint: string) {
 
   if (rows.length >= 1) {
     assert.ok(granted);
-    const verified = verifyEnvelope(granted.row.envelopeJson, expectedEvents.granted);
+    const verified = verifyEnvelope(granted.row.envelopeJson, expectedEvents.granted, edition);
     assert.equal(verified.idempotency.keyDigest, granted.row.keyDigest);
     assert.equal(verified.idempotency.payloadHash, granted.row.payloadHash);
   }
   if (rows.length >= 2) {
     assert.ok(denied);
-    const verified = verifyEnvelope(denied.row.envelopeJson, expectedEvents.denied);
+    const verified = verifyEnvelope(denied.row.envelopeJson, expectedEvents.denied, edition);
     assert.equal(verified.idempotency.keyDigest, denied.row.keyDigest);
     assert.equal(verified.idempotency.payloadHash, denied.row.payloadHash);
   }
@@ -214,6 +215,7 @@ async function verifyReceiptReplay(checkpoint: string) {
 
 async function main() {
   assert.equal(process.env.VNX03_SYNTHETIC_E2E_CONFIRMED, '1');
+  const edition = requireWpformsEdition(process.env.VNX03_WPFORMS_EDITION);
   const checkpoint = process.env.VNX03_ASSERT_CHECKPOINT ?? '';
   const expected = checkpoints[checkpoint];
   assert.ok(expected, 'VNX03_ASSERT_CHECKPOINT_INVALID');
@@ -248,10 +250,10 @@ async function main() {
     assert.equal(gates.find((gate) => gate.code === code)?.enabled, false);
   }
 
-  await verifyBusinessEvents(checkpoint);
+  await verifyBusinessEvents(checkpoint, edition);
   await verifyProjection(checkpoint);
   await verifyReceiptReplay(checkpoint);
-  process.stdout.write(`${JSON.stringify({ checkpoint, counts, ok: true })}\n`);
+  process.stdout.write(`${JSON.stringify({ checkpoint, counts, wpformsEdition: edition, ok: true })}\n`);
 }
 
 void main()
