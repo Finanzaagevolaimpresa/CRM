@@ -59,6 +59,7 @@ esac
 
 source "$repo_root/scripts/vnx03/wpforms-profile.sh"
 source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+source "$repo_root/scripts/vnx03/synthetic-secrets.sh"
 pro_build_arguments=()
 
 docker_context="$(docker context show)"
@@ -276,21 +277,23 @@ export VNX03_WORDPRESS_IMAGE="$WORDPRESS_IMAGE"
 export VNX03_WPFORMS_SOURCE="$WPFORMS_SOURCE"
 export VNX03_WP_CLI_SHA256="$WP_CLI_SHA256"
 export VNX03_CONNECTOR_SHA256="$connector_sha256"
-export VNX03_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
-export VNX03_MYSQL_PASSWORD="$(openssl rand -hex 24)"
-export VNX03_MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
-export VNX03_AUTH_SECRET="$(openssl rand -hex 32)"
-export VNX03_PRIVILEGED_STEP_UP_SECRET="$(openssl rand -hex 32)"
-export VNX03_COMMERCIAL_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
-export VNX03_WORDPRESS_ADMIN_PASSWORD="$(openssl rand -hex 24)"
-export VNX03_WORDPRESS_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_SECURE_AUTH_KEY="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_LOGGED_IN_KEY="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_NONCE_KEY="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_AUTH_SALT="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_SECURE_AUTH_SALT="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_LOGGED_IN_SALT="$(openssl rand -base64 48 | tr -d '\n')"
-export VNX03_WORDPRESS_NONCE_SALT="$(openssl rand -base64 48 | tr -d '\n')"
+# Standalone commands preserve generator failures under set -e; export with a
+# command substitution would otherwise hide OpenSSL's exit status.
+vnx03_export_synthetic_secret VNX03_POSTGRES_PASSWORD hex 24
+vnx03_export_synthetic_secret VNX03_MYSQL_PASSWORD hex 24
+vnx03_export_synthetic_secret VNX03_MYSQL_ROOT_PASSWORD hex 24
+vnx03_export_synthetic_secret VNX03_AUTH_SECRET hex 32
+vnx03_export_synthetic_secret VNX03_PRIVILEGED_STEP_UP_SECRET hex 32
+vnx03_export_synthetic_secret VNX03_COMMERCIAL_PASSWORD base64 32
+vnx03_export_synthetic_secret VNX03_WORDPRESS_ADMIN_PASSWORD hex 24
+vnx03_export_synthetic_secret VNX03_WORDPRESS_AUTH_KEY base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_SECURE_AUTH_KEY base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_LOGGED_IN_KEY base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_NONCE_KEY base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_AUTH_SALT base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_SECURE_AUTH_SALT base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_LOGGED_IN_SALT base64 48
+vnx03_export_synthetic_secret VNX03_WORDPRESS_NONCE_SALT base64 48
 
 "${compose[@]}" config --quiet
 if [[ "$WPFORMS_EDITION" == 'pro' ]]; then

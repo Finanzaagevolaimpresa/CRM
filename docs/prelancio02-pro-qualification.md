@@ -198,3 +198,26 @@ I controlli di conteggio, envelope canonico, provenienza, hash/idempotenza,
 privacy, proiezione e replay non cambiano. Non cambia il connector o il CRM.
 Le regressioni offline usano anche l'identita ENTRY della fixture PHP esistente;
 non sostituiscono la nuova esecuzione completa Pro da autorizzare separatamente.
+
+Il tentativo Pro R08 ha superato la prima sequenza browser (10 invii autentici,
+errori di cattura, ripresa, consensi e proiezioni). Si e poi fermato al login del
+primo commerciale sintetico N14; cleanup verificato. Una riproduzione locale su
+pagina vuota dimostra che OpenSSL nativo Windows emette CRLF: il precedente
+`tr -d '\n'` lasciava CR nella password, bcrypt lo includeva e l'input password
+del browser lo rimuoveva. La credenziale originale R08 non e stata conservata:
+la riproduzione identifica un difetto reale, non ricostruisce quel valore.
+
+Il generatore comune normalizza esclusivamente CR/LF del materiale effimero,
+controlla formato e lunghezza e conserva gli stessi byte casuali richiesti.
+Un errore OpenSSL resta bloccante, senza essere mascherato da `export`.
+Provisioning e browser rifiutano inoltre password con CR/LF prima di usare DB
+o pagina. Non si normalizzano password di utenti reali e il login CRM non cambia.
+La regressione offline esegue il generatore e tutte le 15 esportazioni reali con
+OpenSSL sostituito (LF, CRLF, wrapping, errore e output invalido); nessun Docker,
+DB o rete. Il job N14 la esegue prima della qualifica candidato esistente.
+
+R08 conserva anche un distinto STOP del driver locale per un collegamento
+transitorio alla rete Docker predefinita durante la build. ID e configurazione
+non risultano cambiati; l'attore non e attribuito dalle prove acquisite. Questo
+delta non modifica quella guardia, non converte R08 in PASS e non autorizza un
+nuovo collaudo Pro o una nuova attivazione reale.
