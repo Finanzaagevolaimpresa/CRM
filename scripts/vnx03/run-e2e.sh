@@ -59,8 +59,12 @@ esac
 
 source "$repo_root/scripts/vnx03/wpforms-profile.sh"
 source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+source "$repo_root/scripts/vnx03/pro-network-boundary.sh"
 source "$repo_root/scripts/vnx03/synthetic-secrets.sh"
 pro_build_arguments=()
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  pro_require_network_contract
+fi
 
 docker_context="$(docker context show)"
 docker_endpoint="$(docker context inspect "$docker_context" --format '{{ (index .Endpoints "docker").Host }}')"
@@ -319,10 +323,10 @@ if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
       || fail 'VNX03_PRO_PROJECT_IMAGE_COLLISION'
   done
 fi
-compose_resources_created=true
 if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
-  pro_build_images
+  pro_build_before_runtime
 else
+  compose_resources_created=true
   "${compose[@]}" build --pull harness crm wordpress
 fi
 "${compose[@]}" up -d --wait --wait-timeout 180 postgres mysql
