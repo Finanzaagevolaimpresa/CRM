@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly WPFORMS_VERSION='2.0.1.1'
-readonly WPFORMS_URL='https://downloads.wordpress.org/plugin/wpforms-lite.2.0.1.1.zip'
-readonly WPFORMS_SHA256='6245074790df01a6e24a42587e024132b4a28fac499d1a8fa12ebf5580e4852b'
 readonly WP_CLI_VERSION='2.12.0'
 readonly WP_CLI_URL='https://github.com/wp-cli/wp-cli/releases/download/v2.12.0/wp-cli-2.12.0.phar'
 readonly WP_CLI_SHA256='ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c'
@@ -21,7 +18,17 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
 
-[[ "$(git rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'VNX03_REPOSITORY_ROOT_INVALID'
+git_root="$(git rev-parse --show-toplevel)"
+if command -v cygpath >/dev/null 2>&1; then
+  git_root="$(cygpath -u "$git_root")"
+fi
+[[ "$git_root" == "$repo_root" ]] || fail 'VNX03_REPOSITORY_ROOT_INVALID'
+if command -v cygpath >/dev/null 2>&1; then
+  # Native Docker/Node need host paths; container paths must not be rewritten
+  # by MSYS (for example --path=/var/www/html and HOME=/tmp).
+  repo_root="$(cygpath -m "$repo_root")"
+  export MSYS_NO_PATHCONV=1
+fi
 [[ -z "$(git status --porcelain=v2 --untracked-files=all)" ]] || fail 'VNX03_WORKTREE_NOT_EXACT_HEAD'
 
 source_commit="$(git rev-parse HEAD)"
@@ -50,12 +57,29 @@ case "$VNX03_QUALIFICATION_PROFILE" in
   *) fail 'VNX03_QUALIFICATION_PROFILE_INVALID' ;;
 esac
 
+source "$repo_root/scripts/vnx03/wpforms-profile.sh"
+source "$repo_root/scripts/vnx03/pro-docker-admission.sh"
+pro_build_arguments=()
+
 docker_context="$(docker context show)"
 docker_endpoint="$(docker context inspect "$docker_context" --format '{{ (index .Endpoints "docker").Host }}')"
 case "$docker_endpoint" in
   unix:///var/run/docker.sock|npipe:////./pipe/docker_engine) ;;
+  npipe:////./pipe/dockerDesktopLinuxEngine)
+    [[ "$WPFORMS_EDITION" == 'pro' ]] || fail 'VNX03_NONLOCAL_DOCKER_CONTEXT_FORBIDDEN'
+    ;;
   *) fail 'VNX03_NONLOCAL_DOCKER_CONTEXT_FORBIDDEN' ;;
 esac
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  [[ "$docker_context" == "$VNX03_EXPECTED_DOCKER_CONTEXT" ]] \
+    || fail 'VNX03_PRO_DOCKER_CONTEXT_MISMATCH'
+  [[ "$(docker info --format '{{.ID}}')" == "$VNX03_EXPECTED_DOCKER_ENGINE_ID" ]] \
+    || fail 'VNX03_PRO_DOCKER_ENGINE_MISMATCH'
+  pro_bind_builder
+  # Pin subsequent Docker/Compose calls (including browser helpers) to the
+  # verified context without changing the user's persistent selection.
+  export DOCKER_CONTEXT="$docker_context"
+fi
 docker info --format '{{.ServerVersion}} {{.OSType}}' | grep -Eq '^[^ ]+ linux$' \
   || fail 'VNX03_LINUX_DOCKER_REQUIRED'
 
@@ -66,9 +90,15 @@ fi
 [[ $# -eq 0 ]] || fail 'VNX03_ARGUMENT_INVALID'
 
 runtime_base="${RUNNER_TEMP:-/tmp}"
+if command -v cygpath >/dev/null 2>&1; then
+  runtime_base="$(cygpath -m "$runtime_base")"
+fi
 mkdir -p "$runtime_base"
 runtime_dir="$(mktemp -d "$runtime_base/fai-vnx03.XXXXXX")"
 evidence_dir="${VNX03_EVIDENCE_DIR:-$runtime_base/fai-vnx03-evidence-${source_commit:0:12}}"
+if command -v cygpath >/dev/null 2>&1; then
+  evidence_dir="$(cygpath -m "$evidence_dir")"
+fi
 mkdir -p "$evidence_dir"
 
 project_suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
@@ -86,6 +116,9 @@ export VNX03_CRM_PORT="${VNX03_CRM_PORT:-18084}"
 export VNX03_WORDPRESS_PUBLIC_URL="http://127.0.0.1:${VNX03_WP_PORT}"
 export VNX03_CRM_PUBLIC_URL="http://127.0.0.1:${VNX03_CRM_PORT}"
 export VNX03_COMPOSE_FILE="$repo_root/$COMPOSE_RELATIVE_PATH"
+if command -v cygpath >/dev/null 2>&1; then
+  export VNX03_COMPOSE_FILE="$(cygpath -m "$VNX03_COMPOSE_FILE")"
+fi
 export VNX03_EVIDENCE_DIR="$evidence_dir"
 export VNX03_DOCKER_CONTEXT="$docker_context"
 export VNX03_DOCKER_ENDPOINT="$docker_endpoint"
@@ -121,6 +154,9 @@ node -e '
 ' "$evidence_dir/preflight.json"
 
 compose=(docker compose --project-directory "$repo_root" -p "$COMPOSE_PROJECT_NAME" -f "$VNX03_COMPOSE_FILE")
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  compose+=(-f "$repo_root/tests/vnx03/docker-compose.pro.yml")
+fi
 compose_resources_created=false
 cleanup_status='NOT_CREATED'
 cleanup_verification='NOT_RUN'
@@ -219,7 +255,13 @@ download_and_verify() {
   printf '%s  %s\n' "$digest" "$output" | sha256sum -c - >/dev/null
 }
 
-download_and_verify "$WPFORMS_URL" "$artifacts_dir/wpforms-lite.zip" "$WPFORMS_SHA256"
+if [[ "$WPFORMS_EDITION" == 'lite' ]]; then
+  download_and_verify "$WPFORMS_URL" "$artifacts_dir/wpforms.zip" "$WPFORMS_SHA256"
+else
+  # The admitted local input is rechecked by Dockerfile at build time.
+  printf '%s  %s\n' "$WPFORMS_SHA256" "$VNX03_PRO_PACKAGE" | sha256sum -c - >/dev/null
+  pro_stage_build_input
+fi
 download_and_verify "$WP_CLI_URL" "$artifacts_dir/wp-cli.phar" "$WP_CLI_SHA256"
 node tools/package-vnx02-wordpress-connector.mjs --output "$artifacts_dir" \
   > "$runtime_dir/connector-package.log"
@@ -229,6 +271,9 @@ connector_sha256="$(sha256sum "$connector_zip" | awk '{print $1}')"
 [[ "$connector_sha256" =~ ^[0-9a-f]{64}$ ]] || fail 'VNX03_CONNECTOR_DIGEST_INVALID'
 
 export VNX03_WPFORMS_SHA256="$WPFORMS_SHA256"
+export VNX03_WPFORMS_EDITION="$WPFORMS_EDITION"
+export VNX03_WORDPRESS_IMAGE="$WORDPRESS_IMAGE"
+export VNX03_WPFORMS_SOURCE="$WPFORMS_SOURCE"
 export VNX03_WP_CLI_SHA256="$WP_CLI_SHA256"
 export VNX03_CONNECTOR_SHA256="$connector_sha256"
 export VNX03_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
@@ -248,8 +293,35 @@ export VNX03_WORDPRESS_LOGGED_IN_SALT="$(openssl rand -base64 48 | tr -d '\n')"
 export VNX03_WORDPRESS_NONCE_SALT="$(openssl rand -base64 48 | tr -d '\n')"
 
 "${compose[@]}" config --quiet
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  pro_require_resource_names_absent
+  # Cleanup may own only a newly allocated project. Reject historical/colliding
+  # resources before setting the mutation flag that enables the cleanup trap.
+  prior_containers="$(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || fail 'VNX03_PRO_PROJECT_INVENTORY_FAILED'
+  [[ -z "$prior_containers" ]] \
+    || fail 'VNX03_PRO_PROJECT_CONTAINER_COLLISION'
+  prior_volumes="$(docker volume ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || fail 'VNX03_PRO_PROJECT_INVENTORY_FAILED'
+  [[ -z "$prior_volumes" ]] \
+    || fail 'VNX03_PRO_PROJECT_VOLUME_COLLISION'
+  prior_networks="$(docker network ls -q --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME")" \
+    || fail 'VNX03_PRO_PROJECT_INVENTORY_FAILED'
+  [[ -z "$prior_networks" ]] \
+    || fail 'VNX03_PRO_PROJECT_NETWORK_COLLISION'
+  for suffix in harness crm wordpress; do
+    prior_images="$(docker image ls --quiet --no-trunc "$COMPOSE_PROJECT_NAME-$suffix:$source_commit")" \
+      || fail 'VNX03_PRO_PROJECT_INVENTORY_FAILED'
+    [[ -z "$prior_images" ]] \
+      || fail 'VNX03_PRO_PROJECT_IMAGE_COLLISION'
+  done
+fi
 compose_resources_created=true
-"${compose[@]}" build --pull harness crm wordpress
+if [[ "$WPFORMS_EDITION" == 'pro' ]]; then
+  pro_build_images
+else
+  "${compose[@]}" build --pull harness crm wordpress
+fi
 "${compose[@]}" up -d --wait --wait-timeout 180 postgres mysql
 "${compose[@]}" run --rm -T materials bash tests/vnx03/init-materials.sh
 "${compose[@]}" run --rm -T harness bash -lc \
@@ -271,7 +343,7 @@ wp_quiet=("${wp[@]}" --quiet)
 [[ "$("${wp_quiet[@]}" option get permalink_structure)" == '/%postname%/' ]] \
   || fail 'VNX03_WORDPRESS_REWRITE_MISMATCH'
 echo 'VNX03_WPFORMS_INSTALL_BEGIN'
-"${wp[@]}" plugin install /opt/vnx03/wpforms-lite.zip --activate
+"${wp[@]}" plugin install /opt/vnx03/wpforms.zip --activate
 echo 'VNX03_WPFORMS_INSTALL_OK'
 "${wp_quiet[@]}" eval-file /opt/vnx03/setup-wordpress.php
 echo 'VNX03_CONNECTOR_INSTALL_BEGIN'
@@ -280,9 +352,9 @@ echo 'VNX03_CONNECTOR_INSTALL_OK'
 "${wp[@]}" plugin list --fields=name,status,version --format=table
 
 wordpress_version="$("${wp_quiet[@]}" core version)"
-wpforms_version="$("${wp_quiet[@]}" plugin get wpforms-lite --field=version)"
+wpforms_version="$("${wp_quiet[@]}" plugin get "$WPFORMS_SLUG" --field=version)"
 connector_version="$("${wp_quiet[@]}" plugin get fai-secure-lead-connector --field=version)"
-[[ "$wordpress_version" == '7.1' ]] || fail 'VNX03_WORDPRESS_VERSION_MISMATCH'
+[[ "$wordpress_version" == "$WORDPRESS_VERSION" ]] || fail 'VNX03_WORDPRESS_VERSION_MISMATCH'
 [[ "$wpforms_version" == "$WPFORMS_VERSION" ]] || fail 'VNX03_WPFORMS_VERSION_MISMATCH'
 [[ "$connector_version" == '1.2.1' ]] || fail 'VNX03_CONNECTOR_VERSION_MISMATCH'
 
@@ -290,6 +362,9 @@ export VNX03_RUNTIME_WORDPRESS_VERSION="$wordpress_version"
 export VNX03_RUNTIME_WPFORMS_VERSION="$wpforms_version"
 export VNX03_RUNTIME_CONNECTOR_VERSION="$connector_version"
 export VNX03_RUNTIME_PHP_VERSION="$("${compose[@]}" exec -T wordpress php -r 'echo PHP_VERSION;')"
+if [[ -n "$EXPECTED_PHP_VERSION" ]]; then
+  [[ "$VNX03_RUNTIME_PHP_VERSION" == "$EXPECTED_PHP_VERSION" ]] || fail 'VNX03_PHP_VERSION_MISMATCH'
+fi
 export VNX03_RUNTIME_MYSQL_VERSION="$("${compose[@]}" exec -T mysql mysql --version | tr -d '\r')"
 export VNX03_RUNTIME_POSTGRES_VERSION="$("${compose[@]}" exec -T postgres postgres --version | tr -d '\r')"
 export VNX03_RUNTIME_NODE_VERSION="$("${compose[@]}" run --rm -T harness node --version | tr -d '\r')"
@@ -341,7 +416,8 @@ node -e '
     wpforms: {
       version: process.env.VNX03_RUNTIME_WPFORMS_VERSION,
       sha256: process.env.VNX03_WPFORMS_SHA256,
-      source: "downloads.wordpress.org"
+      source: process.env.VNX03_WPFORMS_SOURCE,
+      edition: process.env.VNX03_WPFORMS_EDITION
     },
     wordpress: process.env.VNX03_RUNTIME_WORDPRESS_VERSION,
     php: process.env.VNX03_RUNTIME_PHP_VERSION,
