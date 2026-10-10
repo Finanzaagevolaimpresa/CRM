@@ -96,10 +96,12 @@ class DockerReadOnly:
 
     def snapshot(self, binding):
         def identity():
-            engine = self.query("info", "--format", "{{.ID}}")
             endpoint = self.query("context", "inspect", self.context, "--format",
                                   '{{ (index .Endpoints "docker").Host }}')
-            require(engine == binding["engine"] and endpoint == binding["endpoint"], "ENGINE_OR_ENDPOINT_DRIFT")
+            require(endpoint == binding["endpoint"], "LOCAL_ENDPOINT_DRIFT")
+            # Inspect context locally before making any request to its daemon.
+            engine = self.query("info", "--format", "{{.ID}}")
+            require(engine == binding["engine"], "ENGINE_DRIFT")
         identity()
         ids = self.query("ps", "-aq", "--no-trunc").splitlines()
         require(len(ids) <= 128 and len(ids) == len(set(ids)) and

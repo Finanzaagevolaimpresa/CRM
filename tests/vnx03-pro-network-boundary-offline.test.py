@@ -235,6 +235,16 @@ class MetadataTransport(unittest.TestCase):
         self.assertEqual(result["attachments"][0]["kind"], "UNATTRIBUTED_SANDBOX")
         self.assertNotIn("private-", json.dumps(result))
 
+    def test_changed_context_endpoint_denies_before_any_daemon_request(self):
+        def fake_run(args, **_kwargs):
+            self.assertEqual(args[3:5], ["context", "inspect"])
+            return subprocess.CompletedProcess(args, 0, b"tcp://remote.invalid:2376")
+        with patch.object(subprocess, "run", side_effect=fake_run) as process:
+            with self.assertRaisesRegex(guard.Denied, "LOCAL_ENDPOINT_DRIFT"):
+                guard.DockerReadOnly("synthetic-local").snapshot(
+                    {"engine": "synthetic-engine", "endpoint": "unix:///var/run/docker.sock"})
+            self.assertEqual(process.call_count, 1)
+
     def test_incomplete_network_metadata_is_never_empty(self):
         for key in (*guard.STABLE, "Id", "Created", "Containers"):
             value = copy.deepcopy(BRIDGE)
