@@ -10,6 +10,7 @@ async function main() {
   assert.equal(process.env.VNX03_SYNTHETIC_E2E_CONFIRMED, '1');
   assert.equal(process.env.COMMERCIAL_LEAD_INBOX_MODE, 'enforced');
   assert.ok(password && password.length >= 24);
+  assert.doesNotMatch(password, /[\r\n]/u, 'VNX03_N14_PASSWORD_CONTAINS_LINE_ENDING');
   const identity = await db.$queryRaw<Array<{ database: string; sentinel: string | null }>>(Prisma.sql`
     SELECT current_database() AS database, shobj_description(oid, 'pg_database') AS sentinel
     FROM pg_database WHERE datname = current_database()

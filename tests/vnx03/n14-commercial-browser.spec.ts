@@ -9,6 +9,7 @@ const composeFile = required('VNX03_COMPOSE_FILE');
 const wordpressUrl = required('VNX03_WORDPRESS_PUBLIC_URL');
 const crmUrl = required('VNX03_CRM_PUBLIC_URL');
 const password = required('VNX03_COMMERCIAL_PASSWORD');
+assert.doesNotMatch(password, /[\r\n]/u, 'VNX03_N14_PASSWORD_CONTAINS_LINE_ENDING');
 const evidenceDirectory = required('VNX03_EVIDENCE_DIR');
 
 test.use({ screenshot: 'off', trace: 'off', video: 'off' });
