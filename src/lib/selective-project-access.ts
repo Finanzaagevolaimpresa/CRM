@@ -50,9 +50,25 @@ async function now(tx: Tx) {
 async function liveActor(tx: Tx, claimed: AuthSession) {
   if (internalSessionMode() !== 'registry' || !z.string().uuid().safeParse(claimed.sessionId).success) denied();
   const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
-  if (!row?.live || row.revokedAt || !row.active || row.deletedAt) denied();
-  return { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
-    ...await loadSelectiveProjectScope(tx, claimed.userId) } satisfies AuthSession;
+  if (!row || row.revokedAt || !row.active || row.deletedAt) denied();
+  const current = { ...claimed, registryExpiresAt: row.expiresAt, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+    ...await loadSelectiveProjectScope(tx, claimed.userId) } satisfies AuthSession & { registryExpiresAt: Date };
+  await assertLiveAtOutcome(tx, current);
+  return current;
+}
+async function assertLiveAtOutcome(tx: Tx, current: AuthSession & { registryExpiresAt: Date }) {
+  const clock = await now(tx);
+  if (!Number.isFinite(current.expiresAt) || current.expiresAt * 1000 <= clock.getTime() || current.registryExpiresAt <= clock) denied();
+}
+/** Session rows stay locked; wall-clock expiry is rechecked after every wait,
+ * including writes/audit and file IO. A denial rolls the whole transaction back. */
+function withSelectiveSession<T>(db: Db, claimed: AuthSession, work: (tx: Tx, current: Awaited<ReturnType<typeof liveActor>>) => Promise<T>) {
+  return withSerializableTransaction(db, async tx => {
+    const current = await liveActor(tx, claimed);
+    const result = await work(tx, current);
+    await assertLiveAtOutcome(tx, current);
+    return result;
+  });
 }
 async function authority(tx: Tx, current: AuthSession) {
   await tx.$queryRaw`SELECT "id" FROM "SelectiveAccessAuthority" WHERE "id"=${authorityId} FOR SHARE`;
@@ -124,8 +140,8 @@ function projection(project: Awaited<ReturnType<typeof projectContext>>, snapsho
 /** Read only: no draft, impersonated session or grant is created by preview. */
 export async function previewSelectiveAccess(db: Db, claimed: AuthSession, raw: unknown) {
   const input = selectiveSelectionSchema.parse(raw);
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed), binding = await authority(tx, current);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
+    const binding = await authority(tx, current);
     const key = await loadActivePrivilegedStepUpKey(tx);
     if (!key) throw new SelectiveAccessError('UNAVAILABLE');
     const state = await selectionState(tx, current, input);
@@ -154,8 +170,8 @@ function parsePreview(token: string) {
 export async function readPreviewSelectiveDocument(db: Db, claimed: AuthSession, token: string, versionId: string,
   readBytes: (storagePath: string, limit: number) => Promise<Buffer>) {
   const envelope = parsePreview(token);
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed), binding = await authority(tx, current), key = await loadActivePrivilegedStepUpKey(tx);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
+    const binding = await authority(tx, current), key = await loadActivePrivilegedStepUpKey(tx);
     const { payload } = envelope;
     if (!key || payload.actorId !== current.userId || payload.sessionId !== current.sessionId || payload.keyVersion !== key.version
       || binding.revision !== payload.authorityRevision || !verifySelectiveProof(key, 'preview', payload, envelope.proof)) denied();
@@ -174,8 +190,8 @@ export async function readPreviewSelectiveDocument(db: Db, claimed: AuthSession,
 export async function confirmSelectiveAccess(db: Db, claimed: AuthSession, token: string, stepUpAdmitted: boolean) {
   if (!stepUpAdmitted) denied();
   const envelope = parsePreview(token);
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed), binding = await authority(tx, current), key = await loadActivePrivilegedStepUpKey(tx);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
+    const binding = await authority(tx, current), key = await loadActivePrivilegedStepUpKey(tx);
     const { payload } = envelope;
     if (!key || payload.actorId !== current.userId || payload.sessionId !== current.sessionId || payload.keyVersion !== key.version
       || binding.revision !== payload.authorityRevision || !verifySelectiveProof(key, 'preview', payload, envelope.proof)) denied();
@@ -200,8 +216,7 @@ export async function confirmSelectiveAccess(db: Db, claimed: AuthSession, token
 
 export async function revokeSelectiveAccess(db: Db, claimed: AuthSession, id: string, revision: number, stepUpAdmitted: boolean) {
   if (!stepUpAdmitted || !z.string().uuid().safeParse(id).success) denied();
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
     await authority(tx, current);
     const grant = await tx.selectiveProjectGrant.findUnique({ where: { id } });
     if (!grant || grant.revision !== revision || grant.recipientId === current.userId) stale();
@@ -235,8 +250,7 @@ async function authorizedSnapshot(tx: Tx, current: AuthSession, projectId: strin
   return { grant, snapshot, project, target };
 }
 export async function readSelectiveProject(db: Db, claimed: AuthSession, projectId: string) {
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
     const state = await authorizedSnapshot(tx, current, projectId);
     return projection(state.project, state.snapshot);
   });
@@ -245,8 +259,7 @@ export async function readSelectiveProject(db: Db, claimed: AuthSession, project
 /** Called on every byte request; never returns a reusable storage URL. */
 export async function readSelectiveDocument(db: Db, claimed: AuthSession, projectId: string, versionId: string, download: boolean,
   readBytes: (storagePath: string, limit: number) => Promise<Buffer>) {
-  return withSerializableTransaction(db, async tx => {
-    const current = await liveActor(tx, claimed);
+  return withSelectiveSession(db, claimed, async (tx, current) => {
     const { grant, snapshot } = await authorizedSnapshot(tx, current, projectId);
     const selected = snapshot.versions.find(row => row.versionId === versionId);
     if (!selected || (download && !selected.download)) denied();

@@ -39,7 +39,9 @@ Le tabelle del perimetro devono essere presenti prima dell'avvio del candidato. 
 
 ## Verifica e recuperabilità
 
-La workflow `Selective project access` usa PostgreSQL16 effimero, database `fai_crm_test`, sentinella obbligatoria e dati sintetici. Verifica migrazione49→50, errore SQL iniettato con rollback completo, prefisso49 invariato, quattro scenari PostgreSQL e un percorso Playwright con utenti distinti, preview, conferma, URL diretti e revoca da sessione aperta. Gli artifact riportano HEAD/tree, TAP, ricevute e screenshot.
+La workflow `Selective project access` usa PostgreSQL16 effimero, database `fai_crm_test`, sentinella obbligatoria e dati sintetici. Verifica migrazione49→50, errore SQL iniettato con rollback completo, prefisso49 invariato, otto scenari PostgreSQL e due percorsi Playwright con utenti distinti, preview, conferma, URL diretti e revoca da sessione aperta. Gli artifact riportano HEAD/tree, TAP, ricevute e screenshot.
+
+Il riesame del candidato iniziale ha richiesto quattro regressioni aggiuntive: le azioni reali sulle pratiche tecniche e sulle note interne ricontrollano il contesto corrente anche nella transazione; i moduli acquisiti prima della concessione restano negati dopo concessione e revoca, sia per Admin sia per tecnico assegnato. L'esito di ogni operazione selettiva ricontrolla la scadenza persistita e quella dichiarata usando l'orologio corrente PostgreSQL, dopo le attese e prima del commit o della restituzione dei byte; un diniego annulla anche l'audit operativo. Il filtro audit comprende gli ID canonici dei messaggi M4 e delle risposte collegate. Un contratto finanziario comune resta riservato senza estendere il perimetro ai servizi, documenti e attività di un altro progetto.
 
 Comandi pertinenti: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `node --import tsx --test --test-reporter=tap tests/selective-project-policy.test.ts`, il test PostgreSQL `tests/selective-project-access-db.test.ts` e Playwright con `tests/selective-sharing/playwright.config.ts`. I test DB richiedono il guardiano di isolamento esistente; non devono essere indirizzati a database reali.
 

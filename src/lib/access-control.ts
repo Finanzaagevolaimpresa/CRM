@@ -357,7 +357,8 @@ export function canViewTechnicalPractice(user: Actor, practice: ClientScopedCont
   return hasClientResponsibility(user, practice.client);
 }
 
-export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwnerId?: string | null }) {
+export function canEditTechnicalPractice(user: Actor, practice?: Parameters<typeof hasSelectiveContext>[1] & { technicalOwnerId?: string | null }) {
+  if (practice && hasSelectiveContext(user, practice)) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);

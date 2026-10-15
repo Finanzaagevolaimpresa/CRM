@@ -87,8 +87,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selective-project-access-db.test.ts | tee "$SELECTIVE_EVIDENCE/postgresql.tap"
-          grep -q '^# tests 4$' "$SELECTIVE_EVIDENCE/postgresql.tap"
-          grep -q '^# pass 4$' "$SELECTIVE_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 8$' "$SELECTIVE_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 8$' "$SELECTIVE_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$SELECTIVE_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'
@@ -111,7 +111,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_EVIDENCE/playwright.json" npx playwright test --config tests/selective-sharing/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==1 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==2 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to last HEAD and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_EVIDENCE/source.txt"

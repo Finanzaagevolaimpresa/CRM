@@ -250,7 +250,7 @@ test('pratiche tecniche invocano le guardie ABAC prima delle scritture', () => {
   );
   assertGuardsBeforeMutation('updateTechnicalPracticeStatus', ['requireTechnicalPracticeEditAccess', 'assertTechnicalPracticeOperational'], 'tx.technicalPractice.update');
   assertGuardsBeforeMutation('assignTechnicalPractice', ['requireTechnicalPracticeEditAccess', 'withAssignmentGuard'], 'tx.technicalPractice.update');
-  assertGuardsBeforeMutation('archiveTechnicalPractice', ['requireTechnicalPracticeEditAccess'], 'prisma.technicalPractice.update');
+  assertGuardsBeforeMutation('archiveTechnicalPractice', ['requireTechnicalPracticeEditAccess', 'requireTechnicalPracticeMutationAccess'], 'tx.technicalPractice.update');
 });
 
 test('la route DOCX verifica l offerta prima di generare il documento', () => {
