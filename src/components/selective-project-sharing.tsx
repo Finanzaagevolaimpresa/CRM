@@ -64,6 +64,6 @@ function Revoke({ grant, name }: { grant: Grant; name: string }) {
   const [state, action, pending] = useActionState(revokeSharing, initial);
   return <form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
     <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} />
-    {!grant.revoked && !state.ok && <button disabled={pending} className="underline">Revoca accesso</button>}<p role="status">{state.message}</p>
+    {!grant.revoked && !state.ok && <button disabled={pending} className="underline">Revoca accesso</button>}<p role="status">{grant.revoked ? 'Accesso revocato.' : state.message}</p>
   </form>;
 }

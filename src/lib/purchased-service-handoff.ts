@@ -93,7 +93,7 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
   await authorizeManualAssignment(tx, actor, [{ userId: input.technicalOwnerId, roles: technicalRoles }]);
   await tx.$queryRaw`SELECT "id" FROM "ClientService" WHERE "id"=${input.serviceId} FOR UPDATE`;
   const selectedService = await tx.clientService.findUnique({ where: { id: input.serviceId }, select: { projectId: true } });
-  await assertNoSelectiveProjectMutation(tx, actor.userId, selectedService?.projectId);
+  await assertNoSelectiveProjectMutation(tx, actor.userId, selectedService?.projectId, input.serviceId);
   const fingerprint = canonicalSha256(input), existing = await getHandoffReceipt(tx, input.serviceId);
   if (existing) {
     if (existing.receipt.fingerprint !== fingerprint) return deny('Passaggio già registrato. Usa la scheda responsabilità per una riassegnazione.');

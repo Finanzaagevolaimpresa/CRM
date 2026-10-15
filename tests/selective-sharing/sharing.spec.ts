@@ -69,6 +69,10 @@ test('personal confirmation, exact preview, recipient routes and revocation with
   const otherProject = await rc.request.get(`/projects/${fixture.otherProjectId}`); expect(otherProject.status()).toBe(200); expect(await otherProject.text()).toContain('Altro fascicolo invariato');
   await admin.reload(); await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
   await expect(admin.getByText('Accesso revocato.', { exact: false })).toBeVisible();
+  const revoked = await db.selectiveProjectGrant.findUniqueOrThrow({ where: { projectId_recipientId: { projectId: fixture.projectId, recipientId: fixture.recipientId } } });
+  expect(revoked.revokedAt).not.toBeNull(); expect(revoked.revision).toBe(2);
+  expect(await db.auditLog.count({ where: { event: 'selective_project_access_revoked', entityId: revoked.id } })).toBe(1);
+  await admin.reload(); await expect(admin.getByText('Accesso revocato.', { exact: false })).toBeVisible();
   expect((await rc.request.get(documentUrl(1) + '?download=1', { headers: { 'If-None-Match': '*' } })).status()).toBe(404);
   expect((await rc.request.get(shared)).status()).toBe(404);
   expect((await rc.request.get(`/projects/${fixture.projectId}`)).status()).toBe(404);

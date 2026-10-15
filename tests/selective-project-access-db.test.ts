@@ -8,8 +8,10 @@ import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
 import { canViewProject, canEditProject, canViewDocument, canEditService, canEditTask } from '../src/lib/access-control';
 import { canViewPaymentListRecord } from '../src/lib/business-list-access';
 import { declareContractSignature } from '../src/lib/contract-signature';
+import { acceptResponsibility, savePracticeResponsibility } from '../src/lib/responsibility';
 import { selectiveProof } from '../src/lib/selective-project-proof';
 import { canonicalSha256 } from '../src/lib/canonical-json';
+import { selectiveAuditAllowed } from '../src/lib/selective-project-policy';
 
 const enabled = process.env.RUN_DB_TESTS === '1', db = new PrismaClient();
 let admin: Awaited<ReturnType<typeof syntheticAuthority>>;
@@ -47,13 +49,24 @@ test('real preview, effective projection and exact document bytes match; future 
   const futureBytes = Buffer.from('VERSIONE_FUTURA_ESCLUSA'), future = await db.documentVersion.create({ data: { documentId: f.documents[0].doc.id, version: 2, storagePath: 'synthetic/future.txt', checksum: createHash('sha256').update(futureBytes).digest('hex') } });
   await assert.rejects(readSelectiveDocument(db, f.reader.session, f.project.id, future.id, false, async () => futureBytes));
   assert.deepEqual(await readSelectiveProject(db, f.reader.session, f.project.id), effective);
+  const financing = await db.corporateFinancingAssessment.create({ data: { clientId: f.client.id, clientServiceId: f.service.id, criticalIssues: 'PRIVATE_SYNTHETIC' } });
+  const bankability = await db.bankabilityAssessment.create({ data: { clientId: f.client.id, projectId: f.project.id, riskRationale: 'PRIVATE_SYNTHETIC' } });
   const current = { ...f.reader.session, ...await loadSelectiveProjectScope(db, f.reader.user.id) };
+  for (const entityId of [financing.id, bankability.id, future.id]) assert.equal(selectiveAuditAllowed(current, { entityId, after: { note: 'PRIVATE_SYNTHETIC' } }), false);
   assert.ok(current.selectiveContractIds?.includes(f.contract.id));
   assert.equal(canViewPaymentListRecord(current, { payment: f.payment, contract: f.contract, client: f.client, project: null }), false);
   assert.equal(canEditService(current, { ...f.service, client: f.client, project: { ...f.project, client: f.client } }), false);
   assert.equal(canEditTask(current, { ...f.task, client: f.client, project: { ...f.project, client: f.client } }), false);
   await assert.rejects(declareContractSignature(db, f.reader.session, { contractId: f.contract.id, expectedVersion: f.contract.updatedAt.toISOString(),
     expectedDeclarationId: null, signedOn: '2026-10-01', source: 'Synthetic attempt', confirmed: true }));
+  // The practice has no direct project binding: its service still puts it inside the perimeter.
+  const indirect = await db.technicalPractice.create({ data: { clientId: f.client.id, projectId: null, clientServiceId: f.service.id,
+    title: 'Pratica indiretta sintetica', practiceType: 'synthetic', targetEntity: 'synthetic', createdById: admin.user.id } });
+  await assert.rejects(db.$transaction(tx => savePracticeResponsibility(tx, f.reader.session, { id: indirect.id,
+    expectedEntryId: '', expectedUpdatedAt: indirect.updatedAt.toISOString(), commercialOwnerId: null, technicalOwnerId: null,
+    departmentCode: null, reason: 'Synthetic attempt' }, true)), /SELECTIVE_PROJECT_READ_ONLY/);
+  await assert.rejects(db.$transaction(tx => acceptResponsibility(tx, f.reader.session, { kind: 'TechnicalPractice', id: indirect.id,
+    decisionId: 'synthetic', role: 'tecnico' })), /SELECTIVE_PROJECT_READ_ONLY/);
   assert.equal(canViewProject(current, { ...f.project, client: f.client }), false);
   assert.equal(canEditProject(current, { ...f.project, client: f.client }), false);
   assert.equal(canViewDocument(current, { ...f.documents[2].doc, client: f.client, project: { ...f.project, client: f.client } }), false);
