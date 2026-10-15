@@ -133,6 +133,7 @@ async function provisionKey(input: {
 }
 
 async function cleanGatewayAndN11() {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const tables = [
     'LeadIdentityKey',
     'LeadDuplicateDecision',
@@ -153,7 +154,8 @@ async function cleanGatewayAndN11() {
     await db.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
   }
   try {
-    await db.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((table) => `"${table}"`).join(', ')}`);
+    // Do not truncate or cascade into the newer controlled-intake schema.
+    for (const table of tables) await db.$executeRawUnsafe(`DELETE FROM "${table}"`);
   } finally {
     for (const table of [...tables].reverse()) {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);

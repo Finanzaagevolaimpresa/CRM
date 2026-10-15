@@ -7,11 +7,14 @@ export async function loadSelectiveProjectScope(db: Db, recipientId: string): Pr
   // denies the projection; it must never restore an older, broader permission.
   const grants = await db.selectiveProjectGrant.findMany({ where: { recipientId }, select: { id: true, projectId: true } });
   const selectiveProjectIds = grants.map(row => row.projectId);
-  if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [] };
+  if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [], selectiveOfferIds: [] };
   const [linkedServices, practices] = await Promise.all([
     db.clientService.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { contractId: true } }),
-    db.practiceReadiness.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { id: true } }),
+    db.practiceReadiness.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { id: true, commercialOfferId: true, acceptedOfferRevisionId: true } }),
   ]);
+  const offerRevisions = await db.practiceOfferRevision.findMany({ where: { OR: [{ projectId: { in: selectiveProjectIds } },
+    { id: { in: practices.flatMap(row => row.acceptedOfferRevisionId ? [row.acceptedOfferRevisionId] : []) } }] }, select: { id: true, commercialOfferId: true } });
+  const selectiveOfferIds = [...new Set([...practices.map(row => row.commercialOfferId), ...offerRevisions.map(row => row.commercialOfferId)])];
   const formalizations = await db.practiceFormalization.findMany({ where: { practiceId: { in: practices.map(row => row.id) } },
     select: { id: true, contractId: true, signedDocumentId: true } });
   const contracts = await db.contract.findMany({ where: { OR: [
@@ -44,16 +47,16 @@ export async function loadSelectiveProjectScope(db: Db, recipientId: string): Pr
     db.aiOutput.findMany({ where: contextWhere, select: idOnly }),
     db.aiRun.findMany({ where: contextWhere, select: idOnly }),
     db.aiExecutionRequest.findMany({ where: contextWhere, select: idOnly }),
-    db.practiceOfferRevision.findMany({ where: projectWhere, select: idOnly }),
     db.bankabilityAssessment.findMany({ where: projectWhere, select: idOnly }),
     db.corporateFinancingAssessment.findMany({ where: contextWhere, select: idOnly }),
     db.grantAssessment.findMany({ where: projectWhere, select: idOnly }),
     db.documentVersion.findMany({ where: { documentId: { in: documents.map(row => row.id) } }, select: idOnly }),
   ]);
   const selectiveDocumentIds = documents.map(row => row.id);
-  const selectiveAuditEntityIds = [...new Set([...selectiveProjectIds, ...selectiveServiceIds, ...selectiveContractIds, ...selectiveDocumentIds,
+  const selectiveAuditEntityIds = [...new Set([...selectiveProjectIds, ...selectiveServiceIds, ...selectiveContractIds, ...selectiveOfferIds, ...selectiveDocumentIds,
+    ...offerRevisions.map(row => row.id),
     ...grants.map(row => row.id), ...payments.map(row => row.id), ...practices.map(row => row.id), ...formalizations.map(row => row.id), ...related.flatMap(rows => rows.map(row => row.id))])];
-  return { selectiveProjectIds, selectiveServiceIds, selectiveContractIds, selectiveDocumentIds, selectiveAuditEntityIds };
+  return { selectiveProjectIds, selectiveServiceIds, selectiveContractIds, selectiveOfferIds, selectiveDocumentIds, selectiveAuditEntityIds };
 }
 
 /** Fresh check inside a transaction, also for actors rebuilt by legacy services. */

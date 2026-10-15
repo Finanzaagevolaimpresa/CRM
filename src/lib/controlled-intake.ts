@@ -6,6 +6,7 @@ import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { maybeEnrollManualCommercialLead } from './commercial-lead-inbox';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { engagementFeatureEnabled } from './internal-engagement-mode';
 import { hasPermission } from './permission-evaluator';
 import { FAI_SERVICE_CATALOG_V2 } from './service-catalog-v2';
@@ -53,7 +54,7 @@ type Db = Pick<PrismaClient, '$transaction' | '$queryRaw' | 'controlledIntake'>;
 async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) {
   const session = claimed.sessionId ? await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId, userId: claimed.userId }) : null;
   if (!session || session.revokedAt || !session.live || !session.active || session.deletedAt || !hasPermission({ role: session.role, active: session.active, permissionOverrides: session.permissionOverrides }, 'lead.write')) throw new ControlledIntakeError('DENIED');
-  return session;
+  return { ...session, ...await loadSelectiveProjectScope(tx, session.userId) };
 }
 
 function requireEnabled() {
@@ -123,6 +124,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
       commercialOfferId = offer.id;
     }
     if (input.contractId) {
+      if (actor.selectiveContractIds?.includes(input.contractId)) throw new ControlledIntakeError('DENIED');
       const contract = await tx.contract.findUnique({ where: { id: input.contractId } });
       const client = contract ? await tx.client.findUnique({ where: { id: contract.clientId } }) : null;
       if (!contract || !client || !canViewClient(actor, client)) throw new ControlledIntakeError('DENIED');

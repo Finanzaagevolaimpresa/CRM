@@ -43,11 +43,25 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
   const payment = await db.payment.create({ data: { contractId: contract.id, clientId: client.id, taxableAmount: 7777,
     vatAmount: 1710.94, totalAmount: 9487.94, method: 'PAGAMENTO_ESCLUSO', notes: 'NOTA_PAGAMENTO_ESCLUSA' } });
   const catalog = await db.serviceCatalog.findFirstOrThrow({ where: { active: true } });
+  const catalogRevision = await db.serviceCatalogRevision.findFirstOrThrow({ where: { serviceCatalogId: catalog.id, status: 'PUBLISHED' }, orderBy: { version: 'desc' } });
+  const lead = await db.lead.create({ data: { firstName: 'Lead', lastName: 'Sintetico', clientId: client.id, assignedToId: reader.user.id } });
+  const intake = await db.controlledIntake.create({ data: { channel: 'EMAIL', sourceId: randomUUID(), sourceOccurredAt: new Date(),
+    acquisitionMode: 'MANUAL_CONTROLLED', mappingVersion: 'selective-synthetic-v1', payloadHash: createHash('sha256').update(randomUUID()).digest('hex'),
+    leadId: lead.id, subjectType: 'PERSONA', firstName: 'Lead', lastName: 'Sintetico', classificationState: 'VERIFIED',
+    effectiveCategory: 'consulenza', need: 'Synthetic offer scope', operatorId: admin.user.id } });
+  const offer = await db.commercialOffer.create({ data: { leadId: lead.id, clientId: client.id, title: 'OFFERTA_FAI_ESCLUSA',
+    taxableAmount: 100, vatAmount: 22, totalAmount: 122, status: 'inviata', sentAt: new Date(), followUpAt: new Date(),
+    validUntil: new Date(Date.now() + 86_400_000), createdById: admin.user.id } });
+  await db.practiceOfferRevision.create({ data: { controlledIntakeId: intake.id, commercialOfferId: offer.id, projectId: project.id,
+    revision: 1, serviceRevisionId: catalogRevision.id, clientId: client.id, scope: 'Synthetic selected project offer',
+    inclusions: [], exclusions: [], deliverables: [], taxableAmount: 100, vatAmount: 22, totalAmount: 122, requiredInitialAmount: 50,
+    currency: 'EUR', validUntil: offer.validUntil!, startupConditions: 'Synthetic conditions',
+    payloadHash: createHash('sha256').update(randomUUID()).digest('hex'), proposedById: admin.user.id } });
   const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalog.id,
     contractId: contract.id, paymentId: payment.id, assignedToId: reader.user.id,
     operationalNotes: 'NOTA_SERVIZIO_ESCLUSA', internalNotes: 'MARGINE_SERVIZIO_ESCLUSO' } });
   const task = await db.task.create({ data: { clientId: client.id, projectId: project.id, clientServiceId: service.id,
     title: 'TASK_PROGETTO_ESCLUSO', assignedToId: reader.user.id, createdById: admin.user.id, dueAt: new Date() } });
   const input = { projectId: project.id, recipientId: reader.user.id, revision: 0, fields: ['title', 'totalInvestment'], documents: documents.slice(0, 2).map((doc, index) => ({ versionId: doc.version.id, download: index === 1 })), expiresAt: null };
-  return { admin, reader, otherAdmin, client, project, otherProject, documents, contract, payment, service, task, input };
+  return { admin, reader, otherAdmin, client, project, otherProject, documents, contract, payment, service, task, lead, offer, input };
 }

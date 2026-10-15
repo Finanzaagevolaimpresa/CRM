@@ -8,7 +8,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 const evidence = process.env.SELECTIVE_EVIDENCE!, password = process.env.SELECTIVE_BROWSER_PASSWORD!;
 const fixture = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
   synthetic: boolean; projectId: string; otherProjectId: string; clientId: string; recipientId: string;
-  contractId: string; serviceId: string;
+  contractId: string; serviceId: string; offerId: string; leadId: string;
   emails: { admin: string; recipient: string; other: string }; documents: { id: string; versionId: string }[];
 };
 const db = new PrismaClient();
@@ -60,12 +60,14 @@ test('personal confirmation, exact preview, recipient routes and revocation with
   const future = await db.documentVersion.create({ data: { documentId: fixture.documents[0].id, version: 2, storagePath: 'selective/not-served.txt', checksum: createHash('sha256').update('FUTURE').digest('hex') } });
   expect((await rc.request.get(`${shared}/documents/${future.id}`)).status()).toBe(404);
   for (const url of [`/projects/${fixture.projectId}`, `/clients/${fixture.clientId}`, '/search?q=ESCLUS', '/audit-log', `/clients/${fixture.clientId}/operational-report`,
-    '/contracts', '/payments', `/contracts/${fixture.contractId}`, '/progress', '/dashboard', '/notifications', '/tasks', '/documents']) {
+    '/contracts', '/payments', `/contracts/${fixture.contractId}`, '/progress', '/dashboard', '/notifications', '/tasks', '/documents',
+    '/commercial-offers', `/commercial-offers/${fixture.offerId}`, `/leads/${fixture.leadId}`]) {
     const response = await rc.request.get(url), text = await response.text();
     expect(response.status()).toBeLessThan(500); expect(text).not.toContain('NOTA_PRIVATA_ESCLUSA_SINTETICA'); expect(text).not.toContain('DESCRIZIONE_ESCLUSA_SINTETICA');
     expect(text).not.toContain('Documento sintetico 3');
-    for (const marker of ['CONTRATTO_ESCLUSO_', 'COMPENSO_FAI_ESCLUSO', 'PAGAMENTO_ESCLUSO', 'MARGINE_PRIVATO_ESCLUSO', 'NOTA_SERVIZIO_ESCLUSA', 'MARGINE_SERVIZIO_ESCLUSO', 'TASK_PROGETTO_ESCLUSO']) expect(text).not.toContain(marker);
+    for (const marker of ['CONTRATTO_ESCLUSO_', 'COMPENSO_FAI_ESCLUSO', 'PAGAMENTO_ESCLUSO', 'MARGINE_PRIVATO_ESCLUSO', 'NOTA_SERVIZIO_ESCLUSA', 'MARGINE_SERVIZIO_ESCLUSO', 'TASK_PROGETTO_ESCLUSO', 'OFFERTA_FAI_ESCLUSA']) expect(text).not.toContain(marker);
   }
+  expect((await rc.request.get(`/commercial-offers/${fixture.offerId}/export/docx`)).status()).toBe(404);
   const otherProject = await rc.request.get(`/projects/${fixture.otherProjectId}`); expect(otherProject.status()).toBe(200); expect(await otherProject.text()).toContain('Altro fascicolo invariato');
   await admin.reload(); await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
   await expect(admin.getByText('Accesso revocato.', { exact: false })).toBeVisible();

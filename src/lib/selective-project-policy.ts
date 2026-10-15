@@ -30,6 +30,7 @@ export type SelectiveProjectScope = {
   selectiveServiceIds?: readonly string[];
   selectiveDocumentIds?: readonly string[];
   selectiveContractIds?: readonly string[];
+  selectiveOfferIds?: readonly string[];
   selectiveAuditEntityIds?: readonly string[];
 };
 type Context = {

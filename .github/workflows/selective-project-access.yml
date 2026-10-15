@@ -115,7 +115,10 @@ jobs:
       - name: Bind result to last HEAD and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_EVIDENCE/source.txt"
-          git diff --exit-code
+          # Next dev changes only these generated type imports. Reject any other drift.
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
       - uses: actions/upload-artifact@v4
         if: always()
         with:

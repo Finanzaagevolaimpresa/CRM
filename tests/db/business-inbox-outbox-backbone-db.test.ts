@@ -93,9 +93,9 @@ async function cleanN11Tables() {
     await db.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
   }
   try {
-    await db.$executeRawUnsafe(
-      `TRUNCATE TABLE ${tables.map((table) => `"${table}"`).join(', ')}`,
-    );
+    // Later schemas reference these tables even when empty. Delete only this
+    // fixture's child-first table set; preserve foreign keys and never cascade.
+    for (const table of tables) await db.$executeRawUnsafe(`DELETE FROM "${table}"`);
   } finally {
     for (const table of [...tables].reverse()) {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);

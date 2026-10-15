@@ -26,6 +26,7 @@ type ClientScopedContext = {
   clientService?: ServiceAccessContext | null;
 };
 type CommercialOfferAccessContext = {
+  id?: string;
   createdById?: string | null;
   leadId?: string | null;
   clientId?: string | null;
@@ -179,6 +180,7 @@ export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
 }
 
 export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
+  if (user.selectiveOfferIds?.length && (!offer.id || user.selectiveOfferIds.includes(offer.id))) return false;
   if (offer.leadId && !offer.lead) return false;
   if (offer.clientId && !offer.client) return false;
   if (offer.lead?.clientId && offer.clientId && offer.lead.clientId !== offer.clientId) return false;
