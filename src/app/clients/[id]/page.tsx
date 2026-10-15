@@ -155,6 +155,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const clientServices = serviceContexts.filter((service) => canViewService(session, service));
   const serviceById = new Map(serviceContexts.map((service) => [service.id, service]));
   const contracts = contractRows.filter((contract) => {
+    if (session.selectiveContractIds?.includes(contract.id)) return false;
     const project = contract.projectId ? projectById.get(contract.projectId) ?? null : null;
     return (!contract.projectId || Boolean(project))
       && canViewClientContext(session, { clientId: contract.clientId, client, project });

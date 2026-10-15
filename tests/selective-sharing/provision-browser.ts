@@ -28,6 +28,7 @@ async function main() {
   await mkdir(evidence, { recursive: true });
   await writeFile(path.join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, projectId: fixture.project.id, clientId: fixture.client.id,
     otherProjectId: fixture.otherProject.id, recipientId: fixture.reader.user.id,
+    contractId: fixture.contract.id, serviceId: fixture.service.id,
     emails: { admin: admin.user.email, recipient: fixture.reader.user.email, other: fixture.otherAdmin.user.email },
     documents: fixture.documents.map(row => ({ id: row.doc.id, versionId: row.version.id })) }));
   console.log('SELECTIVE_SYNTHETIC_BROWSER_READY');

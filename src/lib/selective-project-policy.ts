@@ -15,7 +15,7 @@ export const selectiveSelectionSchema = z.object({
   revision: z.number().int().min(0),
   fields: z.array(field).max(Object.keys(selectiveProjectFields).length),
   documents: z.array(z.object({ versionId: identifier, download: z.boolean() }).strict()).max(50),
-  expiresAt: z.string().datetime().nullable(),
+  expiresAt: z.string().datetime().transform(value => new Date(value).toISOString()).nullable(),
 }).strict().superRefine((value, context) => {
   if (!value.fields.length && !value.documents.length) context.addIssue({ code: 'custom', message: 'Seleziona almeno un elemento.' });
   if (new Set(value.fields).size !== value.fields.length || new Set(value.documents.map(row => row.versionId)).size !== value.documents.length) {

@@ -30,6 +30,7 @@ export function verifyCommunicationSchema() {
   assert.equal(git('diff', '--name-only', baseline, 'HEAD', '--', 'prisma/migrations'), `${path}\n${selectivePath}`, 'M4_HISTORICAL_PREFIX');
   assert.equal(git('rev-parse', `${selective.baseline}^{tree}`), selective.baselineTree, 'SELECTIVE_BASELINE_TREE');
   git('merge-base', '--is-ancestor', selective.baseline, 'HEAD');
+  assert.equal(hash(path), binding.migrationSha256, 'M4_MIGRATION_HASH');
   assert.equal(git('diff', '--name-only', selective.baseline, 'HEAD', '--', 'prisma/migrations'), selectivePath, 'SELECTIVE_PREFIX49_UNCHANGED');
   assert.equal(git('diff', '--name-only', 'HEAD', '--', 'prisma/schema.prisma', 'prisma/migrations'), '', 'M4_SCHEMA_DIRTY');
   assert.equal(hash('prisma/schema.prisma'), selective.schemaSha256, 'M4_SCHEMA_HASH');

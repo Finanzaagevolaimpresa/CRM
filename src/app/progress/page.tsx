@@ -33,6 +33,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
       project: row.projectId ? projectById.get(row.projectId) ?? null : null, clientService: row.clientServiceId ? serviceById.get(row.clientServiceId) ?? null : null })) : [];
   const contracts = canReadContracts ? (await prisma.contract.findMany({ where: { clientId: { in: clientIds } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }))
     .filter(row => {
+      if (session.selectiveContractIds?.includes(row.id)) return false;
       const project = row.projectId ? projectById.get(row.projectId) ?? null : null;
       // Match getClientContextReadAccess: a declared project must exist, be active,
       // and belong to this client before applying the separate financial permission.

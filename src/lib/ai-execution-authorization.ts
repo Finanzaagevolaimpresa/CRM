@@ -173,6 +173,7 @@ function sameReplacementContinuity(
 }
 
 function assertRequestCreationAllowed(session: AuthSession, input: RequestBinding) {
+  if (hasSelectiveContext(session, input)) throw new UserFacingActionError('Il progetto condiviso consente la sola consultazione selezionata.');
   if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
     throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
   }

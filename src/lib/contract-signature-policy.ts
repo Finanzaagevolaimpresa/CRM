@@ -3,6 +3,7 @@ import type { Client, Contract, Document, DocumentVersion, Project } from '@pris
 import type { AuthSession } from './auth';
 import { canEditClient, canEditProject, canViewDocument } from './access-control';
 import { hasPermission } from './permission-evaluator';
+import { isSelectiveProject } from './selective-project-policy';
 
 export class ContractSignatureError extends Error {
   constructor(readonly code: 'DENIED' | 'STALE' | 'CLOSED' | 'DOCUMENT_CHANGED' | 'INVALID_DATE') { super(code); }
@@ -47,6 +48,7 @@ export function contractCanRecordSignature(status: Contract['status']) {
   return (unsignedContractStatuses as readonly string[]).includes(status);
 }
 export function canRecordContractSignature(actor: AuthSession, client: Client, project: Project | null) {
+  if (isSelectiveProject(actor, project?.id)) return false;
   if (!hasPermission(actor, 'contract.write') || !hasPermission(actor, 'document.download') || !hasPermission(actor, 'document.sensitive.read')) return false;
   if (client.deletedAt || (project && (project.deletedAt || project.clientId !== client.id))) return false;
   // Administration already has global contract.write; read grants alone never confer it.

@@ -35,6 +35,19 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
     const version = await db.documentVersion.create({ data: { documentId: doc.id, version: 1, storagePath: doc.storagePath, checksum } });
     documents.push({ doc, version, bytes });
   }
+  // A financial record can be linked through a service even when its own
+  // projectId is null. Its misleadingly classified document stays private.
+  const contract = await db.contract.create({ data: { clientId: client.id, contractNumber: `CONTRATTO_ESCLUSO_${randomUUID()}`,
+    serviceName: 'COMPENSO_FAI_ESCLUSO', taxableAmount: 7777, vatAmount: 1710.94, totalAmount: 9487.94,
+    notes: 'MARGINE_PRIVATO_ESCLUSO', signedDocumentId: documents[2].doc.id } });
+  const payment = await db.payment.create({ data: { contractId: contract.id, clientId: client.id, taxableAmount: 7777,
+    vatAmount: 1710.94, totalAmount: 9487.94, method: 'PAGAMENTO_ESCLUSO', notes: 'NOTA_PAGAMENTO_ESCLUSA' } });
+  const catalog = await db.serviceCatalog.findFirstOrThrow({ where: { active: true } });
+  const service = await db.clientService.create({ data: { clientId: client.id, projectId: project.id, serviceCatalogId: catalog.id,
+    contractId: contract.id, paymentId: payment.id, assignedToId: reader.user.id,
+    operationalNotes: 'NOTA_SERVIZIO_ESCLUSA', internalNotes: 'MARGINE_SERVIZIO_ESCLUSO' } });
+  const task = await db.task.create({ data: { clientId: client.id, projectId: project.id, clientServiceId: service.id,
+    title: 'TASK_PROGETTO_ESCLUSO', assignedToId: reader.user.id, createdById: admin.user.id, dueAt: new Date() } });
   const input = { projectId: project.id, recipientId: reader.user.id, revision: 0, fields: ['title', 'totalInvestment'], documents: documents.slice(0, 2).map((doc, index) => ({ versionId: doc.version.id, download: index === 1 })), expiresAt: null };
-  return { admin, reader, otherAdmin, client, project, otherProject, documents, input };
+  return { admin, reader, otherAdmin, client, project, otherProject, documents, contract, payment, service, task, input };
 }

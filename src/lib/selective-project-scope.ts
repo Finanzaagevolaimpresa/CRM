@@ -8,7 +8,11 @@ export async function loadSelectiveProjectScope(db: Db, recipientId: string): Pr
   const grants = await db.selectiveProjectGrant.findMany({ where: { recipientId }, select: { id: true, projectId: true } });
   const selectiveProjectIds = grants.map(row => row.projectId);
   if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [] };
-  const contracts = await db.contract.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { id: true, signedDocumentId: true } });
+  const linkedServices = await db.clientService.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { contractId: true } });
+  const contracts = await db.contract.findMany({ where: { OR: [
+    { projectId: { in: selectiveProjectIds } },
+    { id: { in: linkedServices.flatMap(row => row.contractId ? [row.contractId] : []) } },
+  ] }, select: { id: true, signedDocumentId: true } });
   const selectiveContractIds = contracts.map(row => row.id);
   const [services, payments, practices] = await Promise.all([
     db.clientService.findMany({ where: { OR: [{ projectId: { in: selectiveProjectIds } }, { contractId: { in: selectiveContractIds } }] }, select: { id: true } }),

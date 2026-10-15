@@ -1350,6 +1350,7 @@ export async function createDossier(form: FormData) {
 export async function createContract(form: FormData) {
   const s = await requirePermission('contract.write');
   const data = contractSchema.parse(clean(form));
+  if (data.projectId && s.selectiveProjectIds?.includes(data.projectId)) denyWriteAccess();
   const [client, project] = await Promise.all([
     prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null }, select: { id: true } }),
     data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
@@ -1363,6 +1364,7 @@ export async function createContract(form: FormData) {
 export async function registerPayment(form: FormData) {
   const s = await requirePermission('payment.write');
   const data = paymentSchema.parse(clean(form));
+  if (s.selectiveContractIds?.includes(data.contractId)) denyWriteAccess();
   const contract = await prisma.contract.findFirst({ where: { id: data.contractId, clientId: data.clientId }, select: { id: true } });
   if (!contract) denyWriteAccess();
   const payment = await prisma.payment.create({ data: data as never });
@@ -1381,6 +1383,7 @@ export async function createClientService(form: FormData) {
     data.paymentId ? prisma.payment.findFirst({ where: { id: data.paymentId, clientId: data.clientId }, select: { id: true, clientId: true, contractId: true } }) : null,
   ]);
   if (!catalog || (data.contractId && !contract) || (data.paymentId && !payment)) denyWriteAccess();
+  if ((contract && s.selectiveContractIds?.includes(contract.id)) || (payment && s.selectiveContractIds?.includes(payment.contractId))) denyWriteAccess();
   if (contract?.projectId && data.projectId && contract.projectId !== data.projectId) denyWriteAccess();
   if (payment && data.contractId && payment.contractId !== data.contractId) denyWriteAccess();
   if (data.status && ['chiuso', 'archiviato', 'consegnato'].includes(data.status) && !hasPermission(s, 'service.close')) denyWriteAccess();

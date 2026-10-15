@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import type { AuthSession } from './auth';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { ContractSignatureError, canRecordContractSignature, contractCanRecordSignature, contractSignatureSchema, isSignatureDocument, signatureCalendarDay } from './contract-signature-policy';
 import { contractSignatureDeclarationEvent, contractSignatureDeclarationSchema, orderedSignatureDeclarations } from './contract-signature-policy';
 
@@ -12,6 +13,7 @@ export async function declareContractSignature(db: Db, claimed: AuthSession, raw
   if (input.signedOn > signatureCalendarDay()) throw new ContractSignatureError('INVALID_DATE');
   return db.$transaction(async tx => {
     const actor = await freshActor(tx, claimed);
+    if (actor.selectiveContractIds?.includes(input.contractId)) throw new ContractSignatureError('DENIED');
     const initial = await tx.contract.findUnique({ where: { id: input.contractId } });
     if (!initial) throw new ContractSignatureError('DENIED');
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${initial.clientId} FOR UPDATE`;
@@ -45,12 +47,12 @@ async function freshActor(tx: Prisma.TransactionClient, claimed: AuthSession): P
   if (claimed.sessionId) {
     const current = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId });
     if (!current?.active || current.deletedAt || current.revokedAt || !current.live) throw new ContractSignatureError('DENIED');
-    return { ...claimed, role: current.role, permissionOverrides: [...current.permissionOverrides], clientReadScope: [] };
+    return { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), role: current.role, permissionOverrides: [...current.permissionOverrides], clientReadScope: [] };
   }
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${claimed.userId} FOR UPDATE`;
   const current = await tx.user.findUnique({ where: { id: claimed.userId }, include: { permissionOverrides: true } });
   if (!current?.active || current.deletedAt) throw new ContractSignatureError('DENIED');
-  return { ...claimed, role: current.role, permissionOverrides: current.permissionOverrides, clientReadScope: [] };
+  return { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), role: current.role, permissionOverrides: current.permissionOverrides, clientReadScope: [] };
 }
 async function unexpired(tx: Prisma.TransactionClient, actor: AuthSession) {
   if (actor.expiresAt * 1000 <= Date.now()) throw new ContractSignatureError('DENIED');
@@ -64,6 +66,7 @@ export async function recordContractSignature(db: Db, claimed: AuthSession, raw:
   if (input.signedOn > signatureCalendarDay()) throw new ContractSignatureError('INVALID_DATE');
   return db.$transaction(async tx => {
     const actor = await freshActor(tx, claimed);
+    if (actor.selectiveContractIds?.includes(input.contractId)) throw new ContractSignatureError('DENIED');
     const initial = await tx.contract.findUnique({ where: { id: input.contractId } });
     if (!initial) throw new ContractSignatureError('DENIED');
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${initial.clientId} FOR UPDATE`;

@@ -16,7 +16,7 @@ Il destinatario trova **Progetti condivisi** nella navigazione. La scheda origin
 
 `SelectiveProjectGrant` conserva selezione, versioni e metadati approvati, revisione, scadenza, approvatore e prova firmata. La stessa chiave registrata per il controllo privilegiato firma prove con domini distinti per preview e concessione. Una rotazione o indisponibilità della chiave rende indisponibile l'accesso selettivo finché non viene nuovamente approvato; non ripristina permessi ordinari.
 
-La migrazione50 è additiva e non converte alcun progetto. I primi 49 file di migrazione restano immutati. Le modifiche ai controlli CI aggiornano il candidato corrente a schema50, mantenendo i riferimenti storici delle qualifiche di rilascio.
+La migrazione50 è additiva e non converte alcun progetto. I primi 49 file di migrazione restano immutati. I controlli CI qualificano il candidato corrente su schema50; i kit produttivi storici non sono modificati né estesi al nuovo schema.
 
 ## Controlli
 
@@ -44,5 +44,7 @@ La workflow `Selective project access` usa PostgreSQL16 effimero, database `fai_
 Comandi pertinenti: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, `node --import tsx --test --test-reporter=tap tests/selective-project-policy.test.ts`, il test PostgreSQL `tests/selective-project-access-db.test.ts` e Playwright con `tests/selective-sharing/playwright.config.ts`. I test DB richiedono il guardiano di isolamento esistente; non devono essere indirizzati a database reali.
 
 Una versione precedente che ignora `SelectiveProjectGrant` **non è un rollback sicuro**. Con perimetri presenti il recupero deve mantenere schema50, i record permanenti, i controlli di esclusione e le prove di revoca. La procedura ammessa è correggere in avanti oppure usare una versione che conserva questi controlli. Un eventuale blocco d'emergenza dell'autorità deve mantenere i perimetri ed essere autorizzato come modifica di permessi reali. Non cancellare le concessioni e non ripristinare schema49 per recuperare l'applicazione. Nessuna di queste operazioni produttive è inclusa nella consegna R01.
+
+La qualifica del pacchetto usa la stessa revisione per il riavvio e il rientro, con una concessione sintetica attiva e una revocata. Verifica la selezione e il divieto di ripristinare accessi ordinari prima e dopo il riavvio, oltre alla conservazione delle impronte di schema, documenti, autorità, concessioni e ricevute. Non dimostra che un errore del codice sia risolvibile riavviando lo stesso codice: in quel caso occorre una correzione compatibile verificata. La vecchia immagine M1 non è più ammessa come destinazione del candidato schema50.
 
 La PR resta da qualificare finché CI e riscontri UI non sono verdi sull'ultimo HEAD. Nessun merge, deploy o modifica produttiva è eseguito dalla consegna.

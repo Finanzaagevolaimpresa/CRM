@@ -939,7 +939,7 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Apply exactly 44 database migrations
+      - name: Verify historical schema44 then apply current schema50
         run: |
           current_prisma="$PWD/node_modules/.bin/prisma"
           historical_source="$RUNNER_TEMP/pr137-general-schema44"
@@ -947,6 +947,7 @@ jobs:
           test "$(git -C "$historical_source" rev-parse HEAD^{tree})" = 064415e3dbb4a7d4ac1498c24808a01342de2359
           (cd "$historical_source" && "$current_prisma" migrate deploy --schema prisma/schema.prisma)
           git worktree remove --force "$historical_source"
+          npm run prisma:migrate:deploy
 
       - name: Bind ephemeral database sentinel
         run: |

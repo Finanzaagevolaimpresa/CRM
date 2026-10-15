@@ -301,7 +301,7 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
   ]) assert.equal(indexNames.has(expected), true, expected);
   assert.equal(triggers.length, 6);
   assert.equal(functions.length, 3);
-  assert.equal(Number(migrations[0]?.count), 44);
+  assert.equal(Number(migrations[0]?.count), 50);
   assert.deepEqual(await counts(), { inbox: 0, outbox: 0, attempts: 0 });
 });
 

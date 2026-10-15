@@ -193,7 +193,7 @@ export async function confirmSelectiveAccess(db: Db, claimed: AuthSession, token
       : await tx.selectiveProjectGrant.create({ data: { ...data, proof } });
     // The receipt and permission commit atomically; no audit error is swallowed.
     await tx.auditLog.create({ data: { actorId: current.userId, event: 'selective_project_access_confirmed', entityType: 'SelectiveProjectGrant', entityId: grant.id,
-      after: { projectId: grant.projectId, recipientId: grant.recipientId, revision: grant.revision, proof } } });
+      after: { projectId: grant.projectId, recipientId: grant.recipientId, grantVersion: grant.revision, grantHash: canonicalSha256(proof) } } });
     return { id: grant.id, revision: grant.revision };
   });
 }
@@ -207,7 +207,7 @@ export async function revokeSelectiveAccess(db: Db, claimed: AuthSession, id: st
     if (!grant || grant.revision !== revision || grant.recipientId === current.userId) stale();
     await tx.selectiveProjectGrant.update({ where: { id, revision }, data: { revokedAt: await now(tx), revision: { increment: 1 } } });
     await tx.auditLog.create({ data: { actorId: current.userId, event: 'selective_project_access_revoked', entityType: 'SelectiveProjectGrant', entityId: id,
-      after: { projectId: grant.projectId, recipientId: grant.recipientId, revision: revision + 1 } } });
+      after: { projectId: grant.projectId, recipientId: grant.recipientId, grantVersion: revision + 1 } } });
   });
 }
 
@@ -221,7 +221,7 @@ async function authorizedSnapshot(tx: Tx, current: AuthSession, projectId: strin
   const key = await loadActivePrivilegedStepUpKey(tx);
   if (!key || grant.keyVersion !== key.version || !verifySelectiveProof(key, 'grant', grantPayload(grant), grant.proof)) denied();
   const receipt = await tx.auditLog.findFirst({ where: { entityId: grant.id, entityType: 'SelectiveProjectGrant', event: 'selective_project_access_confirmed', actorId: grant.approvedById,
-    AND: [{ after: { path: ['proof'], equals: grant.proof } }, { after: { path: ['revision'], equals: grant.revision } }] }, select: { id: true } });
+    AND: [{ after: { path: ['grantHash'], equals: canonicalSha256(grant.proof) } }, { after: { path: ['grantVersion'], equals: grant.revision } }] }, select: { id: true } });
   if (!receipt) denied();
   const snapshot = snapshotSchema.parse(grant.selection);
   if (snapshot.input.projectId !== projectId || snapshot.input.recipientId !== current.userId || snapshot.input.revision + 1 !== grant.revision
@@ -255,7 +255,7 @@ export async function readSelectiveDocument(db: Db, claimed: AuthSession, projec
     const { createHash } = await import('node:crypto');
     if (createHash('sha256').update(bytes).digest('hex') !== selected.checksum) denied();
     await tx.auditLog.create({ data: { actorId: current.userId, event: download ? 'selective_document_download' : 'selective_document_view', entityType: 'SelectiveProjectGrant', entityId: grant.id,
-      after: { projectId, documentId: selected.documentId, versionId, revision: grant.revision } } });
+      after: { projectId, documentId: selected.documentId, versionId, grantVersion: grant.revision } } });
     return { bytes, document: selected };
   });
 }

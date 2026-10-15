@@ -5,8 +5,11 @@ import { PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticSharingCase } from './selective-sharing/fixtures';
 import { confirmSelectiveAccess, previewSelectiveAccess, readSelectiveDocument, readSelectiveProject, readPreviewSelectiveDocument, revokeSelectiveAccess } from '../src/lib/selective-project-access';
 import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
-import { canViewProject, canEditProject, canViewDocument } from '../src/lib/access-control';
+import { canViewProject, canEditProject, canViewDocument, canEditService, canEditTask } from '../src/lib/access-control';
+import { canViewPaymentListRecord } from '../src/lib/business-list-access';
+import { declareContractSignature } from '../src/lib/contract-signature';
 import { selectiveProof } from '../src/lib/selective-project-proof';
+import { canonicalSha256 } from '../src/lib/canonical-json';
 
 const enabled = process.env.RUN_DB_TESTS === '1', db = new PrismaClient();
 let admin: Awaited<ReturnType<typeof syntheticAuthority>>;
@@ -29,6 +32,7 @@ test('real preview, effective projection and exact document bytes match; future 
   assert.equal(await db.selectiveProjectGrant.count({ where: { projectId: f.project.id } }), 0);
   assert.equal(preview.impact.previouslyFullProjectAccess, true);
   assert.deepEqual((await readPreviewSelectiveDocument(db, admin.session, preview.token, f.documents[0].version.id, readerFor(f))).bytes, f.documents[0].bytes);
+  await assert.rejects(previewSelectiveAccess(db, admin.session, { ...f.input, documents: [{ versionId: f.documents[2].version.id, download: false }] }));
   await assert.rejects(readPreviewSelectiveDocument(db, admin.session, preview.token, f.documents[2].version.id, readerFor(f)));
   await confirmSelectiveAccess(db, admin.session, preview.token, true);
   const effective = await readSelectiveProject(db, f.reader.session, f.project.id);
@@ -44,6 +48,12 @@ test('real preview, effective projection and exact document bytes match; future 
   await assert.rejects(readSelectiveDocument(db, f.reader.session, f.project.id, future.id, false, async () => futureBytes));
   assert.deepEqual(await readSelectiveProject(db, f.reader.session, f.project.id), effective);
   const current = { ...f.reader.session, ...await loadSelectiveProjectScope(db, f.reader.user.id) };
+  assert.ok(current.selectiveContractIds?.includes(f.contract.id));
+  assert.equal(canViewPaymentListRecord(current, { payment: f.payment, contract: f.contract, client: f.client, project: null }), false);
+  assert.equal(canEditService(current, { ...f.service, client: f.client, project: { ...f.project, client: f.client } }), false);
+  assert.equal(canEditTask(current, { ...f.task, client: f.client, project: { ...f.project, client: f.client } }), false);
+  await assert.rejects(declareContractSignature(db, f.reader.session, { contractId: f.contract.id, expectedVersion: f.contract.updatedAt.toISOString(),
+    expectedDeclarationId: null, signedOn: '2026-10-01', source: 'Synthetic attempt', confirmed: true }));
   assert.equal(canViewProject(current, { ...f.project, client: f.client }), false);
   assert.equal(canEditProject(current, { ...f.project, client: f.client }), false);
   assert.equal(canViewDocument(current, { ...f.documents[2].doc, client: f.client, project: { ...f.project, client: f.client } }), false);
@@ -89,6 +99,7 @@ test('revocation and expiry deny old sessions and byte links, retaining the rest
   await assert.rejects(readSelectiveDocument(db, f.reader.session, f.project.id, f.documents[1].version.id, true, readerFor(f)));
   const renewed = await previewSelectiveAccess(db, admin.session, { ...f.input, revision: 2, expiresAt: new Date(Date.now() + 60_000).toISOString() });
   await confirmSelectiveAccess(db, admin.session, renewed.token, true);
+  await readSelectiveProject(db, f.reader.session, f.project.id);
   // A correctly signed expired receipt exercises the database-clock check without a timed sleep.
   const row = await db.selectiveProjectGrant.findUniqueOrThrow({ where: { id: grant.id } });
   const approvedAt = new Date(Date.now() - 120_000), expiresAt = new Date(Date.now() - 60_000);
@@ -99,7 +110,7 @@ test('revocation and expiry deny old sessions and byte links, retaining the rest
   const proof = selectiveProof({ version: row.keyVersion, secret: process.env.PRIVILEGED_STEP_UP_SECRET! }, 'grant', payload);
   await db.selectiveProjectGrant.update({ where: { id: row.id }, data: { approvedAt, expiresAt, selection, proof } });
   await db.auditLog.create({ data: { actorId: admin.user.id, entityType: 'SelectiveProjectGrant', entityId: row.id, event: 'selective_project_access_confirmed',
-    after: { projectId: f.project.id, recipientId: f.reader.user.id, revision: row.revision, proof } } });
+    after: { projectId: f.project.id, recipientId: f.reader.user.id, grantVersion: row.revision, grantHash: canonicalSha256(proof) } } });
   await assert.rejects(readSelectiveProject(db, f.reader.session, f.project.id));
   assert.ok((await loadSelectiveProjectScope(db, f.reader.user.id)).selectiveProjectIds?.includes(f.project.id));
   await assert.rejects(db.selectiveProjectGrant.delete({ where: { id: row.id } }));

@@ -34,6 +34,7 @@ type PreAnalysisListContext = {
 export function canViewPaymentListRecord(session: Actor, {
   payment, contract, client, project,
 }: PaymentListContext): boolean {
+  if (session.selectiveContractIds?.includes(payment.contractId)) return false;
   if (!financialReadAccess(session).payment) return false;
   if (!client || client.deletedAt || client.id !== payment.clientId || !canViewClient(session, client)) return false;
   if (!contract || contract.id !== payment.contractId || contract.clientId !== payment.clientId) return false;
