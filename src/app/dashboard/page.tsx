@@ -4,6 +4,7 @@ import {
   formatDateTime,
 } from "@/components/ui";
 import { leadVisibilityWhere } from "@/lib/core-query-policy";
+import { selectiveAuditAllowed, contextOutsideSelection } from '@/lib/selective-project-policy';
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
@@ -118,8 +119,8 @@ export default async function Dashboard() {
   } = await loadDashboardPendingAiAuthorizations({
     isAdmin: session.role === "admin",
     now,
-    count: (where) => prisma.aiExecutionRequest.count({ where }),
-    preview: (query) => prisma.aiExecutionRequest.findMany(query),
+    count: (where) => prisma.aiExecutionRequest.count({ where: { AND: [where, contextOutsideSelection(session)] } }),
+    preview: (query) => prisma.aiExecutionRequest.findMany({ ...query, where: { AND: [query.where, contextOutsideSelection(session)] } }),
   });
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",
@@ -296,9 +297,9 @@ export default async function Dashboard() {
     taskCounts.dueSoon,
     taskCounts.mine,
     0,
-    canReadAudit ? prisma.auditLog.findFirst({ orderBy: { createdAt: "desc" } }) : null,
+    canReadAudit ? prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 200 }).then(rows => rows.find(row => selectiveAuditAllowed(session, row)) ?? null) : null,
     null,
-    canReadPayments ? prisma.payment.findFirst({ where: { clientId: { in: visibleClientIds } }, orderBy: { createdAt: "desc" } }) : null,
+    canReadPayments ? prisma.payment.findFirst({ where: { clientId: { in: visibleClientIds }, contractId: { notIn: [...(session.selectiveContractIds ?? [])] } }, orderBy: { createdAt: "desc" } }) : null,
     accessibleOpenTasks[0] ?? null,
     canReadServices
       ? prisma.clientService.groupBy({

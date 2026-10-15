@@ -9,6 +9,8 @@ import { canViewChecklistItem, canViewClientContext, canViewDocument, isSensitiv
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
+import { loadSelectiveProjectScope } from './selective-project-scope';
+import { isSelectiveProject } from './selective-project-policy';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { readPrivateDocumentBounded } from './storage';
 import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_MAX_BYTES, workBytesHash, workAuditEvidence, workExportEvidence, workExportReceiptSchema, workImportInputSchema, workImportReceiptSchema, workManifestSchema, type WorkManifest } from './engagement-work-package';
@@ -63,7 +65,7 @@ async function actor(tx: Prisma.TransactionClient, claimed: AuthSession, permiss
   if (!claimed.sessionId || !uuid.safeParse(claimed.sessionId).success) throw new EngagementDossierError('DENIED');
   const user = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId, userId: claimed.userId });
   if (!user || !user.live || user.revokedAt || !user.active || user.deletedAt) throw new EngagementDossierError('DENIED');
-  const current = { ...claimed, clientReadScope: await loadClientReadScope(tx, claimed.userId), role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
+  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), clientReadScope: await loadClientReadScope(tx, claimed.userId), role: user.role, active: user.active, permissionOverrides: [...user.permissionOverrides] } satisfies AuthSession;
   if (!hasPermission(current, permission)) throw new EngagementDossierError('DENIED');
   return current;
 }
@@ -136,6 +138,7 @@ async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossier
     || !versions.some((version) => version.id === dossier.currentVersionId)
     || (dossier.approvedVersionId && !versions.some((version) => version.id === dossier.approvedVersionId))) throw new EngagementDossierError('DENIED');
   if (preAnalysis.companyId && !(await tx.company.findFirst({ where: { id: preAnalysis.companyId, clientId: client.id, deletedAt: null } }))) throw new EngagementDossierError('DENIED');
+  if (isSelectiveProject(current, project.id)) throw new EngagementDossierError('DENIED');
   const ordinaryAccess = canViewClientContext(current, { clientId: dossier.clientId, client, project: hydratedProject, clientService: hydratedService });
   const assignedReviewer = !ordinaryAccess && allowReviewAssignment && await hasInitialServiceReviewAssignment(tx, current, { dossier, client, project, service, versions });
   if (!ordinaryAccess && !assignedReviewer) throw new EngagementDossierError('DENIED');

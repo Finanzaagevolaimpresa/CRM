@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -42,6 +43,7 @@ export async function storeUploadedDocument(db: Pick<PrismaClient, '$transaction
       if (!current?.active || current.deletedAt) denyWriteAccess();
       actor = { ...claimed, role: current.role, permissionOverrides: current.permissionOverrides, clientReadScope: [] };
     }
+    actor = { ...actor, ...await loadSelectiveProjectScope(tx, actor.userId) };
     if (!hasPermission(actor, 'document.upload')) denyWriteAccess();
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${data.clientId} FOR UPDATE`;
     const initialService = data.clientServiceId ? await tx.clientService.findUnique({ where: { id: data.clientServiceId } }) : null;

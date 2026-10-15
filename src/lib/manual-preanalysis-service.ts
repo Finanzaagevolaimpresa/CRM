@@ -3,6 +3,7 @@ import { canEditProject } from './access-control';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
 import { manualPreAnalysisFields } from './preanalysis-policy';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 
 export class ManualPreAnalysisError extends Error {
   constructor(readonly code: 'DENIED' | 'CONFLICT') { super(code); }
@@ -30,7 +31,7 @@ async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) 
     const session = await tx.internalSession.findFirst({ where: { id: claimed.sessionId, userId: user.id, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
     if (!session) throw new ManualPreAnalysisError('DENIED');
   }
-  const actor = { userId: user.id, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides, expiresAt: claimed.expiresAt, sessionId: claimed.sessionId } satisfies AuthSession;
+  const actor = { userId: user.id, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides, expiresAt: claimed.expiresAt, sessionId: claimed.sessionId, ...await loadSelectiveProjectScope(tx, user.id) } satisfies AuthSession;
   if (!hasPermission(actor, 'dossier.read') || !hasPermission(actor, 'project.write')) throw new ManualPreAnalysisError('DENIED');
   return actor;
 }

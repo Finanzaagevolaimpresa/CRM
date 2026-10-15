@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { DocumentBatchUpload } from '@/components/document-batch-upload';
+import { selectiveAuditAllowed, contextOutsideSelection } from '@/lib/selective-project-policy';
 import { canAccessFinancialDocumentMetadata, operationalServiceStatus } from '@/lib/financial-access';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { randomUUID } from 'node:crypto';
@@ -90,6 +91,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     ? await prisma.aiExecutionRequest.findFirst({
         where: {
           id: query.supersedesRequestId,
+          ...contextOutsideSelection(session),
           origin: 'CRM_UI',
           requesterKind: 'HUMAN_USER',
           requesterUserId: session.userId,
@@ -129,6 +131,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         where: {
           clientId: id,
           ...(canAuditAiRequests ? {} : { requesterUserId: session.userId }),
+          ...contextOutsideSelection(session),
         },
         include: { requester: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
@@ -247,7 +250,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     prisma.user.findMany({ where: { active: true } }),
   ]);
   const aiOutputs = aiOutputContexts.map((context) => context.output);
-  const auditLogs = canViewAudit ? await prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: visibleDocuments.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] }, orderBy: { createdAt: 'desc' }, take: 80 }) : [];
+  const auditLogs = canViewAudit ? (await prisma.auditLog.findMany({ where: { OR: [{ entityId: id }, { entityId: { in: serviceIds } }, { entityId: { in: technicalPractices.map((practice) => practice.id) } }, { entityId: { in: practiceCommunications.map((communication) => communication.id) } }, { entityId: { in: visibleDocuments.map((document) => document.id) } }, { entityId: { in: tasks.map((task) => task.id) } }] }, orderBy: { createdAt: 'desc' }, take: 80 })).filter(row => selectiveAuditAllowed(session, row)) : [];
   const canManageChecklist = hasPermission(session, 'service.write');
   const canAssignServices = session.role === 'admin' && hasPermission(session, 'service.assign');
   const canManageTasks = hasPermission(session, 'service.write');

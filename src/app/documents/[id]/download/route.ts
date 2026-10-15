@@ -17,6 +17,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const document = await prisma.document.findFirst({ where: { id, deletedAt: null } });
   if (!document) return new NextResponse('Documento non trovato', { status: 404 });
+  // No legacy fallback (including assigned dossier review) can widen a selection.
+  if (session.selectiveDocumentIds?.includes(id)) return new NextResponse('Non autorizzato', { status: 403, headers: { 'Cache-Control': 'private, no-store' } });
   if (!await canAccessFinancialDocument(prisma, session, document)) return new NextResponse('Non autorizzato', { status: 403 });
 
   const [client, project, clientService] = await Promise.all([

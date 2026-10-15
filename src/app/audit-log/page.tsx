@@ -4,6 +4,7 @@ import { Badge, Card, EmptyState, PageHeader, Table, formatDateTime } from '@/co
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { redactAuditPayload } from '@/lib/data-classification';
+import { selectiveAuditAllowed } from '@/lib/selective-project-policy';
 
 const eventLabels: Record<string, string> = {
   login: 'Login',
@@ -31,9 +32,9 @@ function summarizePayload(value: unknown) {
 }
 
 export default async function Page() {
-  await requirePermission('audit.read');
+  const session = await requirePermission('audit.read');
 
-  const [logs, users] = await Promise.all([
+  const [candidates, users] = await Promise.all([
     prisma.auditLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -52,6 +53,7 @@ export default async function Page() {
     prisma.user.findMany({ select: { id: true, name: true, email: true, role: true } }),
   ]);
 
+  const logs = candidates.filter(row => selectiveAuditAllowed(session, row));
   const userById = new Map(users.map((user) => [user.id, user]));
 
   return (

@@ -5,6 +5,7 @@ import { Card, MetaCell, Table } from '@/components/ui';
 import { PaginationNav } from '@/components/pagination-nav';
 import { prisma } from '@/lib/prisma';
 import { requirePermission } from '@/lib/auth';
+import { documentOutsideSelection, serviceOutsideSelection } from '@/lib/selective-project-policy';
 import {
   clientVisibilityWhere,
   coreQueryFetchSize,
@@ -29,10 +30,10 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
   const ownerIds = [...new Set(clients.flatMap((client) => [client.consultantId, client.salesOwnerId]).filter((id): id is string => Boolean(id)))];
   const [users, serviceCounts, documentCounts, latestServices] = clientIds.length ? await Promise.all([
     ownerIds.length ? prisma.user.findMany({ where: { id: { in: ownerIds }, active: true }, select: { id: true, name: true } }) : Promise.resolve([]),
-    prisma.clientService.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null }, _count: { _all: true } }),
-    prisma.document.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null }, _count: { _all: true } }),
+    prisma.clientService.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null, ...serviceOutsideSelection(session) }, _count: { _all: true } }),
+    prisma.document.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null, ...documentOutsideSelection(session) }, _count: { _all: true } }),
     prisma.clientService.findMany({
-      where: { clientId: { in: clientIds }, deletedAt: null, operationalStatus: { notIn: ['chiusa','archiviata'] } },
+      where: { clientId: { in: clientIds }, deletedAt: null, operationalStatus: { notIn: ['chiusa','archiviata'] }, ...serviceOutsideSelection(session) },
       orderBy: [{ clientId: 'asc' }, { statusUpdatedAt: 'desc' }, { id: 'desc' }],
       distinct: ['clientId'],
       select: { clientId: true, operationalStatus: true, statusUpdatedAt: true },

@@ -1,0 +1,127 @@
+name: Selective project access
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: selective-project-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    name: Selective access ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [postgresql, browser]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-selective-only
+          POSTGRES_DB: fai_crm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-selective-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-selective-browser-auth-only
+      AUTH_COOKIE_NAME: fai_selective_test_session
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3035
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-selective-step-up-key-only-000000000000
+      SELECTIVE_BROWSER_CONFIRMED: '1'
+      SELECTIVE_BROWSER_PASSWORD: synthetic-selective-browser-password-0000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind exact candidate and qualify additive migration atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/selective-evidence"
+          mkdir -p "$evidence"
+          echo "SELECTIVE_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/selective-documents" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/selective-schema49"
+          mkdir -p "$historical"
+          git archive c2948f387dfe7235bbdaf19f501b676cbf36aba2 prisma | tar -x -C "$historical"
+          node node_modules/prisma/build/index.js migrate deploy --schema "$historical/prisma/schema.prisma"
+          psql "${DATABASE_URL%%\?*}" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$evidence/prefix49-before.txt"
+          test "$(wc -l < "$evidence/prefix49-before.txt")" = 49
+          ddl=prisma/migrations/20261015090000_selective_project_access_v1/migration.sql
+          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$ddl" > "$evidence/migration-fault.sql"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/migration-fault.sql" > "$evidence/migration-fault.log" 2>&1; then exit 1; fi
+          grep -Fq 'division by zero' "$evidence/migration-fault.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT to_regclass('public.\"SelectiveProjectGrant\"') IS NULL")" = t
+          npm run prisma:migrate:deploy
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 50
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveAccessAuthority"')" = 0
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveProjectGrant"')" = 0
+          psql "${DATABASE_URL%%\?*}" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name LIMIT 49' > "$evidence/prefix49-after.txt"
+          cmp "$evidence/prefix49-before.txt" "$evidence/prefix49-after.txt"
+          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema-diff.sql"
+          node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema-diff.sql"
+          printf '{"synthetic":true,"before":49,"after":50,"atomicFailure":true,"prefix49Unchanged":true,"productionEnrolled":false}\n' > "$evidence/migration.json"
+      - name: Real PostgreSQL authorization, race and audit-failure cases
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/selective-project-access-db.test.ts | tee "$SELECTIVE_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 4$' "$SELECTIVE_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 4$' "$SELECTIVE_EVIDENCE/postgresql.tap"
+          grep -q '^# skipped 0$' "$SELECTIVE_EVIDENCE/postgresql.tap"
+      - name: Prepare synthetic UI case
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/selective-sharing/provision-browser.ts
+      - name: Browser, direct routes, selected versions and revocation
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3035 > "$SELECTIVE_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3035/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_EVIDENCE/playwright.json" npx playwright test --config tests/selective-sharing/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.SELECTIVE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==1 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+      - name: Bind result to last HEAD and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_EVIDENCE/source.txt"
+          git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selective-access-${{ matrix.target }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/selective-evidence
+            test-results
+          if-no-files-found: error
+          retention-days: 14

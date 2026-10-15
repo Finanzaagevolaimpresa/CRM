@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
+import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 import { UserFacingActionError } from './action-errors';
 import { authorizeManualAssignment, type AssignmentActor } from './manual-assignment-guard';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
@@ -93,6 +94,7 @@ export async function savePracticeResponsibility(tx: Prisma.TransactionClient, a
   if (!admitted) return deny('Conferma amministrativa richiesta.');
   await authorizeManualAssignment(tx, actor, [{ userId: input.commercialOwnerId, roles: commercialRoles }, { userId: input.technicalOwnerId, roles: technicalRoles }]);
   const context = await lockContext(tx, 'TechnicalPractice', input.id);
+  await assertNoSelectiveProjectMutation(tx, actor.userId, context?.state.projectId);
   const current = await latestResponsibility(tx, 'TechnicalPractice', input.id);
   if (!context?.workable || context.updatedAt.toISOString() !== input.expectedUpdatedAt || (current?.id ?? '') !== input.expectedEntryId) return deny();
   if (input.technicalOwnerId && !input.departmentCode) return deny('Indica il reparto del referente tecnico.');
@@ -121,6 +123,7 @@ export async function acceptResponsibility(tx: Prisma.TransactionClient, actor: 
   if (!session || !session.active || session.deletedAt || session.revokedAt || !session.live) return deny();
   if (!hasPermission(session, 'assignment.accept') || !hasPermission(session, input.kind === 'Lead' ? 'lead.read' : 'technical.read')) return deny();
   const context = await lockContext(tx, input.kind, input.id), current = await latestResponsibility(tx, input.kind, input.id);
+  await assertNoSelectiveProjectMutation(tx, actor.userId, context?.state.projectId);
   if (!context?.workable || !current || current.id !== input.decisionId || !current.decision.allowed || !sameResponsibility(context.state, current.decision.state)) return deny();
   const ownerId = input.role === 'commerciale' ? context.state.commercialOwnerId : context.state.technicalOwnerId;
   const roles: readonly string[] = input.role === 'commerciale' ? commercialRoles : technicalRoles;

@@ -5,6 +5,8 @@ import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { hasPermission } from './permission-evaluator';
 import { loadClientReadScope } from './client-read-perimeter';
+import { loadSelectiveProjectScope } from './selective-project-scope';
+import { isSelectiveProject } from './selective-project-policy';
 import { canViewClient, canViewClientContext, canViewDocument } from './access-control';
 import { redactAuditPayload } from './data-classification';
 import { readPrivateDocumentBounded } from './storage';
@@ -105,6 +107,7 @@ export async function readInitialServiceState(tx: Tx, context: InitialServiceCon
 // A client consultation grant alone never opens work. The latest admin plan
 // explicitly assigns a human reviewer to this exact dossier and service.
 export async function hasInitialServiceReviewAssignment(tx: Tx, current: AuthSession, context: InitialServiceContext) {
+  if (isSelectiveProject(current, context.project.id)) return false;
   if (!hasPermission(current, 'dossier.approve') || !canViewClient(current, context.client)) return false;
   const state = await readInitialServiceState(tx, context);
   return state?.plan?.humanReviewerIds.includes(current.userId) === true;
@@ -114,7 +117,8 @@ async function livePerson(tx: Tx, context: InitialServiceContext, userId: string
   const row = await tx.user.findUnique({ where: { id: userId }, include: { permissionOverrides: true } });
   if (!row?.active || row.deletedAt || !hasPermission(row, approve ? 'dossier.approve' : 'dossier.write')) denied();
   const current = { userId, role: row.role, active: row.active, permissionOverrides: row.permissionOverrides,
-    expiresAt: Math.floor(Date.now() / 1000) + 60, clientReadScope: await loadClientReadScope(tx, userId) } satisfies AuthSession;
+    expiresAt: Math.floor(Date.now() / 1000) + 60, clientReadScope: await loadClientReadScope(tx, userId), ...await loadSelectiveProjectScope(tx, userId) } satisfies AuthSession;
+  if (isSelectiveProject(current, context.project.id)) denied();
   if (approve ? !canViewClient(current, context.client) || !hasPermission(current, 'dossier.read')
     : !canViewClientContext(current, { clientId: context.client.id, client: context.client, project: { ...context.project, client: context.client },
       clientService: { ...context.service, client: context.client, project: { ...context.project, client: context.client } } })) denied();

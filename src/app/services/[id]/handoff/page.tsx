@@ -1,4 +1,5 @@
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
+import { hasSelectiveContext } from '@/lib/selective-project-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -19,6 +20,7 @@ export default async function Page({ params, searchParams }: {
   const session = await requirePermission('technical.read'), { id } = await params, query = await searchParams;
   const context = await purchasedServiceContext(prisma, id).catch(() => null);
   if (!context) notFound();
+  if (hasSelectiveContext(session, context.service) || session.selectiveServiceIds?.includes(id)) notFound();
   const entry = await getHandoffReceipt(prisma, id), { client, service, project } = context;
   const practice = entry ? await prisma.technicalPractice.findFirst({ where: { id: entry.receipt.technicalPracticeId, clientId: client.id,
     clientServiceId: id, projectId: service.projectId, deletedAt: null } }) : null;

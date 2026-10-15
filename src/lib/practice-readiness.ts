@@ -1,6 +1,7 @@
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import type { AuthSession } from "./auth";
@@ -139,7 +140,7 @@ async function actor(
     )
   )
     throw new PracticeReadinessError("DENIED");
-  return { ...s, clientReadScope: await loadClientReadScope(tx, claimed.userId) };
+  return { ...s, ...await loadSelectiveProjectScope(tx, claimed.userId), clientReadScope: await loadClientReadScope(tx, claimed.userId) };
 }
 async function practiceScope(
   tx: Prisma.TransactionClient,
