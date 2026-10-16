@@ -36,7 +36,10 @@ mapfile -t services < <(compose config --services | LC_ALL=C sort)
 mapfile -t volumes < <(compose config --volumes | LC_ALL=C sort)
 [[ "$(printf '%s\n' "${volumes[@]}")" == $'staging_documents\nstaging_postgres_data' ]] \
   || n05_fail STAGING_COMPOSE_VOLUMES_INVALID
-compose config --images | grep -Fxq "$APP_IMAGE" || n05_fail STAGING_COMPOSE_IMAGE_MISMATCH
+# Consume the complete producer before matching. grep -q can close its pipe
+# after the first image and turn a valid Compose result into SIGPIPE/pipefail.
+compose_images="$(compose config --images)" || n05_fail STAGING_COMPOSE_INSPECTION_FAILED
+grep -Fx -- "$APP_IMAGE" <<< "$compose_images" >/dev/null || n05_fail STAGING_COMPOSE_IMAGE_MISMATCH
 n05_assert_project_absent "$COMPOSE_PROJECT_NAME"
 
 printf 'N05_STAGING_PREFLIGHT_PASS|project=%s|mutation=none\n' "$COMPOSE_PROJECT_NAME"

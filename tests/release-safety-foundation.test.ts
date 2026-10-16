@@ -25,6 +25,30 @@ function sha256(file: string) {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
+test('staging image admission drains the producer and rejects mismatch or inspection failure', () => {
+  const preflight = readFileSync('scripts/n05/staging-preflight.sh', 'utf8').replaceAll('\r\n', '\n');
+  const start = preflight.indexOf('compose_images=');
+  const end = preflight.indexOf('\nn05_assert_project_absent', start);
+  assert.ok(start >= 0 && end > start);
+  const check = preflight.slice(start, end);
+  const delayed = 'printf "%s\\n" "$APP_IMAGE"; sleep 0.1; printf "%s\\n" "postgres:16-alpine"';
+  const base = { APP_IMAGE: 'fai-crm:staging-' + sourceCommit };
+  function admission(producer: string, guard = check) {
+    return shell('set -Eeuo pipefail; n05_fail() { printf "%s\\n" "$1" >&2; exit 1; }; compose() { '
+      + producer + '; }; ' + guard + '; printf PASS', base);
+  }
+  // Reproduce the earlier false negative with a delayed second output write.
+  assert.notEqual(admission(delayed, 'compose config --images | grep -Fxq "$APP_IMAGE"').status, 0);
+  const valid = admission(delayed);
+  assert.equal(valid.status, 0, valid.stderr); assert.equal(valid.stdout, 'PASS');
+  const mismatch = admission('printf "%s\\n" "fai-crm:wrong-image"');
+  assert.equal(mismatch.status, 1, JSON.stringify({ stdout: mismatch.stdout, stderr: mismatch.stderr }));
+  assert.match(mismatch.stderr, /STAGING_COMPOSE_IMAGE_MISMATCH/);
+  const failed = admission('printf "%s\\n" "$APP_IMAGE"; return 42');
+  assert.equal(failed.status, 1, JSON.stringify({ stdout: failed.stdout, stderr: failed.stderr }));
+  assert.match(failed.stderr, /STAGING_COMPOSE_INSPECTION_FAILED/);
+});
+
 test('N05 stays migration-free and introduces the complete release-safety surface', () => {
   assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 50);
   const expected = [
