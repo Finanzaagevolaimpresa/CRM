@@ -8,7 +8,7 @@ jobs:
   qualification:
     name: Ordinary email PostgreSQL candidate
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16
@@ -26,6 +26,14 @@ jobs:
       AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
       ORDINARY_EMAIL_STORE_CONFIRMED: '1'
       INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-ordinary-browser-auth-not-production
+      AUTH_COOKIE_NAME: fai_ordinary_browser_session
+      APP_ORIGIN: http://127.0.0.1:3036
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '10000'
+      LOGIN_THROTTLE_MODE: disabled
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      ORDINARY_EMAIL_BROWSER_CONFIRMED: '1'
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
@@ -63,6 +71,31 @@ jobs:
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
           sha256sum scripts/ordinary-email/storage-candidate.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
+      - name: Native browser preview and refusal on synthetic data only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          for name in ORDINARY_EMAIL_BROWSER_PASSWORD PRIVILEGED_STEP_UP_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            export "$name=$value"
+          done
+          export ORDINARY_EMAIL_BROWSER_EVIDENCE="$RUNNER_TEMP/ordinary-email"
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/ordinary-browser-documents"
+          mkdir -p "$LOCAL_DOCUMENT_STORAGE_ROOT"
+          npm run dev -- --hostname 127.0.0.1 --port 3036 > "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3036/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          npx playwright test --config tests/ordinary-email/playwright.config.ts
+          test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-ui-proof.json"
       - if: always()
         uses: actions/upload-artifact@v4
         with:

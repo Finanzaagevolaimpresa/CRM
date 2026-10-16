@@ -68,7 +68,8 @@ export async function previewStoredOrdinaryEmail(db: Db, claimed: AuthSession, m
   return db.$transaction(async tx => {
     const state = await load(tx, claimed, messageId, runtime);
     if (!['DRAFT','PENDING','APPROVED','ERROR'].includes(state.row.state)) deny();
-    return previewOrdinaryDecision(state.material, state.current, runtime.key, await clock(tx));
+    return { ...previewOrdinaryDecision(state.material, state.current, runtime.key, await clock(tx)),
+      messageId: state.row.id, revision: state.row.currentRevision, snapshotHash: state.version.snapshotHash };
   }, { timeout: 30_000 });
 }
 

@@ -1,5 +1,5 @@
 import { cookies, headers } from 'next/headers';
-import { requirePermission } from './auth';
+import { requirePermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
@@ -7,9 +7,12 @@ import { previewStoredOrdinaryEmail, rejectStoredOrdinaryEmail } from './ordinar
 import { confirmAndTransmitStoredOrdinaryEmail } from './ordinary-email-service-candidate';
 import type { OrdinarySmtpDependencies } from './ordinary-email-smtp-candidate';
 import { assertOrdinaryEmailRequestOrigin, ordinaryEmailPreviewInput, ordinaryEmailConfirmationInput, ordinaryEmailRejectionInput } from './ordinary-email-request-contract';
+import { internalSessionMode } from './session';
+import { privilegedAccessMode } from './application-security-policy';
+import { readOrdinaryEmailUiAuthority } from './ordinary-email-ui-authority';
 
-/** Private Next server adapter. No action/route registration, default connector
- * or provider activation. A future action passes only the strict input below;
+/** Native server adapter for preview/refusal and private send composition.
+ * No default connector or provider activation. Actions pass only strict input;
  * server identity/credentials never come from its form or previous UI state. */
 async function nativeRequest(action?: 'ORDINARY_EMAIL_CONFIRM_SEND' | 'ORDINARY_EMAIL_REJECT') {
   const session = await requirePermission('practice_communications.read');
@@ -20,6 +23,16 @@ async function nativeRequest(action?: 'ORDINARY_EMAIL_CONFIRM_SEND' | 'ORDINARY_
   const sessionToken = store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value;
   if (!key || !sessionToken) throw new Error('ORDINARY_EMAIL_REQUEST_DENIED');
   return { session, runtime: { key }, credentials: { sessionToken, stepUpToken: store.get(privilegedStepUpCookieName)?.value } };
+}
+
+export async function ordinaryEmailUiAuthorityFromRequest(session: AuthSession) {
+  if (internalSessionMode(process.env.INTERNAL_SESSION_MODE ?? '') !== 'registry'
+    || privilegedAccessMode(process.env.PRIVILEGED_ACCESS_MODE ?? '') !== 'enforced') return null;
+  const store = await cookies(), key = await loadActivePrivilegedStepUpKey(prisma);
+  const sessionToken = store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value;
+  if (!key || !sessionToken) return null;
+  return readOrdinaryEmailUiAuthority(prisma, session, key,
+    { sessionToken, stepUpToken: store.get(privilegedStepUpCookieName)?.value });
 }
 
 export async function previewOrdinaryEmailFromRequest(raw: unknown) {

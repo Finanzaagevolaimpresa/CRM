@@ -18,7 +18,7 @@ Il codice di questo candidato:
 - distingue prenotazione, accettazione SMTP, mancato invio certo ed esito incerto. Non consente retry automatici;
 - propone un'associazione in ingresso solo con casella canonica, riferimento esatto, mittente fra i destinatari, invio accettato e contesto ancora accessibile. Identità duplicata identica è un no-op; contenuto differente sulla stessa identità è un conflitto. Ambiguità in quarantena.
 
-Queste funzioni non conferiscono autorità e non sostituiscono controlli transazionali: non sono collegate a route, pulsanti, socket, worker o scheduler. Le prove usano esclusivamente dati sintetici e confrontano i byte MIME effettivi.
+Queste funzioni non conferiscono autorità e non sostituiscono controlli transazionali. L'anteprima e il rifiuto sono collegati alle azioni native della pagina comunicazioni; l'invio resta privato, senza connettore predefinito, worker o scheduler. Le prove usano esclusivamente dati sintetici e confrontano i byte MIME effettivi.
 
 ## Decisione personale distinta
 
@@ -32,7 +32,7 @@ Prove del contratto: sei casi del nucleo MIME/associazione e otto casi della dec
 
 L'adattatore isolato `ordinary-email-smtp-candidate.ts` aggiunge dodici prove di protocollo con socket e consumo in memoria sintetici. Richiede callback server obbligatori per consumo del tentativo committato, controllo corrente, guardia DATA e risoluzione del trasporto qualificato; non fornisce un connettore predefinito. Hash esatti e BCC, rifiuto parziale dei destinatari, timeout/scrittura parziale e assenza di retry sono descritti in [ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md](ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md). Il servizio candidato lo collega allo store isolato, mantenendo i lock durante DATA; nessun provider reale è attivato.
 
-Il candidato PostgreSQL implementa ora prenotazione, consumo unico ed esito con audit atomico e controlli M4 riusati. La suite di30prove su database sintetico copre vincoli, concorrenza, valori dell'audit dopo il minimizzatore e servizio con socket sintetico, incluse revoche concorrenti, scadenza durante DATA, errori di audit dopo il trasporto, rotazione della chiave nativa e corrispondenza cookie/sessione. Il DDL è fuori dalla catena Prisma e rifiuta database privi del sentinel; nessun bootstrap reale. Il nuovo adattatore server privato usa sessione, cookie, chiave e step-up nativi, senza registrare una route o attivare provider. Restano da qualificare l'integrazione browser e il canale effettivo. Dettagli e residui in [ORDINARY_EMAIL_STORE_CANDIDATE_R01.md](ORDINARY_EMAIL_STORE_CANDIDATE_R01.md).
+Il candidato PostgreSQL implementa prenotazione, consumo unico, rifiuto ed esito con audit atomico e controlli M4 riusati. La suite di 40 prove su database sintetico copre vincoli, concorrenza, valori dell'audit dopo il minimizzatore e servizio con socket sintetico, incluse revoche concorrenti, scadenza durante DATA, errori di audit dopo il trasporto, rotazione della chiave nativa e corrispondenza cookie/sessione. Il DDL è fuori dalla catena Prisma e rifiuta database privi del sentinel; nessun bootstrap reale. Le nuove azioni native registrano anteprima e rifiuto, ricavando sessione, cookie, chiave e step-up dal server. Nessuna azione di invio o provider è attivata. Prove browser e limiti sono descritti in [ORDINARY_EMAIL_UI_R01.md](ORDINARY_EMAIL_UI_R01.md); esiti da attribuire all'HEAD verificato.
 
 ## Flusso successivo concreto
 
@@ -56,6 +56,6 @@ La UI deve consentire lettura ordinaria delle comunicazioni nel perimetro senza 
 | Ricezione ufficiale sulla casella esistente | Delivery; R09 ha fornito casella/provider/configurationRef canonici | Restano da verificare endpoint/protocollo e autorizzazione operativa già esistenti; i riferimenti M4 non li provano. Nessuna nuova credenziale/provider |
 | Prove complete ricevuto→bozza→decisione→invio→esito | Delivery CRM | PostgreSQL isolato e browser dopo i punti precedenti |
 
-Stato: preparato e nucleo implementato/testato; non integrato nel CRM, non distribuito, non attivato e non collaudato in produzione. Nessuna nuova migration o variabile d'ambiente introdotta da questo candidato. La prima integrazione completa dipende dalla qualifica dei canali e della persistenza; non è stimabile come completamento certo oggi finché questi prerequisiti non sono verificati.
+Stato: nucleo implementato/testato, ricevute e anteprima/rifiuto integrati nel candidato; non distribuito, non attivato e non collaudato in produzione. Nessuna nuova migration o configurazione produttiva introdotta. Il flusso completo dipende ancora da conferma/invio collegati al trasporto qualificato, ricezione e persistenza promossa. Il candidato non abilita una nuova autorità o canale reali.
 
 Prima di integrare questa PR occorre riconciliarne la base con l'esito definitivo di PR191 e qualificare anche archivio/cestino, revoche e scadenze. Il backbone N15 esistente conserva intenti `RECORDED/HELD` con controlli dormienti: non viene attivato o trasformato in dispatch SMTP. Le approvazioni M4 e l'autorità `project-sharing` non possono sostituire una decisione email personale distinta; nessun binding reale è scritto da questo candidato.

@@ -7,6 +7,8 @@ import { Card, PageHeader } from '@/components/ui';
 import { PrimaryButton } from '@/components/actions';
 import { ManualMessageDownload } from '@/components/manual-message-download';
 import { OrdinaryEmailReceipts } from '@/components/ordinary-email-receipts';
+import { OrdinaryEmailReview } from '@/components/ordinary-email-review';
+import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
 import { readPracticeCommunications } from '@/lib/approved-communications';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
@@ -23,7 +25,7 @@ function BindingFields({ context, message }: { context: CommunicationContext; me
     <input type="hidden" name="expectedRevision" value={message.currentRevision} /><input type="hidden" name="snapshotHash" value={message.snapshotHash} /></>;
 }
 function Draft({ data, snapshot }: { data: Data; snapshot?: ApprovedMessageSnapshot }) {
-  return <form action={mutateApprovedMessageAction} className="grid gap-3">
+  return <form action={mutateApprovedMessageAction} className="grid gap-3" data-message-draft={snapshot?.messageId}>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     <input type="hidden" name="messageId" value={snapshot?.messageId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
     <label>Mittente<select required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
@@ -50,6 +52,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   let data: Data;
   try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page)); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
+  const ordinaryAuthority = await ordinaryEmailUiAuthorityFromRequest(session);
   const feedback: Record<string, string> = { RECORDED: 'Operazione registrata.', DENIED: 'Accesso o contesto non più valido.', CONFLICT: 'La versione è cambiata o l’operazione è già conclusa. Aggiorna e verifica la timeline.', SENDER_NOT_READY: 'Il mittente deve essere configurato, collaudato e abilitato.', INVALID: 'Controlla i campi del messaggio e i limiti degli allegati.', RECONCILIATION_REQUIRED: 'Registra o riconcilia il tentativo aperto prima di prepararne un altro.' };
   return <div className="crm-space-y-6"><PageHeader title="Comunicazioni approvate" description={`Pratica di ${data.client.name}. Email esterna manuale con approvazione nel CRM.`} />
     <p className="text-sm">La preparazione scarica testo, destinatari e allegati approvati. L’invio avviene dal tuo client email; la ricevuta CRM è una dichiarazione manuale, non una conferma del provider.</p>
@@ -64,7 +67,13 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <ul className="my-3 text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">
-        {data.canWrite && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} /></details> : null}
+        {data.canWrite && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
+          key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}
+          eligible={ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
+            && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && !message.attempts.some(attempt => ['SENDING','UNCERTAIN','SENT'].includes(attempt.state))}
+          stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
+          <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} /></details>
+        </OrdinaryEmailReview> : null}
         {data.canWrite && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
         {data.isAdmin && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
@@ -78,7 +87,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
           <PrimaryButton type="submit">Registra dichiarazione</PrimaryButton>
         </form> : null}
       </div>
-      <details><summary className="cursor-pointer font-bold">Timeline e versioni</summary><p className="break-all text-xs">Riferimento: {message.id} · impronta del messaggio: {message.snapshotHash}</p><ol className="mt-3 crm-space-y-2 text-sm">{message.events.map(event => <li key={event.id}>{event.createdAt.toISOString()} · {event.event}{event.event.startsWith('MANUAL_OUTCOME') ? <span> · dichiarazione manuale conservata</span> : null}</li>)}</ol><p className="mt-3 text-sm">Versioni conservate: {message.versions.map(version => `v${version.revision}`).join(', ')}.</p></details>
+      <details><summary className="cursor-pointer font-bold">Timeline e versioni</summary><p className="break-all text-xs">Riferimento: {message.id} · impronta del messaggio: {message.snapshotHash}</p><ol className="mt-3 crm-space-y-2 text-sm">{message.events.map(event => <li key={event.id}>{event.createdAt.toISOString()} · {event.event === 'ORDINARY_REJECTED' ? 'Versione rifiutata · nuova bozza da approvare' : event.event}{event.event.startsWith('MANUAL_OUTCOME') ? <span> · dichiarazione manuale conservata</span> : null}</li>)}</ol><p className="mt-3 text-sm">Versioni conservate: {message.versions.map(version => `v${version.revision}`).join(', ')}.</p></details>
       <div className="mt-4"><h3 className="font-bold">Risposte acquisite manualmente</h3>{message.replies.map(reply => <article className="mt-3 rounded-xl border p-3" key={reply.id}><p>{reply.receivedAt.toISOString()} · {reply.sender}</p><h4 className="font-bold">{reply.subject}</h4><p className="whitespace-pre-wrap">{reply.body}</p><p className="text-xs">Evidenza dichiarata: {reply.evidenceReference}</p></article>)}{message.replies.length === 0 ? <p>Nessuna risposta collegata.</p> : null}</div>
     </Card>)}
     <nav aria-label="Pagine comunicazioni" className="flex gap-4">{data.page > 1 ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page - 1}`}>Pagina precedente</Link> : null}{data.hasMore ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page + 1}`}>Pagina successiva</Link> : null}</nav>
