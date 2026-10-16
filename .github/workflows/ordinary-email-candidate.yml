@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/ordinary-email/store-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/database.tap"
-          grep -Fx '# pass 24' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# pass 30' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"

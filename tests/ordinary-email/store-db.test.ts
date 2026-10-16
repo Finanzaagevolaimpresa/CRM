@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../../src/lib/auth';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { configureCommunicationMailbox, qualifyCommunicationMailbox, saveApprovedMessageDraft, submitApprovedMessage,
   approveExactMessage, prepareManualMessage } from '../../src/lib/approved-communications';
-import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
+import { createPrivilegedStepUpToken, privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
+import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
+import { loadActivePrivilegedStepUpKey, rotatePrivilegedStepUpKeyVersion, PRIVILEGED_STEP_UP_KEY_PURPOSE } from '../../src/lib/application-key-registry';
 import { previewStoredOrdinaryEmail, reserveStoredOrdinaryEmail, takeStoredOrdinaryEmailAttempt,
-  checkStoredOrdinaryEmailLease, recordStoredOrdinaryEmailOutcome } from '../../src/lib/ordinary-email-store-candidate';
+  checkStoredOrdinaryEmailLease, recordStoredOrdinaryEmailOutcome, loadStoredOrdinaryEmailMaterial } from '../../src/lib/ordinary-email-store-candidate';
 import { prepareOrdinaryEmail, type OrdinaryChannel } from '../../src/lib/ordinary-email-candidate';
 import { approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
 import { canonicalJson, canonicalSha256 } from '../../src/lib/canonical-json';
@@ -24,6 +26,7 @@ const db = new PrismaClient(), options = { skip: !enabled };
 const key = { version: 1, secret: 'synthetic-email-store-personal-key-0000000000000000' };
 const bytes = Buffer.from('SYNTHETIC EMAIL STORE ATTACHMENT'), checksum = createHash('sha256').update(bytes).digest('hex');
 const runtime = { key, readDocument: async () => bytes };
+const sessionCookies = new Map<string, string>();
 test.before(async () => {
   if (!enabled) return;
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -44,12 +47,18 @@ test.after(async () => { await db.$disconnect(); });
 async function person() {
   const user = await db.user.create({ data: { email: `ordinary-${randomUUID()}@invalid.test`, name: 'Synthetic ordinary authority',
     role: 'admin', passwordHash: 'synthetic-unusable-hash', active: true } });
-  const session = await db.internalSession.create({ data: { userId: user.id, tokenDigest: randomBytes(32), expiresAt: new Date(Date.now()+3_600_000) } });
+  const cookie = createRegistrySessionToken();
+  const session = await db.internalSession.create({ data: { userId: user.id, tokenDigest: Buffer.from(await digestRegistrySessionToken(cookie.bytes)), expiresAt: new Date(Date.now()+3_600_000) } });
+  sessionCookies.set(session.id, cookie.token);
   return { userId: user.id, sessionId: session.id, expiresAt: Math.floor(session.expiresAt.getTime()/1000),
     role: 'admin', active: true, permissionOverrides: [] } satisfies AuthSession;
 }
 async function fixture() {
   const actor = await person();
+  const latest = await db.applicationKeyVersion.findFirst({ where: { purpose: PRIVILEGED_STEP_UP_KEY_PURPOSE }, orderBy: { version: 'desc' } });
+  key.version = (latest?.version ?? 0) + 1;
+  await db.$transaction(tx => rotatePrivilegedStepUpKeyVersion(tx, { version: key.version,
+    keyDigest: privilegedStepUpKeyDigest(key.secret), actorUserId: actor.userId }));
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Synthetic ordinary client' } });
   const project = await db.project.create({ data: { clientId: client.id, title: 'Synthetic ordinary project' } });
   const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id, title: 'Synthetic ordinary practice',
@@ -74,7 +83,7 @@ async function fixture() {
     to: ['recipient@invalid.test'], cc: [], bcc: ['private@invalid.test'], subject: 'Synthetic stored decision', body: 'SYNTHETIC_PRIVATE_BODY',
     attachmentVersionIds: [version.id], classification: 'ORDINARY' };
   const saved = await saveApprovedMessageDraft(db, actor, input, runtime);
-  const credentials = { sessionToken: 'synthetic-cookie-'+randomUUID(), stepUpToken: undefined as string | undefined };
+  const credentials = { sessionToken: sessionCookies.get(actor.sessionId)!, stepUpToken: undefined as string | undefined };
   credentials.stepUpToken = createPrivilegedStepUpToken({ key, userId: actor.userId, sessionToken: credentials.sessionToken });
   return { actor, client, project, practice, box, doc, version, input, saved, credentials };
 }
@@ -382,4 +391,87 @@ test('lost DATA guard commit response is uncertain and never retries a submitted
   assert.equal((await footprint(f)).message.state,'UNCERTAIN');
   assert.equal(transport.sockets[0].writes.filter(text=>text.startsWith('From: ')).length,1);
   await assert.rejects(send(f,transport)); assert.equal(transport.sockets.length,1);
+});
+
+async function rotate(f: Fixture) {
+  return db.$transaction(tx => rotatePrivilegedStepUpKeyVersion(tx, { version: key.version+1,
+    keyDigest: privilegedStepUpKeyDigest('synthetic-rotated-email-key-000000000000000000'), actorUserId: f.actor.userId }));
+}
+
+test('preview and reservation require the registered active key with the exact digest', options, async () => {
+  for (const mode of ['unregistered','digest','retired','revoked'] as const) {
+    const f=await fixture(), shown=await preview(f), before=await footprint(f);
+    const changed={...runtime,key:{...key}};
+    if(mode==='unregistered') changed.key.version+=1000;
+    if(mode==='digest') changed.key.secret='wrong-synthetic-key-000000000000000000000000000';
+    if(mode==='retired') await rotate(f);
+    if(mode==='revoked') await db.applicationKeyVersion.update({where:{purpose_version:{purpose:PRIVILEGED_STEP_UP_KEY_PURPOSE,version:key.version}},
+      data:{status:'REVOKED',retiredAt:new Date()}});
+    await assert.rejects(previewStoredOrdinaryEmail(db,f.actor,f.saved.id,changed),/ORDINARY_EMAIL_STORE_DENIED/);
+    await assert.rejects(reserveStoredOrdinaryEmail(db,f.actor,{messageId:f.saved.id,requestId:randomUUID(),previewToken:shown.token},f.credentials,changed),/ORDINARY_EMAIL_STORE_DENIED/);
+    assert.deepEqual(await footprint(f),before);
+  }
+});
+
+test('native rotation invalidates stale preview, reservation material, consumption and claim', options, async () => {
+  for(const phase of ['preview','material','consume','claim'] as const) {
+    const f=await fixture(), shown=await preview(f);
+    const reserved=phase==='preview' ? undefined : await reserve(f,shown.token);
+    const input=reserved ? await request(f,reserved.attemptId) : undefined;
+    const lease=phase==='claim' ? await takeStoredOrdinaryEmailAttempt(db,f.actor,input!,runtime) : undefined;
+    const before=await footprint(f);
+    await rotate(f);
+    if(phase==='preview') await assert.rejects(reserve(f,shown.token),/ORDINARY_EMAIL_STORE_DENIED/);
+    if(phase==='material') await assert.rejects(loadStoredOrdinaryEmailMaterial(db,f.actor,reserved!.attemptId,runtime),/ORDINARY_EMAIL_STORE_DENIED/);
+    if(phase==='consume') await assert.rejects(takeStoredOrdinaryEmailAttempt(db,f.actor,input!,runtime),/ORDINARY_EMAIL_STORE_DENIED/);
+    if(phase==='claim') await assert.rejects(checkStoredOrdinaryEmailLease(db,f.actor,lease!,runtime),/ORDINARY_EMAIL_STORE_DENIED/);
+    assert.deepEqual(await footprint(f),before);
+  }
+});
+
+test('valid step-up for a different cookie cannot be paired with the claimed native session', options, async () => {
+  const f=await fixture(), shown=await preview(f), before=await footprint(f);
+  const otherCookie=createRegistrySessionToken();
+  await db.internalSession.create({data:{userId:f.actor.userId,tokenDigest:Buffer.from(await digestRegistrySessionToken(otherCookie.bytes)),expiresAt:new Date(Date.now()+3_600_000)}});
+  for(const sessionToken of [otherCookie.token,'synthetic-legacy-cookie']) {
+    const credentials={sessionToken,stepUpToken:createPrivilegedStepUpToken({key,userId:f.actor.userId,sessionToken})};
+    await assert.rejects(reserveStoredOrdinaryEmail(db,f.actor,{messageId:f.saved.id,requestId:randomUUID(),previewToken:shown.token},credentials,runtime),/ORDINARY_EMAIL_STORE_DENIED/);
+  }
+  assert.deepEqual(await footprint(f),before);
+  await reserve(f,shown.token);
+});
+
+test('key rotation committed during transport qualification prevents every socket', options, async () => {
+  const f=await fixture(), transport=syntheticTransport();
+  transport.dependencies.readQualifiedTransport=async()=>{await rotate(f);return {host:'synthetic.invalid',password:'SYNTHETIC_PASSWORD_ONLY'};};
+  const result=await send(f,transport);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'NOT_SENT');
+  assert.equal(transport.sockets.length,0); assert.equal((await footprint(f)).message.state,'ERROR');
+});
+
+test('native key rotation waits for DATA without a lock cycle and its outcome remains recordable', options, async () => {
+  const f=await fixture(); let rotation:Promise<unknown>|undefined, pid=0, blocked=false, completed=false;
+  const transport=syntheticTransport({beforeDataReply:async()=>{
+    rotation=db.$transaction(async tx=>{
+      pid=(await tx.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+      return rotatePrivilegedStepUpKeyVersion(tx,{version:key.version+1,keyDigest:privilegedStepUpKeyDigest('synthetic-rotated-data-key-000000000000000000'),actorUserId:f.actor.userId});
+    },{timeout:10_000}).then(()=>{completed=true;});
+    for(let i=0;i<100&&!blocked;i++) {
+      if(pid) blocked=(await db.$queryRaw<Array<{blocked:boolean}>>`SELECT cardinality(pg_blocking_pids(${pid}::integer))>0 AS blocked`)[0].blocked;
+      if(!blocked) await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.equal(blocked,true); assert.equal(completed,false);
+  }});
+  const result=await send(f,transport); await rotation;
+  assert.equal(blocked,true); assert.equal(completed,true); assert.equal(result.outcome,'ACCEPTED');
+  assert.equal(transport.sockets[0].writes.filter(text=>text.startsWith('From: ')).length,1);
+  await assert.rejects(preview(f),/ORDINARY_EMAIL_STORE_DENIED/);
+});
+
+test('native environment key loader agrees with stored rotation and never returns retired material', options, async () => {
+  const f=await fixture(), environment={PRIVILEGED_STEP_UP_KEY_VERSION:String(key.version),PRIVILEGED_STEP_UP_SECRET:key.secret};
+  assert.deepEqual(await loadActivePrivilegedStepUpKey(db,environment),key);
+  assert.equal(await loadActivePrivilegedStepUpKey(db,{...environment,PRIVILEGED_STEP_UP_SECRET:'different-synthetic-key-000000000000000'}),null);
+  await rotate(f);
+  assert.equal(await loadActivePrivilegedStepUpKey(db,environment),null);
 });

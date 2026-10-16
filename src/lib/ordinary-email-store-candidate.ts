@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -9,10 +9,13 @@ import type { OrdinaryChannel } from './ordinary-email-candidate';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import type { OrdinaryAttemptLease, OrdinaryAttemptRequest, OrdinarySmtpResult } from './ordinary-email-smtp-candidate';
 import type { readPrivateDocumentBounded } from './storage';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import { tokenDigestFromCookie } from './internal-session-registry';
 
 /** Isolated PostgreSQL candidate. Tables are deliberately outside the migration
  * chain; no route, connector, environment reader, worker or automatic retry.
- * The service supplies its active native key. The DATA guard keeps the same
+ * The service supplies its server key, revalidated/locked in every admission.
+ * The DATA guard keeps the same
  * authoritative locks through the bounded protocol response; no retry. */
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
@@ -23,6 +26,7 @@ function deny(): never { throw new Error('ORDINARY_EMAIL_STORE_DENIED'); }
 async function clock(tx: Tx) { return (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0].now; }
 
 async function load(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime) {
+  if (!await lockRegisteredPrivilegedStepUpKey(tx, runtime.key)) deny();
   const loaded = await loadOrdinaryMessageCandidateContext(tx, claimed, messageId, runtime);
   const authorities = await tx.$queryRaw<Array<{ userId: string; mailboxId: string; revision: number; enabled: boolean }>>`
     SELECT "userId","mailboxId","revision","enabled" FROM "OrdinaryEmailAuthority" WHERE "id"='ordinary-email' FOR SHARE`;
@@ -66,6 +70,12 @@ export async function reserveStoredOrdinaryEmail(db: Db, claimed: AuthSession,
   return db.$transaction(async tx => {
     const state = await load(tx, claimed, input.messageId, runtime);
     if (!['DRAFT','PENDING','APPROVED','ERROR'].includes(state.row.state)) deny();
+    // The step-up cookie is bound to a token; also bind that token to the
+    // authoritative session row already locked by the M4 context loader.
+    const digest = await tokenDigestFromCookie(credentials.sessionToken);
+    const registered = await tx.internalSession.findUnique({ where: { id: state.actor.sessionId }, select: { tokenDigest: true } });
+    if (!digest || !registered || digest.length !== registered.tokenDigest.length
+      || !timingSafeEqual(digest, registered.tokenDigest)) deny();
     const result = confirmOrdinaryDecision(input.previewToken, state.material, state.current, runtime.key, credentials, await clock(tx));
     const { decision, decisionHash, proof, prepared } = result, attemptId = randomUUID();
     const blocking = await tx.communicationAttempt.count({ where: { messageId: input.messageId, state: { in: ['SENDING','UNCERTAIN','SENT'] } } });
