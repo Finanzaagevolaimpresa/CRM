@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import type { CommunicationReply, Prisma } from '@prisma/client';
+import { filterAdmittedOrdinaryReplies } from '../src/lib/ordinary-email-inbound-reader';
 import { createOrdinaryInboundSource, consumeInboundReceipt, inboundQualificationReference, assertInboundSource,
   type InboundBinding, type InboundDescriptor } from '../src/lib/ordinary-email-inbound-contract';
 
@@ -84,4 +86,14 @@ test('failed authentication and changed credential after read never issue a rece
     await assert.rejects(source.read(f.binding,position));
   }
   assert.equal(calls,2);
+});
+test('legacy manual reference labels do not require candidate tables or become automatic intake', async()=>{
+  const itemId=randomUUID(), refs=[
+    {externalMessageId:'<legacy@invalid.test>',evidenceReference:`ORDINARY_INBOUND_${itemId.replaceAll('-','')}`},
+    {externalMessageId:`ordinary-inbound:${itemId}`,evidenceReference:'MANUAL_OPERATOR_REFERENCE'},
+  ];
+  let queries=0;
+  const tx={$queryRaw:async()=>{queries++; throw new Error('CANDIDATE_QUERY_NOT_EXPECTED');}} as unknown as Prisma.TransactionClient;
+  const replies=refs.map(row=>({...row,id:randomUUID()})) as CommunicationReply[];
+  assert.deepEqual(await filterAdmittedOrdinaryReplies(tx,replies),replies); assert.equal(queries,0);
 });

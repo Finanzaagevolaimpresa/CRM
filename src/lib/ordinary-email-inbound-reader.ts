@@ -4,7 +4,10 @@ import type { CommunicationReply, Prisma } from '@prisma/client';
  * quarantined even when the original had already been linked. The intake writer
  * takes the same item lock, so a fresh request cannot reuse a stale projection. */
 export async function filterAdmittedOrdinaryReplies(tx: Prisma.TransactionClient, replies: CommunicationReply[]) {
-  const candidates = replies.filter(row => row.evidenceReference.startsWith('ORDINARY_INBOUND_'));
+  const candidates = replies.filter(row => {
+    const identity = row.externalMessageId.match(/^ordinary-inbound:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/);
+    return identity && row.evidenceReference === `ORDINARY_INBOUND_${identity[1].replaceAll('-','')}`;
+  });
   if (!candidates.length) return replies;
   const [tables] = await tx.$queryRaw<Array<{ count: number }>>`SELECT count(*)::integer AS count FROM
     (VALUES (to_regclass('public."OrdinaryEmailInboundItem"')),(to_regclass('public."OrdinaryEmailInboundConflict"')),
