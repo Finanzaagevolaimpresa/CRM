@@ -30,6 +30,8 @@ Il risultato è una decisione firmata da persistere, con `decisionId` stabile pe
 
 Prove locali: sei casi del nucleo MIME/associazione e sei casi della decisione personale, con controlli avversi su identità, step-up, alterazione dei contenuti, scadenza, contesto e contraffazione. Si tratta di qualificazione sintetica del contratto, distinta dai futuri test DB/browser e da qualunque collaudo produttivo.
 
+L'adattatore isolato `ordinary-email-smtp-candidate.ts` aggiunge undici prove di protocollo con socket e consumo in memoria sintetici. Richiede callback server obbligatori per consumo del tentativo committato, controllo corrente e risoluzione del trasporto qualificato; non fornisce un connettore predefinito. Hash esatti e BCC, rifiuto parziale dei destinatari, timeout/scrittura parziale e assenza di retry sono descritti in [ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md](ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md). Non è ancora un collegamento alla persistenza o al provider reale.
+
 ## Flusso successivo concreto
 
 1. Adattatore ricezione autenticato per la casella esistente: acquisizione continua senza consenso per ogni messaggio, identificativo provider stabile e deduplica atomica. Ricezione da verificare: nessun adattatore IMAP/API e nessun endpoint/abilitazione risultano qualificati in questo candidato. Non inventare un host dal nome del provider.
@@ -48,7 +50,7 @@ La UI deve consentire lettura ordinaria delle comunicazioni nel perimetro senza 
 | --- | --- | --- |
 | Persistenza ordinaria e riserva atomica, concorrenza e audit nativo | Delivery CRM | Candidato DB sintetico; valutazione schema/SQL preciso prima di qualunque migrazione produttiva |
 | Identità personale, step-up e UI | Delivery CRM | Collegamento transazionale al riferimento canonico, senza nuovi account/ruoli |
-| Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Test di protocollo sintetici; nessun invio reale senza approvazione personale della versione esatta |
+| Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Contratto di trasporto e 11 test di protocollo sintetici implementati; restano callback persistenti, vero connettore e qualifica del canale. Nessun invio reale senza approvazione personale della versione esatta |
 | Ricezione ufficiale sulla casella esistente | Delivery; R09 ha fornito casella/provider/configurationRef canonici | Restano da verificare endpoint/protocollo e autorizzazione operativa già esistenti; i riferimenti M4 non li provano. Nessuna nuova credenziale/provider |
 | Prove complete ricevuto→bozza→decisione→invio→esito | Delivery CRM | PostgreSQL isolato e browser dopo i punti precedenti |
 
