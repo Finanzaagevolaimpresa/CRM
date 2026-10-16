@@ -112,9 +112,6 @@ export async function transmitOrdinaryEmailCandidate(
     // a reference to the private MIME/envelope used by this invocation.
     const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, material.preparedAt);
     const mime = prepared.mime.toString('ascii');
-    if (!prepared.mime.equals(Buffer.from(mime, 'ascii')) || !mime.endsWith('\r\n') || /[^\x09\x0a\x0d\x20-\x7e]/.test(mime)
-      || mime.replaceAll('\r\n', '').includes('\r') || mime.replaceAll('\r\n', '').includes('\n')
-      || mime.split('\r\n').some(line => line.length > 998)) throw new Error('ORDINARY_SMTP_MIME_UNSUPPORTED');
     const request: OrdinaryAttemptRequest = Object.freeze({ attemptId, intentHash: prepared.intentHash, mimeHash: prepared.mimeHash,
       envelopeHash: canonicalSha256(prepared.envelope), channel: Object.freeze(prepared.intent.channel) });
     timer = setTimeout(abort, Math.max(0, deadline - performance.now()));

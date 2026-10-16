@@ -54,6 +54,12 @@ export function prepareOrdinaryEmail(raw: ApprovedMessageSnapshot, channelInput:
   );
   lines.push(`--${boundary}--`, '');
   const mime = Buffer.from(lines.join('\r\n'));
+  // Apply transport limitations before a preview/decision can be reserved.
+  // An unsupported filename must remain an editable draft, not a blocked send.
+  const wire = mime.toString('ascii');
+  if (!mime.equals(Buffer.from(wire, 'ascii')) || /[^\x09\x0a\x0d\x20-\x7e]/.test(wire)
+    || wire.replaceAll('\r\n', '').includes('\r') || wire.replaceAll('\r\n', '').includes('\n')
+    || wire.split('\r\n').some(line => line.length > 998)) throw new Error('ORDINARY_SMTP_MIME_UNSUPPORTED');
   return { intent, intentHash, mime, mimeHash: digest(mime),
     envelope: { from: message.from, recipients: [...message.to, ...message.cc, ...message.bcc] },
     summary: { from: message.from, replyTo: message.replyTo, to: message.to, cc: message.cc, bcc: message.bcc,

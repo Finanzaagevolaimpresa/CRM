@@ -52,6 +52,7 @@ test('changed attachment bytes, duplicate recipients and header injection fail b
   assert.throws(() => prepareOrdinaryEmail(draft, channel, new Map([['synthetic-v1', Buffer.from('new version')]]), date));
   assert.throws(() => prepare({ ...draft, cc: draft.to }));
   assert.throws(() => prepare({ ...draft, subject: 'ok\r\nBcc: victim@invalid.test' }));
+  assert.throws(() => prepare({ ...draft, attachments: [{ ...draft.attachments[0], filename: 'è'.repeat(195)+'.txt' }] }), /ORDINARY_SMTP_MIME_UNSUPPORTED/);
   assert.throws(() => prepareOrdinaryEmail(draft, channel, material, new Date('invalid')));
 });
 test('reservation is required; uncertainty and definite failure never authorize automatic retry', () => {

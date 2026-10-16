@@ -157,6 +157,11 @@ test('changed draft and attachment bytes invalidate the decision before writes',
   assert.deepEqual(await footprint(f),before);
   await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:1,body:'Changed synthetic version'},runtime);
   await assert.rejects(reserve(f,shown.token));
+  await db.document.update({where:{id:f.doc.id},data:{fileName:'è'.repeat(195)+'.txt'}});
+  await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:2},runtime);
+  const unsupported=await footprint(f);
+  await assert.rejects(preview(f),/ORDINARY_SMTP_MIME_UNSUPPORTED/);
+  assert.deepEqual(await footprint(f),unsupported); assert.equal(unsupported.message.state,'DRAFT');
 });
 test('expiry during a real audit wait rolls back all reservation writes', options, async () => {
   const f = await fixture(), shown = await preview(f);
