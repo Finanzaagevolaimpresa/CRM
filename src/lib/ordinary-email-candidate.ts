@@ -10,6 +10,7 @@ import { canonicalSha256 } from './canonical-json';
 const channelSchema = z.object({
   purpose: z.literal('ORDINARY_SMTP'), mailboxId: z.string().uuid(), mailboxRevision: z.number().int().positive(),
   address: z.literal('comunicazioni@finanzaagevolaimpresa.it'),
+  providerReference: z.literal('register_it'), configurationReference: z.literal('M4_COMUNICAZIONI_REGISTER_IT'),
   channelRevision: z.number().int().positive(), qualificationReference: z.string().min(1).max(128),
 }).strict();
 export type OrdinaryChannel = z.infer<typeof channelSchema>;

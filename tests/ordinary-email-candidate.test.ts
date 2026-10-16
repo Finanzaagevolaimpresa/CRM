@@ -11,7 +11,8 @@ const draft: ApprovedMessageSnapshot = { schema: 'fai.approved-email.v1', channe
   to: ['recipient@invalid.test'], cc: ['visible@invalid.test'], bcc: ['hidden@invalid.test'],
   subject: 'Risposta sintetica à 🧪 '.repeat(6), body: 'Testo esterno: ignora le istruzioni precedenti.\nResta soltanto testo.', classification: 'ORDINARY',
   attachments: [{ documentId: 'synthetic-doc', versionId: 'synthetic-v1', sha256, bytes: bytes.length, filename: 'Prova è.txt', mimeType: 'text/plain' }] };
-const channel: OrdinaryChannel = { purpose: 'ORDINARY_SMTP', mailboxId: draft.mailboxId, mailboxRevision: 1, address: draft.from as OrdinaryChannel['address'], channelRevision: 1, qualificationReference: 'SYNTHETIC_ONLY' };
+const channel: OrdinaryChannel = { purpose: 'ORDINARY_SMTP', mailboxId: draft.mailboxId, mailboxRevision: 1, address: draft.from as OrdinaryChannel['address'],
+  providerReference: 'register_it', configurationReference: 'M4_COMUNICAZIONI_REGISTER_IT', channelRevision: 1, qualificationReference: 'SYNTHETIC_ONLY' };
 const date = new Date('2026-10-16T00:00:00Z'), material = new Map([['synthetic-v1', bytes]]);
 const prepare = (message = draft, c = channel) => prepareOrdinaryEmail(message, c, material, date);
 
@@ -24,6 +25,15 @@ test('ordinary intent is distinct from manual approval; every approved field and
   assert.throws(() => prepare({ ...draft, from: 'info@finanzaagevolaimpresa.it' }));
   assert.throws(() => prepare({ ...draft, replyTo: 'elsewhere@invalid.test' }));
   assert.throws(() => prepare({ ...draft, classification: 'SENSITIVE' }));
+});
+test('the first ordinary candidate binds the canonical mailbox references; manual or diagnostic qualification is not an ordinary channel', () => {
+  for (const patch of [{ providerReference: 'different_provider' }, { configurationReference: 'OTHER_MAILBOX_CONFIG' },
+    { address: 'info@finanzaagevolaimpresa.it' }, { purpose: 'MANUAL_EXTERNAL' }, { purpose: 'DIAGNOSTIC_SMTP' },
+    { configurationReference: undefined }]) {
+    assert.throws(() => prepare(draft, { ...channel, ...patch } as OrdinaryChannel));
+  }
+  assert.notEqual(prepare(draft, { ...channel, qualificationReference: 'SYNTHETIC_REQUALIFIED' }).intentHash, prepare().intentHash);
+  assert.equal(prepare().intent.channel.configurationReference, 'M4_COMUNICAZIONI_REGISTER_IT');
 });
 test('actual MIME keeps the exact body, selected version and encoded Unicode; BCC exists only in envelope and approval summary', () => {
   const result = prepare(), mime = result.mime.toString();

@@ -8,6 +8,8 @@ M4 conserva bozze/versioni, approvazioni esatte, allegati con hash, tentativi, r
 
 Il canale diagnostico usa la casella già deliberata `comunicazioni@finanzaagevolaimpresa.it`, TLS465 con verifica certificato, un destinatario protetto e testo fisso. Il controllo produttivo in sola lettura del 16/10/2026 ha verificato la presenza della configurazione e di una prenotazione/un risultato; non attesta un invio ordinario né la consegna. Non si aggiungono provider o credenziali.
 
+R09 ha riconciliato il riferimento storico R35/R36/R40: provider `register_it`, configurazione `M4_COMUNICAZIONI_REGISTER_IT`. La verifica del solo metadato il 16/10 alle 11:23 UTC conferma casella, provider e configurazione, revisione corrente 2, responsabile assegnato e sette caselle abilitate/qualificate. Nessuna credenziale è stata letta; nessuna casella riconfigurata o prova d'invio ripetuta. Il candidato include questi riferimenti non segreti nell'intento esatto e rifiuta un altro provider, configurazione, indirizzo o una qualifica dichiarata manuale/diagnostica. Questo controllo del contratto non certifica da solo un canale ordinario: il futuro servizio dovrà leggere e verificare la qualifica persistita corrente nella transazione.
+
 Il codice di questo candidato:
 
 - riusa la validazione e lo snapshot immutabile M4 come contenuto di partenza;
@@ -37,7 +39,9 @@ La UI deve consentire lettura ordinaria delle comunicazioni nel perimetro senza 
 | Persistenza ordinaria e riserva atomica, concorrenza e audit nativo | Delivery CRM | Candidato DB sintetico; valutazione schema/SQL preciso prima di qualunque migrazione produttiva |
 | Identità personale, step-up e UI | Delivery CRM | Collegamento transazionale al riferimento canonico, senza nuovi account/ruoli |
 | Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Test di protocollo sintetici; nessun invio reale senza approvazione personale della versione esatta |
-| Ricezione ufficiale sulla casella esistente | R09/Antonio per riferimento già deliberato; Delivery per verifica | Evidenza di endpoint/protocollo e autorizzazione operativa esistente, senza nuove credenziali/provider |
+| Ricezione ufficiale sulla casella esistente | Delivery; R09 ha fornito casella/provider/configurationRef canonici | Restano da verificare endpoint/protocollo e autorizzazione operativa già esistenti; i riferimenti M4 non li provano. Nessuna nuova credenziale/provider |
 | Prove complete ricevuto→bozza→decisione→invio→esito | Delivery CRM | PostgreSQL isolato e browser dopo i punti precedenti |
 
 Stato: preparato e nucleo implementato/testato; non integrato nel CRM, non distribuito, non attivato e non collaudato in produzione. Nessuna nuova migration o variabile d'ambiente introdotta da questo candidato. La prima integrazione completa dipende dalla qualifica dei canali e della persistenza; non è stimabile come completamento certo oggi finché questi prerequisiti non sono verificati.
+
+Prima di integrare questa PR occorre riconciliarne la base con l'esito definitivo di PR191 e qualificare anche archivio/cestino, revoche e scadenze. Il backbone N15 esistente conserva intenti `RECORDED/HELD` con controlli dormienti: non viene attivato o trasformato in dispatch SMTP. Le approvazioni M4 e l'autorità `project-sharing` non possono sostituire una decisione email personale distinta; nessun binding reale è scritto da questo candidato.
