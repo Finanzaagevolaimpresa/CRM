@@ -20,6 +20,16 @@ Il codice di questo candidato:
 
 Queste funzioni non conferiscono autorità e non sostituiscono controlli transazionali: non sono collegate a route, pulsanti, socket, worker o scheduler. Le prove usano esclusivamente dati sintetici e confrontano i byte MIME effettivi.
 
+## Decisione personale distinta
+
+`ordinary-email-decision.ts` aggiunge il contratto verificabile di anteprima e conferma ordinaria. Richiede un riferimento esplicito `ordinary-email` / `ORDINARY_EMAIL` alla persona e alla casella: un binding `project-sharing`, un altro Admin o un account commerciale sono respinti. Il modulo non legge o scrive un binding reale e non assume che tale autorità sia già attivata.
+
+L'anteprima firmata dura al massimo cinque minuti, comunque non oltre le scadenze della sessione dichiarata e del registro. Contiene soltanto identificativi, revisioni e hash: testo, indirizzi, credenziali e cookie restano fuori dal token. La conferma verifica lo step-up nativo, vincolato a persona, cookie, chiave e tempo; ricalcola intento e MIME con le versioni documentali esatte. Qualsiasi modifica a mittente, destinatari, testo, allegati, canale, contesto autorizzato, autorità o sessione invalida l'anteprima.
+
+Il risultato è una decisione firmata da persistere, con `decisionId` stabile per quella anteprima. Una seconda conferma della stessa anteprima conserva lo stesso ID: la futura prenotazione dovrà consumarlo con un vincolo univoco atomico. Questo contratto non consuma un record e non impedisce da solo un replay; nessuna decisione restituita autorizza direttamente un socket. Stato corrente, orologio e contesto devono provenire dal server e dai lock della transazione, mai da campi del modulo. Il piano della persistenza è in [ORDINARY_EMAIL_PERSISTENCE_PLAN_R01.md](ORDINARY_EMAIL_PERSISTENCE_PLAN_R01.md).
+
+Prove locali: sei casi del nucleo MIME/associazione e sei casi della decisione personale, con controlli avversi su identità, step-up, alterazione dei contenuti, scadenza, contesto e contraffazione. Si tratta di qualificazione sintetica del contratto, distinta dai futuri test DB/browser e da qualunque collaudo produttivo.
+
 ## Flusso successivo concreto
 
 1. Adattatore ricezione autenticato per la casella esistente: acquisizione continua senza consenso per ogni messaggio, identificativo provider stabile e deduplica atomica. Ricezione da verificare: nessun adattatore IMAP/API e nessun endpoint/abilitazione risultano qualificati in questo candidato. Non inventare un host dal nome del provider.
