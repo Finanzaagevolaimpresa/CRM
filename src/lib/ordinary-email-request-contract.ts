@@ -7,6 +7,10 @@ export const ordinaryEmailConfirmationInput = ordinaryEmailPreviewInput.extend({
   requestId: z.string().uuid(), previewToken: z.string().min(1).max(4096),
   personalConfirmation: z.literal('APPROVO_E_INVIO_IL_MESSAGGIO_ESATTO'),
 }).strict();
+export const ordinaryEmailRejectionInput = ordinaryEmailPreviewInput.extend({
+  expectedRevision: z.number().int().positive().max(2_147_483_646), snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
+  personalConfirmation: z.literal('RIFIUTO_QUESTA_VERSIONE'),
+}).strict();
 
 /** Origin and modes come only from the server request/configuration. The
  * serialized action input cannot supply identity, cookies, keys or transport. */

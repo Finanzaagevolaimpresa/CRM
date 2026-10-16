@@ -4,7 +4,9 @@ import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { loadOrdinaryMessageCandidateContext } from './approved-communications';
-import { checkPersistedOrdinaryDecision, confirmOrdinaryDecision, previewOrdinaryDecision } from './ordinary-email-decision';
+import { assertOrdinaryPersonalAction, checkPersistedOrdinaryDecision, confirmOrdinaryDecision, previewOrdinaryDecision } from './ordinary-email-decision';
+import { approvedMessageHash, approvedMessageSnapshotSchema } from './approved-communication-contract';
+import { ordinaryEmailRejectionInput } from './ordinary-email-request-contract';
 import type { OrdinaryChannel } from './ordinary-email-candidate';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import type { OrdinaryAttemptLease, OrdinaryAttemptRequest, OrdinarySmtpResult } from './ordinary-email-smtp-candidate';
@@ -24,6 +26,12 @@ type Credentials = { sessionToken: string; stepUpToken: string | undefined };
 const uuid = z.string().uuid();
 function deny(): never { throw new Error('ORDINARY_EMAIL_STORE_DENIED'); }
 async function clock(tx: Tx) { return (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`)[0].now; }
+async function bindCookie(tx: Tx, sessionId: string, cookie: string) {
+  const digest = await tokenDigestFromCookie(cookie);
+  const registered = await tx.internalSession.findUnique({ where: { id: sessionId }, select: { tokenDigest: true } });
+  if (!digest || !registered || digest.length !== registered.tokenDigest.length
+    || !timingSafeEqual(digest, registered.tokenDigest)) deny();
+}
 
 async function load(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime) {
   if (!await lockRegisteredPrivilegedStepUpKey(tx, runtime.key)) deny();
@@ -64,6 +72,40 @@ export async function previewStoredOrdinaryEmail(db: Db, claimed: AuthSession, m
   }, { timeout: 30_000 });
 }
 
+/** Refuse exactly the displayed revision. Preserve it and its approvals, create
+ * a new unapproved draft, and atomically record the refusal. No socket, delivery
+ * decision, retry or synthetic REJECTED state is manufactured. */
+export async function rejectStoredOrdinaryEmail(db: Db, claimed: AuthSession, raw: unknown, credentials: Credentials, runtime: Runtime) {
+  const input = ordinaryEmailRejectionInput.parse(raw);
+  return db.$transaction(async tx => {
+    const state = await load(tx, claimed, input.messageId, runtime);
+    if (!['DRAFT','PENDING','APPROVED','ERROR'].includes(state.row.state)
+      || state.row.currentRevision !== input.expectedRevision || state.version.snapshotHash !== input.snapshotHash) deny();
+    await bindCookie(tx, state.actor.sessionId, credentials.sessionToken);
+    const check = async () => assertOrdinaryPersonalAction(state.current, state.material.channel, runtime.key, credentials, await clock(tx));
+    await check();
+    const manual = await tx.communicationAttempt.count({ where: { messageId: input.messageId, state: { in: ['SENDING','UNCERTAIN','SENT'] } } });
+    const [ordinary] = await tx.$queryRaw<Array<{ blocked: boolean }>>`SELECT EXISTS(SELECT 1 FROM "OrdinaryEmailAttempt"
+      WHERE "messageId"=${input.messageId}::uuid AND "state" IN ('RESERVED','CLAIMED','ACCEPTED','UNCERTAIN')) AS blocked`;
+    if (manual || ordinary.blocked) deny();
+    const snapshot = approvedMessageSnapshotSchema.parse({ ...state.snapshot, revision: input.expectedRevision + 1 });
+    const snapshotHash = approvedMessageHash(snapshot);
+    const saved = await tx.communicationVersion.create({ data: { messageId: input.messageId, revision: snapshot.revision,
+      snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue, snapshotHash, createdById: state.actor.userId } });
+    const changed = await tx.approvedCommunication.updateMany({ where: { id: input.messageId, currentRevision: input.expectedRevision,
+      state: state.row.state }, data: { state: 'DRAFT', currentRevision: snapshot.revision } });
+    if (changed.count !== 1) deny();
+    const evidence = { rejectedRevision: input.expectedRevision, rejectedHash: input.snapshotHash,
+      newRevision: snapshot.revision, newHash: snapshotHash, versionRef: `communication_version_uuid_${saved.id.replaceAll('-','')}` };
+    await tx.communicationEvent.create({ data: { actorId: state.actor.userId, messageId: input.messageId,
+      event: 'ORDINARY_REJECTED', evidence } });
+    await tx.auditLog.create({ data: { actorId: state.actor.userId, entityType: 'ApprovedCommunication', entityId: input.messageId,
+      event: 'ordinary_email_rejected', after: { action: 'rejected', ...evidence, evidenceHash: canonicalSha256(evidence), status: 'DRAFT' } } });
+    await check();
+    return { id: input.messageId, revision: snapshot.revision, snapshotHash };
+  }, { timeout: 30_000 });
+}
+
 export async function reserveStoredOrdinaryEmail(db: Db, claimed: AuthSession,
   input: { messageId: string; requestId: string; previewToken: string }, credentials: Credentials, runtime: Runtime) {
   uuid.parse(input.requestId);
@@ -72,10 +114,7 @@ export async function reserveStoredOrdinaryEmail(db: Db, claimed: AuthSession,
     if (!['DRAFT','PENDING','APPROVED','ERROR'].includes(state.row.state)) deny();
     // The step-up cookie is bound to a token; also bind that token to the
     // authoritative session row already locked by the M4 context loader.
-    const digest = await tokenDigestFromCookie(credentials.sessionToken);
-    const registered = await tx.internalSession.findUnique({ where: { id: state.actor.sessionId }, select: { tokenDigest: true } });
-    if (!digest || !registered || digest.length !== registered.tokenDigest.length
-      || !timingSafeEqual(digest, registered.tokenDigest)) deny();
+    await bindCookie(tx, state.actor.sessionId, credentials.sessionToken);
     const result = confirmOrdinaryDecision(input.previewToken, state.material, state.current, runtime.key, credentials, await clock(tx));
     const { decision, decisionHash, proof, prepared } = result, attemptId = randomUUID();
     const blocking = await tx.communicationAttempt.count({ where: { messageId: input.messageId, state: { in: ['SENDING','UNCERTAIN','SENT'] } } });

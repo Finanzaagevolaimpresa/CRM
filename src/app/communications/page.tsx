@@ -6,9 +6,11 @@ import { prisma } from '@/lib/prisma';
 import { Card, PageHeader } from '@/components/ui';
 import { PrimaryButton } from '@/components/actions';
 import { ManualMessageDownload } from '@/components/manual-message-download';
+import { OrdinaryEmailReceipts } from '@/components/ordinary-email-receipts';
+import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
 import { readPracticeCommunications } from '@/lib/approved-communications';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
-import { ApprovedCommunicationError, approvedMessageLabels, communicationContextSchema, type ApprovedMessageSnapshot, type ApprovedMessageState, type CommunicationContext } from '@/lib/approved-communication-contract';
+import { ApprovedCommunicationError, communicationContextSchema, type ApprovedMessageSnapshot, type CommunicationContext } from '@/lib/approved-communication-contract';
 
 export const dynamic = 'force-dynamic';
 const field = 'w-full rounded-xl border p-2';
@@ -55,18 +57,19 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
     {data.canWrite ? <Card title="Nuova comunicazione"><Draft data={data} /></Card> : null}
     {data.messages.map(message => <Card key={message.id} title={`${message.snapshot.subject} · v${message.currentRevision}`}>
-      <p className="font-bold">{approvedMessageLabels[message.state as ApprovedMessageState]}</p>
+      <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
       <dl className="my-3 grid gap-1 text-sm"><div><dt className="inline font-bold">Da: </dt><dd className="inline">{message.snapshot.from}</dd></div><div><dt className="inline font-bold">Reply-To: </dt><dd className="inline">{message.snapshot.replyTo}</dd></div>
         <div><dt className="inline font-bold">A: </dt><dd className="inline">{message.snapshot.to.join(', ')}</dd></div><div><dt className="inline font-bold">CC: </dt><dd className="inline">{message.snapshot.cc.join(', ') || 'Nessuna'}</dd></div><div><dt className="inline font-bold">BCC: </dt><dd className="inline">{message.snapshot.bcc.join(', ') || 'Nessuna'}</dd></div></dl>
       <div className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
       <ul className="my-3 text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
+      <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">
         {data.canWrite && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} /></details> : null}
         {data.canWrite && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
         {data.isAdmin && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}
-        {data.canPrepare && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
-        {data.canPrepare && message.state === 'SENDING' && message.attempts[0] ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={message.attempts[0].requestId} resume /> : null}
-        {data.canPrepare && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <form action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">
+        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
+        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && message.state === 'SENDING' && message.attempts[0] ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={message.attempts[0].requestId} resume /> : null}
+        {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <form action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">
           <BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="evidence" /><input type="hidden" name="attemptId" value={message.attempts[0].id} /><input type="hidden" name="reconciliation" value={String(message.state === 'UNCERTAIN')} />
           <h3 className="font-bold">{message.state === 'UNCERTAIN' ? 'Riconciliazione admin dell’esito incerto' : 'Registra l’esito manuale'}</h3>
           <label>Esito<select className={field} name="outcome"><option value="UNCERTAIN">Incerto · non ripetere</option><option value="SENT">Invio dichiarato eseguito</option><option value="NOT_SENT">Non inviata · verificato</option></select></label>
@@ -79,6 +82,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <div className="mt-4"><h3 className="font-bold">Risposte acquisite manualmente</h3>{message.replies.map(reply => <article className="mt-3 rounded-xl border p-3" key={reply.id}><p>{reply.receivedAt.toISOString()} · {reply.sender}</p><h4 className="font-bold">{reply.subject}</h4><p className="whitespace-pre-wrap">{reply.body}</p><p className="text-xs">Evidenza dichiarata: {reply.evidenceReference}</p></article>)}{message.replies.length === 0 ? <p>Nessuna risposta collegata.</p> : null}</div>
     </Card>)}
     <nav aria-label="Pagine comunicazioni" className="flex gap-4">{data.page > 1 ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page - 1}`}>Pagina precedente</Link> : null}{data.hasMore ? <Link href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page + 1}`}>Pagina successiva</Link> : null}</nav>
-    <p className="text-xs text-slate-500">Fino a 100 comunicazioni per pagina, filtrate per accesso. Gli invii nativi email e WhatsApp non sono attivi.</p>
+    <p className="text-xs text-slate-500">Fino a 100 comunicazioni per pagina, filtrate per accesso. La preparazione manuale e le eventuali ricevute SMTP sono distinte. Questa pagina non avvia invii ordinari email o WhatsApp.</p>
   </div>;
 }

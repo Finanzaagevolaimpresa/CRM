@@ -11,6 +11,7 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import type { Permission } from './permissions';
 import { canonicalSha256 } from './canonical-json';
+import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
 import { readPrivateDocumentBounded } from './storage';
 import { buildApprovedMessagePackage } from './approved-message-package';
 import {
@@ -78,7 +79,7 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
   ]);
   if (!client || client.deletedAt || (practice.projectId && (!project || project.deletedAt || project.clientId !== client.id))
     || (practice.clientServiceId && (!service || service.deletedAt || service.clientId !== client.id || service.projectId !== practice.projectId))
-    || (write && service?.status === 'sospeso') || (write && project?.status === 'archiviato')) denied();
+    || (write && service?.status === 'sospeso') || project?.status === 'archiviato') denied();
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
   let allowed = false;
@@ -347,6 +348,9 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
   return readTransaction(db, async tx => {
     const current = await actor(tx, claimed, 'practice_communications.read');
     const scope = await contextScope(tx, current, context);
+    const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! }, select: { expiresAt: true } });
+    if (!registry) denied();
+    let accessUntil = Math.min(current.expiresAt * 1000, registry.expiresAt.getTime());
     const rows = await tx.approvedCommunication.findMany({ where: context.kind === 'READINESS'
       ? { readinessId: context.id } : { technicalPracticeId: context.id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 100, take: 101 });
     const messages = [];
@@ -365,18 +369,27 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
         tx.communicationReply.findMany({ where: { messageId: row.id }, orderBy: { receivedAt: 'asc' }, take: 100 }),
       ]);
       let attachmentAccess = true;
-      for (const file of detail.snapshot.attachments) {
-        const doc = await tx.document.findUnique({ where: { id: file.documentId } });
+      let messageUntil = Infinity;
+      for (const file of detail.snapshot.attachments.slice().sort((a,b) => a.versionId.localeCompare(b.versionId))) {
+        await tx.$queryRaw`SELECT "id" FROM "DocumentVersion" WHERE "id"=${file.versionId} FOR SHARE`;
         const storedVersion = await tx.documentVersion.findUnique({ where: { id: file.versionId } });
+        await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id"=${file.documentId} FOR SHARE`;
+        const doc = await tx.document.findUnique({ where: { id: file.documentId } });
         if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
+          || ['respinto','scaduto','archiviato'].includes(doc.status) || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
           || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
           || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
           || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) attachmentAccess = false;
+        if (doc?.validUntil) messageUntil = Math.min(messageUntil, doc.validUntil.getTime());
       }
       if (!attachmentAccess) continue;
+      // Only admitted messages reach the receipt query. Locks stay held until
+      // the final DB-clock expiry check; consultation needs no new step-up.
+      const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);
+      accessUntil = Math.min(accessUntil, messageUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
-        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, replies });
+        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, replies, ordinaryReceipts });
     }
     const boxes = await tx.communicationMailbox.findMany({ where: current.role === 'admin' ? {} : { restricted: false }, orderBy: { address: 'asc' } });
     const documents = [];
@@ -392,6 +405,8 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
     }
     const boxesWithQualification = [];
     for (const box of boxes) boxesWithQualification.push({ ...box, qualification: await effectiveQualification(tx, box) });
+    const [finished] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (finished.now.getTime() >= accessUntil) denied();
     return { context, client: { id: scope.client.id, name: scope.client.displayName }, messages, documents, page, hasMore: rows.length > 100 && page < 200,
       mailboxes: boxesWithQualification,
       canWrite: hasPermission(current, 'practice_communications.write'), canPrepare: hasPermission(current, 'practice_communications.mark_used'), isAdmin: current.role === 'admin' };

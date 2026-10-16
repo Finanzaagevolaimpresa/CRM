@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { assertOrdinaryEmailRequestOrigin, ordinaryEmailPreviewInput, ordinaryEmailConfirmationInput } from '../src/lib/ordinary-email-request-contract';
+import { assertOrdinaryEmailRequestOrigin, ordinaryEmailPreviewInput, ordinaryEmailConfirmationInput, ordinaryEmailRejectionInput } from '../src/lib/ordinary-email-request-contract';
 
 const env = { INTERNAL_SESSION_MODE: 'registry', PRIVILEGED_ACCESS_MODE: 'enforced', APP_ORIGIN: 'https://crm.invalid.test' };
 const request = { origin: env.APP_ORIGIN, secFetchSite: 'same-origin' };
@@ -45,4 +45,14 @@ test('ordinary confirmation requires an explicit exact-message decision and boun
     assert.equal(ordinaryEmailConfirmationInput.safeParse({ ...input, personalConfirmation }).success, false);
   }
   assert.equal(ordinaryEmailConfirmationInput.safeParse({ ...input, personalConfirmation: 'APPROVO_E_INVIO_IL_MESSAGGIO_ESATTO', previewToken: 'x'.repeat(4097) }).success, false);
+});
+
+test('personal refusal requires exact version/hash and cannot carry an approval or injected authority', () => {
+  const input = { messageId: randomUUID(), expectedRevision: 2, snapshotHash: 'a'.repeat(64), personalConfirmation: 'RIFIUTO_QUESTA_VERSIONE' };
+  assert.deepEqual(ordinaryEmailRejectionInput.parse(input), input);
+  for (const changed of [{ expectedRevision: 0 }, { expectedRevision: 2_147_483_647 }, { snapshotHash: '' },
+    { personalConfirmation: undefined }, { personalConfirmation: 'APPROVO_E_INVIO_IL_MESSAGGIO_ESATTO' },
+    { userId: 'other-admin' }, { sessionToken: 'forged' }, { state: 'REJECTED' }, { previewToken: 'forged' }]) {
+    assert.equal(ordinaryEmailRejectionInput.safeParse({ ...input, ...changed }).success, false);
+  }
 });

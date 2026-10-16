@@ -5,12 +5,12 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../../src/lib/auth';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
 import { configureCommunicationMailbox, qualifyCommunicationMailbox, saveApprovedMessageDraft, submitApprovedMessage,
-  approveExactMessage, prepareManualMessage } from '../../src/lib/approved-communications';
+  approveExactMessage, prepareManualMessage, readPracticeCommunications } from '../../src/lib/approved-communications';
 import { createPrivilegedStepUpToken, privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
 import { loadActivePrivilegedStepUpKey, rotatePrivilegedStepUpKeyVersion, PRIVILEGED_STEP_UP_KEY_PURPOSE } from '../../src/lib/application-key-registry';
 import { previewStoredOrdinaryEmail, reserveStoredOrdinaryEmail, takeStoredOrdinaryEmailAttempt,
-  checkStoredOrdinaryEmailLease, recordStoredOrdinaryEmailOutcome, loadStoredOrdinaryEmailMaterial } from '../../src/lib/ordinary-email-store-candidate';
+  checkStoredOrdinaryEmailLease, recordStoredOrdinaryEmailOutcome, loadStoredOrdinaryEmailMaterial, rejectStoredOrdinaryEmail } from '../../src/lib/ordinary-email-store-candidate';
 import { prepareOrdinaryEmail, type OrdinaryChannel } from '../../src/lib/ordinary-email-candidate';
 import { approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
 import { canonicalJson, canonicalSha256 } from '../../src/lib/canonical-json';
@@ -110,7 +110,7 @@ async function claimed(f: Fixture) {
 }
 async function footprint(f: Fixture) {
   return { message: await db.approvedCommunication.findUniqueOrThrow({ where: { id: f.saved.id } }),
-    rows: await db.$queryRaw`SELECT 'decision' AS kind,count(*)::integer AS count FROM "OrdinaryEmailDecision" WHERE "messageId"=${f.saved.id}::uuid
+    rows: await db.$queryRaw<Array<{kind:string;count:number}>>`SELECT 'decision' AS kind,count(*)::integer AS count FROM "OrdinaryEmailDecision" WHERE "messageId"=${f.saved.id}::uuid
       UNION ALL SELECT 'attempt',count(*)::integer FROM "OrdinaryEmailAttempt" WHERE "messageId"=${f.saved.id}::uuid
       UNION ALL SELECT 'claim',count(*)::integer FROM "OrdinaryEmailClaim" WHERE "attemptId" IN (SELECT "id" FROM "OrdinaryEmailAttempt" WHERE "messageId"=${f.saved.id}::uuid)
       UNION ALL SELECT 'outcome',count(*)::integer FROM "OrdinaryEmailOutcome" WHERE "attemptId" IN (SELECT "id" FROM "OrdinaryEmailAttempt" WHERE "messageId"=${f.saved.id}::uuid)`,
@@ -474,4 +474,181 @@ test('native environment key loader agrees with stored rotation and never return
   assert.equal(await loadActivePrivilegedStepUpKey(db,{...environment,PRIVILEGED_STEP_UP_SECRET:'different-synthetic-key-000000000000000'}),null);
   await rotate(f);
   assert.equal(await loadActivePrivilegedStepUpKey(db,environment),null);
+});
+
+const rejection = (f: Fixture) => ({ messageId: f.saved.id, expectedRevision: f.saved.revision,
+  snapshotHash: f.saved.snapshotHash, personalConfirmation: 'RIFIUTO_QUESTA_VERSIONE' as const });
+const reject = (f: Fixture, store = db) => rejectStoredOrdinaryEmail(store,f.actor,rejection(f),f.credentials,runtime);
+async function refusalFootprint(f: Fixture) {
+  return { ...await footprint(f), versions: await db.communicationVersion.findMany({where:{messageId:f.saved.id},orderBy:{revision:'asc'}}),
+    events: await db.communicationEvent.findMany({where:{messageId:f.saved.id},orderBy:{id:'asc'}}) };
+}
+
+test('personal refusal preserves approved material, creates a fresh draft and retains exact minimized audit values', options, async () => {
+  const f=await fixture(), shown=await preview(f), binding={messageId:f.saved.id,expectedRevision:1,snapshotHash:f.saved.snapshotHash};
+  await submitApprovedMessage(db,f.actor,binding); await approveExactMessage(db,f.actor,binding,runtime);
+  const before=await refusalFootprint(f), result=await reject(f), after=await refusalFootprint(f);
+  assert.equal(result.revision,2); assert.equal(after.message.state,'DRAFT');
+  assert.deepEqual(after.versions[0],before.versions[0]); assert.equal(after.versions.length,2);
+  assert.deepEqual(after.versions[1].snapshot,{...before.versions[0].snapshot as object,revision:2});
+  assert.equal(await db.communicationApproval.count({where:{versionId:after.versions[0].id}}),1);
+  assert.equal(await db.communicationApproval.count({where:{versionId:after.versions[1].id}}),0);
+  assert.notEqual(result.snapshotHash,f.saved.snapshotHash);
+  const event=after.events.find(row=>row.event==='ORDINARY_REJECTED')!;
+  const evidence={rejectedRevision:1,rejectedHash:f.saved.snapshotHash,newRevision:2,newHash:result.snapshotHash,
+    versionRef:`communication_version_uuid_${after.versions[1].id.replaceAll('-','')}`};
+  assert.deepEqual(event.evidence,evidence);
+  const audit=after.audits.find(row=>row.event==='ordinary_email_rejected')!;
+  assert.deepEqual(audit.after,{action:'rejected',...evidence,evidenceHash:canonicalSha256(evidence),status:'DRAFT'});
+  for(const secret of [f.input.body,...f.input.to,...f.input.bcc,f.credentials.sessionToken,key.secret]) assert.ok(!JSON.stringify(audit).includes(secret));
+  assert.ok(after.rows.every(row=>row.count===0));
+  await assert.rejects(reserve(f,shown.token)); await assert.rejects(reject(f));
+  assert.deepEqual(await refusalFootprint(f),after);
+});
+
+test('refusal denies changed hashes, versions, actors, cookies and missing step-up without writes', options, async () => {
+  const f=await fixture(), before=await refusalFootprint(f), other=await person();
+  for(const changed of [{expectedRevision:2},{snapshotHash:'0'.repeat(64)},{personalConfirmation:'on'}]) {
+    await assert.rejects(rejectStoredOrdinaryEmail(db,f.actor,{...rejection(f),...changed},f.credentials,runtime));
+  }
+  await assert.rejects(rejectStoredOrdinaryEmail(db,other,rejection(f),f.credentials,runtime));
+  await assert.rejects(rejectStoredOrdinaryEmail(db,f.actor,rejection(f),{...f.credentials,stepUpToken:undefined},runtime));
+  const cookie=createRegistrySessionToken().token;
+  await assert.rejects(rejectStoredOrdinaryEmail(db,f.actor,rejection(f),{sessionToken:cookie,
+    stepUpToken:createPrivilegedStepUpToken({key,userId:f.actor.userId,sessionToken:cookie})},runtime));
+  await db.$executeRaw`UPDATE "OrdinaryEmailAuthority" SET "enabled"=false,"revision"="revision"+1 WHERE "id"='ordinary-email'`;
+  await assert.rejects(reject(f)); assert.deepEqual(await refusalFootprint(f),before);
+});
+
+test('audit failure or expiry during refusal rolls back its draft, event and audit together', options, async () => {
+  for(const mode of ['error','delay'] as const) {
+    const f=await fixture();
+    if(mode==='delay') await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt:new Date(Date.now()+400)}});
+    const before=await refusalFootprint(f);
+    await assert.rejects(reject(f,fault(mode)));
+    assert.deepEqual(await refusalFootprint(f),before);
+  }
+});
+
+test('concurrent refusal and reservation have one winner and neither path can replay the old version', options, async () => {
+  const f=await fixture(), shown=await preview(f);
+  const values=await Promise.allSettled([reject(f),reserve(f,shown.token)]);
+  assert.equal(values.filter(value=>value.status==='fulfilled').length,1);
+  const after=await refusalFootprint(f);
+  assert.ok(['DRAFT','SENDING'].includes(after.message.state));
+  await assert.rejects(reject(f)); await assert.rejects(reserve(f,shown.token));
+  assert.deepEqual(await refusalFootprint(f),after);
+});
+
+test('refusal remains possible for a valid draft whose MIME is unsupported; a submitted attempt cannot be refused', options, async () => {
+  const f=await fixture();
+  await db.document.update({where:{id:f.doc.id},data:{fileName:'è'.repeat(195)+'.txt'}});
+  f.saved=await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:1},runtime);
+  await assert.rejects(preview(f),/ORDINARY_SMTP_MIME_UNSUPPORTED/);
+  assert.equal((await reject(f)).revision,3);
+  for(const outcome of ['ACCEPTED','UNCERTAIN'] as const) {
+    const sent=await fixture(), {lease}=await claimed(sent);
+    await recordStoredOrdinaryEmailOutcome(db,lease,{outcome,phase:'CONTENT',...(outcome==='ACCEPTED'?{replyCode:250}:{})});
+    const before=await refusalFootprint(sent);
+    await assert.rejects(reject(sent)); assert.deepEqual(await refusalFootprint(sent),before);
+  }
+});
+
+const read = (f: Fixture, actor=f.actor, store=db) => readPracticeCommunications(store,actor,f.input.context);
+test('admitted receipt projection distinguishes pending, accepted and historical outcomes without fresh personal approval', options, async () => {
+  const f=await fixture(), reserved=await reserve(f);
+  let receipt=(await read(f)).messages[0].ordinaryReceipts[0];
+  assert.equal(receipt.state,'RESERVED'); assert.equal(receipt.outcome,null);
+  const lease=await takeStoredOrdinaryEmailAttempt(db,f.actor,await request(f,reserved.attemptId),runtime);
+  assert.equal((await read(f)).messages[0].ordinaryReceipts[0].state,'CLAIMED');
+  await recordStoredOrdinaryEmailOutcome(db,lease,{outcome:'ACCEPTED',phase:'CONTENT',replyCode:250});
+  const delegate=await person();
+  await db.userPermissionOverride.create({data:{userId:delegate.userId,permission:'practice_communications.mark_used',allowed:false}});
+  await db.$executeRaw`UPDATE "OrdinaryEmailAuthority" SET "enabled"=false,"revision"="revision"+1 WHERE "id"='ordinary-email'`;
+  await rotate(f);
+  const before=await footprint(f);
+  receipt=(await read(f,delegate)).messages[0].ordinaryReceipts[0];
+  assert.deepEqual(Object.keys(receipt).sort(),['createdAt','id','outcome','recordedAt','revision','snapshotHash','state']);
+  assert.equal(receipt.state,'ACCEPTED'); assert.equal(receipt.outcome,'ACCEPTED'); assert.equal(receipt.revision,1);
+  assert.equal(receipt.snapshotHash,f.saved.snapshotHash); assert.ok(receipt.recordedAt instanceof Date);
+  assert.deepEqual(await footprint(f),before);
+});
+
+test('current context, session, permission and attachment filters precede receipt disclosure', options, async () => {
+  for(const change of ['archive','trash','session','permission','document','expiry','classification'] as const) {
+    const f=await fixture(); await reserve(f);
+    if(change==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+    if(change==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
+    if(change==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+    if(change==='permission') await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'practice_communications.read',allowed:false}});
+    if(change==='document') await db.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+    if(change==='expiry') await db.document.update({where:{id:f.doc.id},data:{validUntil:new Date(Date.now()-1)}});
+    if(change==='classification') {
+      await db.document.update({where:{id:f.doc.id},data:{type:'contratto_fai'}});
+      await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'contract.read',allowed:false}});
+    }
+    if(['archive','trash','session','permission'].includes(change)) await assert.rejects(read(f));
+    else assert.equal((await read(f)).messages.length,0);
+  }
+});
+
+function observeReceiptRead(afterRead:()=>Promise<void>) {
+  return {$transaction:(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>db.$transaction(tx=>work(new Proxy(tx,{
+    get(target,property,receiver) {
+      if(property!=='$queryRaw') return Reflect.get(target,property,receiver);
+      return async(...args:unknown[])=>{
+        const result=await Reflect.apply(target.$queryRaw,target,args);
+        if(Array.isArray(args[0])&&args[0].join('').includes('FROM "OrdinaryEmailAttempt" a')) await afterRead();
+        return result;
+      };
+    },})),opts)} as unknown as PrismaClient;
+}
+
+test('selective perimeters deny indirect communication receipts even for Admin and after revocation or expiry', options, async () => {
+  for(const state of ['unverified','revoked','expired'] as const) {
+    const f=await fixture(); await reserve(f);
+    const approver=await person(), approvedAt=new Date(Date.now()-120_000);
+    await db.selectiveProjectGrant.create({data:{projectId:f.project.id,recipientId:f.actor.userId,approvedById:approver.userId,
+      revision:1,authorityRevision:1,keyVersion:key.version,selection:{},proof:'0'.repeat(64),approvedAt,
+      revokedAt:state==='revoked'?new Date():null,expiresAt:state==='expired'?new Date(Date.now()-60_000):null}});
+    await assert.rejects(read(f));
+    assert.equal(await db.selectiveProjectGrant.count({where:{projectId:f.project.id,recipientId:f.actor.userId}}),1);
+  }
+});
+
+test('receipt consultation holds current session/project/document locks against concurrent revocations', options, async () => {
+  for(const change of ['session','project','document'] as const) {
+    const f=await fixture(); await reserve(f);
+    let mutation:Promise<unknown>|undefined, pid=0, blocked=false, completed=false;
+    const observed=observeReceiptRead(async()=>{
+      mutation=db.$transaction(async tx=>{
+        pid=(await tx.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+        if(change==='session') return tx.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+        if(change==='project') return tx.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+        return tx.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+      },{timeout:10_000}).then(()=>{completed=true;});
+      for(let i=0;i<100&&!blocked;i++) {
+        if(pid) blocked=(await db.$queryRaw<Array<{blocked:boolean}>>`SELECT cardinality(pg_blocking_pids(${pid}::integer))>0 AS blocked`)[0].blocked;
+        if(!blocked) await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      assert.equal(blocked,true); assert.equal(completed,false);
+    });
+    assert.equal((await read(f,f.actor,observed)).messages[0].ordinaryReceipts.length,1);
+    await mutation; assert.equal(completed,true);
+    if(change==='document') assert.equal((await read(f)).messages.length,0);
+    else await assert.rejects(read(f));
+  }
+});
+
+test('DB-clock expiry at the end of receipt consultation denies the entire result without audit writes', options, async () => {
+  for(const change of ['session','document'] as const) {
+    const f=await fixture(); await reserve(f);
+    const expiresAt=new Date(Date.now()+2_000);
+    if(change==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt}});
+    else await db.document.update({where:{id:f.doc.id},data:{validUntil:expiresAt}});
+    const before=await footprint(f);
+    const observed=observeReceiptRead(()=>new Promise(resolve=>setTimeout(resolve,2_100)));
+    await assert.rejects(read(f,f.actor,observed));
+    assert.deepEqual(await footprint(f),before);
+  }
 });
