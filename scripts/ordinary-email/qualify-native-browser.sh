@@ -7,7 +7,7 @@ test "${NODE_ENV:-}" = development
 [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]]
 [[ "${ORDINARY_BROWSER_DB_CONTAINER:-}" =~ ^[a-f0-9]{64}$ ]]
 prefix="ordinary-ui-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-network="$prefix-net"; app="$prefix-app"
+network="$prefix-net"; app="$prefix-app"; app_forwarder=''
 image='node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d'
 secrets="$RUNNER_TEMP/ordinary-secrets"; control="$RUNNER_TEMP/ordinary-control"
 export ORDINARY_EMAIL_BROWSER_EVIDENCE="$RUNNER_TEMP/ordinary-email"
@@ -42,7 +42,10 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=Unrelated Synthetic
 printf accept > "$control/mode"
 docker pull "$image" >/dev/null
 cleanup() {
+  local result=$?
   docker logs "$app" > "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" 2>&1 || true
+  if [[ "$result" != 0 ]]; then tail -40 "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" || true; fi
+  if [[ -n "$app_forwarder" ]]; then kill "$app_forwarder" 2>/dev/null || true; wait "$app_forwarder" 2>/dev/null || true; fi
   docker rm -f "$app" >/dev/null 2>&1 || true
   docker network disconnect "$network" "$ORDINARY_BROWSER_DB_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
@@ -52,7 +55,7 @@ docker network create --internal --label fai.synthetic=ordinary-email "$network"
 docker network connect --alias ordinary-browser-db "$network" "$ORDINARY_BROWSER_DB_CONTAINER"
 docker run -d --name "$app" --network "$network" --network-alias authsmtp.securemail.pro \
   --user "$(id -u):$(id -g)" --sysctl net.ipv4.ip_unprivileged_port_start=0 --cap-drop ALL --security-opt no-new-privileges=true --env HOME=/tmp \
-  -p 127.0.0.1:3036:3036 --workdir "$GITHUB_WORKSPACE" \
+  --workdir "$GITHUB_WORKSPACE" \
   --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE" \
   --mount "type=bind,src=$secrets,dst=/run/ordinary-secrets,readonly" \
   --mount "type=bind,src=$control,dst=/run/ordinary-control,readonly" \
@@ -71,13 +74,22 @@ test "$(docker inspect "$app" --format '{{len .NetworkSettings.Networks}}')" = 1
 test "$(docker inspect "$app" --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.NetworkID}}{{end}}")" = "$(docker network inspect "$network" --format '{{.Id}}')"
 test "$(docker network inspect "$network" --format '{{.EnableIPv6}}')" = false
 docker exec "$app" node tests/ordinary-email/network-boundary-probe.mjs
+# Internal Docker networks do not publish NAT ports. A loopback-only host
+# forwarder reaches the already verified internal interface without adding egress.
+app_ip="$(docker inspect "$app" --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.IPAddress}}{{end}}")"
+node scripts/ordinary-email/ci-loopback-forwarder.mjs "$app_ip" &
+app_forwarder=$!
 ready=0
 for attempt in $(seq 1 90); do
   if curl --fail --silent --max-time 2 http://127.0.0.1:3036/api/health >/dev/null; then ready=1; break; fi
   test "$(docker inspect "$app" --format '{{.State.Running}}')" = true
+  kill -0 "$app_forwarder"
   sleep 1
 done
-test "$ready" = 1
+if [[ "$ready" != 1 ]]; then
+  docker exec "$app" node -e 'fetch("http://127.0.0.1:3036/api/health").then(r=>console.log("ORDINARY_INTERNAL_HEALTH",r.status)).catch(e=>console.log("ORDINARY_INTERNAL_HEALTH_ERROR",e.cause?.code??e.name))' || true
+  exit 1
+fi
 docker exec "$app" node tests/ordinary-email/tls-boundary-probe.mjs
 npx playwright test --config tests/ordinary-email/playwright.config.ts native-ui.spec.ts
 npx playwright test --config tests/ordinary-email/playwright.config.ts native-send.spec.ts
