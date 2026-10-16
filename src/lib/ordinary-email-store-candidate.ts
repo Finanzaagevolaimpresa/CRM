@@ -21,7 +21,10 @@ import { tokenDigestFromCookie } from './internal-session-registry';
  * authoritative locks through the bounded protocol response; no retry. */
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
-type Runtime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded };
+export type OrdinaryEmailStoreRuntime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded;
+  /** Synchronous server configuration check; never supplied by a browser. */
+  assertTransport?: (channel: OrdinaryChannel) => void };
+type Runtime = OrdinaryEmailStoreRuntime;
 type Credentials = { sessionToken: string; stepUpToken: string | undefined };
 const uuid = z.string().uuid();
 function deny(): never { throw new Error('ORDINARY_EMAIL_STORE_DENIED'); }
@@ -49,6 +52,7 @@ async function load(tx: Tx, claimed: AuthSession, messageId: string, runtime: Ru
   const channel: OrdinaryChannel = { purpose: 'ORDINARY_SMTP', mailboxId: loaded.box.id, mailboxRevision: loaded.box.revision,
     address: loaded.box.address, providerReference: loaded.box.providerReference, configurationReference: loaded.box.configurationReference,
     channelRevision: qualification.revision, qualificationReference: qualification.qualificationReference };
+  runtime.assertTransport?.(channel);
   return { ...loaded, material: { snapshot: loaded.snapshot, channel, materials: loaded.materials },
     current: { actor: loaded.actor, contextHash: loaded.contextHash, contextExpiresAt: loaded.contextExpiresAt,
       authority: { ...binding, id: 'ordinary-email' as const, purpose: 'ORDINARY_EMAIL' as const } } };
@@ -131,7 +135,9 @@ export async function reserveStoredOrdinaryEmail(db: Db, claimed: AuthSession,
     await audit(tx, claimed.userId, input.messageId, 'reserved', decision.decisionId, attemptId, decisionHash, 'RESERVED');
     // No retry and no success receipt until commit. A lost commit response leaves
     // the reservation blocking; it never grants permission to open a socket.
-    confirmOrdinaryDecision(input.previewToken, state.material, state.current, runtime.key, credentials, await clock(tx));
+    const finalClock = await clock(tx);
+    runtime.assertTransport?.(state.material.channel);
+    confirmOrdinaryDecision(input.previewToken, state.material, state.current, runtime.key, credentials, finalClock);
     return { attemptId, decisionId: decision.decisionId };
   }, { timeout: 30_000 });
 }
@@ -153,7 +159,9 @@ async function currentAttempt(tx: Tx, claimed: AuthSession, attemptId: string, r
   const state = await load(tx, claimed, refs[0].messageId, runtime), row = await attempt(tx, attemptId);
   if (state.row.state !== 'SENDING' || row.actorId !== claimed.userId || row.sessionId !== claimed.sessionId
     || row.versionId !== state.version.id || canonicalSha256(row.decision) !== row.decisionHash) deny();
-  const verified = checkPersistedOrdinaryDecision(row.decision, row.proof, state.material, state.current, runtime.key, await clock(tx));
+  const finalClock = await clock(tx);
+  runtime.assertTransport?.(state.material.channel);
+  const verified = checkPersistedOrdinaryDecision(row.decision, row.proof, state.material, state.current, runtime.key, finalClock);
   if (verified.decision.decisionId !== row.decisionId || canonicalSha256(verified.prepared.envelope) !== row.envelopeHash) deny();
   return { state, row, ...verified };
 }
@@ -169,6 +177,7 @@ export async function takeStoredOrdinaryEmailAttempt(db: Db, claimed: AuthSessio
     await audit(tx, claimed.userId, value.row.messageId, 'claimed', value.row.decisionId, value.row.id, value.row.decisionHash, 'CLAIMED');
     const finalClock = await clock(tx);
     if (expiresAt <= finalClock) deny();
+    runtime.assertTransport?.(value.state.material.channel);
     checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, finalClock);
     return Object.freeze({ attemptId: request.attemptId, leaseId, expiresAt: expiresAt.toISOString(), committed: true as const });
   }, { timeout: 30_000 });
@@ -187,6 +196,7 @@ async function lockedLease(tx: Tx, claimed: AuthSession, lease: OrdinaryAttemptL
     const now = await clock(tx);
     if (value.row.state !== 'CLAIMED' || !claims[0] || claims[0].expiresAt.toISOString() !== lease.expiresAt
       || claims[0].expiresAt <= now || !lease.committed) deny();
+    runtime.assertTransport?.(value.state.material.channel);
     checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, now);
   };
   await check();

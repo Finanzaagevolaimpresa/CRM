@@ -17,6 +17,12 @@ import { canonicalJson, canonicalSha256 } from '../../src/lib/canonical-json';
 import type { connect } from 'node:tls';
 import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-email-service-candidate';
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
+import { confirmStoredOrdinaryEmailUsingExistingTransport } from '../../src/lib/ordinary-email-runtime-candidate';
+import { ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
+
+const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
+  DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
+  DIRECT_EMAIL_TEST_SMTP_PASSWORD: 'SYNTHETIC_EXISTING_SOURCE_PASSWORD' });
 
 const enabled = process.env.ORDINARY_EMAIL_STORE_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
   requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1',
@@ -77,7 +83,8 @@ async function fixture() {
     ON CONFLICT ("id") DO UPDATE SET "userId"=EXCLUDED."userId","mailboxId"=EXCLUDED."mailboxId","enabled"=true,"revision"="OrdinaryEmailAuthority"."revision"+1`;
   await db.$executeRaw`INSERT INTO "OrdinaryEmailChannel" ("mailboxId","mailboxRevision","qualificationReference","enabled")
     VALUES (${box.id}::uuid,${box.revision},'SYNTHETIC_ORDINARY_ONLY',true) ON CONFLICT ("mailboxId") DO UPDATE
-    SET "mailboxRevision"=EXCLUDED."mailboxRevision","enabled"=true,"revision"="OrdinaryEmailChannel"."revision"+1`;
+    SET "mailboxRevision"=EXCLUDED."mailboxRevision","enabled"=true,"revision"="OrdinaryEmailChannel"."revision"+1,
+      "qualificationReference"=EXCLUDED."qualificationReference"`;
   const context = { kind: 'TECHNICAL' as const, id: practice.id };
   const input = { messageId: randomUUID(), expectedRevision: 0, context, mailboxId: box.id, replyTo: box.address,
     to: ['recipient@invalid.test'], cc: [], bcc: ['private@invalid.test'], subject: 'Synthetic stored decision', body: 'SYNTHETIC_PRIVATE_BODY',
@@ -178,7 +185,7 @@ test('changed draft and attachment bytes invalidate the decision before writes',
   assert.deepEqual(await footprint(f),before);
   await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:1,body:'Changed synthetic version'},runtime);
   await assert.rejects(reserve(f,shown.token));
-  await db.document.update({where:{id:f.doc.id},data:{fileName:'è'.repeat(195)+'.txt'}});
+  await db.document.update({where:{id:f.doc.id},data:{fileName:'ÃƒÂ¨'.repeat(195)+'.txt'}});
   await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:2},runtime);
   const unsupported=await footprint(f);
   await assert.rejects(preview(f),/ORDINARY_SMTP_MIME_UNSUPPORTED/);
@@ -542,7 +549,7 @@ test('concurrent refusal and reservation have one winner and neither path can re
 
 test('refusal remains possible for a valid draft whose MIME is unsupported; a submitted attempt cannot be refused', options, async () => {
   const f=await fixture();
-  await db.document.update({where:{id:f.doc.id},data:{fileName:'è'.repeat(195)+'.txt'}});
+  await db.document.update({where:{id:f.doc.id},data:{fileName:'ÃƒÂ¨'.repeat(195)+'.txt'}});
   f.saved=await saveApprovedMessageDraft(db,f.actor,{...f.input,expectedRevision:1},runtime);
   await assert.rejects(preview(f),/ORDINARY_SMTP_MIME_UNSUPPORTED/);
   assert.equal((await reject(f)).revision,3);
@@ -658,4 +665,114 @@ test('DB-clock expiry at the end of receipt consultation denies the entire resul
     await assert.rejects(read(f,f.actor,observed));
     assert.deepEqual(await footprint(f),before);
   }
+});
+
+async function qualifyExistingSource(f: Fixture, env: Record<string,string|undefined>) {
+  const [row] = await db.$queryRaw<Array<{ revision:number }>>`SELECT "revision" FROM "OrdinaryEmailChannel" WHERE "mailboxId"=${f.box.id}::uuid`;
+  const channel: OrdinaryChannel = { purpose:'ORDINARY_SMTP', mailboxId:f.box.id, mailboxRevision:f.box.revision,
+    address:'comunicazioni@finanzaagevolaimpresa.it', providerReference:'register_it', configurationReference:'M4_COMUNICAZIONI_REGISTER_IT',
+    channelRevision:row.revision+1, qualificationReference:'SYNTHETIC_PREPARATION_ONLY' };
+  const qualification = ordinaryTransportQualificationReference(channel,key,env);
+  await db.$executeRaw`UPDATE "OrdinaryEmailChannel" SET "revision"=${channel.channelRevision},
+    "qualificationReference"=${qualification} WHERE "mailboxId"=${f.box.id}::uuid`;
+}
+async function sendExistingSource(f:Fixture, env:Record<string,string|undefined>, transport=syntheticTransport(), database=db,
+  token?:string, control={deadline:performance.now()+14_000,signal:new AbortController().signal}) {
+  return confirmStoredOrdinaryEmailUsingExistingTransport(database,f.actor,
+    {messageId:f.saved.id,requestId:randomUUID(),previewToken:token??(await preview(f)).token},
+    f.credentials,runtime,{readEnvironment:()=>env,connectTls:transport.dependencies.connectTls},control);
+}
+
+test('existing-source service rejects manual or diagnostic qualification before reservation', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(), before=await footprint(f), transport=syntheticTransport();
+  await assert.rejects(sendExistingSource(f,env,transport),/TRANSPORT_UNAVAILABLE/);
+  assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
+});
+
+test('existing-source exact qualification commits one personal decision and minimized SMTP receipt', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  for(const forbidden of ['DIRECT_EMAIL_TEST_RECIPIENT','DIRECT_EMAIL_TEST_APPROVAL_KEY'])
+    Object.defineProperty(env,forbidden,{get(){throw new Error('DIAGNOSTIC_INPUT_NOT_ALLOWED');}});
+  const shown=await preview(f), transport=syntheticTransport(), result=await sendExistingSource(f,env,transport,db,shown.token);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'ACCEPTED');
+  assert.equal(transport.sockets.length,1); assert.equal((await footprint(f)).message.state,'SENT');
+  const [decision]=await db.$queryRaw<Array<{decision:unknown;proof:string}>>`SELECT d."decision",d."proof" FROM "OrdinaryEmailDecision" d
+    JOIN "OrdinaryEmailAttempt" a ON a."decisionId"=d."id" WHERE a."id"=${result.attemptId}::uuid`;
+  const persisted=JSON.stringify({decision,state:await footprint(f),result});
+  assert.ok(!persisted.includes(env.DIRECT_EMAIL_TEST_SMTP_PASSWORD!)); assert.ok(!persisted.includes(key.secret));
+  await assert.rejects(sendExistingSource(f,env,transport,db,shown.token));
+  assert.equal(transport.sockets[0].writes.filter(value=>value.startsWith('From: ')).length,1);
+});
+
+test('unavailable or changed runtime source leaves no reservation or audit', options, async()=>{
+  for(const field of ['DIRECT_EMAIL_TEST_MODE','DIRECT_EMAIL_TEST_REFERENCE','DIRECT_EMAIL_TEST_SMTP_HOST','DIRECT_EMAIL_TEST_SMTP_PASSWORD']) {
+    const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+    const shown=await preview(f), before=await footprint(f), transport=syntheticTransport();
+    env[field]=field==='DIRECT_EMAIL_TEST_SMTP_PASSWORD'?undefined:'SYNTHETIC_CHANGED_SOURCE';
+    await assert.rejects(sendExistingSource(f,env,transport,db,shown.token),/TRANSPORT_UNAVAILABLE/);
+    assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
+  }
+});
+
+test('runtime drift after real reservation audit rolls back the entire transaction', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  const before=await footprint(f), transport=syntheticTransport(); let observed=false;
+  const changed={ $transaction:(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>db.$transaction(tx=>{
+    const wrapped=new Proxy(tx,{get(target,property,receiver){
+      if(property!=='auditLog') return Reflect.get(target,property,receiver);
+      return new Proxy(target.auditLog,{get(audit,member,auditReceiver){
+        if(member!=='create') return Reflect.get(audit,member,auditReceiver);
+        return async(args:Prisma.AuditLogCreateArgs)=>{
+          const value=await audit.create(args);
+          if(args.data.event==='ordinary_email_reserved') { observed=true; env.DIRECT_EMAIL_TEST_SMTP_PASSWORD='SYNTHETIC_ROTATED_DURING_AUDIT'; }
+          return value;
+        };
+      }});
+    }});
+    return work(wrapped);
+  },opts) } as unknown as PrismaClient;
+  await assert.rejects(sendExistingSource(f,env,transport,changed),/TRANSPORT_UNAVAILABLE/);
+  assert.ok(observed); assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
+});
+
+test('runtime drift after opening the qualified socket prevents DATA and does not retry', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  const transport=syntheticTransport(), original=transport.dependencies.connectTls;
+  transport.dependencies.connectTls=((...args:Parameters<typeof connect>)=>{
+    const socket=Reflect.apply(original,undefined,args);
+    env.DIRECT_EMAIL_TEST_SMTP_PASSWORD='SYNTHETIC_ROTATED_AFTER_CONNECT'; return socket;
+  }) as typeof connect;
+  const result=await sendExistingSource(f,env,transport);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'NOT_SENT');
+  assert.equal(transport.sockets.length,1); assert.ok(!transport.sockets[0].writes.includes('DATA\r\n'));
+  assert.equal((await footprint(f)).message.state,'ERROR');
+});
+
+test('runtime drift during 354 challenge prevents content under the native DATA locks', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  const transport=syntheticTransport({beforeDataReply:async()=>{env.DIRECT_EMAIL_TEST_SMTP_HOST='unqualified.invalid';}});
+  const result=await sendExistingSource(f,env,transport);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'NOT_SENT');
+  assert.equal(transport.sockets.length,1); assert.ok(transport.sockets[0].writes.includes('DATA\r\n'));
+  assert.ok(!transport.sockets[0].writes.some(value=>value.startsWith('From: ')));
+  const [receipt]=await db.$queryRaw<Array<{phase:string;replyCode:number}>>`SELECT "phase","replyCode" FROM "OrdinaryEmailOutcome"
+    WHERE "attemptId"=${result.attemptId}::uuid`;
+  assert.deepEqual(receipt,{phase:'DATA',replyCode:354});
+});
+
+test('a newly qualified channel revision invalidates the previously displayed preview', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  const shown=await preview(f); await qualifyExistingSource(f,env);
+  const before=await footprint(f), transport=syntheticTransport();
+  await assert.rejects(sendExistingSource(f,env,transport,db,shown.token));
+  assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
+});
+
+test('cancelled or invalid deadline cannot reserve an existing-source attempt', options, async()=>{
+  const f=await fixture(), env=sourceEnvironment(); await qualifyExistingSource(f,env);
+  const shown=await preview(f), before=await footprint(f), transport=syntheticTransport(), cancelled=new AbortController(); cancelled.abort();
+  for(const control of [{deadline:performance.now()+1_000,signal:cancelled.signal},
+    {deadline:Number.NaN,signal:new AbortController().signal},{deadline:0,signal:new AbortController().signal}])
+    await assert.rejects(sendExistingSource(f,env,transport,db,shown.token,control),/TRANSPORT_UNAVAILABLE/);
+  assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
 });

@@ -18,7 +18,7 @@ Il codice di questo candidato:
 - distingue prenotazione, accettazione SMTP, mancato invio certo ed esito incerto. Non consente retry automatici;
 - propone un'associazione in ingresso solo con casella canonica, riferimento esatto, mittente fra i destinatari, invio accettato e contesto ancora accessibile. Identità duplicata identica è un no-op; contenuto differente sulla stessa identità è un conflitto. Ambiguità in quarantena.
 
-Queste funzioni non conferiscono autorità e non sostituiscono controlli transazionali. L'anteprima e il rifiuto sono collegati alle azioni native della pagina comunicazioni; l'invio resta privato, senza connettore predefinito, worker o scheduler. Le prove usano esclusivamente dati sintetici e confrontano i byte MIME effettivi.
+Queste funzioni non conferiscono autorità e non sostituiscono controlli transazionali. L'anteprima e il rifiuto sono collegati alle azioni native della pagina comunicazioni; l'invio resta privato, senza action, worker o scheduler. Il collegamento server al trasporto esistente richiede la qualifica ordinaria esatta descritta in [ORDINARY_EMAIL_TRANSPORT_R01.md](ORDINARY_EMAIL_TRANSPORT_R01.md). Le prove usano esclusivamente dati sintetici e confrontano i byte MIME effettivi.
 
 ## Decisione personale distinta
 
@@ -52,7 +52,7 @@ La UI deve consentire lettura ordinaria delle comunicazioni nel perimetro senza 
 | --- | --- | --- |
 | Integrazione della persistenza ordinaria | Delivery CRM | Candidato PostgreSQL implementato e prove isolate; promozione dei modelli/DDL dopo PR191 e verifica dell'autorità sul piano concreto prima di SQL produttivo |
 | Identità personale, step-up e UI | Delivery CRM | Collegamento transazionale al riferimento canonico, senza nuovi account/ruoli |
-| Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Servizio/store collegati con guardia DATA e12test di protocollo sintetici; restano dipendenze server effettive, vero connettore e qualifica del canale. Nessun invio reale senza approvazione personale della versione esatta |
+| Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Collegamento server privato al connettore TLS con qualifica distinta e sorgente verificata sotto i lock; restano qualifica reale e UI di invio. Nessun invio reale senza approvazione personale della versione esatta |
 | Ricezione ufficiale sulla casella esistente | Delivery; R09 ha fornito casella/provider/configurationRef canonici | Restano da verificare endpoint/protocollo e autorizzazione operativa già esistenti; i riferimenti M4 non li provano. Nessuna nuova credenziale/provider |
 | Prove complete ricevuto→bozza→decisione→invio→esito | Delivery CRM | PostgreSQL isolato e browser dopo i punti precedenti |
 

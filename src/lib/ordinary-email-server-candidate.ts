@@ -1,18 +1,18 @@
+import { connect } from 'node:tls';
 import { cookies, headers } from 'next/headers';
 import { requirePermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
 import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
 import { previewStoredOrdinaryEmail, rejectStoredOrdinaryEmail } from './ordinary-email-store-candidate';
-import { confirmAndTransmitStoredOrdinaryEmail } from './ordinary-email-service-candidate';
-import type { OrdinarySmtpDependencies } from './ordinary-email-smtp-candidate';
+import { confirmStoredOrdinaryEmailUsingExistingTransport } from './ordinary-email-runtime-candidate';
 import { assertOrdinaryEmailRequestOrigin, ordinaryEmailPreviewInput, ordinaryEmailConfirmationInput, ordinaryEmailRejectionInput } from './ordinary-email-request-contract';
 import { internalSessionMode } from './session';
 import { privilegedAccessMode } from './application-security-policy';
 import { readOrdinaryEmailUiAuthority } from './ordinary-email-ui-authority';
 
 /** Native server adapter for preview/refusal and private send composition.
- * No default connector or provider activation. Actions pass only strict input;
+ * No send action or provider activation. Actions pass only strict input;
  * server identity/credentials never come from its form or previous UI state. */
 async function nativeRequest(action?: 'ORDINARY_EMAIL_CONFIRM_SEND' | 'ORDINARY_EMAIL_REJECT') {
   const session = await requirePermission('practice_communications.read');
@@ -40,13 +40,12 @@ export async function previewOrdinaryEmailFromRequest(raw: unknown) {
   return previewStoredOrdinaryEmail(prisma, admitted.session, input.messageId, admitted.runtime);
 }
 
-export async function confirmOrdinaryEmailFromRequest(raw: unknown,
-  transport: Pick<OrdinarySmtpDependencies, 'readQualifiedTransport' | 'connectTls'>,
-  control: { deadline: number; signal: AbortSignal }) {
+export async function confirmOrdinaryEmailFromRequest(raw: unknown) {
   const input = ordinaryEmailConfirmationInput.parse(raw), admitted = await nativeRequest('ORDINARY_EMAIL_CONFIRM_SEND');
-  return confirmAndTransmitStoredOrdinaryEmail(prisma, admitted.session,
+  return confirmStoredOrdinaryEmailUsingExistingTransport(prisma, admitted.session,
     { messageId: input.messageId, requestId: input.requestId, previewToken: input.previewToken },
-    admitted.credentials, admitted.runtime, transport, control);
+    admitted.credentials, admitted.runtime, { readEnvironment: () => process.env, connectTls: connect },
+    { deadline: performance.now() + 14_000, signal: AbortSignal.timeout(15_000) });
 }
 
 export async function rejectOrdinaryEmailFromRequest(raw: unknown) {

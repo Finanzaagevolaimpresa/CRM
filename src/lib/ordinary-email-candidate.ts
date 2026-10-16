@@ -7,13 +7,13 @@ import { canonicalSha256 } from './canonical-json';
  * M4 supplies versioned draft content; its manual approval cannot authorize SMTP.
  * A future transaction must bind the canonical personal actor, exact intent,
  * current context/attachments and a committed unique attempt before transport. */
-const channelSchema = z.object({
+export const ordinaryChannelSchema = z.object({
   purpose: z.literal('ORDINARY_SMTP'), mailboxId: z.string().uuid(), mailboxRevision: z.number().int().positive(),
   address: z.literal('comunicazioni@finanzaagevolaimpresa.it'),
   providerReference: z.literal('register_it'), configurationReference: z.literal('M4_COMUNICAZIONI_REGISTER_IT'),
   channelRevision: z.number().int().positive(), qualificationReference: z.string().min(1).max(128),
 }).strict();
-export type OrdinaryChannel = z.infer<typeof channelSchema>;
+export type OrdinaryChannel = z.infer<typeof ordinaryChannelSchema>;
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 const b64 = (bytes: Buffer) => bytes.toString('base64').match(/.{1,76}/g)?.join('\r\n') ?? '';
 
@@ -28,7 +28,7 @@ function encodedHeader(text: string) {
 }
 
 export function prepareOrdinaryEmail(raw: ApprovedMessageSnapshot, channelInput: OrdinaryChannel, materials: Map<string, Buffer>, preparedAt: Date) {
-  const message = approvedMessageSnapshotSchema.parse(raw), channel = channelSchema.parse(channelInput);
+  const message = approvedMessageSnapshotSchema.parse(raw), channel = ordinaryChannelSchema.parse(channelInput);
   if (!Number.isFinite(preparedAt.getTime()) || channel.mailboxId !== message.mailboxId || channel.mailboxRevision !== message.mailboxRevision
     || message.from !== channel.address || message.replyTo !== channel.address || message.classification !== 'ORDINARY') throw new Error('ORDINARY_CHANNEL_MISMATCH');
   const exactFiles = message.attachments.map(item => {

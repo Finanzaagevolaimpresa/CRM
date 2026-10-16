@@ -1,10 +1,9 @@
 import type { PrismaClient } from '@prisma/client';
 import type { AuthSession } from './auth';
-import type { PrivilegedStepUpKey } from './privileged-step-up-token';
-import type { readPrivateDocumentBounded } from './storage';
 import { transmitOrdinaryEmailCandidate, type OrdinaryAttemptLease, type OrdinarySmtpDependencies } from './ordinary-email-smtp-candidate';
 import { reserveStoredOrdinaryEmail, loadStoredOrdinaryEmailMaterial, takeStoredOrdinaryEmailAttempt,
-  checkStoredOrdinaryEmailLease, withStoredOrdinaryEmailAuthorization, recordStoredOrdinaryEmailOutcome } from './ordinary-email-store-candidate';
+  checkStoredOrdinaryEmailLease, withStoredOrdinaryEmailAuthorization, recordStoredOrdinaryEmailOutcome,
+  type OrdinaryEmailStoreRuntime } from './ordinary-email-store-candidate';
 
 /** Server-only composition candidate. No route, environment lookup, default
  * network connector or retry. The integrating action must obtain identity,
@@ -15,7 +14,7 @@ export async function confirmAndTransmitStoredOrdinaryEmail(
   db: Pick<PrismaClient, '$transaction'>, claimed: AuthSession,
   input: { messageId: string; requestId: string; previewToken: string },
   credentials: { sessionToken: string; stepUpToken: string | undefined },
-  runtime: { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded },
+  runtime: OrdinaryEmailStoreRuntime,
   transport: Pick<OrdinarySmtpDependencies, 'readQualifiedTransport' | 'connectTls'>,
   control: { deadline: number; signal: AbortSignal },
 ) {
