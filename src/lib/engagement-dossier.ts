@@ -1,4 +1,4 @@
-import { assertProjectOperational, ProjectUnavailableError } from './project-lifecycle-lock';
+import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
@@ -18,6 +18,14 @@ import { buildWorkPackage, WORK_IMPORT_EVENT, WORK_PACKAGE_EVENT, WORK_PACKAGE_M
 
 export class EngagementDossierError extends Error {
   constructor(readonly code: 'DENIED' | 'CONFLICT' | 'NOT_READY' | 'INVALID') { super(code); }
+}
+
+async function assertProjectOperational(...args: Parameters<typeof lockOperationalProject>) {
+  try { await lockOperationalProject(...args); }
+  catch (error) {
+    if (error instanceof ProjectUnavailableError) throw new EngagementDossierError('DENIED');
+    throw error;
+  }
 }
 
 type Db = Pick<PrismaClient, '$transaction'>;
@@ -352,7 +360,12 @@ export async function getEngagementMaterialDownloadAccess(db: Db, claimed: AuthS
 
 /** Reuse the authorization inside a byte-read transaction, holding its locks. */
 export async function getEngagementMaterialDownloadAccessTx(tx: Prisma.TransactionClient, claimed: AuthSession, documentId: string, requestedVersionId: string | null = null) {
-  const current = await actor(tx, claimed, 'dossier.read', new Date());
+  let current: AuthSession;
+  try { current = await actor(tx, claimed, 'dossier.read', new Date()); }
+  catch (error) {
+    if (error instanceof EngagementDossierError) return null;
+    throw error;
+  }
   if (!hasPermission(current, 'document.download')) return null;
   const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
   if (!document?.clientId || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;

@@ -121,8 +121,11 @@ test('management uses existing current rights; a selected recipient cannot explo
   await assert.rejects(change(f, 'restore', f.reader.session));
   const outsider = await syntheticPerson(db, 'Commerciale senza progetto', 'commerciale');
   await assert.rejects(change(f, 'restore', outsider.session));
-  await db.userPermissionOverride.create({ data: { userId: f.otherAdmin.user.id, permission: 'project.write', allowed: false } });
-  await assert.rejects(change(f, 'restore', f.otherAdmin.session));
+  const consultant = await syntheticPerson(db, 'Consulente del progetto', 'consulente');
+  await db.project.update({ where: { id: f.project.id }, data: { consultantId: consultant.user.id } });
+  assert.ok((await listManagedProjectLifecycle(db, consultant.session, 'trash')).some(p => p.id === f.project.id));
+  await db.userPermissionOverride.create({ data: { userId: consultant.user.id, permission: 'project.write', allowed: false } });
+  await assert.rejects(change(f, 'restore', consultant.session));
   assert.equal((await change(f, 'restore', current)).state, 'archived');
 });
 

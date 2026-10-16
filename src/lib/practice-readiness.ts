@@ -1,4 +1,4 @@
-import { assertProjectOperational, ProjectUnavailableError } from './project-lifecycle-lock';
+import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
@@ -32,6 +32,14 @@ import {
 export class PracticeReadinessError extends Error {
   constructor(readonly code: "DISABLED" | "DENIED" | "CONFLICT" | "NOT_READY") {
     super(code);
+  }
+}
+
+async function assertProjectOperational(...args: Parameters<typeof lockOperationalProject>) {
+  try { await lockOperationalProject(...args); }
+  catch (error) {
+    if (error instanceof ProjectUnavailableError) throw new PracticeReadinessError('DENIED');
+    throw error;
   }
 }
 export const exactMoneySchema = z
