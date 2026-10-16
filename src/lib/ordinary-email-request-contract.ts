@@ -12,8 +12,10 @@ export const ordinaryEmailConfirmationInput = ordinaryEmailPreviewInput.extend({
  * serialized action input cannot supply identity, cookies, keys or transport. */
 export function assertOrdinaryEmailRequestOrigin(request: { origin: string | null; secFetchSite: string | null },
   environment: Readonly<Record<string, string | undefined>>) {
-  if (internalSessionMode(environment.INTERNAL_SESSION_MODE) !== 'registry'
-    || privilegedAccessMode(environment.PRIVILEGED_ACCESS_MODE) !== 'enforced'
+  // An explicit missing setting must not trigger the native parser's default
+  // process.env argument when a supplied configuration is being qualified.
+  if (internalSessionMode(environment.INTERNAL_SESSION_MODE ?? '') !== 'registry'
+    || privilegedAccessMode(environment.PRIVILEGED_ACCESS_MODE ?? '') !== 'enforced'
     || !isAllowedMutationOrigin({ ...request, configuredOrigin: environment.APP_ORIGIN ?? environment.NEXT_PUBLIC_APP_URL })) {
     throw new Error('ORDINARY_EMAIL_REQUEST_DENIED');
   }

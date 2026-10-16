@@ -18,6 +18,18 @@ test('ordinary request requires native registry and enforced privileged access',
     assert.throws(() => assertOrdinaryEmailRequestOrigin(request, { ...env, ...changed }));
   }
 });
+test('missing supplied modes never inherit an enabled ambient process configuration', () => {
+  const before = { INTERNAL_SESSION_MODE: process.env.INTERNAL_SESSION_MODE, PRIVILEGED_ACCESS_MODE: process.env.PRIVILEGED_ACCESS_MODE };
+  try {
+    process.env.INTERNAL_SESSION_MODE = 'registry'; process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
+    assert.throws(() => assertOrdinaryEmailRequestOrigin(request, { ...env, INTERNAL_SESSION_MODE: undefined }));
+    assert.throws(() => assertOrdinaryEmailRequestOrigin(request, { ...env, PRIVILEGED_ACCESS_MODE: undefined }));
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
 test('ordinary form cannot inject actor, authority, cookie, key or transport', () => {
   const preview = { messageId: randomUUID() }, confirmation = { ...preview, requestId: randomUUID(), previewToken: 'signed-preview',
     personalConfirmation: 'APPROVO_E_INVIO_IL_MESSAGGIO_ESATTO' };
