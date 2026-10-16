@@ -98,7 +98,11 @@ type Item = { id: string; streamId: string; payload: unknown; payloadHash: strin
 export async function associateStoredOrdinaryReply(db: Db, claimed: AuthSession, itemId: string,
   runtime: { readDocument?: typeof readPrivateDocumentBounded } = {}) {
   uuid.parse(itemId);
-  return db.$transaction(async tx => {
+  return db.$transaction(tx => associateInTransaction(tx,claimed,itemId,runtime), { timeout: 30_000 });
+}
+
+async function associateInTransaction(tx: Tx, claimed: AuthSession, itemId: string,
+  runtime: { readDocument?: typeof readPrivateDocumentBounded }) {
     const [item] = await tx.$queryRaw<Item[]>`SELECT i.*,s."mailboxId" FROM "OrdinaryEmailInboundItem" i
       JOIN "OrdinaryEmailInboundStream" s ON s."id"=i."streamId" WHERE i."id"=${itemId}::uuid`;
     if (!item) deny();
@@ -138,5 +142,37 @@ export async function associateStoredOrdinaryReply(db: Db, claimed: AuthSession,
     }
     if ((await clock(tx)).getTime() >= state.accessUntil) deny();
     return { replyId };
+}
+
+/** Explicit projection of one currently admitted message, never a mailbox
+ * browser or a GET side effect. Only exact accepted references/participants
+ * reach the bounded batch. A failed admission or audit rolls back every link. */
+export async function refreshStoredOrdinaryReplies(db: Db, claimed: AuthSession, raw: unknown,
+  runtime: { readDocument?: typeof readPrivateDocumentBounded } = {}) {
+  const input = z.object({ messageId: uuid, revision: z.number().int().positive(),
+    snapshotHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(raw);
+  return db.$transaction(async tx => {
+    const state = await loadOrdinaryReplyCandidateContext(tx,claimed,input.messageId,runtime);
+    if (state.row.currentRevision !== input.revision || state.version.snapshotHash !== input.snapshotHash) deny();
+    const accepted = await tx.$queryRaw<Array<{ versionId: string }>>`SELECT d."versionId" FROM "OrdinaryEmailAttempt" a
+      JOIN "OrdinaryEmailDecision" d ON d."id"=a."decisionId" JOIN "OrdinaryEmailOutcome" o ON o."attemptId"=a."id"
+      WHERE a."messageId"=${input.messageId}::uuid AND a."state"='ACCEPTED' AND o."outcome"='ACCEPTED'`;
+    if (accepted.length !== 1) deny();
+    const sent = state.row.versions.find(version => version.id === accepted[0].versionId);
+    const snapshot = approvedMessageSnapshotSchema.safeParse(sent?.snapshot);
+    if (!sent || !snapshot.success || approvedMessageHash(snapshot.data) !== sent.snapshotHash
+      || snapshot.data.messageId !== state.row.id || snapshot.data.mailboxId !== state.box.id) deny();
+    const reference = `<fai-smtp-${state.row.id}-v${sent.revision}@crm.finanzaagevolaimpresa.it>`;
+    const participants = [...snapshot.data.to,...snapshot.data.cc,...snapshot.data.bcc].map(address => address.toLowerCase());
+    const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT i."id" FROM "OrdinaryEmailInboundItem" i
+      JOIN "OrdinaryEmailInboundStream" s ON s."id"=i."streamId"
+      WHERE s."mailboxId"=${state.box.id}::uuid AND i."payload"->>'inReplyTo'=${reference}
+        AND lower(i."payload"->>'sender') IN (${Prisma.join(participants)})
+        AND NOT EXISTS(SELECT 1 FROM "OrdinaryEmailInboundLink" l WHERE l."itemId"=i."id")
+        AND NOT EXISTS(SELECT 1 FROM "OrdinaryEmailInboundConflict" c WHERE c."itemId"=i."id")
+      ORDER BY i."id" LIMIT 26`;
+    for (const item of candidates.slice(0,25)) await associateInTransaction(tx,claimed,item.id,runtime);
+    if ((await clock(tx)).getTime() >= state.accessUntil) deny();
+    return { more: candidates.length > 25 };
   }, { timeout: 30_000 });
 }

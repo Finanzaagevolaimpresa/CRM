@@ -21,7 +21,7 @@ import { confirmStoredOrdinaryEmailUsingExistingTransport } from '../../src/lib/
 import { createOrdinaryTransportResolver, ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
 import { createOrdinaryInboundSource, inboundQualificationReference, type InboundBinding, type InboundDescriptor,
   type InboundBatch } from '../../src/lib/ordinary-email-inbound-contract';
-import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply } from '../../src/lib/ordinary-email-inbound-store';
+import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply, refreshStoredOrdinaryReplies } from '../../src/lib/ordinary-email-inbound-store';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -835,7 +835,7 @@ async function inboundState(f:InboundFixture) {
     batches:await db.$queryRaw`SELECT * FROM "OrdinaryEmailInboundBatch" WHERE "streamId"=${f.binding.id}::uuid ORDER BY "fromVersion"`,
     items:await db.$queryRaw<Array<{id:string;payload:unknown;payloadHash:string}>>`SELECT * FROM "OrdinaryEmailInboundItem" WHERE "streamId"=${f.binding.id}::uuid ORDER BY "providerId"`,
     conflicts:await db.$queryRaw`SELECT c.* FROM "OrdinaryEmailInboundConflict" c JOIN "OrdinaryEmailInboundItem" i ON i."id"=c."itemId" WHERE i."streamId"=${f.binding.id}::uuid ORDER BY c."id"`,
-    links:await db.$queryRaw`SELECT l.* FROM "OrdinaryEmailInboundLink" l JOIN "OrdinaryEmailInboundItem" i ON i."id"=l."itemId" WHERE i."streamId"=${f.binding.id}::uuid`,
+    links:await db.$queryRaw<Array<{itemId:string;replyId:string;actorId:string}>>`SELECT l.* FROM "OrdinaryEmailInboundLink" l JOIN "OrdinaryEmailInboundItem" i ON i."id"=l."itemId" WHERE i."streamId"=${f.binding.id}::uuid`,
     audits:await db.auditLog.findMany({where:{entityId:f.binding.id},orderBy:{id:'asc'}}),
   };
 }
@@ -1049,4 +1049,113 @@ test('inbound association holds project locks through audit; an open session can
   await associateStoredOrdinaryReply(database,f.actor,item.id,runtime); await revocation?.pending;
   await assert.rejects(read(f)); await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
   assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),1);
+});
+
+const refreshInput = (f: Fixture) => ({messageId:f.saved.id,revision:f.saved.revision,snapshotHash:f.saved.snapshotHash});
+const refreshReplies = (f: Fixture, database=db, actor=f.actor) => refreshStoredOrdinaryReplies(database,actor,refreshInput(f),runtime);
+async function replyDraftInput(f: InboundFixture) {
+  const reply=await db.communicationReply.findFirstOrThrow({where:{messageId:f.saved.id}});
+  return {...f.input,messageId:randomUUID(),expectedRevision:0,to:['explicit-new@invalid.test'],cc:[],bcc:[],
+    subject:'Explicit new draft',body:'Explicit new body',attachmentVersionIds:[],replySource:{id:reply.id,contentHash:reply.contentHash}};
+}
+
+test('refresh uses bounded admitted references; reads do not link and repeated projection is idempotent', options, async()=>{
+  const f=await inboundFixture(); await send(f);
+  f.setItems(Array.from({length:25},(_,i)=>({providerId:`visible-${i}`,message:f.message}))); await receive(f);
+  f.setItems([{providerId:'visible-last',message:f.message},{providerId:'private-unrelated',message:{...f.message,inReplyTo:null}},
+    {providerId:'private-stranger',message:{...f.message,sender:'stranger@invalid.test'}}]); await receive(f);
+  assert.equal((await read(f)).messages[0].replies.length,0);
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  assert.deepEqual(await refreshReplies(f),{more:true});
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),25);
+  assert.deepEqual(await refreshReplies(f),{more:false});
+  const before=await inboundState(f);
+  assert.deepEqual(await refreshReplies(f),{more:false}); assert.deepEqual(await inboundState(f),before);
+  assert.equal((await read(f)).messages[0].replies.length,26);
+  assert.equal((await inboundState(f)).items.length,28);
+});
+
+test('refresh rejects stale versions, hidden contexts and revoked sessions before projecting candidates', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f);
+  for(const input of [{...refreshInput(f),revision:2},{...refreshInput(f),snapshotHash:'0'.repeat(64)},
+    {...refreshInput(f),messageId:randomUUID()},{...refreshInput(f),itemId:randomUUID()}])
+    await assert.rejects(refreshStoredOrdinaryReplies(db,f.actor,input,runtime));
+  await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+  await assert.rejects(refreshReplies(f));
+  await db.project.update({where:{id:f.project.id},data:{status:'idea'}});
+  await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+  await assert.rejects(refreshReplies(f));
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+});
+
+test('refresh batch rolls back earlier links after a later audit fails; committed lost response can be reread', options, async()=>{
+  const f=await inboundFixture(); await send(f);
+  f.setItems([{providerId:'a',message:f.message},{providerId:'b',message:f.message}]); await receive(f);
+  let auditCount=0;
+  const failing=afterInboundAudit('ordinary_email_inbound_linked',async()=>{if(++auditCount===2) throw new Error('SYNTHETIC_LATE_AUDIT');});
+  await assert.rejects(refreshReplies(f,failing)); assert.equal(auditCount,2);
+  assert.equal((await inboundState(f)).links.length,0);
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  const lost={$transaction:async(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>{
+    await db.$transaction(work,opts); throw new Error('SYNTHETIC_RESPONSE_LOST');
+  }} as unknown as PrismaClient;
+  await assert.rejects(refreshReplies(f,lost));
+  assert.equal((await read(f)).messages[0].replies.length,2);
+  assert.equal((await inboundState(f)).links.length,2);
+});
+
+test('reply draft has exact explicit content and no inherited approval, recipients or attachments', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f); await refreshReplies(f);
+  const input=await replyDraftInput(f), saved=await saveApprovedMessageDraft(db,f.actor,input,runtime);
+  const row=await db.approvedCommunication.findUniqueOrThrow({where:{id:saved.id},include:{versions:{include:{approval:true}}}});
+  assert.equal(row.state,'DRAFT'); assert.equal(row.currentRevision,1); assert.equal(row.versions[0].approval,null);
+  const snapshot=approvedMessageSnapshotSchema.parse(row.versions[0].snapshot);
+  assert.deepEqual(snapshot.to,input.to); assert.deepEqual(snapshot.cc,[]); assert.deepEqual(snapshot.bcc,[]); assert.deepEqual(snapshot.attachments,[]);
+  assert.equal(snapshot.body,input.body); assert.notEqual(snapshot.body,f.message.body);
+  const event=await db.communicationEvent.findFirstOrThrow({where:{messageId:saved.id,event:'DRAFT_SAVED'}});
+  assert.equal(event.replyId,input.replySource.id);
+  const audit=await db.auditLog.findFirstOrThrow({where:{entityId:saved.id,event:'m4_draft_saved'}});
+  assert.deepEqual(audit.after,{evidenceHash:canonicalSha256(event.evidence)});
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,input,runtime));
+  assert.equal(await db.communicationVersion.count({where:{messageId:saved.id}}),1);
+});
+
+test('reply draft denies forged hash, foreign context, hidden document and later inbound conflict', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f); await refreshReplies(f);
+  const input=await replyDraftInput(f);
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,{...input,replySource:{...input.replySource,contentHash:'0'.repeat(64)}},runtime));
+  const other=await db.technicalPractice.create({data:{clientId:f.client.id,projectId:f.project.id,title:'Other synthetic practice',
+    practiceType:'test',targetEntity:'Synthetic',createdById:f.actor.userId,technicalOwnerId:f.actor.userId}});
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,{...input,context:{kind:'TECHNICAL',id:other.id}},runtime));
+  await db.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,input,runtime));
+  await db.document.update({where:{id:f.doc.id},data:{status:'verificato'}});
+  f.setItems([{providerId:'uid-1',message:{...f.message,body:'CONFLICT'}}]); await receive(f);
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,input,runtime));
+  assert.equal(await db.approvedCommunication.findUnique({where:{id:input.messageId}}),null);
+});
+
+test('reply draft audit failure and expiry after audit leave no draft or event', options, async()=>{
+  for(const mode of ['error','expiry'] as const) {
+    const f=await inboundFixture(); await send(f); await receive(f); await refreshReplies(f);
+    const input=await replyDraftInput(f);
+    if(mode==='expiry') await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt:new Date(Date.now()+400)}});
+    const database=mode==='expiry' ? afterInboundAudit('m4_draft_saved',()=>new Promise(resolve=>setTimeout(resolve,600))) : db;
+    await assert.rejects(saveApprovedMessageDraft(database,f.actor,input,{...runtime,failAudit:mode==='error'}));
+    assert.equal(await db.approvedCommunication.findUnique({where:{id:input.messageId}}),null);
+    assert.equal(await db.communicationEvent.count({where:{messageId:input.messageId}}),0);
+  }
+});
+
+test('reply draft holds the conflict lock through audit; a later draft sees the conflict', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f); await refreshReplies(f);
+  const input=await replyDraftInput(f), item=(await inboundState(f)).items[0];
+  let mutation:{pending:Promise<void>}|undefined;
+  // A real receiver uses this same item lock. Hold it, then perform the full
+  // intake after the draft commits; no invented conflict evidence is inserted.
+  const database=afterInboundAudit('m4_draft_saved',async()=>{mutation=await observeBlockedRevocation(tx=>
+    tx.$queryRaw`SELECT "id" FROM "OrdinaryEmailInboundItem" WHERE "id"=${item.id}::uuid FOR UPDATE`);});
+  await saveApprovedMessageDraft(database,f.actor,input,runtime); await mutation?.pending;
+  f.setItems([{providerId:'uid-1',message:{...f.message,body:'NEW_CONFLICT'}}]); await receive(f);
+  await assert.rejects(saveApprovedMessageDraft(db,f.actor,{...input,messageId:randomUUID()},runtime));
 });

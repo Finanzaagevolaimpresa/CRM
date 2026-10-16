@@ -33,6 +33,7 @@ export async function mutateApprovedMessageAction(form: FormData) {
       mailboxId: value(form, 'mailboxId'), replyTo: value(form, 'replyTo'), to: addresses(form, 'to'), cc: addresses(form, 'cc'), bcc: addresses(form, 'bcc'),
       subject: value(form, 'subject'), body: value(form, 'body'), attachmentVersionIds: form.getAll('attachmentVersionId').map(String),
       classification: value(form, 'classification'),
+      ...(form.has('replySourceId') ? { replySource: { id: value(form,'replySourceId'), contentHash: value(form,'replySourceHash') } } : {}),
     });
     else if (intent === 'submit') await submitApprovedMessage(prisma, session, { messageId: value(form, 'messageId'), expectedRevision: Number(value(form, 'expectedRevision')), snapshotHash: value(form, 'snapshotHash') });
     else if (intent === 'approve') {

@@ -27,6 +27,7 @@ export DATABASE_URL='postgresql://postgres:synthetic-ordinary-browser-only@127.0
 npm run prisma:migrate:deploy
 psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
 psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ordinary-email/storage-candidate.sql
+psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ordinary-email/inbound-candidate.sql
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "InternalSession"')" = 0
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "User"')" = 0
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=Synthetic Ordinary CA' \
@@ -95,6 +96,8 @@ if [[ "$ready" != 1 ]]; then
 fi
 docker exec "$app" node tests/ordinary-email/tls-boundary-probe.mjs
 npx playwright test --config tests/ordinary-email/playwright.config.ts native-ui.spec.ts
+npx playwright test --config tests/ordinary-email/playwright.config.ts native-inbound.spec.ts
 npx playwright test --config tests/ordinary-email/playwright.config.ts native-send.spec.ts
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-ui-proof.json"
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-send-proof.json"
+test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-inbound-proof.json"

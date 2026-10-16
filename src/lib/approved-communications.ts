@@ -201,6 +201,7 @@ const editSchema = z.object({
   mailboxId: uuid, replyTo: z.string().email().max(254), to: z.array(z.string()).min(1).max(20), cc: z.array(z.string()).max(20), bcc: z.array(z.string()).max(20),
   subject: z.string(), body: z.string(), attachmentVersionIds: z.array(identifier).max(20),
   classification: z.enum(['ORDINARY', 'SENSITIVE', 'COMPLAINT']),
+  replySource: z.object({ id: uuid, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
 }).strict();
 
 /** Server-only building block for the isolated ordinary-mail persistence
@@ -247,6 +248,21 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const box = await mailbox(tx, input.mailboxId, current, input.classification);
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId}, 0))`;
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
+    let replyAccessUntil = Infinity;
+    if (input.replySource) {
+      // The source is checked again when saving, not trusted from the rendered
+      // page. A later conflict, revocation or archive makes a stale form fail.
+      if (existing || input.expectedRevision !== 0) conflict();
+      const reply = await tx.communicationReply.findUnique({ where: { id: input.replySource.id } });
+      if (!reply?.messageId || reply.contentHash !== input.replySource.contentHash) denied();
+      const parent = await loadOrdinaryReplyCandidateContext(tx,current,reply.messageId,runtime);
+      if (canonicalSha256(parent.scope.context) !== canonicalSha256(input.context)
+        || (parent.box.restricted && !box.restricted)
+        || (parent.snapshot.classification === 'COMPLAINT' && input.classification !== 'COMPLAINT')
+        || (parent.snapshot.classification === 'SENSITIVE' && input.classification === 'ORDINARY')
+        || (await filterAdmittedOrdinaryReplies(tx,[reply])).length !== 1) denied();
+      replyAccessUntil = parent.accessUntil;
+    }
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true);
       if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
@@ -266,7 +282,12 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     else await tx.approvedCommunication.update({ where: { id: input.messageId }, data: { currentRevision: snapshot.revision, mailboxId: box.id, state: 'DRAFT' } });
     const saved = await tx.communicationVersion.create({ data: { messageId: input.messageId, revision: snapshot.revision,
       snapshot: json(snapshot), snapshotHash: approvedMessageHash(snapshot), createdById: current.userId } });
-    await event(tx, current, input.messageId, 'DRAFT_SAVED', { revision: snapshot.revision, snapshotHash: saved.snapshotHash, priorApprovalInvalidated: !!existing }, runtime);
+    await event(tx, current, input.messageId, 'DRAFT_SAVED', { revision: snapshot.revision, snapshotHash: saved.snapshotHash, priorApprovalInvalidated: !!existing,
+      ...(input.replySource ? { sourceHash: input.replySource.contentHash } : {}) }, runtime, input.replySource?.id ?? null);
+    if (input.replySource) {
+      const [now] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+      if (now.now.getTime() >= Math.min(replyAccessUntil,files.validUntil?.getTime() ?? Infinity)) denied();
+    }
     return { id: input.messageId, revision: snapshot.revision, snapshotHash: saved.snapshotHash };
   }, { timeout: 30_000 });
 }
