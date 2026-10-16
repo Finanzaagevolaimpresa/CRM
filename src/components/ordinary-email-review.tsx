@@ -1,15 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { previewOrdinaryEmailAction, rejectOrdinaryEmailAction } from '@/lib/ordinary-email-actions';
 import { ordinaryPreviewMatches, type OrdinaryEmailPreview } from '@/lib/ordinary-email-ui-contract';
 
 const button = 'rounded-xl border px-4 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-50';
+const subscribe = () => () => {};
+const browserReady = () => true;
+const serverReady = () => false;
 type Props = { messageId: string; revision: number; snapshotHash: string; eligible: boolean; stepUpActive: boolean; children: ReactNode };
 
 export function OrdinaryEmailReview({ children, ...shown }: Props) {
+  const ready = useSyncExternalStore(subscribe, browserReady, serverReady);
   const router = useRouter(), epoch = useRef(0), busyRef = useRef(false);
   const [preview, setPreview] = useState<OrdinaryEmailPreview | null>(null);
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [confirmed, setConfirmed] = useState(false);
@@ -24,7 +28,7 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
   }, [preview]);
 
   async function openPreview() {
-    if (busyRef.current || dirty || checkCurrent || !shown.eligible) return;
+    if (!ready || busyRef.current || dirty || checkCurrent || !shown.eligible) return;
     busyRef.current = true; setBusy(true); setConfirmed(false); setPreview(null); setNotice('');
     const started = ++epoch.current;
     try {
@@ -55,7 +59,7 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
     finally { busyRef.current = false; setBusy(false); }
   }
 
-  return <div onInputCapture={event => {
+  return <div data-ordinary-ready={String(ready)} onInputCapture={event => {
     if (!(event.target instanceof Element) || !event.target.closest('form[data-message-draft]')) return;
     epoch.current++; setDirty(true); setPreview(null); setConfirmed(false);
     setNotice('Modifiche non salvate: salva la nuova versione prima di aprire un’altra anteprima.');
@@ -64,7 +68,7 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
     {shown.eligible ? <section aria-label="Decisione personale email" className="mt-4 grid min-w-0 gap-3 rounded-xl border p-4">
       <h3 className="font-bold">Email ordinaria · versione salvata {shown.revision}</h3>
       <p className="text-sm">Verifica mittente, destinatari, testo e versioni degli allegati prima della tua decisione.</p>
-      <div className="flex flex-wrap gap-3"><button type="button" className={button} disabled={busy || dirty || checkCurrent} onClick={openPreview}>Anteprima email ordinaria</button>
+      <div className="flex flex-wrap gap-3"><button type="button" className={button} disabled={!ready || busy || dirty || checkCurrent} onClick={openPreview}>Anteprima email ordinaria</button>
         {checkCurrent ? <button type="button" className={button} disabled={busy} onClick={() => window.location.reload()}>Aggiorna comunicazione</button> : null}</div>
       {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       {preview ? <section aria-label="Anteprima della versione esatta" className="grid min-w-0 gap-3 rounded-xl bg-slate-50 p-4">

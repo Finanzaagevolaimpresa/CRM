@@ -78,7 +78,11 @@ test('native preview and refusal bind the exact version, personal authority, cur
   await exact.getByRole('button', { name: 'Rifiuta versione 2' }).click(); await expect(panel).toContainText('Esito da verificare');
   expect(await db.communicationEvent.count({ where: { messageId: f.saved.id, event: 'ORDINARY_REJECTED' } })).toBe(0);
   await panel.getByRole('button', { name: 'Aggiorna comunicazione' }).click();
-  await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click(); await expect(exact).toContainText('VERSIONE SALVATA DALLA SECONDA SESSIONE');
+  await expect(panel).toContainText('versione salvata 3');
+  await page.locator('[data-ordinary-ready="true"]').waitFor({ state: 'attached' });
+  await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click();
+  try { await expect(exact).toContainText('VERSIONE SALVATA DALLA SECONDA SESSIONE'); }
+  catch (error) { console.log('SYNTHETIC_PANEL_AFTER_RELOAD', await panel.innerText()); throw error; }
 
   let refusalRequest: { body: string; headers: Record<string, string> } | undefined, refusalPosts = 0;
   await page.route('**/communications?**', async route => {
