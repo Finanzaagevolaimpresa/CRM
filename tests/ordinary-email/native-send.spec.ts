@@ -145,7 +145,7 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
 
   const keyDenied = await fresh('Chiave ritirata sintetica'); await open(keyDenied.id);
   await db.applicationKeyVersion.updateMany({ where: { purpose: 'PRIVILEGED_STEP_UP', status: 'ACTIVE' }, data: { status: 'RETIRED', retiredAt: new Date() } });
-  await send(keyDenied.id); await expect(panel(keyDenied.id)).toContainText('Esito da verificare');
+  await send(keyDenied.id); await expect(page).toHaveURL(/\/settings\/security\?status=unavailable$/);
   expect(await attempts(keyDenied.id)).toBe(0);
   const last = await metrics();
   expect(last.connections).toBe(baseline.connections + 3); expect(last.authenticated).toBe(3); expect(last.contents).toHaveLength(2);

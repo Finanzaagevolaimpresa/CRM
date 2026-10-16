@@ -43,8 +43,11 @@ printf accept > "$control/mode"
 docker pull "$image" >/dev/null
 cleanup() {
   local result=$?
-  docker logs "$app" > "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" 2>&1 || true
-  if [[ "$result" != 0 ]]; then tail -40 "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" || true; fi
+  # Next development logs include action arguments. Keep raw output alongside
+  # ephemeral secrets, outside artifacts; emit only a fixed diagnostic summary.
+  docker logs "$app" > "$secrets/app.log" 2>&1 || true
+  node scripts/ordinary-email/summarize-ci-app-log.mjs "$secrets/app.log" > "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app-summary.json" || true
+  if [[ "$result" != 0 ]]; then cat "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app-summary.json" || true; fi
   if [[ -n "$app_forwarder" ]]; then kill "$app_forwarder" 2>/dev/null || true; wait "$app_forwarder" 2>/dev/null || true; fi
   docker rm -f "$app" >/dev/null 2>&1 || true
   docker network disconnect "$network" "$ORDINARY_BROWSER_DB_CONTAINER" >/dev/null 2>&1 || true
