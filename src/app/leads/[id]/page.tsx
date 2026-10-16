@@ -24,7 +24,7 @@ export default async function Page({params}:{params:Promise<{id:string}>}){
   const [users, clients, offers, inboxItem] = await Promise.all([
     prisma.user.findMany({where:{active:true}, select:{id:true,name:true,role:true}}),
     prisma.client.findMany({where:{deletedAt:null}, select:{id:true,displayName:true}}),
-    prisma.commercialOffer.findMany({where:{leadId:id,deletedAt:null}, orderBy:{updatedAt:'desc'}}),
+    prisma.commercialOffer.findMany({where:{leadId:id,deletedAt:null,id:{notIn:[...(session.selectiveOfferIds ?? [])]}}, orderBy:{updatedAt:'desc'}}),
     prisma.commercialLeadInboxItem.findUnique({where:{leadId:id}, include:{slaCycles:{orderBy:{sequence:'desc'},take:1}}}),
   ]);
   const owner=lead.assignedToId ? users.find((u)=>u.id===lead.assignedToId) : null;

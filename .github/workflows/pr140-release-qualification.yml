@@ -26,8 +26,8 @@ concurrency:
   group: pr140-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release-schema49:
-    name: Schema49 package with M1 application return
+  release-schema50:
+    name: Schema50 package with selective access retained on restart
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -45,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           bash -n scripts/pr140/qualify-release.sh
           python3 -c "from pathlib import Path; p=Path('scripts/pr140/owner-preflight.py'); compile(p.read_text(), str(p), 'exec')"
-      - name: Verify candidate, M1 access controls and exact application return
+      - name: Verify candidate, M1 access controls and compatible application restart
         run: bash scripts/pr140/qualify-release.sh
       - name: Save minimized receipts and qualified image archive
         if: always()
@@ -59,6 +59,7 @@ jobs:
             ${{ env.R05_EVIDENCE_DIR }}/*-recovery.json
             ${{ env.R05_EVIDENCE_DIR }}/after-resume.json
             ${{ env.R05_EVIDENCE_DIR }}/*session-revocation.json
+            ${{ env.R05_EVIDENCE_DIR }}/selective-*.png
             ${{ env.R05_EVIDENCE_DIR }}/release-images.tar.gz
           if-no-files-found: error
           retention-days: 14

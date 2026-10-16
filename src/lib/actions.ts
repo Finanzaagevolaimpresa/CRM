@@ -1,6 +1,7 @@
 'use server';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
+import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
 import { filterFinancialDocuments } from './financial-document-access';
@@ -57,6 +58,7 @@ import {
   requireTaskEditAccess,
   requireTechnicalPracticeEditAccess,
   requireTechnicalPracticeViewAccess,
+  requireTechnicalPracticeMutationAccess,
 } from './write-access';
 import {
   createAiExecutionReplacementRequest,
@@ -1350,6 +1352,7 @@ export async function createDossier(form: FormData) {
 export async function createContract(form: FormData) {
   const s = await requirePermission('contract.write');
   const data = contractSchema.parse(clean(form));
+  if (data.projectId && s.selectiveProjectIds?.includes(data.projectId)) denyWriteAccess();
   const [client, project] = await Promise.all([
     prisma.client.findFirst({ where: { id: data.clientId, deletedAt: null }, select: { id: true } }),
     data.projectId ? prisma.project.findFirst({ where: { id: data.projectId, clientId: data.clientId, deletedAt: null }, select: { id: true } }) : null,
@@ -1363,6 +1366,7 @@ export async function createContract(form: FormData) {
 export async function registerPayment(form: FormData) {
   const s = await requirePermission('payment.write');
   const data = paymentSchema.parse(clean(form));
+  if (s.selectiveContractIds?.includes(data.contractId)) denyWriteAccess();
   const contract = await prisma.contract.findFirst({ where: { id: data.contractId, clientId: data.clientId }, select: { id: true } });
   if (!contract) denyWriteAccess();
   const payment = await prisma.payment.create({ data: data as never });
@@ -1381,6 +1385,7 @@ export async function createClientService(form: FormData) {
     data.paymentId ? prisma.payment.findFirst({ where: { id: data.paymentId, clientId: data.clientId }, select: { id: true, clientId: true, contractId: true } }) : null,
   ]);
   if (!catalog || (data.contractId && !contract) || (data.paymentId && !payment)) denyWriteAccess();
+  if ((contract && s.selectiveContractIds?.includes(contract.id)) || (payment && s.selectiveContractIds?.includes(payment.contractId))) denyWriteAccess();
   if (contract?.projectId && data.projectId && contract.projectId !== data.projectId) denyWriteAccess();
   if (payment && data.contractId && payment.contractId !== data.contractId) denyWriteAccess();
   if (data.status && ['chiuso', 'archiviato', 'consegnato'].includes(data.status) && !hasPermission(s, 'service.close')) denyWriteAccess();
@@ -1919,6 +1924,7 @@ export async function createTechnicalPractice(form: FormData) {
   if (assignmentRequested && s.role !== 'admin') denyManualAssignment();
   if (assignmentRequested) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignmentRequested, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    await assertNoSelectiveProjectMutation(tx, s.userId, data.projectId, data.clientServiceId);
     await assertTechnicalPracticeOperational(tx, [data.clientId], data.status);
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
     await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
@@ -1998,6 +2004,8 @@ export async function updateTechnicalPractice(form: FormData) {
   const updateData = { ...data, commercialOwnerId: commercialAssignment, technicalOwnerId: technicalAssignment, id: undefined, createdById: before.createdById, status: Object.hasOwn(raw, 'status') ? data.status : before.status };
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData, commercialOwnerId: commercialAssignment === undefined ? before.commercialOwnerId : commercialAssignment, technicalOwnerId: technicalAssignment === undefined ? before.technicalOwnerId : technicalAssignment })) return before;
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    await requireTechnicalPracticeMutationAccess(s, data.id, tx);
+    await assertNoSelectiveProjectMutation(tx, s.userId, nextProjectId, nextClientServiceId);
     await assertTechnicalPracticeOperational(tx, [before.clientId, data.clientId], updateData.status);
     const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId, updatedAt: before.updatedAt, deletedAt: null }, data: updateData as never });
     await audit(s.userId, 'technical_practice_update', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
@@ -2014,6 +2022,7 @@ export async function updateTechnicalPracticeStatus(form: FormData) {
   const updateData = { status: data.status, clientVisibleStatus: data.clientVisibleStatus, submittedAt: data.submittedAt ?? before.submittedAt, protocolNumber: data.protocolNumber, integrationRequestNote: data.integrationRequestNote, lastClientUpdateAt: data.lastClientUpdateAt, nextClientUpdateAt: data.nextClientUpdateAt };
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData })) return before;
   return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, data.id, tx);
     await assertTechnicalPracticeOperational(tx, [before.clientId], updateData.status);
     const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId, updatedAt: before.updatedAt, deletedAt: null }, data: updateData });
     const event = before.status !== practice.status ? 'technical_practice_status_change' : 'technical_practice_update';
@@ -2033,6 +2042,7 @@ export async function assignTechnicalPractice(form: FormData) {
     requireActiveUser(data.technicalOwnerId, ['admin', 'direzione', 'consulente', 'backoffice']),
   ]);
   return withAssignmentGuard(prisma, s, true, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    await requireTechnicalPracticeMutationAccess(s, data.id, tx);
     const practice = await tx.technicalPractice.update({ where: { id: data.id, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId }, data: { commercialOwnerId: data.commercialOwnerId ?? null, technicalOwnerId: data.technicalOwnerId ?? null } });
     await audit(s.userId, 'technical_practice_assign', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
     await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
@@ -2045,9 +2055,12 @@ export async function archiveTechnicalPractice(form: FormData) {
   if (!hasPermission(s, 'technical.status')) denyWriteAccess();
   const data = technicalPracticeIdSchema.parse(clean(form));
   const before = await requireTechnicalPracticeEditAccess(s, data.id);
-  const practice = await prisma.technicalPractice.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
-  await audit(s.userId, 'technical_practice_archive', 'TechnicalPractice', practice.id, { before, after: practice });
-  return practice;
+  return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, data.id, tx);
+    const practice = await tx.technicalPractice.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
+    await audit(s.userId, 'technical_practice_archive', 'TechnicalPractice', practice.id, { before, after: practice }, tx);
+    return practice;
+  });
 }
 
 
@@ -2066,14 +2079,17 @@ export async function createPracticeCommunicationDraft(form: FormData) {
   const s = await requirePermission('practice_communications.write');
   const data = practiceCommunicationDraftSchema.parse(clean(form));
   if (data.type === 'cliente' || data.channel !== 'nota_interna') throw new UserFacingActionError('Prepara i messaggi esterni da Comunicazioni approvate della pratica.');
-  const practice = await requireTechnicalPracticeEditAccess(s, data.technicalPracticeId);
-  const communication = await prisma.practiceCommunication.create({ data: {
-    technicalPracticeId: practice.id, clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId,
-    commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId, type: data.type, channel: data.channel, status: data.status,
-    title: data.title, content: data.content, internalNote: data.internalNote, createdById: s.userId,
-  } });
-  await audit(s.userId, 'practice_communication_draft_create', 'PracticeCommunication', communication.id, communication);
-  return communication;
+  await requireTechnicalPracticeEditAccess(s, data.technicalPracticeId);
+  return prisma.$transaction(async tx => {
+    const practice = await requireTechnicalPracticeMutationAccess(s, data.technicalPracticeId, tx);
+    const communication = await tx.practiceCommunication.create({ data: {
+      technicalPracticeId: practice.id, clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId,
+      commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId, type: data.type, channel: data.channel, status: data.status,
+      title: data.title, content: data.content, internalNote: data.internalNote, createdById: s.userId,
+    } });
+    await audit(s.userId, 'practice_communication_draft_create', 'PracticeCommunication', communication.id, communication, tx);
+    return communication;
+  });
 }
 
 export async function updatePracticeCommunicationDraft(form: FormData) {
@@ -2083,9 +2099,12 @@ export async function updatePracticeCommunicationDraft(form: FormData) {
   const before = await getActivePracticeCommunication(data.id);
   if (!['bozza','da_revisionare'].includes(before.status)) throw new UserFacingActionError('Solo bozze o comunicazioni da revisionare possono essere modificate.');
   await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
-  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { type: data.type, channel: data.channel, status: data.status, title: data.title, content: data.content, internalNote: data.internalNote } });
-  await audit(s.userId, 'practice_communication_draft_update', 'PracticeCommunication', communication.id, { before, after: communication });
-  return communication;
+  return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, before.technicalPracticeId, tx);
+    const communication = await tx.practiceCommunication.update({ where: { id: data.id }, data: { type: data.type, channel: data.channel, status: data.status, title: data.title, content: data.content, internalNote: data.internalNote } });
+    await audit(s.userId, 'practice_communication_draft_update', 'PracticeCommunication', communication.id, { before, after: communication }, tx);
+    return communication;
+  });
 }
 
 export async function approvePracticeCommunicationDraft(form: FormData) {
@@ -2095,9 +2114,12 @@ export async function approvePracticeCommunicationDraft(form: FormData) {
   if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Le comunicazioni esterne richiedono l’approvazione esatta in Comunicazioni approvate.');
   await getPracticeForCommunication(before.technicalPracticeId, s);
   if (before.status !== 'da_revisionare' || before.createdById === s.userId) denyWriteAccess();
-  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'approvata', reviewedById: s.userId, reviewedAt: new Date() } });
-  await audit(s.userId, 'practice_communication_approve', 'PracticeCommunication', communication.id, { before, after: communication });
-  return communication;
+  return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, before.technicalPracticeId, tx, 'view');
+    const communication = await tx.practiceCommunication.update({ where: { id: data.id }, data: { status: 'approvata', reviewedById: s.userId, reviewedAt: new Date() } });
+    await audit(s.userId, 'practice_communication_approve', 'PracticeCommunication', communication.id, { before, after: communication }, tx);
+    return communication;
+  });
 }
 
 export async function markPracticeCommunicationAsUsed(form: FormData) {
@@ -2107,11 +2129,14 @@ export async function markPracticeCommunicationAsUsed(form: FormData) {
   if (before.type === 'cliente' || before.channel !== 'nota_interna') throw new UserFacingActionError('Registra gli invii esterni nel flusso Comunicazioni approvate, con destinatari e ricevuta.');
   if (before.status !== 'approvata') throw new UserFacingActionError('Solo comunicazioni approvate possono essere segnate come usate/inviate manualmente.');
   const practice = await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
-  const now = new Date();
-  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'usata_inviata', usedAt: now } });
-  if (communication.type === 'cliente') await prisma.technicalPractice.update({ where: { id: practice.id }, data: { lastClientUpdateAt: now } });
-  await audit(s.userId, 'practice_communication_used', 'PracticeCommunication', communication.id, { before, after: communication });
-  return communication;
+  return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, practice.id, tx);
+    const now = new Date();
+    const communication = await tx.practiceCommunication.update({ where: { id: data.id }, data: { status: 'usata_inviata', usedAt: now } });
+    if (communication.type === 'cliente') await tx.technicalPractice.update({ where: { id: practice.id }, data: { lastClientUpdateAt: now } });
+    await audit(s.userId, 'practice_communication_used', 'PracticeCommunication', communication.id, { before, after: communication }, tx);
+    return communication;
+  });
 }
 
 export async function archivePracticeCommunication(form: FormData) {
@@ -2123,7 +2148,10 @@ export async function archivePracticeCommunication(form: FormData) {
   } else {
     await requireTechnicalPracticeEditAccess(s, before.technicalPracticeId);
   }
-  const communication = await prisma.practiceCommunication.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
-  await audit(s.userId, 'practice_communication_archive', 'PracticeCommunication', communication.id, { before, after: communication });
-  return communication;
+  return prisma.$transaction(async tx => {
+    await requireTechnicalPracticeMutationAccess(s, before.technicalPracticeId, tx, hasPermission(s, 'practice_communications.review') ? 'view' : 'edit');
+    const communication = await tx.practiceCommunication.update({ where: { id: data.id }, data: { status: 'archiviata', deletedAt: new Date() } });
+    await audit(s.userId, 'practice_communication_archive', 'PracticeCommunication', communication.id, { before, after: communication }, tx);
+    return communication;
+  });
 }

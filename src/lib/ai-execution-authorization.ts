@@ -6,6 +6,7 @@ import {
   type AiRun,
 } from '@prisma/client';
 import { UserFacingActionError } from './action-errors';
+import { hasSelectiveContext } from './selective-project-policy';
 import { hasPermission, type AuthSession } from './auth';
 import {
   AI_RUN_RELIABILITY_VERSION,
@@ -172,6 +173,7 @@ function sameReplacementContinuity(
 }
 
 function assertRequestCreationAllowed(session: AuthSession, input: RequestBinding) {
+  if (hasSelectiveContext(session, input)) throw new UserFacingActionError('Il progetto condiviso consente la sola consultazione selezionata.');
   if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
     throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
   }
@@ -193,8 +195,9 @@ export function effectiveAiExecutionRequestStatus(
 
 export function canViewAiExecutionRequest(
   session: AuthSession,
-  request: Pick<AiExecutionRequest, 'requesterUserId'>,
+  request: Pick<AiExecutionRequest, 'requesterUserId'> & Partial<Pick<AiExecutionRequest, 'projectId' | 'clientServiceId'>>,
 ) {
+  if (hasSelectiveContext(session, request)) return false;
   return (session.role === 'admin' && hasPermission(session, 'ai.execution.audit'))
     || request.requesterUserId === session.userId;
 }

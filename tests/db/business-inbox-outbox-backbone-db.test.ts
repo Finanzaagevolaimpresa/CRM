@@ -93,9 +93,9 @@ async function cleanN11Tables() {
     await db.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE TRIGGER USER`);
   }
   try {
-    await db.$executeRawUnsafe(
-      `TRUNCATE TABLE ${tables.map((table) => `"${table}"`).join(', ')}`,
-    );
+    // Later schemas reference these tables even when empty. Delete only this
+    // fixture's child-first table set; preserve foreign keys and never cascade.
+    for (const table of tables) await db.$executeRawUnsafe(`DELETE FROM "${table}"`);
   } finally {
     for (const table of [...tables].reverse()) {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE TRIGGER USER`);
@@ -301,7 +301,7 @@ test('N11 migration 38 creates exactly three empty tables with approved catalog 
   ]) assert.equal(indexNames.has(expected), true, expected);
   assert.equal(triggers.length, 6);
   assert.equal(functions.length, 3);
-  assert.equal(Number(migrations[0]?.count), 44);
+  assert.equal(Number(migrations[0]?.count), 50);
   assert.deepEqual(await counts(), { inbox: 0, outbox: 0, attempts: 0 });
 });
 
@@ -785,7 +785,7 @@ async function qualifyMigrationChain(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 49);
+  assert.equal(allNames.length, 50);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 38);

@@ -3,7 +3,11 @@ export const dynamic = 'force-dynamic';
 import { SecondaryLink } from '@/components/actions';
 import Link from 'next/link';
 import { Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
-import { hasPermission, requirePermission } from '@/lib/auth';
+import { hasPermission, requirePermission, requireSession } from '@/lib/auth';
+import { notFound } from 'next/navigation';
+import { mayManageSelectiveAccess, readSelectiveProject } from '@/lib/selective-project-access';
+import { isSelectiveProject } from '@/lib/selective-project-policy';
+import { SelectiveProjectView } from '@/components/selective-project-view';
 import { effectiveAiExecutionRequestStatus } from '@/lib/ai-execution-authorization';
 import { ManualAssignmentForm } from '@/components/manual-assignment-form';
 import { prisma } from '@/lib/prisma';
@@ -12,10 +16,17 @@ import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
 import { canEditProject } from '@/lib/access-control';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
-  const session = await requirePermission('project.read');
+  const session = await requireSession();
   const { id } = await params;
+  if (isSelectiveProject(session, id)) {
+    const projection = await readSelectiveProject(prisma, session, id).catch(() => null);
+    if (!projection) notFound();
+    return <SelectiveProjectView projection={projection} />;
+  }
+  await requirePermission('project.read');
   const project = await getProjectReadAccess(session, id);
   if (!project) return <PageHeader title="Progetto non trovato" description="Il record richiesto non esiste o non è accessibile." />;
+  const canShare = await mayManageSelectiveAccess(prisma, session);
   const assignmentUsers = session.role === 'admin' ? await prisma.user.findMany({ where: { active: true, deletedAt: null }, select: { id: true, name: true, role: true }, orderBy: { name: 'asc' }, take: 250 }) : [];
   const canAuditAiRequests = session.role === 'admin' && hasPermission(session, 'ai.execution.audit');
   const canRequestAi = hasPermission(session, 'ai.execution.request');
@@ -43,6 +54,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return <div className="crm-space-y-6">
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
+    {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
     {session.role === 'admin' && <Card title="Responsabile del progetto"><ManualAssignmentForm kind="project" id={project.id} updatedAt={project.updatedAt.toISOString()} technicalOwnerId={project.consultantId} users={assignmentUsers} /></Card>}
     <Card title="Dati progetto">
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>

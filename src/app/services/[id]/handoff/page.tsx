@@ -1,4 +1,5 @@
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
+import { hasSelectiveContext } from '@/lib/selective-project-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -19,6 +20,7 @@ export default async function Page({ params, searchParams }: {
   const session = await requirePermission('technical.read'), { id } = await params, query = await searchParams;
   const context = await purchasedServiceContext(prisma, id).catch(() => null);
   if (!context) notFound();
+  if (hasSelectiveContext(session, context.service) || session.selectiveServiceIds?.includes(id)) notFound();
   const entry = await getHandoffReceipt(prisma, id), { client, service, project } = context;
   const practice = entry ? await prisma.technicalPractice.findFirst({ where: { id: entry.receipt.technicalPracticeId, clientId: client.id,
     clientServiceId: id, projectId: service.projectId, deletedAt: null } }) : null;
@@ -27,8 +29,10 @@ export default async function Page({ params, searchParams }: {
     clientService: { ...service, client, project: project ? { ...project, client } : null },
   }))) notFound();
   const path = `/services/${id}/handoff`;
-  const canViewContracts = hasPermission(session, 'contract.read');
-  const canViewPayments = hasPermission(session, 'payment.read');
+  const restrictedContract = [service.contractId, entry?.receipt.contractId].some(contractId =>
+    Boolean(contractId && session.selectiveContractIds?.includes(contractId)));
+  const canViewContracts = !restrictedContract && hasPermission(session, 'contract.read');
+  const canViewPayments = !restrictedContract && hasPermission(session, 'payment.read');
   if (entry) {
     const receipt = entry.receipt;
     const sources = receipt.source.filter(source => source.kind === 'contract' ? canViewContracts : canViewPayments);
@@ -62,6 +66,8 @@ export default async function Page({ params, searchParams }: {
       </Card>}
     </div>;
   }
+  if (restrictedContract) return <Card title="Passaggio non disponibile"><p>I dati contrattuali non sono disponibili per questo accesso.</p>
+    <Link href={`/clients/${client.id}#servizi-acquistati`}>Torna al servizio acquistato</Link></Card>;
   let preview: Awaited<ReturnType<typeof previewPurchasedServiceHandoff>>;
   try { preview = await previewPurchasedServiceHandoff(prisma, id); }
   catch (error) { if (!(error instanceof UserFacingActionError)) throw error;

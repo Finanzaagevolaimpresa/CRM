@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { assertNoSelectiveProjectMutation, loadSelectiveProjectScope } from './selective-project-scope';
 import { z } from 'zod';
 import { type Prisma, type PrismaClient } from '@prisma/client';
 import { UserFacingActionError } from './action-errors';
@@ -91,7 +92,12 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
   if (!admitted) return deny('Conferma amministrativa richiesta.');
   await authorizeManualAssignment(tx, actor, [{ userId: input.technicalOwnerId, roles: technicalRoles }]);
   await tx.$queryRaw`SELECT "id" FROM "ClientService" WHERE "id"=${input.serviceId} FOR UPDATE`;
+  const selectedService = await tx.clientService.findUnique({ where: { id: input.serviceId }, select: { projectId: true, contractId: true } });
+  await assertNoSelectiveProjectMutation(tx, actor.userId, selectedService?.projectId, input.serviceId);
   const fingerprint = canonicalSha256(input), existing = await getHandoffReceipt(tx, input.serviceId);
+  const scope = await loadSelectiveProjectScope(tx, actor.userId);
+  if ([selectedService?.contractId, existing?.receipt.contractId].some(contractId =>
+    Boolean(contractId && scope.selectiveContractIds?.includes(contractId)))) return deny('Dati contrattuali non disponibili per questo accesso.');
   if (existing) {
     if (existing.receipt.fingerprint !== fingerprint) return deny('Passaggio già registrato. Usa la scheda responsabilità per una riassegnazione.');
     return existing; // An HTTP retry never reapplies assignments, recreates tasks or overwrites subsequent work.

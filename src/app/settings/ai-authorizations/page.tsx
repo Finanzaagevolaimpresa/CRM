@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import type { Prisma } from '@prisma/client';
+import { contextOutsideSelection } from '@/lib/selective-project-policy';
 import Link from 'next/link';
 import { Badge, Card, EmptyState, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import {
@@ -32,7 +33,7 @@ export default async function AiAuthorizationsPage() {
     ? {}
     : { requesterUserId: session.userId };
   const requests = await prisma.aiExecutionRequest.findMany({
-    where,
+    where: { AND: [where, contextOutsideSelection(session)] },
     include: {
       requester: { select: { name: true } },
       client: { select: { displayName: true } },

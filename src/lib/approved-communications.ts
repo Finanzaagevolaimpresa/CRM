@@ -6,6 +6,7 @@ import type { AuthSession } from './auth';
 import { canViewDocument, canViewTechnicalPractice } from './access-control';
 import { canViewPracticeReadinessWork } from './practice-readiness-access';
 import { loadClientReadScope } from './client-read-perimeter';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import type { Permission } from './permissions';
@@ -54,7 +55,7 @@ async function actor(tx: Tx, claimed: AuthSession, permission: Permission, admin
   if (!claimed.active || claimed.expiresAt * 1000 <= Date.now() || !uuid.safeParse(claimed.sessionId).success) denied();
   const row = await lockAuthoritativeInternalSession(tx, { sessionId: claimed.sessionId!, userId: claimed.userId });
   if (!row || !row.active || !row.live || row.revokedAt || row.deletedAt || (admin && row.role !== 'admin')) denied();
-  const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
+  const current = { ...claimed, ...await loadSelectiveProjectScope(tx, claimed.userId), role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
     clientReadScope: await loadClientReadScope(tx, claimed.userId) } satisfies AuthSession;
   if (!hasPermission(current, permission)) denied();
   return current;

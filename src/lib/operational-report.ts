@@ -1,4 +1,5 @@
 import { operationalServiceStatus } from './financial-access';
+import { selectiveAuditAllowed } from './selective-project-policy';
 import { filterFinancialDocuments } from './financial-document-access';
 import type { AuthSession } from "./auth";
 import { hasPermission } from "./auth";
@@ -458,7 +459,7 @@ export async function buildOperationalReportMarkdown(
             "",
             "## Audit log autorizzato",
             list(
-              audits,
+              audits.filter(row => selectiveAuditAllowed(session, row)),
               (a) =>
                 `- ${fmt(a.createdAt)} · ${clean(a.event)} · ${clean(a.entityType)}`,
             ),

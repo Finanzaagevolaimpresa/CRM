@@ -12,6 +12,7 @@ export default async function Page() {
   const clientById = new Map(visibleClients.map((client) => [client.id, client]));
   const projectById = new Map(projectRows.map((project) => [project.id, project]));
   const visibleItems = items.filter((contract) => {
+    if (session.selectiveContractIds?.includes(contract.id)) return false;
     const client = clientById.get(contract.clientId);
     if (!client) return false;
     if (!contract.projectId) return canViewClientContext(session, { clientId: contract.clientId, client });

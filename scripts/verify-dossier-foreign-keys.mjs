@@ -15,5 +15,9 @@ const communications = readFileSync('prisma/migrations/20260927010000_approved_m
 const messageKeys = [...communications.matchAll(/ADD CONSTRAINT "([^"]+)" FOREIGN KEY/g)].map(match => match[1]);
 assert.equal(messageKeys.length, 18, 'All migration49 foreign keys must be covered');
 assert.deepEqual(messageKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove communication foreign keys');
+const selective = readFileSync('prisma/migrations/20261015090000_selective_project_access_v1/migration.sql', 'utf8');
+const selectiveKeys = [...selective.matchAll(/CONSTRAINT "([^"]+)" FOREIGN KEY/g)].map(match => match[1]);
+assert.equal(selectiveKeys.length, 4, 'All selective-perimeter foreign keys must be covered');
+assert.deepEqual(selectiveKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove selective-perimeter foreign keys');
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
   communicationConstraints: messageKeys.length }));

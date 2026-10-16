@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
-          git diff --exit-code afcdaee5bc718088890a289997ad6fbd72433e79 HEAD -- prisma/schema.prisma prisma/migrations
+          node scripts/m4/verify-schema.mjs
           mkdir -p "$RUNNER_TEMP/r13-evidence"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/r13-evidence/candidate.txt"
           psql 'postgresql://postgres:synthetic-r13-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"

@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { withAssignmentGuard } from './manual-assignment-guard';
+import { assertNoSelectiveProjectMutation } from './selective-project-scope';
 
 type State = { ok: boolean; message: string };
 const input = z.object({
@@ -37,6 +38,7 @@ async function save(kind: 'client' | 'project', form: FormData): Promise<State> 
           after: { salesOwnerId: after.salesOwnerId, consultantId: after.consultantId },
         } });
       } else {
+        await assertNoSelectiveProjectMutation(tx, session.userId, data.id);
         const before = await tx.project.findFirstOrThrow({ where });
         const after = await tx.project.update({ where, data: { consultantId: technical } });
         await tx.auditLog.create({ data: {

@@ -127,6 +127,7 @@ export async function requireCommercialOfferReadAccess(session: AuthSession, off
 }
 
 export async function getContractReadAccess(session: AuthSession, contractId: string) {
+  if (session.selectiveContractIds?.includes(contractId)) return null;
   if (!hasPermission(session, 'contract.read')) return null;
   const contract = await prisma.contract.findUnique({ where: { id: contractId } });
   if (!contract) return null;
@@ -138,6 +139,7 @@ export async function getPaymentReadAccess(session: AuthSession, paymentId: stri
   if (!hasPermission(session, 'payment.read')) return null;
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) return null;
+  if (session.selectiveContractIds?.includes(payment.contractId)) return null;
   const contract = await prisma.contract.findFirst({ where: { id: payment.contractId, clientId: payment.clientId } });
   if (!contract) return null;
   const context = await getClientContextReadAccess(session, { clientId: payment.clientId, projectId: contract.projectId });

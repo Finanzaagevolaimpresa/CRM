@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { PrimaryButton } from '@/components/actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
-import { canViewClient } from '@/lib/access-control';
+import { canViewClient, canViewProject } from '@/lib/access-control';
 import { canViewPaymentListRecord } from '@/lib/business-list-access';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { registerPaymentAndRefresh } from '@/lib/form-actions';
@@ -19,8 +19,13 @@ export default async function Page() {
   const visibleClients = clientRows.filter((client) => canViewClient(session, client));
   const clientById = new Map(visibleClients.map((client) => [client.id, client]));
   const contractById = new Map(contracts.map((contract) => [contract.id, contract]));
-  const visibleContracts = contracts.filter((contract) => clientById.has(contract.clientId));
   const projectById = new Map(projects.map((project) => [project.id, project]));
+  const visibleContracts = contracts.filter((contract) => {
+    const client = clientById.get(contract.clientId);
+    if (!client || session.selectiveContractIds?.includes(contract.id)) return false;
+    const project = contract.projectId ? projectById.get(contract.projectId) : null;
+    return !contract.projectId || Boolean(project && canViewProject(session, { ...project, client }));
+  });
   const visibleItems = items.filter((payment) => {
     const contract = contractById.get(payment.contractId);
     return canViewPaymentListRecord(session, {

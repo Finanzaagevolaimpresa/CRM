@@ -40,6 +40,9 @@ async function main() {
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'footprint') {
     const data = {
+      selectiveAuthorities: await db.selectiveAccessAuthority.findMany({ orderBy: { id: 'asc' } }),
+      selectiveGrants: await db.selectiveProjectGrant.findMany({ orderBy: { id: 'asc' } }),
+      selectiveReceipts: await db.auditLog.findMany({ where: { event: { in: ['selective_project_access_confirmed', 'selective_project_access_revoked'] } }, orderBy: { id: 'asc' } }),
       m4Mailboxes: await db.communicationMailbox.findMany({ orderBy: { id: 'asc' } }),
       m4MailboxHistory: await db.communicationMailboxHistory.findMany({ orderBy: { id: 'asc' } }),
       m4Messages: await db.approvedCommunication.findMany({ orderBy: { id: 'asc' } }),
@@ -68,7 +71,9 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 49);
+    assert.equal(data.ledger.length, 50);
+    assert.equal(data.selectiveAuthorities.length, 1);
+    assert.equal(data.selectiveGrants.length, 2);
     assert.equal(data.m4Mailboxes.length, 7);
     assert.ok(data.m4Messages.length >= 1 && data.m4Versions.length >= 1 && data.m4Approvals.length >= 1 && data.m4Attempts.length >= 1 && data.m4Replies.length >= 1 && data.m4Events.length >= 1);
     assert.ok(data.clientReadGrants.length >= 3);

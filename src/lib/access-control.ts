@@ -4,8 +4,9 @@ import { hasClientReadGrant, type ClientReadScope } from './client-read-perimete
 import { hasGlobalReadAccess } from './read-supervision';
 import type { FinancialDocumentMetadata } from './financial-privacy-policy';
 import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
+import { hasSelectiveContext, isSelectiveProject, type SelectiveProjectScope } from './selective-project-policy';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor & SelectiveProjectScope;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -25,6 +26,7 @@ type ClientScopedContext = {
   clientService?: ServiceAccessContext | null;
 };
 type CommercialOfferAccessContext = {
+  id?: string;
   createdById?: string | null;
   leadId?: string | null;
   clientId?: string | null;
@@ -108,6 +110,8 @@ function hasClientResponsibility(user: Actor, client: Pick<Client, 'salesOwnerId
   return canViewClient({ ...user, clientReadScope: [] }, client);
 }
 export function canViewProject(user: Actor, project: ProjectAccessContext) {
+  if (!project.id && user.selectiveProjectIds?.length) return false;
+  if (isSelectiveProject(user, project.id)) return false;
   const client = project.client;
   if (!client || !hasValidProjectContext(project)) return false;
   if (hasGlobalReadAccess(user)) return true;
@@ -115,6 +119,7 @@ export function canViewProject(user: Actor, project: ProjectAccessContext) {
   return hasClientResponsibility(user, client);
 }
 export function canViewService(user: Actor, service: ServiceAccessContext) {
+  if (hasSelectiveContext(user, service) || (service.id && user.selectiveServiceIds?.includes(service.id))) return false;
   if (!hasValidServiceContext(service)) return false;
   if (hasGlobalReadAccess(user)) return true;
   if (service.assignedToId) return service.assignedToId === getActorId(user);
@@ -123,6 +128,7 @@ export function canViewService(user: Actor, service: ServiceAccessContext) {
 }
 
 export function canViewClientContext(user: Actor, context: ClientScopedContext) {
+  if (hasSelectiveContext(user, context)) return false;
   if (!hasConsistentClientContext(context) || !context.client) return false;
   if (context.project && !hasValidProjectContext(context.project)) return false;
   if (context.clientService && !hasValidServiceContext(context.clientService)) return false;
@@ -143,6 +149,7 @@ export function canViewClientContext(user: Actor, context: ClientScopedContext) 
   return clientAllowed;
 }
 export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+  if (hasSelectiveContext(user, document) || ('id' in document && user.selectiveDocumentIds?.includes(String(document.id)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
@@ -173,6 +180,7 @@ export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
 }
 
 export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
+  if (user.selectiveOfferIds?.length && (!offer.id || user.selectiveOfferIds.includes(offer.id))) return false;
   if (offer.leadId && !offer.lead) return false;
   if (offer.clientId && !offer.client) return false;
   if (offer.lead?.clientId && offer.clientId && offer.lead.clientId !== offer.clientId) return false;
@@ -226,6 +234,7 @@ export function canEditService(user: Actor, service: ServiceAccessContext) {
 }
 
 export function canAssignService(user: Actor, service: ServiceAccessContext) {
+  if (hasSelectiveContext(user, service) || (service.id && user.selectiveServiceIds?.includes(service.id))) return false;
   return user.role === 'admin'
     && hasConsistentClientContext({ clientId: service.clientId, client: service.client, project: service.project });
 }
@@ -254,6 +263,7 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (hasSelectiveContext(user, task)) return false;
   if (!hasConsistentClientContext(task)) return false;
   if (task.clientId && !task.client) return false;
   if (!task.clientId && (task.projectId || task.clientServiceId || task.project || task.clientService)) return false;
@@ -294,6 +304,7 @@ export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (hasSelectiveContext(user, item) || ('documentId' in item && user.selectiveDocumentIds?.includes(String(item.documentId)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, item)) return false;
   if (!hasConsistentClientContext(item)) return false;
   if (!item.client) return false;
@@ -315,6 +326,7 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }, canReadSensitive = false) {
+  if (hasSelectiveContext(user, document) || ('id' in document && user.selectiveDocumentIds?.includes(String(document.id)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, document)) return false;
   if (isSensitiveDocument(document) && !canReadSensitive) return false;
   if (!hasConsistentClientContext(document)) return false;
@@ -328,6 +340,7 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
 }
 
 export function canViewTechnicalPractice(user: Actor, practice: ClientScopedContext & { projectId?: string | null; clientServiceId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null }) {
+  if (hasSelectiveContext(user, practice)) return false;
   if (!practice.client || !hasConsistentClientContext(practice)) return false;
   if (practice.projectId && (!practice.project || practice.project.id !== practice.projectId)) return false;
   if (practice.clientServiceId && (!practice.clientService || practice.clientService.id !== practice.clientServiceId)) return false;
@@ -344,7 +357,8 @@ export function canViewTechnicalPractice(user: Actor, practice: ClientScopedCont
   return hasClientResponsibility(user, practice.client);
 }
 
-export function canEditTechnicalPractice(user: Actor, practice?: { technicalOwnerId?: string | null }) {
+export function canEditTechnicalPractice(user: Actor, practice?: Parameters<typeof hasSelectiveContext>[1] & { technicalOwnerId?: string | null }) {
+  if (practice && hasSelectiveContext(user, practice)) return false;
   if (hasGlobalAccess(user)) return true;
   if (!['consulente', 'backoffice'].includes(user.role)) return false;
   const id = getActorId(user);

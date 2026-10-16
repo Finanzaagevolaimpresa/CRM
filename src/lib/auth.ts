@@ -8,10 +8,12 @@ import { resolveInternalSession } from './internal-session-registry';
 import { rolePermissions, type Permission } from './permissions';
 import { loadClientReadScope } from './client-read-perimeter';
 import type { ClientReadScope } from './client-read-perimeter-policy';
+import type { SelectiveProjectScope } from './selective-project-policy';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type AuthSession = SessionCookie & ClientReadScope & {
+export type AuthSession = SessionCookie & ClientReadScope & SelectiveProjectScope & {
   role: RoleCode;
   active: boolean;
   permissionOverrides: PermissionOverrideSnapshot[];
@@ -36,7 +38,7 @@ export async function getSession() {
     const row = await resolveInternalSession(prisma, token);
     if (!row || !row.user.active || row.user.deletedAt) return null;
     const clientReadScope = await loadClientReadScope(prisma, row.userId);
-    return { userId: row.userId, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000), role: row.user.role, active: row.user.active, permissionOverrides: row.user.permissionOverrides, clientReadScope } satisfies AuthSession;
+    return { userId: row.userId, sessionId: row.id, expiresAt: Math.floor(row.expiresAt.getTime() / 1000), role: row.user.role, active: row.user.active, permissionOverrides: row.user.permissionOverrides, clientReadScope, ...await loadSelectiveProjectScope(prisma, row.userId) } satisfies AuthSession;
   }
   const cookieSession = await verifySessionCookie(token);
   if (!cookieSession) return null;
@@ -52,7 +54,7 @@ export async function getSession() {
   }
 
   const clientReadScope = await loadClientReadScope(prisma, user.id);
-  return { ...cookieSession, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides, clientReadScope } satisfies AuthSession;
+  return { ...cookieSession, role: user.role, active: user.active, permissionOverrides: user.permissionOverrides, clientReadScope, ...await loadSelectiveProjectScope(prisma, user.id) } satisfies AuthSession;
 }
 
 export async function requireSession(): Promise<AuthSession> {

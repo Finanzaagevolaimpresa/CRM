@@ -16,6 +16,8 @@ import {
 import { UserFacingActionError } from './action-errors';
 import { hasPermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
+import { loadSelectiveProjectScope } from './selective-project-scope';
+import { lockInternalUser } from './internal-session-registry';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
 type ContextDb = Pick<Prisma.TransactionClient, 'client' | 'company' | 'project' | 'clientService'>;
@@ -231,13 +233,13 @@ export async function requireTaskEditAccess(session: AuthSession, taskId: string
   return context;
 }
 
-async function loadTechnicalPracticeContext(practiceId: string) {
-  const practice = await prisma.technicalPractice.findFirst({ where: { id: practiceId, deletedAt: null } });
+async function loadTechnicalPracticeContext(practiceId: string, db: Prisma.TransactionClient = prisma) {
+  const practice = await db.technicalPractice.findFirst({ where: { id: practiceId, deletedAt: null } });
   if (!practice) denyWriteAccess();
   const [client, project, clientService] = await Promise.all([
-    prisma.client.findFirst({ where: { id: practice.clientId, deletedAt: null }, select: clientSelect }),
-    practice.projectId ? loadProjectContext(practice.projectId) : null,
-    practice.clientServiceId ? loadServiceContext(practice.clientServiceId) : null,
+    db.client.findFirst({ where: { id: practice.clientId, deletedAt: null }, select: clientSelect }),
+    practice.projectId ? loadProjectContext(practice.projectId, db) : null,
+    practice.clientServiceId ? loadServiceContext(practice.clientServiceId, db) : null,
   ]);
   if (!client) denyWriteAccess();
   if (practice.projectId && (!project || project.clientId !== practice.clientId)) denyWriteAccess();
@@ -246,14 +248,24 @@ async function loadTechnicalPracticeContext(practiceId: string) {
   return { practice, client, project, clientService };
 }
 
-export async function requireTechnicalPracticeViewAccess(session: AuthSession, practiceId: string) {
-  const context = await loadTechnicalPracticeContext(practiceId);
-  if (!canViewTechnicalPractice(session, { ...context.practice, client: context.client, project: context.project, clientService: context.clientService })) denyWriteAccess();
+export async function requireTechnicalPracticeViewAccess(session: AuthSession, practiceId: string, db: Prisma.TransactionClient = prisma) {
+  const context = await loadTechnicalPracticeContext(practiceId, db);
+  const current = { ...session, ...await loadSelectiveProjectScope(db, session.userId) };
+  if (!canViewTechnicalPractice(current, { ...context.practice, client: context.client, project: context.project, clientService: context.clientService })) denyWriteAccess();
   return context;
 }
 
-export async function requireTechnicalPracticeEditAccess(session: AuthSession, practiceId: string) {
-  const { practice } = await loadTechnicalPracticeContext(practiceId);
-  if (!canEditTechnicalPractice(session, practice)) denyWriteAccess();
-  return practice;
+export async function requireTechnicalPracticeEditAccess(session: AuthSession, practiceId: string, db: Prisma.TransactionClient = prisma) {
+  const context = await loadTechnicalPracticeContext(practiceId, db);
+  const current = { ...session, ...await loadSelectiveProjectScope(db, session.userId) };
+  if (!canEditTechnicalPractice(current, { ...context.practice, project: context.project, clientService: context.clientService })) denyWriteAccess();
+  return context.practice;
+}
+
+/** Recheck fresh context while excluding concurrent grants and practice moves. */
+export async function requireTechnicalPracticeMutationAccess(session: AuthSession, practiceId: string, tx: Prisma.TransactionClient, mode: 'edit' | 'view' = 'edit') {
+  await lockInternalUser(tx, session.userId);
+  await tx.$queryRaw`SELECT "id" FROM "TechnicalPractice" WHERE "id"=${practiceId} FOR UPDATE`;
+  return mode === 'edit' ? requireTechnicalPracticeEditAccess(session, practiceId, tx)
+    : (await requireTechnicalPracticeViewAccess(session, practiceId, tx)).practice;
 }

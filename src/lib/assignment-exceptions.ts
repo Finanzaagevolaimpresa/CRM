@@ -1,4 +1,6 @@
 import type { Prisma } from '@prisma/client';
+import { loadSelectiveProjectScope } from './selective-project-scope';
+import { projectOutsideSelection, serviceOutsideSelection, contextOutsideSelection } from './selective-project-policy';
 import { authorizeManualAssignment, type AssignmentActor } from './manual-assignment-guard';
 
 export const exceptionKinds = ['leads', 'clients', 'projects', 'tasks', 'services', 'practices'] as const;
@@ -10,6 +12,7 @@ export async function loadAssignmentExceptions(
   tx: Prisma.TransactionClient, actor: AssignmentActor, kind: ExceptionKind, after?: string,
 ) {
   await authorizeManualAssignment(tx, actor, []);
+  const scope = await loadSelectiveProjectScope(tx, actor.userId);
   if (!exceptionKinds.includes(kind) || (after && !/^[A-Za-z0-9_-]{1,128}$/u.test(after))) throw new Error('INVALID_EXCEPTION_CURSOR');
   const users = await tx.user.findMany({
     where: { OR: [{ active: false }, { deletedAt: { not: null } }] },
@@ -19,12 +22,14 @@ export async function loadAssignmentExceptions(
   const active = { deletedAt: null };
   const leadWhere = { ...active, assignedToId: { in: invalidIds } };
   const clientWhere = { ...active, OR: [{ salesOwnerId: { in: invalidIds } }, { consultantId: { in: invalidIds } }] };
-  const projectWhere = { ...active, consultantId: { in: invalidIds } };
-  const practiceWhere = { ...active, OR: [{ commercialOwnerId: { in: invalidIds } }, { technicalOwnerId: { in: invalidIds } }] };
+  const projectWhere = { ...active, consultantId: { in: invalidIds }, AND: [projectOutsideSelection(scope)] };
+  const practiceWhere = { ...active, OR: [{ commercialOwnerId: { in: invalidIds } }, { technicalOwnerId: { in: invalidIds } }], ...contextOutsideSelection(scope) };
+  const taskWhere = { ...leadWhere, ...contextOutsideSelection(scope) };
+  const serviceWhere = { ...leadWhere, AND: [serviceOutsideSelection(scope)] };
   const values = await Promise.all([
     tx.lead.count({ where: leadWhere }), tx.client.count({ where: clientWhere }),
-    tx.project.count({ where: projectWhere }), tx.task.count({ where: leadWhere }),
-    tx.clientService.count({ where: leadWhere }), tx.technicalPractice.count({ where: practiceWhere }),
+    tx.project.count({ where: projectWhere }), tx.task.count({ where: taskWhere }),
+    tx.clientService.count({ where: serviceWhere }), tx.technicalPractice.count({ where: practiceWhere }),
   ]);
   const counts = Object.fromEntries(exceptionKinds.map((key, index) => [key, values[index]!])) as Record<ExceptionKind, number>;
   const page = { ...(after ? { id: { gt: after } } : {}), deletedAt: null };
@@ -41,10 +46,10 @@ export async function loadAssignmentExceptions(
     case 'projects': rows = (await tx.project.findMany({ where: { ...projectWhere, ...page }, ...window,
       select: { id: true, title: true, consultantId: true, status: true } }))
       .map(row => ({ id: row.id, title: row.title, href: `/projects/${row.id}`, status: row.status, historical: ['chiuso', 'archiviato'].includes(row.status), ownerIds: owners(row.consultantId) })); break;
-    case 'tasks': rows = (await tx.task.findMany({ where: { ...leadWhere, ...page }, ...window,
+    case 'tasks': rows = (await tx.task.findMany({ where: { ...taskWhere, ...page }, ...window,
       select: { id: true, title: true, assignedToId: true, clientId: true, status: true } }))
       .map(row => ({ id: row.id, title: row.title, href: `/settings/assignment-exceptions/tasks/${row.id}`, status: row.status, historical: ['completata', 'annullata'].includes(row.status), ownerIds: owners(row.assignedToId) })); break;
-    case 'services': rows = (await tx.clientService.findMany({ where: { ...leadWhere, ...page }, ...window,
+    case 'services': rows = (await tx.clientService.findMany({ where: { ...serviceWhere, ...page }, ...window,
       select: { id: true, clientId: true, assignedToId: true, status: true, operationalStatus: true } }))
       .map(row => ({ id: row.id, title: `Servizio ${row.id}`, href: `/clients/${row.clientId}`, status: `${row.status} / ${row.operationalStatus}`, historical: ['consegnato', 'chiuso', 'archiviato'].includes(row.status) || ['chiusa', 'archiviata'].includes(row.operationalStatus), ownerIds: owners(row.assignedToId) })); break;
     case 'practices': rows = (await tx.technicalPractice.findMany({ where: { ...practiceWhere, ...page }, ...window,
