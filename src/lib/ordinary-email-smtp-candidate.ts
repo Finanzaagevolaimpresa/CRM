@@ -22,6 +22,10 @@ export type OrdinarySmtpDependencies = {
   takeCommittedAttempt(request: OrdinaryAttemptRequest): Promise<OrdinaryAttemptLease | null>;
   /** Current authoritative actor/session, channel, context and expiry. */
   assertCurrent(lease: OrdinaryAttemptLease): Promise<void>;
+  /** Hold authoritative locks from before DATA through its bounded response.
+   * The supplied check uses the same locked transaction and a fresh DB clock.
+   * No retry of the callback, including after an uncertain commit response. */
+  withCurrentAuthorization<T>(lease: OrdinaryAttemptLease, operation: (check: () => Promise<void>) => Promise<T>): Promise<T>;
   /** Resolve only the qualified configuration referenced by the committed lease.
    * A host is never inferred from the provider name or accepted from a form. */
   readQualifiedTransport(lease: OrdinaryAttemptLease): Promise<{ host: string; password: string }>;
@@ -145,15 +149,24 @@ export async function transmitOrdinaryEmailCandidate(
     phase = 'MAIL'; await command(`MAIL FROM:<${prepared.envelope.from}>`, [250]);
     phase = 'RCPT';
     for (const recipient of prepared.envelope.recipients) await command(`RCPT TO:<${recipient}>`, [250, 251]);
-    // Do not submit to a subset if any recipient was refused. Recheck the
-    // authoritative lease after protocol waits, including the DATA challenge.
-    await current(); phase = 'DATA'; await command('DATA', [354]);
-    await current(); phase = 'CONTENT'; replyCode = undefined;
-    const response = bounded(replies.read()); void response.catch(() => {});
-    contentSubmitted = true; // Set before write: a throwing write may be partial.
-    socket.write(mime.replace(/(^|\r\n)\./g, '$1..') + '.\r\n');
-    const reply = await response; replyCode = reply.code;
-    const result: OrdinarySmtpResult = { outcome: reply.code === 250 ? 'ACCEPTED' : reply.code >= 400 && reply.code < 600 ? 'NOT_SENT' : 'UNCERTAIN', phase, replyCode };
+    // Serialize current authorization with DATA. Ordinary preflight reads do
+    // not close a concurrent revocation window. The private server guard owns
+    // the transaction; only this callback can set an observed SMTP outcome.
+    let entered = false, result: OrdinarySmtpResult | undefined;
+    await bounded(dependencies.withCurrentAuthorization(lease, async check => {
+      if (entered) throw new Error('ORDINARY_SMTP_GUARD_REPLAY');
+      entered = true;
+      live(); await bounded(check()); live();
+      phase = 'DATA'; await command('DATA', [354]);
+      await bounded(check()); live(); phase = 'CONTENT'; replyCode = undefined;
+      const response = bounded(replies!.read()); void response.catch(() => {});
+      contentSubmitted = true; // A throwing write may be partial.
+      socket!.write(mime.replace(/(^|\r\n)\./g, '$1..') + '.\r\n');
+      const reply = await response; replyCode = reply.code;
+      result = { outcome: reply.code === 250 ? 'ACCEPTED' : reply.code >= 400 && reply.code < 600 ? 'NOT_SENT' : 'UNCERTAIN', phase, replyCode };
+      return result;
+    }));
+    if (!result) throw new Error('ORDINARY_SMTP_GUARD_REQUIRED');
     // Graceful closure cannot change an already definitive DATA result. An
     // unknown protocol state is closed without sending further message bytes.
     if (result.outcome !== 'UNCERTAIN') { try { await command('QUIT', [221]); } catch {} }

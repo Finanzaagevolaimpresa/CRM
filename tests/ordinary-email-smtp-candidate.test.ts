@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import type { connect, ConnectionOptions } from 'node:tls';
 import type { ApprovedMessageSnapshot } from '../src/lib/approved-communication-contract';
 import { canonicalSha256 } from '../src/lib/canonical-json';
 import { prepareOrdinaryEmail, type OrdinaryChannel } from '../src/lib/ordinary-email-candidate';
 import { transmitOrdinaryEmailCandidate, type OrdinaryAttemptLease, type OrdinarySmtpDependencies } from '../src/lib/ordinary-email-smtp-candidate';
+import { SyntheticSocket, type WireOptions } from './helpers/ordinary-smtp-socket';
 
 // Every socket, credential and reservation below is synthetic/in-memory. These
 // tests qualify protocol behavior, not durable DB claims or a provider channel.
@@ -25,43 +25,6 @@ function material() {
     channelRevision: 1, qualificationReference: 'SYNTHETIC_ONLY' };
   return { snapshot, channel, materials: new Map([['synthetic-v1', bytes]]), preparedAt };
 }
-type WireOptions = {
-  authorized?: boolean; protocol?: string; greeting?: string; ehlo?: string; auth?: string; mail?: string;
-  refuseRecipient?: number; final?: string | null; contentWriteThrows?: boolean; closeAfterFinal?: boolean;
-  onWrite?: (text: string) => void;
-};
-class SyntheticSocket extends EventEmitter {
-  authorized: boolean; destroyed = false; writes: string[] = []; private content = false; private recipients = 0;
-  constructor(private options: WireOptions) { super(); this.authorized = options.authorized ?? true; }
-  setEncoding() { return this; }
-  getProtocol() { return this.options.protocol ?? 'TLSv1.3'; }
-  reply(text: string) {
-    queueMicrotask(() => {
-      if (this.destroyed) return;
-      // Deliberately fragment CRLF and reply codes across data events.
-      for (let start = 0; start < text.length && !this.destroyed; start += 3) this.emit('data', text.slice(start, start + 3));
-    });
-  }
-  write(text: string) {
-    if (this.destroyed) throw new Error('SYNTHETIC_CLOSED');
-    this.writes.push(text); this.options.onWrite?.(text);
-    if (text === 'QUIT\r\n') { this.reply('221 closing\r\n'); return true; }
-    if (this.content) {
-      if (this.options.contentWriteThrows) throw new Error('SYNTHETIC_PARTIAL_WRITE');
-      if (this.options.final === null) { queueMicrotask(() => this.destroy()); return true; }
-      this.reply(this.options.final ?? '250 accepted\r\n');
-      if (this.options.closeAfterFinal) queueMicrotask(() => this.destroy());
-    } else if (text.startsWith('EHLO ')) this.reply(this.options.ehlo ?? '250-synthetic.invalid\r\n250-AUTH PLAIN LOGIN\r\n250 SIZE 30000000\r\n');
-    else if (text.startsWith('AUTH PLAIN ')) this.reply(this.options.auth ?? '235 authenticated\r\n');
-    else if (text.startsWith('MAIL FROM:')) this.reply(this.options.mail ?? '250 sender accepted\r\n');
-    else if (text.startsWith('RCPT TO:')) this.reply(++this.recipients === this.options.refuseRecipient ? '550 refused\r\n' : '250 recipient accepted\r\n');
-    else if (text === 'DATA\r\n') { this.content = true; this.reply('354 continue\r\n'); }
-    else throw new Error('SYNTHETIC_UNEXPECTED_COMMAND');
-    return true;
-  }
-  destroy() { if (!this.destroyed) { this.destroyed = true; this.emit('close'); } return this; }
-}
-
 function harness(input = material(), options: WireOptions = {}) {
   const expected = prepareOrdinaryEmail(input.snapshot, input.channel, input.materials, input.preparedAt);
   const attemptId = randomUUID(), leaseId = randomUUID(), consumed = new Set<string>();
@@ -76,6 +39,7 @@ function harness(input = material(), options: WireOptions = {}) {
       return { attemptId, leaseId, committed: true, expiresAt: new Date(Date.now() + 60_000).toISOString() };
     },
     async assertCurrent() { currentChecks++; },
+    withCurrentAuthorization: (lease, operation) => operation(() => deps.assertCurrent(lease)),
     async readQualifiedTransport() { credentialReads++; return { host: 'synthetic.invalid', password: 'SYNTHETIC_PASSWORD_ONLY' }; },
     connectTls: ((config: ConnectionOptions) => {
       connectOptions.push(config); const socket = new SyntheticSocket(options); sockets.push(socket);
@@ -200,4 +164,21 @@ test('caller mutation during await cannot change the private approved bytes or e
 test('unsupported long MIME lines are rejected before consuming an attempt', async () => {
   const h = harness(); h.input.snapshot.attachments[0].filename = 'è'.repeat(195) + '.txt';
   assert.equal((await h.invoke()).phase, 'PREPARATION'); assert.equal(h.counts().claims, 0); assert.equal(h.sockets.length, 0);
+});
+
+test('DATA requires the authorization guard, bounds waiting and cannot replay its callback', async () => {
+  const denied = harness();
+  denied.deps.withCurrentAuthorization = async () => { throw new Error('SYNTHETIC_REVOKED'); };
+  assert.equal((await denied.invoke()).outcome, 'NOT_SENT');
+  assert.ok(!denied.sockets[0].writes.includes('DATA\r\n'));
+  const stalled = harness(); stalled.deps.withCurrentAuthorization = () => new Promise(() => {});
+  assert.equal((await stalled.invoke(undefined,200)).outcome, 'NOT_SENT');
+  assert.ok(!stalled.sockets[0].writes.includes('DATA\r\n')); assert.ok(stalled.sockets[0].destroyed);
+  const replayed = harness();
+  replayed.deps.withCurrentAuthorization = async (lease, operation) => {
+    await operation(() => replayed.deps.assertCurrent(lease));
+    return operation(() => replayed.deps.assertCurrent(lease));
+  };
+  assert.equal((await replayed.invoke()).outcome, 'UNCERTAIN');
+  assert.equal(replayed.sockets[0].writes.filter(value => value.startsWith('From: ')).length,1);
 });

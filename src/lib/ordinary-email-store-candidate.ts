@@ -12,8 +12,8 @@ import type { readPrivateDocumentBounded } from './storage';
 
 /** Isolated PostgreSQL candidate. Tables are deliberately outside the migration
  * chain; no route, connector, environment reader, worker or automatic retry.
- * An integrating service must load its active native key and serialize current
- * authorization with the bounded DATA write, not just perform an earlier read. */
+ * The service supplies its active native key. The DATA guard keeps the same
+ * authoritative locks through the bounded protocol response; no retry. */
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
 type Runtime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded };
@@ -118,14 +118,41 @@ export async function takeStoredOrdinaryEmailAttempt(db: Db, claimed: AuthSessio
 }
 export async function checkStoredOrdinaryEmailLease(db: Db, claimed: AuthSession, lease: OrdinaryAttemptLease, runtime: Runtime) {
   return db.$transaction(async tx => {
-    const value = await currentAttempt(tx, claimed, lease.attemptId, runtime);
-    const claims = await tx.$queryRaw<Array<{ expiresAt: Date }>>`SELECT "expiresAt" FROM "OrdinaryEmailClaim"
-      WHERE "id"=${uuid.parse(lease.leaseId)}::uuid AND "attemptId"=${lease.attemptId}::uuid`;
-    const finalClock = await clock(tx);
-    if (value.row.state !== 'CLAIMED' || !claims[0] || claims[0].expiresAt.toISOString() !== lease.expiresAt
-      || claims[0].expiresAt <= finalClock || !lease.committed) deny();
-    checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, finalClock);
+    await lockedLease(tx, claimed, lease, runtime);
   }, { timeout: 30_000 });
+}
+
+async function lockedLease(tx: Tx, claimed: AuthSession, lease: OrdinaryAttemptLease, runtime: Runtime) {
+  const value = await currentAttempt(tx, claimed, lease.attemptId, runtime);
+  const claims = await tx.$queryRaw<Array<{ expiresAt: Date }>>`SELECT "expiresAt" FROM "OrdinaryEmailClaim"
+    WHERE "id"=${uuid.parse(lease.leaseId)}::uuid AND "attemptId"=${lease.attemptId}::uuid`;
+  const check = async () => {
+    const now = await clock(tx);
+    if (value.row.state !== 'CLAIMED' || !claims[0] || claims[0].expiresAt.toISOString() !== lease.expiresAt
+      || claims[0].expiresAt <= now || !lease.committed) deny();
+    checkPersistedOrdinaryDecision(value.row.decision, value.row.proof, value.state.material, value.state.current, runtime.key, now);
+  };
+  await check();
+  return check;
+}
+
+/** Private transport material, always rebuilt from the committed reservation.
+ * Neither an attempt ID nor these bytes can replace the one-use claim. */
+export async function loadStoredOrdinaryEmailMaterial(db: Db, claimed: AuthSession, attemptId: string, runtime: Runtime) {
+  return db.$transaction(async tx => {
+    const value = await currentAttempt(tx, claimed, attemptId, runtime);
+    if (value.row.state !== 'RESERVED') deny();
+    return { ...value.state.material, preparedAt: new Date(value.decision.preparedAt) };
+  }, { timeout: 30_000 });
+}
+
+/** Native session/user/message/context/document/channel/authority locks stay
+ * held during DATA. The SMTP deadline is at most 15s, below this 20s transaction
+ * bound. Expiry is checked again after 354 with the DB clock. No callback retry
+ * and no success assumed if the transaction result is lost. */
+export async function withStoredOrdinaryEmailAuthorization<T>(db: Db, claimed: AuthSession, lease: OrdinaryAttemptLease,
+  runtime: Runtime, operation: (check: () => Promise<void>) => Promise<T>): Promise<T> {
+  return db.$transaction(async tx => operation(await lockedLease(tx, claimed, lease, runtime)), { timeout: 20_000 });
 }
 
 const resultSchema = z.object({ outcome: z.enum(['ACCEPTED','NOT_SENT','UNCERTAIN']),

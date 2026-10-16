@@ -12,6 +12,9 @@ import { previewStoredOrdinaryEmail, reserveStoredOrdinaryEmail, takeStoredOrdin
 import { prepareOrdinaryEmail, type OrdinaryChannel } from '../../src/lib/ordinary-email-candidate';
 import { approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
 import { canonicalSha256 } from '../../src/lib/canonical-json';
+import type { connect } from 'node:tls';
+import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-email-service-candidate';
+import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
 
 const enabled = process.env.ORDINARY_EMAIL_STORE_CONFIRMED === '1' && assertAiOrchestratorEphemeralDbTestConfiguration({
   requested: process.env.RUN_DB_TESTS === '1', destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1',
@@ -28,6 +31,7 @@ test.before(async () => {
     BEGIN
       IF NEW."event" LIKE 'ordinary_email_%' THEN
         IF current_setting('fai.ordinary_fault',true)='error' THEN RAISE EXCEPTION 'SYNTHETIC_ORDINARY_AUDIT_FAULT'; END IF;
+        IF current_setting('fai.ordinary_fault',true)='outcome-error' AND NEW."event"='ordinary_email_outcome' THEN RAISE EXCEPTION 'SYNTHETIC_ORDINARY_OUTCOME_FAULT'; END IF;
         IF current_setting('fai.ordinary_fault',true)='delay' THEN PERFORM pg_sleep(0.6); END IF;
       END IF;
       RETURN NEW;
@@ -103,7 +107,7 @@ async function footprint(f: Fixture) {
       UNION ALL SELECT 'outcome',count(*)::integer FROM "OrdinaryEmailOutcome" WHERE "attemptId" IN (SELECT "id" FROM "OrdinaryEmailAttempt" WHERE "messageId"=${f.saved.id}::uuid)`,
     audits: await db.auditLog.findMany({ where: { entityId: f.saved.id }, orderBy: { id: 'asc' } }) };
 }
-function fault(mode: 'error' | 'delay'): PrismaClient {
+function fault(mode: 'error' | 'delay' | 'outcome-error'): PrismaClient {
   return { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) => db.$transaction(async tx => {
     await tx.$queryRaw`SELECT set_config('fai.ordinary_fault',${mode},true)`;
     return work(tx);
@@ -258,4 +262,116 @@ test('database constraints forbid forged links, evidence edits, impossible recei
   assert.equal((await footprint(f)).message.state,'SENDING');
   await assert.rejects(db.$executeRaw`UPDATE "OrdinaryEmailAuthority" SET "enabled"=false WHERE "id"='ordinary-email'`);
   await assert.rejects(db.$executeRaw`DELETE FROM "OrdinaryEmailAuthority" WHERE "id"='ordinary-email'`);
+});
+
+function syntheticTransport(options: WireOptions = {}) {
+  const sockets: SyntheticSocket[] = [];
+  return { sockets, dependencies: {
+    readQualifiedTransport: async () => ({host:'synthetic.invalid',password:'SYNTHETIC_PASSWORD_ONLY'}),
+    connectTls: (() => {
+      const socket=new SyntheticSocket(options); sockets.push(socket);
+      queueMicrotask(()=>{socket.emit('secureConnect');socket.reply('220 synthetic ready\r\n');});
+      return socket;
+    }) as unknown as typeof connect,
+  }};
+}
+async function send(f: Fixture, transport = syntheticTransport(), database = db, token?: string) {
+  return confirmAndTransmitStoredOrdinaryEmail(database,f.actor,
+    {messageId:f.saved.id,requestId:randomUUID(),previewToken:token ?? (await preview(f)).token},f.credentials,runtime,transport.dependencies,
+    {deadline:performance.now()+14_000,signal:new AbortController().signal});
+}
+
+test('service composes exact personal decision, committed claim, SMTP and private audited receipt', options, async () => {
+  const f=await fixture(), shown=await preview(f), transport=syntheticTransport(), result=await send(f,transport,db,shown.token);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'ACCEPTED');
+  assert.deepEqual(Object.keys(result).sort(),['attemptId','outcome','status']);
+  const state=await footprint(f); assert.equal(state.message.state,'SENT');
+  assert.equal(transport.sockets.length,1);
+  const wire=transport.sockets[0].writes;
+  assert.ok(wire.includes('RCPT TO:<private@invalid.test>\r\n'));
+  assert.ok(!wire.find(text=>text.startsWith('From: '))!.includes('private@invalid.test'));
+  assert.equal(state.audits.filter(row=>row.event.startsWith('ordinary_email_')).length,3);
+  assert.equal((await db.$queryRaw<Array<{count:number}>>`SELECT count(*)::integer AS count FROM "OrdinaryEmailOutcome" WHERE "attemptId"=${result.attemptId}::uuid`)[0].count,1);
+  await assert.rejects(send(f,transport,db,shown.token)); assert.equal(transport.sockets.length,1);
+});
+
+test('service records uncertain DATA once and blocks every later attempt', options, async () => {
+  const f=await fixture(), transport=syntheticTransport({final:null}), result=await send(f,transport);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'UNCERTAIN');
+  assert.equal((await footprint(f)).message.state,'UNCERTAIN');
+  await assert.rejects(send(f,transport)); assert.equal(transport.sockets.length,1);
+  assert.equal(transport.sockets[0].writes.filter(text=>text.startsWith('From: ')).length,1);
+});
+
+test('receipt audit fault after transport returns reconciliation and leaves the committed claim blocking', options, async () => {
+  const f=await fixture(), transport=syntheticTransport(), result=await send(f,transport,fault('outcome-error'));
+  assert.deepEqual(result,{attemptId:result.attemptId,status:'RECONCILIATION_REQUIRED'});
+  const state=await footprint(f); assert.equal(state.message.state,'SENDING');
+  assert.equal(state.audits.filter(row=>row.event==='ordinary_email_claimed').length,1);
+  assert.equal(state.audits.filter(row=>row.event==='ordinary_email_outcome').length,0);
+  await assert.rejects(send(f,transport)); assert.equal(transport.sockets.length,1);
+});
+
+test('two full service calls with one exact preview can submit at most one MIME body', options, async () => {
+  const f=await fixture(), shown=await preview(f), transport=syntheticTransport();
+  const results=await Promise.allSettled([send(f,transport,db,shown.token),send(f,transport,db,shown.token)]);
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
+  const result=results.find(row=>row.status==='fulfilled'); assert.ok(result?.status==='fulfilled');
+  assert.equal(result.value.outcome,'ACCEPTED');
+  assert.equal(transport.sockets.length,1);
+  assert.equal(transport.sockets[0].writes.filter(text=>text.startsWith('From: ')).length,1);
+});
+
+test('native DATA locks serialize session, authority, channel, project, document and permission revocations', options, async () => {
+  for(const kind of ['session','authority','channel','project','document','permission'] as const) {
+    const f=await fixture(); let revocation:Promise<unknown>|undefined, pid=0, blocked=false, completed=false;
+    const transport=syntheticTransport({beforeDataReply:async()=>{
+      revocation=db.$transaction(async tx=>{
+        pid=(await tx.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+        if(kind==='session') await tx.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+        if(kind==='authority') await tx.$executeRaw`UPDATE "OrdinaryEmailAuthority" SET "enabled"=false,"revision"="revision"+1 WHERE "id"='ordinary-email'`;
+        if(kind==='channel') await tx.$executeRaw`UPDATE "OrdinaryEmailChannel" SET "enabled"=false,"revision"="revision"+1 WHERE "mailboxId"=${f.box.id}::uuid`;
+        if(kind==='project') await tx.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+        if(kind==='document') await tx.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+        if(kind==='permission') await tx.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'practice_communications.mark_used',allowed:false}});
+      },{timeout:10_000}).then(()=>{completed=true;});
+      // Observe a real PostgreSQL lock wait, not an arbitrary timer assumption.
+      for(let i=0;i<100&&!blocked;i++) {
+        if(pid) blocked=(await db.$queryRaw<Array<{blocked:boolean}>>`SELECT cardinality(pg_blocking_pids(${pid}::integer))>0 AS blocked`)[0].blocked;
+        if(!blocked) await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      assert.equal(blocked,true,kind); assert.equal(completed,false,kind);
+    }});
+    const result=await send(f,transport);
+    await revocation;
+    assert.equal(blocked,true,kind); assert.equal(completed,true,kind);
+    assert.equal(result.outcome,'ACCEPTED',kind);
+    assert.equal((await footprint(f)).message.state,'SENT');
+    await assert.rejects(preview(f));
+  }
+});
+
+test('session expiry during DATA challenge prevents bytes and records a definite no-send', options, async () => {
+  const f=await fixture();
+  await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt:new Date(Date.now()+2_000)}});
+  const transport=syntheticTransport({beforeDataReply:()=>new Promise(resolve=>setTimeout(resolve,2_100))});
+  const result=await send(f,transport);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'NOT_SENT');
+  assert.ok(transport.sockets[0].writes.includes('DATA\r\n'));
+  assert.ok(!transport.sockets[0].writes.some(text=>text.startsWith('From: ')));
+  assert.equal((await footprint(f)).message.state,'ERROR');
+});
+
+test('lost DATA guard commit response is uncertain and never retries a submitted message', options, async () => {
+  const f=await fixture(), transport=syntheticTransport();
+  const lost={$transaction:async(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>{
+    const result=await db.$transaction(work,opts);
+    if(result&&typeof result==='object'&&'phase' in result&&result.phase==='CONTENT') throw new Error('SYNTHETIC_GUARD_COMMIT_LOST');
+    return result;
+  }} as unknown as PrismaClient;
+  const result=await send(f,transport,lost);
+  assert.equal(result.status,'RECORDED'); assert.equal(result.outcome,'UNCERTAIN');
+  assert.equal((await footprint(f)).message.state,'UNCERTAIN');
+  assert.equal(transport.sockets[0].writes.filter(text=>text.startsWith('From: ')).length,1);
+  await assert.rejects(send(f,transport)); assert.equal(transport.sockets.length,1);
 });
