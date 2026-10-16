@@ -43,7 +43,7 @@ async function writableContext(tx: Prisma.TransactionClient, actor: AuthSession,
     tx.client.findFirst({ where: { id: clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }),
     tx.project.findFirst({ where: { id: projectId, clientId, deletedAt: null } }),
   ]);
-  if (!client || !project) throw new ManualPreAnalysisError('DENIED');
+  if (!client || !project || project.status === 'archiviato') throw new ManualPreAnalysisError('DENIED');
   const companyIds = [...new Set([companyId, project.companyId].filter((id): id is string => Boolean(id)))];
   if (companyIds.length) await tx.$queryRaw`SELECT id FROM "Company" WHERE id IN (${Prisma.join(companyIds)}) FOR UPDATE`;
   const companies = companyIds.length ? await tx.company.findMany({ where: { id: { in: companyIds }, clientId, deletedAt: null }, select: { id: true } }) : [];

@@ -1,3 +1,4 @@
+import { assertProjectOperational, ProjectUnavailableError } from './project-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
@@ -115,6 +116,7 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
 async function scope(tx: Prisma.TransactionClient, current: AuthSession, dossierId: string, allowReviewAssignment = false) {
   const dossier = await tx.clientDossier.findUnique({ where: { id: dossierId } });
   if (!dossier || dossier.status === 'archiviata' || !dossier.practiceReadinessId || !dossier.preAnalysisId) throw new EngagementDossierError('DENIED');
+  await assertProjectOperational(tx, dossier);
   const [client, project, service] = await Promise.all([
     tx.client.findFirst({ where: { id: dossier.clientId, deletedAt: null } }),
     dossier.projectId ? tx.project.findFirst({ where: { id: dossier.projectId, deletedAt: null } }) : null,
@@ -333,7 +335,7 @@ export async function getEngagementDossierReadAccess(db: Db, claimed: AuthSessio
       return readContext(tx, current, dossierId);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if (error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
+    if (error instanceof ProjectUnavailableError || error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
     throw error;
   }
 }
@@ -341,41 +343,44 @@ export async function getEngagementDossierReadAccess(db: Db, claimed: AuthSessio
 /** A review assignment authorizes only the exact material version in the current dossier. */
 export async function getEngagementMaterialDownloadAccess(db: Db, claimed: AuthSession, documentId: string, requestedVersionId: string | null = null) {
   try {
-    return await db.$transaction(async (tx) => {
-      const current = await actor(tx, claimed, 'dossier.read', new Date());
-      if (!hasPermission(current, 'document.download')) return null;
-      const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-      if (!document?.clientId || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
-      const dossiers = await tx.clientDossier.findMany({ where: {
-        clientId: document.clientId, archivedAt: null, status: { not: 'archiviata' }, practiceReadinessId: { not: null },
-        ...(document.projectId ? { projectId: document.projectId } : {}),
-        ...(document.clientServiceId ? { clientServiceId: document.clientServiceId } : {}),
-      }, select: { id: true } });
-      for (const dossier of dossiers) {
-        try {
-          const context = await scope(tx, current, dossier.id, true);
-          if (!await hasInitialServiceReviewAssignment(tx, current, context)) continue;
-          const currentVersion = context.versions.find(version => version.id === context.dossier.currentVersionId);
-          if (!currentVersion) continue;
-          for (const material of materialSnapshotSchema.parse(currentVersion.materialSnapshot)) {
-            if (material.status !== 'VALIDATED' || material.documentId !== document.id || !material.documentVersionId || !material.checksum
-              || (requestedVersionId && requestedVersionId !== material.documentVersionId)) continue;
-            const version = await tx.documentVersion.findUnique({ where: { id: material.documentVersionId } });
-            if (!version || version.documentId !== document.id || version.checksum !== material.checksum) continue;
-            // A plain document URL must never grant a newer, unsnapshotted file.
-            if (!requestedVersionId && (version.storagePath !== document.storagePath || version.checksum !== document.checksum)) continue;
-            return { versionId: version.id, storagePath: version.storagePath, checksum: material.checksum };
-          }
-        } catch (error) {
-          if (!(error instanceof EngagementDossierError) && !(error instanceof InitialServiceError)) throw error;
-        }
-      }
-      return null;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    return await db.$transaction(tx => getEngagementMaterialDownloadAccessTx(tx, claimed, documentId, requestedVersionId), { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   } catch (error) {
-    if (error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
+    if (error instanceof ProjectUnavailableError || error instanceof EngagementDossierError || error instanceof InitialServiceError) return null;
     throw error;
   }
+}
+
+/** Reuse the authorization inside a byte-read transaction, holding its locks. */
+export async function getEngagementMaterialDownloadAccessTx(tx: Prisma.TransactionClient, claimed: AuthSession, documentId: string, requestedVersionId: string | null = null) {
+  const current = await actor(tx, claimed, 'dossier.read', new Date());
+  if (!hasPermission(current, 'document.download')) return null;
+  const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
+  if (!document?.clientId || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
+  const dossiers = await tx.clientDossier.findMany({ where: {
+    clientId: document.clientId, archivedAt: null, status: { not: 'archiviata' }, practiceReadinessId: { not: null },
+    ...(document.projectId ? { projectId: document.projectId } : {}),
+    ...(document.clientServiceId ? { clientServiceId: document.clientServiceId } : {}),
+  }, select: { id: true } });
+  for (const dossier of dossiers) {
+    try {
+      const context = await scope(tx, current, dossier.id, true);
+      if (!await hasInitialServiceReviewAssignment(tx, current, context)) continue;
+      const currentVersion = context.versions.find(version => version.id === context.dossier.currentVersionId);
+      if (!currentVersion) continue;
+      for (const material of materialSnapshotSchema.parse(currentVersion.materialSnapshot)) {
+        if (material.status !== 'VALIDATED' || material.documentId !== document.id || !material.documentVersionId || !material.checksum
+          || (requestedVersionId && requestedVersionId !== material.documentVersionId)) continue;
+        const version = await tx.documentVersion.findUnique({ where: { id: material.documentVersionId } });
+        if (!version || version.documentId !== document.id || version.checksum !== material.checksum) continue;
+        // A plain document URL must never grant a newer, unsnapshotted file.
+        if (!requestedVersionId && (version.storagePath !== document.storagePath || version.checksum !== document.checksum)) continue;
+        return { versionId: version.id, storagePath: version.storagePath, checksum: material.checksum };
+      }
+    } catch (error) {
+      if (!(error instanceof ProjectUnavailableError) && !(error instanceof EngagementDossierError) && !(error instanceof InitialServiceError)) throw error;
+    }
+  }
+  return null;
 }
 
 export async function getVisibleEngagementDossierIds(db: Db, claimed: AuthSession, dossierIds: string[], runtime: Runtime = {}) {
@@ -388,13 +393,13 @@ export async function getVisibleEngagementDossierIds(db: Db, claimed: AuthSessio
       const visible: string[] = [];
       for (const dossierId of new Set(dossierIds)) {
         try { await readContext(tx, current, dossierId); visible.push(dossierId); }
-        catch (error) { if (!(error instanceof EngagementDossierError)) throw error; }
+        catch (error) { if (!(error instanceof ProjectUnavailableError) && !(error instanceof EngagementDossierError)) throw error; }
       }
       return visible;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     return new Set(ids);
   } catch (error) {
-    if (error instanceof EngagementDossierError) return new Set<string>();
+    if (error instanceof ProjectUnavailableError || error instanceof EngagementDossierError) return new Set<string>();
     throw error;
   }
 }
@@ -417,6 +422,7 @@ export async function createEngagementDossier(db: Db, claimed: AuthSession, raw:
     await tx.$queryRaw`SELECT id FROM "PracticeReadiness" WHERE id=${input.practiceReadinessId}::uuid FOR UPDATE`;
     const practice = await tx.practiceReadiness.findUnique({ where: { id: input.practiceReadinessId }, include: { materials: { where: { successor: null }, orderBy: { checklistItemId: 'asc' } } } });
     if (!practice?.startedAt || !practice.clientServiceId) throw new EngagementDossierError('NOT_READY');
+    await assertProjectOperational(tx, practice);
     const [preAnalysis, client, project, service] = await Promise.all([
       tx.preAnalysis.findUnique({ where: { id: input.preAnalysisId } }),
       tx.client.findFirst({ where: { id: practice.clientId, deletedAt: null } }),

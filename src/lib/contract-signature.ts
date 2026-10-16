@@ -1,3 +1,4 @@
+import { guardProjectResources } from './project-resource-guard';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import type { AuthSession } from './auth';
@@ -14,6 +15,7 @@ export async function declareContractSignature(db: Db, claimed: AuthSession, raw
   return db.$transaction(async tx => {
     const actor = await freshActor(tx, claimed);
     if (actor.selectiveContractIds?.includes(input.contractId)) throw new ContractSignatureError('DENIED');
+    await guardProjectResources(tx, actor.userId, [{ contractId: input.contractId }]);
     const initial = await tx.contract.findUnique({ where: { id: input.contractId } });
     if (!initial) throw new ContractSignatureError('DENIED');
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${initial.clientId} FOR UPDATE`;
@@ -67,6 +69,7 @@ export async function recordContractSignature(db: Db, claimed: AuthSession, raw:
   return db.$transaction(async tx => {
     const actor = await freshActor(tx, claimed);
     if (actor.selectiveContractIds?.includes(input.contractId)) throw new ContractSignatureError('DENIED');
+    await guardProjectResources(tx, actor.userId, [{ contractId: input.contractId }]);
     const initial = await tx.contract.findUnique({ where: { id: input.contractId } });
     if (!initial) throw new ContractSignatureError('DENIED');
     await tx.$queryRaw`SELECT id FROM "Client" WHERE id=${initial.clientId} FOR UPDATE`;
@@ -81,6 +84,7 @@ export async function recordContractSignature(db: Db, claimed: AuthSession, raw:
     if (!contractCanRecordSignature(contract.status) || contract.signedAt || contract.signedDocumentId) throw new ContractSignatureError('CLOSED');
     const candidate = await tx.documentVersion.findUnique({ where: { id: input.signedDocumentVersionId } });
     if (!candidate) throw new ContractSignatureError('DOCUMENT_CHANGED');
+    await guardProjectResources(tx, actor.userId, [{ documentId: candidate.documentId }]);
     await tx.$queryRaw`SELECT id FROM "Document" WHERE id=${candidate.documentId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM "DocumentVersion" WHERE id=${candidate.id} FOR UPDATE`;
     const document = await tx.document.findUnique({ where: { id: candidate.documentId } });

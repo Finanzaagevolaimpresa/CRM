@@ -150,7 +150,7 @@ test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', 
   assertGuardsBeforeMutation(
     'updateCommercialOffer',
     ['requireCommercialOfferEditAccess', 'requireCommercialOfferTargetAccess'],
-    'prisma.commercialOffer.update',
+    'tx.commercialOffer.update',
   );
   assert.match(functionBody('auditCommercialOfferExport'), /requireCommercialOfferEditAccess/);
 });
@@ -168,24 +168,24 @@ test('documenti e checklist invocano le guardie ABAC prima delle scritture', () 
   assertGuardsBeforeMutation(
     'linkDocumentToService',
     ['requireDocumentEditAccess', 'requireServiceEditAccess'],
-    'prisma.document.update',
+    'tx.document.update',
   );
   assert.match(
     functionBody('linkDocumentToService'),
     /currentDocument\.clientServiceId[\s\S]*requireServiceEditAccess\(s, currentDocument\.clientServiceId\)/,
     'linkDocumentToService: manca la guardia sul servizio sorgente',
   );
-  assertGuardsBeforeMutation('updateDocumentSection', ['requireDocumentEditAccess'], 'prisma.document.update');
-  assertGuardsBeforeMutation('createDocumentChecklistItem', ['assertChecklistContext'], 'prisma.documentChecklistItem.create');
-  assertGuardsBeforeMutation('createStandardDocumentChecklist', ['assertChecklistContext'], 'prisma.$transaction');
-  assertGuardsBeforeMutation('updateDocumentChecklistItemStatus', ['requireChecklistEditAccess'], 'prisma.documentChecklistItem.update');
+  assertGuardsBeforeMutation('updateDocumentSection', ['requireDocumentEditAccess'], 'tx.document.update');
+  assertGuardsBeforeMutation('createDocumentChecklistItem', ['assertChecklistContext'], 'tx.documentChecklistItem.create');
+  assertGuardsBeforeMutation('createStandardDocumentChecklist', ['assertChecklistContext'], 'withProjectResources');
+  assertGuardsBeforeMutation('updateDocumentChecklistItemStatus', ['requireChecklistEditAccess'], 'tx.documentChecklistItem.update');
   assertGuardsBeforeMutation(
     'linkDocumentToChecklistItem',
     ['requireChecklistEditAccess', 'assertChecklistContext'],
-    'prisma.documentChecklistItem.update',
+    'tx.documentChecklistItem.update',
   );
-  assertGuardsBeforeMutation('unlinkDocumentFromChecklistItem', ['requireChecklistEditAccess'], 'prisma.documentChecklistItem.update');
-  assertGuardsBeforeMutation('deactivateDocumentChecklistItem', ['requireChecklistEditAccess'], 'prisma.documentChecklistItem.update');
+  assertGuardsBeforeMutation('unlinkDocumentFromChecklistItem', ['requireChecklistEditAccess'], 'tx.documentChecklistItem.update');
+  assertGuardsBeforeMutation('deactivateDocumentChecklistItem', ['requireChecklistEditAccess'], 'tx.documentChecklistItem.update');
   assert.match(functionBody('assertChecklistContext'), /requireClientContextWriteAccess/);
   assert.match(functionBody('assertChecklistContext'), /requireDocumentEditAccess/);
 
@@ -197,7 +197,7 @@ test('documenti e checklist invocano le guardie ABAC prima delle scritture', () 
 test('task e servizi invocano le guardie ABAC prima delle scritture', () => {
   assertGuardsBeforeMutation('createClientTask', ['assertTaskContext', 'withAssignmentGuard'], 'tx.task.create');
   assertGuardsBeforeMutation('updateClientTask', ['requireTaskEditAccess', 'withAssignmentGuard'], 'tx.task.update');
-  assertGuardsBeforeMutation('completeClientTask', ['requireTaskEditAccess'], 'prisma.task.update');
+  assertGuardsBeforeMutation('completeClientTask', ['requireTaskEditAccess'], 'tx.task.update');
   assert.match(functionBody('assertTaskContext'), /requireClientContextWriteAccess/);
 
   assertGuardsBeforeMutation('createClientService', ['requireClientContextWriteAccess', 'withAssignmentGuard'], 'tx.clientService.create');

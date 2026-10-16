@@ -14,6 +14,7 @@ import { prisma } from '@/lib/prisma';
 import { getProjectReadAccess } from '@/lib/read-access';
 import { canViewPreAnalysisListRecord } from '@/lib/business-list-access';
 import { canEditProject } from '@/lib/access-control';
+import { ProjectLifecycleControls } from '@/components/project-lifecycle-controls';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
@@ -55,6 +56,9 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
     {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
+    {hasPermission(session, 'project.write') && canEditProject(session, project) && <Card title="Gestisci progetto">
+      <ProjectLifecycleControls id={project.id} updatedAt={project.updatedAt.toISOString()} state="active" />
+    </Card>}
     {session.role === 'admin' && <Card title="Responsabile del progetto"><ManualAssignmentForm kind="project" id={project.id} updatedAt={project.updatedAt.toISOString()} technicalOwnerId={project.consultantId} users={assignmentUsers} /></Card>}
     <Card title="Dati progetto">
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>

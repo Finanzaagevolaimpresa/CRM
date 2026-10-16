@@ -28,7 +28,7 @@ test('la conversione lead è idempotente e protetta da vincolo DB e compare-and-
   assert.match(schema, /leadId\s+String\?\s+@unique/);
   assert.match(migration, /GROUP BY "leadId"[\s\S]*HAVING COUNT\(\*\) > 1/);
   assert.match(migration, /CREATE UNIQUE INDEX "Client_leadId_key"/);
-  assert.match(body, /prisma\.\$transaction/);
+  assert.match(body, /prisma\.\$transaction|withProjectResources/);
   assert.match(body, /tx\.client\.create/);
   assert.match(body, /tx\.lead\.updateMany/);
   assert.match(body, /clientId: null, updatedAt: lead\.updatedAt/);
@@ -39,7 +39,7 @@ test('la conversione lead è idempotente e protetta da vincolo DB e compare-and-
 test('modifica e archiviazione dossier usano CAS e audit nella stessa transazione', () => {
   for (const action of ['updateClientDossier', 'archiveClientDossier']) {
     const body = functionBody(action);
-    assert.match(body, /prisma\.\$transaction/);
+    assert.match(body, /prisma\.\$transaction|withProjectResources/);
     assert.match(body, /tx\.clientDossier\.updateMany/);
     assert.match(body, /updatedAt: before\.updatedAt/);
     assert.match(body, /result\.count !== 1/);
@@ -71,7 +71,7 @@ test('review e approval fissano la versione letta e rendono mutazione e audit at
   const approval = functionBody('approveAiOutput');
 
   for (const body of [review, approval]) {
-    assert.match(body, /prisma\.\$transaction/);
+    assert.match(body, /prisma\.\$transaction|withProjectResources/);
     assert.match(body, /tx\.aiOutput\.updateMany/);
     assert.match(body, /updatedAt: current\.updatedAt/);
     assert.match(body, /tx\.auditLog\.(?:create|createMany)/);
