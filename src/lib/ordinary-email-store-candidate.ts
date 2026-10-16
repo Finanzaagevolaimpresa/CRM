@@ -95,8 +95,10 @@ export async function rejectStoredOrdinaryEmail(db: Db, claimed: AuthSession, ra
     const changed = await tx.approvedCommunication.updateMany({ where: { id: input.messageId, currentRevision: input.expectedRevision,
       state: state.row.state }, data: { state: 'DRAFT', currentRevision: snapshot.revision } });
     if (changed.count !== 1) deny();
-    const evidence = { rejectedRevision: input.expectedRevision, rejectedHash: input.snapshotHash,
-      newRevision: snapshot.revision, newHash: snapshotHash, versionRef: `communication_version_uuid_${saved.id.replaceAll('-','')}` };
+    // Native audit retains *Version and *Id keys; keep the exact revision
+    // numbers and typed version identity without extending its allowlist.
+    const evidence = { rejectedVersion: input.expectedRevision, rejectedHash: input.snapshotHash,
+      newVersion: snapshot.revision, newHash: snapshotHash, versionId: `communication_version_uuid_${saved.id.replaceAll('-','')}` };
     await tx.communicationEvent.create({ data: { actorId: state.actor.userId, messageId: input.messageId,
       event: 'ORDINARY_REJECTED', evidence } });
     await tx.auditLog.create({ data: { actorId: state.actor.userId, entityType: 'ApprovedCommunication', entityId: input.messageId,

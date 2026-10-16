@@ -495,8 +495,8 @@ test('personal refusal preserves approved material, creates a fresh draft and re
   assert.equal(await db.communicationApproval.count({where:{versionId:after.versions[1].id}}),0);
   assert.notEqual(result.snapshotHash,f.saved.snapshotHash);
   const event=after.events.find(row=>row.event==='ORDINARY_REJECTED')!;
-  const evidence={rejectedRevision:1,rejectedHash:f.saved.snapshotHash,newRevision:2,newHash:result.snapshotHash,
-    versionRef:`communication_version_uuid_${after.versions[1].id.replaceAll('-','')}`};
+  const evidence={rejectedVersion:1,rejectedHash:f.saved.snapshotHash,newVersion:2,newHash:result.snapshotHash,
+    versionId:`communication_version_uuid_${after.versions[1].id.replaceAll('-','')}`};
   assert.deepEqual(event.evidence,evidence);
   const audit=after.audits.find(row=>row.event==='ordinary_email_rejected')!;
   assert.deepEqual(audit.after,{action:'rejected',...evidence,evidenceHash:canonicalSha256(evidence),status:'DRAFT'});
@@ -563,6 +563,7 @@ test('admitted receipt projection distinguishes pending, accepted and historical
   assert.equal((await read(f)).messages[0].ordinaryReceipts[0].state,'CLAIMED');
   await recordStoredOrdinaryEmailOutcome(db,lease,{outcome:'ACCEPTED',phase:'CONTENT',replyCode:250});
   const delegate=await person();
+  await db.user.update({where:{id:delegate.userId},data:{role:'direzione'}});
   await db.userPermissionOverride.create({data:{userId:delegate.userId,permission:'practice_communications.mark_used',allowed:false}});
   await db.$executeRaw`UPDATE "OrdinaryEmailAuthority" SET "enabled"=false,"revision"="revision"+1 WHERE "id"='ordinary-email'`;
   await rotate(f);
@@ -577,6 +578,12 @@ test('admitted receipt projection distinguishes pending, accepted and historical
 test('current context, session, permission and attachment filters precede receipt disclosure', options, async () => {
   for(const change of ['archive','trash','session','permission','document','expiry','classification'] as const) {
     const f=await fixture(); await reserve(f);
+    // Native Admin bypasses per-user overrides. Use a current direction actor
+    // with a positive read first to exercise effective individual denials.
+    if(change==='permission'||change==='classification') {
+      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
+      assert.equal((await read(f)).messages.length,1);
+    }
     if(change==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
     if(change==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
     if(change==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
@@ -587,8 +594,8 @@ test('current context, session, permission and attachment filters precede receip
       await db.document.update({where:{id:f.doc.id},data:{type:'contratto_fai'}});
       await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'contract.read',allowed:false}});
     }
-    if(['archive','trash','session','permission'].includes(change)) await assert.rejects(read(f));
-    else assert.equal((await read(f)).messages.length,0);
+    if(['archive','trash','session','permission'].includes(change)) await assert.rejects(read(f),change);
+    else assert.equal((await read(f)).messages.length,0,change);
   }
 });
 
