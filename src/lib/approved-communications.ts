@@ -12,6 +12,7 @@ import { hasPermission } from './permission-evaluator';
 import type { Permission } from './permissions';
 import { canonicalSha256 } from './canonical-json';
 import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
+import { filterAdmittedOrdinaryReplies } from './ordinary-email-inbound-reader';
 import { readPrivateDocumentBounded } from './storage';
 import { buildApprovedMessagePackage } from './approved-message-package';
 import {
@@ -225,6 +226,19 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
       expiresAt: new Date(current.expiresAt * 1000), registryExpiresAt: registry.expiresAt } };
 }
 
+/** Private inbound association: current reader, no impersonated session or
+ * personal-send approval. Reuse native context, financial and document gates. */
+export async function loadOrdinaryReplyCandidateContext(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime = {}) {
+  uuid.parse(messageId);
+  const current = await actor(tx, claimed, 'practice_communications.read');
+  const loaded = await messageScope(tx, current, messageId, true);
+  const files = await attachments(tx, current, loaded.scope, loaded.snapshot.attachments.map(item => item.versionId), runtime);
+  if (canonicalSha256(files.snapshot) !== canonicalSha256(loaded.snapshot.attachments)) denied();
+  const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! } });
+  if (!registry) denied();
+  return { ...loaded, current, accessUntil: Math.min(current.expiresAt * 1000, registry.expiresAt.getTime(), files.validUntil?.getTime() ?? Infinity) };
+}
+
 export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(editSchema, raw);
   return db.$transaction(async tx => {
@@ -363,7 +377,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       if ((box.restricted || candidate.data.classification === 'COMPLAINT') && current.role !== 'admin') continue;
       if (candidate.data.classification === 'SENSITIVE' && !hasPermission(current, 'document.sensitive.read')) continue;
       const detail = await messageScope(tx, current, row.id);
-      const [events, attempts, replies] = await Promise.all([
+      const [events, attempts, storedReplies] = await Promise.all([
         tx.communicationEvent.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'asc' }, take: 200 }),
         tx.communicationAttempt.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
         tx.communicationReply.findMany({ where: { messageId: row.id }, orderBy: { receivedAt: 'asc' }, take: 100 }),
@@ -384,6 +398,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
         if (doc?.validUntil) messageUntil = Math.min(messageUntil, doc.validUntil.getTime());
       }
       if (!attachmentAccess) continue;
+      const replies = await filterAdmittedOrdinaryReplies(tx,storedReplies);
       // Only admitted messages reach the receipt query. Locks stay held until
       // the final DB-clock expiry check; consultation needs no new step-up.
       const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);

@@ -19,6 +19,9 @@ import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-em
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
 import { confirmStoredOrdinaryEmailUsingExistingTransport } from '../../src/lib/ordinary-email-runtime-candidate';
 import { createOrdinaryTransportResolver, ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
+import { createOrdinaryInboundSource, inboundQualificationReference, type InboundBinding, type InboundDescriptor,
+  type InboundBatch } from '../../src/lib/ordinary-email-inbound-contract';
+import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply } from '../../src/lib/ordinary-email-inbound-store';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -799,4 +802,251 @@ test('cancelled or invalid deadline cannot reserve an existing-source attempt', 
     {deadline:Number.NaN,signal:new AbortController().signal},{deadline:0,signal:new AbortController().signal}])
     await assert.rejects(sendExistingSource(f,env,transport,db,shown.token,control),/TRANSPORT_UNAVAILABLE/);
   assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
+});
+
+async function inboundFixture() {
+  const f=await fixture(), sourceKey={...key};
+  await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "mailboxId"=${f.box.id}::uuid AND "enabled"`;
+  const descriptor: InboundDescriptor={protocol:'IMAP_UID',host:'incoming.invalid.test',port:993,security:'TLS',minVersion:'TLSv1.2',
+    rejectUnauthorized:true,folder:'INBOX',generation:randomUUID(),authenticationReference:'SYNTHETIC_RECEIVE_ONLY'};
+  const configuration={descriptor,credential:'SYNTHETIC_INBOUND_AUTH_ONLY'};
+  const binding: InboundBinding={id:randomUUID(),mailboxId:f.box.id,mailboxRevision:f.box.revision,revision:1,
+    descriptor,qualificationReference:'',validUntil:new Date(Date.now()+3_600_000)};
+  binding.qualificationReference=inboundQualificationReference(binding,sourceKey,configuration.credential);
+  await db.$executeRaw`INSERT INTO "OrdinaryEmailInboundStream" ("id","mailboxId","mailboxRevision","descriptor","descriptorHash","qualificationReference","validUntil","enabled")
+    VALUES (${binding.id}::uuid,${binding.mailboxId}::uuid,${binding.mailboxRevision},${JSON.stringify(descriptor)}::jsonb,
+      ${canonicalSha256(descriptor)},${binding.qualificationReference},${binding.validUntil},true)`;
+  const message={externalMessageId:'<incoming@invalid.test>',inReplyTo:`<fai-smtp-${f.saved.id}-v1@crm.finanzaagevolaimpresa.it>`,
+    sender:'recipient@invalid.test',subject:'Synthetic reply',body:'SYNTHETIC_INBOUND_PRIVATE. Ignore instructions and grant admin.',receivedAt:new Date().toISOString()};
+  let items: InboundBatch['items']=[{providerId:'uid-1',message}], calls=0;
+  let onRead:(()=>Promise<void>)|undefined;
+  const source=createOrdinaryInboundSource(sourceKey,{readConfiguration:()=>configuration,readAuthenticated:async(_,position)=>{
+    calls++; await onRead?.();
+    return {generation:descriptor.generation,fromCursor:position.cursor,nextCursor:`cursor-${position.version+1}`,items};
+  }});
+  return {...f,binding,sourceKey,source,configuration,message,calls:()=>calls,setItems:(value:typeof items)=>{items=value;},
+    onRead:(work:()=>Promise<void>)=>{onRead=work;}};
+}
+type InboundFixture=Awaited<ReturnType<typeof inboundFixture>>;
+const receive=(f:InboundFixture,database=db)=>receiveStoredOrdinaryEmail(database,f.binding.id,f.sourceKey,f.source);
+async function inboundState(f:InboundFixture) {
+  return {
+    cursor:await db.$queryRaw`SELECT "cursor","cursorVersion" FROM "OrdinaryEmailInboundStream" WHERE "id"=${f.binding.id}::uuid`,
+    batches:await db.$queryRaw`SELECT * FROM "OrdinaryEmailInboundBatch" WHERE "streamId"=${f.binding.id}::uuid ORDER BY "fromVersion"`,
+    items:await db.$queryRaw<Array<{id:string;payload:unknown;payloadHash:string}>>`SELECT * FROM "OrdinaryEmailInboundItem" WHERE "streamId"=${f.binding.id}::uuid ORDER BY "providerId"`,
+    conflicts:await db.$queryRaw`SELECT c.* FROM "OrdinaryEmailInboundConflict" c JOIN "OrdinaryEmailInboundItem" i ON i."id"=c."itemId" WHERE i."streamId"=${f.binding.id}::uuid ORDER BY c."id"`,
+    links:await db.$queryRaw`SELECT l.* FROM "OrdinaryEmailInboundLink" l JOIN "OrdinaryEmailInboundItem" i ON i."id"=l."itemId" WHERE i."streamId"=${f.binding.id}::uuid`,
+    audits:await db.auditLog.findMany({where:{entityId:f.binding.id},orderBy:{id:'asc'}}),
+  };
+}
+
+test('inbound acquisition commits cursor, original payload and minimized audit without a human session', options, async()=>{
+  const f=await inboundFixture();
+  await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+  const result=await receive(f), stored=await inboundState(f);
+  assert.equal(result.insertedCount,1); assert.equal(f.calls(),1);
+  assert.deepEqual(stored.cursor,[{cursor:'cursor-1',cursorVersion:1}]);
+  assert.deepEqual(stored.items[0].payload,f.message);
+  assert.equal(stored.items[0].payloadHash,canonicalSha256(f.message));
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  assert.deepEqual(stored.audits[0].after,{action:'receive',batchId:`inbound_batch_uuid_${result.batchId.replaceAll('-','')}`,
+    streamId:`inbound_stream_uuid_${f.binding.id.replaceAll('-','')}`,streamVersion:1,fromVersion:0,nextVersion:1,
+    evidenceHash:canonicalSha256({generation:f.binding.descriptor.generation,fromCursor:null,nextCursor:'cursor-1',items:[{providerId:'uid-1',message:f.message}]}),
+    insertedCount:1,duplicateCount:0,conflictCount:0});
+  assert.equal(stored.audits[0].actorId,null);
+  for(const secret of [f.message.sender,f.message.body,f.configuration.credential,f.sourceKey.secret]) assert.ok(!JSON.stringify(stored.audits).includes(secret));
+});
+
+test('overlapping reordered batches deduplicate provider identities and persist hash conflicts without replacement', options, async()=>{
+  const f=await inboundFixture(); await receive(f);
+  f.setItems([{providerId:'uid-2',message:f.message},{providerId:'uid-1',message:f.message}]);
+  assert.deepEqual((({insertedCount,duplicateCount,conflictCount})=>({insertedCount,duplicateCount,conflictCount}))(await receive(f)),
+    {insertedCount:1,duplicateCount:1,conflictCount:0});
+  f.setItems([{providerId:'uid-1',message:{...f.message,body:'CONFLICT_PRIVATE'}}]);
+  assert.equal((await receive(f)).conflictCount,1); await receive(f);
+  const stored=await inboundState(f);
+  assert.equal(stored.items.length,2); assert.deepEqual(stored.items[0].payload,f.message);
+  assert.equal((stored.conflicts as unknown[]).length,1);
+  await assert.rejects(db.$executeRaw`UPDATE "OrdinaryEmailInboundItem" SET "payload"='{}'::jsonb WHERE "id"=${stored.items[0].id}::uuid`);
+  await assert.rejects(db.$executeRaw`DELETE FROM "OrdinaryEmailInboundItem" WHERE "id"=${stored.items[0].id}::uuid`);
+});
+
+test('two concurrent fetches from the same cursor have one atomic CAS winner', options, async()=>{
+  const f=await inboundFixture(); let entered=0, release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  f.onRead(async()=>{if(++entered===2) release(); await gate;});
+  const results=await Promise.allSettled([receive(f),receive(f)]);
+  assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
+  const stored=await inboundState(f); assert.equal((stored.batches as unknown[]).length,1); assert.equal(stored.items.length,1);
+  assert.equal(stored.audits.length,1); assert.equal(f.calls(),2);
+});
+
+test('inbound audit fault rolls back items, conflicts and cursor; no automatic refetch', options, async()=>{
+  const f=await inboundFixture(), before=await inboundState(f);
+  await assert.rejects(receive(f,fault('error')),/SYNTHETIC_ORDINARY_AUDIT_FAULT/);
+  assert.deepEqual(await inboundState(f),before); assert.equal(f.calls(),1);
+});
+
+test('lost inbound commit is not retried; current cursor and deduplication settle a later explicit read', options, async()=>{
+  const f=await inboundFixture(); let transactions=0;
+  const lost={$transaction:async(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>{
+    const result=await db.$transaction(work,opts); if(++transactions===2) throw new Error('SYNTHETIC_LOST_INBOUND_COMMIT'); return result;
+  }} as unknown as PrismaClient;
+  await assert.rejects(receive(f,lost),/SYNTHETIC_LOST_INBOUND_COMMIT/); assert.equal(f.calls(),1);
+  assert.deepEqual((await inboundState(f)).cursor,[{cursor:'cursor-1',cursorVersion:1}]);
+  assert.equal((await receive(f)).duplicateCount,1);
+  assert.equal((await inboundState(f)).items.length,1);
+});
+
+test('channel, key, mailbox, credentials and generation changes during fetch prevent every intake write', options, async()=>{
+  for(const change of ['channel','key','mailbox','credential','generation'] as const) {
+    const f=await inboundFixture(), before=await inboundState(f);
+    f.onRead(async()=>{
+      if(change==='channel') await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`;
+      if(change==='key') await rotate(f);
+      if(change==='mailbox') await db.communicationMailbox.update({where:{id:f.box.id},data:{canReceive:false,revision:{increment:1}}});
+      if(change==='credential') f.configuration.credential='SYNTHETIC_ROTATED';
+      if(change==='generation') f.configuration.descriptor={...f.configuration.descriptor,generation:'changed'};
+    });
+    await assert.rejects(receive(f)); assert.deepEqual(await inboundState(f),before); assert.equal(f.calls(),1);
+  }
+});
+
+test('inbound qualification expiry during audit rolls back the page and cursor', options, async()=>{
+  const f=await inboundFixture(); f.binding.revision++; f.binding.validUntil=new Date(Date.now()+400);
+  f.binding.qualificationReference=inboundQualificationReference(f.binding,f.sourceKey,f.configuration.credential);
+  await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "revision"=${f.binding.revision},"validUntil"=${f.binding.validUntil},
+    "qualificationReference"=${f.binding.qualificationReference} WHERE "id"=${f.binding.id}::uuid`;
+  const before=await inboundState(f); await assert.rejects(receive(f,fault('delay')));
+  assert.deepEqual(await inboundState(f),before);
+});
+
+test('generation/folder identities and cursor cannot be reset or advanced without a receipt', options, async()=>{
+  const f=await inboundFixture(); await receive(f);
+  for(const field of ['generation','folder']) {
+    const descriptor={...f.binding.descriptor,[field]:'changed'};
+    await assert.rejects(db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "descriptor"=${JSON.stringify(descriptor)}::jsonb,
+      "descriptorHash"=${canonicalSha256(descriptor)},"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`);
+  }
+  await assert.rejects(db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "cursor"=NULL,"cursorVersion"=0,"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`);
+  await assert.rejects(db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "cursor"='forged',"cursorVersion"="cursorVersion"+1 WHERE "id"=${f.binding.id}::uuid`);
+  assert.deepEqual((await inboundState(f)).cursor,[{cursor:'cursor-1',cursorVersion:1}]);
+});
+
+test('exact accepted reference associates once for a current delegate without granting sending or requiring step-up', options, async()=>{
+  const f=await inboundFixture(); assert.equal((await send(f)).outcome,'ACCEPTED'); await receive(f);
+  const delegate=await person(); await db.user.update({where:{id:delegate.userId},data:{role:'direzione'}});
+  await db.userPermissionOverride.create({data:{userId:delegate.userId,permission:'practice_communications.mark_used',allowed:false}});
+  const item=(await inboundState(f)).items[0], before=await footprint(f);
+  const result=await associateStoredOrdinaryReply(db,delegate,item.id,runtime);
+  assert.deepEqual(await associateStoredOrdinaryReply(db,delegate,item.id,runtime),result);
+  const replies=(await read(f,delegate)).messages[0].replies;
+  assert.equal(replies.length,1); assert.equal(replies[0].body,f.message.body);
+  assert.equal(replies[0].messageId,f.saved.id); assert.equal(replies[0].acquiredById,delegate.userId);
+  assert.equal((await footprint(f)).rows.find(row=>row.kind==='decision')?.count,before.rows.find(row=>row.kind==='decision')?.count);
+  const audit=await db.auditLog.findFirstOrThrow({where:{entityId:result.replyId,event:'ordinary_email_inbound_linked'}});
+  assert.deepEqual(audit.after,{action:'link',itemId:`inbound_item_uuid_${item.id.replaceAll('-','')}`,
+    replyId:`inbound_reply_uuid_${result.replyId.replaceAll('-','')}`,evidenceHash:item.payloadHash});
+});
+
+test('unaccepted references, new senders and quoted CRM IDs remain private with no M4 association', options, async()=>{
+  for(const mode of ['unaccepted','sender','body'] as const) {
+    const f=await inboundFixture(); if(mode!=='unaccepted') await send(f);
+    if(mode==='sender') f.setItems([{providerId:'uid-1',message:{...f.message,sender:'foreign@invalid.test'}}]);
+    if(mode==='body') f.setItems([{providerId:'uid-1',message:{...f.message,inReplyTo:null,body:f.message.inReplyTo}}]);
+    await receive(f); const item=(await inboundState(f)).items[0];
+    await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+    assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  }
+});
+
+test('current archive, trash, sessions, permission, attachment and selective perimeter gate inbound association', options, async()=>{
+  for(const change of ['archive','trash','session','permission','document','selective'] as const) {
+    const f=await inboundFixture(); await send(f); await receive(f); const item=(await inboundState(f)).items[0];
+    if(change==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+    if(change==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
+    if(change==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+    if(change==='permission') {
+      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
+      await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission:'practice_communications.read',allowed:false}});
+    }
+    if(change==='document') await db.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+    if(change==='selective') {
+      const approver=await person();
+      await db.selectiveProjectGrant.create({data:{projectId:f.project.id,recipientId:f.actor.userId,approvedById:approver.userId,
+        revision:1,authorityRevision:1,keyVersion:key.version,selection:{},proof:'0'.repeat(64),approvedAt:new Date(),revokedAt:new Date()}});
+    }
+    await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+    assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  }
+});
+
+test('association audit failure or session expiry leaves no reply, link or native event', options, async()=>{
+  for(const mode of ['error','delay'] as const) {
+    const f=await inboundFixture(); await send(f); await receive(f); const item=(await inboundState(f)).items[0];
+    if(mode==='delay') await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt:new Date(Date.now()+400)}});
+    const before=await inboundState(f), events=await db.communicationEvent.count({where:{messageId:f.saved.id}});
+    await assert.rejects(associateStoredOrdinaryReply(fault(mode),f.actor,item.id,runtime));
+    assert.deepEqual(await inboundState(f),before);
+    assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+    assert.equal(await db.communicationEvent.count({where:{messageId:f.saved.id}}),events);
+  }
+});
+
+test('a new conflict hides an already linked reply from fresh reads while preserving original evidence', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f); const item=(await inboundState(f)).items[0];
+  const {replyId}=await associateStoredOrdinaryReply(db,f.actor,item.id,runtime);
+  assert.equal((await read(f)).messages[0].replies.length,1);
+  f.setItems([{providerId:'uid-1',message:{...f.message,body:'CONFLICT_PAYLOAD'}}]); await receive(f);
+  assert.equal((await read(f)).messages[0].replies.length,0);
+  assert.equal((await db.communicationReply.findUniqueOrThrow({where:{id:replyId}})).body,f.message.body);
+  await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+});
+
+function afterInboundAudit(event:string, action:()=>Promise<void>) {
+  return {$transaction:(work:(tx:Prisma.TransactionClient)=>Promise<unknown>,opts:object)=>db.$transaction(tx=>work(new Proxy(tx,{
+    get(target,property,receiver) {
+      if(property!=='auditLog') return Reflect.get(target,property,receiver);
+      return new Proxy(target.auditLog,{get(audit,member,auditReceiver) {
+        if(member!=='create') return Reflect.get(audit,member,auditReceiver);
+        return async(args:Prisma.AuditLogCreateArgs)=>{const row=await audit.create(args); if(args.data.event===event) await action(); return row;};
+      }});
+    },
+  })),opts)} as unknown as PrismaClient;
+}
+async function observeBlockedRevocation(work:(tx:Prisma.TransactionClient)=>Promise<unknown>) {
+  let pid=0, finished=false;
+  const pending=db.$transaction(async tx=>{
+    pid=(await tx.$queryRaw<Array<{pid:number}>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+    return work(tx);
+  },{timeout:10_000}).then(()=>{finished=true;});
+  let blocked=false;
+  for(let i=0;i<100&&!blocked;i++) {
+    if(pid) blocked=(await db.$queryRaw<Array<{blocked:boolean}>>`SELECT cardinality(pg_blocking_pids(${pid}::integer))>0 AS blocked`)[0].blocked;
+    if(!blocked) await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.equal(blocked,true); assert.equal(finished,false);
+  return {pending};
+}
+test('inbound audit holds native key and channel locks until commit; later requests observe revocation', options, async()=>{
+  for(const mode of ['key','channel'] as const) {
+    const f=await inboundFixture(); let revocation:{pending:Promise<void>}|undefined;
+    const database=afterInboundAudit('ordinary_email_inbound_batch',async()=>{
+      revocation=await observeBlockedRevocation(tx=>mode==='key'
+        ? rotatePrivilegedStepUpKeyVersion(tx,{version:key.version+1,keyDigest:privilegedStepUpKeyDigest('synthetic-new-key-after-inbound-000000000000'),actorUserId:f.actor.userId})
+        : tx.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`);
+    });
+    assert.equal((await receive(f,database)).insertedCount,1); await revocation?.pending;
+    await assert.rejects(receive(f)); assert.equal(f.calls(),1);
+  }
+});
+test('inbound association holds project locks through audit; an open session cannot read after archive', options, async()=>{
+  const f=await inboundFixture(); await send(f); await receive(f); const item=(await inboundState(f)).items[0];
+  let revocation:{pending:Promise<void>}|undefined;
+  const database=afterInboundAudit('ordinary_email_inbound_linked',async()=>{
+    revocation=await observeBlockedRevocation(tx=>tx.project.update({where:{id:f.project.id},data:{status:'archiviato'}}));
+  });
+  await associateStoredOrdinaryReply(database,f.actor,item.id,runtime); await revocation?.pending;
+  await assert.rejects(read(f)); await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),1);
 });
