@@ -10,6 +10,7 @@ import { createRegistrySessionToken, digestRegistrySessionToken } from '../../sr
 import { rotatePrivilegedStepUpKeyVersion } from '../../src/lib/application-key-registry';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import type { AuthSession } from '../../src/lib/auth';
+import { ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
 
 export async function nativeEmailFixture(db: PrismaClient) {
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.ORDINARY_EMAIL_BROWSER_CONFIRMED, '1');
@@ -28,7 +29,11 @@ export async function nativeEmailFixture(db: PrismaClient) {
   const actor = { userId: user.id, sessionId: session.id, role: 'admin', active: true, permissionOverrides: [], expiresAt: Math.floor(session.expiresAt.getTime() / 1000) } satisfies AuthSession;
   const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret };
   assert.equal(key.version, 10000);
-  await db.$transaction(tx => rotatePrivilegedStepUpKeyVersion(tx, { version: key.version, keyDigest: privilegedStepUpKeyDigest(secret), actorUserId: user.id }));
+  const registered = await db.applicationKeyVersion.findFirst({ where: { purpose: 'PRIVILEGED_STEP_UP', status: 'ACTIVE' } });
+  if (registered) {
+    assert.equal(registered.version, key.version);
+    assert.deepEqual(Buffer.from(registered.keyDigest), Buffer.from(privilegedStepUpKeyDigest(secret)));
+  } else await db.$transaction(tx => rotatePrivilegedStepUpKeyVersion(tx, { version: key.version, keyDigest: privilegedStepUpKeyDigest(secret), actorUserId: user.id }));
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente email sintetico' } });
   const project = await db.project.create({ data: { clientId: client.id, title: 'Progetto email sintetico' } });
   const practice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: project.id,
@@ -54,5 +59,18 @@ export async function nativeEmailFixture(db: PrismaClient) {
     to: ['destinatario@invalid.test'], cc: ['copia@invalid.test'], bcc: ['riservato@invalid.test'], subject: 'Anteprima email sintetica',
     body: 'TESTO SINTETICO ESATTO. Nessun invio reale.', attachmentVersionIds: [version.id], classification: 'ORDINARY' };
   const saved = await saveApprovedMessageDraft(db, actor, input);
-  return { user, other, actor, key, cookie: cookie.token, client, project, practice, doc, version, input, saved };
+  return { user, other, actor, key, cookie: cookie.token, client, project, practice, doc, version, input, saved, box };
+}
+
+export async function qualifyNativeTransport(db: PrismaClient, f: Awaited<ReturnType<typeof nativeEmailFixture>>) {
+  assert.equal(process.env.CI, 'true'); assert.equal(process.env.ORDINARY_EMAIL_BROWSER_CONFIRMED, '1');
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  assert.ok(process.env.DIRECT_EMAIL_TEST_SMTP_PASSWORD && process.env.DIRECT_EMAIL_TEST_SMTP_PASSWORD.length >= 32);
+  const [row] = await db.$queryRaw<Array<{ revision: number }>>`SELECT "revision" FROM "OrdinaryEmailChannel" WHERE "mailboxId"=${f.box.id}::uuid`;
+  const revision = row.revision + 1;
+  const qualification = ordinaryTransportQualificationReference({ purpose: 'ORDINARY_SMTP', mailboxId: f.box.id,
+    mailboxRevision: f.box.revision, address: 'comunicazioni@finanzaagevolaimpresa.it', providerReference: 'register_it', configurationReference: 'M4_COMUNICAZIONI_REGISTER_IT',
+    channelRevision: revision, qualificationReference: 'SYNTHETIC_PREPARATION_ONLY' }, f.key, process.env);
+  await db.$executeRaw`UPDATE "OrdinaryEmailChannel" SET "revision"=${revision},"qualificationReference"=${qualification}
+    WHERE "mailboxId"=${f.box.id}::uuid`;
 }

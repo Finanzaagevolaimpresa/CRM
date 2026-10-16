@@ -41,7 +41,7 @@ test('native preview and refusal bind the exact version, personal authority, cur
   await expect(exact).toContainText(f.version.id); await expect(exact).toContainText(f.doc.checksum!);
   await expect(exact.getByRole('button', { name: 'Rifiuta versione 1' })).toBeDisabled();
   await expect(exact.getByRole('link', { name: 'Conferma la tua identità' })).toBeVisible();
-  await expect(panel).toContainText('L’invio ordinario non è ancora abilitato');
+  await expect(panel).toContainText('Invio ordinario non disponibile per questa configurazione');
   expect(await panel.getByRole('button', { name: 'Approva e invia' }).count()).toBe(0);
   await other.goto(target); await expect(other.getByRole('region', { name: 'Decisione personale email', exact: true })).toHaveCount(0);
   expect(previewRequest).toBeTruthy();
@@ -124,7 +124,7 @@ test('native preview and refusal bind the exact version, personal authority, cur
   const proof = { synthetic: true, nativeNextActions: true, nativeLoginAndStepUp: true, samePersonTwoSessions: true, otherAdminDenied: true,
     wrongOriginDenied: true, exactPreview: true, localEditInvalidates: true, concurrentEditDenied: true, committedResponseLost: true,
     refusalPosts, replayDenied: true, refusalAudit: { rejectedVersion: 3, newVersion: 4 }, sessionRevoked: true,
-    projectArchived: true, ordinaryAttempts: 0, externalRequests, sendActionRegistered: false, screenshotsInspected: false };
+    projectArchived: true, ordinaryAttempts: 0, externalRequests, sendActionRegistered: true, sendAvailable: false, screenshotsInspected: false };
   await writeFile(path.join(evidence, 'native-ui-proof.json'), JSON.stringify(proof, null, 2));
   console.log('ORDINARY_NATIVE_UI_PROOF ' + JSON.stringify(proof));
   await context.close(); await otherContext.close(); await secondContext.close();

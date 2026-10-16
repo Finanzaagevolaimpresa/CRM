@@ -23,7 +23,9 @@ type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
 export type OrdinaryEmailStoreRuntime = { key: PrivilegedStepUpKey; readDocument?: typeof readPrivateDocumentBounded;
   /** Synchronous server configuration check; never supplied by a browser. */
-  assertTransport?: (channel: OrdinaryChannel) => void };
+  assertTransport?: (channel: OrdinaryChannel) => void;
+  /** Read-only UI hint. Sending still requires assertTransport at every gate. */
+  transportAvailable?: (channel: OrdinaryChannel) => boolean };
 type Runtime = OrdinaryEmailStoreRuntime;
 type Credentials = { sessionToken: string; stepUpToken: string | undefined };
 const uuid = z.string().uuid();
@@ -73,7 +75,8 @@ export async function previewStoredOrdinaryEmail(db: Db, claimed: AuthSession, m
     const state = await load(tx, claimed, messageId, runtime);
     if (!['DRAFT','PENDING','APPROVED','ERROR'].includes(state.row.state)) deny();
     return { ...previewOrdinaryDecision(state.material, state.current, runtime.key, await clock(tx)),
-      messageId: state.row.id, revision: state.row.currentRevision, snapshotHash: state.version.snapshotHash };
+      messageId: state.row.id, revision: state.row.currentRevision, snapshotHash: state.version.snapshotHash,
+      sendAvailable: runtime.transportAvailable?.(state.material.channel) === true };
   }, { timeout: 30_000 });
 }
 

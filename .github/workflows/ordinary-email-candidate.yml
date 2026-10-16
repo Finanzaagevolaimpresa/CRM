@@ -73,45 +73,20 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/ordinary-email/store-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/database.tap"
-          grep -Fx '# pass 48' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# pass 49' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
           sha256sum scripts/ordinary-email/storage-candidate.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
-      - name: Native browser preview and refusal on synthetic data only
+      - name: Native browser decisions through an isolated real TLS transport
         shell: bash
+        env:
+          ORDINARY_BROWSER_DB_CONTAINER: ${{ job.services['browser-postgres'].id }}
         run: |
           set -euo pipefail
           npx playwright install --with-deps chromium
-          for name in ORDINARY_EMAIL_BROWSER_PASSWORD PRIVILEGED_STEP_UP_SECRET; do
-            value="$(openssl rand -hex 32)"
-            echo "::add-mask::$value"
-            export "$name=$value"
-          done
-          export ORDINARY_EMAIL_BROWSER_EVIDENCE="$RUNNER_TEMP/ordinary-email"
-          export LOCAL_DOCUMENT_STORAGE_ROOT="$RUNNER_TEMP/ordinary-browser-documents"
-          # The store suite creates live synthetic sessions. Start the native
-          # browser on a separate fresh DB, preserving the zero-session startup
-          # gate rather than writing continuity proof or bypassing the guard.
-          export DATABASE_URL='postgresql://postgres:synthetic-ordinary-browser-only@127.0.0.1:5433/fai_crm_test?schema=public'
-          npm run prisma:migrate:deploy
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ordinary-email/storage-candidate.sql
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "InternalSession"')" = 0
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "User"')" = 0
-          mkdir -p "$LOCAL_DOCUMENT_STORAGE_ROOT"
-          npm run dev -- --hostname 127.0.0.1 --port 3036 > "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log" 2>&1 &
-          app_pid=$!
-          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
-          ready=0
-          for attempt in $(seq 1 60); do
-            if curl --fail --silent --max-time 2 http://127.0.0.1:3036/api/health >/dev/null; then ready=1; break; fi
-            if ! kill -0 "$app_pid" 2>/dev/null; then tail -n 30 "$ORDINARY_EMAIL_BROWSER_EVIDENCE/app.log"; exit 1; fi
-            sleep 1
-          done
-          test "$ready" = 1
-          npx playwright test --config tests/ordinary-email/playwright.config.ts
-          test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-ui-proof.json"
+          bash -n scripts/ordinary-email/qualify-native-browser.sh
+          bash scripts/ordinary-email/qualify-native-browser.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { previewOrdinaryEmailAction, rejectOrdinaryEmailAction } from '@/lib/ordinary-email-actions';
+import { confirmOrdinaryEmailAction, previewOrdinaryEmailAction, rejectOrdinaryEmailAction } from '@/lib/ordinary-email-actions';
 import { ordinaryPreviewMatches, type OrdinaryEmailPreview } from '@/lib/ordinary-email-ui-contract';
 
 const button = 'rounded-xl border px-4 py-2 font-bold disabled:cursor-not-allowed disabled:opacity-50';
@@ -17,9 +17,10 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
   const router = useRouter(), epoch = useRef(0), busyRef = useRef(false);
   const [preview, setPreview] = useState<OrdinaryEmailPreview | null>(null);
   const [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [confirmed, setConfirmed] = useState(false);
+  const [sendConfirmed, setSendConfirmed] = useState(false);
   const [checkCurrent, setCheckCurrent] = useState(false), [notice, setNotice] = useState('');
   useEffect(() => {
-    function invalidate() { epoch.current++; setPreview(null); setConfirmed(false); }
+    function invalidate() { epoch.current++; setPreview(null); setConfirmed(false); setSendConfirmed(false); }
     const timer = preview ? window.setTimeout(() => { invalidate(); setNotice('Anteprima scaduta. Aprila di nuovo per verificare la versione corrente.'); }, Math.max(0, new Date(preview.expiresAt).getTime() - Date.now())) : undefined;
     function hidden() { if (document.visibilityState === 'hidden') invalidate(); }
     function restored(event: PageTransitionEvent) { if (event.persisted) invalidate(); }
@@ -29,7 +30,7 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
 
   async function openPreview() {
     if (!ready || busyRef.current || dirty || checkCurrent || !shown.eligible) return;
-    busyRef.current = true; setBusy(true); setConfirmed(false); setPreview(null); setNotice('');
+    busyRef.current = true; setBusy(true); setConfirmed(false); setSendConfirmed(false); setPreview(null); setNotice('');
     const started = ++epoch.current;
     try {
       const result = await previewOrdinaryEmailAction({ messageId: shown.messageId });
@@ -45,7 +46,7 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
   async function refuse() {
     if (busyRef.current || dirty || checkCurrent || !confirmed || !shown.stepUpActive || !preview
       || !ordinaryPreviewMatches(preview, shown, Date.now())) return;
-    busyRef.current = true; setBusy(true); setConfirmed(false);
+    busyRef.current = true; setBusy(true); setConfirmed(false); setSendConfirmed(false);
     // Discard the proof before the mutation. Failure/lost response never offers
     // a retry; only a fresh page/current persisted revision can start again.
     setPreview(null); setCheckCurrent(true); ++epoch.current;
@@ -59,9 +60,26 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
     finally { busyRef.current = false; setBusy(false); }
   }
 
+  async function send() {
+    if (busyRef.current || dirty || checkCurrent || !sendConfirmed || !shown.stepUpActive || !preview?.sendAvailable
+      || !ordinaryPreviewMatches(preview, shown, Date.now())) return;
+    busyRef.current = true; setBusy(true); setConfirmed(false); setSendConfirmed(false);
+    setPreview(null); setCheckCurrent(true); ++epoch.current;
+    try {
+      const result = await confirmOrdinaryEmailAction({ messageId: shown.messageId, requestId: crypto.randomUUID(),
+        previewToken: preview.token, personalConfirmation: 'APPROVO_E_INVIO_IL_MESSAGGIO_ESATTO' });
+      setNotice(result.status === 'CHECK_CURRENT' ? 'Esito da verificare. Aggiorna la comunicazione e consulta le ricevute. Non ripetere l’invio.'
+        : result.outcome === 'ACCEPTED' ? 'Accettata dal server. Consulta la ricevuta: non certifica la consegna o la lettura.'
+        : result.outcome === 'NOT_SENT' ? 'Invio non avvenuto. Consulta la ricevuta prima di una nuova decisione.'
+        : 'Esito incerto. Consulta la ricevuta e non ripetere l’invio.');
+      if (result.status === 'RECORDED') router.refresh();
+    } catch { setNotice('Risposta non ricevuta. Aggiorna la comunicazione e consulta le ricevute. L’invio non verrà ripetuto automaticamente.'); }
+    finally { busyRef.current = false; setBusy(false); }
+  }
+
   return <div data-ordinary-ready={String(ready)} onInputCapture={event => {
     if (!(event.target instanceof Element) || !event.target.closest('form[data-message-draft]')) return;
-    epoch.current++; setDirty(true); setPreview(null); setConfirmed(false);
+    epoch.current++; setDirty(true); setPreview(null); setConfirmed(false); setSendConfirmed(false);
     setNotice('Modifiche non salvate: salva la nuova versione prima di aprire un’altra anteprima.');
   }}>
     {children}
@@ -85,12 +103,18 @@ export function OrdinaryEmailReview({ children, ...shown }: Props) {
         <p className="text-sm">Anteprima valida fino a <time dateTime={preview.expiresAt}>{new Date(preview.expiresAt).toLocaleTimeString('it-IT')}</time>. Ogni modifica richiede una nuova verifica.</p>
         <details className="text-xs break-all"><summary>Impronta della versione</summary>{preview.snapshotHash}</details>
         <p className="text-sm">Il rifiuto conserva questa versione e le sue approvazioni. Il messaggio torna in una nuova bozza da approvare.</p>
-        {!shown.stepUpActive ? <p className="text-sm"><Link className="font-bold underline" href="/settings/security">Conferma la tua identità</Link> prima di rifiutare, poi riapri questa anteprima.</p> : null}
+        {!shown.stepUpActive ? <p className="text-sm"><Link className="font-bold underline" href="/settings/security">Conferma la tua identità</Link> prima di decidere, poi riapri questa anteprima.</p> : null}
+        {preview.sendAvailable ? <div className="grid gap-3 rounded-xl border p-3">
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={sendConfirmed} disabled={!shown.stepUpActive || busy}
+            onChange={event => { setSendConfirmed(event.target.checked); setConfirmed(false); }} />Approvo e invio personalmente questa versione esatta, inclusi mittente, destinatari, testo e allegati.</label>
+          <button type="button" className={button} disabled={!sendConfirmed || !shown.stepUpActive || busy || dirty || checkCurrent} onClick={send}>Approva e invia</button>
+          <p className="text-sm">Verrà eseguito un solo tentativo. Una ricevuta del server non certifica consegna o lettura.</p>
+        </div> : <p className="text-sm">Invio ordinario non disponibile per questa configurazione. Puoi rifiutare la versione se autorizzato.</p>}
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} disabled={!shown.stepUpActive || busy}
-          onChange={event => setConfirmed(event.target.checked)} />Rifiuto personalmente questa versione esatta.</label>
+          onChange={event => { setConfirmed(event.target.checked); setSendConfirmed(false); }} />Rifiuto personalmente questa versione esatta.</label>
         <button type="button" className={button} disabled={!confirmed || !shown.stepUpActive || busy || dirty || checkCurrent} onClick={refuse}>Rifiuta versione {preview.revision}</button>
       </section> : null}
-      <p className="text-sm text-slate-600">L’invio ordinario non è ancora abilitato. L’anteprima e il rifiuto non inviano messaggi.</p>
+      <p className="text-sm text-slate-600">L’anteprima e il rifiuto non inviano messaggi. L’invio richiede la tua decisione sulla versione esatta e un canale attualmente qualificato.</p>
     </section> : null}
   </div>;
 }

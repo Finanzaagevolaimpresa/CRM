@@ -1,6 +1,6 @@
 # Trasporto esistente e qualifica ordinaria — R01
 
-PR192 resta un candidato separato. Il nuovo collegamento server è privato: nessuna action di invio, nuovo binding, canale attivato, worker o scheduler. Il flusso browser attuale espone anteprima/rifiuto e ricevute. Il prossimo incremento deve qualificare la conferma/invio nel browser prima di esporla.
+PR192 resta un candidato separato. La action personale di invio usa il collegamento server al trasporto esistente, con disponibilità corrente nell’anteprima e controlli transazionali invariati. Nessun binding, canale reale, worker o scheduler viene attivato. La prova browser TLS sintetica è descritta in ORDINARY_EMAIL_UI_R01.md; esito da attribuire all’HEAD corrente.
 
 ## Riferimenti riconciliati
 
@@ -26,6 +26,6 @@ La qualifica non sostituisce identità personale, step-up, sessione corrente, pe
 
 ## Prove e residui
 
-Sette nuove prove locali verificano distinzione dal diagnostico, riferimenti esatti, rotazioni, assenza di fallback, limiti, mancata esposizione dei segreti e uso singolo del trasporto. Otto prove PostgreSQL aggiuntive usano decisione/prenotazione/audit effettivi: sorgente non qualificata, invio sintetico completo, assenza/cambi prima della prenotazione, cambio dopo audit con rollback, dopo connessione e dopo354, nuova qualifica con anteprima obsoleta, cancellazione/deadline. La suite totale ha 48 casi DB; esiti da attribuire all'HEAD esatto della CI.
+Sette nuove prove locali verificano distinzione dal diagnostico, riferimenti esatti, rotazioni, assenza di fallback, limiti, mancata esposizione dei segreti e uso singolo del trasporto. Otto prove PostgreSQL aggiuntive usano decisione/prenotazione/audit effettivi: sorgente non qualificata, invio sintetico completo, assenza/cambi prima della prenotazione, cambio dopo audit con rollback, dopo connessione e dopo354, nuova qualifica con anteprima obsoleta, cancellazione/deadline. Un ulteriore caso verifica disponibilità read-only e rifiuto ammesso quando la sorgente cambia. La suite totale ha 49 casi DB; esiti da attribuire all'HEAD esatto della CI.
 
-Restano UI di invio e relativo browser con provider sintetico, ricezione autenticata/cursori e riferimenti operativi, qualifica ordinaria reale, autorità sul binding email distinto e piano SQL/target/recuperabilità. Nessun invio reale senza decisione personale sulla versione esatta. PR191 precede l'integrazione; nessun rollback a codice che ignori perimetri o tentativi.
+UI di invio e browser TLS sintetico sono integrati nel candidato. Restano ricezione autenticata/cursori e riferimenti operativi, qualifica ordinaria reale, autorità sul binding email distinto e piano SQL/target/recuperabilità. Nessun invio reale senza decisione personale sulla versione esatta. PR191 precede l'integrazione; nessun rollback a codice che ignori perimetri o tentativi.

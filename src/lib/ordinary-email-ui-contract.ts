@@ -2,6 +2,8 @@ import type { previewStoredOrdinaryEmail } from './ordinary-email-store-candidat
 export type OrdinaryEmailPreview = Awaited<ReturnType<typeof previewStoredOrdinaryEmail>>;
 export type OrdinaryEmailPreviewResult = { status: 'READY'; preview: OrdinaryEmailPreview } | { status: 'UNAVAILABLE' };
 export type OrdinaryEmailRefusalResult = { status: 'REJECTED'; revision: number } | { status: 'CHECK_CURRENT' };
+export type OrdinaryEmailSendResult = { status: 'RECORDED'; outcome: 'ACCEPTED' | 'NOT_SENT' | 'UNCERTAIN' }
+  | { status: 'CHECK_CURRENT' };
 
 /** A stale page cannot present a fresh response as its previously shown draft.
  * This is a UI guard only; the server always verifies current state again. */

@@ -18,7 +18,7 @@ import type { connect } from 'node:tls';
 import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-email-service-candidate';
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
 import { confirmStoredOrdinaryEmailUsingExistingTransport } from '../../src/lib/ordinary-email-runtime-candidate';
-import { ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
+import { createOrdinaryTransportResolver, ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -676,6 +676,30 @@ async function qualifyExistingSource(f: Fixture, env: Record<string,string|undef
   await db.$executeRaw`UPDATE "OrdinaryEmailChannel" SET "revision"=${channel.channelRevision},
     "qualificationReference"=${qualification} WHERE "mailboxId"=${f.box.id}::uuid`;
 }
+
+test('preview transport availability is current, read-only and does not disable an admitted refusal', options, async () => {
+  const f = await fixture(), env = sourceEnvironment();
+  const probe = () => {
+    const resolver = createOrdinaryTransportResolver(key, { readEnvironment: () => env, connectTls: (() => { throw new Error('NO_SOCKET'); }) as typeof connect });
+    return previewStoredOrdinaryEmail(db, f.actor, f.saved.id, { ...runtime, transportAvailable: channel => {
+      try { resolver.assertChannel(channel); return true; } catch { return false; }
+    } });
+  };
+  const before = await footprint(f);
+  assert.equal((await probe()).sendAvailable, false);
+  assert.deepEqual(await footprint(f), before);
+  await qualifyExistingSource(f, env);
+  const qualified = await footprint(f);
+  assert.equal((await probe()).sendAvailable, true);
+  assert.deepEqual(await footprint(f), qualified);
+  env.DIRECT_EMAIL_TEST_SMTP_PASSWORD += '_CHANGED';
+  const stale = await probe();
+  assert.equal(stale.sendAvailable, false);
+  assert.deepEqual(await footprint(f), qualified);
+  const rejected = await rejectStoredOrdinaryEmail(db, f.actor, { messageId: f.saved.id, expectedRevision: stale.revision,
+    snapshotHash: stale.snapshotHash, personalConfirmation: 'RIFIUTO_QUESTA_VERSIONE' }, f.credentials, runtime);
+  assert.equal(rejected.revision, 2);
+});
 async function sendExistingSource(f:Fixture, env:Record<string,string|undefined>, transport=syntheticTransport(), database=db,
   token?:string, control={deadline:performance.now()+14_000,signal:new AbortController().signal}) {
   return confirmStoredOrdinaryEmailUsingExistingTransport(database,f.actor,

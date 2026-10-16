@@ -10,9 +10,10 @@ import { assertOrdinaryEmailRequestOrigin, ordinaryEmailPreviewInput, ordinaryEm
 import { internalSessionMode } from './session';
 import { privilegedAccessMode } from './application-security-policy';
 import { readOrdinaryEmailUiAuthority } from './ordinary-email-ui-authority';
+import { createOrdinaryTransportResolver } from './ordinary-email-transport-binding';
 
-/** Native server adapter for preview/refusal and private send composition.
- * No send action or provider activation. Actions pass only strict input;
+/** Native server adapter. No binding or channel is activated here.
+ * Actions pass only strict input;
  * server identity/credentials never come from its form or previous UI state. */
 async function nativeRequest(action?: 'ORDINARY_EMAIL_CONFIRM_SEND' | 'ORDINARY_EMAIL_REJECT') {
   const session = await requirePermission('practice_communications.read');
@@ -37,7 +38,11 @@ export async function ordinaryEmailUiAuthorityFromRequest(session: AuthSession) 
 
 export async function previewOrdinaryEmailFromRequest(raw: unknown) {
   const input = ordinaryEmailPreviewInput.parse(raw), admitted = await nativeRequest();
-  return previewStoredOrdinaryEmail(prisma, admitted.session, input.messageId, admitted.runtime);
+  const resolver = createOrdinaryTransportResolver(admitted.runtime.key, { readEnvironment: () => process.env, connectTls: connect });
+  return previewStoredOrdinaryEmail(prisma, admitted.session, input.messageId, { ...admitted.runtime,
+    transportAvailable: channel => {
+      try { resolver.assertChannel(channel); return true; } catch { return false; }
+    } });
 }
 
 export async function confirmOrdinaryEmailFromRequest(raw: unknown) {
