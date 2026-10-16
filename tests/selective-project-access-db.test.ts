@@ -10,6 +10,7 @@ import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
 import { canViewProject, canEditProject, canViewDocument, canEditService, canEditTask, canViewCommercialOffer, canEditCommercialOffer } from '../src/lib/access-control';
 import { canViewPaymentListRecord } from '../src/lib/business-list-access';
 import { declareContractSignature } from '../src/lib/contract-signature';
+import { handoffPurchasedService } from '../src/lib/purchased-service-handoff';
 import { acceptResponsibility, savePracticeResponsibility } from '../src/lib/responsibility';
 import { selectiveProof } from '../src/lib/selective-project-proof';
 import { canonicalSha256 } from '../src/lib/canonical-json';
@@ -241,5 +242,11 @@ test('P2-04 shared contract stays private without restricting another project se
     assert.equal(canEditTask(current, { ...f.otherTask, client: f.client, project, clientService }), true);
     assert.equal(canViewDocument(current, { ...f.otherDocument.doc, client: f.client, project, clientService }), true);
     assert.equal(canViewDocument(current, { ...f.documents[2].doc, client: f.client, project: { ...f.project, client: f.client } }), false);
+    const audits = await db.auditLog.count();
+    await assert.rejects(db.$transaction(tx => handoffPurchasedService(tx, f.reader.session, { serviceId: f.otherService.id,
+      expectedHash: '0'.repeat(64), technicalOwnerId: f.otherAdmin.user.id, departmentCode: 'SYNTHETIC', variantCode: 'SYNTHETIC',
+      dueDate: new Date().toISOString(), activities: ['Synthetic activity'], confirmed: true, reason: 'Synthetic stale handoff' }, true)),
+    /Dati contrattuali non disponibili/);
+    assert.equal(await db.auditLog.count(), audits);
   }
 });

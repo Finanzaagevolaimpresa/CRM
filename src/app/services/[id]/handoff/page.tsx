@@ -29,8 +29,10 @@ export default async function Page({ params, searchParams }: {
     clientService: { ...service, client, project: project ? { ...project, client } : null },
   }))) notFound();
   const path = `/services/${id}/handoff`;
-  const canViewContracts = hasPermission(session, 'contract.read');
-  const canViewPayments = hasPermission(session, 'payment.read');
+  const restrictedContract = [service.contractId, entry?.receipt.contractId].some(contractId =>
+    Boolean(contractId && session.selectiveContractIds?.includes(contractId)));
+  const canViewContracts = !restrictedContract && hasPermission(session, 'contract.read');
+  const canViewPayments = !restrictedContract && hasPermission(session, 'payment.read');
   if (entry) {
     const receipt = entry.receipt;
     const sources = receipt.source.filter(source => source.kind === 'contract' ? canViewContracts : canViewPayments);
@@ -64,6 +66,8 @@ export default async function Page({ params, searchParams }: {
       </Card>}
     </div>;
   }
+  if (restrictedContract) return <Card title="Passaggio non disponibile"><p>I dati contrattuali non sono disponibili per questo accesso.</p>
+    <Link href={`/clients/${client.id}#servizi-acquistati`}>Torna al servizio acquistato</Link></Card>;
   let preview: Awaited<ReturnType<typeof previewPurchasedServiceHandoff>>;
   try { preview = await previewPurchasedServiceHandoff(prisma, id); }
   catch (error) { if (!(error instanceof UserFacingActionError)) throw error;

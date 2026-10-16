@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { PrismaClient, type RoleCode } from '@prisma/client';
+import { PrismaClient, type RoleCode, type Document, type DocumentVersion } from '@prisma/client';
 import { createInternalSession } from '../../src/lib/internal-session-registry';
 import { createRegistrySessionToken, digestRegistrySessionToken } from '../../src/lib/session';
 import type { AuthSession } from '../../src/lib/auth';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { saveApprovedMessageDraft } from '../../src/lib/approved-communications';
+import { canonicalSha256 } from '../../src/lib/canonical-json';
+import { handoffReceipt } from '../../src/lib/purchased-service-handoff';
 
 export async function syntheticPerson(db: PrismaClient, name: string, role: RoleCode = 'admin', passwordHash = 'synthetic-not-for-login') {
   const user = await db.user.create({ data: { name, role, passwordHash, email: `${randomUUID()}@selective.invalid.test` } });
@@ -31,7 +33,7 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente sintetico condiviso', consultantId: reader.user.id, salesOwnerId: reader.user.id } });
   const project = await db.project.create({ data: { clientId: client.id, consultantId: reader.user.id, title: 'Progetto sintetico selettivo', description: 'DESCRIZIONE_ESCLUSA_SINTETICA', scenarioA: 'NOTA_PRIVATA_ESCLUSA_SINTETICA', totalInvestment: 180000, requestedAmount: 90000 } });
   const otherProject = await db.project.create({ data: { clientId: client.id, title: 'Altro fascicolo invariato', scenarioA: 'ALTRO_FASCICOLO' } });
-  const documents = [];
+  const documents: { doc: Document; version: DocumentVersion; bytes: Buffer }[] = [];
   for (let index = 1; index <= 3; index++) {
     const bytes = Buffer.from(`CONTENUTO_SINTETICO_DOCUMENTO_${index}`), checksum = createHash('sha256').update(bytes).digest('hex');
     const doc = await db.document.create({ data: { clientId: client.id, projectId: project.id, title: `Documento sintetico ${index}`, fileName: `sintetico-${index}.txt`,
@@ -42,7 +44,7 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
   // A financial record can be linked through a service even when its own
   // projectId is null. Its misleadingly classified document stays private.
   const contract = await db.contract.create({ data: { clientId: client.id, contractNumber: `CONTRATTO_ESCLUSO_${randomUUID()}`,
-    serviceName: 'COMPENSO_FAI_ESCLUSO', taxableAmount: 7777, vatAmount: 1710.94, totalAmount: 9487.94,
+    serviceName: 'COMPENSO_FAI_ESCLUSO', serviceDescription: 'PERIMETRO_CONTRATTO_ESCLUSO', taxableAmount: 7777, vatAmount: 1710.94, totalAmount: 9487.94,
     notes: 'MARGINE_PRIVATO_ESCLUSO', signedDocumentId: documents[2].doc.id } });
   const payment = await db.payment.create({ data: { contractId: contract.id, clientId: client.id, taxableAmount: 7777,
     vatAmount: 1710.94, totalAmount: 9487.94, method: 'PAGAMENTO_ESCLUSO', notes: 'NOTA_PAGAMENTO_ESCLUSA' } });
@@ -80,6 +82,18 @@ export async function syntheticSharingCase(db: PrismaClient, admin: Awaited<Retu
     title: 'Pratica tecnica A', practiceType: 'synthetic', targetEntity: 'synthetic', technicalOwnerId: reader.user.id, createdById: admin.user.id } });
   const otherPractice = await db.technicalPractice.create({ data: { clientId: client.id, projectId: otherProject.id, clientServiceId: otherService.id,
     title: 'Pratica tecnica B', practiceType: 'synthetic', targetEntity: 'synthetic', technicalOwnerId: reader.user.id, createdById: admin.user.id } });
+  // Historical receipt remains after a contract has become shared. Its
+  // financial context must not be exposed through B's still-authorized work.
+  const historicalReceipt = handoffReceipt.parse({ type: 'R05_PURCHASED_SERVICE_HANDOFF_V1', version: 1,
+    clientId: client.id, projectId: otherProject.id, clientServiceId: otherService.id, technicalPracticeId: otherPractice.id,
+    serviceCatalogId: catalog.id, variantCode: 'SYNTHETIC', contractId: contract.id, contractHash: 'a'.repeat(64),
+    paymentId: payment.id, paymentHash: 'b'.repeat(64), scopeHash: canonicalSha256(contract.serviceDescription),
+    sourceFingerprint: 'c'.repeat(64), fingerprint: 'd'.repeat(64), technicalOwnerId: reader.user.id, departmentCode: 'SYNTHETIC',
+    decisionId: 'synthetic-historical-decision', source: ['contract', 'payment'].map(kind => ({ id: documents[2].doc.id,
+      documentVersionId: documents[2].version.id, version: 1, checksumHash: documents[2].version.checksum, kind })),
+    paths: [otherTask.id], dueAt: new Date().toISOString(), confirmed: true, reason: 'Synthetic historical receipt' });
+  await db.auditLog.create({ data: { event: 'purchased_service_handoff', entityType: 'TechnicalPractice', entityId: otherPractice.id,
+    actorId: admin.user.id, after: historicalReceipt } });
   const mailbox = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
   const messages = [];
   for (const practice of [technicalPractice, otherPractice]) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canViewProject, canViewService, canViewDocument, canEditProject, canAssignService, canViewTask, canViewTechnicalPractice } from '../src/lib/access-control';
+import { canViewProject, canViewService, canViewDocument, canEditProject, canAssignService, canViewTask, canViewTechnicalPractice, canEditTechnicalPractice } from '../src/lib/access-control';
 import { projectFieldProjection, selectiveSelectionSchema, hasSelectiveContext, selectiveAuditAllowed } from '../src/lib/selective-project-policy';
 import { selectiveProof, verifySelectiveProof } from '../src/lib/selective-project-proof';
 
@@ -19,6 +19,8 @@ test('selection limits Admin, assignments, client grants and permission override
       containsSensitiveData: false, documentCategory: 'altro', type: 'text/plain', project, client, clientService: service } as Parameters<typeof canViewDocument>[1]), false);
     assert.equal(canViewTask(actor, { assignedToId: actor.userId, createdById: actor.userId, clientId: client.id, project, client }), false);
     assert.equal(canViewTechnicalPractice(actor, { clientId: client.id, client, project, technicalOwnerId: actor.userId }), false);
+    assert.equal(canEditTechnicalPractice(actor, { projectId: project.id, technicalOwnerId: actor.userId }), false);
+    assert.equal(canEditTechnicalPractice(actor, { projectId: null, clientService: service, technicalOwnerId: actor.userId }), false);
   }
   assert.equal(canViewProject({ userId: 'recipient', role: 'admin', ...scope }, { ...project, id: 'other-project' }), true);
 });

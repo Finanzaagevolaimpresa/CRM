@@ -29,6 +29,7 @@ test('personal confirmation, exact preview, recipient routes and revocation with
   await login(admin, fixture.emails.admin); await login(recipient, fixture.emails.recipient); await login(other, fixture.emails.other);
   const beforeAudit = await rc.request.get('/audit-log');
   for (const id of [fixture.restrictedMessageId, fixture.otherMessageId, fixture.replyId]) expect(await beforeAudit.text()).toContain(id);
+  expect(await (await rc.request.get(`/services/${fixture.otherServiceId}/handoff`)).text()).toContain('PERIMETRO_CONTRATTO_ESCLUSO');
   const manage = `/projects/${fixture.projectId}/share`, shared = `/shared-projects/${fixture.projectId}`;
   expect((await oc.request.get(manage)).status()).toBe(404);
   expect((await rc.request.get(manage)).status()).toBe(404);
@@ -61,6 +62,12 @@ test('personal confirmation, exact preview, recipient routes and revocation with
     for (const marker of ['COMPENSO_FAI_ESCLUSO', 'MARGINE_PRIVATO_ESCLUSO', 'Documento sintetico 3', 'TASK_PROGETTO_ESCLUSO']) expect(html).not.toContain(marker);
     const otherDocument = await rc.request.get(`/documents/${fixture.otherDocumentId}/download`);
     expect(otherDocument.status()).toBe(200); expect(await otherDocument.text()).toBe('DOCUMENTO_B_CONTRATTO_COMUNE');
+    const handoff = await rc.request.get(`/services/${fixture.otherServiceId}/handoff`);
+    expect(handoff.status()).toBe(200);
+    const handoffHtml = await handoff.text();
+    expect(handoffHtml).toContain('TASK_B_CONTRATTO_COMUNE');
+    expect(handoffHtml).not.toContain('PERIMETRO_CONTRATTO_ESCLUSO');
+    expect(handoffHtml).not.toContain('Documenti del passaggio');
   }
   await assertM4AndOtherProject();
   await recipient.goto(shared); const view = recipient.getByRole('region', { name: 'Progetto condiviso' });
