@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import type { AuthSession } from '../../src/lib/auth';
 import { assertAiOrchestratorEphemeralDatabaseIdentity, assertAiOrchestratorEphemeralDbTestConfiguration } from '../db/ai-orchestrator-db-test-guard';
@@ -11,7 +11,7 @@ import { previewStoredOrdinaryEmail, reserveStoredOrdinaryEmail, takeStoredOrdin
   checkStoredOrdinaryEmailLease, recordStoredOrdinaryEmailOutcome } from '../../src/lib/ordinary-email-store-candidate';
 import { prepareOrdinaryEmail, type OrdinaryChannel } from '../../src/lib/ordinary-email-candidate';
 import { approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
-import { canonicalSha256 } from '../../src/lib/canonical-json';
+import { canonicalJson, canonicalSha256 } from '../../src/lib/canonical-json';
 import type { connect } from 'node:tls';
 import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-email-service-candidate';
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
@@ -121,11 +121,19 @@ test('ordinary store keeps schema50 and has a real native minimizer', options, a
   assert.equal(value.present,true);
 });
 test('exact reservation and native audit commit together without bodies or addresses', options, async () => {
-  const f = await fixture(), shown = await preview(f), reservation = await reserve(f,shown.token);
+  const f = await fixture(), shown = await preview(f);
+  // Reissue this synthetic preview with the test-only key and the numeric UUID
+  // that exposed a native phone-redaction collision. No production key is used.
+  const payload=JSON.parse(Buffer.from(shown.token.split('.')[1],'base64url').toString('utf8'));
+  payload.decisionId='06505798-e87d-4080-a15b-7cd84d47cdf7';
+  const serialized=canonicalJson(payload);
+  shown.token=`oe1.${Buffer.from(serialized).toString('base64url')}.${createHmac('sha256',key.secret).update(`fai.ordinary-email.preview.v1\n${serialized}`).digest('hex')}`;
+  const reservation = await reserve(f,shown.token);
   assert.deepEqual(shown.summary.bcc,f.input.bcc);
   const row = await db.auditLog.findFirstOrThrow({ where: { entityId: f.saved.id, event: 'ordinary_email_reserved' } });
   const [decision] = await db.$queryRaw<Array<{ decisionHash: string }>>`SELECT "decisionHash" FROM "OrdinaryEmailDecision" WHERE "id"=${reservation.decisionId}::uuid`;
-  assert.deepEqual(row.after,{ action:'reserved',decisionId:reservation.decisionId,attemptId:reservation.attemptId,evidenceHash:decision.decisionHash,status:'RESERVED' });
+  assert.deepEqual(row.after,{ action:'reserved',decisionId:'ordinary_decision_uuid_06505798e87d4080a15b7cd84d47cdf7',
+    attemptId:`ordinary_attempt_uuid_${reservation.attemptId.replaceAll('-','')}`,evidenceHash:decision.decisionHash,status:'RESERVED' });
   for (const secret of [f.input.body,...f.input.to,...f.input.bcc,f.credentials.sessionToken,key.secret]) assert.ok(!JSON.stringify(row).includes(secret));
   assert.equal((await footprint(f)).message.state,'SENDING');
 });

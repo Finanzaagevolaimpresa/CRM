@@ -14,7 +14,7 @@ Il messaggio M4 passa a `SENDING` nella prenotazione per serializzare il percors
 
 La ricevuta privata del server può essere registrata dopo scadenza o revoca: conserva l'esito di un invio già tentato, senza consentire una nuova trasmissione. Un errore di audit annulla tutte le scritture della relativa transazione; se avviene dopo il trasporto, rimangono `CLAIMED/SENDING`, che impediscono altri invii. Una risposta persa al commit non è un'autorizzazione a consumare nuovamente. Registrare di nuovo la stessa ricevuta è idempotente, cambiarla è respinto.
 
-L'audit nativo conserva effettivamente `action`, `decisionId`, `attemptId`, `evidenceHash`, `status`; il tipo/ID dell'entità restano quelli M4 per riusare la visibilità esistente. I test confrontano il JSON letto dopo il minimizzatore PostgreSQL e verificano l'assenza di corpo, indirizzi, cookie e chiavi. La decisione contiene solo riferimenti e hash; nessun testo o segreto viene copiato nelle nuove tabelle.
+L'audit nativo conserva `action`, `decisionId`, `attemptId`, `evidenceHash`, `status`; il tipo/ID dell'entità restano quelli M4 per riusare la visibilità esistente. I due riferimenti UUID usano rispettivamente `ordinary_decision_uuid_<32cifrehex>` e `ordinary_attempt_uuid_<32cifrehex>`, senza trattini: mantengono integralmente l'identità ed evitano che un prefisso numerico venga scambiato per telefono dal minimizzatore. Il trigger nativo resta invariato. I test confrontano il JSON dopo il trigger, incluso un UUID numerico avverso riproducibile, e verificano l'assenza di corpo, indirizzi, cookie e chiavi. Nessun testo o segreto viene copiato nelle nuove tabelle.
 
 ## Qualifica e residui
 

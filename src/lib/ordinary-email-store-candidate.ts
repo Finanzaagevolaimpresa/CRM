@@ -44,7 +44,12 @@ async function load(tx: Tx, claimed: AuthSession, messageId: string, runtime: Ru
 async function audit(tx: Tx, actorId: string, messageId: string, action: string, decisionId: string, attemptId: string,
   evidenceHash: string, status: string) {
   await tx.auditLog.create({ data: { actorId, entityType: 'ApprovedCommunication', entityId: messageId,
-    event: `ordinary_email_${action}`, after: { action, decisionId, attemptId, evidenceHash, status } } });
+    // Typed delimiter-free UUIDs preserve every bit without phone-like word
+    // boundaries in the native minimizer; do not weaken that minimizer.
+    event: `ordinary_email_${action}`, after: { action,
+      decisionId: `ordinary_decision_uuid_${uuid.parse(decisionId).replaceAll('-','').toLowerCase()}`,
+      attemptId: `ordinary_attempt_uuid_${uuid.parse(attemptId).replaceAll('-','').toLowerCase()}`,
+      evidenceHash, status } } });
 }
 
 export async function previewStoredOrdinaryEmail(db: Db, claimed: AuthSession, messageId: string, runtime: Runtime) {
