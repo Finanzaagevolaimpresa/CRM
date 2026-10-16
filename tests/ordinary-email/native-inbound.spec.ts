@@ -63,7 +63,7 @@ test('native received reply becomes a separately approved draft with current sco
   await expect(form.locator('[name="mailboxId"]')).toHaveValue('');
   expect(await form.locator('input[name="attachmentVersionId"]:checked').count()).toBe(0);
   expect(await db.approvedCommunication.count({where:{technicalPracticeId:f.practice.id}})).toBe(1);
-  await form.getByLabel('Mittente',{exact:true}).selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
+  await form.locator('select[name="mailboxId"]').selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
   await form.getByLabel('A · indirizzi separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
   await form.getByLabel('Oggetto',{exact:true}).fill('Nuova risposta da valutare'); await form.getByLabel('Testo esatto',{exact:true}).fill('TESTO NUOVO SCRITTO ESPLICITAMENTE');
   const draftId=await form.locator('input[name="messageId"]').inputValue();
@@ -91,7 +91,7 @@ test('native received reply becomes a separately approved draft with current sco
 
   const sourceUrl=target+'&reply='+linked.id;
   await page.goto(sourceUrl); await expect(form).toBeVisible(); await f.conflict();
-  await form.getByLabel('Mittente',{exact:true}).selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
+  await form.locator('select[name="mailboxId"]').selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
   await form.getByLabel('A · indirizzi separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
   await form.getByLabel('Oggetto',{exact:true}).fill('Stale conflict'); await form.getByLabel('Testo esatto',{exact:true}).fill('STALE FORM MUST FAIL');
   await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=DENIED/);
