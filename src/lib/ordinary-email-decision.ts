@@ -22,6 +22,8 @@ export type OrdinaryDecisionCurrentState = {
   authority: OrdinaryEmailAuthorityCandidate;
   /** Hash of the currently locked ABAC/lifecycle context, never from a form. */
   contextHash: string;
+  /** Earliest expiry of the locked authorized materials, when present. */
+  contextExpiresAt?: Date;
 };
 type Material = { snapshot: ApprovedMessageSnapshot; channel: OrdinaryChannel; materials: Map<string, Buffer> };
 const previewSchema = z.object({
@@ -51,7 +53,8 @@ function assertCurrent(state: OrdinaryDecisionCurrentState, channel: OrdinaryCha
     || binding.data.userId !== state.actor.userId || binding.data.mailboxId !== channel.mailboxId
     || !z.string().uuid().safeParse(state.actor.sessionId).success
     || !Number.isFinite(state.actor.expiresAt.getTime()) || state.actor.expiresAt <= now
-    || !Number.isFinite(state.actor.registryExpiresAt.getTime()) || state.actor.registryExpiresAt <= now) deny();
+    || !Number.isFinite(state.actor.registryExpiresAt.getTime()) || state.actor.registryExpiresAt <= now
+    || (state.contextExpiresAt && (!Number.isFinite(state.contextExpiresAt.getTime()) || state.contextExpiresAt <= now))) deny();
   return binding.data;
 }
 function parsePreview(token: string, key: PrivilegedStepUpKey) {
@@ -73,7 +76,8 @@ function parsePreview(token: string, key: PrivilegedStepUpKey) {
 export function previewOrdinaryDecision(material: Material, current: OrdinaryDecisionCurrentState, key: PrivilegedStepUpKey, now: Date) {
   const authority = assertCurrent(current, material.channel, now);
   const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, now);
-  const expiresAt = new Date(Math.min(now.getTime() + ttl, current.actor.expiresAt.getTime(), current.actor.registryExpiresAt.getTime()));
+  const expiresAt = new Date(Math.min(now.getTime() + ttl, current.actor.expiresAt.getTime(), current.actor.registryExpiresAt.getTime(),
+    current.contextExpiresAt?.getTime() ?? Infinity));
   const payload: Preview = previewSchema.parse({ protocol: 'FAI_ORDINARY_EMAIL_PREVIEW_V1', decisionId: randomUUID(),
     intentHash: prepared.intentHash, mimeHash: prepared.mimeHash, contextHash: current.contextHash,
     authorityId: authority.id, authorityRevision: authority.revision, userId: current.actor.userId,
@@ -106,4 +110,31 @@ export function confirmOrdinaryDecision(
     sessionId: current.actor.sessionId, mailboxId: material.channel.mailboxId, mailboxRevision: material.channel.mailboxRevision,
     channelRevision: material.channel.channelRevision, keyVersion: key.version, approvedAt: now.toISOString() });
   return { decision, decisionHash: canonicalSha256(decision), proof: sign(key, 'decision', decision), prepared };
+}
+
+const storedDecisionSchema = z.object({
+  protocol: z.literal('FAI_ORDINARY_EMAIL_PERSONAL_DECISION_V1'), decisionId: z.string().uuid(),
+  intentHash: hash, mimeHash: hash, messageId: z.string().uuid(), draftRevision: revision, draftHash: hash,
+  preparedAt: z.string().datetime(), validUntil: z.string().datetime(), previewHash: hash, contextHash: hash,
+  authorityId: z.literal('ordinary-email'), authorityRevision: revision, actorId: id, sessionId: z.string().uuid(),
+  mailboxId: z.string().uuid(), mailboxRevision: revision, channelRevision: revision, keyVersion: revision,
+  approvedAt: z.string().datetime(),
+}).strict();
+
+/** Recheck a durable decision before consumption; a database JSON row alone is
+ * not authority. This does not grant a lease or authorize any network activity. */
+export function checkPersistedOrdinaryDecision(raw: unknown, proof: string, material: Material,
+  current: OrdinaryDecisionCurrentState, key: PrivilegedStepUpKey, now: Date) {
+  const decision = storedDecisionSchema.parse(raw), authority = assertCurrent(current, material.channel, now);
+  if (!hash.safeParse(proof).success || !timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(sign(key, 'decision', decision), 'hex'))) deny();
+  const issued = new Date(decision.preparedAt), approved = new Date(decision.approvedAt), until = new Date(decision.validUntil);
+  if (issued > approved || approved > now || until <= now || until <= issued || until.getTime() - issued.getTime() > ttl
+    || decision.keyVersion !== key.version || decision.authorityRevision !== authority.revision
+    || decision.actorId !== current.actor.userId || decision.sessionId !== current.actor.sessionId
+    || decision.contextHash !== current.contextHash || decision.mailboxId !== material.channel.mailboxId
+    || decision.mailboxRevision !== material.channel.mailboxRevision || decision.channelRevision !== material.channel.channelRevision
+    || decision.messageId !== material.snapshot.messageId || decision.draftRevision !== material.snapshot.revision) deny();
+  const prepared = prepareOrdinaryEmail(material.snapshot, material.channel, material.materials, issued);
+  if (decision.intentHash !== prepared.intentHash || decision.mimeHash !== prepared.mimeHash || decision.draftHash !== prepared.intent.draftHash) deny();
+  return { decision, prepared };
 }

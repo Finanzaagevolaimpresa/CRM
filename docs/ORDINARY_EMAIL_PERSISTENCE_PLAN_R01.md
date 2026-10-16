@@ -19,7 +19,7 @@ Riutilizzare bozze/versioni e accessi M4 è utile. Occorre invece una persistenz
 | Esito e ricevuta | Esito append-only autenticato e riferito al tentativo. `ACCEPTED` significa accettazione SMTP; non implica consegna o lettura. `UNCERTAIN` resta bloccante fino a riconciliazione, senza retry automatici. |
 | Ingresso automatico | Identità univoca casella/protocollo/UIDVALIDITY+UID o equivalente riferimento provider, hash contenuto e stato di associazione. Nessuna falsa attribuzione a un utente che avrebbe acquisito manualmente la risposta. Un duplicato diverso è conflitto. |
 
-La disposizione delle tabelle e il SQL completo restano da preparare e qualificare. Le cancellazioni definitive, conversioni di righe M4 e scritture di bootstrap reali non fanno parte del candidato corrente.
+Il candidato isolato ora implementa sei tabelle per autorità, qualifica, decisione, tentativo, consumo ed esito: vedere `ORDINARY_EMAIL_STORE_CANDIDATE_R01.md`. Il DDL completo è vincolato fisicamente al database sintetico e resta fuori dalla catena Prisma. Ingresso automatico, promozione a migration applicativa e integrazione restano da completare. Le cancellazioni definitive, conversioni di righe M4 e scritture di bootstrap reali non fanno parte del candidato corrente.
 
 ## Transazione di «Approva e invia»
 
@@ -42,4 +42,4 @@ La qualifica DB isolata deve coprire vincoli reali e due connessioni concorrenti
 
 Nessun host IMAP/API viene derivato dal nome Register.it. Ricezione automatica, autenticazione del canale, persistenza del cursore e policy di elaborazione vanno qualificate sui riferimenti realmente disponibili. Nessuna nuova credenziale o provider è introdotta. La decisione personale su una versione non autorizza messaggi successivi.
 
-Il contratto `ordinary-email-decision.ts` e la sequenza di trasporto isolata `ordinary-email-smtp-candidate.ts` sono implementati e provati. Quest'ultima richiede consumo esatto e controllo corrente tramite callback obbligatori: i relativi adapter persistenti, la qualifica del trasporto reale e la UI restano da implementare. Le prove con consumo in memoria non attestano vincoli o audit PostgreSQL. Nessuna migration, attivazione, binding reale o invio esterno è eseguito da questo candidato.
+Il contratto `ordinary-email-decision.ts`, la sequenza isolata `ordinary-email-smtp-candidate.ts` e la persistenza candidata `ordinary-email-store-candidate.ts` sono implementati. Le prove del trasporto con socket/consumo simulati restano distinte dalle nuove prove reali di vincoli e audit PostgreSQL. Collegamento del servizio, serializzazione autorizzazioni/trasmissione, qualifica del trasporto reale e UI restano da implementare. Nessuna migration produttiva, attivazione, binding reale o invio esterno è eseguito da questo candidato.

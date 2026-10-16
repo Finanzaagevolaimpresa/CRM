@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ApprovedMessageSnapshot } from '../src/lib/approved-communication-contract';
 import type { OrdinaryChannel } from '../src/lib/ordinary-email-candidate';
-import { previewOrdinaryDecision, confirmOrdinaryDecision, type OrdinaryDecisionCurrentState } from '../src/lib/ordinary-email-decision';
+import { previewOrdinaryDecision, confirmOrdinaryDecision, checkPersistedOrdinaryDecision, type OrdinaryDecisionCurrentState } from '../src/lib/ordinary-email-decision';
 import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
 
 const now = new Date('2026-10-16T12:00:00Z'), later = new Date(now.getTime() + 10 * 60_000);
@@ -28,6 +28,23 @@ const credentials = { sessionToken: 'synthetic-session-cookie', stepUpToken: cre
 const preview = () => previewOrdinaryDecision(material, current, key, now);
 const confirm = (token: string, next = material, state = current, auth = credentials, clock = now) =>
   confirmOrdinaryDecision(token, next, state, key, auth, clock);
+
+test('stored decisions require their signature, exact current materials and authority before a lease', () => {
+  const result=confirm(preview().token);
+  assert.equal(checkPersistedOrdinaryDecision(result.decision,result.proof,material,current,key,now).prepared.mimeHash,result.prepared.mimeHash);
+  assert.throws(()=>checkPersistedOrdinaryDecision(result.decision,'0'.repeat(64),material,current,key,now));
+  assert.throws(()=>checkPersistedOrdinaryDecision({...result.decision,contextHash:'0'.repeat(64)},result.proof,material,current,key,now));
+  assert.throws(()=>checkPersistedOrdinaryDecision(result.decision,result.proof,material,{...current,authority:{...current.authority,revision:2}},key,now));
+  assert.throws(()=>checkPersistedOrdinaryDecision(result.decision,result.proof,{...material,snapshot:{...snapshot,bcc:[]}},current,key,now));
+  assert.throws(()=>checkPersistedOrdinaryDecision(result.decision,result.proof,material,current,key,later));
+});
+test('authorized material expiry bounds both preview lifetime and confirmation', () => {
+  const contextExpiresAt=new Date(now.getTime()+1000), state={...current,contextExpiresAt};
+  const shown=previewOrdinaryDecision(material,state,key,now);
+  assert.equal(shown.expiresAt,contextExpiresAt.toISOString());
+  assert.throws(()=>confirm(shown.token,material,state,credentials,contextExpiresAt));
+  assert.throws(()=>previewOrdinaryDecision(material,{...state,contextExpiresAt:now},key,now));
+});
 
 test('ordinary decision binds the exact MIME and canonical personal actor; proof and preview disclose no content or cookie', () => {
   const shown = preview(), confirmed = confirm(shown.token);

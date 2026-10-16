@@ -1,0 +1,25 @@
+# Email ordinario — candidato PostgreSQL R01
+
+Implementazione isolata nella PR192. `scripts/ordinary-email/storage-candidate.sql` è un DDL di prova: richiede database `fai_crm_test`, sentinel nativo e schema50. È fuori da `prisma/migrations`; non modifica lo schema Prisma né abilita il runtime. Nessuna riga di autorità o qualifica è creata dal DDL. I binding dei test sono interamente sintetici.
+
+## Persistenza implementata
+
+Sei tabelle additive: autorità personale email distinta, qualifica ordinaria del canale, decisione immutabile, tentativo, consumo unico del tentativo e ricevuta immutabile. FK senza cascata, revisioni crescenti per autorità/canale, divieto di cancellare o troncare le nuove evidenze. Un indice impedisce un secondo tentativo sul messaggio quando quello precedente è riservato, consumato, incerto o accettato. Ogni decisione e requestId è consumabile una sola volta.
+
+`ordinary-email-store-candidate.ts` riusa i lock e i controlli M4 su sessione/utente, contesto, casella, metadati e byte delle versioni documentali, inclusi controlli finanziari e perimetri selettivi. Il contesto per l'invio richiede lo stato operativo corrente; archivio/cestino negano. La nuova autorità è caricata dalla propria tabella e deve corrispondere all'attore corrente: né il solo ruolo Admin né l'autorità di condivisione progetti bastano. La qualifica manuale della casella rimane un prerequisito distinto dalla nuova qualifica ordinaria.
+
+Anteprima e conferma ricalcolano MIME, envelope e firma sul contesto server. La conferma richiede step-up nativo. Il clock PostgreSQL è ricontrollato dopo attese e audit; la scadenza dei documenti limita l'anteprima e viene ricontrollata dopo la lettura dei byte. Decisione, prenotazione, stato di blocco e audit sono nella stessa transazione senza retry. Il consumo del tentativo avviene una volta in un'altra transazione committata, con nuova verifica della firma e dello stato corrente. Il lease dura al massimo 15 secondi.
+
+Il messaggio M4 passa a `SENDING` nella prenotazione per serializzare il percorso ordinario con preparazione manuale e modifica della bozza. L'esito ordinario usa la propria ricevuta: `ACCEPTED` è sola accettazione SMTP, `NOT_SENT` richiede una nuova decisione personale, `UNCERTAIN` resta bloccante. I corrispondenti stati M4 sono rispettivamente `SENT`, `ERROR`, `UNCERTAIN`; prima di integrare la UI va mostrata la provenienza della ricevuta ordinaria, perché le etichette M4 attuali descrivono dichiarazioni manuali.
+
+La ricevuta privata del server può essere registrata dopo scadenza o revoca: conserva l'esito di un invio già tentato, senza consentire una nuova trasmissione. Un errore di audit annulla tutte le scritture della relativa transazione; se avviene dopo il trasporto, rimangono `CLAIMED/SENDING`, che impediscono altri invii. Una risposta persa al commit non è un'autorizzazione a consumare nuovamente. Registrare di nuovo la stessa ricevuta è idempotente, cambiarla è respinto.
+
+L'audit nativo conserva effettivamente `action`, `decisionId`, `attemptId`, `evidenceHash`, `status`; il tipo/ID dell'entità restano quelli M4 per riusare la visibilità esistente. I test confrontano il JSON letto dopo il minimizzatore PostgreSQL e verificano l'assenza di corpo, indirizzi, cookie e chiavi. La decisione contiene solo riferimenti e hash; nessun testo o segreto viene copiato nelle nuove tabelle.
+
+## Qualifica e residui
+
+Le prove PostgreSQL coprono prenotazioni e consumi concorrenti reali, conflitto col percorso manuale, replay con requestId nuovo, cambio di bozza/byte/autorità/canale, dinieghi correnti, scadenza durante audit o lettura documenti, audit fault, risposta persa al commit, esito incerto, ricevuta idempotente e vincoli fisici. La CI verifica anche il rifiuto del DDL senza sentinel, il rollback atomico del DDL con errore iniettato e il mantenimento delle cinquanta migration.
+
+Il candidato **non è collegato a route, UI o trasporto**. La funzione di ricevuta è un componente server privato; il lease non deve essere restituito al browser. L'integrazione deve caricare la chiave attiva dal registro nativo e ricavare attore/cookie dalla sessione server, senza accettarli dal client. Deve inoltre mantenere i lock autorevoli per la fase limitata di trasmissione o un equivalente protocollo qualificato: controlli separati prima di DATA non eliminano da soli la corsa con una revoca. Non è qualificata una sessione reale TLS né il provider.
+
+Prima dell'integrazione restano: riconciliazione con PR191, promozione dei modelli/DDL in un piano di migration preciso con autorità e recuperabilità appropriate, bootstrap personale email e qualifica del canale autorizzati separatamente, servizio completo senza retry di rete, UI ricevuto/associazione/bozza/modifica/rifiuto/approvazione/esito, ricezione autenticata e cursori persistenti. Nessun SQL produttivo, binding reale, provider, scheduler, nuova credenziale o invio esterno deriva da queste prove.

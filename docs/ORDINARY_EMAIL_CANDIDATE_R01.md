@@ -28,9 +28,11 @@ L'anteprima firmata dura al massimo cinque minuti, comunque non oltre le scadenz
 
 Il risultato è una decisione firmata da persistere, con `decisionId` stabile per quella anteprima. Una seconda conferma della stessa anteprima conserva lo stesso ID: la futura prenotazione dovrà consumarlo con un vincolo univoco atomico. Questo contratto non consuma un record e non impedisce da solo un replay; nessuna decisione restituita autorizza direttamente un socket. Stato corrente, orologio e contesto devono provenire dal server e dai lock della transazione, mai da campi del modulo. Il piano della persistenza è in [ORDINARY_EMAIL_PERSISTENCE_PLAN_R01.md](ORDINARY_EMAIL_PERSISTENCE_PLAN_R01.md).
 
-Prove locali: sei casi del nucleo MIME/associazione e sei casi della decisione personale, con controlli avversi su identità, step-up, alterazione dei contenuti, scadenza, contesto e contraffazione. Si tratta di qualificazione sintetica del contratto, distinta dai futuri test DB/browser e da qualunque collaudo produttivo.
+Prove del contratto: sei casi del nucleo MIME/associazione e otto casi della decisione personale, con controlli avversi su identità, step-up, alterazione dei contenuti, scadenza, contesto, firma persistita e contraffazione. La qualifica resta distinta dalle prove PostgreSQL, browser e da qualunque collaudo produttivo.
 
 L'adattatore isolato `ordinary-email-smtp-candidate.ts` aggiunge undici prove di protocollo con socket e consumo in memoria sintetici. Richiede callback server obbligatori per consumo del tentativo committato, controllo corrente e risoluzione del trasporto qualificato; non fornisce un connettore predefinito. Hash esatti e BCC, rifiuto parziale dei destinatari, timeout/scrittura parziale e assenza di retry sono descritti in [ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md](ORDINARY_EMAIL_SMTP_CANDIDATE_R01.md). Non è ancora un collegamento alla persistenza o al provider reale.
+
+Il candidato PostgreSQL implementa ora prenotazione, consumo unico ed esito con audit atomico e controlli M4 riusati. Diciassette prove reali su database sintetico qualificano vincoli, concorrenza e valori dell'audit dopo il minimizzatore. Il DDL è fuori dalla catena Prisma e rifiuta database privi del sentinel; nessun bootstrap reale. Dettagli e residui d'integrazione in [ORDINARY_EMAIL_STORE_CANDIDATE_R01.md](ORDINARY_EMAIL_STORE_CANDIDATE_R01.md).
 
 ## Flusso successivo concreto
 
@@ -48,7 +50,7 @@ La UI deve consentire lettura ordinaria delle comunicazioni nel perimetro senza 
 
 | Residuo | Responsabile | Prossimo evento |
 | --- | --- | --- |
-| Persistenza ordinaria e riserva atomica, concorrenza e audit nativo | Delivery CRM | Candidato DB sintetico; valutazione schema/SQL preciso prima di qualunque migrazione produttiva |
+| Integrazione della persistenza ordinaria | Delivery CRM | Candidato PostgreSQL implementato e prove isolate; promozione dei modelli/DDL dopo PR191 e verifica dell'autorità sul piano concreto prima di SQL produttivo |
 | Identità personale, step-up e UI | Delivery CRM | Collegamento transazionale al riferimento canonico, senza nuovi account/ruoli |
 | Adattatore SMTP ordinario e qualifica del canale esistente | Delivery CRM | Contratto di trasporto e 11 test di protocollo sintetici implementati; restano callback persistenti, vero connettore e qualifica del canale. Nessun invio reale senza approvazione personale della versione esatta |
 | Ricezione ufficiale sulla casella esistente | Delivery; R09 ha fornito casella/provider/configurationRef canonici | Restano da verificare endpoint/protocollo e autorizzazione operativa già esistenti; i riferimenti M4 non li provano. Nessuna nuova credenziale/provider |

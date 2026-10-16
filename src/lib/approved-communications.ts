@@ -137,6 +137,7 @@ async function effectiveQualification(tx: Tx, box: CommunicationMailbox) {
 async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnType<typeof contextScope>>, ids: string[], runtime: Runtime) {
   const snapshot: ApprovedMessageSnapshot['attachments'] = [], materials = new Map<string, Buffer>();
   let total = 0;
+  let validUntil: Date | null = null;
   if (ids.length > 20 || new Set(ids).size !== ids.length) denied();
   for (const versionId of ids.slice().sort()) {
     if (!hasPermission(current, 'document.download')) denied();
@@ -157,10 +158,11 @@ async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnTy
     catch { denied(); }
     total += bytes.length;
     if (digest(bytes) !== version.checksum) denied();
+    if (doc.validUntil && (!validUntil || doc.validUntil < validUntil)) validUntil = doc.validUntil;
     snapshot.push({ documentId: doc.id, versionId, sha256: version.checksum, filename: doc.fileName, mimeType: doc.mimeType, bytes: bytes.length });
     materials.set(versionId, bytes);
   }
-  return { snapshot, materials };
+  return { snapshot, materials, validUntil };
 }
 
 async function event(tx: Tx, current: AuthSession, messageId: string | null, code: string, evidence: unknown, runtime: Runtime = {}, replyId: string | null = null) {
@@ -198,6 +200,29 @@ const editSchema = z.object({
   subject: z.string(), body: z.string(), attachmentVersionIds: z.array(identifier).max(20),
   classification: z.enum(['ORDINARY', 'SENSITIVE', 'COMPLAINT']),
 }).strict();
+
+/** Server-only building block for the isolated ordinary-mail persistence
+ * candidate. Reuses M4 locks and current document/financial/ABAC checks. It is
+ * not a route, a manual approval conversion or a transport authorization. */
+export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime = {}) {
+  uuid.parse(messageId);
+  const current = await actor(tx, claimed, 'practice_communications.mark_used', true);
+  if (!hasPermission(current, 'practice_communications.read')) denied();
+  const loaded = await messageScope(tx, current, messageId, true);
+  if (!mailboxQualification(mailboxSnapshot(loaded.box)).enabled) denied();
+  await responsibleMailbox(tx, loaded.box);
+  const files = await attachments(tx, current, loaded.scope, loaded.snapshot.attachments.map(item => item.versionId), runtime);
+  if (canonicalSha256(files.snapshot) !== canonicalSha256(loaded.snapshot.attachments)) conflict();
+  const registry = await lockAuthoritativeInternalSession(tx, { userId: current.userId, sessionId: current.sessionId! });
+  if (!registry || registry.revokedAt || registry.deletedAt || !registry.active) denied();
+  const contextHash = canonicalSha256(JSON.parse(JSON.stringify({ scope: loaded.scope,
+    actorId: current.userId, role: current.role, overrides: current.permissionOverrides,
+    clientReadScope: [...(current.clientReadScope ?? [])].sort(),
+    selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort() })));
+  return { ...loaded, materials: files.materials, contextHash, contextExpiresAt: files.validUntil ?? undefined,
+    actor: { userId: current.userId, sessionId: current.sessionId!, role: registry.role, active: registry.active,
+      expiresAt: new Date(current.expiresAt * 1000), registryExpiresAt: registry.expiresAt } };
+}
 
 export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(editSchema, raw);

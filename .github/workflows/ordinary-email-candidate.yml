@@ -1,0 +1,72 @@
+name: Ordinary email isolated persistence
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: ordinary-email-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    name: Ordinary email PostgreSQL candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-ordinary-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-ordinary-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      ORDINARY_EMAIL_STORE_CONFIRMED: '1'
+      INTERNAL_SESSION_MODE: registry
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify guarded additive DDL only on an isolated schema50 database
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          git diff --exit-code 6583e918380d0bf658cd675f5e553e7de72c9de5 -- prisma
+          npm run prisma:migrate:deploy
+          ddl=scripts/ordinary-email/storage-candidate.sql
+          evidence="$RUNNER_TEMP/ordinary-email"
+          mkdir -p "$evidence"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/no-sentinel.log" 2>&1; then exit 1; fi
+          grep -Fq ORDINARY_EMAIL_SYNTHETIC_DATABASE_REQUIRED "$evidence/no-sentinel.log"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$ddl" > "$evidence/fault.sql"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log" 2>&1; then exit 1; fi
+          grep -Fq 'division by zero' "$evidence/fault.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'OrdinaryEmail%'")" = 0
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$ddl"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 50
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailAuthority"')" = 0
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailChannel"')" = 0
+      - name: Exact decision, durable consumption, native audit and concurrent manual path
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/ordinary-email/store-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# pass 17' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
+          sha256sum scripts/ordinary-email/storage-candidate.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-email-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ordinary-email
+          if-no-files-found: error
+          retention-days: 14
