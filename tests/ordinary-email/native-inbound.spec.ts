@@ -61,6 +61,7 @@ test('native received reply becomes a separately approved draft with current sco
   expect(downloaded.headers()['content-type']).toBe('application/octet-stream');
   expect(downloaded.headers()['x-content-type-options']).toBe('nosniff');
   expect(downloaded.headers()['cache-control']).toBe('private, no-store');
+  expect(downloaded.headers()['content-security-policy']).toBe("sandbox allow-downloads; default-src 'none'");
   const actualDownload=reader.waitForEvent('download');
   await attachmentForm.getByRole('button',{name:'Scarica allegato 1',exact:true}).click();
   const download=await actualDownload; expect(download.suggestedFilename()).toBe('ricevuto-sintetico.txt');

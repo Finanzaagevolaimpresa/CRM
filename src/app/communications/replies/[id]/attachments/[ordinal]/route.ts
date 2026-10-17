@@ -17,7 +17,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       payloadHash: form.get('payloadHash'), attachmentHash: form.get('attachmentHash') });
     return new NextResponse(new Uint8Array(file.bytes), { headers: {
       'Content-Type': 'application/octet-stream', 'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "sandbox; default-src 'none'", 'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "sandbox allow-downloads; default-src 'none'", 'Referrer-Policy': 'no-referrer',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
       'Content-Length': String(file.bytes.length), 'Cache-Control': 'private, no-store',
     } });
