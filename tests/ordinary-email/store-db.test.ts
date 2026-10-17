@@ -178,18 +178,18 @@ test('operational activation denies stale evidence, wrong scope, identity, targe
     { validUntil: new Date(Date.now() + 32 * 86_400_000).toISOString() },
   ]) {
     const plan = { ...f.plan, ...change };
-    await assert.rejects(activateOrdinaryEmail(db, plan, canonicalSha256(plan), key, sourceEnvironment()));
+    await assert.rejects(activateOrdinaryEmail(db, plan, canonicalSha256(plan), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   }
-  await assert.rejects(activateOrdinaryEmail(db, f.plan, 'd'.repeat(64), key, sourceEnvironment()));
-  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), { ...key, secret: 'wrong'.repeat(16) }, sourceEnvironment()));
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, 'd'.repeat(64), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), { ...key, secret: 'wrong'.repeat(16) }, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   await db.user.update({ where: { id: f.actor.userId }, data: { role: 'direzione' } });
-  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), key, sourceEnvironment()));
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   assert.deepEqual(await activationCounts(), [0, 0, 0]);
 });
 
 test('operational activation audit fault rolls authority, channel and cursor back together', options, async () => {
   const f = await activationFixture();
-  await assert.rejects(activateOrdinaryEmail(fault('error'), f.plan, canonicalSha256(f.plan), key, sourceEnvironment()));
+  await assert.rejects(activateOrdinaryEmail(fault('error'), f.plan, canonicalSha256(f.plan), key, sourceEnvironment()), /SYNTHETIC_ORDINARY_AUDIT_FAULT/);
   assert.deepEqual(await activationCounts(), [0, 0, 0]);
   assert.equal(await db.auditLog.count({ where: { event: 'ordinary_email_binding_activated' } }), 0);
 });

@@ -37,7 +37,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   if (!parsed.success || !hash.safeParse(expectedPlanHash).success || canonicalSha256(parsed.data) !== expectedPlanHash) denied();
   const plan = parsed.data;
   return db.$transaction(async tx => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
     const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
