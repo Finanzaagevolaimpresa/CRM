@@ -27,6 +27,7 @@ import { syntheticInboundMime } from '../helpers/ordinary-inbound-mime';
 import { readStoredOrdinaryAttachment } from '../../src/lib/ordinary-email-attachment';
 import { receiveOrdinaryRegisterEmailOnce } from '../../src/lib/ordinary-email-inbound-runtime';
 import { SyntheticImapSocket } from '../helpers/ordinary-imap-peer';
+import { activateOrdinaryEmail, type OrdinaryActivationPlan } from '../../src/lib/ordinary-email-activation';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -144,6 +145,88 @@ test('ordinary store uses schema51 and has a real native minimizer', options, as
   const [value] = await db.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='AuditLog_redaction_n04_v1' AND tgenabled='O') AS present`;
   assert.equal(value.present,true);
 });
+async function activationFixture() {
+  const actor = await person();
+  const latest = await db.applicationKeyVersion.findFirst({ where: { purpose: PRIVILEGED_STEP_UP_KEY_PURPOSE }, orderBy: { version: 'desc' } });
+  key.version = (latest?.version ?? 0) + 1;
+  await db.$transaction(tx => rotatePrivilegedStepUpKeyVersion(tx, { version: key.version,
+    keyDigest: privilegedStepUpKeyDigest(key.secret), actorUserId: actor.userId }));
+  const before = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'comunicazioni@finanzaagevolaimpresa.it' } });
+  const box = await configureCommunicationMailbox(db, actor, { mailboxId: before.id, expectedRevision: before.revision,
+    kind: 'MAILBOX', canonicalMailboxId: null, providerReference: 'register_it', responsibleUserId: actor.userId,
+    canSend: true, canReceive: true, restricted: false, configurationReference: 'M4_COMUNICAZIONI_REGISTER_IT' });
+  await qualifyCommunicationMailbox(db, actor, { mailboxId: box.id, expectedRevision: box.revision, action: 'TEST', testReference: 'SYNTHETIC_ONLY' });
+  await qualifyCommunicationMailbox(db, actor, { mailboxId: box.id, expectedRevision: box.revision, action: 'ENABLE' });
+  const plan: OrdinaryActivationPlan = { protocol: 'FAI_ORDINARY_EMAIL_ACTIVATION_V1', targetDatabase: 'fai_crm_test',
+    userId: actor.userId, responsibleUserId: actor.userId, mailboxId: box.id, mailboxRevision: box.revision,
+    streamId: randomUUID(), historyScope: 'NEW_FROM_ACTIVATION', generation: '7999', observedUidNext: '7',
+    observedAt: new Date().toISOString(), validUntil: new Date(Date.now() + 86_400_000).toISOString(),
+    authorityReference: 'SYNTHETIC_EXPLICIT_EMAIL_AUTHORITY', personalBindingAuthorized: true, receptionAuthorized: true,
+    authorityEvidenceSha256: 'a'.repeat(64), smtpQualificationSha256: 'b'.repeat(64), imapQualificationSha256: 'c'.repeat(64) };
+  return { actor, box, plan };
+}
+async function activationCounts() {
+  return [await db.ordinaryEmailAuthority.count(), await db.ordinaryEmailChannel.count(), await db.ordinaryEmailInboundStream.count()];
+}
+
+test('operational activation denies stale evidence, wrong scope, identity, target and plan hash without creating bindings', options, async () => {
+  const f = await activationFixture();
+  for (const change of [
+    { observedAt: new Date(Date.now() - 301_000).toISOString() },
+    { targetDatabase: 'fai_crm' }, { mailboxRevision: f.box.revision + 1 },
+    { historyScope: 'INFERRED_DEFAULT' }, { personalBindingAuthorized: false },
+    { validUntil: new Date(Date.now() + 32 * 86_400_000).toISOString() },
+  ]) {
+    const plan = { ...f.plan, ...change };
+    await assert.rejects(activateOrdinaryEmail(db, plan, canonicalSha256(plan), key, sourceEnvironment()));
+  }
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, 'd'.repeat(64), key, sourceEnvironment()));
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), { ...key, secret: 'wrong'.repeat(16) }, sourceEnvironment()));
+  await db.user.update({ where: { id: f.actor.userId }, data: { role: 'direzione' } });
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), key, sourceEnvironment()));
+  assert.deepEqual(await activationCounts(), [0, 0, 0]);
+});
+
+test('operational activation audit fault rolls authority, channel and cursor back together', options, async () => {
+  const f = await activationFixture();
+  await assert.rejects(activateOrdinaryEmail(fault('error'), f.plan, canonicalSha256(f.plan), key, sourceEnvironment()));
+  assert.deepEqual(await activationCounts(), [0, 0, 0]);
+  assert.equal(await db.auditLog.count({ where: { event: 'ordinary_email_binding_activated' } }), 0);
+});
+
+test('explicit existing-INBOX scope starts at zero and outer failure preserves an empty store', options, async () => {
+  const f = await activationFixture(), plan = { ...f.plan, historyScope: 'EXISTING_INBOX' as const };
+  const rollback = new Error('SYNTHETIC_OUTER_ROLLBACK');
+  const wrapped = { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) =>
+    db.$transaction(async tx => { const result = await work(tx) as { initialCursor: string };
+      assert.equal(result.initialCursor, '0'); throw rollback; }, opts) } as unknown as PrismaClient;
+  await assert.rejects(activateOrdinaryEmail(wrapped, plan, canonicalSha256(plan), key, sourceEnvironment()), error => error === rollback);
+  assert.deepEqual(await activationCounts(), [0, 0, 0]);
+});
+
+test('one explicit activation commits native minimized audit and qualified bindings; concurrency and replay cannot reset the cursor', options, async () => {
+  const f = await activationFixture(), planHash = canonicalSha256(f.plan);
+  const results = await Promise.allSettled([0, 1].map(() => activateOrdinaryEmail(db, f.plan, planHash, key, sourceEnvironment())));
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal(results.filter(r => r.status === 'rejected').length, 1);
+  assert.deepEqual(await activationCounts(), [1, 1, 1]);
+  const stream = await db.ordinaryEmailInboundStream.findUniqueOrThrow({ where: { id: f.plan.streamId } });
+  assert.equal(stream.cursor, '6'); assert.equal(stream.cursorVersion, 0);
+  assert.equal(stream.enabled, true);
+  const binding = { id: stream.id, mailboxId: stream.mailboxId, mailboxRevision: stream.mailboxRevision, revision: stream.revision,
+    descriptor: stream.descriptor as InboundDescriptor, validUntil: stream.validUntil };
+  assert.equal(stream.qualificationReference, inboundQualificationReference(binding, key, sourceEnvironment().DIRECT_EMAIL_TEST_SMTP_PASSWORD!));
+  const authority = await db.ordinaryEmailAuthority.findUniqueOrThrow({ where: { id: 'ordinary-email' } });
+  assert.equal(authority.userId, f.actor.userId);
+  const audits = await db.auditLog.findMany({ where: { event: 'ordinary_email_binding_activated' } });
+  assert.equal(audits.length, 1);
+  assert.deepEqual(audits[0].after, { action: 'activate', evidenceHash: planHash, status: 'ENABLED' });
+  await assert.rejects(activateOrdinaryEmail(db, f.plan, planHash, key, sourceEnvironment()));
+  assert.deepEqual(await db.ordinaryEmailInboundStream.findUniqueOrThrow({ where: { id: f.plan.streamId } }), stream);
+  // End this synthetic activation lease; later fixtures independently qualify their own streams.
+  await db.ordinaryEmailInboundStream.update({ where: { id: stream.id }, data: { enabled: false, revision: 2 } });
+});
+
 test('exact reservation and native audit commit together without bodies or addresses', options, async () => {
   const f = await fixture(), shown = await preview(f);
   // Reissue this synthetic preview with the test-only key and the numeric UUID

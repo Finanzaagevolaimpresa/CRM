@@ -14,8 +14,8 @@ import type { readPrivateDocumentBounded } from './storage';
 import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import { tokenDigestFromCookie } from './internal-session-registry';
 
-/** Isolated PostgreSQL candidate. Tables are deliberately outside the migration
- * chain; no route, connector, environment reader, worker or automatic retry.
+/** PostgreSQL store promoted into additive migration51. This module itself
+ * creates no binding, connector, environment reader, worker or automatic retry.
  * The service supplies its server key, revalidated/locked in every admission.
  * The DATA guard keeps the same
  * authoritative locks through the bounded protocol response; no retry. */

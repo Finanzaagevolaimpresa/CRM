@@ -1,0 +1,101 @@
+import type { PrismaClient } from '@prisma/client';
+import { z } from 'zod';
+import { canonicalSha256 } from './canonical-json';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import type { PrivilegedStepUpKey } from './privileged-step-up-token';
+import { ordinaryTransportQualificationReference } from './ordinary-email-transport-binding';
+import { inboundQualificationReference, type InboundDescriptor } from './ordinary-email-inbound-contract';
+
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const uint = z.string().regex(/^[1-9][0-9]{0,9}$/).refine(v => Number(v) <= 4_294_967_295);
+export const ordinaryActivationSchema = z.object({
+  protocol: z.literal('FAI_ORDINARY_EMAIL_ACTIVATION_V1'),
+  targetDatabase: z.enum(['fai_crm', 'fai_crm_test']),
+  userId: z.string().cuid(), mailboxId: z.string().uuid(), mailboxRevision: z.number().int().positive(),
+  responsibleUserId: z.string().cuid(), streamId: z.string().uuid(),
+  historyScope: z.enum(['NEW_FROM_ACTIVATION', 'EXISTING_INBOX']),
+  generation: uint, observedUidNext: uint, observedAt: z.string().datetime(),
+  validUntil: z.string().datetime(),
+  authorityReference: z.string().regex(/^[A-Z][A-Z0-9_-]{5,127}$/),
+  personalBindingAuthorized: z.literal(true), receptionAuthorized: z.literal(true),
+  authorityEvidenceSha256: hash, smtpQualificationSha256: hash, imapQualificationSha256: hash,
+}).strict();
+export type OrdinaryActivationPlan = z.infer<typeof ordinaryActivationSchema>;
+function denied(): never { throw new Error('ORDINARY_EMAIL_ACTIVATION_DENIED'); }
+const MIGRATION = '20261017120000_ordinary_email_v1';
+const MIGRATION_SHA256 = '74b6a8e88c8732012656420b4d6aabbc17c2054ae13935f5f5879042e8483a83';
+
+/** A privileged, explicitly invoked operational act, never a public action.
+ * The operator must acquire the human binding/scope and real TLS/authentication
+ * evidence first. Hashing that act does not create its authority. The CLI
+ * requires the separately reviewed plan hash. No session is impersonated,
+ * no network is opened and no existing authority or cursor is overwritten. */
+export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction'>, input: unknown,
+  expectedPlanHash: string, key: PrivilegedStepUpKey,
+  environment: Readonly<Record<string, string | undefined>>) {
+  const parsed = ordinaryActivationSchema.safeParse(input);
+  if (!parsed.success || !hash.safeParse(expectedPlanHash).success || canonicalSha256(parsed.data) !== expectedPlanHash) denied();
+  const plan = parsed.data;
+  return db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
+    if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; now: Date }>>`
+      SELECT current_database() AS database, clock_timestamp() AS now,
+        (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
+        (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${MIGRATION}) AS checksum`;
+    const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
+    if (state.database !== plan.targetDatabase || state.count !== 51 || !state.complete || state.checksum !== MIGRATION_SHA256
+      || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
+      || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
+    // Lock both people before the mailbox, following native admission ordering.
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id IN (${plan.userId}, ${plan.responsibleUserId}) ORDER BY id FOR SHARE`;
+    await tx.$queryRaw`SELECT id FROM "CommunicationMailbox" WHERE id=${plan.mailboxId}::uuid FOR SHARE`;
+    const actor = await tx.user.findUnique({ where: { id: plan.userId } });
+    const owner = await tx.user.findUnique({ where: { id: plan.responsibleUserId } });
+    const box = await tx.communicationMailbox.findUnique({ where: { id: plan.mailboxId } });
+    if (!actor?.active || actor.deletedAt || actor.role !== 'admin' || !owner?.active || owner.deletedAt
+      || !box || box.revision !== plan.mailboxRevision || box.responsibleUserId !== owner.id
+      || box.kind !== 'MAILBOX' || box.canonicalMailboxId || box.address !== 'comunicazioni@finanzaagevolaimpresa.it'
+      || box.providerReference !== 'register_it' || box.configurationReference !== 'M4_COMUNICAZIONI_REGISTER_IT'
+      || !box.enabled || !box.canSend || !box.canReceive || box.configuredRevision !== box.revision || box.testedRevision !== box.revision) denied();
+    const [existing] = await tx.$queryRaw<Array<{ present: boolean }>>`SELECT
+      EXISTS(SELECT 1 FROM "OrdinaryEmailAuthority") OR EXISTS(SELECT 1 FROM "OrdinaryEmailChannel") OR
+      EXISTS(SELECT 1 FROM "OrdinaryEmailInboundStream") AS present`;
+    if (existing.present) denied();
+    const channel = { purpose: 'ORDINARY_SMTP' as const, mailboxId: box.id, mailboxRevision: box.revision,
+      address: 'comunicazioni@finanzaagevolaimpresa.it' as const, providerReference: 'register_it' as const,
+      configurationReference: 'M4_COMUNICAZIONI_REGISTER_IT' as const, channelRevision: 1,
+      qualificationReference: 'PENDING_PRIVATE_FINGERPRINT' };
+    const smtpReference = ordinaryTransportQualificationReference(channel, key, environment);
+    const descriptor: InboundDescriptor = { protocol: 'IMAP_UID', host: 'pop.securemail.pro', port: 993,
+      security: 'TLS', minVersion: 'TLSv1.2', rejectUnauthorized: true, folder: 'INBOX',
+      generation: plan.generation, authenticationReference: 'DIRECT_EMAIL_TEST_SMTP_PASSWORD' };
+    const credential = environment.DIRECT_EMAIL_TEST_SMTP_PASSWORD;
+    if (!credential || !/^[\x20-\x7e]{1,4096}$/.test(credential)) denied();
+    const binding = { id: plan.streamId, mailboxId: box.id, mailboxRevision: box.revision, revision: 1,
+      descriptor, validUntil: new Date(plan.validUntil) };
+    const inboundReference = inboundQualificationReference(binding, key, credential);
+    const cursor = plan.historyScope === 'NEW_FROM_ACTIVATION' ? String(Number(plan.observedUidNext) - 1) : '0';
+    await tx.$executeRaw`INSERT INTO "OrdinaryEmailAuthority" ("id","userId","mailboxId","revision","enabled")
+      VALUES ('ordinary-email',${actor.id},${box.id}::uuid,1,true)`;
+    await tx.$executeRaw`INSERT INTO "OrdinaryEmailChannel" ("mailboxId","mailboxRevision","revision","qualificationReference","enabled")
+      VALUES (${box.id}::uuid,${box.revision},1,${smtpReference},true)`;
+    await tx.$executeRaw`INSERT INTO "OrdinaryEmailInboundStream"
+      ("id","mailboxId","mailboxRevision","revision","descriptor","descriptorHash","qualificationReference","validUntil","enabled","cursor","cursorVersion")
+      VALUES (${plan.streamId}::uuid,${box.id}::uuid,${box.revision},1,${JSON.stringify(descriptor)}::jsonb,
+        ${canonicalSha256(descriptor)},${inboundReference},${binding.validUntil},true,${cursor},0)`;
+    const evidence = { action: 'activate', evidenceHash: expectedPlanHash, status: 'ENABLED' };
+    const audit = await tx.auditLog.create({ data: { actorId: actor.id, entityType: 'OrdinaryEmailAuthority',
+      entityId: 'ordinary-email', event: 'ordinary_email_binding_activated', after: evidence } });
+    // Read after the native redaction trigger; an unusable receipt aborts all bindings.
+    const persisted = await tx.auditLog.findUnique({ where: { id: audit.id }, select: { after: true } });
+    const [finalClock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (canonicalSha256(persisted?.after) !== canonicalSha256(evidence)
+      || finalClock.now.getTime() - observed > 300_000 || finalClock.now.getTime() >= expiry) denied();
+    // Re-read the existing source immediately before commit; credential drift denies.
+    if (ordinaryTransportQualificationReference(channel, key, environment) !== smtpReference) denied();
+    return { status: 'ACTIVATED' as const, planSha256: expectedPlanHash, streamId: plan.streamId,
+      initialCursor: cursor, cursorVersion: 0, historyScope: plan.historyScope, validUntil: plan.validUntil };
+  }, { timeout: 30_000 });
+}
