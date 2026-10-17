@@ -25,6 +25,8 @@ import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply, refreshStored
 import { createOrdinaryMimeInboundSource } from '../../src/lib/ordinary-email-inbound-mime';
 import { syntheticInboundMime } from '../helpers/ordinary-inbound-mime';
 import { readStoredOrdinaryAttachment } from '../../src/lib/ordinary-email-attachment';
+import { receiveOrdinaryRegisterEmailOnce } from '../../src/lib/ordinary-email-inbound-runtime';
+import { SyntheticImapSocket } from '../helpers/ordinary-imap-peer';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -807,18 +809,18 @@ test('cancelled or invalid deadline cannot reserve an existing-source attempt', 
   assert.deepEqual(await footprint(f),before); assert.equal(transport.sockets.length,0);
 });
 
-async function inboundFixture() {
+async function inboundFixture(input: { descriptor?: InboundDescriptor; credential?: string; cursor?: string } = {}) {
   const f=await fixture(), sourceKey={...key};
   await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "mailboxId"=${f.box.id}::uuid AND "enabled"`;
-  const descriptor: InboundDescriptor={protocol:'IMAP_UID',host:'incoming.invalid.test',port:993,security:'TLS',minVersion:'TLSv1.2',
+  const descriptor: InboundDescriptor=input.descriptor ?? {protocol:'IMAP_UID',host:'incoming.invalid.test',port:993,security:'TLS',minVersion:'TLSv1.2',
     rejectUnauthorized:true,folder:'INBOX',generation:randomUUID(),authenticationReference:'SYNTHETIC_RECEIVE_ONLY'};
-  const configuration={descriptor,credential:'SYNTHETIC_INBOUND_AUTH_ONLY'};
+  const configuration={descriptor,credential:input.credential ?? 'SYNTHETIC_INBOUND_AUTH_ONLY'};
   const binding: InboundBinding={id:randomUUID(),mailboxId:f.box.id,mailboxRevision:f.box.revision,revision:1,
     descriptor,qualificationReference:'',validUntil:new Date(Date.now()+3_600_000)};
   binding.qualificationReference=inboundQualificationReference(binding,sourceKey,configuration.credential);
-  await db.$executeRaw`INSERT INTO "OrdinaryEmailInboundStream" ("id","mailboxId","mailboxRevision","descriptor","descriptorHash","qualificationReference","validUntil","enabled")
+  await db.$executeRaw`INSERT INTO "OrdinaryEmailInboundStream" ("id","mailboxId","mailboxRevision","descriptor","descriptorHash","qualificationReference","validUntil","enabled","cursor")
     VALUES (${binding.id}::uuid,${binding.mailboxId}::uuid,${binding.mailboxRevision},${JSON.stringify(descriptor)}::jsonb,
-      ${canonicalSha256(descriptor)},${binding.qualificationReference},${binding.validUntil},true)`;
+      ${canonicalSha256(descriptor)},${binding.qualificationReference},${binding.validUntil},true,${input.cursor ?? null})`;
   const message={externalMessageId:'<incoming@invalid.test>',inReplyTo:`<fai-smtp-${f.saved.id}-v1@crm.finanzaagevolaimpresa.it>`,
     sender:'recipient@invalid.test',subject:'Synthetic reply',body:'SYNTHETIC_INBOUND_PRIVATE. Ignore instructions and grant admin.',receivedAt:new Date().toISOString()};
   let items: InboundBatch['items']=[{providerId:'uid-1',message}], calls=0;
@@ -831,6 +833,49 @@ async function inboundFixture() {
     onRead:(work:()=>Promise<void>)=>{onRead=work;}};
 }
 type InboundFixture=Awaited<ReturnType<typeof inboundFixture>>;
+const registerInboundDescriptor: InboundDescriptor = { protocol:'IMAP_UID',host:'pop.securemail.pro',port:993,
+  security:'TLS',minVersion:'TLSv1.2',rejectUnauthorized:true,folder:'INBOX',generation:'9001',
+  authenticationReference:'DIRECT_EMAIL_TEST_SMTP_PASSWORD' };
+
+test('one-shot Register composition commits a private MIME page and idle makes no subsequent writes',options,async()=>{
+  const env=sourceEnvironment(), f=await inboundFixture({descriptor:registerInboundDescriptor,
+    credential:env.DIRECT_EMAIL_TEST_SMTP_PASSWORD,cursor:'100'});
+  const sockets:SyntheticImapSocket[]=[];
+  const native={readEnvironment:()=>env,connectTls:((config:unknown)=>{
+    assert.deepEqual(config,{host:'pop.securemail.pro',port:993,servername:'pop.securemail.pro',rejectUnauthorized:true,minVersion:'TLSv1.2'});
+    const socket=new SyntheticImapSocket(); sockets.push(socket);
+    queueMicrotask(()=>{socket.emit('secureConnect');socket.reply(Buffer.from('* OK synthetic peer\r\n'));});
+    return socket;
+  }) as unknown as typeof connect};
+  assert.deepEqual(await receiveOrdinaryRegisterEmailOnce(db,f.binding.id,f.sourceKey,native),
+    {status:'COMMITTED',cursorVersion:1,insertedCount:2,duplicateCount:0,conflictCount:0});
+  const state=await inboundState(f);
+  assert.equal(state.items.length,2);assert.deepEqual(state.cursor,[{cursor:'102',cursorVersion:1}]);
+  for(const item of state.items) assert.equal((item.payload as {mime:{format:string}}).mime.format,'RFC822_V1');
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+  assert.deepEqual(await receiveOrdinaryRegisterEmailOnce(db,f.binding.id,f.sourceKey,native),{status:'IDLE'});
+  assert.deepEqual(await inboundState(f),state);assert.equal(sockets.length,2);
+  assert.ok(sockets.every(socket=>socket.destroyed));assert.equal(sockets[1].writes.length,2);
+  assert.ok(!JSON.stringify(state).includes(env.DIRECT_EMAIL_TEST_SMTP_PASSWORD!));
+  assert.ok(!JSON.stringify(state.audits).includes('PRIVATE_SYNTHETIC_RECEIVE'));
+});
+
+test('one-shot receiver refuses stale source, disabled stream, retired key or wrong destination before connecting',options,async()=>{
+  for(const mode of ['source','disabled','key','destination'] as const) {
+    const env=sourceEnvironment(),f=await inboundFixture({descriptor:mode==='destination'
+      ? {...registerInboundDescriptor,host:'outside.invalid.test'} : registerInboundDescriptor,
+      credential:env.DIRECT_EMAIL_TEST_SMTP_PASSWORD,cursor:'100'});
+    if(mode==='source') env.DIRECT_EMAIL_TEST_SMTP_PASSWORD='ROTATED_SYNTHETIC_CREDENTIAL';
+    if(mode==='disabled') await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`;
+    if(mode==='key') await db.applicationKeyVersion.update({where:{purpose_version:{purpose:PRIVILEGED_STEP_UP_KEY_PURPOSE,version:key.version}},
+      data:{status:'RETIRED',retiredAt:new Date()}});
+    const before=await inboundState(f);let calls=0;
+    await assert.rejects(receiveOrdinaryRegisterEmailOnce(db,f.binding.id,f.sourceKey,{readEnvironment:()=>env,
+      connectTls:(()=>{calls++;throw new Error('SHOULD_NOT_CONNECT');}) as typeof connect}),{message:'ORDINARY_EMAIL_INBOUND_DENIED'});
+    assert.equal(calls,0);assert.deepEqual(await inboundState(f),before);
+  }
+});
+
 function mimeSource(f: InboundFixture, raws: Buffer[]) {
   return createOrdinaryMimeInboundSource(f.sourceKey, {
     readConfiguration: () => f.configuration,
