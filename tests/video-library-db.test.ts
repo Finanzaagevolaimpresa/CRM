@@ -137,8 +137,20 @@ test('revoking publication remains possible when a recipient or the stored file 
   await db.user.update({ where: { id: f.viewer.user.id }, data: { active: false } });
   await writeFile(localPathFromStoragePath(videoStoragePath(f.id)), Buffer.alloc(256));
   await confirm(f, await command(f, 'ARCHIVE'));
-  await confirm(f, await command(f, 'RESTORE_DRAFT'));
-  assert.equal((await readVideoSetup(db, admin.session, f.id)).state, 'DRAFT');
+  const archived = await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } });
+  assert.equal(archived.state, 'ARCHIVED');
+  const restore = await command(f, 'RESTORE_DRAFT');
+  assert.equal(restore.operation, 'RESTORE_DRAFT');
+  assert.equal(restore.expectedVersion, archived.version);
+  assert.deepEqual(await confirm(f, restore), { confirmed: true });
+  const receipt = await db.videoCommand.findUniqueOrThrow({ where: { id: restore.commandId } });
+  assert.equal(receipt.operation, 'RESTORE_DRAFT');
+  assert.equal(receipt.version, archived.version + 1);
+  const restored = await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } });
+  assert.deepEqual({ state: restored.state, version: restored.version, audience: restored.audience, publisher: restored.publishedById },
+    { state: 'DRAFT', version: receipt.version, audience: [], publisher: null });
+  const setup = await readVideoSetup(db, admin.session, f.id);
+  assert.deepEqual({ state: setup.state, version: setup.version }, { state: restored.state, version: restored.version });
   await assert.rejects(confirm(f));
   await assert.rejects(readVideoBytes(db, f.viewer.session, f.id));
 });
