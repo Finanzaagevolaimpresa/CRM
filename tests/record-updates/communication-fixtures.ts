@@ -33,7 +33,9 @@ export async function storedNoticeMessage(db: PrismaClient, input: {
 export async function linkedOrdinaryNoticeReply(db: PrismaClient, messageId: string, mailboxId: string, actorId: string) {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const streamId = randomUUID(), batchId = randomUUID(), itemId = randomUUID();
-  const descriptor = { synthetic: true, generation: streamId }, payload = { synthetic: true, body: 'PRIVATE REPLY' };
+  const descriptor = { synthetic: true, generation: streamId };
+  const payload = { externalMessageId: '<synthetic@invalid.test>', sender: 'synthetic@invalid.test',
+    subject: 'PRIVATE REPLY SUBJECT', body: 'PRIVATE REPLY BODY', inReplyTo: null, receivedAt: new Date().toISOString() };
   const reply = await db.$transaction(async tx => {
     await tx.$executeRaw`INSERT INTO "OrdinaryEmailInboundStream"
       ("id","mailboxId","mailboxRevision","descriptor","descriptorHash","qualificationReference","validUntil")
@@ -45,9 +47,10 @@ export async function linkedOrdinaryNoticeReply(db: PrismaClient, messageId: str
     await tx.$executeRaw`INSERT INTO "OrdinaryEmailInboundItem" ("id","streamId","batchId","providerId","payload","payloadHash")
       VALUES (${itemId}::uuid,${streamId}::uuid,${batchId}::uuid,'synthetic-1',${JSON.stringify(payload)}::jsonb,${canonicalSha256(payload)})`;
     const row = await tx.communicationReply.create({ data: { messageId, canonicalMailboxId: mailboxId,
-      externalMessageId: 'ordinary-inbound:' + itemId, contentHash: canonicalSha256(payload),
-      sender: 'synthetic@invalid.test', subject: 'PRIVATE REPLY SUBJECT', body: 'PRIVATE REPLY BODY',
-      receivedAt: new Date(), evidenceReference: 'ORDINARY_INBOUND_' + itemId.replaceAll('-', ''),
+      externalMessageId: 'ordinary-inbound:' + itemId, contentHash: canonicalSha256({ ...payload,
+        externalMessageId: 'ordinary-inbound:' + itemId, canonicalMailboxId: mailboxId }),
+      sender: payload.sender, subject: payload.subject, body: payload.body, inReplyTo: payload.inReplyTo,
+      receivedAt: new Date(payload.receivedAt), evidenceReference: 'ORDINARY_INBOUND_' + itemId.replaceAll('-', ''),
       acquiredById: actorId, linkedById: actorId } });
     await tx.$executeRaw`INSERT INTO "OrdinaryEmailInboundLink" ("itemId","replyId","actorId")
       VALUES (${itemId}::uuid,${row.id}::uuid,${actorId})`;

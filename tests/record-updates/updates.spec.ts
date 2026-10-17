@@ -139,7 +139,7 @@ test('non-Admin notices use native source privacy; late restriction/conflict den
     const label = 'Sorgente sintetica ' + restriction + ' ' + randomUUID();
     const lead = await db.lead.create({ data: { firstName: label, lastName: 'Test', assignedToId: f.commercialId } });
     const form = await open(admin, { kind: 'LEAD', id: lead.id, label });
-    await form.getByLabel('Operazione', { exact: true }).selectOption('RULE');
+    await form.getByRole('combobox', { name: /^Operazione/ }).selectOption('RULE');
     await form.getByRole('checkbox', { name: new RegExp(f.commercialName) }).check();
     await form.getByRole('button', { name: 'Controlla destinatari e modifiche' }).click();
     await expect(admin.getByRole('region', { name: 'Riepilogo aggiornamento' })).toBeVisible();
