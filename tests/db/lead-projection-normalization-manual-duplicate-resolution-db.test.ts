@@ -2148,7 +2148,7 @@ test('M3 multiple submissions retain original campaign, request and privacy afte
 
 test('trashed projected lead stays hidden while replay and a new website request preserve durable history without resurrection', { skip: !runDbTests }, async () => {
   const actor = { userId: primaryUserId, sessionId: primarySessionId };
-  const first = syntheticEvent(9401, { message: 'Synthetic request before trash.' }, undefined, { formCode: 'TRASH_HISTORY' });
+  const first = syntheticEvent(9501, { message: 'Synthetic request before trash.' }, undefined, { formCode: 'TRASH_HISTORY' });
   const admission = await admitBusinessInboxEvent(client(), first);
   const projection = await projectClaimedLeadInboxEvent(client(), await m3Claim(admission.inboxEventId, 101), projectionOptions());
   assert.equal(projection.result.state, 'PROJECTED_NEW');
@@ -2159,7 +2159,7 @@ test('trashed projected lead stays hidden while replay and a new website request
   await assert.rejects(readLeadAcquisitions(client(), actor, { leadId }), (error: unknown) => error instanceof LeadAcquisitionDenied);
   assert.equal((await readLeadAcquisitions(client(), actor, { queue: 'all' })).items.some(row => row.id === admission.inboxEventId), false);
   assert.equal((await readLeadAcquisitionSummary(client(), actor)).some(row => row.form === 'TRASH_HISTORY'), false);
-  const newer = syntheticEvent(9402, { ...first.payload, message: 'Synthetic request after trash.' }, undefined, { formCode: 'TRASH_NEW_REQUEST' });
+  const newer = syntheticEvent(9502, { ...first.payload, message: 'Synthetic request after trash.' }, undefined, { formCode: 'TRASH_NEW_REQUEST' });
   const admittedNew = await admitBusinessInboxEvent(client(), newer);
   const held = await projectClaimedLeadInboxEvent(client(), await m3Claim(admittedNew.inboxEventId, 102), projectionOptions());
   assert.equal(held.result.state, 'REVIEW_REQUIRED');

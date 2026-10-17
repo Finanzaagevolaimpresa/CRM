@@ -55,7 +55,7 @@ test('native list/detail trash and restore, old-session denial, replay, preserve
   await expect(admin).toHaveURL(/\/leads\/trash\?result=trashed$/);
   await expect(admin.getByRole('heading', { name: row.label, exact: true })).toBeVisible();
   for (const ctx of [ac, oc]) {
-    for (const url of ['/leads', '/leads/inbox', '/search?q=' + encodeURIComponent(row.label), '/dashboard', '/notifications', '/commercial-offers']) {
+    for (const url of ['/leads', '/leads/inbox', '/search?q=' + encodeURIComponent(row.lead.email!), '/dashboard', '/notifications', '/commercial-offers']) {
       const response = await ctx.request.get(url); expect(response.status()).toBeLessThan(500);
       const html = await response.text(); expect(html).not.toContain(row.label); expect(html).not.toContain(row.offer.title);
     }
@@ -98,13 +98,20 @@ test('lost response has one persisted transition and no automatic retry; old com
   await login(page, f.emails.admin, true); await page.goto('/leads/' + row.lead.id);
   const form = await openAction(page, 'Sposta nel cestino', row.label), getPost = capture(page);
   let forwarded = 0;
+  let abortDone!: () => void, abortFailed!: (error: unknown) => void;
+  const aborted = new Promise<void>((resolve, reject) => { abortDone = resolve; abortFailed = reject; });
   await page.route('**/leads/**', async route => {
     if (route.request().method() !== 'POST' || !route.request().headers()['next-action']) return route.continue();
     forwarded++;
-    await route.fetch({ maxRedirects: 0 });
-    await route.abort('failed');
+    try {
+      const response = await route.fetch({ maxRedirects: 0 });
+      expect(response.status()).toBeLessThan(500);
+      await route.abort('failed');
+      abortDone();
+    } catch (error) { abortFailed(error); }
   });
   await form.getByRole('button', { name: 'Sposta nel cestino', exact: true }).click();
+  await aborted;
   await expect.poll(async () => db.auditLog.count({ where: { entityId: row.lead.id, event: 'lead_lifecycle_changed' } })).toBe(1);
   await page.unroute('**/leads/**');
   await page.goto('/leads/trash');
