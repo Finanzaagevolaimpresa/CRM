@@ -22,6 +22,8 @@ import { createOrdinaryTransportResolver, ordinaryTransportQualificationReferenc
 import { createOrdinaryInboundSource, inboundQualificationReference, type InboundBinding, type InboundDescriptor,
   type InboundBatch } from '../../src/lib/ordinary-email-inbound-contract';
 import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply, refreshStoredOrdinaryReplies } from '../../src/lib/ordinary-email-inbound-store';
+import { createOrdinaryMimeInboundSource } from '../../src/lib/ordinary-email-inbound-mime';
+import { syntheticInboundMime } from '../helpers/ordinary-inbound-mime';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -828,6 +830,17 @@ async function inboundFixture() {
     onRead:(work:()=>Promise<void>)=>{onRead=work;}};
 }
 type InboundFixture=Awaited<ReturnType<typeof inboundFixture>>;
+function mimeSource(f: InboundFixture, raws: Buffer[]) {
+  return createOrdinaryMimeInboundSource(f.sourceKey, {
+    readConfiguration: () => f.configuration,
+    readAuthenticated: async (_, position) => ({
+      generation: f.configuration.descriptor.generation, fromCursor: position.cursor,
+      nextCursor: 'cursor-' + (position.version + 1),
+      items: raws.map((raw, index) => ({ providerId: 'mime-' + index, raw, expectedBytes: raw.length,
+        receivedAt: f.message.receivedAt })),
+    }),
+  });
+}
 const receive=(f:InboundFixture,database=db)=>receiveStoredOrdinaryEmail(database,f.binding.id,f.sourceKey,f.source);
 async function inboundState(f:InboundFixture) {
   return {
@@ -855,6 +868,63 @@ test('inbound acquisition commits cursor, original payload and minimized audit w
     insertedCount:1,duplicateCount:0,conflictCount:0});
   assert.equal(stored.audits[0].actorId,null);
   for(const secret of [f.message.sender,f.message.body,f.configuration.credential,f.sourceKey.secret]) assert.ok(!JSON.stringify(stored.audits).includes(secret));
+});
+
+test('MIME intake preserves private originals and attachment evidence; association projects only admitted text', options, async()=>{
+  const f=await inboundFixture(); await send(f);
+  const raw=syntheticInboundMime({inReplyTo:f.message.inReplyTo});
+  await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[raw]));
+  const stored=await inboundState(f), payload=stored.items[0].payload as InboundBatch['items'][number]['message'];
+  assert.deepEqual(Buffer.from(payload.mime!.rawBase64,'base64'),raw);
+  assert.equal(payload.mime!.attachments.length,1);
+  assert.equal(payload.receivedAt,f.message.receivedAt);
+  const {replyId}=await associateStoredOrdinaryReply(db,f.actor,stored.items[0].id,runtime);
+  const reply=await db.communicationReply.findUniqueOrThrow({where:{id:replyId}});
+  assert.equal(reply.body,payload.body); assert.equal(reply.subject,payload.subject);
+  assert.equal(reply.contentHash,canonicalSha256({externalMessageId:reply.externalMessageId,canonicalMailboxId:f.box.id,
+    inReplyTo:payload.inReplyTo,sender:payload.sender,subject:payload.subject,body:payload.body,receivedAt:payload.receivedAt}));
+  const outward=JSON.stringify({reply,audits:stored.audits,events:await db.communicationEvent.findMany({where:{replyId}})});
+  for(const privateValue of [payload.mime!.rawBase64,payload.mime!.attachments[0].filename!,f.configuration.credential])
+    assert.ok(!outward.includes(privateValue));
+  assert.equal((await read(f)).messages[0].replies.length,1);
+});
+
+test('attachment-only MIME drift quarantines a linked reply without replacing its original bytes', options, async()=>{
+  const f=await inboundFixture(); await send(f);
+  const original=syntheticInboundMime({inReplyTo:f.message.inReplyTo,attachment:'FIRST_PRIVATE'});
+  await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[original]));
+  const item=(await inboundState(f)).items[0];
+  await associateStoredOrdinaryReply(db,f.actor,item.id,runtime);
+  assert.equal((await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[original]))).duplicateCount,1);
+  const changed=syntheticInboundMime({inReplyTo:f.message.inReplyTo,attachment:'CHANGED_PRIVATE'});
+  assert.equal((await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[changed]))).conflictCount,1);
+  assert.deepEqual((await inboundState(f)).items[0],item);
+  assert.equal((await read(f)).messages[0].replies.length,0);
+  await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+});
+
+test('malformed MIME anywhere in a page leaves every item, batch, audit and cursor unchanged', options, async()=>{
+  const f=await inboundFixture(), before=await inboundState(f);
+  const good=syntheticInboundMime({inReplyTo:f.message.inReplyTo});
+  const truncated=Buffer.from(good.toString().replace('--synthetic-outer----',''));
+  await assert.rejects(receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[good,truncated])),
+    /^Error: ORDINARY_EMAIL_INBOUND_MIME_DENIED$/);
+  assert.deepEqual(await inboundState(f),before);
+});
+
+test('HTML-only and unassociated MIME stay private and do not block projection of an admitted plain reply', options, async()=>{
+  const f=await inboundFixture(); await send(f);
+  const raws=[syntheticInboundMime({inReplyTo:f.message.inReplyTo,htmlOnly:true}),
+    syntheticInboundMime(),syntheticInboundMime({inReplyTo:f.message.inReplyTo})];
+  await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,raws));
+  const items=(await inboundState(f)).items;
+  await assert.rejects(associateStoredOrdinaryReply(db,f.actor,items[0].id,runtime));
+  await assert.rejects(associateStoredOrdinaryReply(db,f.actor,items[1].id,runtime));
+  assert.deepEqual(await refreshReplies(f),{more:false});
+  assert.equal((await read(f)).messages[0].replies.length,1);
+  const stored=await inboundState(f);
+  assert.equal(stored.items.length,3); assert.equal(stored.links.length,1);
+  assert.equal(stored.links[0].itemId,items[2].id);
 });
 
 test('overlapping reordered batches deduplicate provider identities and persist hash conflicts without replacement', options, async()=>{

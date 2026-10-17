@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { canonicalJson, canonicalSha256 } from './canonical-json';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
@@ -14,12 +14,42 @@ export const inboundDescriptorSchema = z.object({
   authenticationReference: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
 }).strict();
 export type InboundDescriptor = z.infer<typeof inboundDescriptorSchema>;
+export const INBOUND_MIME_MAX_BYTES = 1024 * 1024;
+const privateMimeSchema = z.object({
+  format: z.literal('RFC822_V1'),
+  rawBase64: z.string().min(4).max(4 * Math.ceil(INBOUND_MIME_MAX_BYTES / 3)),
+  rawBytes: z.number().int().positive().max(INBOUND_MIME_MAX_BYTES),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  textProjection: z.enum(['PLAIN_TEXT', 'NONE']),
+  hasHtml: z.boolean(),
+  attachments: z.array(z.object({
+    ordinal: z.number().int().nonnegative().max(31),
+    filename: z.string().max(512).refine(value => !/[\u0000-\u001f\u007f]/.test(value)).nullable(),
+    contentType: z.string().max(127).regex(/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/),
+    disposition: z.enum(['inline', 'attachment']).nullable(),
+    contentId: z.string().max(998).refine(value => !/[\u0000-\u001f\u007f]/.test(value)).nullable(),
+    bytes: z.number().int().nonnegative().max(INBOUND_MIME_MAX_BYTES),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  }).strict()).max(32),
+}).strict().superRefine((value, ctx) => {
+  if (value.rawBase64.length > 4 * Math.ceil(INBOUND_MIME_MAX_BYTES / 3)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'ORDINARY_EMAIL_INBOUND_MIME_DENIED' });
+    return;
+  }
+  const bytes = Buffer.from(value.rawBase64, 'base64');
+  if (bytes.toString('base64') !== value.rawBase64 || bytes.length !== value.rawBytes
+    || createHash('sha256').update(bytes).digest('hex') !== value.sha256
+    || value.attachments.some((attachment, index) => attachment.ordinal !== index)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'ORDINARY_EMAIL_INBOUND_MIME_DENIED' });
+  }
+});
 export const inboundMessageSchema = z.object({
   externalMessageId: identifier.nullable(), inReplyTo: identifier.nullable(),
   sender: z.string().email().max(254),
   subject: z.string().max(998).refine(value => !/[\u0000-\u001f\u007f]/.test(value)),
   body: z.string().max(200_000).refine(value => !value.includes('\0')),
   receivedAt: z.string().datetime({ offset: true }).transform(value => new Date(value).toISOString()),
+  mime: privateMimeSchema.optional(),
 }).strict();
 export const inboundBatchSchema = z.object({
   generation: identifier, fromCursor: cursor.nullable(), nextCursor: cursor,
@@ -50,16 +80,17 @@ type Receipt = Readonly<{ received: true }>;
 const receipts = new WeakMap<Receipt, { bindingHash: string; positionHash: string; batch: InboundBatch; deadline: number }>();
 const sources = new WeakSet<object>();
 export type InboundSource = ReturnType<typeof createOrdinaryInboundSource>;
+export type InboundAdapter = {
+  readConfiguration(): { descriptor: InboundDescriptor; credential: string };
+  readAuthenticated(configuration: { descriptor: InboundDescriptor; credential: string },
+    position: InboundPosition, signal: AbortSignal): Promise<unknown>;
+};
 /** Private server adapter boundary, deliberately without a default connector,
  * environment reader, route or worker. readAuthenticated must verify TLS/SNI,
  * authenticate the configured mailbox and read without marking/deleting mail.
  * Its real protocol implementation is a separate qualification prerequisite.
  * A payload's authenticated=true is never accepted as authentication evidence. */
-export function createOrdinaryInboundSource(keyInput: PrivilegedStepUpKey, adapter: {
-  readConfiguration(): { descriptor: InboundDescriptor; credential: string };
-  readAuthenticated(configuration: { descriptor: InboundDescriptor; credential: string },
-    position: InboundPosition, signal: AbortSignal): Promise<unknown>;
-}) {
+export function createOrdinaryInboundSource(keyInput: PrivilegedStepUpKey, adapter: InboundAdapter) {
   const key = { ...keyInput };
   function assertBinding(binding: InboundBinding) {
     const configuration = adapter.readConfiguration();

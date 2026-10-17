@@ -108,6 +108,7 @@ async function associateInTransaction(tx: Tx, claimed: AuthSession, itemId: stri
     if (!item) deny();
     const payload = inboundMessageSchema.parse(item.payload);
     if (canonicalSha256(payload) !== item.payloadHash) deny();
+    if (payload.mime?.textProjection === 'NONE') deny();
     const reference = payload.inReplyTo?.match(/^<fai-smtp-([a-f0-9-]{36})-v([1-9][0-9]*)@crm\.finanzaagevolaimpresa\.it>$/);
     if (!reference || !uuid.safeParse(reference[1]).success || !Number.isSafeInteger(Number(reference[2])) || Number(reference[2])>2_147_483_647) deny();
     const state = await loadOrdinaryReplyCandidateContext(tx,claimed,reference[1],runtime);
@@ -128,7 +129,9 @@ async function associateInTransaction(tx: Tx, claimed: AuthSession, itemId: stri
     let replyId = existing?.replyId;
     if (!replyId) {
       const externalMessageId = `ordinary-inbound:${itemId}`;
-      const content = { ...payload, externalMessageId, canonicalMailboxId: item.mailboxId };
+      const content = { externalMessageId, canonicalMailboxId: item.mailboxId,
+        inReplyTo: payload.inReplyTo, sender: payload.sender, subject: payload.subject,
+        body: payload.body, receivedAt: payload.receivedAt };
       const reply = await tx.communicationReply.create({ data: { ...content, receivedAt: new Date(payload.receivedAt),
         contentHash: canonicalSha256(content), evidenceReference: `ORDINARY_INBOUND_${itemId.replaceAll('-','')}`,
         acquiredById: state.current.userId, linkedById: state.current.userId, messageId: state.row.id } });
@@ -168,6 +171,7 @@ export async function refreshStoredOrdinaryReplies(db: Db, claimed: AuthSession,
       JOIN "OrdinaryEmailInboundStream" s ON s."id"=i."streamId"
       WHERE s."mailboxId"=${state.box.id}::uuid AND i."payload"->>'inReplyTo'=${reference}
         AND lower(i."payload"->>'sender') IN (${Prisma.join(participants)})
+        AND COALESCE(i."payload"->'mime'->>'textProjection','PLAIN_TEXT')='PLAIN_TEXT'
         AND NOT EXISTS(SELECT 1 FROM "OrdinaryEmailInboundLink" l WHERE l."itemId"=i."id")
         AND NOT EXISTS(SELECT 1 FROM "OrdinaryEmailInboundConflict" c WHERE c."itemId"=i."id")
       ORDER BY i."id" LIMIT 26`;

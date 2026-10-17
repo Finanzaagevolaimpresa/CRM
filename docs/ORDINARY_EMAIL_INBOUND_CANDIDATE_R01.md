@@ -22,7 +22,21 @@ La qualifica HMAC è vincolata a stream/casella/revisioni, descrittore, scadenza
 
 Una lettura limitata (15 secondi, 25 elementi, 2 MiB normalizzati) precede una transazione unica. La transazione ricontrolla chiave nativa, casella, qualifica, scadenza e posizione, poi inserisce elementi/conflitti, ricevuta e audit insieme al cursore. I duplicati identici non creano risposte. Due letture dello stesso cursore hanno un solo vincitore. Errori di audit non avanzano il cursore; esito di commit incerto non viene ritentato automaticamente. La lettura successiva deve riacquisire la posizione corrente. Nessun messaggio viene cancellato o confermato al provider.
 
-Il contratto attuale ammette solo il payload testuale normalizzato definito dal tipo; il futuro adattatore deve rifiutare formati, allegati o dimensioni non gestiti senza avanzare il cursore. Non può troncare o dichiarare acquisita una pagina incompleta. Protocollo concreto, semantica della paginazione, MIME/allegati e recupero dopo cambio generazione restano da qualificare sul canale deliberato.
+Il percorso MIME privato accetta byte RFC822 solo dal confine autenticato già qualificato. Il connettore deve fornire la dimensione integrale dichiarata dal server e un istante di ricezione stabile: né l'header Date né l'ora del fetch determinano la ricezione. Protocollo concreto, semantica della paginazione e recupero dopo cambio generazione restano da qualificare sul canale deliberato.
+
+## MIME e allegati privati
+
+La factory aggiuntiva usa postal-mime 4.0.7, fissato nel lockfile, per decodificare header, charset, quoted-printable e base64. Prima del decoder tollerante verifica la struttura MIME: separatori header/corpo, header strutturali singoli, chiusura di ogni multipart, encoding e limiti. Ammette multipart mixed/alternative/related; gli altri contenitori e gli encoding non supportati negano il lotto intero. Nessun troncamento, acquisizione parziale, retry o avanzamento del cursore su errore.
+
+Limiti espliciti: 25 messaggi, 1 MiB di byte originali complessivi per pagina e per messaggio, 64 parti, profondità 12, 32 KiB di header per parte e 64 KiB complessivi, 32 allegati. Resta il tetto esistente di 2 MiB normalizzati per lotto. Un messaggio oltre i limiti richiede una successiva procedura deliberata; non viene saltato automaticamente.
+
+Il payload immutabile conserva privatamente i byte originali in base64, dimensione e SHA256, più un manifesto degli allegati con ordine, nome originale, tipo dichiarato, disposizione, Content-ID, dimensione e SHA256 dei byte decodificati. I nomi non diventano percorsi sul filesystem e il tipo dichiarato non attesta sicurezza del contenuto. Gli allegati non vengono aperti, decompressi, eseguiti o promossi automaticamente a documenti CRM. I messaggi RFC822 allegati rimangono opachi e non possono fornire riferimenti o testo al messaggio esterno.
+
+Solo il testo semplice può essere proiettato nel contesto ammesso; HTML e risorse esterne non vengono renderizzati o richiesti. Un messaggio solo HTML rimane conservato nell'area privata senza proiezione M4, come i messaggi non associabili. La proiezione usa campi espliciti e non trasferisce originale, manifesto o header privati in risposte, audit o eventi. Gli allegati rimangono esclusi dalla nuova bozza; la loro eventuale consultazione/importazione ammessa è un residuo distinto.
+
+Le impronte comprendono l'intero originale: cambiare soltanto un allegato genera un conflitto, conserva la prima versione e nasconde anche una risposta precedentemente associata. Duplicati esatti restano idempotenti. Nessun valore JSON può sostituire la qualifica del canale o la ricevuta privata monouso.
+
+La qualifica MIME aggiunge dieci casi unitari e quattro casi PostgreSQL (75 totali nella suite dedicata): originali privati e proiezione esplicita, conflitto del solo allegato, pagina non valida senza scritture e conservazione privata dei non associabili/HTML. Gli esiti valgono solo dopo l'esecuzione sul nuovo HEAD; i 71 casi del candidato precedente non ne costituiscono prova.
 
 ## Associazione e visibilità
 
@@ -32,7 +46,7 @@ Solo dopo tali verifiche viene creata la risposta M4; audit, link ed evento sono
 
 La pagina comunicazioni offre «Collega risposte ricevute» sul messaggio con ricevuta ACCEPTED. L'action usa sessione/origine native, senza step-up, e rilegge versione e perimetro prima di individuare candidati. Solo riferimenti esatti e partecipanti della stessa casella arrivano al lotto di 25 elementi; nessuna inbox globale, conteggio di esclusi o chiamata al provider. Tutti i link e audit del lotto sono atomici. Il controllo di concorrenza resta sul messaggio e sugli item; risposta persa richiede rilettura, nessun retry automatico. Nessuna GET scrive collegamenti.
 
-«Prepara risposta» apre una nuova bozza nel contesto ammesso, mostrando il testo ricevuto come testo non attendibile. Mittente, destinatari, testo e allegati restano da compilare esplicitamente; nessuna approvazione ereditata. Il salvataggio controlla di nuovo sorgente/hash, contesto, documenti, riservatezza, sessione e conflitti, mantiene il riferimento nell'evento M4 e verifica scadenza con clock DB dopo audit. La bozza segue poi anteprima e decisione personale proprie. Il collegamento è una fonte di lavoro: non afferma threading RFC dell'email uscente o inoltro automatico del messaggio ricevuto. Adattatore di ricezione operativo, MIME/allegati e riconciliazione dei non associabili restano residui.
+«Prepara risposta» apre una nuova bozza nel contesto ammesso, mostrando il testo ricevuto come testo non attendibile. Mittente, destinatari, testo e allegati restano da compilare esplicitamente; nessuna approvazione ereditata. Il salvataggio controlla di nuovo sorgente/hash, contesto, documenti, riservatezza, sessione e conflitti, mantiene il riferimento nell'evento M4 e verifica scadenza con clock DB dopo audit. La bozza segue poi anteprima e decisione personale proprie. Il collegamento è una fonte di lavoro: non afferma threading RFC dell'email uscente o inoltro automatico del messaggio ricevuto. Adattatore di ricezione operativo, consultazione/importazione ammessa degli allegati, rappresentazione ammessa dei messaggi solo HTML e riconciliazione dei non associabili restano residui.
 
 ## Qualificazione e recuperabilità
 
