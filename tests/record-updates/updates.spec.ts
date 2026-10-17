@@ -163,8 +163,13 @@ test('non-Admin notices use native source privacy; late restriction/conflict den
         await reader.goto('/notifications');
         expect(await reader.getByText(/^\d+ attive$/).textContent()).not.toBe(baselineCount);
         await reader.goto(href); await expect(reader.getByRole('button', { name: 'Segna come letto' })).toBeVisible();
-        const names = await reader.locator('form input').evaluateAll(inputs => inputs.map(input => input.getAttribute('name') ?? ''));
-        actionName = names.find(name => name.startsWith('$ACTION_ID_')) ?? '';
+        const readForm = reader.locator('form').filter({ has: reader.getByRole('button', { name: 'Segna come letto', exact: true }) });
+        await expect(readForm).toHaveCount(1);
+        await expect(readForm.locator('input[name="id"]')).toHaveValue(work.id);
+        const names = await readForm.locator('input').evaluateAll(inputs => inputs.map(input => input.getAttribute('name') ?? ''));
+        const actionNames = names.filter(name => name.startsWith('$ACTION_ID_'));
+        expect(actionNames).toHaveLength(1);
+        actionName = actionNames[0];
         expect(actionName).toMatch(/^\$ACTION_ID_/);
         expect((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } })).readAt).toBeNull();
       }
@@ -174,6 +179,7 @@ test('non-Admin notices use native source privacy; late restriction/conflict den
       // control. Subsequent POSTs cannot pass merely by using an invalid action.
       const response = await rc.request.post(href, { headers: { origin }, multipart: { [actionName]: '', id: work.id } });
       expect([200, 303, 404]).toContain(response.status());
+      expect(new URL(response.url()).pathname).toBe(href);
       const row = await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } });
       if (restriction === 'ORDINARY') expect(row.readAt).not.toBeNull();
       else {
