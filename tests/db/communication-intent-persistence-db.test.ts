@@ -375,8 +375,9 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
     const userId = '00000000-0000-4000-8000-000000154302';
     const sessionId = '00000000-0000-4000-8000-000000154300';
     try {
-      await oldClient.user.create({ data: { id: userId, email: 'schema43@n15.invalid', name: 'N15 Schema43',
-        passwordHash: 'synthetic-not-a-real-password-hash', role: 'commerciale', active: true }, select: { id: true } });
+      await oldClient.$executeRaw`INSERT INTO "User"
+        (id,email,name,"passwordHash",role,active,"updatedAt") VALUES
+        (${userId},'schema43@n15.invalid','N15 Schema43','synthetic-not-a-real-password-hash','commerciale',true,NOW())`;
       await oldClient.internalSession.create({ data: { id: sessionId, userId, tokenDigest: Buffer.alloc(32, 43),
         expiresAt: new Date('2099-01-01T00:00:00.000Z') } });
       await oldClient.commercialLeadSlaPolicyVersion.create({ data: { id: '00000000-0000-4000-8000-000000154301',
@@ -384,8 +385,10 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
         timezoneCode: 'UTC', responseTargetSeconds: 3600, createdById: userId } });
       const actor = { userId, sessionId };
       const createItem = async (suffix: string) => {
-        const lead = await oldClient.lead.create({ data: { id: `n15-schema43-lead-${suffix}`, firstName: 'Synthetic',
-          lastName: suffix, source: 'CRM', leadSource: 'manuale' }, select: { id: true } });
+        const lead = { id: `n15-schema43-lead-${suffix}` };
+        await oldClient.$executeRaw`INSERT INTO "Lead"
+          (id,"firstName","lastName",source,"leadSource","updatedAt") VALUES
+          (${lead.id},'Synthetic',${suffix},'CRM','manuale',NOW())`;
         const item = await initializeCommercialLeadInboxItem(oldClient, { leadId: lead.id, actor,
           attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' });
         return { lead, item };

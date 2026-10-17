@@ -2208,16 +2208,12 @@ test('upgrade reale PR74→PR75→PR76→PR77→PR79→PR80 preserva replay, bar
     datasources: { db: { url: upgradeUrl.toString() } },
   });
   try {
-    const legacyUser = await upgradePrisma.user.create({
-      select: { id: true },
-      data: {
-        email: `legacy-upgrade-${runId}@example.test`,
-        name: 'Legacy upgrade synthetic admin',
-        passwordHash,
-        role: 'admin',
-        active: true,
-      },
-    });
+    // Historical schema fixture: the current ORM inserts newer default columns
+    // even with select:id. Insert only the columns present at this upgrade step.
+    const legacyUser = { id: randomUUID() };
+    await upgradePrisma.$executeRaw`INSERT INTO "User"
+      (id,email,name,"passwordHash",role,active,"updatedAt") VALUES
+      (${legacyUser.id},${`legacy-upgrade-${runId}@example.test`},'Legacy upgrade synthetic admin',${passwordHash},'admin',true,NOW())`;
     await upgradePrisma.aiOrchestratorSetting.update({
       where: { id: 'global' },
       data: {
@@ -2685,16 +2681,10 @@ test('preflight PR80 fallisce count-only su reason PR79 incompatibile e non inst
     datasources: { db: { url: preflightUrl.toString() } },
   });
   try {
-    const actor = await preflightPrisma.user.create({
-      select: { id: true },
-      data: {
-        email: `pr80-preflight-${runId}@example.test`,
-        name: 'PR80 preflight synthetic admin',
-        passwordHash,
-        role: 'admin',
-        active: true,
-      },
-    });
+    const actor = { id: randomUUID() };
+    await preflightPrisma.$executeRaw`INSERT INTO "User"
+      (id,email,name,"passwordHash",role,active,"updatedAt") VALUES
+      (${actor.id},${`pr80-preflight-${runId}@example.test`},'PR80 preflight synthetic admin',${passwordHash},'admin',true,NOW())`;
     const head = await preflightPrisma.aiOrchestratorAdminPolicyRevision.findFirstOrThrow({
       where: { scopeType: 'GLOBAL', scopeCode: 'global' },
       orderBy: { version: 'desc' },

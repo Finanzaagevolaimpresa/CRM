@@ -48,14 +48,18 @@ test('recovery image retains versioned history and current access denials', asyn
   try {
     await visible(false);
     await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: true } });
+    expect((await db.user.findUniqueOrThrow({ where: { id: override.userId } })).recordUpdateEpoch).toBe(ownerBefore.recordUpdateEpoch + 1);
     await visible(true);
     await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: false } });
+    expect((await db.user.findUniqueOrThrow({ where: { id: override.userId } })).recordUpdateEpoch).toBe(ownerBefore.recordUpdateEpoch + 2);
     await visible(false);
   } finally {
     await db.document.update({ where: { id: material.id }, data: { containsSensitiveData: material.containsSensitiveData } });
     await db.userPermissionOverride.update({ where: { id: override.id }, data: { allowed: override.allowed } });
   }
-  expect((await db.user.findUniqueOrThrow({ where: { id: override.userId } })).recordUpdateEpoch).toBe(ownerBefore.recordUpdateEpoch + 2);
+  // Restoring the permission also updates its timestamp: all three persisted
+  // permission revisions invalidate the old recipient decision monotonically.
+  expect((await db.user.findUniqueOrThrow({ where: { id: override.userId } })).recordUpdateEpoch).toBe(ownerBefore.recordUpdateEpoch + 3);
   await visible(true);
   const legacy = await db.clientDossier.findFirstOrThrow({ where: { clientId: dossier.clientId, practiceReadinessId: null } });
   const reviewer = await browser.newContext();

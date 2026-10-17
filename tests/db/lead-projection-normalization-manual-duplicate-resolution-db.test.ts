@@ -498,14 +498,10 @@ async function qualifyMigration(upgrade: boolean) {
     if (upgrade) {
       const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
       try {
-        historicalLeadId = (await before.lead.create({
-          data: {
-            firstName: 'Historical',
-            lastName: 'N12',
-            email: 'historical@n13-upgrade.invalid',
-          },
-          select: { id: true },
-        })).id;
+        historicalLeadId = 'n13-upgrade-historical-lead';
+        await before.$executeRaw`INSERT INTO "Lead"
+          (id,"firstName","lastName",email,"updatedAt") VALUES
+          (${historicalLeadId},'Historical','N12','historical@n13-upgrade.invalid',NOW())`;
         await before.secureLeadGatewayKeyVersion.create({
           data: {
             id: historicalKeyId,
@@ -625,16 +621,10 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
     if (upgrade) {
       const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
       try {
-        historicalLeadId = (await before.lead.create({
-          data: {
-            firstName: 'Jose\u0301',
-            lastName: 'N13-C2',
-            companyName: 'Cafe\u0301 Synthetic',
-            email: 'u\u0308pgrade@n13-c2.invalid',
-            source: 'N13_C2_UPGRADE_SENTINEL',
-          },
-          select: { id: true },
-        })).id;
+        historicalLeadId = 'n13-c2-upgrade-historical-lead';
+        await before.$executeRaw`INSERT INTO "Lead"
+          (id,"firstName","lastName","companyName",email,source,"updatedAt") VALUES
+          (${historicalLeadId},${'Jose\u0301'},'N13-C2',${'Cafe\u0301 Synthetic'},${'u\u0308pgrade@n13-c2.invalid'},'N13_C2_UPGRADE_SENTINEL',NOW())`;
       } finally {
         await before.$disconnect();
       }

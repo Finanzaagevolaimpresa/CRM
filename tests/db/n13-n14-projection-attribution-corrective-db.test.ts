@@ -422,14 +422,9 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   try {
     deploy(fixture.databaseUrl, fixture.schemaPath);
     client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
-    await client.lead.create({ data: {
-      id: leadId,
-      firstName: 'Migration',
-      lastName: 'Sentinel',
-      email: 'migration-sentinel@n13-n14.invalid',
-      source: 'CRM',
-      leadSource: 'manuale',
-    } });
+    await client.$executeRaw`INSERT INTO "Lead"
+      (id,"firstName","lastName",email,source,"leadSource","updatedAt") VALUES
+      (${leadId},'Migration','Sentinel','migration-sentinel@n13-n14.invalid','CRM','manuale',NOW())`;
     await client.$executeRaw(Prisma.sql`
       INSERT INTO "CommercialLeadInboxItem" (
         "id", "leadId", "originKind", "sourceSystem", "formCode", "formVersion",
