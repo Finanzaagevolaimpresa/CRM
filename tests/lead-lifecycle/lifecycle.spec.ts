@@ -23,9 +23,10 @@ async function login(page: Page, email: string, stepUp = false) {
   }
 }
 async function openAction(page: Page, label: string, title: string) {
-  // The form is initially inside closed details; open its visible summary first.
+  await page.getByRole('button', { name: label + ': ' + title, exact: true }).click();
   const form = page.locator('form[aria-label=' + JSON.stringify(label + ': ' + title) + ']');
-  await form.locator('..').locator('summary').click();
+  await expect(page.getByRole('dialog', { name: label, exact: true })).toBeVisible();
+  expect(await form.evaluate(node => { const box = node.getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth; })).toBe(true);
   await form.getByLabel('Confermo queste conseguenze per questo lead', { exact: true }).check();
   return form;
 }
@@ -46,8 +47,12 @@ test('native list/detail trash and restore, old-session denial, replay, preserve
   await login(admin, f.emails.admin, true); await login(owner, f.emails.owner);
   await owner.goto('/leads/' + row.lead.id);
   await expect(owner.getByText(row.label, { exact: true }).first()).toBeVisible();
-  await expect(owner.locator('summary').filter({ hasText: 'Sposta nel cestino' })).toHaveCount(0);
+  await expect(owner.getByRole('button', { name: 'Sposta nel cestino: ' + row.label, exact: true })).toHaveCount(0);
   await admin.goto('/leads');
+  const cancelled = await openAction(admin, 'Sposta nel cestino', row.label);
+  await cancelled.getByRole('button', { name: 'Annulla', exact: true }).click();
+  await expect(admin.getByRole('dialog')).toHaveCount(0);
+  expect(await db.auditLog.count({ where: { entityId: row.lead.id, event: 'lead_lifecycle_changed' } })).toBe(0);
   const getPost = capture(admin), form = await openAction(admin, 'Sposta nel cestino', row.label);
   await form.getByLabel('Motivo facoltativo').selectOption('DUPLICATE');
   await admin.screenshot({ path: path.join(evidence, 'lead-list-desktop.png'), fullPage: true });
@@ -77,6 +82,7 @@ test('native list/detail trash and restore, old-session denial, replay, preserve
   expect(await db.auditLog.count({ where: { entityId: row.lead.id, event: 'lead_lifecycle_changed' } })).toBe(2);
   expect(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: row.cycle!.id } })).toEqual(row.cycle);
   await owner.reload(); await expect(owner.getByText(row.label, { exact: true }).first()).toBeVisible();
+  expect(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await admin.screenshot({ path: path.join(evidence, 'lead-detail-mobile.png'), fullPage: true });
   await admin.setViewportSize({ width: 1440, height: 1000 });
   await admin.screenshot({ path: path.join(evidence, 'lead-restored-desktop.png'), fullPage: true });

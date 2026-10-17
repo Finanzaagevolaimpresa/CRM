@@ -174,3 +174,8 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 4px rgba(128, 204, 42, 0.18);
 }
 }
+
+/* Lead names, addresses and form controls must fit a narrow record view. */
+.lead-detail-page { min-width: 0; overflow-wrap: anywhere; }
+.lead-detail-page .grid > *, .lead-detail-page header .flex > * { min-width: 0; }
+.lead-detail-page input, .lead-detail-page textarea, .lead-detail-page select { min-width: 0; max-width: 100%; }
