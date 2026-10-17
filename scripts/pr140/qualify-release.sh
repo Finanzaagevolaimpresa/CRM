@@ -11,7 +11,7 @@ tree="$(git rev-parse HEAD^{tree})"
 recovery_head="$head"
 recovery_tree="$tree"
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema50 requires selective enforcement in every serving image. Qualify only
+# Schema51 requires lifecycle, selective access and durable email state in every serving image. Qualify only
 # a restart of this exact candidate; an older binary is never a safe rollback.
 node scripts/m4/verify-schema.mjs
 git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
@@ -175,6 +175,7 @@ node --import tsx tests/pr140-release/selective-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 export R05_SELECTIVE_PHASE=candidate
 run_browser candidate-selective tests/pr140-release/playwright.config.ts selective-recovery.spec.ts 1
+node --import tsx tests/pr140-release/ordinary-state.ts
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
 stop_app
@@ -213,6 +214,6 @@ cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA50_SELECTIVE_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":50,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA51_EMAIL_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":51,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"

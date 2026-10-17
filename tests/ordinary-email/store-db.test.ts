@@ -138,9 +138,9 @@ function fault(mode: 'error' | 'delay' | 'outcome-error'): PrismaClient {
   }, opts) } as unknown as PrismaClient;
 }
 
-test('ordinary store keeps schema50 and has a real native minimizer', options, async () => {
+test('ordinary store uses schema51 and has a real native minimizer', options, async () => {
   const [count] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(count.count,50);
+  assert.equal(count.count,51);
   const [value] = await db.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='AuditLog_redaction_n04_v1' AND tgenabled='O') AS present`;
   assert.equal(value.present,true);
 });
@@ -861,9 +861,10 @@ test('one-shot Register composition commits a private MIME page and idle makes n
 });
 
 test('one-shot receiver refuses stale source, disabled stream, retired key or wrong destination before connecting',options,async()=>{
-  for(const mode of ['source','disabled','key','destination'] as const) {
+  for(const [index,mode] of (['source','disabled','key','destination'] as const).entries()) {
+    const descriptor={...registerInboundDescriptor,generation:String(9100+index)};
     const env=sourceEnvironment(),f=await inboundFixture({descriptor:mode==='destination'
-      ? {...registerInboundDescriptor,host:'outside.invalid.test'} : registerInboundDescriptor,
+      ? {...descriptor,host:'outside.invalid.test'} : descriptor,
       credential:env.DIRECT_EMAIL_TEST_SMTP_PASSWORD,cursor:'100'});
     if(mode==='source') env.DIRECT_EMAIL_TEST_SMTP_PASSWORD='ROTATED_SYNTHETIC_CREDENTIAL';
     if(mode==='disabled') await db.$executeRaw`UPDATE "OrdinaryEmailInboundStream" SET "enabled"=false,"revision"="revision"+1 WHERE "id"=${f.binding.id}::uuid`;

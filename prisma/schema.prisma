@@ -371,6 +371,9 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  ordinaryEmailAuthorities OrdinaryEmailAuthority[]
+  ordinaryEmailDecisions OrdinaryEmailDecision[]
+  ordinaryInboundLinks OrdinaryEmailInboundLink[]
   selectiveAccessAuthority SelectiveAccessAuthority?
   selectiveProjectGrants SelectiveProjectGrant[] @relation("SelectiveRecipient")
   selectiveProjectApprovals SelectiveProjectGrant[] @relation("SelectiveApprover")
@@ -413,6 +416,7 @@ model User {
 }
 
 model InternalSession {
+  ordinaryEmailDecisions OrdinaryEmailDecision[]
   id                       String                   @id @default(uuid()) @db.Uuid
   userId                   String
   tokenDigest              Bytes                    @unique
@@ -2895,6 +2899,9 @@ model PracticeMaterialAttestation {
 
 // M4: manual external email. These records do not enable a provider or worker.
 model CommunicationMailbox {
+  ordinaryEmailAuthorities OrdinaryEmailAuthority[]
+  ordinaryEmailChannel OrdinaryEmailChannel?
+  ordinaryInboundStreams OrdinaryEmailInboundStream[]
   id String @id @default(uuid()) @db.Uuid
   address String @unique @db.VarChar(254)
   purpose String @db.VarChar(200)
@@ -2933,6 +2940,8 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  ordinaryEmailDecisions OrdinaryEmailDecision[]
+  ordinaryEmailAttempts OrdinaryEmailAttempt[]
   id String @id @default(uuid()) @db.Uuid
   clientId String
   readinessId String? @db.Uuid
@@ -2957,6 +2966,7 @@ model ApprovedCommunication {
   @@index([state, updatedAt])
 }
 model CommunicationVersion {
+  ordinaryEmailDecisions OrdinaryEmailDecision[]
   id String @id @default(uuid()) @db.Uuid
   messageId String @db.Uuid
   revision Int
@@ -3002,6 +3012,7 @@ model CommunicationAttempt {
   @@index([messageId, createdAt])
 }
 model CommunicationReply {
+  ordinaryInboundLink OrdinaryEmailInboundLink?
   id String @id @default(uuid()) @db.Uuid
   canonicalMailboxId String @db.Uuid
   externalMessageId String @db.VarChar(255)
@@ -3033,4 +3044,137 @@ model CommunicationEvent {
   message ApprovedCommunication? @relation(fields: [messageId], references: [id], onDelete: Restrict)
   reply CommunicationReply? @relation(fields: [replyId], references: [id], onDelete: Restrict)
   @@index([messageId, createdAt])
+}
+
+
+// Ordinary email: constraints, partial indexes and append-only triggers are
+// enforced by migration51; no model creates an authority or channel implicitly.
+model OrdinaryEmailAuthority {
+  id String @id
+  userId String
+  mailboxId String @db.Uuid
+  revision Int @default(1)
+  enabled Boolean @default(false)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+model OrdinaryEmailChannel {
+  mailboxId String @id @db.Uuid
+  mailboxRevision Int
+  revision Int @default(1)
+  qualificationReference String @db.VarChar(128)
+  enabled Boolean @default(false)
+  mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+model OrdinaryEmailDecision {
+  id String @id @db.Uuid
+  messageId String @db.Uuid
+  versionId String @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  decision Json
+  decisionHash String @db.Char(64)
+  proof String @db.Char(64)
+  envelopeHash String @db.Char(64)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  version CommunicationVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  attempt OrdinaryEmailAttempt?
+}
+model OrdinaryEmailAttempt {
+  id String @id @db.Uuid
+  requestId String @unique @db.Uuid
+  decisionId String @unique @db.Uuid
+  messageId String @db.Uuid
+  state String @default("RESERVED")
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  decision OrdinaryEmailDecision @relation(fields: [decisionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  message ApprovedCommunication @relation(fields: [messageId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  claim OrdinaryEmailClaim?
+  outcome OrdinaryEmailOutcome?
+}
+model OrdinaryEmailClaim {
+  id String @id @db.Uuid
+  attemptId String @unique @db.Uuid
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  attempt OrdinaryEmailAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  outcome OrdinaryEmailOutcome?
+}
+model OrdinaryEmailOutcome {
+  id String @id @db.Uuid
+  attemptId String @unique @db.Uuid
+  claimId String @unique @db.Uuid
+  outcome String
+  phase String
+  replyCode Int?
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  attempt OrdinaryEmailAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  claim OrdinaryEmailClaim @relation(fields: [claimId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+model OrdinaryEmailInboundStream {
+  id String @id @db.Uuid
+  mailboxId String @db.Uuid
+  mailboxRevision Int
+  revision Int @default(1)
+  descriptor Json
+  descriptorHash String @db.Char(64)
+  qualificationReference String @db.VarChar(128)
+  validUntil DateTime @db.Timestamptz(3)
+  enabled Boolean @default(false)
+  cursor String? @db.VarChar(512)
+  cursorVersion Int @default(0)
+  mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  batches OrdinaryEmailInboundBatch[]
+  items OrdinaryEmailInboundItem[]
+  @@unique([mailboxId, descriptorHash])
+}
+model OrdinaryEmailInboundBatch {
+  id String @id @db.Uuid
+  streamId String @db.Uuid
+  streamRevision Int
+  fromVersion Int
+  fromCursorHash String @db.Char(64)
+  nextCursorHash String @db.Char(64)
+  batchHash String @db.Char(64)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  stream OrdinaryEmailInboundStream @relation(fields: [streamId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  items OrdinaryEmailInboundItem[]
+  conflicts OrdinaryEmailInboundConflict[]
+  @@unique([streamId, fromVersion])
+}
+model OrdinaryEmailInboundItem {
+  id String @id @db.Uuid
+  streamId String @db.Uuid
+  batchId String @db.Uuid
+  providerId String @db.VarChar(255)
+  payload Json
+  payloadHash String @db.Char(64)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  stream OrdinaryEmailInboundStream @relation(fields: [streamId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  batch OrdinaryEmailInboundBatch @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  conflicts OrdinaryEmailInboundConflict[]
+  link OrdinaryEmailInboundLink?
+  @@unique([streamId, providerId])
+}
+model OrdinaryEmailInboundConflict {
+  id String @id @db.Uuid
+  itemId String @db.Uuid
+  batchId String @db.Uuid
+  observedHash String @db.Char(64)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  item OrdinaryEmailInboundItem @relation(fields: [itemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  batch OrdinaryEmailInboundBatch @relation(fields: [batchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@unique([itemId, observedHash])
+}
+model OrdinaryEmailInboundLink {
+  itemId String @id @db.Uuid
+  replyId String @unique @db.Uuid
+  actorId String
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  item OrdinaryEmailInboundItem @relation(fields: [itemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reply CommunicationReply @relation(fields: [replyId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 }

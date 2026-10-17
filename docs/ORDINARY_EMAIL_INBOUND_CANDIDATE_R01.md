@@ -1,5 +1,7 @@
 # Ricezione ordinaria: candidato isolato
 
+Aggiornamento schema51: i modelli e le undici tabelle sono ora nella migration additiva `20261017120000_ordinary_email_v1`, sulla base PR191 rilasciata. I riferimenti sotto al DDL isolato descrivono la fase precedente; quei file restano solo sintetici. Stato e vincoli correnti: [ORDINARY_EMAIL_MIGRATION51_R01.md](ORDINARY_EMAIL_MIGRATION51_R01.md). Nessuna attivazione produttiva deriva dalla migration.
+
 Il candidato aggiunge acquisizione privata con cursore e associazione derivata, senza route, scheduler, connettore predefinito o casella attivata. La ricezione non dipende dalla sessione di Antonio e non richiede conferme per ogni messaggio. La successiva decisione personale di invio rimane distinta.
 
 ## Riuso e modello

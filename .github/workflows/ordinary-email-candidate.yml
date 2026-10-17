@@ -58,38 +58,12 @@ jobs:
           grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
-      - name: Qualify guarded additive DDL only on an isolated schema50 database
+      - name: Qualify additive migration51, immutable prefix50 and atomic failure
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
-          git diff --exit-code 6583e918380d0bf658cd675f5e553e7de72c9de5 -- prisma
-          npm run prisma:migrate:deploy
-          ddl=scripts/ordinary-email/storage-candidate.sql
-          evidence="$RUNNER_TEMP/ordinary-email"
-          mkdir -p "$evidence"
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/no-sentinel.log" 2>&1; then exit 1; fi
-          grep -Fq ORDINARY_EMAIL_SYNTHETIC_DATABASE_REQUIRED "$evidence/no-sentinel.log"
-          inbound=scripts/ordinary-email/inbound-candidate.sql
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$inbound" > "$evidence/inbound-no-sentinel.log" 2>&1; then exit 1; fi
-          grep -Fq ORDINARY_EMAIL_SYNTHETIC_DATABASE_REQUIRED "$evidence/inbound-no-sentinel.log"
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$ddl" > "$evidence/fault.sql"
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log" 2>&1; then exit 1; fi
-          grep -Fq 'division by zero' "$evidence/fault.log"
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'OrdinaryEmail%'")" = 0
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$inbound" > "$evidence/inbound-no-base.log" 2>&1; then exit 1; fi
-          grep -Fq ORDINARY_EMAIL_INBOUND_BASE_REQUIRED "$evidence/inbound-no-base.log"
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$ddl"
-          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$inbound" > "$evidence/inbound-fault.sql"
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/inbound-fault.sql" > "$evidence/inbound-fault.log" 2>&1; then exit 1; fi
-          grep -Fq 'division by zero' "$evidence/inbound-fault.log"
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'OrdinaryEmailInbound%'")" = 0
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$inbound"
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailInboundStream"')" = 0
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 50
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailAuthority"')" = 0
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailChannel"')" = 0
+          bash scripts/ordinary-email/qualify-migration.sh
       - name: Exact decision, durable consumption, native audit and concurrent manual path
         shell: bash
         run: |
@@ -99,8 +73,7 @@ jobs:
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
-          sha256sum scripts/ordinary-email/storage-candidate.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
-          sha256sum scripts/ordinary-email/inbound-candidate.sql > "$RUNNER_TEMP/ordinary-email/inbound-ddl.sha256"
+          sha256sum prisma/migrations/20261017120000_ordinary_email_v1/migration.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
       - name: Native browser decisions through an isolated real TLS transport
         shell: bash
         env:

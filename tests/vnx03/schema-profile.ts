@@ -5,5 +5,6 @@ export function qualificationSchema() {
   if (profile === 'candidate-schema48') return { profile, migrations: 48 } as const;
   if (profile === 'candidate-schema49') return { profile, migrations: 49 } as const;
   if (profile === 'candidate-schema50') return { profile, migrations: 50 } as const;
+  if (profile === 'candidate-schema51') return { profile, migrations: 51 } as const;
   throw new Error('VNX03_QUALIFICATION_PROFILE_INVALID');
 }

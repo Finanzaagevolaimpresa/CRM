@@ -52,19 +52,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind exact candidate and unchanged schema50
+      - name: Bind exact candidate and immutable schema50 prefix
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
-          git diff --exit-code 6583e918380d0bf658cd675f5e553e7de72c9de5 -- prisma
+          node scripts/m4/verify-schema.mjs
           evidence="$RUNNER_TEMP/lifecycle-evidence"
           mkdir -p "$evidence"
           echo "SELECTIVE_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/lifecycle-documents" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 50
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
       - name: PostgreSQL lifecycle, native audit, permissions and concurrency
         if: matrix.target == 'postgresql'
         shell: bash

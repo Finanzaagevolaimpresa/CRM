@@ -1,5 +1,7 @@
 # Email ordinario — candidato separato R01
 
+Aggiornamento schema51: i modelli e le undici tabelle sono ora nella migration additiva `20261017120000_ordinary_email_v1`, sulla base PR191 rilasciata. I riferimenti sotto al DDL isolato descrivono la fase precedente; quei file restano solo sintetici. Stato e vincoli correnti: [ORDINARY_EMAIL_MIGRATION51_R01.md](ORDINARY_EMAIL_MIGRATION51_R01.md). Nessuna attivazione produttiva deriva dalla migration.
+
 Mandato COORD-DUE-PIANI-CRM-20261016-R01. Questo candidato prepara il nucleo verificabile dell'invio ordinario; non abilita un canale e non chiude il flusso completo. È separato da PR191, lifecycle progetti.
 
 ## Capacità esistenti e delta

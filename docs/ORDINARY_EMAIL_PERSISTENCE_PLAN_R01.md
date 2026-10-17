@@ -1,5 +1,7 @@
 # Email ordinario — persistenza e integrazione R01
 
+Aggiornamento schema51: i modelli e le undici tabelle sono ora nella migration additiva `20261017120000_ordinary_email_v1`, sulla base PR191 rilasciata. I riferimenti sotto al DDL isolato descrivono la fase precedente; quei file restano solo sintetici. Stato e vincoli correnti: [ORDINARY_EMAIL_MIGRATION51_R01.md](ORDINARY_EMAIL_MIGRATION51_R01.md). Nessuna attivazione produttiva deriva dalla migration.
+
 Ricognizione sul candidato PR192, schema50. Questo documento identifica il delta necessario e i vincoli; non è una migration eseguibile e non autorizza SQL produttivo. La prima release lifecycle resta PR191.
 
 ## Perché il modello M4 non basta

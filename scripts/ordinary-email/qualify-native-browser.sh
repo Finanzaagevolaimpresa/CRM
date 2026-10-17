@@ -26,8 +26,9 @@ export DIRECT_EMAIL_TEST_SMTP_HOST=authsmtp.securemail.pro
 export DATABASE_URL='postgresql://postgres:synthetic-ordinary-browser-only@127.0.0.1:5433/fai_crm_test?schema=public'
 npm run prisma:migrate:deploy
 psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ordinary-email/storage-candidate.sql
-psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/ordinary-email/inbound-candidate.sql
+test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
+test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailAuthority"')" = 0
+test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailInboundStream"')" = 0
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "InternalSession"')" = 0
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "User"')" = 0
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=Synthetic Ordinary CA' \

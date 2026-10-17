@@ -1,5 +1,7 @@
 # Decisione personale email nella pagina nativa — R01
 
+Aggiornamento schema51: i modelli e le undici tabelle sono ora nella migration additiva `20261017120000_ordinary_email_v1`, sulla base PR191 rilasciata. I riferimenti sotto al DDL isolato descrivono la fase precedente; quei file restano solo sintetici. Stato e vincoli correnti: [ORDINARY_EMAIL_MIGRATION51_R01.md](ORDINARY_EMAIL_MIGRATION51_R01.md). Nessuna attivazione produttiva deriva dalla migration.
+
 PR192 resta draft distinta da PR191. `/communications` integra anteprima, rifiuto, «Approva e invia» e ricevute tramite le azioni Next. L'invio usa il trasporto server descritto in [ORDINARY_EMAIL_TRANSPORT_R01.md](ORDINARY_EMAIL_TRANSPORT_R01.md). Nessun binding o canale produttivo viene creato: l'autorità email rimane distinta dalla condivisione progetti.
 
 Il server mostra i controlli alla persona del binding email corrente, con chiave e cookie/sessione validi. Ogni azione ricarica contesto, documenti/byte, casella, autorità e orologio del database. Gli altri Admin possono consultare quanto loro ammesso, ma non decidere per la persona. L'assenza delle sei tabelle candidate mantiene utilizzabile schema50; schema parziale o errore SQL non simula una disponibilità positiva.

@@ -1,5 +1,7 @@
 # Email ordinario — candidato PostgreSQL R01
 
+Aggiornamento schema51: i modelli e le undici tabelle sono ora nella migration additiva `20261017120000_ordinary_email_v1`, sulla base PR191 rilasciata. I riferimenti sotto al DDL isolato descrivono la fase precedente; quei file restano solo sintetici. Stato e vincoli correnti: [ORDINARY_EMAIL_MIGRATION51_R01.md](ORDINARY_EMAIL_MIGRATION51_R01.md). Nessuna attivazione produttiva deriva dalla migration.
+
 Implementazione isolata nella PR192. `scripts/ordinary-email/storage-candidate.sql` è un DDL di prova: richiede database `fai_crm_test`, sentinel nativo e schema50. È fuori da `prisma/migrations`; non modifica lo schema Prisma né abilita il runtime. Nessuna riga di autorità o qualifica è creata dal DDL. I binding dei test sono interamente sintetici.
 
 ## Persistenza implementata
