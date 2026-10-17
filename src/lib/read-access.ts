@@ -64,7 +64,7 @@ async function loadClient(clientId: string) {
 }
 
 async function loadProject(projectId: string) {
-  const project = await prisma.project.findFirst({ where: { id: projectId, deletedAt: null } });
+  const project = await prisma.project.findFirst({ where: { id: projectId, deletedAt: null, status: { not: 'archiviato' } } });
   if (!project) return null;
   const client = await loadClient(project.clientId);
   return client ? { ...project, client } : null;

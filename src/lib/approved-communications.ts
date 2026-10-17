@@ -78,7 +78,7 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
   ]);
   if (!client || client.deletedAt || (practice.projectId && (!project || project.deletedAt || project.clientId !== client.id))
     || (practice.clientServiceId && (!service || service.deletedAt || service.clientId !== client.id || service.projectId !== practice.projectId))
-    || (write && service?.status === 'sospeso') || (write && project?.status === 'archiviato')) denied();
+    || (write && service?.status === 'sospeso') || project?.status === 'archiviato') denied();
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
   let allowed = false;

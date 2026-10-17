@@ -87,8 +87,9 @@ async function recipient(tx: Tx, id: string) {
     clientReadScope: await loadClientReadScope(tx, id), ...await loadSelectiveProjectScope(tx, id) } };
 }
 async function projectContext(tx: Tx, projectId: string) {
+  await tx.$queryRaw`SELECT "id" FROM "Project" WHERE "id"=${projectId} FOR SHARE`;
   const project = await tx.project.findUnique({ where: { id: projectId } });
-  if (!project || project.deletedAt) denied();
+  if (!project || project.deletedAt || project.status === 'archiviato') denied();
   const client = await tx.client.findUnique({ where: { id: project.clientId } });
   if (!client || client.deletedAt) denied();
   return { ...project, client };
@@ -242,6 +243,11 @@ async function authorizedSnapshot(tx: Tx, current: AuthSession, projectId: strin
   if (snapshot.input.projectId !== projectId || snapshot.input.recipientId !== current.userId || snapshot.input.revision + 1 !== grant.revision
     || snapshot.versions.length !== snapshot.input.documents.length || snapshot.input.expiresAt !== (grant.expiresAt?.toISOString() ?? null)) denied();
   const project = await projectContext(tx, projectId), target = await recipient(tx, current.userId);
+  // Restoration never revives an old permission. Rows/proofs/revocations remain
+  // intact; only a new personal confirmation issued after the lifecycle receipt
+  // can establish a valid selection again.
+  if (await tx.auditLog.findFirst({ where: { event: 'project_lifecycle_changed', entityType: 'Project', entityId: projectId,
+    createdAt: { gte: grant.approvedAt } }, select: { id: true } })) denied();
   for (const doc of snapshot.versions) {
     const selected = snapshot.input.documents.find(row => row.versionId === doc.versionId);
     const live = await allowedVersion(tx, target.actor, project, doc.versionId);

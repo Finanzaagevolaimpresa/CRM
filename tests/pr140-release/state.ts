@@ -40,6 +40,8 @@ async function main() {
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
   } else if (mode === 'footprint') {
     const data = {
+      projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
+      projectLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'project_lifecycle_changed' }, orderBy: { id: 'asc' } }),
       selectiveAuthorities: await db.selectiveAccessAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveGrants: await db.selectiveProjectGrant.findMany({ orderBy: { id: 'asc' } }),
       selectiveReceipts: await db.auditLog.findMany({ where: { event: { in: ['selective_project_access_confirmed', 'selective_project_access_revoked'] } }, orderBy: { id: 'asc' } }),
@@ -73,7 +75,10 @@ async function main() {
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
     assert.equal(data.ledger.length, 50);
     assert.equal(data.selectiveAuthorities.length, 1);
-    assert.equal(data.selectiveGrants.length, 2);
+    assert.equal(data.selectiveGrants.length, 3);
+    assert.equal(data.projectLifecycleReceipts.length, 6);
+    assert.equal(data.projects.filter(project => project.status === 'archiviato' && !project.deletedAt).length, 1);
+    assert.equal(data.projects.filter(project => project.deletedAt).length, 1);
     assert.equal(data.m4Mailboxes.length, 7);
     assert.ok(data.m4Messages.length >= 1 && data.m4Versions.length >= 1 && data.m4Approvals.length >= 1 && data.m4Attempts.length >= 1 && data.m4Replies.length >= 1 && data.m4Events.length >= 1);
     assert.ok(data.clientReadGrants.length >= 3);

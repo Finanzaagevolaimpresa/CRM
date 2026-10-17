@@ -1,3 +1,4 @@
+import { guardProjectResources, withProjectResources } from './project-resource-guard';
 import {
   Prisma,
   type AiExecutionDecisionType,
@@ -268,6 +269,7 @@ async function createAiExecutionRequestInternal(
 
   try {
     return await withSerializableTransaction(async (tx) => {
+      if (input.projectId || input.clientServiceId) await guardProjectResources(tx, session.userId, [input]);
       const duplicate = await tx.aiExecutionRequest.findUnique({
         where: {
           origin_idempotencyKey: {
@@ -362,7 +364,9 @@ async function createAiExecutionRequestInternal(
           },
         },
       });
-      if (duplicate && sameRequestBinding(duplicate, session, binding)) return duplicate;
+      if (duplicate && sameRequestBinding(duplicate, session, binding)) {
+        return withProjectResources(prisma, session.userId, [input], async () => duplicate);
+      }
       if (supersedesRequestId) {
         throw new UserFacingActionError(
           'La richiesta originaria è già stata sostituita oppure non è più disponibile.',
@@ -420,6 +424,7 @@ async function createDecision(
       throw new UserFacingActionError('Richiesta AI non disponibile nel perimetro autorizzato.');
     }
 
+    if (request.projectId || request.clientServiceId) await guardProjectResources(tx, session.userId, [request]);
     const now = await databaseNow(tx);
     if (
       request.expiresAt <= now
@@ -605,6 +610,10 @@ export async function reserveAuthorizedAiRun(
     });
     if (!request || ![1, 2].includes(request.hashCanonicalizationVersion)) {
       throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI assente o sconosciuta.');
+    }
+    if (request.projectId || request.clientServiceId) {
+      if (!request.requesterUserId) throw new UserFacingActionError('Richiesta AI priva di un richiedente autorizzato al progetto.');
+      await guardProjectResources(tx, request.requesterUserId, [request]);
     }
     const executionInputHash = request.hashCanonicalizationVersion === 2
       ? aiExecutionCanonicalSha256V2(input.input ?? null)
