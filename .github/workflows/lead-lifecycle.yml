@@ -71,8 +71,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/lead-lifecycle-db.test.ts | tee "$LEAD_EVIDENCE/postgresql.tap"
-          grep -q '^# tests 10$' "$LEAD_EVIDENCE/postgresql.tap"
-          grep -q '^# pass 10$' "$LEAD_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 11$' "$LEAD_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 11$' "$LEAD_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$LEAD_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'

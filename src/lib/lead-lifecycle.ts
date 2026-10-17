@@ -23,6 +23,10 @@ async function personalConfirmation(tx: Prisma.TransactionClient, actor: AuthSes
 export async function transitionLeadLifecycle(db: PrismaClient, claimed: AuthSession, raw: unknown, proof: LeadLifecycleCredentials) {
   const input = leadLifecycleSchema.parse(raw);
   return withSerializableTransaction(db, async tx => {
+    // Native key rotation locks the key before its actor-linked insert/audit.
+    // Hold that key before identity/session/User locks to avoid the inverse
+    // wait cycle, while retaining the final clock/session/proof checks below.
+    if (privilegedAccessMode() !== 'enforced' || !await lockRegisteredPrivilegedStepUpKey(tx, proof.key)) throw new LeadLifecycleError('DENIED');
     // Same ordering as identity/profile writers: no concurrent intake can
     // create an active duplicate across this transition.
     await acquireLeadIdentityWriteLock(tx);

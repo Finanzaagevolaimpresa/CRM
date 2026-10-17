@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test, { before, after } from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { syntheticAuthority, syntheticPerson, syntheticSession } from './selective-sharing/fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { leadFixture } from './lead-lifecycle/fixtures';
 import { transitionLeadLifecycle, listTrashedLeads } from '../src/lib/lead-lifecycle';
-import { lockLeadForMutation, assertLeadOperational } from '../src/lib/lead-lifecycle-lock';
-import { createPrivilegedStepUpToken } from '../src/lib/privileged-step-up-token';
+import { lockLeadForMutation, assertLeadOperational, LeadLifecycleError } from '../src/lib/lead-lifecycle-lock';
+import { createPrivilegedStepUpToken, privilegedStepUpKeyDigest } from '../src/lib/privileged-step-up-token';
+import { rotatePrivilegedStepUpKeyVersion } from '../src/lib/application-key-registry';
 import { withSerializableTransaction } from '../src/lib/serializable';
 import { recordCommercialLeadFirstResponse } from '../src/lib/commercial-lead-inbox';
 import { CommercialLeadInboxError } from '../src/lib/commercial-lead-inbox-contract';
@@ -161,3 +162,110 @@ test('restoration does not revive a revoked session or override a permission rev
   await assert.rejects(transitionLeadLifecycle(db, opened.session, await input(f.lead.id, 'trash'), { key, sessionToken: opened.token,
     stepUpToken: createPrivilegedStepUpToken({ key, userId: admin.user.id, sessionToken: opened.token }) }));
 });
+
+test('native same-Admin key rotation and lifecycle serialize in both lock orders without partial state or deadlock',
+  { ...options, timeout: 40_000 }, async () => {
+    let currentKey = key;
+    for (const first of ['lifecycle', 'rotation'] as const) {
+      const f = await fixture(), command = await input(f.lead.id, 'trash');
+      const oldProof = { key: currentKey, sessionToken: admin.token,
+        stepUpToken: createPrivilegedStepUpToken({ key: currentKey, userId: admin.user.id, sessionToken: admin.token }) };
+      const nextKey = { version: currentKey.version + 1, secret: `synthetic-rotation-${first}-${randomUUID()}` };
+      let release!: () => void, protectedReady!: () => void;
+      const latch = new Promise<void>(resolve => { release = resolve; });
+      const ready = new Promise<void>(resolve => { protectedReady = resolve; });
+      let lifecyclePid = 0, rotationPid = 0, paused = false;
+      const database = { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) =>
+        db.$transaction(async tx => {
+          lifecyclePid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+          return work(new Proxy(tx, { get(target, property, receiver) {
+            if (property !== '$queryRaw') return Reflect.get(target, property, receiver);
+            return async (query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]) => {
+              const result = await target.$queryRaw(query, ...values);
+              const sql = 'sql' in query ? query.sql : Array.from(query).join('?');
+              if (first === 'lifecycle' && !paused && sql.includes('"ApplicationKeyVersion"') && sql.includes('FOR SHARE')) {
+                paused = true; protectedReady(); await latch;
+              }
+              return result;
+            };
+          } }));
+        }, { ...opts, timeout: 15_000 }) } as unknown as PrismaClient;
+      const rotate = () => db.$transaction(async tx => {
+        rotationPid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+        const observed = new Proxy(tx, { get(target, property, receiver) {
+          if (property !== 'applicationKeyVersion') return Reflect.get(target, property, receiver);
+          return new Proxy(target.applicationKeyVersion, { get(model, member, modelReceiver) {
+            if (member !== 'update') return Reflect.get(model, member, modelReceiver);
+            return async (args: Prisma.ApplicationKeyVersionUpdateArgs) => {
+              const row = await model.update(args);
+              if (first === 'rotation' && !paused) { paused = true; protectedReady(); await latch; }
+              return row;
+            };
+          } });
+        } });
+        return rotatePrivilegedStepUpKeyVersion(observed, { version: nextKey.version,
+          keyDigest: privilegedStepUpKeyDigest(nextKey.secret), actorUserId: admin.user.id });
+      }, { timeout: 15_000 });
+      const lifecycle = () => transitionLeadLifecycle(database, admin.session, command, oldProof);
+      const observe = (operation: Promise<unknown>) => operation.then(
+        value => ({ status: 'fulfilled' as const, value }), reason => ({ status: 'rejected' as const, reason }));
+      const leading = observe(first === 'lifecycle' ? lifecycle() : rotate());
+      let following: ReturnType<typeof observe> | undefined;
+      let observationError: unknown;
+      try {
+        await Promise.race([ready, leading.then(result => {
+          throw result.status === 'rejected' ? result.reason : new Error('Missing transaction barrier');
+        })]);
+        following = observe(first === 'lifecycle' ? rotate() : lifecycle());
+        let blocked = false;
+        for (let attempt = 0; attempt < 100 && !blocked; attempt++) {
+          const blocker = first === 'lifecycle' ? lifecyclePid : rotationPid;
+          const waiter = first === 'lifecycle' ? rotationPid : lifecyclePid;
+          if (waiter) blocked = (await db.$queryRaw<Array<{ blocked: boolean }>>`
+            SELECT ${blocker}::int = ANY(pg_blocking_pids(${waiter}::int)) AS blocked`)[0].blocked;
+          if (!blocked) await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(blocked, true, `${first} must hold the authoritative key before its competitor proceeds`);
+      } catch (error) { observationError = error; } finally { release(); }
+      const outcomes = await Promise.all([leading, following]);
+      if (observationError) throw observationError;
+      assert.ok(outcomes[1]);
+      const [leadResult, rotationResult] = first === 'lifecycle'
+        ? [outcomes[0], outcomes[1]] : [outcomes[1], outcomes[0]];
+      assert.equal(rotationResult.status, 'fulfilled', `native rotation must finish: ${JSON.stringify(rotationResult)}`);
+      assert.equal(leadResult.status, first === 'lifecycle' ? 'fulfilled' : 'rejected');
+      if (leadResult.status === 'rejected') {
+        // A waiting SERIALIZABLE reader may observe 40001 after rotation commits;
+        // it must never hide a 40P01 deadlock behind the conflict error wrapper.
+        let cause: unknown = leadResult.reason;
+        while (cause && typeof cause === 'object') {
+          assert.doesNotMatch(String(cause), /deadlock|40P01/i);
+          if ('meta' in cause) assert.doesNotMatch(JSON.stringify(cause.meta), /40P01|deadlock/i);
+          cause = 'cause' in cause ? cause.cause : null;
+        }
+      }
+      const lead = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
+      const item = await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { id: f.item!.id } });
+      const audits = await db.auditLog.findMany({ where: { entityId: f.lead.id, event: 'lead_lifecycle_changed' } });
+      assert.equal(audits.length, first === 'lifecycle' ? 1 : 0);
+      assert.equal(item.version, f.item!.version + (first === 'lifecycle' ? 1 : 0));
+      assert.deepEqual({ ...item, version: f.item!.version }, f.item);
+      assert.deepEqual(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: f.cycle!.id } }), f.cycle);
+      if (first === 'rotation') assert.deepEqual(lead, f.lead);
+      else assert.ok(lead.deletedAt);
+      assert.equal((await db.applicationKeyVersion.findUniqueOrThrow({ where: { purpose_version: {
+        purpose: 'PRIVILEGED_STEP_UP', version: currentKey.version } } })).status, 'RETIRED');
+      const active = await db.applicationKeyVersion.findUniqueOrThrow({ where: { purpose_version: {
+        purpose: 'PRIVILEGED_STEP_UP', version: nextKey.version } } });
+      assert.equal(active.status, 'ACTIVE');
+      assert.equal(await db.auditLog.count({ where: { event: 'application_key_version_rotated', entityId: active.id } }), 1);
+      // An open page with the old proof cannot mutate either state after rotation.
+      await assert.rejects(transitionLeadLifecycle(db, admin.session,
+        await input(lead.id, first === 'lifecycle' ? 'restore' : 'trash'), oldProof),
+      (error: unknown) => error instanceof LeadLifecycleError && error.code === 'DENIED');
+      assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: lead.id } }), lead);
+      assert.deepEqual(await db.commercialLeadInboxItem.findUniqueOrThrow({ where: { id: item.id } }), item);
+      assert.deepEqual(await db.auditLog.findMany({ where: { entityId: lead.id, event: 'lead_lifecycle_changed' } }), audits);
+      currentKey = nextKey;
+    }
+  });
