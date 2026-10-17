@@ -1,0 +1,94 @@
+name: Ordinary email isolated persistence
+on: [pull_request]
+permissions: { contents: read }
+concurrency:
+  group: ordinary-email-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    name: Ordinary email PostgreSQL candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-ordinary-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      browser-postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-ordinary-browser-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-ordinary-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      ORDINARY_EMAIL_STORE_CONFIRMED: '1'
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-ordinary-browser-auth-not-production
+      AUTH_COOKIE_NAME: fai_ordinary_browser_session
+      APP_ORIGIN: http://127.0.0.1:3036
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '10000'
+      LOGIN_THROTTLE_MODE: disabled
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      ORDINARY_EMAIL_BROWSER_CONFIRMED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bounded operational trigger and failure latch
+        run: python3 -m unittest discover -s tests/ordinary-email -p 'test_trigger.py' -v
+      - name: IMAP read-only transport through verified synthetic TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/ordinary-imap-cert"
+          mkdir -p "$certdir" "$RUNNER_TEMP/ordinary-email"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout "$certdir/key.pem" -out "$certdir/cert.pem" -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' >/dev/null 2>&1
+          ORDINARY_IMAP_TLS_TEST=SYNTHETIC_LOOPBACK_ONLY ORDINARY_IMAP_TEST_CERT="$certdir/cert.pem" ORDINARY_IMAP_TEST_KEY="$certdir/key.pem" node --import tsx --test --test-reporter=tap tests/ordinary-email/inbound-imap-tls.test.ts | tee "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+      - name: Qualify additive migration51, immutable prefix50 and atomic failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          bash scripts/ordinary-email/qualify-migration.sh
+      - name: Exact decision, durable consumption, native audit and concurrent manual path
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/ordinary-email/store-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# pass 87' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"
+          sha256sum prisma/migrations/20261017120000_ordinary_email_v1/migration.sql > "$RUNNER_TEMP/ordinary-email/ddl.sha256"
+      - name: Native browser decisions through an isolated real TLS transport
+        shell: bash
+        env:
+          ORDINARY_BROWSER_DB_CONTAINER: ${{ job.services['browser-postgres'].id }}
+        run: |
+          set -euo pipefail
+          npx playwright install --with-deps chromium
+          bash -n scripts/ordinary-email/qualify-native-browser.sh
+          bash scripts/ordinary-email/qualify-native-browser.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordinary-email-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ordinary-email
+          if-no-files-found: error
+          retention-days: 14

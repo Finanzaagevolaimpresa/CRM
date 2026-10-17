@@ -5,6 +5,15 @@ import { privilegedStepUpKeyDigest, type PrivilegedStepUpKey } from './privilege
 export const PRIVILEGED_STEP_UP_KEY_PURPOSE = 'PRIVILEGED_STEP_UP';
 
 type KeyRegistryDb = Pick<PrismaClient, 'applicationKeyVersion'>;
+type RegisteredKey = { keyDigest: Uint8Array; status: string; activatedAt: Date | null; retiredAt: Date | null };
+
+function registeredKeyMatches(configured: PrivilegedStepUpKey, registered: RegisteredKey | null | undefined) {
+  if (!Number.isSafeInteger(configured.version) || configured.version <= 0 || configured.secret.length < 32
+    || !registered || registered.status !== 'ACTIVE' || !registered.activatedAt || registered.retiredAt) return false;
+  const configuredDigest = privilegedStepUpKeyDigest(configured.secret);
+  const registeredDigest = Buffer.from(registered.keyDigest);
+  return configuredDigest.length === registeredDigest.length && timingSafeEqual(configuredDigest, registeredDigest);
+}
 
 export function privilegedStepUpEnvironmentKey(
   environment: Readonly<Record<string, string | undefined>> = process.env,
@@ -30,11 +39,18 @@ export async function loadActivePrivilegedStepUpKey(
     },
     select: { keyDigest: true, status: true, activatedAt: true, retiredAt: true },
   });
-  if (!registered || registered.status !== 'ACTIVE' || !registered.activatedAt || registered.retiredAt) return null;
-  const configuredDigest = privilegedStepUpKeyDigest(configured.secret);
-  const registeredDigest = Buffer.from(registered.keyDigest);
-  if (configuredDigest.length !== registeredDigest.length || !timingSafeEqual(configuredDigest, registeredDigest)) return null;
-  return configured;
+  return registeredKeyMatches(configured, registered) ? configured : null;
+}
+
+/** Revalidate the server key inside a mutation transaction and hold its row
+ * until commit. Take this lock before actor/context locks: native rotation
+ * updates the key before writing its actor-linked audit. */
+export async function lockRegisteredPrivilegedStepUpKey(tx: Prisma.TransactionClient, configured: PrivilegedStepUpKey) {
+  const rows = await tx.$queryRaw<RegisteredKey[]>(Prisma.sql`
+    SELECT "keyDigest", "status", "activatedAt", "retiredAt" FROM "ApplicationKeyVersion"
+    WHERE "purpose"=${PRIVILEGED_STEP_UP_KEY_PURPOSE} AND "version"=${configured.version} FOR SHARE
+  `);
+  return registeredKeyMatches(configured, rows[0]) ? configured : null;
 }
 
 export async function rotatePrivilegedStepUpKeyVersion(

@@ -417,8 +417,9 @@ test('OSV runs only after bounded npm service unavailability and verifies the fu
 
 test('the authorized package-lock inventory is complete and deterministic', () => {
   const inventory = parseNpmLockInventory(readFileSync('package-lock.json'));
-  assert.equal(inventory.entryCount, 472);
-  assert.equal(inventory.coordinates.size, 463);
+  assert.equal(inventory.entryCount, 473);
+  assert.equal(inventory.coordinates.size, 464);
+  assert.ok(inventory.coordinates.has(JSON.stringify(['postal-mime', '4.0.7'])));
   assert.ok(inventory.coordinates.has(JSON.stringify(['tinyglobby', '0.2.17'])));
   assert.ok(!inventory.coordinates.has(JSON.stringify(['fast-glob', '0.2.17'])));
   assert.ok(inventory.coordinates.has(JSON.stringify(['@napi-rs/wasm-runtime', '1.1.4'])));

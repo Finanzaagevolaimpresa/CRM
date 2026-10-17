@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind exact candidate and preserve schema49
+      - name: Bind exact candidate schema51 and preserve historical migrations
         shell: bash
         run: |
           set -euo pipefail

@@ -11,6 +11,8 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import type { Permission } from './permissions';
 import { canonicalSha256 } from './canonical-json';
+import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
+import { filterAdmittedOrdinaryReplies, readAdmittedOrdinaryAttachmentMetadata } from './ordinary-email-inbound-reader';
 import { readPrivateDocumentBounded } from './storage';
 import { buildApprovedMessagePackage } from './approved-message-package';
 import {
@@ -137,6 +139,7 @@ async function effectiveQualification(tx: Tx, box: CommunicationMailbox) {
 async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnType<typeof contextScope>>, ids: string[], runtime: Runtime) {
   const snapshot: ApprovedMessageSnapshot['attachments'] = [], materials = new Map<string, Buffer>();
   let total = 0;
+  let validUntil: Date | null = null;
   if (ids.length > 20 || new Set(ids).size !== ids.length) denied();
   for (const versionId of ids.slice().sort()) {
     if (!hasPermission(current, 'document.download')) denied();
@@ -157,10 +160,11 @@ async function attachments(tx: Tx, current: AuthSession, scope: Awaited<ReturnTy
     catch { denied(); }
     total += bytes.length;
     if (digest(bytes) !== version.checksum) denied();
+    if (doc.validUntil && (!validUntil || doc.validUntil < validUntil)) validUntil = doc.validUntil;
     snapshot.push({ documentId: doc.id, versionId, sha256: version.checksum, filename: doc.fileName, mimeType: doc.mimeType, bytes: bytes.length });
     materials.set(versionId, bytes);
   }
-  return { snapshot, materials };
+  return { snapshot, materials, validUntil };
 }
 
 async function event(tx: Tx, current: AuthSession, messageId: string | null, code: string, evidence: unknown, runtime: Runtime = {}, replyId: string | null = null) {
@@ -197,7 +201,44 @@ const editSchema = z.object({
   mailboxId: uuid, replyTo: z.string().email().max(254), to: z.array(z.string()).min(1).max(20), cc: z.array(z.string()).max(20), bcc: z.array(z.string()).max(20),
   subject: z.string(), body: z.string(), attachmentVersionIds: z.array(identifier).max(20),
   classification: z.enum(['ORDINARY', 'SENSITIVE', 'COMPLAINT']),
+  replySource: z.object({ id: uuid, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
 }).strict();
+
+/** Server-only building block for the isolated ordinary-mail persistence
+ * candidate. Reuses M4 locks and current document/financial/ABAC checks. It is
+ * not a route, a manual approval conversion or a transport authorization. */
+export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime = {}) {
+  uuid.parse(messageId);
+  const current = await actor(tx, claimed, 'practice_communications.mark_used', true);
+  if (!hasPermission(current, 'practice_communications.read')) denied();
+  const loaded = await messageScope(tx, current, messageId, true);
+  if (!mailboxQualification(mailboxSnapshot(loaded.box)).enabled) denied();
+  await responsibleMailbox(tx, loaded.box);
+  const files = await attachments(tx, current, loaded.scope, loaded.snapshot.attachments.map(item => item.versionId), runtime);
+  if (canonicalSha256(files.snapshot) !== canonicalSha256(loaded.snapshot.attachments)) conflict();
+  const registry = await lockAuthoritativeInternalSession(tx, { userId: current.userId, sessionId: current.sessionId! });
+  if (!registry || registry.revokedAt || registry.deletedAt || !registry.active) denied();
+  const contextHash = canonicalSha256(JSON.parse(JSON.stringify({ scope: loaded.scope,
+    actorId: current.userId, role: current.role, overrides: current.permissionOverrides,
+    clientReadScope: [...(current.clientReadScope ?? [])].sort(),
+    selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort() })));
+  return { ...loaded, materials: files.materials, contextHash, contextExpiresAt: files.validUntil ?? undefined,
+    actor: { userId: current.userId, sessionId: current.sessionId!, role: registry.role, active: registry.active,
+      expiresAt: new Date(current.expiresAt * 1000), registryExpiresAt: registry.expiresAt } };
+}
+
+/** Private inbound association: current reader, no impersonated session or
+ * personal-send approval. Reuse native context, financial and document gates. */
+export async function loadOrdinaryReplyCandidateContext(tx: Tx, claimed: AuthSession, messageId: string, runtime: Runtime = {}) {
+  uuid.parse(messageId);
+  const current = await actor(tx, claimed, 'practice_communications.read');
+  const loaded = await messageScope(tx, current, messageId, true);
+  const files = await attachments(tx, current, loaded.scope, loaded.snapshot.attachments.map(item => item.versionId), runtime);
+  if (canonicalSha256(files.snapshot) !== canonicalSha256(loaded.snapshot.attachments)) denied();
+  const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! } });
+  if (!registry) denied();
+  return { ...loaded, current, accessUntil: Math.min(current.expiresAt * 1000, registry.expiresAt.getTime(), files.validUntil?.getTime() ?? Infinity) };
+}
 
 export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw: unknown, runtime: Runtime = {}) {
   const input = parse(editSchema, raw);
@@ -207,6 +248,21 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const box = await mailbox(tx, input.mailboxId, current, input.classification);
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${input.messageId}, 0))`;
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
+    let replyAccessUntil = Infinity;
+    if (input.replySource) {
+      // The source is checked again when saving, not trusted from the rendered
+      // page. A later conflict, revocation or archive makes a stale form fail.
+      if (existing || input.expectedRevision !== 0) conflict();
+      const reply = await tx.communicationReply.findUnique({ where: { id: input.replySource.id } });
+      if (!reply?.messageId || reply.contentHash !== input.replySource.contentHash) denied();
+      const parent = await loadOrdinaryReplyCandidateContext(tx,current,reply.messageId,runtime);
+      if (canonicalSha256(parent.scope.context) !== canonicalSha256(input.context)
+        || (parent.box.restricted && !box.restricted)
+        || (parent.snapshot.classification === 'COMPLAINT' && input.classification !== 'COMPLAINT')
+        || (parent.snapshot.classification === 'SENSITIVE' && input.classification === 'ORDINARY')
+        || (await filterAdmittedOrdinaryReplies(tx,[reply])).length !== 1) denied();
+      replyAccessUntil = parent.accessUntil;
+    }
     if (existing) {
       const prior = await messageScope(tx, current, input.messageId, true);
       if (prior.row.currentRevision !== input.expectedRevision || ['SENDING', 'UNCERTAIN', 'SENT'].includes(prior.row.state)
@@ -226,7 +282,12 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     else await tx.approvedCommunication.update({ where: { id: input.messageId }, data: { currentRevision: snapshot.revision, mailboxId: box.id, state: 'DRAFT' } });
     const saved = await tx.communicationVersion.create({ data: { messageId: input.messageId, revision: snapshot.revision,
       snapshot: json(snapshot), snapshotHash: approvedMessageHash(snapshot), createdById: current.userId } });
-    await event(tx, current, input.messageId, 'DRAFT_SAVED', { revision: snapshot.revision, snapshotHash: saved.snapshotHash, priorApprovalInvalidated: !!existing }, runtime);
+    await event(tx, current, input.messageId, 'DRAFT_SAVED', { revision: snapshot.revision, snapshotHash: saved.snapshotHash, priorApprovalInvalidated: !!existing,
+      ...(input.replySource ? { sourceHash: input.replySource.contentHash } : {}) }, runtime, input.replySource?.id ?? null);
+    if (input.replySource) {
+      const [now] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+      if (now.now.getTime() >= Math.min(replyAccessUntil,files.validUntil?.getTime() ?? Infinity)) denied();
+    }
     return { id: input.messageId, revision: snapshot.revision, snapshotHash: saved.snapshotHash };
   }, { timeout: 30_000 });
 }
@@ -322,6 +383,9 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
   return readTransaction(db, async tx => {
     const current = await actor(tx, claimed, 'practice_communications.read');
     const scope = await contextScope(tx, current, context);
+    const registry = await tx.internalSession.findUnique({ where: { id: current.sessionId! }, select: { expiresAt: true } });
+    if (!registry) denied();
+    let accessUntil = Math.min(current.expiresAt * 1000, registry.expiresAt.getTime());
     const rows = await tx.approvedCommunication.findMany({ where: context.kind === 'READINESS'
       ? { readinessId: context.id } : { technicalPracticeId: context.id }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * 100, take: 101 });
     const messages = [];
@@ -334,24 +398,36 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       if ((box.restricted || candidate.data.classification === 'COMPLAINT') && current.role !== 'admin') continue;
       if (candidate.data.classification === 'SENSITIVE' && !hasPermission(current, 'document.sensitive.read')) continue;
       const detail = await messageScope(tx, current, row.id);
-      const [events, attempts, replies] = await Promise.all([
+      const [events, attempts, storedReplies] = await Promise.all([
         tx.communicationEvent.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'asc' }, take: 200 }),
         tx.communicationAttempt.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
         tx.communicationReply.findMany({ where: { messageId: row.id }, orderBy: { receivedAt: 'asc' }, take: 100 }),
       ]);
       let attachmentAccess = true;
-      for (const file of detail.snapshot.attachments) {
-        const doc = await tx.document.findUnique({ where: { id: file.documentId } });
+      let messageUntil = Infinity;
+      for (const file of detail.snapshot.attachments.slice().sort((a,b) => a.versionId.localeCompare(b.versionId))) {
+        await tx.$queryRaw`SELECT "id" FROM "DocumentVersion" WHERE "id"=${file.versionId} FOR SHARE`;
         const storedVersion = await tx.documentVersion.findUnique({ where: { id: file.versionId } });
+        await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id"=${file.documentId} FOR SHARE`;
+        const doc = await tx.document.findUnique({ where: { id: file.documentId } });
         if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
+          || ['respinto','scaduto','archiviato'].includes(doc.status) || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
           || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
           || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
           || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
             clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) attachmentAccess = false;
+        if (doc?.validUntil) messageUntil = Math.min(messageUntil, doc.validUntil.getTime());
       }
       if (!attachmentAccess) continue;
+      const replies = await filterAdmittedOrdinaryReplies(tx,storedReplies);
+      const receivedAttachments = await readAdmittedOrdinaryAttachmentMetadata(tx, replies, current);
+      // Only admitted messages reach the receipt query. Locks stay held until
+      // the final DB-clock expiry check; consultation needs no new step-up.
+      const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);
+      accessUntil = Math.min(accessUntil, messageUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
-        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, replies });
+        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts,
+        replies: replies.map(reply => ({ ...reply, receivedAttachments: receivedAttachments.get(reply.id) ?? [] })), ordinaryReceipts });
     }
     const boxes = await tx.communicationMailbox.findMany({ where: current.role === 'admin' ? {} : { restricted: false }, orderBy: { address: 'asc' } });
     const documents = [];
@@ -367,6 +443,8 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
     }
     const boxesWithQualification = [];
     for (const box of boxes) boxesWithQualification.push({ ...box, qualification: await effectiveQualification(tx, box) });
+    const [finished] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+    if (finished.now.getTime() >= accessUntil) denied();
     return { context, client: { id: scope.client.id, name: scope.client.displayName }, messages, documents, page, hasMore: rows.length > 100 && page < 200,
       mailboxes: boxesWithQualification,
       canWrite: hasPermission(current, 'practice_communications.write'), canPrepare: hasPermission(current, 'practice_communications.mark_used'), isAdmin: current.role === 'admin' };
