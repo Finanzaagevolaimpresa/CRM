@@ -102,10 +102,11 @@ test('commercial owner cannot trash, restore or list trash despite ordinary lead
   await assert.rejects(listTrashedLeads(db, owner.session, 1)); await assert.rejects(change(f.lead.id, 'restore', owner));
 });
 test('fresh role, explicit permission deny, revoked session and expired confirmation fail closed', options, async () => {
-  for (const mode of ['role', 'permission', 'session', 'proof', 'cookie', 'claimed-expiry'] as const) {
+  for (const mode of ['role', 'permission', 'permission-read', 'session', 'proof', 'cookie', 'claimed-expiry'] as const) {
     const person = await syntheticPerson(db, 'Admin test'), f = await fixture(), command = await input(f.lead.id, 'trash');
     if (mode === 'role') await db.user.update({ where: { id: person.user.id }, data: { role: 'direzione' } });
     if (mode === 'permission') await db.userPermissionOverride.create({ data: { userId: person.user.id, permission: 'lead.write', allowed: false } });
+    if (mode === 'permission-read') await db.userPermissionOverride.create({ data: { userId: person.user.id, permission: 'lead.read', allowed: false } });
     if (mode === 'session') await db.internalSession.update({ where: { id: person.session.sessionId }, data: { revokedAt: new Date() } });
     const p = proof(person, mode === 'proof' ? Math.floor(Date.now() / 1000) - 600 : undefined);
     if (mode === 'cookie') p.sessionToken = admin.token;

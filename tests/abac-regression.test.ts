@@ -146,7 +146,7 @@ function assertGuardsBeforeMutation(
 test('lead e offerte invocano le guardie ABAC prima di ogni mutazione critica', () => {
   assertGuardsBeforeMutation('updateLeadCommercial', ['requireLeadEditAccess', 'withAssignmentGuard'], 'tx.lead.update');
   assertGuardsBeforeMutation('convertLeadToClient', ['requireLeadEditAccess'], 'tx.client.create');
-  assertGuardsBeforeMutation('createCommercialOffer', ['requireCommercialOfferTargetAccess'], 'prisma.commercialOffer.create');
+  assertGuardsBeforeMutation('createCommercialOffer', ['requireCommercialOfferTargetAccess', 'assertLeadOperational'], 'tx.commercialOffer.create');
   assertGuardsBeforeMutation(
     'updateCommercialOffer',
     ['requireCommercialOfferEditAccess', 'requireCommercialOfferTargetAccess'],

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from './lead-identity';
-import { assertLeadOperational } from './lead-lifecycle-lock';
+import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { canEditLead, canViewClient, canViewCommercialOffer } from './access-control';
@@ -51,6 +51,13 @@ export const authenticated1265LinkSchema = z.object({
   digitalProjectType: nullableText(80),
 });
 export class ControlledIntakeError extends Error { constructor(readonly code: 'DISABLED' | 'DENIED' | 'CONFLICT' | 'CATALOG_INVALID') { super(code); } }
+async function assertLeadOperational(...args: Parameters<typeof lockOperationalLead>) {
+  try { return await lockOperationalLead(...args); }
+  catch (error) {
+    if (error instanceof LeadLifecycleError) throw new ControlledIntakeError('DENIED');
+    throw error;
+  }
+}
 type Db = Pick<PrismaClient, '$transaction' | '$queryRaw' | 'controlledIntake'>;
 
 async function currentActor(tx: Prisma.TransactionClient, claimed: AuthSession) {

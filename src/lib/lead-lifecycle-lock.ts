@@ -23,6 +23,8 @@ export async function lockLeadActor(tx: Prisma.TransactionClient, claimed: AuthS
   const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
   if (!row || row.revokedAt || !row.active || row.deletedAt) throw new LeadLifecycleError('DENIED');
   const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides], registryExpiresAt: row.expiresAt };
+  // An explicit suspension also blocks this personal operation for an Admin.
+  if (current.permissionOverrides.some(item => !item.allowed && (item.permission === 'lead.read' || (write && item.permission === 'lead.write')))) throw new LeadLifecycleError('DENIED');
   if (!hasPermission(current, 'lead.read') || (write && !hasPermission(current, 'lead.write'))) throw new LeadLifecycleError('DENIED');
   await assertLeadActorLive(tx, current);
   return current;

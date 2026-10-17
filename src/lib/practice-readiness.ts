@@ -1,5 +1,5 @@
 import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
-import { assertLeadOperational } from './lead-lifecycle-lock';
+import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
@@ -40,6 +40,13 @@ async function assertProjectOperational(...args: Parameters<typeof lockOperation
   try { await lockOperationalProject(...args); }
   catch (error) {
     if (error instanceof ProjectUnavailableError) throw new PracticeReadinessError('DENIED');
+    throw error;
+  }
+}
+async function assertLeadOperational(...args: Parameters<typeof lockOperationalLead>) {
+  try { return await lockOperationalLead(...args); }
+  catch (error) {
+    if (error instanceof LeadLifecycleError) throw new PracticeReadinessError('DENIED');
     throw error;
   }
 }

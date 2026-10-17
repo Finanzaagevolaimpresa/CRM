@@ -23,7 +23,8 @@ async function login(page: Page, email: string, stepUp = false) {
   }
 }
 async function openAction(page: Page, label: string, title: string) {
-  const form = page.getByRole('form', { name: label + ': ' + title, exact: true });
+  // The form is initially inside closed details; open its visible summary first.
+  const form = page.locator('form[aria-label=' + JSON.stringify(label + ': ' + title) + ']');
   await form.locator('..').locator('summary').click();
   await form.getByLabel('Confermo queste conseguenze per questo lead', { exact: true }).check();
   return form;
