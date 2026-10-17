@@ -93,6 +93,7 @@ test('native received reply becomes a separately approved draft with current sco
   await page.screenshot({path:path.join(evidence,'native-inbound-draft-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
   expect(await form.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:path.join(evidence,'native-inbound-draft-mobile.png'),fullPage:true});
   await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=RECORDED/);
   const version=await db.communicationVersion.findFirstOrThrow({where:{messageId:draftId},include:{approval:true}});

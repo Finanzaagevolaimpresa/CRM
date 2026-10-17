@@ -56,6 +56,7 @@ test('native preview and refusal bind the exact version, personal authority, cur
   await page.screenshot({ path: path.join(evidence, 'native-preview-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await exact.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(evidence, 'native-preview-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 900 });
   const editor = page.locator(`form[data-message-draft="${f.saved.id}"]`);

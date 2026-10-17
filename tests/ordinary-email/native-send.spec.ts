@@ -96,6 +96,7 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   await page.screenshot({ path: path.join(evidence, 'native-send-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await exact(f.saved.id).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(evidence, 'native-send-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 900 });
 

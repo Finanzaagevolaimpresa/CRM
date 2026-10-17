@@ -69,8 +69,13 @@ test('native lead, standalone client and internal composition preserve context, 
   await expect.poll(()=>db.approvedCommunication.count({where:{id:internalMessage,internalThreadId:threadId,clientId:null}})).toBe(1);
   const snapshot=(await db.communicationVersion.findUniqueOrThrow({where:{messageId_revision:{messageId:internalMessage,revision:1}}})).snapshot as {schema:string;to:string[];attachments:Array<{source:string;sha256:string}>};
   expect(snapshot.schema).toBe('fai.approved-email.v2');expect(snapshot.to).toEqual([member.email]);expect(snapshot.attachments).toMatchObject([{source:'CONTEXT_FILE',sha256}]);
+  await expect(page.getByRole('heading',{name:'Native internal message · v1',exact:true})).toBeVisible();
+  await page.locator('[data-ordinary-ready="true"]').first().waitFor({state:'attached'});
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.evaluate(()=>window.scrollTo(0,0));
   await page.screenshot({path:path.join(evidence,'native-context-desktop.png'),fullPage:true});
-  await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.setViewportSize({width:390,height:844});
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:path.join(evidence,'native-context-mobile.png'),fullPage:true});await page.setViewportSize({width:1280,height:900});
   await participant.goto(target);await expect(participant.getByText('SYNTHETIC_CONTEXT_NATIVE_BODY',{exact:true})).toBeVisible();
   expect((await outsider.request.get(target)).status()).toBe(404);

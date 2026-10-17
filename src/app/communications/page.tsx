@@ -23,7 +23,7 @@ import { mutateApprovedMessageAction } from '@/lib/approved-communication-action
 import { ApprovedCommunicationError, communicationContextSchema, type ApprovedMessageSnapshot, type CommunicationContext } from '@/lib/approved-communication-contract';
 
 export const dynamic = 'force-dynamic';
-const field = 'w-full rounded-xl border p-2';
+const field = 'min-w-0 w-full max-w-full rounded-xl border p-2';
 type Data = Awaited<ReturnType<typeof readPracticeCommunications>>;
 function ContextFields({ context }: { context: CommunicationContext }) {
   return <><input type="hidden" name="contextKind" value={context.kind} /><input type="hidden" name="contextId" value={context.id} /></>;
@@ -34,7 +34,7 @@ function BindingFields({ context, message }: { context: CommunicationContext; me
 }
 function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: ApprovedMessageSnapshot;
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
-  return <form action={mutateApprovedMessageAction} className="grid gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
+  return <form action={mutateApprovedMessageAction} className="grid min-w-0 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}
@@ -50,7 +50,7 @@ function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: Approve
     <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject} /></label>
     <label>Testo esatto<textarea required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body} /></label>
     <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
-    <fieldset className="rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
+    <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
         defaultChecked={snapshot?.schema === 'fai.approved-email.v2' && snapshot.attachments.some(a => a.source === 'CONTEXT_FILE' && a.versionId === file.id)} />{file.fileName} · {file.sizeBytes} byte</label>)}
       {data.documents.length ? data.documents.map(doc => <div key={doc.id}><b>{doc.title}</b>{doc.versions.map(version => <label key={version.id} className="ml-3 inline-flex gap-2"><input type="checkbox" name="attachmentVersionId" value={version.id} defaultChecked={snapshot?.attachments.some(a => a.versionId === version.id)} />Versione {version.version}</label>)}</div>) : <p>Nessun documento disponibile per il tuo accesso.</p>}
@@ -68,7 +68,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
     const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
-    return <div className="crm-space-y-5"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
+    return <div className="min-w-0 crm-space-y-5 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
       <nav className="flex flex-wrap gap-4"><Link className="font-bold underline" href="/leads">Lead</Link><Link className="font-bold underline" href="/clients">Clienti</Link><Link className="font-bold underline" href="/practice-readiness">Pratiche da avviare</Link><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link></nav>
       {authority ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
       <Card title="Conversazioni interne a cui partecipi"><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}><Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link></li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
@@ -83,7 +83,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   if (query.reply && (!data.canWrite || !replySource)) notFound();
   const ordinaryAuthority = await ordinaryEmailUiAuthorityFromRequest(session);
   const feedback: Record<string, string> = { RECORDED: 'Operazione registrata.', DENIED: 'Accesso o contesto non più valido.', CONFLICT: 'La versione è cambiata o l’operazione è già conclusa. Aggiorna e verifica la timeline.', SENDER_NOT_READY: 'Il mittente deve essere configurato, collaudato e abilitato.', INVALID: 'Controlla i campi del messaggio e i limiti degli allegati.', RECONCILIATION_REQUIRED: 'Registra o riconcilia il tentativo aperto prima di prepararne un altro.' };
-  return <div className="crm-space-y-6"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni · ${data.label}`} />
+  return <div className="min-w-0 crm-space-y-6 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni · ${data.label}`} />
     <Link className="font-bold underline" href="/communications">Tutte le comunicazioni</Link>
     {data.thread && data.personal && data.thread.ownerUserId === session.userId ? <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Gestisci partecipanti della conversazione interna</summary>
       <InternalCommunicationEditor key={`${data.thread.id}-${data.thread.version}`} id={data.thread.id} version={data.thread.version} title={data.thread.title}
@@ -106,7 +106,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <dl className="my-3 grid gap-1 text-sm"><div><dt className="inline font-bold">Da: </dt><dd className="inline">{message.snapshot.from}</dd></div><div><dt className="inline font-bold">Reply-To: </dt><dd className="inline">{message.snapshot.replyTo}</dd></div>
         <div><dt className="inline font-bold">A: </dt><dd className="inline">{message.snapshot.to.join(', ')}</dd></div><div><dt className="inline font-bold">CC: </dt><dd className="inline">{message.snapshot.cc.join(', ') || 'Nessuna'}</dd></div><div><dt className="inline font-bold">BCC: </dt><dd className="inline">{message.snapshot.bcc.join(', ') || 'Nessuna'}</dd></div></dl>
       <div className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4">{message.snapshot.body}</div>
-      <ul className="my-3 text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
+      <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">
         {data.canWrite && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
