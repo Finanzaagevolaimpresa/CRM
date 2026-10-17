@@ -10,6 +10,7 @@ import { purchasedFixture } from '../purchased-service-fixture';
 import { handoffPurchasedService } from '../../src/lib/purchased-service-handoff';
 import { acceptResponsibility } from '../../src/lib/responsibility';
 import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
+import { readPrivateVideoFile } from '../../src/lib/video-storage';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -53,9 +54,22 @@ async function main() {
     };
     writeFileSync(process.argv[3], JSON.stringify(epochs, null, 2) + '\n');
   } else if (mode === 'footprint') {
+    const videoAssets = await db.videoAsset.findMany({ orderBy: { id: 'asc' } });
+    const videoFiles = [];
+    for (const asset of videoAssets.filter(row => row.state === 'READY')) {
+      const bytes = await readPrivateVideoFile(asset.id, asset);
+      videoFiles.push({ id: asset.id, sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length });
+    }
     const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
       UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
     const data = {
+      videoAssets, videoFiles,
+      videos: await db.videoEntry.findMany({ orderBy: { id: 'asc' } }),
+      videoRevisions: await db.videoRevision.findMany({ orderBy: [{ videoId: 'asc' }, { version: 'asc' }] }),
+      videoCommands: (await db.videoCommand.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      videoUsers: await db.user.findMany({ where: { email: { startsWith: 'video-recovery-' } }, orderBy: { id: 'asc' },
+        select: { id: true, role: true, active: true, deletedAt: true, recordUpdateEpoch: true } }),
+      videoAudit: await db.auditLog.findMany({ where: { event: 'VIDEO_LIBRARY_MUTATION' }, orderBy: { id: 'asc' } }),
       projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
       leads: await db.lead.findMany({ orderBy: { id: 'asc' } }),
       updateRules: await db.recordUpdateRule.findMany({ orderBy: { id: 'asc' } }),
@@ -116,7 +130,12 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 53);
+    assert.equal(data.ledger.length, 54);
+    assert.equal(data.videoAssets.length, 5); assert.equal(data.videoAssets.filter(row => row.state === 'RESERVED').length, 1);
+    assert.equal(data.videoFiles.length, 4); assert.equal(data.videos.length, 4);
+    assert.equal(data.videoRevisions.length, 11); assert.equal(data.videoCommands.length, 11); assert.equal(data.videoAudit.length, 11);
+    assert.deepEqual(data.videos.map(row => row.state).sort(), ['ARCHIVED', 'DRAFT', 'PUBLISHED', 'PUBLISHED']);
+    assert.equal(data.videoUsers.length, 3);
     assert.equal(data.updateRules.length, 2);
     assert.equal(data.updateRules.filter(row => !row.active).length, 1);
     assert.equal(data.updateCommands.length, 4);

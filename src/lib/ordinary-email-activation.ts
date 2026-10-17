@@ -29,6 +29,9 @@ const CONTEXT_MIGRATION_SHA256 = '614f3a2c329892f2732c9e788c1f120662f30ea9c01ede
 const UPDATES_MIGRATION = '20261017200000_record_update_notifications_v1';
 const UPDATES_MIGRATION_SHA256 = '11df35b3e90d69aa535104fcc8b15eb32ed218691c40dd85409cc51edf2a3ef0';
 
+const VIDEOS_MIGRATION = '20261018000000_private_video_library_v1';
+const VIDEOS_MIGRATION_SHA256 = '9e18345a37841ef6682c4f87ef564fdc48d289112b10c2299cb4b7f662e3e81e';
+
 /** A privileged, explicitly invoked operational act, never a public action.
  * The operator must acquire the human binding/scope and real TLS/authentication
  * evidence first. Hashing that act does not create its authority. The CLI
@@ -43,17 +46,19 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   return db.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
-    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; now: Date }>>`
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
         (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
         (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${MIGRATION}) AS checksum,
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${CONTEXT_MIGRATION}) AS "contextChecksum",
-        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${UPDATES_MIGRATION}) AS "updatesChecksum"`;
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${UPDATES_MIGRATION}) AS "updatesChecksum",
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${VIDEOS_MIGRATION}) AS "videosChecksum"`;
     const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
-    if (state.database !== plan.targetDatabase || state.count !== 53 || !state.complete || state.checksum !== MIGRATION_SHA256
+    if (state.database !== plan.targetDatabase || state.count !== 54 || !state.complete || state.checksum !== MIGRATION_SHA256
       || state.contextChecksum !== CONTEXT_MIGRATION_SHA256
       || state.updatesChecksum !== UPDATES_MIGRATION_SHA256
+      || state.videosChecksum !== VIDEOS_MIGRATION_SHA256
       || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
       || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
     // Lock both people before the mailbox, following native admission ordering.
