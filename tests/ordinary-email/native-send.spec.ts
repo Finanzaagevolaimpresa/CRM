@@ -6,6 +6,10 @@ import path from 'node:path';
 import { nativeEmailFixture, qualifyNativeTransport } from './ui-fixture';
 import { tokenDigestFromCookie } from '../../src/lib/internal-session-registry';
 import { saveApprovedMessageDraft } from '../../src/lib/approved-communications';
+import { emptyCommunicationRecipientSelection } from '../../src/lib/communication-recipient-policy';
+import { previewInternalCommunication, confirmInternalCommunication } from '../../src/lib/internal-communications';
+import { createPrivilegedStepUpToken } from '../../src/lib/privileged-step-up-token';
+import { storeCommunicationFile } from '../../src/lib/communication-files';
 
 const db = new PrismaClient(), origin = 'http://127.0.0.1:3036', evidence = process.env.ORDINARY_EMAIL_BROWSER_EVIDENCE!;
 const confirmation = 'Approvo e invio personalmente questa versione esatta, inclusi mittente, destinatari, testo e allegati.';
@@ -29,7 +33,8 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   const tlsProof = JSON.parse(await readFile(path.join(evidence, 'tls-boundary-proof.json'), 'utf8'));
   expect(network).toMatchObject({ ipv4DefaultRoute: false, canonicalSmtpResolvesToOwnInterface: true, applicationNetworks: 1 });
   expect(tlsProof).toMatchObject({ trusted: true, wrongServernameDenied: true, untrustedIssuerDenied: true });
-  const f = await nativeEmailFixture(db), target = '/communications?kind=TECHNICAL&practice=' + f.practice.id;
+  const f = await nativeEmailFixture(db);
+  let target = '/communications?kind=TECHNICAL&practice=' + f.practice.id;
   await qualifyNativeTransport(db, f);
   const baseline = await metrics();
   expect(baseline.authenticated).toBe(0); expect(baseline.contents).toHaveLength(0);
@@ -143,19 +148,45 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
   expect(await panel(uncertain.id).count()).toBe(0);
   expect(await attempts(uncertain.id)).toBe(1);
 
+  // The same qualified adapter and native personal action serve all new contexts.
+  // The server remains the isolated synthetic TLS peer; no new transport exists.
+  await writeFile(path.join(process.env.ORDINARY_EMAIL_TLS_CONTROL!, 'mode'), 'accept');
+  const member=await db.user.create({data:{name:'Synthetic context recipient',email:'tls-member-'+randomUUID()+'@invalid.test',role:'commerciale',active:true,passwordHash:f.user.passwordHash}});
+  const lead=await db.lead.create({data:{firstName:'Synthetic',lastName:'TLS context',email:'tls-lead@invalid.test'}});
+  const credentials={key:f.key,sessionToken:f.cookie,stepUpToken:createPrivilegedStepUpToken({key:f.key,userId:f.user.id,sessionToken:f.cookie})};
+  const thread={id:randomUUID(),expectedVersion:0,title:'Synthetic TLS internal conversation',selection:{userIds:[member.id],groups:[]}};
+  const participants=await previewInternalCommunication(db,f.actor,thread,credentials);
+  await confirmInternalCommunication(db,f.actor,thread,participants.evidenceHash,credentials);
+  const fileId=randomUUID(),fileContext={kind:'INTERNAL' as const,id:thread.id};
+  await storeCommunicationFile(db,f.actor,{id:fileId,context:fileContext,classification:'ORDINARY'},new File([Buffer.from('SYNTHETIC_TLS_PRIVATE_ATTACHMENT')],'tls-context.txt',{type:'text/plain'}));
+  for(const context of [{kind:'LEAD' as const,id:lead.id},{kind:'CLIENT' as const,id:f.client.id},fileContext]) {
+    const selection=emptyCommunicationRecipientSelection();selection.to.userIds=[member.id];
+    const contextual=await saveApprovedMessageDraft(db,f.actor,{...f.input,messageId:randomUUID(),expectedRevision:0,context,
+      subject:'Synthetic TLS '+context.kind,to:[],cc:[],bcc:[],recipientSelection:selection,attachmentVersionIds:[],contextFileIds:context.kind==='INTERNAL'?[fileId]:[]});
+    target='/communications?kind='+context.kind+'&practice='+context.id;
+    const before=await metrics();await open(contextual.id);await send(contextual.id);await expect.poll(()=>state(contextual.id)).toBe('SENT');
+    await expect.poll(async()=>(await metrics()).contents.length).toBe(before.contents.length+1);
+    const delivered=(await metrics()).contents.at(-1)!;
+    expect(delivered.recipients).toEqual([member.email]);expect(delivered).toMatchObject({from:f.box.address,bccHeader:false,servername:'authsmtp.securemail.pro',mode:'accept'});
+    const [exactDecision]=await db.$queryRaw<Array<{decision:{mimeHash:string}}>>`SELECT "decision" FROM "OrdinaryEmailDecision" WHERE "messageId"=${contextual.id}::uuid`;
+    expect(exactDecision.decision.mimeHash).toBe(delivered.sha256);expect(await attempts(contextual.id)).toBe(1);
+    expect(await receipt(contextual.id)).toMatchObject({outcome:'ACCEPTED',phase:'CONTENT'});
+  }
+  target='/communications?kind=TECHNICAL&practice='+f.practice.id;
   const keyDenied = await fresh('Chiave ritirata sintetica'); await open(keyDenied.id);
   await db.applicationKeyVersion.updateMany({ where: { purpose: 'PRIVILEGED_STEP_UP', status: 'ACTIVE' }, data: { status: 'RETIRED', retiredAt: new Date() } });
   await send(keyDenied.id); await expect(page).toHaveURL(/\/settings\/security\?status=unavailable$/);
   expect(await attempts(keyDenied.id)).toBe(0);
   const last = await metrics();
-  expect(last.connections).toBe(baseline.connections + 3); expect(last.authenticated).toBe(3); expect(last.contents).toHaveLength(2);
+  expect(last.connections).toBe(baseline.connections + 6); expect(last.authenticated).toBe(6); expect(last.contents).toHaveLength(5);
   expect(externalRequests).toBe(0);
   const proof = { synthetic: true, nativeLoginAndStepUp: true, nativeSendAction: true, nativeTls: true,
     internalNetwork: network.internalNetwork, noIpv4DefaultRoute: network.ipv4DefaultRoute === false,
     wrongServernameDenied: tlsProof.wrongServernameDenied, untrustedIssuerDenied: tlsProof.untrustedIssuerDenied,
     otherAdminDenied, concurrentEditDenied: true, changedQualificationDenied: true, currentSessionRevocationDenied: true,
     retiredKeyDenied: true, doubleClickPosts: posts, committedResponseLost: true, replayDenied: true,
-    exactMimeHash: true, exactEnvelope: true, bccHeaderAbsent: true, accepted: 1, notSent: 1, uncertain: 1,
+    exactMimeHash: true, exactEnvelope: true, bccHeaderAbsent: true, accepted: 4, notSent: 1, uncertain: 1,
+    leadClientInternalNativeTls: true, privateContextAttachment: true,
     authenticatedSyntheticConnections: last.authenticated, externalBrowserRequests: externalRequests, automaticRetries: 0, screenshotsInspected: false };
   await writeFile(path.join(evidence, 'native-send-proof.json'), JSON.stringify(proof, null, 2));
   console.log('ORDINARY_NATIVE_SEND_PROOF ' + JSON.stringify(proof));

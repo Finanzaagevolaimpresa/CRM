@@ -89,6 +89,26 @@ export async function privateDocumentExists(storagePath?: string | null) {
   try { await stat(localPathFromStoragePath(storagePath)); return true; } catch { return false; }
 }
 
+/** Same approved private storage, with a genuine communication namespace. */
+export async function savePrivateCommunicationFile(input: { file: File; contextKind: string; contextId: string; id: string; fileName: string }) {
+  assertLocalProvider();
+  if (!['LEAD','CLIENT','READINESS','TECHNICAL','INTERNAL'].includes(input.contextKind)
+    || !/^[A-Za-z0-9_-]{1,128}$/.test(input.contextId)
+    || !/^[a-f0-9-]{36}$/.test(input.id) || input.file.size < 1 || input.file.size > Math.min(maxBytes,20*1024*1024)) throw new Error('COMMUNICATION_FILE_INVALID');
+  assertSafeUploadName(input.fileName);
+  const bytes = Buffer.from(await input.file.arrayBuffer());
+  if (bytes.length !== input.file.size) throw new Error('COMMUNICATION_FILE_CHANGED');
+  if (path.extname(input.fileName).toLowerCase() === '.zip' && (bytes.length < 22 || ![0x04034b50,0x06054b50,0x08074b50].includes(bytes.readUInt32LE(0)))) throw new Error('COMMUNICATION_ZIP_INVALID');
+  const storagePath = path.posix.join('communications',input.contextKind.toLowerCase(),input.contextId,input.id);
+  const target = localPathFromStoragePath(storagePath);
+  await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+  try { await writeFile(target,bytes,{ flag: 'wx', mode: 0o600 }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !(await readPrivateDocumentBounded(storagePath,20*1024*1024)).equals(bytes)) throw error;
+  }
+  return { storagePath, sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length };
+}
+
 export async function readPrivateDocument(storagePath: string) {
   return readFile(localPathFromStoragePath(storagePath));
 }

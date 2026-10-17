@@ -141,9 +141,9 @@ function fault(mode: 'error' | 'delay' | 'outcome-error'): PrismaClient {
   }, opts) } as unknown as PrismaClient;
 }
 
-test('ordinary store uses schema51 and has a real native minimizer', options, async () => {
+test('ordinary store uses schema52 and has a real native minimizer', options, async () => {
   const [count] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(count.count,51);
+  assert.equal(count.count,52);
   const [value] = await db.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='AuditLog_redaction_n04_v1' AND tgenabled='O') AS present`;
   assert.equal(value.present,true);
 });

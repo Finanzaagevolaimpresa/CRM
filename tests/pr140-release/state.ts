@@ -61,6 +61,9 @@ async function main() {
       ordinaryInboundConflict: await db.ordinaryEmailInboundConflict.findMany({ orderBy: { id: 'asc' } }),
       ordinaryInboundLink: await db.ordinaryEmailInboundLink.findMany({ orderBy: { itemId: 'asc' } }),
       m4Mailboxes: await db.communicationMailbox.findMany({ orderBy: { id: 'asc' } }),
+      internalThreads: await db.internalCommunicationThread.findMany({ orderBy: { id: 'asc' } }),
+      internalParticipants: await db.internalCommunicationParticipant.findMany({ orderBy: [{ threadId: 'asc' }, { userId: 'asc' }] }),
+      contextFiles: await db.communicationContextFile.findMany({ orderBy: { id: 'asc' } }),
       m4MailboxHistory: await db.communicationMailboxHistory.findMany({ orderBy: { id: 'asc' } }),
       m4Messages: await db.approvedCommunication.findMany({ orderBy: { id: 'asc' } }),
       m4Versions: await db.communicationVersion.findMany({ orderBy: { id: 'asc' } }),
@@ -88,7 +91,12 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 51);
+    assert.equal(data.ledger.length, 52);
+    assert.equal(data.internalThreads.length, 2);
+    assert.equal(data.internalParticipants.length, 6);
+    assert.equal(data.internalParticipants.filter(row=>!row.active).length, 2);
+    assert.equal(data.contextFiles.length, 2);
+    assert.equal(data.contextFiles.filter(row=>row.revokedAt).length, 1);
     assert.equal(data.ordinaryAuthority.length, 1);
     assert.equal(data.ordinaryAuthority[0].enabled, false);
     assert.equal(data.ordinaryChannel[0].enabled, false);

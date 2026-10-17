@@ -11,7 +11,7 @@ dossier_path='prisma/migrations/20260920090000_engagement_dossier_approval_deliv
 [[ "$(git diff --name-only "$base"...HEAD -- prisma/migrations)" == "$new_path"$'\n'"$readiness_path"$'\n'"$dossier_path"$'\n'"$perimeter_path"$'\n'"$communications_path"$'\n'"prisma/migrations/20261015090000_selective_project_access_v1/migration.sql"$'\n'"prisma/migrations/20261017120000_ordinary_email_v1/migration.sql" ]]
 [[ "$(git ls-tree -r --name-only "$base" -- prisma/migrations | sed -n '/\/migration.sql$/p' | wc -l | tr -d ' ')" == 44 ]]
 [[ "$(git ls-tree -r --name-only "$schema45" -- prisma/migrations | sed -n '/\/migration.sql$/p' | wc -l | tr -d ' ')" == 45 ]]
-[[ "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" == 51 ]]
+[[ "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" == 52 ]]
 git diff --quiet "$base"...HEAD -- $(git ls-tree -r --name-only "$base" -- prisma/migrations)
 git diff --quiet "$schema45" HEAD -- $(git ls-tree -r --name-only "$schema45" -- prisma/migrations)
 grep -q '^model ControlledIntake {' prisma/schema.prisma

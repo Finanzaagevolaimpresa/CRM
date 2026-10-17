@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { unstable_rethrow } from 'next/navigation';
-import { requirePermission } from '@/lib/auth';
+import { requireAnyPermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { assertOrdinaryEmailRequestOrigin } from '@/lib/ordinary-email-request-contract';
 import { readStoredOrdinaryAttachment } from '@/lib/ordinary-email-attachment';
@@ -8,7 +8,7 @@ import { readStoredOrdinaryAttachment } from '@/lib/ordinary-email-attachment';
 export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; ordinal: string }> }) {
   try {
-    const session = await requirePermission('practice_communications.read');
+    const session = await requireAnyPermission(['practice_communications.read','communications.internal.read']);
     assertOrdinaryEmailRequestOrigin({ origin: request.headers.get('origin'), secFetchSite: request.headers.get('sec-fetch-site') }, process.env);
     const { id, ordinal } = await params, form = await request.formData();
     if (!/^(?:[0-9]|[12][0-9]|3[01])$/.test(ordinal) || [...form.keys()].length !== 2

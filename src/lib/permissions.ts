@@ -2,6 +2,7 @@ import type { RoleCode } from '@prisma/client';
 import { hasFinancialRole, isFinancialPermission } from './financial-privacy-policy';
 
 export const permissionCatalog = [
+  { code: 'communications.internal.read', label: 'Leggere comunicazioni interne', description: 'Consulta soltanto conversazioni interne a cui partecipa attualmente; non concede accesso a clienti o pratiche.', group: 'comunicazioni interne' },
   { code: 'user.read', label: 'Leggere utenti', description: 'Visualizza utenti interni e profili.', group: 'utenti e impostazioni' },
   { code: 'user.write', label: 'Modificare utenti', description: 'Crea e modifica utenti interni non privilegiati.', group: 'utenti e impostazioni' },
   { code: 'settings.manage', label: 'Gestire impostazioni', description: 'Accede alle impostazioni operative e diagnostiche.', group: 'utenti e impostazioni' },
@@ -96,6 +97,7 @@ export const rolePermissions: Record<RoleCode, readonly (Permission | '*')[]> = 
 };
 
 export function roleHasPermission(role: RoleCode, permission: Permission) {
+  if (permission === 'communications.internal.read') return Object.hasOwn(rolePermissions, role);
   if (isFinancialPermission(permission) && !hasFinancialRole({ role })) return false;
   if (permission === 'ai.execution.consume') return false;
   if ((protectedLeadDuplicatePermissions as readonly Permission[]).includes(permission)) {

@@ -1,0 +1,8 @@
+{
+  "baseline": "5f0d6e00b3cf08d4f789eb94fcde29ed27720cf4",
+  "baselineTree": "ba90621b65ec451661630ce64d4ba17df13aa53a",
+  "historicalMigrationCount": 51,
+  "migration": "20261017160000_admin_email_contexts_v1",
+  "schemaSha256": "75d815b5fef50fbb73b55f4cf0d713446e08d311469c2d94c2cccc9f082c859b",
+  "migrationSha256": "614f3a2c329892f2732c9e788c1f120662f30ea9c01edea9ff0192a087d9f026"
+}

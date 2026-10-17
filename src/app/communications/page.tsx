@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { requirePermission } from '@/lib/auth';
+import { requireAnyPermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { Card, PageHeader } from '@/components/ui';
 import { PrimaryButton } from '@/components/actions';
@@ -10,6 +10,11 @@ import { OrdinaryEmailReceipts } from '@/components/ordinary-email-receipts';
 import { OrdinaryEmailReview } from '@/components/ordinary-email-review';
 import { OrdinaryEmailInboundRefresh } from '@/components/ordinary-email-inbound-refresh';
 import { OrdinaryEmailAttachmentDownload } from '@/components/ordinary-email-attachment-download';
+import { CommunicationRecipients } from '@/components/communication-recipients';
+import { CommunicationFiles } from '@/components/communication-files';
+import { hasPermission } from '@/lib/permission-evaluator';
+import { InternalCommunicationEditor } from '@/components/internal-communication-editor';
+import { listInternalCommunications, readCommunicationDirectory } from '@/lib/internal-communications';
 import { sanitizeFileName } from '@/lib/storage';
 import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
@@ -38,12 +43,16 @@ function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: Approve
       <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
     </select></label>
     <label>Reply-To<input required className={field} type="email" name="replyTo" defaultValue={snapshot?.replyTo} /></label>
-    <label>A · indirizzi separati da virgola<input required className={field} name="to" defaultValue={snapshot?.to.join(', ')} /></label>
-    <div className="grid gap-3 md:grid-cols-2"><label>CC esplicita<input className={field} name="cc" defaultValue={snapshot?.cc.join(', ')} /></label><label>BCC esplicita<input className={field} name="bcc" defaultValue={snapshot?.bcc.join(', ')} /></label></div>
+    <CommunicationRecipients directory={data.directory} internal={data.context.kind === 'INTERNAL'} participantIds={data.participantIds}
+      suggestedRecipients={data.suggestedRecipients}
+      initialSelection={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.recipientSelection : undefined}
+      initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />
     <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject} /></label>
     <label>Testo esatto<textarea required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body} /></label>
     <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
+      {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
+        defaultChecked={snapshot?.schema === 'fai.approved-email.v2' && snapshot.attachments.some(a => a.source === 'CONTEXT_FILE' && a.versionId === file.id)} />{file.fileName} · {file.sizeBytes} byte</label>)}
       {data.documents.length ? data.documents.map(doc => <div key={doc.id}><b>{doc.title}</b>{doc.versions.map(version => <label key={version.id} className="ml-3 inline-flex gap-2"><input type="checkbox" name="attachmentVersionId" value={version.id} defaultChecked={snapshot?.attachments.some(a => a.versionId === version.id)} />Versione {version.version}</label>)}</div>) : <p>Nessun documento disponibile per il tuo accesso.</p>}
     </fieldset>
     <p className="text-sm text-slate-600">Ogni modifica crea una nuova versione da approvare. Nessun destinatario viene aggiunto automaticamente.</p>
@@ -52,9 +61,20 @@ function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: Approve
 }
 
 export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string }> }) {
-  const query = await searchParams, session = await requirePermission('practice_communications.read');
+  const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
-  if (!context.success) return <div className="crm-space-y-5"><PageHeader title="Comunicazioni approvate" description="Apri le comunicazioni dalla pratica interessata." /><Link className="font-bold underline" href="/practice-readiness">Pratiche da preventivo ad avvio</Link><br /><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link>{session.role === 'admin' ? <p><Link href="/settings/communications" className="font-bold underline">Caselle e risposte da riconciliare</Link></p> : null}</div>;
+  if (!context.success) {
+    if (query.kind || query.practice) notFound();
+    const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
+    const authority = await ordinaryEmailUiAuthorityFromRequest(session);
+    const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
+    return <div className="crm-space-y-5"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
+      <nav className="flex flex-wrap gap-4"><Link className="font-bold underline" href="/leads">Lead</Link><Link className="font-bold underline" href="/clients">Clienti</Link><Link className="font-bold underline" href="/practice-readiness">Pratiche da avviare</Link><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link></nav>
+      {authority ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
+      <Card title="Conversazioni interne a cui partecipi"><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}><Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link></li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
+      {session.role === 'admin' ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
+    </div>;
+  }
   let data: Data;
   try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page)); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
@@ -63,10 +83,18 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   if (query.reply && (!data.canWrite || !replySource)) notFound();
   const ordinaryAuthority = await ordinaryEmailUiAuthorityFromRequest(session);
   const feedback: Record<string, string> = { RECORDED: 'Operazione registrata.', DENIED: 'Accesso o contesto non più valido.', CONFLICT: 'La versione è cambiata o l’operazione è già conclusa. Aggiorna e verifica la timeline.', SENDER_NOT_READY: 'Il mittente deve essere configurato, collaudato e abilitato.', INVALID: 'Controlla i campi del messaggio e i limiti degli allegati.', RECONCILIATION_REQUIRED: 'Registra o riconcilia il tentativo aperto prima di prepararne un altro.' };
-  return <div className="crm-space-y-6"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni della pratica di ${data.client.name}.`} />
+  return <div className="crm-space-y-6"><PageHeader title="Comunicazioni approvate" description={`Comunicazioni · ${data.label}`} />
+    <Link className="font-bold underline" href="/communications">Tutte le comunicazioni</Link>
+    {data.thread && data.personal && data.thread.ownerUserId === session.userId ? <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Gestisci partecipanti della conversazione interna</summary>
+      <InternalCommunicationEditor key={`${data.thread.id}-${data.thread.version}`} id={data.thread.id} version={data.thread.version} title={data.thread.title}
+        selectedIds={data.participantIds} people={data.directory} stepUpActive={ordinaryAuthority?.stepUpActive ?? false} /></details> : null}
     <p className="text-sm">Per l’invio manuale, scarica il messaggio approvato e usa il tuo client email. Quando l’invio dal CRM è disponibile, scegli «Approva e invia» sulla versione esatta. Le due modalità conservano ricevute distinte.</p>
     {data.isAdmin ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     {query.result && feedback[query.result] ? <p role="status" className="rounded-xl bg-slate-100 p-3">{feedback[query.result]}</p> : null}
+    <details className="rounded-xl border p-3"><summary className="cursor-pointer font-bold">Allegati del contesto</summary>
+      <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
+        context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} requestId={randomUUID()} />
+    </details>
     {data.canWrite ? <Card title={replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
       {replySource ? <aside className="mb-4 rounded-xl border p-3"><p>{replySource.sender} · {replySource.receivedAt.toISOString()}</p>
         <h3 className="font-bold">{replySource.subject}</h3><p className="whitespace-pre-wrap break-words">{replySource.body}</p>

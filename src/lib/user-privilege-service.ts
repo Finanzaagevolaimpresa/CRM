@@ -4,6 +4,7 @@ import { serializableOptions } from './serializable';
 import { internalSessionMode } from './session';
 import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 import { redactAuditPayload } from './data-classification';
+import { lockCommunicationDirectory } from './communication-directory-lock';
 
 export type PrivilegeActor = { userId: string; sessionId?: string };
 export type PrivilegeResult<T = unknown> = { ok: true; value: T } | { ok: false; message: string };
@@ -33,6 +34,7 @@ async function loadActor(tx: Tx, actor: PrivilegeActor): Promise<ActorUser | nul
 }
 
 async function requireAdminActor(tx: Tx, actor: PrivilegeActor, targetId: string, action: string, after: unknown) {
+  await lockCommunicationDirectory(tx, true);
   const actorUser = await loadActor(tx, actor);
   if (!actorUser || !actorUser.active || actorUser.deletedAt || actorUser.role !== 'admin') {
     await auditBlocked(tx, actor, targetId, { action, ...typeof after === 'object' && after ? after : { detail: after } }, actorUser ? { role: actorUser.role, active: actorUser.active } : { missing: true });

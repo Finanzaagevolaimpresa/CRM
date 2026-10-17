@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { internalSessionMode } from './session';
 import { lockAuthoritativeInternalSession, lockInternalUser, revokeAllInternalSessions } from './internal-session-registry';
 import { accountPasswordSchema, accountProfileSchema } from './user-account-contract';
+import { lockCommunicationDirectory } from './communication-directory-lock';
 
 type Tx = Prisma.TransactionClient;
 export type AccountActor = { userId: string; sessionId?: string };
@@ -11,6 +12,7 @@ const deny = (): AccountResult => ({ ok: false, message: 'Operazione non consent
 
 async function actorForMutation(tx: Tx, actor: AccountActor, adminOnly: boolean) {
   if (internalSessionMode() !== 'registry' || !actor.sessionId) return null;
+  await lockCommunicationDirectory(tx, true);
   const session = await lockAuthoritativeInternalSession(tx, { userId: actor.userId, sessionId: actor.sessionId });
   if (!session || session.revokedAt || !session.live || !session.active || session.deletedAt) return null;
   if (adminOnly && session.role !== 'admin') return null;

@@ -371,6 +371,9 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  internalCommunicationThreads InternalCommunicationThread[]
+  internalCommunicationParticipants InternalCommunicationParticipant[]
+  communicationContextFiles CommunicationContextFile[]
   ordinaryEmailAuthorities OrdinaryEmailAuthority[]
   ordinaryEmailDecisions OrdinaryEmailDecision[]
   ordinaryInboundLinks OrdinaryEmailInboundLink[]
@@ -508,6 +511,8 @@ model ClientReadGrant {
 }
 
 model Lead {
+  approvedCommunications ApprovedCommunication[]
+  communicationContextFiles CommunicationContextFile[]
   id                          String                   @id @default(cuid())
   firstName                   String
   lastName                    String
@@ -629,6 +634,7 @@ model CommercialOffer {
 }
 
 model Client {
+  communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                  String               @id @default(cuid())
   type                ClientType
@@ -2091,6 +2097,7 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                     String                    @id @default(cuid())
   clientId               String
@@ -2751,6 +2758,7 @@ model CommunicationIntentAudit {
 }
 
 model PracticeReadiness {
+  communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                    String @id @default(uuid()) @db.Uuid
   controlledIntakeId    String @unique @db.Uuid
@@ -2940,10 +2948,15 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  lead Lead? @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  internalThread InternalCommunicationThread? @relation(fields: [internalThreadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   ordinaryEmailDecisions OrdinaryEmailDecision[]
   ordinaryEmailAttempts OrdinaryEmailAttempt[]
   id String @id @default(uuid()) @db.Uuid
-  clientId String
+  clientId String?
+  contextKind String @default("LEGACY") @db.VarChar(20)
+  leadId String?
+  internalThreadId String? @db.Uuid
   readinessId String? @db.Uuid
   technicalPracticeId String?
   mailboxId String @db.Uuid
@@ -2952,7 +2965,7 @@ model ApprovedCommunication {
   createdById String
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
-  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
   readiness PracticeReadiness? @relation(fields: [readinessId], references: [id], onDelete: Restrict)
   technicalPractice TechnicalPractice? @relation(fields: [technicalPracticeId], references: [id], onDelete: Restrict)
   mailbox CommunicationMailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict)
@@ -2964,6 +2977,64 @@ model ApprovedCommunication {
   @@index([readinessId, updatedAt])
   @@index([technicalPracticeId, updatedAt])
   @@index([state, updatedAt])
+  @@index([leadId, updatedAt])
+  @@index([internalThreadId, updatedAt])
+  @@index([contextKind, clientId, updatedAt])
+}
+model InternalCommunicationThread {
+  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  participants InternalCommunicationParticipant[]
+  messages ApprovedCommunication[]
+  files CommunicationContextFile[]
+  id String @id @default(uuid()) @db.Uuid
+  title String @db.VarChar(200)
+  ownerUserId String
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+  @@index([ownerUserId, updatedAt])
+}
+model InternalCommunicationParticipant {
+  thread InternalCommunicationThread @relation(fields: [threadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  threadId String @db.Uuid
+  userId String
+  active Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  @@id([threadId, userId])
+  @@index([userId, active])
+}
+model CommunicationContextFile {
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  lead Lead? @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  readiness PracticeReadiness? @relation(fields: [readinessId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  technicalPractice TechnicalPractice? @relation(fields: [technicalPracticeId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  internalThread InternalCommunicationThread? @relation(fields: [internalThreadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  uploadedBy User @relation(fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id String @id @default(uuid()) @db.Uuid
+  contextKind String @db.VarChar(20)
+  clientId String?
+  leadId String?
+  readinessId String? @db.Uuid
+  technicalPracticeId String?
+  internalThreadId String? @db.Uuid
+  uploadedById String
+  fileName String @db.VarChar(200)
+  mimeType String @db.VarChar(120)
+  classification String @default("ORDINARY") @db.VarChar(20)
+  sizeBytes Int
+  sha256 String @db.Char(64)
+  storagePath String @unique
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  revokedAt DateTime? @db.Timestamptz(3)
+  @@index([clientId, createdAt])
+  @@index([leadId, createdAt])
+  @@index([readinessId, createdAt])
+  @@index([technicalPracticeId, createdAt])
+  @@index([internalThreadId, createdAt])
 }
 model CommunicationVersion {
   ordinaryEmailDecisions OrdinaryEmailDecision[]

@@ -25,5 +25,12 @@ const ordinaryKeys = [...ordinary.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\
 assert.equal(ordinaryKeys.length, 21, 'All ordinary email foreign keys must be covered');
 assert.deepEqual(ordinaryKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove ordinary email foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "OrdinaryEmail|ALTER TABLE "OrdinaryEmail[^"]*"[^;]*DROP COLUMN/);
+const contexts = readFileSync('prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql', 'utf8');
+const contextKeys = [...contexts.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)]
+  .flatMap(([,table,columns]) => [...columns.matchAll(/"([^"]+)"[^\n]* REFERENCES /g)].map(([,column]) => table+'_'+column+'_fkey'));
+contextKeys.push('ApprovedCommunication_leadId_fkey', 'ApprovedCommunication_internalThreadId_fkey');
+assert.equal(contextKeys.length, 11, 'Every new context foreign key must be covered');
+assert.deepEqual(contextKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove context foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "(?:InternalCommunication|CommunicationContextFile)|ALTER TABLE "(?:InternalCommunication[^"]*|CommunicationContextFile)"[^;]*DROP COLUMN/);
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
   communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length }));
