@@ -8,7 +8,7 @@ perimeter_path='prisma/migrations/20260924100000_admin_client_read_perimeters_v1
 communications_path='prisma/migrations/20260927010000_approved_manual_communications_v1/migration.sql'
 
 dossier_path='prisma/migrations/20260920090000_engagement_dossier_approval_delivery_v1/migration.sql'
-[[ "$(git diff --name-only "$base"...HEAD -- prisma/migrations)" == "$new_path"$'\n'"$readiness_path"$'\n'"$dossier_path"$'\n'"$perimeter_path"$'\n'"$communications_path"$'\n'"prisma/migrations/20261015090000_selective_project_access_v1/migration.sql"$'\n'"prisma/migrations/20261017120000_ordinary_email_v1/migration.sql" ]]
+[[ "$(git diff --name-only "$base"...HEAD -- prisma/migrations)" == "$new_path"$'\n'"$readiness_path"$'\n'"$dossier_path"$'\n'"$perimeter_path"$'\n'"$communications_path"$'\n'"prisma/migrations/20261015090000_selective_project_access_v1/migration.sql"$'\n'"prisma/migrations/20261017120000_ordinary_email_v1/migration.sql"$'\n'"prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql" ]]
 [[ "$(git ls-tree -r --name-only "$base" -- prisma/migrations | sed -n '/\/migration.sql$/p' | wc -l | tr -d ' ')" == 44 ]]
 [[ "$(git ls-tree -r --name-only "$schema45" -- prisma/migrations | sed -n '/\/migration.sql$/p' | wc -l | tr -d ' ')" == 45 ]]
 [[ "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" == 52 ]]

@@ -24,6 +24,8 @@ export type OrdinaryActivationPlan = z.infer<typeof ordinaryActivationSchema>;
 function denied(): never { throw new Error('ORDINARY_EMAIL_ACTIVATION_DENIED'); }
 const MIGRATION = '20261017120000_ordinary_email_v1';
 const MIGRATION_SHA256 = '74b6a8e88c8732012656420b4d6aabbc17c2054ae13935f5f5879042e8483a83';
+const CONTEXT_MIGRATION = '20261017160000_admin_email_contexts_v1';
+const CONTEXT_MIGRATION_SHA256 = '614f3a2c329892f2732c9e788c1f120662f30ea9c01edea9ff0192a087d9f026';
 
 /** A privileged, explicitly invoked operational act, never a public action.
  * The operator must acquire the human binding/scope and real TLS/authentication
@@ -39,13 +41,15 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   return db.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
-    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; now: Date }>>`
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
         (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
         (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
-        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${MIGRATION}) AS checksum`;
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${MIGRATION}) AS checksum,
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${CONTEXT_MIGRATION}) AS "contextChecksum"`;
     const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
-    if (state.database !== plan.targetDatabase || state.count !== 51 || !state.complete || state.checksum !== MIGRATION_SHA256
+    if (state.database !== plan.targetDatabase || state.count !== 52 || !state.complete || state.checksum !== MIGRATION_SHA256
+      || state.contextChecksum !== CONTEXT_MIGRATION_SHA256
       || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
       || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
     // Lock both people before the mailbox, following native admission ordering.

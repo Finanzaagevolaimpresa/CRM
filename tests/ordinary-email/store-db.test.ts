@@ -184,6 +184,18 @@ test('operational activation denies stale evidence, wrong scope, identity, targe
   }
   await assert.rejects(activateOrdinaryEmail(db, f.plan, 'd'.repeat(64), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), { ...key, secret: 'wrong'.repeat(16) }, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
+  // The current binary admits only the exact complete schema52 ledger. Each
+  // synthetic tamper is rolled back with the rejected activation transaction.
+  for (const sql of [
+    `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261017160000_admin_email_contexts_v1'`,
+    `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261017160000_admin_email_contexts_v1'`,
+    `DELETE FROM "_prisma_migrations" WHERE migration_name='20261017160000_admin_email_contexts_v1'`,
+  ]) {
+    const wrapped = { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) =>
+      db.$transaction(async tx => { await tx.$executeRawUnsafe(sql); return work(tx); }, opts) } as unknown as PrismaClient;
+    await assert.rejects(activateOrdinaryEmail(wrapped, f.plan, canonicalSha256(f.plan), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
+    assert.deepEqual(await activationCounts(), [0, 0, 0]);
+  }
   await db.user.update({ where: { id: f.actor.userId }, data: { role: 'direzione' } });
   await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   assert.deepEqual(await activationCounts(), [0, 0, 0]);

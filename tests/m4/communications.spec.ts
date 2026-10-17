@@ -45,7 +45,8 @@ test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle,
   await operator.goto(target);
   const draft = operator.locator('form').filter({ has: operator.locator('input[name="intent"][value="draft"]') });
   await draft.getByLabel('Mittente', { exact: false }).selectOption(f.mailboxId); await draft.getByLabel('Reply-To', { exact: true }).fill('assistenza@finanzaagevolaimpresa.it');
-  await draft.getByLabel('A · indirizzi separati da virgola').fill('client@invalid.test'); await draft.getByLabel('BCC esplicita').fill('archive@invalid.test');
+  await draft.getByRole('region', { name: 'Destinatari A', exact: true }).getByLabel('Indirizzi esterni · separati da virgola').fill('client@invalid.test');
+  await draft.getByRole('region', { name: 'Destinatari BCC', exact: true }).getByLabel('Indirizzi esterni · separati da virgola').fill('archive@invalid.test');
   await draft.getByLabel('Oggetto', { exact: true }).fill('M4 synthetic approved email'); await draft.getByLabel('Testo esatto').fill('Synthetic exact body; no real delivery.');
   await draft.locator(`input[name="attachmentVersionId"][value="${f.versionId}"]`).check(); await draft.getByRole('button', { name: 'Salva bozza', exact: true }).click();
   await expect(operator).toHaveURL(/result=RECORDED/);
@@ -119,7 +120,7 @@ test('M4 readiness direct URLs and draft submissions follow the current originat
   async function fill(draft: Locator) {
     await draft.getByLabel('Mittente', { exact: false }).selectOption(f.mailboxId);
     await draft.getByLabel('Reply-To', { exact: true }).fill('assistenza@finanzaagevolaimpresa.it');
-    await draft.getByLabel('A · indirizzi separati da virgola').fill(recipient);
+    await draft.getByRole('region', { name: 'Destinatari A', exact: true }).getByLabel('Indirizzi esterni · separati da virgola').fill(recipient);
     await draft.getByLabel('Oggetto', { exact: true }).fill(subject); await draft.getByLabel('Testo esatto').fill(body);
   }
   const draft = (page: Page) => page.locator('form').filter({ has: page.locator('input[name="intent"][value="draft"]') }).first();
