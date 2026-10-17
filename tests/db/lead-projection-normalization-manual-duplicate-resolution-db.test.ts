@@ -480,7 +480,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 52);
+  assert.equal(allNames.length, 53);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 40);
@@ -504,6 +504,7 @@ async function qualifyMigration(upgrade: boolean) {
             lastName: 'N12',
             email: 'historical@n13-upgrade.invalid',
           },
+          select: { id: true },
         })).id;
         await before.secureLeadGatewayKeyVersion.create({
           data: {
@@ -607,7 +608,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[39], migrationName);
@@ -632,6 +633,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
             email: 'u\u0308pgrade@n13-c2.invalid',
             source: 'N13_C2_UPGRADE_SENTINEL',
           },
+          select: { id: true },
         })).id;
       } finally {
         await before.$disconnect();
@@ -770,7 +772,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[40], correctiveMigrationName);

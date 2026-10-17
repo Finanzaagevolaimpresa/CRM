@@ -371,6 +371,10 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  recordUpdateEpoch Int @default(1)
+  recordUpdateRules RecordUpdateRule[] @relation("RecordUpdateRuleAuthor")
+  recordUpdateCommands RecordUpdateCommand[] @relation("RecordUpdateCommandActor")
+  recordUpdateDeliveries RecordUpdateDelivery[] @relation("RecordUpdateRecipient")
   internalCommunicationThreads InternalCommunicationThread[]
   internalCommunicationParticipants InternalCommunicationParticipant[]
   communicationContextFiles CommunicationContextFile[]
@@ -511,6 +515,7 @@ model ClientReadGrant {
 }
 
 model Lead {
+  recordUpdateEpoch Int @default(1)
   approvedCommunications ApprovedCommunication[]
   communicationContextFiles CommunicationContextFile[]
   id                          String                   @id @default(cuid())
@@ -634,6 +639,7 @@ model CommercialOffer {
 }
 
 model Client {
+  recordUpdateEpoch Int @default(1)
   communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                  String               @id @default(cuid())
@@ -722,6 +728,7 @@ model IncorporationSubject {
 }
 
 model Project {
+  recordUpdateEpoch Int @default(1)
   selectiveGrants SelectiveProjectGrant[]
   id                     String               @id @default(cuid())
   clientId               String
@@ -2034,6 +2041,7 @@ model ServiceCatalogPublication {
 }
 
 model ClientService {
+  recordUpdateEpoch Int @default(1)
   id                  String                   @id @default(cuid())
   clientId            String
   companyId           String?
@@ -2097,6 +2105,7 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  recordUpdateEpoch Int @default(1)
   communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
   id                     String                    @id @default(cuid())
@@ -3248,4 +3257,73 @@ model OrdinaryEmailInboundLink {
   item OrdinaryEmailInboundItem @relation(fields: [itemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   reply CommunicationReply @relation(fields: [replyId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+}
+
+model RecordUpdateRule {
+  id String @id @default(uuid()) @db.Uuid
+  kind String @db.VarChar(20)
+  recordId String
+  version Int @default(1)
+  active Boolean @default(true)
+  authorId String
+  authorEpoch Int
+  scope Json
+  selection Json
+  directoryBinding String @db.Char(64)
+  recipients Json
+  events String[]
+  expiresAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  author User @relation("RecordUpdateRuleAuthor", fields: [authorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  deliveries RecordUpdateDelivery[]
+  @@unique([kind, recordId])
+}
+
+model RecordUpdateCommand {
+  id String @id @db.Uuid
+  actorId String
+  actorEpoch Int
+  kind String @db.VarChar(20)
+  recordId String
+  digest String @db.Char(64)
+  operation String @db.VarChar(20)
+  scope Json
+  selection Json
+  directoryBinding String @db.Char(64)
+  recipients Json
+  transactionId BigInt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  actor User @relation("RecordUpdateCommandActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  deliveries RecordUpdateDelivery[]
+}
+
+model RecordUpdateEvent {
+  id String @id @default(uuid()) @db.Uuid
+  kind String @db.VarChar(20)
+  recordId String
+  event String @db.VarChar(30)
+  changed Json
+  scope Json
+  sourceKey String? @unique
+  occurredAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  deliveries RecordUpdateDelivery[]
+  @@index([kind, recordId, occurredAt])
+}
+
+model RecordUpdateDelivery {
+  id String @id @default(uuid()) @db.Uuid
+  eventId String @db.Uuid
+  recipientId String
+  recipientEpoch Int
+  ruleId String? @db.Uuid
+  ruleVersion Int?
+  commandId String? @db.Uuid
+  readAt DateTime? @db.Timestamptz(3)
+  event RecordUpdateEvent @relation(fields: [eventId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation("RecordUpdateRecipient", fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  rule RecordUpdateRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  command RecordUpdateCommand? @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([eventId, recipientId])
+  @@index([recipientId, readAt, eventId])
 }

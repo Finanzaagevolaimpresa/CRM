@@ -2209,6 +2209,7 @@ test('upgrade reale PR74→PR75→PR76→PR77→PR79→PR80 preserva replay, bar
   });
   try {
     const legacyUser = await upgradePrisma.user.create({
+      select: { id: true },
       data: {
         email: `legacy-upgrade-${runId}@example.test`,
         name: 'Legacy upgrade synthetic admin',
@@ -2685,6 +2686,7 @@ test('preflight PR80 fallisce count-only su reason PR79 incompatibile e non inst
   });
   try {
     const actor = await preflightPrisma.user.create({
+      select: { id: true },
       data: {
         email: `pr80-preflight-${runId}@example.test`,
         name: 'PR80 preflight synthetic admin',

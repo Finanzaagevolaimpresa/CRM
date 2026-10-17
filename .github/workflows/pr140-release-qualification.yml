@@ -26,8 +26,8 @@ concurrency:
   group: pr140-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  release-schema52:
-    name: Schema52 package with email state and selective access retained on restart
+  release-schema53:
+    name: Schema53 package with email state and selective access retained on restart
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

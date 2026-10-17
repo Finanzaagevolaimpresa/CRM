@@ -6,6 +6,8 @@ db="${DATABASE_URL%%\?*}"
 evidence="$RUNNER_TEMP/ordinary-email"
 ddl=prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
+if psql "$db" -v ON_ERROR_STOP=1 -f prisma/migrations/20261017200000_record_update_notifications_v1/migration.sql > "$evidence/update-wrong-base.log" 2>&1; then exit 1; fi
+grep -Fq RECORD_UPDATE_MIGRATION53_BASE_REQUIRED "$evidence/update-wrong-base.log"
 psql "$db" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$evidence/prefix51-before.txt"
 # Genuine v1 rows exist before the schema change; no new-context code seeds them.
 psql "$db" -v ON_ERROR_STOP=1 <<'SQL'
@@ -29,7 +31,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM information_schema.columns WHERE t
 test "$(psql "$db" -Atc "SELECT is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name='ApprovedCommunication' AND column_name='clientId'")" = NO
 footprint "$evidence/context-legacy-after-fault.json"
 cmp "$evidence/context-legacy-before.json" "$evidence/context-legacy-after-fault.json"
-npm run prisma:migrate:deploy
+schema52="$RUNNER_TEMP/admin-email-schema52"
+mkdir -p "$schema52"
+git archive 76f1a1530310f40a760e3cfe27bb335f92451569 prisma | tar -x -C "$schema52"
+npx prisma migrate deploy --schema "$schema52/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 52
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261017160000_admin_email_contexts_v1' ORDER BY migration_name" > "$evidence/prefix51-after.txt"
 cmp "$evidence/prefix51-before.txt" "$evidence/prefix51-after.txt"
@@ -44,7 +49,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/context-replay.log" 2>&1; then exit 1; fi
 grep -Fq ADMIN_EMAIL_MIGRATION52_BASE_REQUIRED "$evidence/context-replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema52-datamodel-diff.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$schema52/prisma/schema.prisma" --script > "$evidence/schema52-datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema52-datamodel-diff.sql"
 printf '{"synthetic":true,"before":51,"after":52,"tablesAdded":3,"newTablesEmpty":true,"prefix51Unchanged":true,"legacyRowsPreserved":true,"wrongBaseDenied":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"productionContact":false}\n' > "$evidence/migration52-proof.json"
 cat "$evidence/migration52-proof.json"

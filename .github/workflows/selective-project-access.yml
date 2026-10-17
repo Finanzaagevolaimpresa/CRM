@@ -73,14 +73,14 @@ jobs:
           grep -Fq 'division by zero' "$evidence/migration-fault.log"
           test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT to_regclass('public.\"SelectiveProjectGrant\"') IS NULL")" = t
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 52
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 53
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveAccessAuthority"')" = 0
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveProjectGrant"')" = 0
           psql "${DATABASE_URL%%\?*}" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name LIMIT 49' > "$evidence/prefix49-after.txt"
           cmp "$evidence/prefix49-before.txt" "$evidence/prefix49-after.txt"
           npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema-diff.sql"
           node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema-diff.sql"
-          printf '{"synthetic":true,"before":49,"after":52,"atomicFailure":true,"prefix49Unchanged":true,"productionEnrolled":false}\n' > "$evidence/migration.json"
+          printf '{"synthetic":true,"before":49,"after":53,"atomicFailure":true,"prefix49Unchanged":true,"productionEnrolled":false}\n' > "$evidence/migration.json"
       - name: Real PostgreSQL authorization, race and audit-failure cases
         if: matrix.target == 'postgresql'
         shell: bash
