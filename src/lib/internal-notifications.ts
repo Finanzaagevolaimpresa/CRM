@@ -4,6 +4,8 @@ import type { TaskStatus } from "@prisma/client";
 import { leadVisibilityWhere } from "./core-query-policy";
 import { buildNotificationAccess } from "./internal-notification-policy";
 import { contextOutsideSelection } from './selective-project-policy';
+import { listRecordUpdates } from './record-update-delivery';
+import { internalSessionMode } from './session';
 
 export type InternalNotification = {
   id: string;
@@ -148,6 +150,11 @@ export async function getInternalNotifications(session: AuthSession, options?: {
   ];
 
   const priorityOrder = { alta: 0, media: 1, bassa: 2 };
+  if (internalSessionMode() === 'registry' && session.sessionId) {
+    const updates = await listRecordUpdates(prisma, session, limit);
+    notifications.push(...updates.map(row => ({ id: `record-update-${row.id}`, title: row.title,
+      category: row.category, related: row.related, date: row.date, priority: row.priority, href: row.href })));
+  }
   return notifications.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0)).slice(0, limit);
 }
 

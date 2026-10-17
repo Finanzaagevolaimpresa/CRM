@@ -43,8 +43,9 @@ test('trash and restore preserve linked client, offers, documents, versions, sta
   assert.equal((await listTrashedLeads(db, admin.session, 1)).items.some(row => row.id === before.id), true);
   await change(before.id, 'restore');
   const after = await db.lead.findUniqueOrThrow({ where: { id: before.id } });
-  const stable = ({ deletedAt: _d, updatedAt: _u, ...r }: typeof before) => { void _d; void _u; return r; };
+  const stable = ({ deletedAt: _d, updatedAt: _u, recordUpdateEpoch: _e, ...r }: typeof before) => { void _d; void _u; void _e; return r; };
   assert.deepEqual(stable(after), stable(before)); assert.equal(after.deletedAt, null);
+  assert.equal(after.recordUpdateEpoch, before.recordUpdateEpoch + 2, 'trash and restore invalidate earlier update recipients permanently');
   assert.deepEqual(await db.client.findUniqueOrThrow({ where: { id: f.client.id } }), f.client);
   assert.deepEqual(await db.commercialOffer.findUniqueOrThrow({ where: { id: f.offer.id } }), f.offer);
   assert.deepEqual(await db.document.findUniqueOrThrow({ where: { id: f.doc.id } }), f.doc);

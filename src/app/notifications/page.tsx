@@ -19,8 +19,9 @@ export default async function NotificationsPage() {
     <div className="crm-space-y-6">
       <PageHeader
         title="Notifiche"
-        description="Priorità operative interne e notifiche persistenti delle richieste AI destinate all’Admin, senza invii automatici o canali esterni."
+        description="Priorità operative, aggiornamenti selezionati dall’Admin e richieste AI, con accesso verificato per ogni scheda."
       />
+      <Link href="/notifications/updates" className="inline-block font-bold text-fai-blue underline">Aggiornamenti selezionati e stato di lettura</Link>
 
       <Card
         title="Notifiche attive"
