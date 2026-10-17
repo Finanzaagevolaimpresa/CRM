@@ -58,3 +58,4 @@ printf '{"synthetic":true,"before":50,"after":51,"tablesAdded":11,"newTablesEmpt
 cat "$evidence/migration51-proof.json"
 
 bash scripts/admin-email/qualify-migration.sh
+bash scripts/record-updates/qualify-migration.sh

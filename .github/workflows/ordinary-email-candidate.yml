@@ -60,7 +60,7 @@ jobs:
           grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
-      - name: Qualify historical migration51 and additive migration52 with atomic failure and immutable prefixes
+      - name: Qualify historical migrations51/52 and additive migration53 with atomic failure and immutable prefixes
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +100,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ordinary-email-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ordinary-email
+          path: |
+            ${{ runner.temp }}/ordinary-email
+            ${{ runner.temp }}/record-updates-migration
           if-no-files-found: error
           retention-days: 14

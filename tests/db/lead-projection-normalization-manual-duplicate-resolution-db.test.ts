@@ -480,7 +480,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 52);
+  assert.equal(allNames.length, 53);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 40);
@@ -498,13 +498,10 @@ async function qualifyMigration(upgrade: boolean) {
     if (upgrade) {
       const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
       try {
-        historicalLeadId = (await before.lead.create({
-          data: {
-            firstName: 'Historical',
-            lastName: 'N12',
-            email: 'historical@n13-upgrade.invalid',
-          },
-        })).id;
+        historicalLeadId = 'n13-upgrade-historical-lead';
+        await before.$executeRaw`INSERT INTO "Lead"
+          (id,"firstName","lastName",email,"updatedAt") VALUES
+          (${historicalLeadId},'Historical','N12','historical@n13-upgrade.invalid',NOW())`;
         await before.secureLeadGatewayKeyVersion.create({
           data: {
             id: historicalKeyId,
@@ -607,7 +604,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[39], migrationName);
@@ -624,15 +621,10 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
     if (upgrade) {
       const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
       try {
-        historicalLeadId = (await before.lead.create({
-          data: {
-            firstName: 'Jose\u0301',
-            lastName: 'N13-C2',
-            companyName: 'Cafe\u0301 Synthetic',
-            email: 'u\u0308pgrade@n13-c2.invalid',
-            source: 'N13_C2_UPGRADE_SENTINEL',
-          },
-        })).id;
+        historicalLeadId = 'n13-c2-upgrade-historical-lead';
+        await before.$executeRaw`INSERT INTO "Lead"
+          (id,"firstName","lastName","companyName",email,source,"updatedAt") VALUES
+          (${historicalLeadId},${'Jose\u0301'},'N13-C2',${'Cafe\u0301 Synthetic'},${'u\u0308pgrade@n13-c2.invalid'},'N13_C2_UPGRADE_SENTINEL',NOW())`;
       } finally {
         await before.$disconnect();
       }
@@ -770,7 +762,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[40], correctiveMigrationName);

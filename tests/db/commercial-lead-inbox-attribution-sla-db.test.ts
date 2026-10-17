@@ -217,7 +217,7 @@ test('current fresh46 catalog preserves N14 and contains zero policy, item, cycl
         (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
     `,
   ]);
-  assert.equal(Number(migrationRows[0]?.count), 52);
+  assert.equal(Number(migrationRows[0]?.count), 53);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
     'CommercialLeadInboxItem',
@@ -225,7 +225,9 @@ test('current fresh46 catalog preserves N14 and contains zero policy, item, cycl
     'CommercialLeadSlaPolicyVersion',
   ]);
   assert.equal(indexRows.length, 25);
-  assert.equal(triggerRows.length, 9);
+  assert.equal(triggerRows.length, 11);
+  assert.deepEqual(triggerRows.filter(({ name }) => name.startsWith('record_update_')).map(({ name }) => name),
+    ['record_update_capture_Lead', 'record_update_epoch_Lead']);
   assert.equal(functionRows.length, 5);
   assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
 });
@@ -659,7 +661,7 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migrationName);
@@ -675,10 +677,9 @@ test('N14 qualifies the exact additive 41 to 42 upgrade and preserves a legacy L
     });
     const before = new PrismaClient({ datasources: { db: { url: url.toString() } } });
     try {
-      await before.lead.create({ data: {
-        id: 'n14-upgrade-legacy-lead', firstName: 'Legacy', lastName: 'Synthetic',
-        email: 'legacy@n14-upgrade.invalid', source: 'LEGACY', leadSource: 'altro',
-      } });
+      await before.$executeRaw`INSERT INTO "Lead"
+        (id,"firstName","lastName",email,source,"leadSource","updatedAt") VALUES
+        ('n14-upgrade-legacy-lead','Legacy','Synthetic','legacy@n14-upgrade.invalid','LEGACY','altro',NOW())`;
       assert.equal(Number((await before.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0]?.count), 41);
     } finally { await before.$disconnect(); }
     cpSync(join('prisma/migrations', migrationName), join(migrationsDirectory, migrationName), { recursive: true });

@@ -38,10 +38,35 @@ async function main() {
       practiceId: entry.receipt.technicalPracticeId, handoffId: entry.id, acceptanceId: accepted.id, originId: origin.id,
       tech: { id: f.tech.id, email: f.tech.email }, otherEmail: f.other.email, otherId: f.other.id, adminEmail: f.admin.email,
       materialId: f.documents[2].id, materialHash: f.documents[2].checksum, sensitiveId: f.documents[0].id }) + '\n');
+  } else if (mode === 'epochs') {
+    // Compare every epoch immediately across each stop/start, before browser
+    // probes intentionally revoke and restore unrelated synthetic permissions.
+    const select = { id: true, recordUpdateEpoch: true } as const;
+    const orderBy = { id: 'asc' } as const;
+    const epochs = {
+      users: await db.user.findMany({ select, orderBy }),
+      leads: await db.lead.findMany({ select, orderBy }),
+      clients: await db.client.findMany({ select, orderBy }),
+      projects: await db.project.findMany({ select, orderBy }),
+      services: await db.clientService.findMany({ select, orderBy }),
+      practices: await db.technicalPractice.findMany({ select, orderBy }),
+    };
+    writeFileSync(process.argv[3], JSON.stringify(epochs, null, 2) + '\n');
   } else if (mode === 'footprint') {
+    const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
+      UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
     const data = {
       projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
       leads: await db.lead.findMany({ orderBy: { id: 'asc' } }),
+      updateRules: await db.recordUpdateRule.findMany({ orderBy: { id: 'asc' } }),
+      updateCommands: await db.recordUpdateCommand.findMany({ orderBy: { id: 'asc' } }),
+      updateEvents: await db.recordUpdateEvent.findMany({ orderBy: { id: 'asc' } }),
+      updateDeliveries: await db.recordUpdateDelivery.findMany({ orderBy: { id: 'asc' } }),
+      // The selected actors and recipients must also remain unchanged through
+      // every browser probe. Other actors' deliberate epoch increments are
+      // asserted at each perturbation, never reset to hide a revocation.
+      updateUsers: await db.user.findMany({ where: { id: { in: updateIdentities.map(row => row.id) } },
+        orderBy: { id: 'asc' }, select: { id: true, recordUpdateEpoch: true } }),
       leadLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'lead_lifecycle_changed' }, orderBy: { id: 'asc' } }),
       leadInboxItems: await db.commercialLeadInboxItem.findMany({ orderBy: { id: 'asc' } }),
       leadSlaCycles: await db.commercialLeadSlaCycle.findMany({ orderBy: { id: 'asc' } }),
@@ -91,7 +116,13 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 52);
+    assert.equal(data.ledger.length, 53);
+    assert.equal(data.updateRules.length, 2);
+    assert.equal(data.updateRules.filter(row => !row.active).length, 1);
+    assert.equal(data.updateCommands.length, 4);
+    assert.equal(data.updateEvents.length, 3);
+    assert.equal(data.updateDeliveries.length, 3);
+    assert.equal(data.updateDeliveries.filter(row => row.readAt).length, 1);
     assert.equal(data.internalThreads.length, 2);
     assert.equal(data.internalParticipants.length, 6);
     assert.equal(data.internalParticipants.filter(row=>!row.active).length, 2);
@@ -125,7 +156,7 @@ async function main() {
     assert.ok(data.m1History.some(row => row.event === 'purchased_service_handoff'));
     assert.ok(data.m1History.some(row => row.event === 'responsibility_accepted'));
     const minimized = Object.fromEntries(Object.entries(data).map(([key, rows]) => [key, {
-      count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows)).digest('hex'),
+      count: rows.length, sha256: createHash('sha256').update(JSON.stringify(rows, (_key, value) => typeof value === 'bigint' ? value.toString() : value)).digest('hex'),
     }]));
     writeFileSync(process.argv[3], JSON.stringify(minimized, null, 2) + '\n');
   } else if (mode === 'revoke-sessions') {

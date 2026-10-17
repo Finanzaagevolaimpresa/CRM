@@ -55,6 +55,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   return <div className="crm-space-y-6">
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
+    {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Chi aggiornare</SecondaryLink>}
     {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
     {hasPermission(session, 'project.write') && canEditProject(session, project) && <Card title="Gestisci progetto">
       <ProjectLifecycleControls id={project.id} updatedAt={project.updatedAt.toISOString()} state="active" />

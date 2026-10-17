@@ -350,7 +350,7 @@ test('fresh46 preserves exact N13/N14 provenance types, validated CHECK, correct
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migration42Name);
@@ -366,7 +366,7 @@ test('fresh46 preserves exact N13/N14 provenance types, validated CHECK, correct
       readMigrationRecord(client, migration43Name),
       readBusinessRows(client),
     ]);
-    assert.equal(await readFinishedMigrationCount(client), 52);
+    assert.equal(await readFinishedMigrationCount(client), 53);
     assert.deepEqual(physical.columns, [
       { name: 'formCode', type: 'character varying(120)', notNull: true },
       { name: 'formVersion', type: 'character varying(80)', notNull: true },
@@ -412,7 +412,7 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 52);
+  assert.equal(names.length, 53);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   const fixture = await createFixture('upgrade', names.slice(0, 42));
@@ -422,14 +422,9 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   try {
     deploy(fixture.databaseUrl, fixture.schemaPath);
     client = new PrismaClient({ datasources: { db: { url: fixture.databaseUrl } } });
-    await client.lead.create({ data: {
-      id: leadId,
-      firstName: 'Migration',
-      lastName: 'Sentinel',
-      email: 'migration-sentinel@n13-n14.invalid',
-      source: 'CRM',
-      leadSource: 'manuale',
-    } });
+    await client.$executeRaw`INSERT INTO "Lead"
+      (id,"firstName","lastName",email,source,"leadSource","updatedAt") VALUES
+      (${leadId},'Migration','Sentinel','migration-sentinel@n13-n14.invalid','CRM','manuale',NOW())`;
     await client.$executeRaw(Prisma.sql`
       INSERT INTO "CommercialLeadInboxItem" (
         "id", "leadId", "originKind", "sourceSystem", "formCode", "formVersion",

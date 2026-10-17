@@ -62,11 +62,14 @@ test('archive, trash and restore preserve every linked row and version; restorat
   await assert.rejects(ordinary(f));
   await assert.rejects(readSelectiveDocument(db, f.reader.session, f.project.id, f.documents[1].version.id, true, reader(f)));
   const restored = await db.project.findUniqueOrThrow({ where: { id: f.project.id } });
-  const stable = ({ status: _s, deletedAt: _d, updatedAt: _u, ...rest }: typeof original) => { void _s; void _d; void _u; return rest; };
+  const stable = ({ status: _s, deletedAt: _d, updatedAt: _u, recordUpdateEpoch: _epoch, ...rest }: typeof original) => { void _s; void _d; void _u; void _epoch; return rest; };
   assert.deepEqual(stable(restored), stable(original));
+  assert.equal(restored.recordUpdateEpoch, original.recordUpdateEpoch + 3);
   assert.deepEqual(await snapshot(f), before);
   assert.equal((await change(f, 'reactivate')).state, 'active');
-  assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).status, 'idea');
+  const reactivated = await db.project.findUniqueOrThrow({ where: { id: f.project.id } });
+  assert.equal(reactivated.status, 'idea');
+  assert.equal(reactivated.recordUpdateEpoch, original.recordUpdateEpoch + 4);
   assert.deepEqual((await ordinary(f)).bytes, f.documents[0].bytes);
   await assert.rejects(readSelectiveProject(db, f.reader.session, f.project.id));
   assert.deepEqual(await snapshot(f), before);

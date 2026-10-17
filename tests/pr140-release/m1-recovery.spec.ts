@@ -24,6 +24,7 @@ test('packaged image enforces live client perimeters on an existing reviewer ses
   const client = await db.client.findUniqueOrThrow({ where: { id: 'readiness-browser-client-standard' } });
   const grant = await db.clientReadGrant.findUniqueOrThrow({ where: { userId_clientId: { userId: 'readiness-browser-reader', clientId: client.id } } });
   expect(grant.active).toBe(true);
+  const readerBefore = await db.user.findUniqueOrThrow({ where: { id: grant.userId } });
   async function access(allowed: boolean) {
     const detail = await page.request.get(app + '/clients/' + client.id);
     if (allowed) expect(await detail.text()).toContain(client.displayName);
@@ -39,9 +40,10 @@ test('packaged image enforces live client perimeters on an existing reviewer ses
     await db.clientReadGrant.update({ where: { id: grant.id }, data: { active: false, version: { increment: 1 } } });
     await access(false);
   } finally {
-    // Synthetic-only perturbation is restored byte-for-byte before comparing footprints.
+    // Restore the grant, preserving the monotone authority epoch from both changes.
     await db.clientReadGrant.update({ where: { id: grant.id }, data: { active: grant.active, version: grant.version, updatedAt: grant.updatedAt } });
   }
+  expect((await db.user.findUniqueOrThrow({ where: { id: grant.userId } })).recordUpdateEpoch).toBe(readerBefore.recordUpdateEpoch + 2);
   await access(true);
 });
 
@@ -97,4 +99,5 @@ test('packaged image reopens M1 handoff, acceptance and private materials with c
   } finally {
     await db.user.update({ where: { id: tech.id }, data: { active: tech.active, updatedAt: tech.updatedAt } });
   }
+  expect((await db.user.findUniqueOrThrow({ where: { id: tech.id } })).recordUpdateEpoch).toBe(tech.recordUpdateEpoch + 2);
 });
