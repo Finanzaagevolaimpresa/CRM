@@ -12,7 +12,7 @@ import { hasPermission } from './permission-evaluator';
 import type { Permission } from './permissions';
 import { canonicalSha256 } from './canonical-json';
 import { readAdmittedOrdinaryEmailReceipts } from './ordinary-email-receipt-reader';
-import { filterAdmittedOrdinaryReplies } from './ordinary-email-inbound-reader';
+import { filterAdmittedOrdinaryReplies, readAdmittedOrdinaryAttachmentMetadata } from './ordinary-email-inbound-reader';
 import { readPrivateDocumentBounded } from './storage';
 import { buildApprovedMessagePackage } from './approved-message-package';
 import {
@@ -420,12 +420,14 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       }
       if (!attachmentAccess) continue;
       const replies = await filterAdmittedOrdinaryReplies(tx,storedReplies);
+      const receivedAttachments = await readAdmittedOrdinaryAttachmentMetadata(tx, replies, current);
       // Only admitted messages reach the receipt query. Locks stay held until
       // the final DB-clock expiry check; consultation needs no new step-up.
       const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);
       accessUntil = Math.min(accessUntil, messageUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
-        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, replies, ordinaryReceipts });
+        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts,
+        replies: replies.map(reply => ({ ...reply, receivedAttachments: receivedAttachments.get(reply.id) ?? [] })), ordinaryReceipts });
     }
     const boxes = await tx.communicationMailbox.findMany({ where: current.role === 'admin' ? {} : { restricted: false }, orderBy: { address: 'asc' } });
     const documents = [];

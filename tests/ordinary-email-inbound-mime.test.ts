@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { createOrdinaryMimeInboundSource } from '../src/lib/ordinary-email-inbound-mime';
+import { createOrdinaryMimeInboundSource, decodeStoredOrdinaryAttachment } from '../src/lib/ordinary-email-inbound-mime';
 import { consumeInboundReceipt, inboundMessageSchema, inboundQualificationReference, INBOUND_MIME_MAX_BYTES,
   type InboundBinding, type InboundDescriptor } from '../src/lib/ordinary-email-inbound-contract';
 import { syntheticInboundMime } from './helpers/ordinary-inbound-mime';
@@ -162,4 +162,25 @@ test('private MIME storage validates original hash, size, base64 canonical form 
     { attachments: [{ ...message.mime!.attachments[0], ordinal: 1 }] }]) {
     assert.equal(inboundMessageSchema.safeParse({ ...message, mime: { ...message.mime, ...delta } }).success, false);
   }
+});
+
+test('attachment decoding rebuilds the original manifest and returns exactly the selected bytes', async () => {
+  const message = (await fixture().read()).items[0].message, expected = message.mime!.attachments[0];
+  const decoded = await decodeStoredOrdinaryAttachment(message, 0, expected.sha256);
+  assert.deepEqual(decoded.bytes, Buffer.from('SYNTHETIC_PRIVATE_ATTACHMENT'));
+  assert.deepEqual(decoded.manifest, expected);
+  for (const ordinal of [-1, 1, 32, 0.5, NaN]) await assert.rejects(decodeStoredOrdinaryAttachment(message, ordinal, expected.sha256));
+  await assert.rejects(decodeStoredOrdinaryAttachment(message, 0, '0'.repeat(64)));
+});
+
+test('valid-looking manifest, headers or body edits cannot substitute decoded attachment content', async () => {
+  const message = (await fixture().read()).items[0].message, expected = message.mime!.attachments[0];
+  for (const delta of [{ filename: 'forged.pdf' }, { bytes: expected.bytes + 1 },
+    { contentType: 'application/pdf' }, { sha256: '0'.repeat(64) }]) {
+    const changed = { ...message, mime: { ...message.mime, attachments: [{ ...expected, ...delta }] } };
+    assert.equal(inboundMessageSchema.safeParse(changed).success, true);
+    await assert.rejects(decodeStoredOrdinaryAttachment(changed, 0, expected.sha256));
+  }
+  for (const delta of [{ body: 'forged' }, { sender: 'forged@invalid.test' }, { subject: 'forged' }])
+    await assert.rejects(decodeStoredOrdinaryAttachment({ ...message, ...delta }, 0, expected.sha256));
 });

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import PostalMime, { addressParser } from 'postal-mime';
 import { z } from 'zod';
+import { canonicalSha256 } from './canonical-json';
+import { OrdinaryInboundIdle } from './ordinary-email-inbound-contract';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { createOrdinaryInboundSource, inboundBatchSchema, inboundMessageSchema,
   INBOUND_MIME_MAX_BYTES, type InboundAdapter } from './ordinary-email-inbound-contract';
@@ -135,22 +137,42 @@ async function normalize(item: z.infer<typeof rawItemSchema>) {
     return value.trim();
   };
   if (parsed.attachments.length > 32) deny();
+  const files: Buffer[] = [];
   const attachments = parsed.attachments.map((attachment, ordinal) => {
     if (typeof attachment.content === 'string' || attachment.rfc822DepthExceeded
       || (attachment.disposition !== null && !['inline', 'attachment'].includes(attachment.disposition))) deny();
     const bytes = Buffer.from(attachment.content instanceof Uint8Array
       ? attachment.content : new Uint8Array(attachment.content));
+    files.push(bytes);
     return { ordinal, filename: attachment.filename, contentType: attachment.mimeType,
       disposition: attachment.disposition as 'inline' | 'attachment' | null,
       contentId: attachment.contentId ?? null, bytes: bytes.length, sha256: hash(bytes) };
   });
-  return inboundMessageSchema.parse({
+  const message = inboundMessageSchema.parse({
     externalMessageId: reference(messageId), inReplyTo: reference(inReplyTo),
     sender: addresses[0].address, subject: parsed.subject ?? '', body: parsed.text ?? '',
     receivedAt: item.receivedAt,
     mime: { format: 'RFC822_V1', rawBase64: raw.toString('base64'), rawBytes: raw.length, sha256: hash(raw),
       textProjection: parsed.text === undefined ? 'NONE' : 'PLAIN_TEXT', hasHtml: parsed.html !== undefined, attachments },
   });
+  return { message, files };
+}
+
+/** Private decoding only: the caller must hold current native admission and
+ * the intake conflict lock. Rebuild the whole manifest from the immutable raw
+ * bytes, so a stored filename/hash or an ordinal alone cannot select content. */
+export async function decodeStoredOrdinaryAttachment(value: unknown, ordinal: number, expectedHash: string) {
+  try {
+    const stored = inboundMessageSchema.parse(value);
+    if (!stored.mime || !Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal > 31
+      || !/^[a-f0-9]{64}$/.test(expectedHash)) deny();
+    const rebuilt = await normalize({ providerId: 'stored', raw: Buffer.from(stored.mime.rawBase64, 'base64'),
+      expectedBytes: stored.mime.rawBytes, receivedAt: stored.receivedAt });
+    if (canonicalSha256(rebuilt.message) !== canonicalSha256(stored)) deny();
+    const manifest = rebuilt.message.mime!.attachments[ordinal], bytes = rebuilt.files[ordinal];
+    if (!manifest || !bytes || manifest.sha256 !== expectedHash || hash(bytes) !== expectedHash) deny();
+    return { bytes, manifest };
+  } catch { deny(); }
 }
 
 /** An adapter boundary for authenticated raw messages, not a protocol connector.
@@ -172,11 +194,11 @@ export function createOrdinaryMimeInboundSource(key: PrivilegedStepUpKey, adapte
         const items = [];
         for (const item of snapshot) {
           if (signal.aborted) deny();
-          items.push({ providerId: item.providerId, message: await normalize(item) });
+          items.push({ providerId: item.providerId, message: (await normalize(item)).message });
         }
         if (signal.aborted) deny();
         return { ...batch, items };
-      } catch { deny(); }
+      } catch (error) { if (error instanceof OrdinaryInboundIdle) throw error; deny(); }
     },
   });
 }

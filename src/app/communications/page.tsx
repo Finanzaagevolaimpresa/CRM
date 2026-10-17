@@ -105,6 +105,17 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
         {message.replies.map(reply => <article className="mt-3 break-words rounded-xl border p-3" key={reply.id} data-linked-reply={reply.id}>
           <p>{reply.receivedAt.toISOString()} · {reply.sender}</p><h4 className="font-bold">{reply.subject}</h4><p className="whitespace-pre-wrap">{reply.body}</p>
           <p className="text-xs">Riferimento di acquisizione: {reply.evidenceReference}</p>
+          {reply.receivedAttachments.length ? <section aria-label="Allegati ricevuti" className="my-3 grid gap-2">
+            <h5 className="font-bold">Allegati ricevuti</h5>
+            {reply.receivedAttachments.map(file => <form key={file.ordinal} method="post"
+              action={`/communications/replies/${reply.id}/attachments/${file.ordinal}`} className="rounded-xl border p-3">
+              <input type="hidden" name="payloadHash" value={file.payloadHash} />
+              <input type="hidden" name="attachmentHash" value={file.sha256} />
+              <p className="break-words">{file.filename} · {file.bytes} byte</p>
+              <button type="submit" className="font-bold underline">Scarica allegato {file.ordinal + 1}</button>
+            </form>)}
+            <p className="text-sm">File ricevuti dall’esterno. Il download non li aggiunge ai documenti della pratica o alla bozza.</p>
+          </section> : null}
           {data.canWrite ? <Link className="font-bold underline" href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page}&reply=${reply.id}`}>Prepara risposta</Link> : null}
         </article>)}{message.replies.length === 0 ? <p>Nessuna risposta collegata.</p> : null}</div>
     </Card>)}

@@ -19,11 +19,12 @@ import { confirmAndTransmitStoredOrdinaryEmail } from '../../src/lib/ordinary-em
 import { SyntheticSocket, type WireOptions } from '../helpers/ordinary-smtp-socket';
 import { confirmStoredOrdinaryEmailUsingExistingTransport } from '../../src/lib/ordinary-email-runtime-candidate';
 import { createOrdinaryTransportResolver, ordinaryTransportQualificationReference } from '../../src/lib/ordinary-email-transport-binding';
-import { createOrdinaryInboundSource, inboundQualificationReference, type InboundBinding, type InboundDescriptor,
+import { createOrdinaryInboundSource, inboundQualificationReference, OrdinaryInboundIdle, type InboundBinding, type InboundDescriptor,
   type InboundBatch } from '../../src/lib/ordinary-email-inbound-contract';
 import { receiveStoredOrdinaryEmail, associateStoredOrdinaryReply, refreshStoredOrdinaryReplies } from '../../src/lib/ordinary-email-inbound-store';
 import { createOrdinaryMimeInboundSource } from '../../src/lib/ordinary-email-inbound-mime';
 import { syntheticInboundMime } from '../helpers/ordinary-inbound-mime';
+import { readStoredOrdinaryAttachment } from '../../src/lib/ordinary-email-attachment';
 
 const sourceEnvironment = (): Record<string, string | undefined> => ({ DIRECT_EMAIL_TEST_MODE: 'enforced',
   DIRECT_EMAIL_TEST_REFERENCE: 'R49_EMAIL_DIRECT_20260930_01', DIRECT_EMAIL_TEST_SMTP_HOST: 'authsmtp.securemail.pro',
@@ -870,6 +871,15 @@ test('inbound acquisition commits cursor, original payload and minimized audit w
   for(const secret of [f.message.sender,f.message.body,f.configuration.credential,f.sourceKey.secret]) assert.ok(!JSON.stringify(stored.audits).includes(secret));
 });
 
+test('authenticated idle creates no batch, cursor, audit or projected reply', options, async()=>{
+  const f=await inboundFixture(),before=await inboundState(f);
+  const source=createOrdinaryMimeInboundSource(f.sourceKey,{readConfiguration:()=>f.configuration,
+    readAuthenticated:async()=>{throw new OrdinaryInboundIdle();}});
+  await assert.rejects(receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,source),OrdinaryInboundIdle);
+  assert.deepEqual(await inboundState(f),before);
+  assert.equal(await db.communicationReply.count({where:{messageId:f.saved.id}}),0);
+});
+
 test('MIME intake preserves private originals and attachment evidence; association projects only admitted text', options, async()=>{
   const f=await inboundFixture(); await send(f);
   const raw=syntheticInboundMime({inReplyTo:f.message.inReplyTo});
@@ -901,6 +911,90 @@ test('attachment-only MIME drift quarantines a linked reply without replacing it
   assert.deepEqual((await inboundState(f)).items[0],item);
   assert.equal((await read(f)).messages[0].replies.length,0);
   await assert.rejects(associateStoredOrdinaryReply(db,f.actor,item.id,runtime));
+});
+
+async function attachmentFixture() {
+  const f=await inboundFixture(); await send(f);
+  const raw=syntheticInboundMime({inReplyTo:f.message.inReplyTo});
+  await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,mimeSource(f,[raw]));
+  const item=(await inboundState(f)).items[0];
+  const {replyId}=await associateStoredOrdinaryReply(db,f.actor,item.id,runtime);
+  const payload=item.payload as InboundBatch['items'][number]['message'];
+  return {...f,raw,item,request:{replyId,ordinal:0,payloadHash:item.payloadHash,attachmentHash:payload.mime!.attachments[0].sha256}};
+}
+
+test('received attachment metadata and bytes require current admission and preserve minimized audit', options, async()=>{
+  const f=await attachmentFixture(), before=await footprint(f);
+  const reply=(await read(f)).messages[0].replies[0];
+  assert.deepEqual(reply.receivedAttachments,[{ordinal:0,filename:'bilancio caffè.bin',bytes:28,
+    sha256:f.request.attachmentHash,payloadHash:f.item.payloadHash}]);
+  assert.ok(!JSON.stringify(reply).includes((f.item.payload as InboundBatch['items'][number]['message']).mime!.rawBase64));
+  const file=await readStoredOrdinaryAttachment(db,f.actor,f.request,runtime);
+  assert.deepEqual(file.bytes,Buffer.from('SYNTHETIC_PRIVATE_ATTACHMENT'));
+  assert.equal(file.filename,'bilancio caff_.bin');
+  const audit=await db.auditLog.findFirstOrThrow({where:{entityId:f.request.replyId,event:'ordinary_email_attachment_download'}});
+  assert.deepEqual(audit.after,{action:'download',replyId:`inbound_reply_uuid_${f.request.replyId.replaceAll('-','')}`,
+    evidenceHash:f.item.payloadHash,fileHash:f.request.attachmentHash,sizeBytes:28});
+  assert.deepEqual(await footprint(f),before);
+});
+
+test('forged attachment selection, manual replies and unassociated MIME return no bytes', options, async()=>{
+  const f=await attachmentFixture();
+  for(const delta of [{payloadHash:'0'.repeat(64)},{attachmentHash:'0'.repeat(64)},{ordinal:1},{ordinal:-1},
+    {replyId:randomUUID()},{messageId:f.saved.id}])
+    await assert.rejects(readStoredOrdinaryAttachment(db,f.actor,{...f.request,...delta},runtime),/ATTACHMENT_UNAVAILABLE/);
+  const manual=await db.communicationReply.create({data:{messageId:f.saved.id,canonicalMailboxId:f.box.id,
+    externalMessageId:'manual-'+randomUUID(),sender:f.message.sender,subject:'Synthetic manual',body:'PRIVATE',
+    receivedAt:new Date(),contentHash:'0'.repeat(64),evidenceReference:'SYNTHETIC_MANUAL',acquiredById:f.actor.userId}});
+  await assert.rejects(readStoredOrdinaryAttachment(db,f.actor,{...f.request,replyId:manual.id},runtime));
+  assert.equal(await db.auditLog.count({where:{entityId:f.request.replyId,event:'ordinary_email_attachment_download'}}),0);
+});
+
+test('attachment access rechecks permissions, session, lifecycle, original documents and selective scope', options, async()=>{
+  for(const mode of ['download','sensitive','contract','payment','session','archive','trash','document','selective'] as const) {
+    const f=await attachmentFixture();
+    if(['download','sensitive','contract','payment'].includes(mode)) {
+      await db.user.update({where:{id:f.actor.userId},data:{role:'direzione'}});
+      const permission={download:'document.download',sensitive:'document.sensitive.read',contract:'contract.read',payment:'payment.read'}[mode as 'download'|'sensitive'|'contract'|'payment'];
+      await db.userPermissionOverride.create({data:{userId:f.actor.userId,permission,allowed:false}});
+      assert.deepEqual((await read(f)).messages[0].replies[0].receivedAttachments,[]);
+    } else if(mode==='session') await db.internalSession.update({where:{id:f.actor.sessionId},data:{revokedAt:new Date()}});
+    else if(mode==='archive') await db.project.update({where:{id:f.project.id},data:{status:'archiviato'}});
+    else if(mode==='trash') await db.project.update({where:{id:f.project.id},data:{deletedAt:new Date()}});
+    else if(mode==='document') await db.document.update({where:{id:f.doc.id},data:{status:'archiviato'}});
+    else {
+      const approver=await person();
+      await db.selectiveProjectGrant.create({data:{projectId:f.project.id,recipientId:f.actor.userId,approvedById:approver.userId,
+        revision:1,authorityRevision:1,keyVersion:f.sourceKey.version,selection:{},proof:'0'.repeat(64),approvedAt:new Date(),revokedAt:new Date()}});
+    }
+    await assert.rejects(readStoredOrdinaryAttachment(db,f.actor,f.request,runtime),/ATTACHMENT_UNAVAILABLE/);
+    assert.equal(await db.auditLog.count({where:{entityId:f.request.replyId,event:'ordinary_email_attachment_download'}}),0);
+  }
+});
+
+test('attachment audit failure and expiry after decoding roll back audit and return no content', options, async()=>{
+  for(const mode of ['error','expiry'] as const) {
+    const f=await attachmentFixture();
+    if(mode==='expiry') await db.internalSession.update({where:{id:f.actor.sessionId},data:{expiresAt:new Date(Date.now()+400)}});
+    await assert.rejects(readStoredOrdinaryAttachment(fault(mode==='error'?'error':'delay'),f.actor,f.request,runtime),/ATTACHMENT_UNAVAILABLE/);
+    assert.equal(await db.auditLog.count({where:{entityId:f.request.replyId,event:'ordinary_email_attachment_download'}}),0);
+  }
+});
+
+test('attachment conflict and project locks cover decoding and audit; stale requests fail afterward', options, async()=>{
+  for(const mode of ['conflict','archive'] as const) {
+    const f=await attachmentFixture(); let pending:{pending:Promise<void>}|undefined;
+    const database=afterInboundAudit('ordinary_email_attachment_download',async()=>{
+      pending=await observeBlockedRevocation(tx=>mode==='archive'
+        ? tx.project.update({where:{id:f.project.id},data:{status:'archiviato'}})
+        : tx.$queryRaw`SELECT "id" FROM "OrdinaryEmailInboundItem" WHERE "id"=${f.item.id}::uuid FOR UPDATE`);
+    });
+    assert.deepEqual((await readStoredOrdinaryAttachment(database,f.actor,f.request,runtime)).bytes,Buffer.from('SYNTHETIC_PRIVATE_ATTACHMENT'));
+    await pending?.pending;
+    if(mode==='conflict') await receiveStoredOrdinaryEmail(db,f.binding.id,f.sourceKey,
+      mimeSource(f,[syntheticInboundMime({inReplyTo:f.message.inReplyTo,attachment:'CHANGED_PRIVATE'})]));
+    await assert.rejects(readStoredOrdinaryAttachment(db,f.actor,f.request,runtime),/ATTACHMENT_UNAVAILABLE/);
+  }
 });
 
 test('malformed MIME anywhere in a page leaves every item, batch, audit and cursor unchanged', options, async()=>{

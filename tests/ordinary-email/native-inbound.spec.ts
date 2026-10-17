@@ -48,6 +48,25 @@ test('native received reply becomes a separately approved draft with current sco
   expect(await reader.locator('body').textContent()).not.toContain('UNASSOCIATED_PRIVATE_MARKER');
   expect(await reader.locator('body').textContent()).not.toContain('STRANGER_PRIVATE_MARKER');
   expect(await reader.evaluate(()=>('INBOUND_EXECUTED' in window))).toBe(false);
+  const attachmentForm=reader.locator(`[data-linked-reply="${linked.id}"] section[aria-label="Allegati ricevuti"] form`);
+  await expect(attachmentForm).toHaveCount(1);
+  const attachmentUrl=(await attachmentForm.getAttribute('action'))!;
+  const attachmentData={payloadHash:(await attachmentForm.locator('[name="payloadHash"]').inputValue()),
+    attachmentHash:(await attachmentForm.locator('[name="attachmentHash"]').inputValue())};
+  const deniedDownload=await reader.request.post(attachmentUrl,{headers:{origin:'https://untrusted.invalid'},form:attachmentData});
+  expect(deniedDownload.status()).toBe(404);
+  const noGet=await reader.request.get(attachmentUrl); expect(noGet.status()).toBe(405);
+  const downloaded=await reader.request.post(attachmentUrl,{headers:{origin},form:attachmentData});
+  expect(downloaded.status()).toBe(200); expect(await downloaded.body()).toEqual(f.attachmentBytes);
+  expect(downloaded.headers()['content-type']).toBe('application/octet-stream');
+  expect(downloaded.headers()['x-content-type-options']).toBe('nosniff');
+  expect(downloaded.headers()['cache-control']).toBe('private, no-store');
+  const actualDownload=reader.waitForEvent('download');
+  await attachmentForm.getByRole('button',{name:'Scarica allegato 1',exact:true}).click();
+  const download=await actualDownload; expect(download.suggestedFilename()).toBe('ricevuto-sintetico.txt');
+  const chunks:Buffer[]=[]; for await(const chunk of (await download.createReadStream())!) chunks.push(Buffer.from(chunk));
+  expect(Buffer.concat(chunks)).toEqual(f.attachmentBytes);
+  expect(await db.document.count({where:{clientId:f.client.id}})).toBe(1);
   const events=await db.communicationEvent.count({where:{messageId:f.saved.id,event:'ORDINARY_REPLY_LINKED'}});
   const replay=await reader.request.post(target,{headers:request!.headers,data:request!.body});
   expect(await replay.text()).toContain('UPDATED'); expect(await replies()).toBe(1);
@@ -56,6 +75,8 @@ test('native received reply becomes a separately approved draft with current sco
     revision:1,authorityRevision:1,keyVersion:f.key.version,selection:{},proof:'0'.repeat(64),approvedAt:new Date(),revokedAt:new Date()}});
   const scoped=await reader.request.post(target,{headers:request!.headers,data:request!.body}); expect(await scoped.text()).toContain('CHECK_CURRENT');
   await reader.reload(); expect(await reader.locator('body').textContent()).not.toContain(f.message.body);
+  const staleDownload=await reader.request.post(attachmentUrl,{headers:{origin},form:attachmentData});
+  expect(staleDownload.status()).toBe(404); expect(await staleDownload.text()).not.toContain(f.attachmentBytes.toString());
 
   await page.reload(); await page.locator(`[data-linked-reply="${linked.id}"]`).getByRole('link',{name:'Prepara risposta'}).click();
   const form=page.locator(`[data-reply-draft="${linked.id}"]`);
@@ -97,6 +118,7 @@ test('native received reply becomes a separately approved draft with current sco
   await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=DENIED/);
   expect(await db.approvedCommunication.count({where:{technicalPracticeId:f.practice.id}})).toBe(2);
   await page.goto(sourceUrl); await expect(form).toHaveCount(0); expect(await page.locator('body').textContent()).not.toContain(f.message.body);
+  expect((await page.request.post(attachmentUrl,{headers:{origin},form:attachmentData})).status()).toBe(404);
   const cookie=(await readerContext.cookies()).find(item=>item.name===process.env.AUTH_COOKIE_NAME)!;
   const digest=await tokenDigestFromCookie(cookie.value);
   await db.internalSession.updateMany({where:{tokenDigest:Buffer.from(digest!)},data:{revokedAt:new Date()}});
@@ -108,7 +130,8 @@ test('native received reply becomes a separately approved draft with current sco
   const proof={synthetic:true,nativeLogin:true,readerWithoutStepUp:true,sourceAdaptersSimulated:true,receivedToDraftToPersonalRefusal:true,
     getWrites:0,otherContextsLeaked:0,untrustedMarkupExecuted:false,doubleClickPosts:posts,committedResponseLost:true,replayIdempotent:true,
     sourceConflictStaleFormDenied:true,selectiveScopeDenied:true,sessionRevocationDenied:true,archiveDenied:true,newDraftApprovals:0,newDraftAttempts:0,
-    recipientsExplicit:true,attachmentsAutomaticallyCopied:0,externalBrowserRequests:externalRequests,automaticRetries:0,screenshotsInspected:false};
+    recipientsExplicit:true,attachmentsAutomaticallyCopied:0,receivedAttachmentDownloadVerified:true,receivedAttachmentImported:false,
+    attachmentGetDisabled:true,attachmentOriginScopeConflictDenied:true,externalBrowserRequests:externalRequests,automaticRetries:0,screenshotsInspected:false};
   await writeFile(path.join(evidence,'native-inbound-proof.json'),JSON.stringify(proof,null,2));
   console.log('ORDINARY_NATIVE_INBOUND_PROOF '+JSON.stringify(proof));
   await context.close(); await readerContext.close();

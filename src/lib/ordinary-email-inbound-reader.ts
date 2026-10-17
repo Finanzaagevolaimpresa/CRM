@@ -1,4 +1,57 @@
 import type { CommunicationReply, Prisma } from '@prisma/client';
+import { canonicalSha256 } from './canonical-json';
+import { inboundMessageSchema } from './ordinary-email-inbound-contract';
+import { hasPermission, type PermissionSession } from './permission-evaluator';
+
+// Unclassified incoming bytes can contain financial or sensitive material even
+// when the sender gave them an innocuous filename. No name-based relaxation.
+export function canReadOrdinaryAttachments(actor: PermissionSession) {
+  return hasPermission(actor, 'document.download') && hasPermission(actor, 'document.sensitive.read')
+    && hasPermission(actor, 'contract.read') && hasPermission(actor, 'payment.read');
+}
+
+function denied(): never { throw new Error('ORDINARY_EMAIL_ATTACHMENT_UNAVAILABLE'); }
+
+/** Only call after native context/document admission. The linked projection,
+ * private original and conflict lock must describe the same immutable item. */
+export async function loadAdmittedOrdinaryMime(tx: Prisma.TransactionClient, reply: CommunicationReply) {
+  if ((await filterAdmittedOrdinaryReplies(tx, [reply])).length !== 1) denied();
+  const identity = reply.externalMessageId.match(/^ordinary-inbound:([a-f0-9-]{36})$/);
+  if (!identity || reply.evidenceReference !== `ORDINARY_INBOUND_${identity[1].replaceAll('-', '')}`) denied();
+  const [item] = await tx.$queryRaw<Array<{ payload: unknown; payloadHash: string }>>`SELECT i."payload",i."payloadHash"
+    FROM "OrdinaryEmailInboundItem" i JOIN "OrdinaryEmailInboundLink" l ON l."itemId"=i."id"
+    JOIN "OrdinaryEmailInboundStream" s ON s."id"=i."streamId"
+    WHERE i."id"=${identity[1]}::uuid AND l."replyId"=${reply.id}::uuid
+      AND s."mailboxId"=${reply.canonicalMailboxId}::uuid FOR SHARE OF i`;
+  const payload = inboundMessageSchema.safeParse(item?.payload);
+  if (!item || !payload.success || !payload.data.mime || canonicalSha256(payload.data) !== item.payloadHash) denied();
+  const content = { externalMessageId: reply.externalMessageId, canonicalMailboxId: reply.canonicalMailboxId,
+    inReplyTo: payload.data.inReplyTo, sender: payload.data.sender, subject: payload.data.subject,
+    body: payload.data.body, receivedAt: payload.data.receivedAt };
+  if (canonicalSha256(content) !== reply.contentHash || reply.inReplyTo !== content.inReplyTo
+    || reply.sender !== content.sender || reply.subject !== content.subject || reply.body !== content.body
+    || reply.receivedAt.toISOString() !== content.receivedAt) denied();
+  return { payload: payload.data, payloadHash: item.payloadHash };
+}
+
+/** No private content, excluded count or attachment metadata before admission. */
+export async function readAdmittedOrdinaryAttachmentMetadata(tx: Prisma.TransactionClient,
+  replies: CommunicationReply[], actor: PermissionSession) {
+  const result = new Map<string, Array<{ ordinal: number; filename: string; bytes: number; sha256: string; payloadHash: string }>>();
+  if (!canReadOrdinaryAttachments(actor)) return result;
+  for (const reply of replies) {
+    if (!/^ordinary-inbound:[a-f0-9-]{36}$/.test(reply.externalMessageId)) continue;
+    // The pre-MIME text-only candidate remains readable and has no attachments.
+    const [row] = await tx.$queryRaw<Array<{ hasMime: boolean }>>`SELECT i."payload" ? 'mime' AS "hasMime"
+      FROM "OrdinaryEmailInboundItem" i JOIN "OrdinaryEmailInboundLink" l ON l."itemId"=i."id"
+      WHERE l."replyId"=${reply.id}::uuid`;
+    if (!row?.hasMime) continue;
+    const { payload, payloadHash } = await loadAdmittedOrdinaryMime(tx, reply);
+    result.set(reply.id, payload.mime!.attachments.map(file => ({ ordinal: file.ordinal,
+      filename: file.filename ?? `allegato-${file.ordinal + 1}`, bytes: file.bytes, sha256: file.sha256, payloadHash })));
+  }
+  return result;
+}
 
 /** Called only after native context/document admission. Conflicting intake is
  * quarantined even when the original had already been linked. The intake writer

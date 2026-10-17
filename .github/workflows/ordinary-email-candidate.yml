@@ -47,6 +47,17 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
+      - name: IMAP read-only transport through verified synthetic TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          certdir="$RUNNER_TEMP/ordinary-imap-cert"
+          mkdir -p "$certdir" "$RUNNER_TEMP/ordinary-email"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout "$certdir/key.pem" -out "$certdir/cert.pem" -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' >/dev/null 2>&1
+          ORDINARY_IMAP_TLS_TEST=SYNTHETIC_LOOPBACK_ONLY ORDINARY_IMAP_TEST_CERT="$certdir/cert.pem" ORDINARY_IMAP_TEST_KEY="$certdir/key.pem" node --import tsx --test --test-reporter=tap tests/ordinary-email/inbound-imap-tls.test.ts | tee "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
       - name: Qualify guarded additive DDL only on an isolated schema50 database
         shell: bash
         run: |
@@ -84,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/ordinary-email/store-db.test.ts | tee "$RUNNER_TEMP/ordinary-email/database.tap"
-          grep -Fx '# pass 75' "$RUNNER_TEMP/ordinary-email/database.tap"
+          grep -Fx '# pass 81' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/database.tap"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/ordinary-email/source.txt"

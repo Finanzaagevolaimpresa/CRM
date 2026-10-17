@@ -59,6 +59,10 @@ export type InboundBatch = z.infer<typeof inboundBatchSchema>;
 export type InboundBinding = { id: string; mailboxId: string; mailboxRevision: number; revision: number;
   descriptor: InboundDescriptor; qualificationReference: string; validUntil: Date };
 export type InboundPosition = { version: number; cursor: string | null };
+/** Authenticated read found no new UID. No receipt or cursor update is issued. */
+export class OrdinaryInboundIdle extends Error {
+  constructor() { super('ORDINARY_EMAIL_INBOUND_IDLE'); }
+}
 export function inboundDenied(): never { throw new Error('ORDINARY_EMAIL_INBOUND_DENIED'); }
 const bindingHash = (binding: InboundBinding) => canonicalSha256({ ...binding, validUntil: binding.validUntil.toISOString() });
 
