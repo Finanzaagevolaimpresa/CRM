@@ -94,13 +94,13 @@ export default async function Page({
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <a className="font-extrabold text-fai-blue underline" href={`/leads/${candidate.leadId}`}>
+                {candidate.selectable ? <a className="font-extrabold text-fai-blue underline" href={`/leads/${candidate.leadId}`}>
                   {displayIdentity([
                     candidate.lead.companyName,
                     candidate.lead.firstName,
                     candidate.lead.lastName,
                   ])}
-                </a>
+                </a> : <span className="font-extrabold text-slate-700">Lead nel cestino</span>}
                 <p className="mt-1 text-sm text-slate-600">
                   {candidate.lead.email || 'Email —'} · {candidate.lead.phone || 'Telefono —'}
                 </p>

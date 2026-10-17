@@ -315,7 +315,6 @@ export async function discoverLeadIdentityCandidates(
     WHERE identity_key."normalizationVersion" = ${LEAD_NORMALIZATION_VERSION}
       AND identity_key."identityKeyVersionId" = ${input.identityKeyVersionId}::UUID
       AND identity_key."retiredAt" IS NULL
-      AND lead."deletedAt" IS NULL
       AND (${Prisma.join(digestPredicates, ' OR ')})
   `);
 
@@ -352,7 +351,7 @@ export async function discoverLeadIdentityCandidates(
   const fallbackRows = await tx.$queryRaw<CandidateLeadRow[]>(Prisma.sql`
     SELECT "id", "createdAt", "firstName", "lastName", "companyName", "email", "phone"
     FROM "Lead"
-    WHERE "deletedAt" IS NULL AND (${Prisma.join(rawPredicates, ' OR ')})
+    WHERE (${Prisma.join(rawPredicates, ' OR ')})
   `);
 
   const matches = new Map<string, {
@@ -408,6 +407,7 @@ export async function hasStrongRawLeadIdentityDuplicate(
     email?: string | null;
     phone?: string | null;
     excludeLeadId?: string;
+    trashedOnly?: boolean;
   }>,
 ) {
   const predicates: Prisma.Sql[] = [];
@@ -416,7 +416,7 @@ export async function hasStrongRawLeadIdentityDuplicate(
     LOWER(NORMALIZE(BTRIM("email"), NFC)) = ${email}
   `);
   const phone = normalizeLeadIdentityPhone(input.phone);
-  if (phone?.kind === 'PHONE_E164_EXACT_V1') {
+  if (phone && (phone.kind === 'PHONE_E164_EXACT_V1' || input.trashedOnly)) {
     predicates.push(Prisma.sql`
       REGEXP_REPLACE("phone", '[[:space:]().-]', '', 'g') = ${phone.canonicalValue}
     `);
@@ -428,8 +428,8 @@ export async function hasStrongRawLeadIdentityDuplicate(
   const rows = await tx.$queryRaw<Array<{ duplicate: boolean }>>(Prisma.sql`
     SELECT EXISTS (
       SELECT 1 FROM "Lead"
-      WHERE "deletedAt" IS NULL
-        AND (${Prisma.join(predicates, ' OR ')})
+      WHERE (${Prisma.join(predicates, ' OR ')})
+        ${input.trashedOnly ? Prisma.sql`AND "deletedAt" IS NOT NULL` : Prisma.empty}
         ${excluded}
     ) AS "duplicate"
   `);

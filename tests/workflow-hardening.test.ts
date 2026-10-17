@@ -28,12 +28,13 @@ test('la conversione lead è idempotente e protetta da vincolo DB e compare-and-
   assert.match(schema, /leadId\s+String\?\s+@unique/);
   assert.match(migration, /GROUP BY "leadId"[\s\S]*HAVING COUNT\(\*\) > 1/);
   assert.match(migration, /CREATE UNIQUE INDEX "Client_leadId_key"/);
-  assert.match(body, /prisma\.\$transaction|withProjectResources/);
+  assert.match(body, /withSerializableTransaction\(prisma/);
+  assert.match(body, /lockLeadForMutation\(tx, s, data\.id, data\.expectedVersion\)/);
   assert.match(body, /tx\.client\.create/);
-  assert.match(body, /tx\.lead\.updateMany/);
-  assert.match(body, /clientId: null, updatedAt: lead\.updatedAt/);
-  assert.match(body, /isUniqueConstraintError/);
-  assert.match(actionsText, /error\.code === 'P2002'/);
+  assert.match(body, /tx\.lead\.update/);
+  assert.match(body, /clientId: null, updatedAt: lead\.updatedAt, deletedAt: null/);
+  assert.match(body, /tx\.auditLog\.create/);
+  assert.match(body, /assertLeadActorLive\(tx, current\)/);
 });
 
 test('modifica e archiviazione dossier usano CAS e audit nella stessa transazione', () => {

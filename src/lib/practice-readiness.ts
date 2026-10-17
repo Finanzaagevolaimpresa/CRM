@@ -1,4 +1,5 @@
 import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
+import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
@@ -39,6 +40,13 @@ async function assertProjectOperational(...args: Parameters<typeof lockOperation
   try { await lockOperationalProject(...args); }
   catch (error) {
     if (error instanceof ProjectUnavailableError) throw new PracticeReadinessError('DENIED');
+    throw error;
+  }
+}
+async function assertLeadOperational(...args: Parameters<typeof lockOperationalLead>) {
+  try { return await lockOperationalLead(...args); }
+  catch (error) {
+    if (error instanceof LeadLifecycleError) throw new PracticeReadinessError('DENIED');
     throw error;
   }
 }
@@ -170,7 +178,7 @@ async function practiceScope(
     }),
   ]);
   const lead = intake
-    ? await tx.lead.findUnique({ where: { id: intake.leadId } })
+    ? await assertLeadOperational(tx, intake.leadId)
     : null;
   if (
     !client ||
@@ -364,7 +372,7 @@ export async function proposePracticeOfferRevision(
             : null,
         ]);
       const lead = intake
-        ? await tx.lead.findUnique({ where: { id: intake.leadId } })
+        ? await assertLeadOperational(tx, intake.leadId)
         : null;
       const definition = FAI_SERVICE_CATALOG_V2.find(
         (item) => item.code === catalogRevision?.serviceCatalog.code,
@@ -508,7 +516,7 @@ export async function createPracticeReadiness(
         }),
       ]);
       const lead = intake
-        ? await tx.lead.findUnique({ where: { id: intake.leadId } })
+        ? await assertLeadOperational(tx, intake.leadId)
         : null;
       const definition = FAI_SERVICE_CATALOG_V2.find(
         (item) => item.code === catalogRevision?.serviceCatalog.code,

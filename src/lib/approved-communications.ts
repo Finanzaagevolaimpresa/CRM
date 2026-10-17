@@ -84,6 +84,7 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
   const hydratedProject = project ? { ...project, client } : null;
   const hydratedService = service ? { ...service, client, project: hydratedProject } : null;
   let allowed = false;
+  let leadLifecycle: { id: string; createdAt: Date } | null = null;
   if (technical && 'commercialOwnerId' in practice) {
     allowed = canViewTechnicalPractice(current, { ...practice, client, project: hydratedProject, clientService: hydratedService });
   } else if (!technical && 'controlledIntakeId' in practice) {
@@ -93,10 +94,12 @@ async function contextScope(tx: Tx, current: AuthSession, context: Communication
     await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id"=${intake.leadId} FOR SHARE`;
     const lead = await tx.lead.findUnique({ where: { id: intake.leadId } });
     if (!lead || lead.deletedAt || lead.clientId !== client.id) denied();
+    leadLifecycle = await tx.auditLog.findFirst({ where: { entityType: 'Lead', entityId: lead.id, event: 'lead_lifecycle_changed' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], select: { id: true, createdAt: true } });
     allowed = canViewPracticeReadinessWork(current, { ...practice, client, lead, project: hydratedProject, clientService: hydratedService });
   }
   if (!allowed) denied();
-  return { context, practice, client, project: hydratedProject, service: hydratedService };
+  return { context, practice, client, project: hydratedProject, service: hydratedService, ...(leadLifecycle ? { leadLifecycle } : {}) };
 }
 
 function mailboxSnapshot(box: CommunicationMailbox) {
@@ -311,6 +314,7 @@ export async function approveExactMessage(db: Db, claimed: AuthSession, raw: unk
     const current = await actor(tx, claimed, 'practice_communications.read', true);
     const { row, version, snapshot, scope, box } = await messageScope(tx, current, input.messageId, true);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !['PENDING', 'APPROVED'].includes(row.state)) conflict();
+    if (scope.leadLifecycle && scope.leadLifecycle.createdAt >= version.createdAt) conflict();
     if (snapshot.mailboxRevision !== box.revision || snapshot.from !== box.address) conflict();
     if (!mailboxQualification(mailboxSnapshot(box)).enabled) throw new ApprovedCommunicationError('SENDER_NOT_READY');
     await responsibleMailbox(tx, box);
@@ -332,6 +336,7 @@ export async function prepareManualMessage(db: Db, claimed: AuthSession, raw: un
     const { row, version, snapshot, scope, box } = await messageScope(tx, current, input.messageId, true);
     if (row.currentRevision !== input.expectedRevision || version.snapshotHash !== input.snapshotHash || !version.approval) conflict();
     const approval = version.approval;
+    if (scope.leadLifecycle && scope.leadLifecycle.createdAt >= approval.approvedAt) conflict();
     await responsibleMailbox(tx, box);
     const approvingUser = await lockAuthoritativeInternalSession(tx, { sessionId: approval.approverSessionId, userId: approval.approverUserId });
     if (!approvingUser || !approvingUser.active || !approvingUser.live || approvingUser.revokedAt || approvingUser.deletedAt || approvingUser.role !== 'admin') denied();

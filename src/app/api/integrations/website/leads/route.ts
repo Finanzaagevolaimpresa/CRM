@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
+import { acquireLeadIdentityWriteLock } from '@/lib/lead-identity';
 import { isApplicationFeatureEnabled } from '@/lib/application-feature-gates';
 import { assertClassifiedFields, UnclassifiedDataFieldError } from '@/lib/data-classification';
 import {
@@ -128,17 +129,22 @@ async function processLegacy(data: Input, keyDigest: string, payloadHash: string
       const receipt = await transactionOperation(tx, deadline, () => tx.websiteLeadReceipt.create({ data: { namespace: NAMESPACE, keyDigest, payloadHash, status: 'processing' } }));
       const identityDigests = [data.email && sha256(`email:${data.email}`), data.phone && sha256(`phone:${data.phone}`)].filter(Boolean).sort() as string[];
       for (const identityDigest of identityDigests) await transactionOperation(tx, deadline, () => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${NAMESPACE}:${identityDigest}`}, 0))`);
+      await transactionOperation(tx, deadline, () => acquireLeadIdentityWriteLock(tx));
       const duplicateSince = new Date(Date.now() - RECENT_DUPLICATE_DAYS * 86400000);
       const duplicateConditions: Prisma.Sql[] = [];
       if (data.email) duplicateConditions.push(Prisma.sql`LOWER("email") = ${data.email}`);
       if (data.phone) duplicateConditions.push(Prisma.sql`"phone" = ${data.phone}`);
       const lockedCandidates = await transactionOperation(tx, deadline, () => tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id" FROM "Lead"
-        WHERE "deletedAt" IS NULL AND "createdAt" >= ${duplicateSince}
+        WHERE ("deletedAt" IS NOT NULL OR "createdAt" >= ${duplicateSince})
           AND (${Prisma.join(duplicateConditions, ' OR ')})
-        ORDER BY "updatedAt" DESC, "id" ASC
+        ORDER BY ("deletedAt" IS NOT NULL) DESC, "updatedAt" DESC, "id" ASC
         LIMIT 1 FOR UPDATE`));
       const duplicate = lockedCandidates[0] ? await transactionOperation(tx, deadline, () => tx.lead.findUnique({ where: { id: lockedCandidates[0].id } })) : null;
+      // The legacy receipt has no durable request payload. Reject atomically,
+      // rather than acknowledge a request whose content would be discarded.
+      // The v1 inbox/projection path durably holds matching identities for review.
+      if (duplicate?.deletedAt) throw new Conflict();
       const amount = requestedAmount(data.requestedAmount); if (amount === null) throw new Error('invalid_amount');
       const lead = duplicate ? await transactionOperation(tx, deadline, () => tx.lead.update({ where: { id: duplicate.id }, data: { notes: [duplicate.notes, notes(data, true)].filter(Boolean).join('\n\n---\n'), nextActionNote: 'Verificare nuova richiesta sito web potenzialmente duplicata', interest: duplicate.interest ?? data.serviceInterest ?? data.interest ?? data.message } })) : await transactionOperation(tx, deadline, () => tx.lead.create({ data: { firstName:data.firstName ?? 'Contatto',lastName:data.lastName ?? 'Sito web',companyName:data.companyName,contactPerson:[data.firstName,data.lastName].filter(Boolean).join(' ') || undefined,email:data.email,phone:data.phone,city:data.city,region:data.region,source:'finanzaagevolaimpresa.it',leadSource:'sito',priority:'media',status:'nuovo',interest:data.serviceInterest ?? data.interest ?? data.message,requestedAmount:amount,notes:notes(data,false),nextActionNote:'Contattare lead ricevuto dal sito web' } }));
       const privacyEvidence = await transactionOperation(tx, deadline, () => createWebsiteLeadPrivacyEvidence(tx, {

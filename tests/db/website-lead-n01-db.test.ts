@@ -130,6 +130,17 @@ test('100 concurrent replays create one business effect and one receipt', { skip
   assert.equal(new Set(await Promise.all(responses.map(async (r) => (await r.json()).receipt))).size, 1);
 });
 
+test('legacy replay preserves a trashed lead and a new matching request fails atomically', { skip: !runDbTests }, async () => {
+  assert.equal((await POST(request('trash-original', 'trashed'))).status, 201);
+  const lead = await db.lead.findFirstOrThrow({ where: { email: `trashed@${syntheticDomain}` } });
+  const trashed = await db.lead.update({ where: { id: lead.id }, data: { deletedAt: new Date(), createdAt: new Date('2020-01-01') } });
+  const before = await counts();
+  assert.equal((await POST(request('trash-original', 'trashed'))).status, 200);
+  assert.equal((await POST(request('trash-new', 'trashed', { message: 'A new synthetic request must not revive this lead.' }))).status, 409);
+  assert.deepEqual(await counts(), before);
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: lead.id } }), trashed);
+});
+
 test('100 keys with one normalized identity create one Lead without lost effects', { skip: !runDbTests }, async () => {
   const responses = await Promise.all(Array.from({ length: 100 }, (_, index) => POST(request(`contact-key-${index}`, 'NORMALIZED'))));
   assert.equal(responses.filter((r) => r.status === 201).length, 100);

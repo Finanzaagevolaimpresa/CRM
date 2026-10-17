@@ -165,7 +165,12 @@ test('lead profile duplicate checks normalize strong contacts and exclude the cu
   assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: lead.id } }), current);
   assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'record_profile_saved' } }), 1);
   await db.lead.update({ where: { id: other.id }, data: { deletedAt: new Date() } });
-  await saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, email } });
+  for (const contacts of [{ email: email.toUpperCase() }, { phone: '+1 (202) 555-0199' }]) {
+    await assert.rejects(saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, ...contacts } }), failure('DUPLICATE_LEAD'));
+  }
+  assert.deepEqual(await db.lead.findUniqueOrThrow({ where: { id: lead.id } }), current);
+  assert.equal(await db.auditLog.count({ where: { entityId: lead.id, event: 'record_profile_saved' } }), 1);
+  await saveRecordProfile(db, admin, { kind: 'lead', id: lead.id, expectedVersion: current.updatedAt.toISOString(), data: { ...leadData, email: `new-${randomUUID()}@example.test` } });
 });
 
 test('concurrent lead profile writers cannot claim the same strong contact', { skip: !enabled }, async () => {

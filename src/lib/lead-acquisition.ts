@@ -30,6 +30,10 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
     }
     const where: Prisma.BusinessInboxEventWhereInput = input.leadId
       ? { leadProjectionLedger: { is: { leadId: input.leadId } } } : {};
+    where.AND = [{ OR: [
+      { leadProjectionLedger: { is: null } },
+      { leadProjectionLedger: { is: { OR: [{ leadId: null }, { lead: { is: { deletedAt: null } } }] } } },
+    ] }];
     if (input.queue === 'errors') where.OR = [
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];
@@ -82,6 +86,7 @@ export async function readLeadAcquisitionSummary(db: PrismaClient, actor: Actor)
         )) AS "paidLeads"
       FROM "BusinessInboxEvent" inbox LEFT JOIN "LeadProjectionLedger" projection ON projection."inboxEventId"=inbox.id
       LEFT JOIN "Lead" lead ON lead.id=projection."leadId" AND lead."deletedAt" IS NULL
+      WHERE projection."leadId" IS NULL OR lead.id IS NOT NULL
       GROUP BY 1,2 ORDER BY 1,2`);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 8_000, maxWait: 2_000 });
 }

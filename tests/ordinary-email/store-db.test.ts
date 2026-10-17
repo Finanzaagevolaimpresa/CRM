@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readinessLeadFixture } from '../lead-lifecycle/fixtures';
+import { transitionLeadLifecycle } from '../../src/lib/lead-lifecycle';
 import test from 'node:test';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -1451,4 +1453,26 @@ test('reply draft holds the conflict lock through audit; a later draft sees the 
   await saveApprovedMessageDraft(database,f.actor,input,runtime); await mutation?.pending;
   f.setItems([{providerId:'uid-1',message:{...f.message,body:'NEW_CONFLICT'}}]); await receive(f);
   await assert.rejects(saveApprovedMessageDraft(db,f.actor,{...input,messageId:randomUUID()},runtime));
+});
+
+test('lead trash and restore invalidate old native previews and manual approvals without deleting their history', options, async () => {
+  const f = await fixture(), scoped = await readinessLeadFixture(db, f.actor.userId, { clientId: f.client.id, projectId: f.project.id });
+  const context = { kind: 'READINESS' as const, id: scoped.practice.id };
+  const saved = await saveApprovedMessageDraft(db, f.actor, { ...f.input, messageId: randomUUID(), context, attachmentVersionIds: [] }, runtime);
+  const binding = { messageId: saved.id, expectedRevision: 1, snapshotHash: saved.snapshotHash };
+  await submitApprovedMessage(db, f.actor, binding); await approveExactMessage(db, f.actor, binding, runtime);
+  const shown = await previewStoredOrdinaryEmail(db, f.actor, saved.id, runtime);
+  const approval = await db.communicationApproval.findFirstOrThrow({ where: { version: { messageId: saved.id } } });
+  for (const action of ['trash', 'restore'] as const) {
+    const current = await db.lead.findUniqueOrThrow({ where: { id: scoped.lead.id } });
+    await transitionLeadLifecycle(db, f.actor, { id: current.id, updatedAt: current.updatedAt.toISOString(), action, confirmed: 'yes' },
+      { key, sessionToken: f.credentials.sessionToken, stepUpToken: f.credentials.stepUpToken! });
+    await assert.rejects(reserveStoredOrdinaryEmail(db, f.actor, { messageId: saved.id, requestId: randomUUID(), previewToken: shown.token }, f.credentials, runtime));
+    await assert.rejects(prepareManualMessage(db, f.actor, { ...binding, requestId: randomUUID() }, runtime));
+  }
+  assert.deepEqual(await db.communicationApproval.findUniqueOrThrow({ where: { id: approval.id } }), approval);
+  assert.equal(await db.communicationAttempt.count({ where: { messageId: saved.id } }), 0);
+  const fresh = await previewStoredOrdinaryEmail(db, f.actor, saved.id, runtime);
+  assert.notEqual(fresh.token, shown.token);
+  assert.equal((await readPracticeCommunications(db, f.actor, context)).messages[0].id, saved.id);
 });

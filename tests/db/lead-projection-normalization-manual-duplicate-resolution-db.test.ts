@@ -2146,6 +2146,36 @@ test('M3 multiple submissions retain original campaign, request and privacy afte
   assert.equal(paid.requests, 2n); assert.equal(paid.leads, 1n); assert.equal(paid.paidLeads, 1n);
 });
 
+test('trashed projected lead stays hidden while replay and a new website request preserve durable history without resurrection', { skip: !runDbTests }, async () => {
+  const actor = { userId: primaryUserId, sessionId: primarySessionId };
+  const first = syntheticEvent(9501, { message: 'Synthetic request before trash.' }, undefined, { formCode: 'TRASH_HISTORY' });
+  const admission = await admitBusinessInboxEvent(client(), first);
+  const projection = await projectClaimedLeadInboxEvent(client(), await m3Claim(admission.inboxEventId, 101), projectionOptions());
+  assert.equal(projection.result.state, 'PROJECTED_NEW');
+  const leadId = projection.result.leadId!;
+  const receipts = await client().privacyEvidenceReceipt.findMany({ where: { businessInboxEventId: admission.inboxEventId }, orderBy: { id: 'asc' } });
+  const trashed = await client().lead.update({ where: { id: leadId }, data: { deletedAt: new Date() } });
+  assert.equal((await admitBusinessInboxEvent(client(), first)).outcome, 'REPLAY');
+  await assert.rejects(readLeadAcquisitions(client(), actor, { leadId }), (error: unknown) => error instanceof LeadAcquisitionDenied);
+  assert.equal((await readLeadAcquisitions(client(), actor, { queue: 'all' })).items.some(row => row.id === admission.inboxEventId), false);
+  assert.equal((await readLeadAcquisitionSummary(client(), actor)).some(row => row.form === 'TRASH_HISTORY'), false);
+  const newer = syntheticEvent(9502, { ...first.payload, message: 'Synthetic request after trash.' }, undefined, { formCode: 'TRASH_NEW_REQUEST' });
+  const admittedNew = await admitBusinessInboxEvent(client(), newer);
+  const held = await projectClaimedLeadInboxEvent(client(), await m3Claim(admittedNew.inboxEventId, 102), projectionOptions());
+  assert.equal(held.result.state, 'REVIEW_REQUIRED');
+  const duplicate = await client().leadDuplicateCase.findUniqueOrThrow({ where: { projectionLedgerId: held.result.ledgerId } });
+  const visible = (await listLeadDuplicateReviewCases(client(), { skip: 0, take: 101 })).find(row => row.caseId === duplicate.id);
+  assert.ok(visible);
+  const candidate = visible.candidates.find(row => row.leadId === leadId)!;
+  assert.equal(candidate.selectable, false); assert.equal(candidate.lead.email, null); assert.equal(candidate.lead.companyName, null);
+  await assert.rejects(resolveLeadDuplicateCase(client(), { caseId: duplicate.id, expectedCaseVersion: 1,
+    outcome: 'LINK_EXISTING_NO_OVERWRITE', selectedLeadId: leadId, reasonCode: 'SYNTHETIC_TRASH_DENIAL', ...resolutionActor() }, projectionOptions()));
+  assert.equal(await client().lead.count({ where: { email: first.payload.email } }), 1);
+  assert.deepEqual(await client().lead.findUniqueOrThrow({ where: { id: leadId } }), trashed);
+  assert.deepEqual(await client().privacyEvidenceReceipt.findMany({ where: { businessInboxEventId: admission.inboxEventId }, orderBy: { id: 'asc' } }), receipts);
+  assert.equal((await client().businessInboxEvent.findUniqueOrThrow({ where: { id: admittedNew.inboxEventId } })).state, 'PROCESSED');
+});
+
 test('M3 retry and terminal errors stay visible while successful recovery removes only the open error', { skip: !runDbTests }, async () => {
   const actor = { userId: primaryUserId, sessionId: primarySessionId };
   const event = syntheticEvent(9303, { campaignCode: 'M3-RECOVERY' }, undefined, { formCode: 'M3_RECOVERY' });
