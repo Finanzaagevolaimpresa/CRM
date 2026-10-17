@@ -1,3 +1,4 @@
+import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
 import { lockClientOperationalAdmission } from './client-operational-hold';
 import { loadClientReadScope } from './client-read-perimeter';
@@ -31,6 +32,14 @@ import {
 export class PracticeReadinessError extends Error {
   constructor(readonly code: "DISABLED" | "DENIED" | "CONFLICT" | "NOT_READY") {
     super(code);
+  }
+}
+
+async function assertProjectOperational(...args: Parameters<typeof lockOperationalProject>) {
+  try { await lockOperationalProject(...args); }
+  catch (error) {
+    if (error instanceof ProjectUnavailableError) throw new PracticeReadinessError('DENIED');
+    throw error;
   }
 }
 export const exactMoneySchema = z
@@ -150,6 +159,7 @@ async function practiceScope(
 ) {
   const practice = await tx.practiceReadiness.findUnique({ where: { id } });
   if (!practice) throw new PracticeReadinessError("DENIED");
+  await assertProjectOperational(tx, practice);
   const [client, project, intake] = await Promise.all([
     tx.client.findUnique({ where: { id: practice.clientId } }),
     practice.projectId
@@ -335,6 +345,7 @@ export async function proposePracticeOfferRevision(
   return db.$transaction(
     async (tx) => {
       const a = await actor(tx, claimed);
+      await assertProjectOperational(tx, input);
       const [intake, offer, catalogRevision, client, project] =
         await Promise.all([
           tx.controlledIntake.findUnique({
@@ -470,6 +481,7 @@ export async function createPracticeReadiness(
       });
       if (!revision || revision.validUntil <= new Date())
         throw new PracticeReadinessError("DENIED");
+      await assertProjectOperational(tx, revision);
       const same = await tx.practiceReadiness.findFirst({
         where: { acceptedOfferRevisionId: revision.id },
       });
@@ -907,6 +919,7 @@ async function resolvePrerequisites(
     },
   });
   if (!practice) throw new PracticeReadinessError("DENIED");
+  await assertProjectOperational(tx, practice);
   const [
     revision,
     acceptance,
@@ -1563,7 +1576,7 @@ export async function listAccessiblePracticeReadiness(
         } catch (error) {
           if (
             !(
-              error instanceof PracticeReadinessError && error.code === "DENIED"
+              (error instanceof PracticeReadinessError && error.code === "DENIED") || error instanceof ProjectUnavailableError
             )
           )
             throw error;

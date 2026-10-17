@@ -1,14 +1,25 @@
 import type { Prisma } from '@prisma/client';
 import type { SelectiveProjectScope } from './selective-project-policy';
 import { lockInternalUser } from './internal-session-registry';
+import { assertProjectOperational } from './project-lifecycle-lock';
 
 type Db = Prisma.TransactionClient;
 export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope> {
+  return loadExclusions(db, recipientId, true);
+}
+/** Management-only: keeps every personal selection, omits lifecycle exclusions. */
+export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope> {
+  return loadExclusions(db, recipientId, false);
+}
+async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean): Promise<SelectiveProjectScope> {
   // Deliberately includes revoked, expired and invalid grants. A missing proof
   // denies the projection; it must never restore an older, broader permission.
   const grants = await db.selectiveProjectGrant.findMany({ where: { recipientId }, select: { id: true, projectId: true } });
-  const selectiveProjectIds = grants.map(row => row.projectId);
-  if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [], selectiveOfferIds: [] };
+  // Reuse the complete indirect-resource exclusion graph for suspended projects.
+  // These are exclusions only: no grant is created, changed or removed.
+  const inactive = includeLifecycle ? await db.project.findMany({ where: { OR: [{ deletedAt: { not: null } }, { status: 'archiviato' }] }, select: { id: true } }) : [];
+  const selectiveProjectIds = [...new Set([...grants.map(row => row.projectId), ...inactive.map(row => row.id)])];
+  if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [], selectiveOfferIds: [], selectiveAuditEntityIds: [] };
   // A shared financial contract is restricted, but must not pull another
   // project's operational services into this project/recipient perimeter.
   const linkedServices = await db.clientService.findMany({ where: { projectId: { in: selectiveProjectIds } }, select: { id: true, contractId: true } });
@@ -66,6 +77,7 @@ export async function loadSelectiveProjectScope(db: Db, recipientId: string): Pr
 export async function assertNoSelectiveProjectMutation(db: Db, recipientId: string, projectId?: string | null, serviceId?: string | null) {
   // Confirmation locks this same recipient before changing its perimeter.
   await lockInternalUser(db, recipientId);
+  await assertProjectOperational(db, { projectId, clientServiceId: serviceId });
   if (projectId && await db.selectiveProjectGrant.findUnique({ where: { projectId_recipientId: { projectId, recipientId } }, select: { id: true } })) {
     throw new Error('SELECTIVE_PROJECT_READ_ONLY');
   }

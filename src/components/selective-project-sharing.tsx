@@ -6,7 +6,7 @@ import { selectiveProjectFields, type SelectiveProjectField } from '@/lib/select
 import { SelectiveProjectView } from './selective-project-view';
 
 const initial: SharingState = { ok: false, message: '' };
-type Grant = { id: string; recipientId: string; revision: number; revoked: boolean; expiresAt: string | null };
+type Grant = { id: string; recipientId: string; revision: number; revoked: boolean; suspended: boolean; expiresAt: string | null };
 export function SelectiveProjectSharing({ projectId, recipients, documents, grants }: {
   projectId: string; recipients: { id: string; name: string; role: string }[];
   documents: { versionId: string; title: string; fileName: string; version: number }[]; grants: Grant[];
@@ -62,7 +62,7 @@ export function SelectiveProjectSharing({ projectId, recipients, documents, gran
 }
 function Revoke({ grant, name }: { grant: Grant; name: string }) {
   const [state, action, pending] = useActionState(revokeSharing, initial);
-  return <form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
+  return <form action={action} className="my-3 rounded border p-3"><p>{name} · revisione {grant.revision} · {grant.revoked ? 'Revocata' : grant.suspended ? 'Sospesa: serve una nuova anteprima e conferma personale' : grant.expiresAt ? `Scadenza ${grant.expiresAt}` : 'Senza scadenza'}</p>
     <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} />
     {!grant.revoked && !state.ok && <button disabled={pending} className="underline">Revoca accesso</button>}<p role="status">{grant.revoked ? 'Accesso revocato.' : state.message}</p>
   </form>;

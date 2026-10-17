@@ -18,9 +18,10 @@ import { hasPermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
 import { loadSelectiveProjectScope } from './selective-project-scope';
 import { lockInternalUser } from './internal-session-registry';
+import { assertProjectOperational } from './project-lifecycle-lock';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
-type ContextDb = Pick<Prisma.TransactionClient, 'client' | 'company' | 'project' | 'clientService'>;
+type ContextDb = Pick<Prisma.TransactionClient, 'client' | 'company' | 'project' | 'clientService' | '$queryRaw'>;
 const clientSelect = { id: true, salesOwnerId: true, consultantId: true } as const;
 
 export type ClientWriteContext = {
@@ -81,8 +82,9 @@ export async function requireCommercialOfferTargetAccess(
 }
 
 async function loadProjectContext(projectId: string, db: ContextDb = prisma) {
+  if (db !== prisma) await assertProjectOperational(db as Prisma.TransactionClient, { projectId });
   const project = await db.project.findFirst({
-    where: { id: projectId, deletedAt: null },
+    where: { id: projectId, deletedAt: null, status: { not: 'archiviato' } },
   });
   if (!project) denyWriteAccess();
   const [client, company] = await Promise.all([
