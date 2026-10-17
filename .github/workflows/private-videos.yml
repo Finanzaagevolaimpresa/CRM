@@ -96,7 +96,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$VIDEOS_EVIDENCE/playwright.json" npx playwright test --config tests/private-videos/playwright.config.ts --reporter=line,json | tee "$VIDEOS_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.VIDEOS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.VIDEOS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==9 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$VIDEOS_EVIDENCE/source.txt"

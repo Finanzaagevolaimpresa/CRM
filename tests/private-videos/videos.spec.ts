@@ -134,3 +134,94 @@ test('lost confirmation is reconciled through its receipt; a second click does n
   expect(await db.auditLog.count({ where: { entityId: row.id, event: 'VIDEO_LIBRARY_MUTATION' } })).toBe(2);
   await ac.close();
 });
+
+for (const reason of ['inactive', 'deleted', 'read-permission-revoked'] as const) {
+  for (const restored of [false, true]) {
+    test('remove unavailable named recipient: ' + reason + (restored ? ', restored draft' : ', published video'), async ({ browser }) => {
+      const ac = await browser.newContext(), rc = await browser.newContext(), oc = await browser.newContext();
+      const admin = await ac.newPage(), reader = await rc.newPage(), other = await oc.newPage();
+      const original = await db.user.findUniqueOrThrow({ where: { id: f.readerId }, select: { active: true, deletedAt: true } });
+      expect(original).toEqual({ active: true, deletedAt: null });
+      expect(await db.userPermissionOverride.count({ where: { userId: f.readerId, permission: 'video.read' } })).toBe(0);
+      try {
+        await login(admin, f.emails.admin, true); await login(reader, f.emails.reader); await login(other, f.emails.other);
+        const row = await upload(admin), content = '/videos/' + row.id + '/content';
+        await admin.getByRole('checkbox', { name: 'Commerciali', exact: true }).uncheck();
+        await admin.getByRole('checkbox', { name: f.readerName + ' (commerciale)', exact: true }).check();
+        await preview(admin); await confirm(admin);
+        await reader.goto('/videos/' + row.id); await play(reader);
+        if (reason === 'inactive') await db.user.update({ where: { id: f.readerId }, data: { active: false } });
+        else if (reason === 'deleted') await db.user.update({ where: { id: f.readerId }, data: { deletedAt: new Date() } });
+        else await db.userPermissionOverride.create({ data: { userId: f.readerId, permission: 'video.read', allowed: false } });
+        expect((await reader.request.get(content, { headers: { Range: 'bytes=16-31' } })).status()).toBe(404);
+        async function openEditor() {
+          await admin.goto('/videos/manage/' + row.id);
+          await expect(admin.getByTestId('video-editor')).toHaveAttribute('data-interactive-ready', 'true');
+        }
+        if (restored) {
+          for (const operation of ['Archivia', 'Ripristina in bozza']) {
+            await openEditor();
+            await admin.getByRole('button', { name: operation, exact: true }).click();
+            await admin.getByRole('checkbox', { name: 'Confermo questa operazione e le persone indicate.' }).check();
+            await confirm(admin);
+          }
+          const draft = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
+          expect(draft.state).toBe('DRAFT'); expect(draft.audience).toEqual([]);
+          expect(draft.publishedById).toBeNull(); expect(draft.publisherEpoch).toBeNull();
+        }
+        await openEditor();
+        await expect(admin.getByRole('checkbox', { name: f.readerName + ' (commerciale)', exact: true })).toHaveCount(0);
+        const unavailable = admin.getByLabel('Destinatari non disponibili', { exact: true });
+        await expect(unavailable).toContainText('Destinatari selezionati non più disponibili: 1.');
+        await expect(unavailable).not.toContainText(f.readerName);
+        const otherChoice = admin.getByRole('checkbox', { name: f.otherName + ' (backoffice)', exact: true });
+        await otherChoice.check();
+        const before = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
+        expect(before.selection).toEqual({ people: [f.readerId], areas: [] });
+        // Both mutations still fail closed while the unavailable ID is retained.
+        for (const operation of ['Prepara pubblicazione', 'Prepara bozza']) {
+          await admin.getByRole('button', { name: operation, exact: true }).click();
+          await expect(admin.getByRole('status')).toContainText('Operazione non confermata.');
+          await expect(admin.getByLabel('Riepilogo video')).toHaveCount(0);
+        }
+        if (reason === 'read-permission-revoked' && restored) {
+          await screenshot(admin, 'recipient-removal-desktop', 1440);
+          await screenshot(admin, 'recipient-removal-mobile', 390);
+        }
+        await admin.getByRole('button', { name: 'Rimuovi destinatari non disponibili', exact: true }).click();
+        await expect(unavailable).toHaveCount(0); await expect(otherChoice).toBeChecked();
+        // Removing from the editor alone cannot mutate the stored selection.
+        expect((await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } })).selection).toEqual(before.selection);
+        await admin.getByRole('button', { name: 'Prepara bozza', exact: true }).click();
+        await expect(admin.getByLabel('Riepilogo video')).toBeVisible();
+        await admin.getByRole('checkbox', { name: 'Confermo questa operazione e le persone indicate.' }).check();
+        await confirm(admin);
+        const saved = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
+        expect(saved.state).toBe('DRAFT'); expect(saved.audience).toEqual([]);
+        expect(saved.selection).toEqual({ people: [f.otherId], areas: [] });
+        expect((await other.request.get(content)).status()).toBe(404);
+        await openEditor();
+        await expect(unavailable).toHaveCount(0); await expect(otherChoice).toBeChecked();
+        await admin.getByRole('button', { name: 'Prepara pubblicazione', exact: true }).click();
+        const summary = admin.getByLabel('Riepilogo video');
+        await expect(summary).toContainText(f.otherName); await expect(summary).not.toContainText(f.readerName);
+        await admin.getByRole('checkbox', { name: 'Confermo questa operazione e le persone indicate.' }).check();
+        await confirm(admin);
+        const published = await db.videoEntry.findUniqueOrThrow({ where: { id: row.id } });
+        expect(published.state).toBe('PUBLISHED');
+        expect(published.selection).toEqual({ people: [f.otherId], areas: [] });
+        expect(published.audience).toEqual([{ id: f.otherId, epoch: expect.any(Number), role: 'backoffice' }]);
+        expect((await reader.request.get(content, { headers: { Range: 'bytes=16-31' } })).status()).toBe(404);
+        await other.goto('/videos/' + row.id); await play(other);
+        expect(await db.videoRevision.count({ where: { videoId: row.id } })).toBe(restored ? 6 : 4);
+        expect(await db.videoCommand.count({ where: { videoId: row.id } })).toBe(restored ? 6 : 4);
+        expect(await db.auditLog.count({ where: { entityId: row.id, event: 'VIDEO_LIBRARY_MUTATION' } })).toBe(restored ? 6 : 4);
+      } finally {
+        if (reason === 'read-permission-revoked')
+          await db.userPermissionOverride.deleteMany({ where: { userId: f.readerId, permission: 'video.read' } });
+        else await db.user.update({ where: { id: f.readerId }, data: original });
+        for (const context of [ac, rc, oc]) await context.close();
+      }
+    });
+  }
+}

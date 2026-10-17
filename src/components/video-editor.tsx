@@ -35,6 +35,8 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
   const [message, setMessage] = useState(''), [consent, setConsent] = useState(false);
   const [proposal, setProposal] = useState<{ command: VideoCommand; preview: VideoEditorPreview } | null>(null);
   const locked = busy || uncertain || done || proposal !== null;
+  const availablePeople = new Set(setup.people.map(person => person.id));
+  const unavailablePeople = details.selection.people.filter(id => !availablePeople.has(id));
   async function prepare(operation: VideoCommand['operation']) {
     if (pending.current || locked || !interactive) return;
     pending.current = true;
@@ -86,7 +88,16 @@ export function VideoEditor({ setup, actions }: { setup: Setup; actions: EditorA
           <input type="checkbox" className="mt-1 shrink-0" checked={details.selection.areas.includes(id as keyof typeof communicationRecipientGroups)} onChange={() => setDetails({ ...details, selection: { ...details.selection, areas: toggle(details.selection.areas, id as keyof typeof communicationRecipientGroups) } })}/><span>{area.label}</span>
         </label>)}</div>
       </fieldset>
-      <fieldset className="crm-space-y-2"><legend className="font-bold">Persone</legend><div className="grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2">
+      <fieldset className="crm-space-y-2"><legend className="font-bold">Persone</legend>
+        {unavailablePeople.length > 0 && <div className="crm-space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3" aria-label="Destinatari non disponibili">
+          <p className="text-sm">Destinatari selezionati non più disponibili: {unavailablePeople.length}. Rimuovili prima di preparare una nuova bozza o pubblicazione.</p>
+          <button type="button" className={secondary} disabled={!interactive} onClick={() => {
+            if (pending.current || locked || !interactive || setup.state === 'ARCHIVED') return;
+            setDetails(current => ({ ...current, selection: { ...current.selection,
+              people: current.selection.people.filter(id => availablePeople.has(id)) } }));
+          }}>Rimuovi destinatari non disponibili</button>
+        </div>}
+        <div className="grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2">
         {setup.people.map(person => <label key={person.id} className="flex min-w-0 items-start gap-2 text-sm"><input type="checkbox" className="mt-1 shrink-0" checked={details.selection.people.includes(person.id)} onChange={() => setDetails({ ...details, selection: { ...details.selection, people: toggle(details.selection.people, person.id) } })}/>
           <span className="min-w-0 break-words">{person.name} <span className="text-slate-500">({person.role})</span></span></label>)}
       </div></fieldset>
