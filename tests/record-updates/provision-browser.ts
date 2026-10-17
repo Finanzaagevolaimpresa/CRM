@@ -15,12 +15,18 @@ async function main() {
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash);
   const reader = await syntheticPerson(db, 'Destinatario notifiche sintetico', 'admin', hash);
   const other = await syntheticPerson(db, 'Escluso notifiche sintetico', 'admin', hash);
+  const commercial = await syntheticPerson(db, 'Commerciale privacy notifiche sintetico', 'commerciale', hash);
+  await db.userPermissionOverride.createMany({ data: [
+    { userId: commercial.user.id, permission: 'practice_communications.read', allowed: true },
+    { userId: commercial.user.id, permission: 'document.sensitive.read', allowed: false },
+  ] });
   await db.$transaction(async tx => {
-    for (const person of [admin, reader, other]) await revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id);
+    for (const person of [admin, reader, other, commercial]) await revokeAllInternalSessions(tx, person.user.id, 'INTERNAL_GLOBAL', admin.user.id);
   });
   await assertRegistryActivationReady(db); await mkdir(evidence, { recursive: true });
   await writeFile(path.join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, adminId: admin.user.id, readerId: reader.user.id,
-    otherId: other.user.id, readerName: reader.user.name, emails: { admin: admin.user.email, reader: reader.user.email, other: other.user.email } }));
+    otherId: other.user.id, readerName: reader.user.name, commercialId: commercial.user.id, commercialName: commercial.user.name,
+    emails: { admin: admin.user.email, reader: reader.user.email, other: other.user.email, commercial: commercial.user.email } }));
   console.log('UPDATES_SYNTHETIC_BROWSER_READY');
 }
 main().finally(() => db.$disconnect()).catch(error => { console.error(error); process.exitCode = 1; });

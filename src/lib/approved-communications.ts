@@ -261,6 +261,58 @@ async function messageScope(tx: Tx, current: AuthSession, id: string, write = fa
   return { row, version, snapshot, scope, box };
 }
 
+// Consultation and notification metadata share the same attachment admission.
+// All locks are retained by the caller's transaction through its final clock check.
+async function readableMessageAttachments(tx: Tx, current: AuthSession, detail: Awaited<ReturnType<typeof messageScope>>) {
+  const { scope, snapshot } = detail;
+  let messageUntil = Infinity;
+  for (const file of snapshot.attachments.slice().sort((a, b) => a.versionId.localeCompare(b.versionId))) {
+    if ('source' in file && file.source === 'CONTEXT_FILE') {
+      await tx.$queryRaw`SELECT "id" FROM "CommunicationContextFile" WHERE "id"=${file.versionId}::uuid FOR SHARE`;
+      const stored = await tx.communicationContextFile.findFirst({ where: { id: file.versionId, revokedAt: null, ...communicationFileWhere(scope.context) } });
+      if (!stored || stored.id !== file.documentId || stored.sha256 !== file.sha256 || stored.sizeBytes !== file.bytes
+        || !canReadCommunicationFile(current, stored.classification)) return null;
+      continue;
+    }
+    await tx.$queryRaw`SELECT "id" FROM "DocumentVersion" WHERE "id"=${file.versionId} FOR SHARE`;
+    const storedVersion = await tx.documentVersion.findUnique({ where: { id: file.versionId } });
+    await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id"=${file.documentId} FOR SHARE`;
+    const doc = await tx.document.findUnique({ where: { id: file.documentId } });
+    if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
+      || ['respinto', 'scaduto', 'archiviato'].includes(doc.status) || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
+      || !scope.client || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
+      || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
+      || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client,
+        project: doc.projectId ? scope.project : null, clientService: doc.clientServiceId ? scope.service : null },
+      hasPermission(current, 'document.sensitive.read'))) return null;
+    if (doc.validUntil) messageUntil = Math.min(messageUntil, doc.validUntil.getTime());
+  }
+  return messageUntil;
+}
+
+/** Current native source admission, without exposing any communication content.
+ * The caller must supply its locked current actor and check the returned expiry
+ * against the DB clock before returning data or committing a read receipt. */
+export async function admitCommunicationNotice(tx: Tx, current: AuthSession, context: CommunicationContext,
+  messageId: string, replyId?: string) {
+  if (!hasPermission(current, 'practice_communications.read')) return null;
+  try {
+    const detail = await messageScope(tx, current, messageId);
+    if (canonicalSha256(detail.scope.context) !== canonicalSha256(context) || (!replyId && detail.row.state !== 'SENT')) return null;
+    const accessUntil = await readableMessageAttachments(tx, current, detail);
+    if (accessUntil === null) return null;
+    if (replyId) {
+      await tx.$queryRaw`SELECT "id" FROM "CommunicationReply" WHERE "id"=${replyId}::uuid FOR SHARE`;
+      const reply = await tx.communicationReply.findUnique({ where: { id: replyId } });
+      if (!reply?.linkedById || reply.messageId !== messageId || !(await filterAdmittedOrdinaryReplies(tx, [reply])).length) return null;
+    }
+    return { accessUntil };
+  } catch (error) {
+    if (error instanceof ApprovedCommunicationError) return null;
+    throw error;
+  }
+}
+
 const editSchema = z.object({
   messageId: uuid, expectedRevision: z.number().int().nonnegative(), context: communicationContextSchema,
   mailboxId: uuid, replyTo: z.string().email().max(254), to: z.array(z.string()).max(20), cc: z.array(z.string()).max(20), bcc: z.array(z.string()).max(20),
@@ -490,29 +542,8 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
         tx.communicationAttempt.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
         tx.communicationReply.findMany({ where: { messageId: row.id }, orderBy: { receivedAt: 'asc' }, take: 100 }),
       ]);
-      let attachmentAccess = true;
-      let messageUntil = Infinity;
-      for (const file of detail.snapshot.attachments.slice().sort((a,b) => a.versionId.localeCompare(b.versionId))) {
-        if ('source' in file && file.source === 'CONTEXT_FILE') {
-          await tx.$queryRaw`SELECT "id" FROM "CommunicationContextFile" WHERE "id"=${file.versionId}::uuid FOR SHARE`;
-          const stored = await tx.communicationContextFile.findFirst({ where: { id: file.versionId, revokedAt: null, ...communicationFileWhere(context) } });
-          if (!stored || stored.id !== file.documentId || stored.sha256 !== file.sha256 || stored.sizeBytes !== file.bytes
-            || !canReadCommunicationFile(current, stored.classification)) attachmentAccess = false;
-          continue;
-        }
-        await tx.$queryRaw`SELECT "id" FROM "DocumentVersion" WHERE "id"=${file.versionId} FOR SHARE`;
-        const storedVersion = await tx.documentVersion.findUnique({ where: { id: file.versionId } });
-        await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id"=${file.documentId} FOR SHARE`;
-        const doc = await tx.document.findUnique({ where: { id: file.documentId } });
-        if (!doc || doc.deletedAt || !storedVersion || storedVersion.documentId !== doc.id || storedVersion.checksum !== file.sha256
-          || ['respinto','scaduto','archiviato'].includes(doc.status) || (doc.validUntil && doc.validUntil.getTime() <= Date.now())
-          || !scope.client || doc.clientId !== scope.client.id || (doc.projectId && doc.projectId !== scope.project?.id)
-          || (doc.clientServiceId && doc.clientServiceId !== scope.service?.id)
-          || !await canAccessFinancialDocument(tx, current, doc) || !canViewDocument(current, { ...doc, client: scope.client, project: doc.projectId ? scope.project : null,
-            clientService: doc.clientServiceId ? scope.service : null }, hasPermission(current, 'document.sensitive.read'))) attachmentAccess = false;
-        if (doc?.validUntil) messageUntil = Math.min(messageUntil, doc.validUntil.getTime());
-      }
-      if (!attachmentAccess) continue;
+      const messageUntil = await readableMessageAttachments(tx, current, detail);
+      if (messageUntil === null) continue;
       const replies = await filterAdmittedOrdinaryReplies(tx,storedReplies);
       const receivedAttachments = await readAdmittedOrdinaryAttachmentMetadata(tx, replies, current);
       // Only admitted messages reach the receipt query. Locks stay held until

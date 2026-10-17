@@ -12,6 +12,8 @@ import { lockLeadForMutation } from '../src/lib/lead-lifecycle-lock';
 import { withSerializableTransaction } from '../src/lib/serializable';
 import { changeClientReadGrant } from '../src/lib/client-read-perimeter';
 import { previewSelectiveAccess, confirmSelectiveAccess } from '../src/lib/selective-project-access';
+import { storedNoticeMessage, linkedOrdinaryNoticeReply } from './record-updates/communication-fixtures';
+import { readPracticeCommunications } from '../src/lib/approved-communications';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_UPDATES_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -23,8 +25,12 @@ after(async () => db.$disconnect());
 function proof(person = admin, nowSeconds?: number) {
   return { key, sessionToken: person.token, stepUpToken: createPrivilegedStepUpToken({ key, userId: person.user.id, sessionToken: person.token, nowSeconds }) };
 }
-async function fixture(kind: UpdateCommand['kind'] = 'LEAD') {
-  const reader = await syntheticPerson(db, 'Selected synthetic recipient'), other = await syntheticPerson(db, 'Unselected synthetic recipient');
+async function fixture(kind: UpdateCommand['kind'] = 'LEAD', nonAdmin = false) {
+  const reader = await syntheticPerson(db, 'Selected synthetic recipient', nonAdmin ? 'commerciale' : 'admin'), other = await syntheticPerson(db, 'Unselected synthetic recipient');
+  if (nonAdmin) await db.userPermissionOverride.createMany({ data: [
+    { userId: reader.user.id, permission: 'practice_communications.read', allowed: true },
+    { userId: reader.user.id, permission: 'document.sensitive.read', allowed: false },
+  ] });
   let id: string;
   if (kind === 'LEAD') id = (await db.lead.create({ data: { firstName: 'Synthetic', lastName: randomUUID(), assignedToId: reader.user.id,
     nextActionDate: new Date('2027-01-04T10:11:12.345Z'), notes: 'PRIVATE-NOTES-NEVER-IN-NOTICES' } })).id;
@@ -291,10 +297,8 @@ test('a selective project recipient never inherits the ordinary project update c
 });
 
 test('synthetic SENT and explicitly linked reply emit once; draft, uncertainty and unassociated reply emit nothing', options, async () => {
-  const f = await fixture(); await rule(f);
-  const mailbox = await db.communicationMailbox.findFirstOrThrow();
-  const message = await db.approvedCommunication.create({ data: { contextKind: 'LEAD', leadId: f.id,
-    mailboxId: mailbox.id, createdById: admin.user.id } });
+  const f = await fixture('LEAD', true); await rule(f);
+  const { message, mailbox } = await storedNoticeMessage(db, { leadId: f.id, authorId: admin.user.id });
   assert.equal((await works(f.id)).length, 0);
   await db.approvedCommunication.update({ where: { id: message.id }, data: { state: 'UNCERTAIN' } });
   assert.equal((await works(f.id)).length, 0);
@@ -311,4 +315,59 @@ test('synthetic SENT and explicitly linked reply emit once; draft, uncertainty a
   assert.equal((await works(f.id)).length, 2);
   const visible = await listRecordUpdates(db, f.reader.session);
   assert.equal(visible.length, 2); assert.doesNotMatch(JSON.stringify(visible), /PRIVATE SUBJECT|PRIVATE REPLY BODY/);
+  assert.equal((await readPracticeCommunications(db, f.reader.session, { kind: 'LEAD', id: f.id })).messages.length, 1);
 });
+
+for (const restriction of ['restricted', 'COMPLAINT', 'SENSITIVE', 'conflict'] as const) {
+  test('non-Admin source admission blocks list/detail/read receipt: ' + restriction, options, async () => {
+    const f = await fixture('LEAD', true); await rule(f);
+    const { message, mailbox } = await storedNoticeMessage(db, { leadId: f.id, authorId: admin.user.id,
+      mailboxAddress: restriction === 'restricted' ? 'info@finanzaagevolaimpresa.it' : undefined,
+      classification: restriction === 'COMPLAINT' || restriction === 'SENSITIVE' ? restriction : 'ORDINARY' });
+    const linked = restriction === 'conflict' ? await linkedOrdinaryNoticeReply(db, message.id, mailbox.id, admin.user.id) : null;
+    if (!linked) await db.approvedCommunication.update({ where: { id: message.id }, data: { state: 'SENT' } });
+    const [work] = await works(f.id); assert.ok(work);
+    try {
+      if (restriction === 'restricted' || linked) {
+        assert.equal((await listRecordUpdates(db, f.reader.session)).length, 1);
+        assert.ok(await readRecordUpdate(db, f.reader.session, work.id));
+        if (linked) await linked.conflict();
+        else await db.communicationMailbox.update({ where: { id: mailbox.id }, data: { restricted: true } });
+      }
+      const native = await readPracticeCommunications(db, f.reader.session, { kind: 'LEAD', id: f.id });
+      assert.equal(linked ? native.messages.flatMap(m => m.replies).length : native.messages.length, 0);
+      assert.equal((await listRecordUpdates(db, f.reader.session)).length, 0);
+      assert.equal((await listRecordUpdates(db, f.reader.session, 100, false)).length, 0);
+      assert.equal(await readRecordUpdate(db, f.reader.session, work.id), null);
+      assert.equal(await readRecordUpdate(db, f.reader.session, work.id, true), null);
+      assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } })).readAt, null);
+    } finally {
+      if (restriction === 'restricted') await db.communicationMailbox.update({ where: { id: mailbox.id }, data: { restricted: false } });
+    }
+  });
+}
+
+for (const fault of ['missing-version', 'snapshot-hash', 'revoked-attachment'] as const) {
+  test('source version/hash and attachment admission cannot be bypassed by notifications: ' + fault, options, async () => {
+    const f = await fixture('LEAD', true); await rule(f);
+    const file = fault === 'revoked-attachment' ? await db.communicationContextFile.create({ data: {
+      contextKind: 'LEAD', leadId: f.id, uploadedById: admin.user.id, fileName: 'synthetic.txt', mimeType: 'text/plain',
+      sizeBytes: 1, sha256: 'a'.repeat(64), storagePath: 'synthetic-not-read/' + randomUUID(),
+    } }) : null;
+    const { message } = await storedNoticeMessage(db, { leadId: f.id, authorId: admin.user.id,
+      omitVersion: fault === 'missing-version', invalidHash: fault === 'snapshot-hash',
+      attachments: file ? [{ source: 'CONTEXT_FILE', documentId: file.id, versionId: file.id, filename: file.fileName,
+        mimeType: file.mimeType, bytes: file.sizeBytes, sha256: file.sha256 }] : [] });
+    await db.approvedCommunication.update({ where: { id: message.id }, data: { state: 'SENT' } });
+    const [work] = await works(f.id); assert.ok(work);
+    if (file) {
+      assert.equal((await listRecordUpdates(db, f.reader.session)).length, 1);
+      assert.ok(await readRecordUpdate(db, f.reader.session, work.id));
+      await db.communicationContextFile.update({ where: { id: file.id }, data: { revokedAt: new Date() } });
+      assert.equal((await readPracticeCommunications(db, f.reader.session, { kind: 'LEAD', id: f.id })).messages.length, 0);
+    }
+    assert.equal((await listRecordUpdates(db, f.reader.session)).length, 0);
+    assert.equal(await readRecordUpdate(db, f.reader.session, work.id, true), null);
+    assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } })).readAt, null);
+  });
+}

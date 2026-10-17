@@ -4,9 +4,11 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { storedNoticeMessage, linkedOrdinaryNoticeReply } from './communication-fixtures';
 const db = new PrismaClient(), evidence = process.env.UPDATES_EVIDENCE!, password = process.env.UPDATES_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
-  synthetic: boolean; adminId: string; readerId: string; otherId: string; readerName: string; emails: { admin: string; reader: string; other: string };
+  synthetic: boolean; adminId: string; readerId: string; otherId: string; readerName: string; commercialId: string; commercialName: string;
+  emails: { admin: string; reader: string; other: string; commercial: string };
 };
 const origin = 'http://127.0.0.1:3038';
 async function login(page: Page, email: string, stepUp = false) {
@@ -125,4 +127,75 @@ test('lost confirmation response freezes repeat writes; explicit receipt lookup 
   expect(await db.recordUpdateDelivery.count({ where: { event: { recordId: row.id } } })).toBe(1);
   expect(await db.recordUpdateCommand.count({ where: { recordId: row.id } })).toBe(1);
   await context.close();
+});
+
+test('non-Admin notices use native source privacy; late restriction/conflict denies stale read POST and all counts', async ({ browser }) => {
+  test.setTimeout(480_000);
+  const ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.emails.admin, true); await login(reader, f.emails.commercial);
+  let actionName = '';
+  for (const restriction of ['ORDINARY', 'restricted', 'COMPLAINT', 'SENSITIVE', 'conflict'] as const) {
+    const label = 'Sorgente sintetica ' + restriction + ' ' + randomUUID();
+    const lead = await db.lead.create({ data: { firstName: label, lastName: 'Test', assignedToId: f.commercialId } });
+    const form = await open(admin, { kind: 'LEAD', id: lead.id, label });
+    await form.getByLabel('Operazione', { exact: true }).selectOption('RULE');
+    await form.getByRole('checkbox', { name: new RegExp(f.commercialName) }).check();
+    await form.getByRole('button', { name: 'Controlla destinatari e modifiche' }).click();
+    await expect(admin.getByRole('region', { name: 'Riepilogo aggiornamento' })).toBeVisible();
+    await admin.getByRole('checkbox', { name: 'Confermo questa operazione, i destinatari ammessi e il canale CRM' }).check();
+    await admin.getByRole('button', { name: 'Attiva regola', exact: true }).click();
+    await expect(admin.getByRole('status')).toContainText('Operazione registrata');
+    await reader.goto('/notifications');
+    const baselineCount = await reader.getByText(/^\d+ attive$/).textContent();
+    const { message, mailbox } = await storedNoticeMessage(db, { leadId: lead.id, authorId: f.adminId,
+      mailboxAddress: restriction === 'restricted' ? 'info@finanzaagevolaimpresa.it' : undefined,
+      classification: restriction === 'COMPLAINT' || restriction === 'SENSITIVE' ? restriction : 'ORDINARY' });
+    const linked = restriction === 'conflict' ? await linkedOrdinaryNoticeReply(db, message.id, mailbox.id, f.adminId) : null;
+    if (!linked) await db.approvedCommunication.update({ where: { id: message.id }, data: { state: 'SENT' } });
+    const work = await db.recordUpdateDelivery.findFirstOrThrow({ where: { event: { recordId: lead.id } } });
+    expect(work.recipientId).toBe(f.commercialId);
+    const href = '/notifications/updates/' + work.id;
+    try {
+      if (restriction === 'ORDINARY' || restriction === 'restricted' || linked) {
+        await reader.goto('/notifications/updates');
+        await expect(reader.locator('a[href="' + href + '"]')).toHaveCount(1);
+        await reader.goto('/notifications');
+        expect(await reader.getByText(/^\d+ attive$/).textContent()).not.toBe(baselineCount);
+        await reader.goto(href); await expect(reader.getByRole('button', { name: 'Segna come letto' })).toBeVisible();
+        const names = await reader.locator('form input').evaluateAll(inputs => inputs.map(input => input.getAttribute('name') ?? ''));
+        actionName = names.find(name => name.startsWith('$ACTION_ID_')) ?? '';
+        expect(actionName).toMatch(/^\$ACTION_ID_/);
+        expect((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } })).readAt).toBeNull();
+      }
+      if (restriction === 'restricted') await db.communicationMailbox.update({ where: { id: mailbox.id }, data: { restricted: true } });
+      if (linked) await linked.conflict();
+      // The same actual form action is first proven by the ORDINARY positive
+      // control. Subsequent POSTs cannot pass merely by using an invalid action.
+      const response = await rc.request.post(href, { headers: { origin }, multipart: { [actionName]: '', id: work.id } });
+      expect([200, 303, 404]).toContain(response.status());
+      const row = await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: work.id } });
+      if (restriction === 'ORDINARY') expect(row.readAt).not.toBeNull();
+      else {
+        expect(row.readAt).toBeNull();
+        const detail = await rc.request.get(href);
+        expect(detail.status()).toBe(404); expect(await detail.text()).not.toContain(label);
+        await reader.goto('/notifications/updates');
+        await expect(reader.locator('a[href="' + href + '"]')).toHaveCount(0);
+        await expect(reader.getByText(label, { exact: true })).toHaveCount(0);
+      }
+      await reader.goto('/notifications');
+      await expect(reader.getByText(/^\d+ attive$/)).toHaveText(baselineCount!);
+      await expect(reader.locator('a[href="' + href + '"]')).toHaveCount(0);
+      expect(await reader.content()).not.toContain('PRIVATE SYNTHETIC');
+      if (restriction === 'conflict') {
+        await reader.setViewportSize({ width: 390, height: 844 });
+        await reader.screenshot({ path: path.join(evidence, 'updates-non-admin-quarantine.png'), fullPage: true });
+        expect(await reader.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    } finally {
+      if (restriction === 'restricted') await db.communicationMailbox.update({ where: { id: mailbox.id }, data: { restricted: false } });
+    }
+  }
+  await ac.close(); await rc.close();
 });
