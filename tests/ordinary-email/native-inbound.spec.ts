@@ -50,6 +50,7 @@ test('native received reply becomes a separately approved draft with current sco
   expect(await reader.evaluate(()=>('INBOUND_EXECUTED' in window))).toBe(false);
   const attachmentForm=reader.locator(`[data-linked-reply="${linked.id}"] section[aria-label="Allegati ricevuti"] form`);
   await expect(attachmentForm).toHaveCount(1);
+  await expect(attachmentForm).toHaveAttribute('data-attachment-ready','true');
   const attachmentUrl=(await attachmentForm.getAttribute('action'))!;
   const attachmentData={payloadHash:(await attachmentForm.locator('[name="payloadHash"]').inputValue()),
     attachmentHash:(await attachmentForm.locator('[name="attachmentHash"]').inputValue())};
@@ -61,7 +62,7 @@ test('native received reply becomes a separately approved draft with current sco
   expect(downloaded.headers()['content-type']).toBe('application/octet-stream');
   expect(downloaded.headers()['x-content-type-options']).toBe('nosniff');
   expect(downloaded.headers()['cache-control']).toBe('private, no-store');
-  expect(downloaded.headers()['content-security-policy']).toBe("sandbox allow-downloads; default-src 'none'");
+  expect(downloaded.headers()['content-security-policy']).toBe("sandbox; default-src 'none'");
   const actualDownload=reader.waitForEvent('download');
   await attachmentForm.getByRole('button',{name:'Scarica allegato 1',exact:true}).click();
   const download=await actualDownload; expect(download.suggestedFilename()).toBe('ricevuto-sintetico.txt');

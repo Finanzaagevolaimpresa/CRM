@@ -9,6 +9,8 @@ import { ManualMessageDownload } from '@/components/manual-message-download';
 import { OrdinaryEmailReceipts } from '@/components/ordinary-email-receipts';
 import { OrdinaryEmailReview } from '@/components/ordinary-email-review';
 import { OrdinaryEmailInboundRefresh } from '@/components/ordinary-email-inbound-refresh';
+import { OrdinaryEmailAttachmentDownload } from '@/components/ordinary-email-attachment-download';
+import { sanitizeFileName } from '@/lib/storage';
 import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
 import { readPracticeCommunications } from '@/lib/approved-communications';
@@ -107,13 +109,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
           <p className="text-xs">Riferimento di acquisizione: {reply.evidenceReference}</p>
           {reply.receivedAttachments.length ? <section aria-label="Allegati ricevuti" className="my-3 grid gap-2">
             <h5 className="font-bold">Allegati ricevuti</h5>
-            {reply.receivedAttachments.map(file => <form key={file.ordinal} method="post"
-              action={`/communications/replies/${reply.id}/attachments/${file.ordinal}`} className="rounded-xl border p-3">
-              <input type="hidden" name="payloadHash" value={file.payloadHash} />
-              <input type="hidden" name="attachmentHash" value={file.sha256} />
-              <p className="break-words">{file.filename} · {file.bytes} byte</p>
-              <button type="submit" className="font-bold underline">Scarica allegato {file.ordinal + 1}</button>
-            </form>)}
+            {reply.receivedAttachments.map(file => <OrdinaryEmailAttachmentDownload key={file.ordinal}
+              replyId={reply.id} file={file} downloadName={sanitizeFileName(file.filename)} />)}
             <p className="text-sm">File ricevuti dall’esterno. Il download non li aggiunge ai documenti della pratica o alla bozza.</p>
           </section> : null}
           {data.canWrite ? <Link className="font-bold underline" href={`/communications?kind=${data.context.kind}&practice=${encodeURIComponent(data.context.id)}&page=${data.page}&reply=${reply.id}`}>Prepara risposta</Link> : null}
