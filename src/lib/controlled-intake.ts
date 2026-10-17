@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from './lead-identity';
+import { assertLeadOperational } from './lead-lifecycle-lock';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { canEditLead, canViewClient, canViewCommercialOffer } from './access-control';
@@ -94,10 +96,11 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
   const input = controlledIntakeSchema.parse(raw); await assertControlledIntakeDatabase(db);
   const payloadHash = canonicalSha256(input);
   const run = () => db.$transaction(async (tx) => {
+    await acquireLeadIdentityWriteLock(tx);
     const actor = await currentActor(tx, claimed);
     const existing = await tx.controlledIntake.findUnique({ where: { channel_sourceId: { channel: input.channel, sourceId: input.sourceId } }, include: { duplicateCandidates: true, duplicateDecision: true } });
     if (existing) {
-      const lead = await tx.lead.findUnique({ where: { id: existing.leadId } });
+      const lead = await assertLeadOperational(tx, existing.leadId);
       if (!lead || lead.deletedAt) throw new ControlledIntakeError('DENIED');
       const canEdit = canEditLead(actor, lead);
       const ownQueuedReceipt = lead.assignedToId === null && existing.operatorId === actor.userId;
@@ -111,6 +114,8 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
     }
     const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`)[0]?.now ?? new Date(0);
     const revision = await selectableRevision(tx, input.serviceCode, input.digitalProjectType, now);
+    // A hidden identity must not be silently recreated through manual intake.
+    if (await hasStrongRawLeadIdentityDuplicate(tx, { ...input, trashedOnly: true })) throw new ControlledIntakeError('CONFLICT');
     const candidates = input.email ? (await tx.lead.findMany({ where: { email: { equals: input.email, mode: 'insensitive' }, deletedAt: null }, take: 20 })).filter((lead) => canEditLead(actor, lead)) : [];
     let commercialOfferId: string | null = null; let contractId: string | null = null;
     if (input.commercialOfferId) {
@@ -155,6 +160,7 @@ export async function decideControlledIntakeDuplicate(db: Db, claimed: AuthSessi
       const actor = await currentActor(tx, claimed);
       const intake = await tx.controlledIntake.findUnique({ where: { id: input.intakeId } });
       if (!intake || intake.version !== input.expectedVersion) throw new ControlledIntakeError('CONFLICT');
+      for (const id of [...new Set([intake.leadId, input.candidateLeadId])].sort()) await assertLeadOperational(tx, id);
       const [sourceLead, candidate, candidateLink] = await Promise.all([
         tx.lead.findUnique({ where: { id: intake.leadId } }),
         tx.lead.findUnique({ where: { id: input.candidateLeadId } }),
@@ -206,6 +212,7 @@ export async function linkAuthenticated1265Projection(db: Db, claimed: AuthSessi
       || projection.commercialInboxItem.projectionLedgerId !== projection.id
       || projection.lead.deletedAt
       || !canEditLead(actor, projection.lead)) throw new ControlledIntakeError('DENIED');
+    await assertLeadOperational(tx, projection.lead.id);
     const now = (await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`)[0]?.now ?? new Date(0);
     const revision = await selectableRevision(tx, input.serviceCode, input.digitalProjectType, now);
     const sourceId = projection.inboxEvent.eventId;

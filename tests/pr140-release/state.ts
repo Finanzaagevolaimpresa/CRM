@@ -41,6 +41,10 @@ async function main() {
   } else if (mode === 'footprint') {
     const data = {
       projects: await db.project.findMany({ orderBy: { id: 'asc' } }),
+      leads: await db.lead.findMany({ orderBy: { id: 'asc' } }),
+      leadLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'lead_lifecycle_changed' }, orderBy: { id: 'asc' } }),
+      leadInboxItems: await db.commercialLeadInboxItem.findMany({ orderBy: { id: 'asc' } }),
+      leadSlaCycles: await db.commercialLeadSlaCycle.findMany({ orderBy: { id: 'asc' } }),
       projectLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'project_lifecycle_changed' }, orderBy: { id: 'asc' } }),
       selectiveAuthorities: await db.selectiveAccessAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveGrants: await db.selectiveProjectGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -103,6 +107,8 @@ async function main() {
     assert.equal(data.selectiveAuthorities.length, 1);
     assert.equal(data.selectiveGrants.length, 3);
     assert.equal(data.projectLifecycleReceipts.length, 6);
+    assert.equal(data.leadLifecycleReceipts.length, 3);
+    assert.equal(data.leads.filter(lead => lead.deletedAt).length, 1);
     assert.equal(data.projects.filter(project => project.status === 'archiviato' && !project.deletedAt).length, 1);
     assert.equal(data.projects.filter(project => project.deletedAt).length, 1);
     assert.equal(data.m4Mailboxes.length, 7);

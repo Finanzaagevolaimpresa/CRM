@@ -6,6 +6,7 @@ test('packaged restart retains live selections and revoked perimeters', async ({
   const f = JSON.parse(readFileSync(process.env.R05_SELECTIVE_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; projectId: string; revokedProjectId: string; clientId: string; contractId: string; versions: string[];
     lifecycleProjectId: string; lifecycleDocumentId: string; lifecycleVersionId: string; archivedProjectId: string; trashProjectId: string;
+    trashedLeadId: string; trashedLeadLabel: string; trashedOfferId: string; preservedClientId: string; restoredLeadId: string; restoredLeadLabel: string;
   };
   expect(f.synthetic).toBe(true);
   const app = process.env.PRACTICE_READINESS_BROWSER_ORIGIN!, phase = process.env.R05_SELECTIVE_PHASE!;
@@ -31,6 +32,13 @@ test('packaged restart retains live selections and revoked perimeters', async ({
   expect((await page.request.get(`${app}/documents/${f.lifecycleDocumentId}/download`)).status()).toBe(403);
   const projects = await (await page.request.get(`${app}/projects`)).text();
   expect(projects).not.toContain('RECOVERY_ARCHIVED_SYNTHETIC'); expect(projects).not.toContain('RECOVERY_TRASH_SYNTHETIC');
+  const hiddenLead = await page.request.get(`${app}/leads/${f.trashedLeadId}`);
+  expect(await hiddenLead.text()).not.toContain(f.trashedLeadLabel);
+  expect((await page.request.get(`${app}/commercial-offers/${f.trashedOfferId}/export/docx`)).status()).toBe(404);
+  expect((await page.request.get(`${app}/clients/${f.preservedClientId}`)).status()).toBe(200);
+  const restoredLead = await page.request.get(`${app}/leads/${f.restoredLeadId}`);
+  expect(restoredLead.status()).toBe(200); expect(await restoredLead.text()).toContain(f.restoredLeadLabel);
+  expect(await (await page.request.get(`${app}/leads/trash`)).text()).toContain(f.trashedLeadLabel);
   for (const suffix of [`/clients/${f.clientId}`, `/contracts/${f.contractId}`, '/payments', '/notifications']) {
     const response = await page.request.get(app + suffix); expect(response.status()).toBeLessThan(500);
     const html = await response.text();

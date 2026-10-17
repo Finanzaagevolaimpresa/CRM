@@ -26,9 +26,10 @@ export const leadSchema = z.object({
   status: leadStatusSchema.default('nuovo'), priority: leadPrioritySchema.default('media'), assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText, clientId: id.optional(),
 });
 export const leadUpdateSchema = leadSchema.extend({ id });
-export const leadCommercialUpdateSchema = z.object({ id, status: leadStatusSchema, priority: leadPrioritySchema, assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText });
+export const leadCommercialUpdateSchema = z.object({ id, expectedVersion: z.string().datetime(), status: leadStatusSchema, priority: leadPrioritySchema, assignedToId: id.optional(), nextActionNote: optionalText, nextActionDate: date.optional(), notes: optionalText, commercialProposal: optionalText });
 export const leadConvertSchema = z.object({
   id,
+  expectedVersion: z.string().datetime(),
   type: z.enum(['persona_fisica','ditta_individuale','societa','professionista','soggetto_da_costituire','associazione','altro']).default('societa'),
   expectedInboxVersion: z.coerce.number().int().positive().optional(),
 });

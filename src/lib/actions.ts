@@ -1,4 +1,6 @@
 'use server';
+import { assertLeadOperational, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
+import { withSerializableTransaction } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
@@ -94,8 +96,6 @@ function clean(form: FormData) { return Object.fromEntries([...form.entries()].f
 async function audit(actorId: string, event: string, entityType: string, entityId?: string, after?: unknown, db: Prisma.TransactionClient = prisma) {
   await db.auditLog.create({ data: { actorId, event, entityType, entityId, after: redactAuditPayload(after) as Prisma.InputJsonValue } });
 }
-
-class ConcurrentLeadConversionError extends Error {}
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
@@ -669,12 +669,19 @@ export async function updateLeadCommercial(form: FormData) {
   if (assignment !== undefined && s.role !== 'admin') denyManualAssignment();
   if (assignment !== undefined) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignment !== undefined, [{ userId: assignment }], async tx => {
-    const lead = await tx.lead.update({ where: { id: data.id, ...(assignment !== undefined ? { assignedToId: before.assignedToId } : {}) }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal } });
+    const { current, lead: before } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
+    const freshInbox = await tx.commercialLeadInboxItem.findUnique({ where: { leadId: data.id } });
+    if (freshInbox && ((assignment !== undefined && assignment !== before.assignedToId)
+      || (before.status !== data.status && (protectedTerminalStatus.includes(before.status) || protectedTerminalStatus.includes(data.status))))) {
+      throw new UserFacingActionError('Owner e stati terminali si gestiscono dalla Commercial Lead Inbox.');
+    }
+    const lead = await tx.lead.update({ where: { id: data.id, updatedAt: before.updatedAt, deletedAt: null }, data: { status: data.status, priority: data.priority, assignedToId: assignment, nextActionNote: data.nextActionNote, nextActionDate: data.nextActionDate ?? null, nextAction: data.nextActionDate ?? null, notes: data.notes, commercialProposal: data.commercialProposal, updatedAt: nextConcurrencyTimestamp(before.updatedAt) } });
     const events = ['lead_update'];
     if (before.status !== lead.status) events.push('lead_status_change');
     if (assignment !== undefined) events.push('lead_assign');
     await Promise.all(events.map((event) => audit(s.userId, event, 'Lead', lead.id, { before, after: lead }, tx)));
     if (assignment !== undefined) await appendResponsibilityDecision(tx, { kind: 'Lead', id: lead.id, actorId: s.userId, allowed: true, reason: 'Assegnazione manuale amministrativa', state: { clientId: lead.clientId, projectId: null, clientServiceId: null, commercialOwnerId: lead.assignedToId, technicalOwnerId: null } });
+    await assertLeadActorLive(tx, current);
     return lead;
   });
 }
@@ -706,43 +713,19 @@ export async function convertLeadToClient(form: FormData) {
       });
     } catch (error) { return mapCommercialLeadInboxError(error); }
   }
-  const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
-  try {
-    return await prisma.$transaction(async (tx) => {
-      const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId, notes: lead.notes } });
-      const claimed = await tx.lead.updateMany({
-        where: { id: lead.id, clientId: null, updatedAt: lead.updatedAt },
-        data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) },
-      });
-      if (claimed.count !== 1) throw new ConcurrentLeadConversionError();
-      await tx.auditLog.create({ data: {
-        actorId: s.userId,
-        event: 'lead_convert_to_client',
-        entityType: 'Lead',
-        entityId: lead.id,
-        after: { leadId: lead.id, clientId: client.id, fromStatus: lead.status, toStatus: 'vinto', salesOwnerId: client.salesOwnerId },
-      } });
-      return client;
-    });
-  } catch (error) {
-    if (!isUniqueConstraintError(error) && !(error instanceof ConcurrentLeadConversionError)) throw error;
-
-    const currentLead = await requireLeadEditAccess(s, data.id);
-    const existingClient = currentLead.clientId
-      ? await prisma.client.findFirst({ where: { id: currentLead.clientId, deletedAt: null } })
-      : await prisma.client.findFirst({ where: { leadId: currentLead.id, deletedAt: null } });
-    if (!existingClient) throw new UserFacingActionError('Il lead è stato modificato durante la conversione. Riprova.');
-    await requireCommercialOfferTargetAccess(s, { clientId: existingClient.id });
-
-    if (!currentLead.clientId) {
-      const reconciled = await prisma.lead.updateMany({
-        where: { id: currentLead.id, clientId: null, updatedAt: currentLead.updatedAt },
-        data: { clientId: existingClient.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(currentLead.updatedAt) },
-      });
-      if (reconciled.count !== 1) throw new UserFacingActionError('Il lead è stato modificato durante la conversione. Ricarica la pagina.');
-    }
-    return existingClient;
-  }
+  return withSerializableTransaction(prisma, async tx => {
+    const { current, lead } = await lockLeadForMutation(tx, s, data.id, data.expectedVersion);
+    if (!hasPermission(current, 'client.write') || lead.clientId
+      || await tx.commercialLeadInboxItem.findUnique({ where: { leadId: lead.id } })) throw new LeadLifecycleError('STALE');
+    const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
+    const client = await tx.client.create({ data: { type: data.type, displayName, leadId: lead.id, salesOwnerId: lead.assignedToId, notes: lead.notes } });
+    await tx.lead.update({ where: { id: lead.id, clientId: null, updatedAt: lead.updatedAt, deletedAt: null },
+      data: { clientId: client.id, status: 'vinto', updatedAt: nextConcurrencyTimestamp(lead.updatedAt) } });
+    await tx.auditLog.create({ data: { actorId: current.userId, event: 'lead_convert_to_client', entityType: 'Lead', entityId: lead.id,
+      after: { leadId: lead.id, clientId: client.id, fromStatus: lead.status, toStatus: 'vinto', salesOwnerId: client.salesOwnerId } } });
+    await assertLeadActorLive(tx, current);
+    return client;
+  });
 }
 
 export async function createCommercialOffer(form: FormData) {
@@ -751,9 +734,12 @@ export async function createCommercialOffer(form: FormData) {
   await requireCommercialOfferTargetAccess(s, data);
   const { commercialAction: _commercialAction, ...offerData } = data;
   void _commercialAction;
-  const offer = await prisma.commercialOffer.create({ data: { ...offerData, createdById: s.userId } });
-  await audit(s.userId, 'commercial_offer_create', 'CommercialOffer', offer.id, offer);
-  return offer;
+  return withProjectResources(prisma, s.userId, [], async tx => {
+    await assertLeadOperational(tx, data.leadId);
+    const offer = await tx.commercialOffer.create({ data: { ...offerData, createdById: s.userId } });
+    await audit(s.userId, 'commercial_offer_create', 'CommercialOffer', offer.id, offer, tx);
+    return offer;
+  });
 }
 export async function updateCommercialOffer(form: FormData) {
   const s = await requirePermission('lead.write');
@@ -821,6 +807,8 @@ export async function updateCommercialOffer(form: FormData) {
     updateData.sentAt = now;
   }
   return withProjectResources(prisma, s.userId, [{ commercialOfferId: data.id }], async tx => {
+    await assertLeadOperational(tx, before.leadId);
+    await assertLeadOperational(tx, data.leadId);
     const offer = await tx.commercialOffer.update({ where: { id: data.id }, data: updateData });
     const events = ['commercial_offer_update'];
     if (before.status !== offer.status) events.push('commercial_offer_status_change');

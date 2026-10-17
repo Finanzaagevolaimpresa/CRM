@@ -18,6 +18,7 @@ const sessionCookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 export const privilegedStepUpCookieName = 'fai_crm_privileged_step_up';
 
 export const privilegedMutationCodes = [
+  'LEAD_LIFECYCLE',
   'SELECTIVE_PROJECT_ACCESS_CONFIRM',
   'SELECTIVE_PROJECT_ACCESS_REVOKE',
   'DIRECT_EMAIL_TEST_SEND',

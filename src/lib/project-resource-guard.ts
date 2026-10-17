@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { assertLeadOperational } from './lead-lifecycle-lock';
 import { lockInternalUser } from './internal-session-registry';
 import { assertProjectOperational, ProjectUnavailableError } from './project-lifecycle-lock';
 import { loadSelectiveProjectScope } from './selective-project-scope';
@@ -40,6 +41,8 @@ export async function guardProjectResources(tx: Prisma.TransactionClient, userId
     contexts.push(...rows, ...services.map(r => ({ projectId: r.projectId })), ...formalizations.map(r => r.practice));
   }
   if (offers.length) {
+    const offerRows = await tx.commercialOffer.findMany({ where: { id: { in: offers } }, select: { leadId: true } });
+    for (const id of [...new Set(offerRows.flatMap(row => row.leadId ? [row.leadId] : []))].sort()) await assertLeadOperational(tx, id);
     const [practices, revisions] = await Promise.all([
       tx.practiceReadiness.findMany({ where: { commercialOfferId: { in: offers } }, select: { projectId: true, clientServiceId: true } }),
       tx.practiceOfferRevision.findMany({ where: { commercialOfferId: { in: offers } }, select: { projectId: true } }),

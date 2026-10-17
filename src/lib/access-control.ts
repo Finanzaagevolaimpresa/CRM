@@ -30,7 +30,7 @@ type CommercialOfferAccessContext = {
   createdById?: string | null;
   leadId?: string | null;
   clientId?: string | null;
-  lead?: Pick<Lead, 'assignedToId' | 'clientId'> | null;
+  lead?: Pick<Lead, 'assignedToId' | 'clientId'> & Partial<Pick<Lead, 'deletedAt'>> | null;
   client?: ClientAccessContext | null;
 };
 
@@ -101,7 +101,8 @@ export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
   return ['backoffice', 'collaboratore_limitato'].includes(user.role)
     && (client.salesOwnerId === id || client.consultantId === id);
 }
-export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
+export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'deletedAt'>>) {
+  if (lead.deletedAt) return false;
   if (hasGlobalReadAccess(user)) return true;
   if (lead.assignedToId === null) return false;
   return lead.assignedToId === getActorId(user);
@@ -171,7 +172,8 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
   return document.uploadedById === id && !!document.client && hasClientResponsibility(user, document.client);
 }
 
-export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
+export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'deletedAt'>>) {
+  if (lead.deletedAt) return false;
   if (user.role === 'admin') return true;
   if (lead.assignedToId === null) return false;
   if (user.role === 'direzione') return true;
@@ -180,6 +182,7 @@ export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'>) {
 }
 
 export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
+  if (offer.lead?.deletedAt) return false;
   if (user.selectiveOfferIds?.length && (!offer.id || user.selectiveOfferIds.includes(offer.id))) return false;
   if (offer.leadId && !offer.lead) return false;
   if (offer.clientId && !offer.client) return false;
