@@ -79,7 +79,7 @@ test('native personal send uses isolated verified TLS, exact decisions and durab
 
   await open(f.saved.id); await second.goto(target);
   const editor = second.locator('form[data-message-draft="' + f.saved.id + '"]');
-  await editor.locator('..').locator('summary').click(); await editor.getByLabel('Testo esatto').fill('NUOVA VERSIONE NATIVA DA INVIARE');
+  await editor.locator('..').locator(':scope > summary').click(); await editor.getByLabel('Testo esatto').fill('NUOVA VERSIONE NATIVA DA INVIARE');
   await editor.getByRole('button', { name: 'Salva nuova versione da approvare' }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: f.saved.id } })).currentRevision).toBe(2);
   await send(f.saved.id); await expect(panel(f.saved.id)).toContainText('Esito da verificare');

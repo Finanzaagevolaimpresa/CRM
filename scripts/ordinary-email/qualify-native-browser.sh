@@ -96,10 +96,13 @@ if [[ "$ready" != 1 ]]; then
   exit 1
 fi
 docker exec "$app" node tests/ordinary-email/tls-boundary-probe.mjs
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-ui.spec.ts
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-inbound.spec.ts
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-contexts.spec.ts
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-send.spec.ts
+browser_status=0
+for spec in native-ui.spec.ts native-inbound.spec.ts native-contexts.spec.ts native-send.spec.ts; do
+  if ! npx playwright test --config tests/ordinary-email/playwright.config.ts "$spec"; then
+    browser_status=1
+  fi
+done
+test "$browser_status" -eq 0
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-ui-proof.json"
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-send-proof.json"
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-inbound-proof.json"
