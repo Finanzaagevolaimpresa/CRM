@@ -511,7 +511,7 @@ async function mutateOwner(
       }
     }
     await tx.$queryRaw`SELECT set_config('fai.n14_write_context', 'authorized', true)`;
-    await tx.lead.update({ where: { id: lead.id }, data: { assignedToId: input.targetUserId } });
+    await tx.lead.update({ where: { id: lead.id }, data: { assignedToId: input.targetUserId }, select: { id: true } });
     inject(input.faultAt, 'AFTER_LEAD');
     const updated = await tx.commercialLeadInboxItem.update({
       where: { id: item.id }, data: { version: item.version + 1, updatedAt: commandNow },
@@ -638,7 +638,7 @@ export async function closeCommercialLeadInboxItem(
     if (!cycle) fail('N14_VERSION_CONFLICT');
     const now = commandNow;
     await tx.$queryRaw`SELECT set_config('fai.n14_write_context', 'authorized', true)`;
-    await tx.lead.update({ where: { id: lead.id }, data: { status: closeStatusByReason[input.reasonCode] } });
+    await tx.lead.update({ where: { id: lead.id }, data: { status: closeStatusByReason[input.reasonCode] }, select: { id: true } });
     inject(input.faultAt, 'AFTER_LEAD');
     await tx.commercialLeadSlaCycle.update({ where: { id: cycle.id }, data: {
       closedAt: now,
@@ -702,7 +702,7 @@ export async function convertCommercialLeadInboxItem(
       clientId: client.id,
       status: 'vinto',
       updatedAt: commandNow,
-    } });
+    }, select: { id: true } });
     inject(input.faultAt, 'AFTER_LEAD');
     await tx.commercialLeadSlaCycle.update({ where: { id: cycle.id }, data: {
       closedAt: commandNow,
@@ -764,7 +764,7 @@ export async function reopenCommercialLeadInboxItem(
       FROM "CommercialLeadSlaCycle" WHERE "inboxItemId" = ${item.id}::uuid
     `);
     await tx.$queryRaw`SELECT set_config('fai.n14_write_context', 'authorized', true)`;
-    await tx.lead.update({ where: { id: lead.id }, data: { status: 'da_contattare' } });
+    await tx.lead.update({ where: { id: lead.id }, data: { status: 'da_contattare' }, select: { id: true } });
     inject(input.faultAt, 'AFTER_LEAD');
     const updated = await tx.commercialLeadInboxItem.update({ where: { id: item.id }, data: {
       state: 'OPEN', closedAt: null, version: item.version + 1, updatedAt: policy.now,
