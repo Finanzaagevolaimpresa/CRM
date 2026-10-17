@@ -88,8 +88,8 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
         const options = (key === 'status' || key === 'type') && schema && 'options' in schema ? schema.options as string[] : null;
         const change = (next: string) => setPatch({ ...patch, [key]: next } as UpdatePatch);
         return <label className="block min-w-0 text-sm font-bold" key={key}>{updateFieldLabels[key]}
-          {options ? <select className={fieldClass} value={value} onChange={e => change(e.target.value)}>{options.map(option => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}</select>
-            : <input className={fieldClass} type={isDate ? 'datetime-local' : 'text'} value={isDate ? localDate(value) : value}
+          {options ? <select aria-label={updateFieldLabels[key]} className={fieldClass} value={value} onChange={e => change(e.target.value)}>{options.map(option => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}</select>
+            : <input aria-label={updateFieldLabels[key]} className={fieldClass} type={isDate ? 'datetime-local' : 'text'} value={isDate ? localDate(value) : value}
               onChange={e => change(isDate ? isoDate(e.target.value) : e.target.value)} />}
         </label>;
       })}</div>}

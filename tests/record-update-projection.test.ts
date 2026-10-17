@@ -62,4 +62,3 @@ test('future or invalid delivery time and forged kind fail closed', () => {
   assert.equal(mayExposeRecordUpdate(receipt, { ...current, now: new Date('invalid') }), false);
   assert.throws(() => projectRecordChange('constructor' as never, {}, {}));
 });
-

@@ -187,6 +187,9 @@ test('operational activation denies stale evidence, wrong scope, identity, targe
   // The current binary admits only the exact complete schema53 ledger. Each
   // synthetic tamper is rolled back with the rejected activation transaction.
   for (const sql of [
+    `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261017200000_record_update_notifications_v1'`,
+    `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261017200000_record_update_notifications_v1'`,
+    `DELETE FROM "_prisma_migrations" WHERE migration_name='20261017200000_record_update_notifications_v1'`,
     `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261017160000_admin_email_contexts_v1'`,
     `UPDATE "_prisma_migrations" SET finished_at=NULL WHERE migration_name='20261017160000_admin_email_contexts_v1'`,
     `DELETE FROM "_prisma_migrations" WHERE migration_name='20261017160000_admin_email_contexts_v1'`,

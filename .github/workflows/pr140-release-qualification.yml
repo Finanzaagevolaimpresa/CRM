@@ -57,6 +57,7 @@ jobs:
             ${{ env.R05_EVIDENCE_DIR }}/*-summary.json
             ${{ env.R05_EVIDENCE_DIR }}/admission.json
             ${{ env.R05_EVIDENCE_DIR }}/*-recovery.json
+            ${{ env.R05_EVIDENCE_DIR }}/*-epochs.json
             ${{ env.R05_EVIDENCE_DIR }}/after-resume.json
             ${{ env.R05_EVIDENCE_DIR }}/*session-revocation.json
             ${{ env.R05_EVIDENCE_DIR }}/selective-*.png

@@ -79,4 +79,3 @@ export function recordUpdateDeliveryState(stored: UpdateDeliveryEvidence) {
   return { crm: stored.readAt ? 'LETTO' as const : 'DISPONIBILE' as const,
     email: stored.emailDraftId ? 'BOZZA_DA_APPROVARE' as const : 'NON_PREPARATA' as const };
 }
-

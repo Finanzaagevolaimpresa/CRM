@@ -184,6 +184,7 @@ tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf -
 run_browser candidate-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser candidate-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
+node --import tsx tests/pr140-release/state.ts epochs "$evidence/before-recovery-epochs.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
 stop_app
 start_app "$candidate_id" invalid controlled internal
@@ -197,6 +198,8 @@ node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/sess
 start_app "$recovery_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$recovery_id" ]]
+node --import tsx tests/pr140-release/state.ts epochs "$evidence/after-recovery-epochs.json"
+cmp "$evidence/before-recovery-epochs.json" "$evidence/after-recovery-epochs.json"
 run_browser recovery tests/pr140-release/playwright.config.ts '/recovery.spec.ts$' 1
 run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 export R05_SELECTIVE_PHASE=restart
@@ -209,11 +212,14 @@ cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker inspect -f '{{.Id}}' "$pg")" == "$pg_id" ]]
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 # Qualify resuming the candidate after the same explicit session gate.
+node --import tsx tests/pr140-release/state.ts epochs "$evidence/before-resume-epochs.json"
 stop_app
 node --import tsx tests/pr140-release/state.ts revoke-sessions > "$evidence/resume-session-revocation.json"
 start_app "$candidate_id" registry controlled internal
 wait_healthy
 [[ "$(docker inspect -f '{{.Image}}' "$app")" == "$candidate_id" ]]
+node --import tsx tests/pr140-release/state.ts epochs "$evidence/after-resume-epochs.json"
+cmp "$evidence/before-resume-epochs.json" "$evidence/after-resume-epochs.json"
 run_browser resume-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 run_browser resume-m2 tests/pr140-release/playwright.config.ts m2-resume.spec.ts 1
 export R05_SELECTIVE_PHASE=resume
