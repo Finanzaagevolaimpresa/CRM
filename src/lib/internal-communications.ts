@@ -69,7 +69,9 @@ async function proposed(tx: Tx, claimed: AuthSession, raw: unknown, credentials:
   const selected = resolveCommunicationRecipients({ ...emptyCommunicationRecipientSelection(), to: input.selection }, directory, { to: [], cc: [], bcc: [] });
   const ids = [...new Set([admitted.actor.userId, ...selected.people.to.map(person => person.id)])].sort();
   const before = existing ? await tx.internalCommunicationParticipant.findMany({ where: { threadId: existing.id }, orderBy: { userId: 'asc' } }) : [];
-  const evidenceHash = canonicalSha256({ input, ids, directoryHash: selected.evidenceHash, before,
+  const evidenceHash = canonicalSha256({ input, ids, directoryHash: selected.evidenceHash,
+    before: before.map(({ createdAt, updatedAt, ...participant }) => ({ ...participant,
+      createdAt: createdAt.toISOString(), updatedAt: updatedAt.toISOString() })),
     authorityRevision: admitted.authority.revision, actorId: admitted.actor.userId, sessionId: admitted.actor.id });
   const people = directory.filter(person => ids.includes(person.id)).map(({ id, name, email, role }) => ({ id, name, email, role }));
   await admitted.finish();
