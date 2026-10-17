@@ -29,27 +29,39 @@ export function verifyCommunicationSchema() {
   assert.equal(ordinary.baselineTree, 'd95fe672b5d75db112e03b52b1e5172175a8b55d');
   assert.equal(ordinary.historicalMigrationCount, 50);
   assert.equal(ordinary.migration, '20261017120000_ordinary_email_v1');
+  const contexts = JSON.parse(readFileSync('scripts/admin-email/schema-binding.json', 'utf8'));
+  assert.equal(contexts.baseline, '5f0d6e00b3cf08d4f789eb94fcde29ed27720cf4');
+  assert.equal(contexts.baselineTree, 'ba90621b65ec451661630ce64d4ba17df13aa53a');
+  assert.equal(contexts.historicalMigrationCount, 51);
+  assert.equal(contexts.migration, '20261017160000_admin_email_contexts_v1');
+  const contextPath = `prisma/migrations/${contexts.migration}/migration.sql`;
   const ordinaryPath = `prisma/migrations/${ordinary.migration}/migration.sql`;
   const selectivePath = `prisma/migrations/${selective.migration}/migration.sql`;
-  assert.deepEqual(names, [...prior, migration, selective.migration, ordinary.migration], 'M4_EXACT_MIGRATION_SET');
+  assert.deepEqual(names, [...prior, migration, selective.migration, ordinary.migration, contexts.migration], 'M4_EXACT_MIGRATION_SET');
   const path = `prisma/migrations/${migration}/migration.sql`;
-  assert.equal(git('diff', '--name-only', baseline, 'HEAD', '--', 'prisma/migrations'), `${path}\n${selectivePath}\n${ordinaryPath}`, 'M4_HISTORICAL_PREFIX');
+  assert.equal(git('diff', '--name-only', baseline, 'HEAD', '--', 'prisma/migrations'), `${path}\n${selectivePath}\n${ordinaryPath}\n${contextPath}`, 'M4_HISTORICAL_PREFIX');
   assert.equal(git('rev-parse', `${selective.baseline}^{tree}`), selective.baselineTree, 'SELECTIVE_BASELINE_TREE');
   git('merge-base', '--is-ancestor', selective.baseline, 'HEAD');
   assert.equal(hash(path), binding.migrationSha256, 'M4_MIGRATION_HASH');
-  assert.equal(git('diff', '--name-only', selective.baseline, 'HEAD', '--', 'prisma/migrations'), `${selectivePath}\n${ordinaryPath}`, 'SELECTIVE_PREFIX49_UNCHANGED');
+  assert.equal(git('diff', '--name-only', selective.baseline, 'HEAD', '--', 'prisma/migrations'), `${selectivePath}\n${ordinaryPath}\n${contextPath}`, 'SELECTIVE_PREFIX49_UNCHANGED');
   assert.equal(git('diff', '--name-only', 'HEAD', '--', 'prisma/schema.prisma', 'prisma/migrations'), '', 'M4_SCHEMA_DIRTY');
-  assert.equal(hash('prisma/schema.prisma'), ordinary.schemaSha256, 'M4_SCHEMA_HASH');
+  assert.equal(hash('prisma/schema.prisma'), contexts.schemaSha256, 'M4_SCHEMA_HASH');
   assert.equal(hash(path), binding.migrationSha256, 'M4_MIGRATION_HASH');
   assert.equal(hash(selectivePath), selective.migrationSha256, 'SELECTIVE_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${ordinary.baseline}^{tree}`), ordinary.baselineTree, 'ORDINARY_BASELINE_TREE');
   git('merge-base', '--is-ancestor', ordinary.baseline, 'HEAD');
   const historicalSchema = execFileSync('git', ['show', `${ordinary.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(historicalSchema).digest('hex'), selective.schemaSha256, 'ORDINARY_BASELINE_SCHEMA50');
-  assert.equal(git('diff', '--name-only', ordinary.baseline, 'HEAD', '--', 'prisma/migrations'), ordinaryPath, 'ORDINARY_PREFIX50_UNCHANGED');
+  assert.equal(git('diff', '--name-only', ordinary.baseline, 'HEAD', '--', 'prisma/migrations'), `${ordinaryPath}\n${contextPath}`, 'ORDINARY_PREFIX50_UNCHANGED');
   assert.equal(hash(ordinaryPath), ordinary.migrationSha256, 'ORDINARY_MIGRATION_HASH');
-  return { protocol: 'ORDINARY_EMAIL_SCHEMA51_BINDING', sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'),
-    baseline: ordinary.baseline, qualifiedBaseline, migrations: 51, historicalMigrationPrefixUnchanged: 50, additiveMigration: ordinary.migration,
-    schemaSha256: ordinary.schemaSha256, migrationSha256: ordinary.migrationSha256, productionContact: false };
+  assert.equal(git('rev-parse', `${contexts.baseline}^{tree}`), contexts.baselineTree, 'CONTEXT_BASELINE_TREE');
+  git('merge-base', '--is-ancestor', contexts.baseline, 'HEAD');
+  const schema51 = execFileSync('git', ['show', `${contexts.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
+  assert.equal(createHash('sha256').update(schema51).digest('hex'), ordinary.schemaSha256, 'CONTEXT_BASELINE_SCHEMA51');
+  assert.equal(git('diff', '--name-only', contexts.baseline, 'HEAD', '--', 'prisma/migrations'), contextPath, 'CONTEXT_PREFIX51_UNCHANGED');
+  assert.equal(hash(contextPath), contexts.migrationSha256, 'CONTEXT_MIGRATION_HASH');
+  return { protocol: 'ADMIN_EMAIL_SCHEMA52_BINDING', sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'),
+    baseline: contexts.baseline, qualifiedBaseline, migrations: 52, historicalMigrationPrefixUnchanged: 51, additiveMigration: contexts.migration,
+    schemaSha256: contexts.schemaSha256, migrationSha256: contexts.migrationSha256, productionContact: false };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.stdout.write(JSON.stringify(verifyCommunicationSchema()) + '\n');

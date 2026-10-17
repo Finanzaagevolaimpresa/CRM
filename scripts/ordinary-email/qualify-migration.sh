@@ -21,6 +21,9 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public
 git archive 57b265e9829b9ccd9ffe86314db9ef7071d1c2e7 prisma | tar -x -C "$prior"
 npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 50
+# The next context migration must also refuse schema50 without any new object.
+if psql "$db" -v ON_ERROR_STOP=1 -f prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql > "$evidence/context-wrong-base.log" 2>&1; then exit 1; fi
+grep -Fq ADMIN_EMAIL_MIGRATION52_BASE_REQUIRED "$evidence/context-wrong-base.log"
 psql "$db" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$evidence/prefix50-before.txt"
 # Historical synthetic-only SQL stays guarded and is never the release migration.
 for historical in scripts/ordinary-email/storage-candidate.sql scripts/ordinary-email/inbound-candidate.sql; do
@@ -33,7 +36,8 @@ if psql "$db" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log
 grep -Fq 'division by zero' "$evidence/fault.log"
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'OrdinaryEmail%'")" = 0
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND (proname LIKE 'ordinary_email_%' OR proname LIKE 'ordinary_inbound_%')")" = 0
-npm run prisma:migrate:deploy
+git archive 5f0d6e00b3cf08d4f789eb94fcde29ed27720cf4 prisma | tar -x -C "$prior"
+npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261017120000_ordinary_email_v1' ORDER BY migration_name" > "$evidence/prefix50-after.txt"
 cmp "$evidence/prefix50-before.txt" "$evidence/prefix50-after.txt"
@@ -48,7 +52,9 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ORDINARY_EMAIL_MIGRATION51_BASE_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$prior/prisma/schema.prisma" --script > "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
 printf '{"synthetic":true,"before":50,"after":51,"tablesAdded":11,"newTablesEmpty":true,"prefix50Unchanged":true,"wrongBaseDenied":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"activation":false,"productionContact":false}\n' > "$evidence/migration51-proof.json"
 cat "$evidence/migration51-proof.json"
+
+bash scripts/admin-email/qualify-migration.sh

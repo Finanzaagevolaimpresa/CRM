@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { canonicalJson, sha256 } from '../src/lib/canonical-json';
+import { emptyCommunicationRecipientSelection } from '../src/lib/communication-recipient-policy';
 import { approvedMessageHash, approvedMessageSnapshotSchema, assertExactMessageApproval, mailboxQualification,
   assertCanBeginManualMessage, nextManualMessageState, manualMessageEvidenceSchema } from '../src/lib/approved-communication-contract';
 
@@ -17,6 +19,35 @@ function fixture() {
     mailboxId: snapshot.mailboxId, mailboxRevision: 1, approverUserId: 'synthetic-admin', approverSessionId: randomUUID(), approvedAt: '2026-09-27T00:00:00Z' };
   return { snapshot, mailbox, approval };
 }
+
+test('historical v1 hash is unchanged and cannot be relabelled as a new context',()=>{
+  const {snapshot}=fixture();
+  assert.equal(approvedMessageHash(snapshot),sha256('fai.approved-email.snapshot.v1\n'+canonicalJson(snapshot)));
+  for(const context of [{kind:'LEAD',id:'lead'},{kind:'CLIENT',id:'client'},{kind:'INTERNAL',id:randomUUID()}])
+    assert.equal(approvedMessageSnapshotSchema.safeParse({...snapshot,context}).success,false);
+});
+test('context v2 exact decision binds directory, source, context and every recipient selection',()=>{
+  const {snapshot,approval,mailbox}=fixture();
+  const current={...snapshot,schema:'fai.approved-email.v2',context:{kind:'LEAD',id:'lead'},clientId:null,
+    attachments:snapshot.attachments.map(file=>({...file,source:'CONTEXT_FILE'})),recipientSelection:emptyCommunicationRecipientSelection(),
+    externalRecipients:{to:snapshot.to,cc:[],bcc:[]},recipientEvidenceHash:'a'.repeat(64),contextEvidenceHash:'b'.repeat(64)};
+  const exact={...approval,snapshotHash:approvedMessageHash(current)};
+  assert.doesNotThrow(()=>assertExactMessageApproval(current,exact,mailbox));
+  for(const change of [{contextEvidenceHash:'c'.repeat(64)},{recipientEvidenceHash:'c'.repeat(64)},
+    {recipientSelection:{...current.recipientSelection,to:{userIds:['user-1'],groups:[]}}},
+    {attachments:current.attachments.map(file=>({...file,source:'DOCUMENT'}))},
+    {context:{kind:'LEAD',id:'other'}},{externalRecipients:{to:['different@invalid.test'],cc:[],bcc:[]}}])
+    assert.throws(()=>assertExactMessageApproval({...current,...change},exact,mailbox),/CONFLICT/);
+});
+test('new contexts reject placeholder clients, external internal-recipients and missing evidence',()=>{
+  const {snapshot}=fixture(),current={...snapshot,schema:'fai.approved-email.v2',attachments:[],
+    context:{kind:'INTERNAL',id:randomUUID()},clientId:null,recipientSelection:emptyCommunicationRecipientSelection(),
+    externalRecipients:{to:[],cc:[],bcc:[]},recipientEvidenceHash:'a'.repeat(64),contextEvidenceHash:'b'.repeat(64)};
+  assert.equal(approvedMessageSnapshotSchema.safeParse(current).success,true);
+  for(const change of [{clientId:'placeholder'},{externalRecipients:{to:['outside@invalid.test'],cc:[],bcc:[]}},
+    {contextEvidenceHash:null},{recipientEvidenceHash:undefined},{context:{kind:'CLIENT',id:'different'},clientId:'real-client'}])
+    assert.equal(approvedMessageSnapshotSchema.safeParse({...current,...change}).success,false);
+});
 
 test('M4 exact approval invalidates for every message, recipient and attachment change', () => {
   const { snapshot, approval, mailbox } = fixture();

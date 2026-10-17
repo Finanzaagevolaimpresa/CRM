@@ -56,10 +56,11 @@ test('native preview and refusal bind the exact version, personal authority, cur
   await page.screenshot({ path: path.join(evidence, 'native-preview-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await exact.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(evidence, 'native-preview-mobile.png'), fullPage: true });
   await page.setViewportSize({ width: 1280, height: 900 });
   const editor = page.locator(`form[data-message-draft="${f.saved.id}"]`);
-  await editor.locator('..').locator('summary').click();
+  await editor.locator('..').locator(':scope > summary').click();
   await editor.getByLabel('Testo esatto').fill('VERSIONE MODIFICATA LOCALMENTE');
   await expect(exact).toHaveCount(0); await expect(panel.getByRole('button', { name: 'Anteprima email ordinaria' })).toBeDisabled();
   await expect(panel).toContainText('Modifiche non salvate');
@@ -71,7 +72,7 @@ test('native preview and refusal bind the exact version, personal authority, cur
   // A second actual browser session saves a new version after the preview.
   await second.goto(target);
   const otherEditor = second.locator(`form[data-message-draft="${f.saved.id}"]`);
-  await otherEditor.locator('..').locator('summary').click(); await otherEditor.getByLabel('Testo esatto').fill('VERSIONE SALVATA DALLA SECONDA SESSIONE');
+  await otherEditor.locator('..').locator(':scope > summary').click(); await otherEditor.getByLabel('Testo esatto').fill('VERSIONE SALVATA DALLA SECONDA SESSIONE');
   await otherEditor.getByRole('button', { name: 'Salva nuova versione da approvare' }).click();
   await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: f.saved.id } })).currentRevision).toBe(3);
   await exact.getByLabel('Rifiuto personalmente questa versione esatta.').check();

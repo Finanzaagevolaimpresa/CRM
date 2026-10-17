@@ -26,7 +26,7 @@ export DIRECT_EMAIL_TEST_SMTP_HOST=authsmtp.securemail.pro
 export DATABASE_URL='postgresql://postgres:synthetic-ordinary-browser-only@127.0.0.1:5433/fai_crm_test?schema=public'
 npm run prisma:migrate:deploy
 psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
+test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 52
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailAuthority"')" = 0
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "OrdinaryEmailInboundStream"')" = 0
 test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "InternalSession"')" = 0
@@ -96,9 +96,14 @@ if [[ "$ready" != 1 ]]; then
   exit 1
 fi
 docker exec "$app" node tests/ordinary-email/tls-boundary-probe.mjs
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-ui.spec.ts
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-inbound.spec.ts
-npx playwright test --config tests/ordinary-email/playwright.config.ts native-send.spec.ts
+browser_status=0
+for spec in native-ui.spec.ts native-inbound.spec.ts native-contexts.spec.ts native-send.spec.ts; do
+  if ! npx playwright test --config tests/ordinary-email/playwright.config.ts "$spec"; then
+    browser_status=1
+  fi
+done
+test "$browser_status" -eq 0
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-ui-proof.json"
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-send-proof.json"
 test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-inbound-proof.json"
+test -s "$ORDINARY_EMAIL_BROWSER_EVIDENCE/native-context-proof.json"

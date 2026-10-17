@@ -16,6 +16,7 @@ test('M4 exact schema binding rejects changed prefix, schema, DDL and an extra m
     assert.equal(check().status, 0, check().stderr);
     for (const [path, code] of [
       ['prisma/schema.prisma', 'M4_SCHEMA_HASH'],
+      ['prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql', 'CONTEXT_MIGRATION_HASH'],
       ['prisma/migrations/20261017120000_ordinary_email_v1/migration.sql', 'ORDINARY_MIGRATION_HASH'],
       ['prisma/migrations/20260927010000_approved_manual_communications_v1/migration.sql', 'M4_MIGRATION_HASH'],
       ['prisma/migrations/20260924100000_admin_client_read_perimeters_v1/migration.sql', 'M4_HISTORICAL_PREFIX'],

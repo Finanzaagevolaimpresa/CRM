@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { canonicalJson, sha256 } from './canonical-json';
+import { communicationRecipientSelectionSchema } from './communication-recipient-policy';
 
 export const DECLARED_FAI_MAILBOXES = Object.freeze([
   { address: 'info@finanzaagevolaimpresa.it', purpose: 'Primo contatto e commerciale', restricted: false },
@@ -57,16 +58,22 @@ export const approvedAttachmentSchema = z.object({
   bytes: z.number().int().nonnegative().max(20 * 1024 * 1024),
 }).strict();
 
-export const communicationContextSchema = z.discriminatedUnion('kind', [
+const practiceCommunicationContextSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('READINESS'), id: z.string().uuid() }).strict(),
   z.object({ kind: z.literal('TECHNICAL'), id }).strict(),
 ]);
+export const communicationContextSchema = z.union([
+  practiceCommunicationContextSchema,
+  z.object({ kind: z.literal('LEAD'), id }).strict(),
+  z.object({ kind: z.literal('CLIENT'), id }).strict(),
+  z.object({ kind: z.literal('INTERNAL'), id: z.string().uuid() }).strict(),
+]);
 export type CommunicationContext = z.infer<typeof communicationContextSchema>;
 
-export const approvedMessageSnapshotSchema = z.object({
+const legacySnapshot = z.object({
   schema: z.literal('fai.approved-email.v1'),
   messageId: z.string().uuid(), revision: version,
-  context: communicationContextSchema, clientId: id,
+  context: practiceCommunicationContextSchema, clientId: id,
   channel: z.literal('EMAIL_MANUAL'),
   mailboxId: z.string().uuid(), mailboxRevision: version,
   from: email, replyTo: email,
@@ -74,18 +81,38 @@ export const approvedMessageSnapshotSchema = z.object({
   subject: header, body,
   attachments: z.array(approvedAttachmentSchema).max(20),
   classification: z.enum(['ORDINARY', 'SENSITIVE', 'COMPLAINT']),
-}).strict().superRefine((value, ctx) => {
+}).strict();
+const contextualSnapshot = legacySnapshot.extend({
+  schema: z.literal('fai.approved-email.v2'), context: communicationContextSchema, clientId: id.nullable(),
+  attachments: z.array(approvedAttachmentSchema.extend({ source: z.enum(['DOCUMENT', 'CONTEXT_FILE']) }).strict()).max(20),
+  recipientSelection: communicationRecipientSelectionSchema,
+  externalRecipients: z.object({ to: z.array(email).max(20), cc: z.array(email).max(20), bcc: z.array(email).max(20) }).strict(),
+  recipientEvidenceHash: hash,
+  contextEvidenceHash: hash,
+}).strict();
+// Legacy versions remain byte/hash compatible and immutable. New contexts use
+// v2; creating a client or practice as a placeholder is never a valid context.
+export const approvedMessageSnapshotSchema = z.union([legacySnapshot, contextualSnapshot]).superRefine((value, ctx) => {
   const recipients = [...value.to, ...value.cc, ...value.bcc];
   if (recipients.length > 20 || new Set(recipients.map((s) => s.toLowerCase())).size !== recipients.length)
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'MESSAGE_RECIPIENT_SET_INVALID' });
   if (new Set(value.attachments.map((a) => a.documentId)).size !== value.attachments.length
     || value.attachments.reduce((total, a) => total + a.bytes, 0) > 20 * 1024 * 1024)
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'MESSAGE_ATTACHMENT_SET_INVALID' });
+  if (value.schema === 'fai.approved-email.v2') {
+    const requiresClient = ['READINESS', 'TECHNICAL', 'CLIENT'].includes(value.context.kind);
+    if (requiresClient !== (value.clientId !== null)
+      || (value.context.kind === 'CLIENT' && value.clientId !== value.context.id)
+      || (value.context.kind === 'INTERNAL' && Object.values(value.externalRecipients).some(items => items.length)))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'MESSAGE_CONTEXT_BINDING_INVALID' });
+  }
 });
 export type ApprovedMessageSnapshot = z.infer<typeof approvedMessageSnapshotSchema>;
 
 export function approvedMessageHash(input: unknown) {
-  return sha256(`fai.approved-email.snapshot.v1\n${canonicalJson(approvedMessageSnapshotSchema.parse(input))}`);
+  const snapshot = approvedMessageSnapshotSchema.parse(input);
+  const format = snapshot.schema === 'fai.approved-email.v1' ? 'v1' : 'v2';
+  return sha256(`fai.approved-email.snapshot.${format}\n${canonicalJson(snapshot)}`);
 }
 
 export const exactMessageApprovalSchema = z.object({

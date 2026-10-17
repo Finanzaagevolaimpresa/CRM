@@ -87,12 +87,13 @@ test('native received reply becomes a separately approved draft with current sco
   expect(await form.locator('input[name="attachmentVersionId"]:checked').count()).toBe(0);
   expect(await db.approvedCommunication.count({where:{technicalPracticeId:f.practice.id}})).toBe(1);
   await form.locator('select[name="mailboxId"]').selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
-  await form.getByLabel('A · indirizzi separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
+  await form.getByRole('region',{name:'Destinatari A',exact:true}).getByLabel('Indirizzi esterni · separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
   await form.getByLabel('Oggetto',{exact:true}).fill('Nuova risposta da valutare'); await form.getByLabel('Testo esatto',{exact:true}).fill('TESTO NUOVO SCRITTO ESPLICITAMENTE');
   const draftId=await form.locator('input[name="messageId"]').inputValue();
   await page.screenshot({path:path.join(evidence,'native-inbound-draft-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
   expect(await form.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.screenshot({path:path.join(evidence,'native-inbound-draft-mobile.png'),fullPage:true});
   await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=RECORDED/);
   const version=await db.communicationVersion.findFirstOrThrow({where:{messageId:draftId},include:{approval:true}});
@@ -115,7 +116,7 @@ test('native received reply becomes a separately approved draft with current sco
   const sourceUrl=target+'&reply='+linked.id;
   await page.goto(sourceUrl); await expect(form).toBeVisible(); await f.conflict();
   await form.locator('select[name="mailboxId"]').selectOption(f.box.id); await form.getByLabel('Reply-To',{exact:true}).fill(f.box.address);
-  await form.getByLabel('A · indirizzi separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
+  await form.getByRole('region',{name:'Destinatari A',exact:true}).getByLabel('Indirizzi esterni · separati da virgola',{exact:true}).fill('explicit-reply@invalid.test');
   await form.getByLabel('Oggetto',{exact:true}).fill('Stale conflict'); await form.getByLabel('Testo esatto',{exact:true}).fill('STALE FORM MUST FAIL');
   await form.getByRole('button',{name:'Salva bozza',exact:true}).click(); await expect(page).toHaveURL(/result=DENIED/);
   expect(await db.approvedCommunication.count({where:{technicalPracticeId:f.practice.id}})).toBe(2);

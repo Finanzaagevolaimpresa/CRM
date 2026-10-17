@@ -63,9 +63,11 @@ test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({ baseURL: origin }), page = await context.newPage();
   await login(page, 'admin'); await page.goto('/documents');
   const form = page.locator('form').filter({ has: page.locator('input[type="file"]') });
+  await form.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await form.locator('select[name="clientId"]').selectOption(clientId);
   await form.locator('input[name="title"]').fill(tag + '-document');
   await form.locator('input[type="file"]').setInputFiles({ name: 'perimeter.txt', mimeType: 'text/plain', buffer: bytes });
+  await expect(form.getByRole('list', { name: 'Esito caricamenti' })).toContainText('perimeter.txt: Pronto');
   await form.getByRole('checkbox').check(); await capture(page, '/documents');
   await form.getByRole('button', { name: 'Carica in storage privato' }).click();
   uploadRequest = await captured(page); expect(uploadRequest.body).toContain(bytes.toString());

@@ -86,7 +86,7 @@ test('existing step-up is mandatory and bound to this user, cookie, key and time
 
 test('editing any recipient, body, attachment, sender or channel invalidates the preview', () => {
   const token = preview().token;
-  const edits: Partial<ApprovedMessageSnapshot>[] = [{ to: ['other@invalid.test'] }, { cc: [] }, { bcc: [] },
+  const edits: Partial<typeof snapshot>[] = [{ to: ['other@invalid.test'] }, { cc: [] }, { bcc: [] },
     { subject: 'Changed' }, { body: 'Changed' }, { attachments: [] }, { revision: 2 },
     { from: 'other@invalid.test' }, { replyTo: 'other@invalid.test' },
     { attachments: [{ ...snapshot.attachments[0], filename: 'other.txt' }] },

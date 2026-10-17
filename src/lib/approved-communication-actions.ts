@@ -3,7 +3,7 @@
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { requirePermission } from './auth';
+import { requirePermission, requireSession } from './auth';
 import { prisma } from './prisma';
 import { isAllowedMutationOrigin } from './application-security-policy';
 import { requireEnforcedPrivilegedMutation } from './privileged-access';
@@ -19,7 +19,7 @@ async function origin() {
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new ApprovedCommunicationError('DENIED');
 }
 export async function mutateApprovedMessageAction(form: FormData) {
-  const session = await requirePermission('practice_communications.read');
+  const session = await requireSession();
   await origin();
   const context = communicationContextSchema.parse({ kind: value(form, 'contextKind'), id: value(form, 'contextId') });
   const target = `/communications?kind=${context.kind}&practice=${encodeURIComponent(context.id)}`;
@@ -33,6 +33,8 @@ export async function mutateApprovedMessageAction(form: FormData) {
       mailboxId: value(form, 'mailboxId'), replyTo: value(form, 'replyTo'), to: addresses(form, 'to'), cc: addresses(form, 'cc'), bcc: addresses(form, 'bcc'),
       subject: value(form, 'subject'), body: value(form, 'body'), attachmentVersionIds: form.getAll('attachmentVersionId').map(String),
       classification: value(form, 'classification'),
+      contextFileIds: form.getAll('contextFileId').map(String),
+      ...(form.has('recipientSelection') ? { recipientSelection: JSON.parse(value(form, 'recipientSelection')) } : {}),
       ...(form.has('replySourceId') ? { replySource: { id: value(form,'replySourceId'), contentHash: value(form,'replySourceHash') } } : {}),
     });
     else if (intent === 'submit') await submitApprovedMessage(prisma, session, { messageId: value(form, 'messageId'), expectedRevision: Number(value(form, 'expectedRevision')), snapshotHash: value(form, 'snapshotHash') });
