@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import type { AuthSession } from './auth';
+import type { CommunicationPrincipal } from './communication-principal';
 import { canViewClient, canViewLead } from './access-control';
 import { hasPermission } from './permission-evaluator';
 import { ApprovedCommunicationError, type CommunicationContext } from './approved-communication-contract';
@@ -25,7 +25,7 @@ export function communicationFileWhere(context: CommunicationContext): Prisma.Co
 
 /** Called only inside the authoritative message transaction. A participant or
  * email destination never receives a client/project grant through this scope. */
-export async function expandedCommunicationScope(tx: Tx, current: AuthSession,
+export async function expandedCommunicationScope(tx: Tx, current: CommunicationPrincipal,
   context: Extract<CommunicationContext, { kind: 'LEAD' | 'CLIENT' | 'INTERNAL' }>) {
   const empty = { practice: null, project: null, service: null, context, leadLifecycle: null as { id: string; createdAt: Date } | null };
   if (context.kind === 'LEAD') {

@@ -60,7 +60,7 @@ jobs:
           grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
-      - name: Qualify historical migrations51/52/53 and additive migration54 with atomic failure and immutable prefixes
+      - name: Qualify historical migrations51/52/53/54 and additive migration55 with atomic failure and immutable prefixes
         shell: bash
         run: |
           set -euo pipefail
@@ -103,5 +103,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ordinary-email
             ${{ runner.temp }}/record-updates-migration
+            ${{ runner.temp }}/private-video-migration
+            ${{ runner.temp }}/record-update-email-migration
           if-no-files-found: error
           retention-days: 14

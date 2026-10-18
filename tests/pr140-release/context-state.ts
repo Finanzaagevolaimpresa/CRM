@@ -7,8 +7,9 @@ import { assertSyntheticCatalogDatabase } from '../../src/lib/service-catalog-v2
 import { approvedMessageHash, approvedMessageSnapshotSchema } from '../../src/lib/approved-communication-contract';
 import { emptyCommunicationRecipientSelection } from '../../src/lib/communication-recipient-policy';
 
-// Persistence fixture only. The binding/channel stay disabled. Admission and
-// exact personal send are independently exercised by the native context suite.
+// Persistence fixture only. The channel stays disabled. The following updates
+// fixture enables the owner's personal binding for synthetic drafts only;
+// another Admin must remain read-only in the native recovery checks.
 const db=new PrismaClient();
 async function main(){
   assert.equal(process.env.CI,'true');await assertSyntheticCatalogDatabase(db);

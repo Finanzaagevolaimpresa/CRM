@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { recordUpdateEvents, recordUpdateKinds } from './record-update-labels';
+import { recordUpdateEvents, recordUpdateKinds, recordUpdateModes } from './record-update-labels';
 
 const date = z.union([z.string().datetime(), z.literal('')]);
 export const updatePatchSchema = z.discriminatedUnion('kind', [
@@ -12,12 +12,15 @@ export const updatePatchSchema = z.discriminatedUnion('kind', [
     clientVisibleStatus: z.string().trim().max(500), dueDate: date, nextClientUpdateAt: date }).strict(),
 ]);
 export const updateCommandSchema = z.object({
+  mode: z.enum(recordUpdateModes).optional(),
   commandId: z.string().uuid(), kind: z.enum(recordUpdateKinds), recordId: z.string().min(1).max(128),
   operation: z.enum(['UPDATE', 'RULE', 'REVOKE']), expectedVersion: z.string().datetime(),
   ruleVersion: z.number().int().min(0), selection: z.object({ people: z.array(z.string()).max(20), groups: z.array(z.string()).max(5) }).strict(),
   events: z.array(z.enum(recordUpdateEvents)).min(1).max(5), persistent: z.boolean(),
   expiresAt: z.string().datetime().nullable(), patch: updatePatchSchema.nullable(),
 }).strict().superRefine((value, ctx) => {
+  if (value.kind === 'PROJECT' && value.mode && value.mode !== 'CRM')
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Il progetto dispone del canale CRM' });
   if ((value.operation === 'UPDATE') !== Boolean(value.patch) || (value.patch && value.patch.kind !== value.kind))
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Patch e contesto incoerenti' });
   if (value.operation !== 'UPDATE' && value.persistent) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Opzione non pertinente' });

@@ -2962,6 +2962,8 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  updateDeliveryId String? @unique @db.Uuid
+  updateDelivery RecordUpdateDelivery? @relation(fields: [updateDeliveryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   lead Lead? @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   internalThread InternalCommunicationThread? @relation(fields: [internalThreadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   ordinaryEmailDecisions OrdinaryEmailDecision[]
@@ -3051,6 +3053,8 @@ model CommunicationContextFile {
   @@index([internalThreadId, createdAt])
 }
 model CommunicationVersion {
+  updateSource Json?
+  updateSourceHash String? @db.Char(64)
   ordinaryEmailDecisions OrdinaryEmailDecision[]
   id String @id @default(uuid()) @db.Uuid
   messageId String @db.Uuid
@@ -3265,6 +3269,8 @@ model OrdinaryEmailInboundLink {
 }
 
 model RecordUpdateRule {
+  mode String @default("CRM") @db.VarChar(24)
+  emailAuthorityRevision Int?
   id String @id @default(uuid()) @db.Uuid
   kind String @db.VarChar(20)
   recordId String
@@ -3286,6 +3292,8 @@ model RecordUpdateRule {
 }
 
 model RecordUpdateCommand {
+  mode String @default("CRM") @db.VarChar(24)
+  emailAuthorityRevision Int?
   id String @id @db.Uuid
   actorId String
   actorEpoch Int
@@ -3317,6 +3325,8 @@ model RecordUpdateEvent {
 }
 
 model RecordUpdateDelivery {
+  mode String @default("CRM") @db.VarChar(24)
+  emailDraft ApprovedCommunication?
   id String @id @default(uuid()) @db.Uuid
   eventId String @db.Uuid
   recipientId String

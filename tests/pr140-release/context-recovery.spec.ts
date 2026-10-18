@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test,expect,type Page } from '@playwright/test';
 
-test('packaged schema54 restart retains context messages, private files and revoked participants',async({browser})=>{
+test('packaged schema55 restart retains context messages, private files and revoked participants',async({browser})=>{
   const f=JSON.parse(readFileSync(process.env.R05_CONTEXT_RECOVERY_FIXTURE!,'utf8')) as {
     synthetic:boolean;persistenceOnly:boolean;threadId:string;deletedThreadId:string;ownerEmail:string;memberEmail:string;otherEmail:string;
     leadId:string;clientId:string;fileId:string;revokedFileId:string;sha256:string;bytes:string;
@@ -17,7 +17,7 @@ test('packaged schema54 restart retains context messages, private files and revo
   await login(owner,f.ownerEmail);await login(member,f.memberEmail);await login(other,f.otherEmail);
   const target=origin+'/communications?kind=INTERNAL&practice='+f.threadId;
   for(const page of [owner,member]){
-    await page.goto(target);await expect(page.getByText('SYNTHETIC_CONTEXT_RETAINED_BODY',{exact:true})).toBeVisible();
+    await page.goto(target);await expect(page.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
     expect((await page.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(200);
     expect((await page.request.post(origin+'/communications/files/'+f.revokedFileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(404);
     expect((await page.request.get(origin+'/communications?kind=INTERNAL&practice='+f.deletedThreadId)).status()).toBe(404);
@@ -27,8 +27,14 @@ test('packaged schema54 restart retains context messages, private files and revo
   expect((await other.request.get(target)).status()).toBe(404);
   expect((await other.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(404);
   for(const [kind,id] of [['LEAD',f.leadId],['CLIENT',f.clientId]]){
-    await owner.goto(origin+'/communications?kind='+kind+'&practice='+id);await expect(owner.getByText('SYNTHETIC_CONTEXT_RETAINED_BODY',{exact:true})).toBeVisible();
-    expect(await owner.getByRole('button',{name:'Salva bozza',exact:true}).count()).toBe(0);
+    await owner.goto(origin+'/communications?kind='+kind+'&practice='+id);await expect(owner.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
+    // The updates fixture now binds this owner for synthetic draft preparation.
+    // The other Admin can read these records but never inherits that binding.
+    await expect(owner.getByRole('button',{name:'Salva bozza',exact:true})).toBeVisible();
+    await other.goto(origin+'/communications?kind='+kind+'&practice='+id);
+    await expect(other.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
+    await expect(other.getByRole('button',{name:'Salva bozza',exact:true})).toHaveCount(0);
+    await expect(other.getByRole('button',{name:'Salva nuova versione da approvare',exact:true})).toHaveCount(0);
   }
   for(const context of contexts)await context.close();
 });

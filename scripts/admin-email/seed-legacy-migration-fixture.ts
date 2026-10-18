@@ -13,7 +13,8 @@ async function main(){
   const snapshot=approvedMessageSnapshotSchema.parse({schema:'fai.approved-email.v1',messageId:'22222222-5252-4252-8252-222222222222',revision:1,
     context:{kind:'TECHNICAL',id:'migration52-practice'},clientId:'migration52-client',channel:'EMAIL_MANUAL',mailboxId:box.id,mailboxRevision:box.revision,
     from:box.address,replyTo:box.address,to:['synthetic-legacy@invalid.test'],cc:[],bcc:[],subject:'Historical v1 migration fixture',body:'SYNTHETIC_LEGACY_V1_ONLY',attachments:[],classification:'ORDINARY'});
+  // Schema51 intentionally lacks later provenance columns: return only the historical id.
   await db.communicationVersion.create({data:{id:'33333333-5252-4252-8252-333333333333',messageId:snapshot.messageId,revision:1,
-    snapshot:JSON.parse(JSON.stringify(snapshot)),snapshotHash:approvedMessageHash(snapshot),createdById:'migration52-owner'}});
+    snapshot:JSON.parse(JSON.stringify(snapshot)),snapshotHash:approvedMessageHash(snapshot),createdById:'migration52-owner'},select:{id:true}});
 }
 main().finally(()=>db.$disconnect());

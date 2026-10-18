@@ -99,7 +99,11 @@ export async function rejectStoredOrdinaryEmail(db: Db, claimed: AuthSession, ra
     const snapshot = approvedMessageSnapshotSchema.parse({ ...state.snapshot, revision: input.expectedRevision + 1 });
     const snapshotHash = approvedMessageHash(snapshot);
     const saved = await tx.communicationVersion.create({ data: { messageId: input.messageId, revision: snapshot.revision,
-      snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue, snapshotHash, createdById: state.actor.userId } });
+      snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue, snapshotHash, createdById: state.actor.userId,
+      // The current version's provenance was admitted under the same locks.
+      // Refusal changes the revision, not its origin, and copies no approval.
+      updateSource: state.version.updateSource === null ? Prisma.DbNull : state.version.updateSource as Prisma.InputJsonValue,
+      updateSourceHash: state.version.updateSourceHash } });
     const changed = await tx.approvedCommunication.updateMany({ where: { id: input.messageId, currentRevision: input.expectedRevision,
       state: state.row.state }, data: { state: 'DRAFT', currentRevision: snapshot.revision } });
     if (changed.count !== 1) deny();
