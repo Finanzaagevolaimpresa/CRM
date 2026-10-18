@@ -4,6 +4,7 @@ import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from '../selective-sharing/fixtures';
+import { syntheticUpdateMailbox } from './email-fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
 const db = new PrismaClient();
@@ -13,6 +14,7 @@ async function main() {
   const password = process.env.UPDATES_BROWSER_PASSWORD!, evidence = process.env.UPDATES_EVIDENCE!;
   assert.ok(password?.length >= 24 && evidence);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash);
+  await syntheticUpdateMailbox(db, admin.session);
   const reader = await syntheticPerson(db, 'Destinatario notifiche sintetico', 'admin', hash);
   const other = await syntheticPerson(db, 'Escluso notifiche sintetico', 'admin', hash);
   const commercial = await syntheticPerson(db, 'Commerciale privacy notifiche sintetico', 'commerciale', hash);

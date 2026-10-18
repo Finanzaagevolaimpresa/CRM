@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [postgresql, browser]
+        target: [postgresql, email-postgresql, browser]
     services:
       postgres:
         image: postgres:16
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind exact candidate and immutable schema53 prefix
+      - name: Bind exact candidate and immutable schema54 prefix
         shell: bash
         run: |
           set -euo pipefail
@@ -65,7 +65,7 @@ jobs:
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/updates-documents" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 54
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 55
       - name: PostgreSQL recipient selection, atomicity, revocation and concurrency
         if: matrix.target == 'postgresql'
         shell: bash
@@ -75,6 +75,16 @@ jobs:
           grep -q '^# tests 28$' "$UPDATES_EVIDENCE/postgresql.tap"
           grep -q '^# pass 28$' "$UPDATES_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$UPDATES_EVIDENCE/postgresql.tap"
+      - name: PostgreSQL derived email provenance, atomic save and current recipient admission
+        if: matrix.target == 'email-postgresql'
+        env: { RECORD_UPDATE_EMAIL_DB_TESTS: '1' }
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/record-update-email-db.test.ts | tee "$UPDATES_EVIDENCE/email-postgresql.tap"
+          grep -q '^# tests 26$' "$UPDATES_EVIDENCE/email-postgresql.tap"
+          grep -q '^# pass 26$' "$UPDATES_EVIDENCE/email-postgresql.tap"
+          grep -q '^# skipped 0$' "$UPDATES_EVIDENCE/email-postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'
         run: |
@@ -96,7 +106,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$UPDATES_EVIDENCE/playwright.json" npx playwright test --config tests/record-updates/playwright.config.ts --reporter=line,json | tee "$UPDATES_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==7 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$UPDATES_EVIDENCE/source.txt"

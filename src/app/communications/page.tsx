@@ -19,6 +19,9 @@ import { sanitizeFileName } from '@/lib/storage';
 import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server-candidate';
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
 import { readPracticeCommunications } from '@/lib/approved-communications';
+import { readRecordUpdateEmailPrefill } from '@/lib/record-update-email-queue';
+import { RecordUpdateError } from '@/lib/record-update-contract';
+import { emptyCommunicationRecipientSelection } from '@/lib/communication-recipient-policy';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
 import { ApprovedCommunicationError, communicationContextSchema, type ApprovedMessageSnapshot, type CommunicationContext } from '@/lib/approved-communication-contract';
 
@@ -32,23 +35,33 @@ function BindingFields({ context, message }: { context: CommunicationContext; me
   return <><ContextFields context={context} /><input type="hidden" name="messageId" value={message.id} />
     <input type="hidden" name="expectedRevision" value={message.currentRevision} /><input type="hidden" name="snapshotHash" value={message.snapshotHash} /></>;
 }
-function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: ApprovedMessageSnapshot;
+type UpdateDraft = NonNullable<Data['messages'][number]['updateDraft']> & { subject?: string; body?: string; mailboxId?: string };
+function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snapshot?: ApprovedMessageSnapshot;
+  updateDraft?: UpdateDraft;
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
+  const updateSelection = emptyCommunicationRecipientSelection();
+  if (updateDraft) updateSelection.to.userIds = [updateDraft.recipientId];
   return <form action={mutateApprovedMessageAction} className="grid min-w-0 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}
-    <input type="hidden" name="messageId" value={snapshot?.messageId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
+    <input type="hidden" name="messageId" value={snapshot?.messageId ?? updateDraft?.deliveryId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
     <label>Mittente<select required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
-      <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
+      <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.filter(box => !updateDraft?.mailboxId || box.id === updateDraft.mailboxId).map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
     </select></label>
     <label>Reply-To<input required className={field} type="email" name="replyTo" defaultValue={snapshot?.replyTo} /></label>
-    <CommunicationRecipients directory={data.directory} internal={data.context.kind === 'INTERNAL'} participantIds={data.participantIds}
+    {updateDraft ? <section className="rounded-xl border p-3" aria-label="Destinatario dell’aggiornamento">
+      <input type="hidden" name="updateDeliveryId" value={updateDraft.deliveryId} /><input type="hidden" name="updateSourceHash" value={updateDraft.sourceHash} />
+      <input type="hidden" name="recipientSelection" value={JSON.stringify(updateSelection)} />
+      <p className="break-words font-bold">A: {updateDraft.recipientName} · {updateDraft.recipientAddress}</p>
+      <p>Questa bozza riguarda il destinatario scelto in Chi aggiornare. Ogni persona ha una bozza distinta. CC e BCC sono vuoti.</p>
+      {updateDraft.stale && <p role="status">Il record è cambiato: controlla il testo e salva una nuova versione prima dell’approvazione.</p>}
+    </section> : <CommunicationRecipients directory={data.directory} internal={data.context.kind === 'INTERNAL'} participantIds={data.participantIds}
       suggestedRecipients={data.suggestedRecipients}
       initialSelection={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.recipientSelection : undefined}
-      initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />
-    <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject} /></label>
-    <label>Testo esatto<textarea required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body} /></label>
+      initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />}
+    <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? updateDraft?.subject} /></label>
+    <label>Testo esatto<textarea required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? updateDraft?.body} /></label>
     <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
@@ -60,23 +73,32 @@ function Draft({ data, snapshot, replySource }: { data: Data; snapshot?: Approve
   </form>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
-    if (query.kind || query.practice) notFound();
+    if (query.kind || query.practice || query.update) notFound();
     const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
     const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
     return <div className="min-w-0 crm-space-y-5 [overflow-wrap:anywhere]"><PageHeader title="Comunicazioni" description="Scrivi dal lead, dal cliente o dalla pratica. Le conversazioni interne restano riservate ai partecipanti confermati." />
       <nav className="flex flex-wrap gap-4"><Link className="font-bold underline" href="/leads">Lead</Link><Link className="font-bold underline" href="/clients">Clienti</Link><Link className="font-bold underline" href="/practice-readiness">Pratiche da avviare</Link><Link className="font-bold underline" href="/technical-office/practices">Pratiche tecniche</Link></nav>
+      {authority ? <Link className="font-bold underline" href="/communications/updates">Bozze da aggiornamenti</Link> : null}
       {authority ? <Card title="Nuova comunicazione interna"><InternalCommunicationEditor id={randomUUID()} people={directory} stepUpActive={authority.stepUpActive} /></Card> : null}
       <Card title="Conversazioni interne a cui partecipi"><ul className="grid gap-3">{threads.map(thread => <li key={thread.id}><Link className="font-bold underline" href={`/communications?kind=INTERNAL&practice=${thread.id}`}>{thread.title}</Link></li>)}</ul>{threads.length === 0 ? <p>Nessuna conversazione disponibile.</p> : null}</Card>
       {session.role === 'admin' ? <Link className="font-bold underline" href="/settings/communications">Caselle e risposte da riconciliare</Link> : null}
     </div>;
   }
+  let updatePrefill: Awaited<ReturnType<typeof readRecordUpdateEmailPrefill>> | undefined;
+  if (query.update) {
+    if (query.reply) notFound();
+    try { updatePrefill = await readRecordUpdateEmailPrefill(prisma, session, query.update); }
+    catch (error) { if (error instanceof RecordUpdateError) notFound(); throw error; }
+    if (updatePrefill.context.kind !== context.data.kind || updatePrefill.context.id !== context.data.id) notFound();
+  }
   let data: Data;
-  try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page)); }
+  try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page),
+    updatePrefill?.saved ? updatePrefill.deliveryId : undefined); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
   const replyParent = query.reply ? data.messages.find(message => message.replies.some(reply => reply.id === query.reply)) : undefined;
   const replySource = replyParent?.replies.find(reply => reply.id === query.reply);
@@ -95,11 +117,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
         context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} requestId={randomUUID()} />
     </details>
-    {data.canWrite ? <Card title={replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
+    {data.canWrite && !updatePrefill?.saved ? <Card title={updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
       {replySource ? <aside className="mb-4 rounded-xl border p-3"><p>{replySource.sender} · {replySource.receivedAt.toISOString()}</p>
         <h3 className="font-bold">{replySource.subject}</h3><p className="whitespace-pre-wrap break-words">{replySource.body}</p>
         <p className="text-sm">Testo ricevuto dall’esterno, da valutare prima di rispondere.</p></aside> : null}
-      <Draft data={data} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
+      <Draft data={data} updateDraft={updatePrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
     </Card> : null}
     {data.messages.map(message => <Card key={message.id} title={`${message.snapshot.subject} · v${message.currentRevision}`}>
       <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
@@ -109,15 +131,15 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <ul className="my-3 min-w-0 break-all text-sm">{message.snapshot.attachments.map(file => <li key={file.versionId}>{file.filename} · {file.bytes} byte · versione {file.versionId} · SHA256 {file.sha256}</li>)}</ul>
       <OrdinaryEmailReceipts receipts={message.ordinaryReceipts} />
       <div className="my-4 grid gap-4">
-        {data.canWrite && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
+        {data.canWrite && (!message.updateDeliveryId || message.updateDraft) && ['DRAFT', 'PENDING', 'APPROVED', 'ERROR'].includes(message.state) ? <OrdinaryEmailReview
           key={`${message.id}-${message.currentRevision}-${message.snapshotHash}`} messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash}
-          eligible={ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
+          eligible={!message.updateDraft?.stale && ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
             && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && !message.attempts.some(attempt => ['SENDING','UNCERTAIN','SENT'].includes(attempt.state))}
           stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
-          <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} /></details>
+          <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} updateDraft={message.updateDraft ?? undefined} /></details>
         </OrdinaryEmailReview> : null}
-        {data.canWrite && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
-        {data.isAdmin && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}
+        {data.canWrite && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
+        {data.isAdmin && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && ['APPROVED', 'ERROR'].includes(message.state) ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={randomUUID()} /> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && message.state === 'SENDING' && message.attempts[0] ? <ManualMessageDownload messageId={message.id} revision={message.currentRevision} snapshotHash={message.snapshotHash} requestId={message.attempts[0].requestId} resume /> : null}
         {data.canPrepare && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && (message.state === 'SENDING' || (message.state === 'UNCERTAIN' && data.isAdmin)) && message.attempts[0] ? <form action={mutateApprovedMessageAction} className="grid gap-3 rounded-xl border p-4">

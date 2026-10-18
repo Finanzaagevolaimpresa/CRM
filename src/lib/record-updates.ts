@@ -16,6 +16,7 @@ import { updateCommandSchema, type UpdateCommand } from './record-update-input';
 import { projectRecordChange } from './record-update-projection';
 import { recordUpdateContext, currentRecordUpdateUser, recordUpdatePermission, recordWritePermissions } from './record-update-context';
 import { mapSerializableConflict } from './serializable';
+import { recordUpdateEmailAuthority } from './record-update-email-authority';
 
 type Tx = Prisma.TransactionClient;
 export type UpdateCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -62,6 +63,9 @@ async function proposal(tx: Tx, claimed: AuthSession, input: UpdateCommand, proo
   if (input.kind === 'LEAD' && input.operation === 'UPDATE') await acquireLeadIdentityWriteLock(tx);
   const auth = await updateActor(tx, claimed, proof);
   if (auth.actor.role !== 'admin') deny();
+  const mode = input.operation === 'REVOKE' ? 'CRM' : input.mode ?? 'CRM';
+  const emailAuthority = mode === 'CRM' ? null : await recordUpdateEmailAuthority(tx, auth.actor);
+  if (mode !== 'CRM' && !emailAuthority) deny();
   const context = await recordUpdateContext(tx, input.kind, input.recordId, Boolean(proof));
   if (!context.canRead(auth.actor)) deny();
   if (context.version.toISOString() !== input.expectedVersion) stale();
@@ -75,7 +79,8 @@ async function proposal(tx: Tx, claimed: AuthSession, input: UpdateCommand, proo
   const admissions = [];
   for (const person of resolved?.people ?? []) {
     const user = await currentRecordUpdateUser(tx, person.id);
-    const available = Boolean(user && context.canRead(user));
+    const available = Boolean(user && context.canRead(user)
+      && (mode === 'CRM' || recordUpdatePermission(user, 'practice_communications.read')));
     admissions.push({ ...person, available, reason: available ? 'AVAILABLE' : 'NO_CURRENT_ACCESS',
       communication: Boolean(available && user && recordUpdatePermission(user, 'practice_communications.read')) });
   }
@@ -91,10 +96,10 @@ async function proposal(tx: Tx, claimed: AuthSession, input: UpdateCommand, proo
   }
   const digest = updatePreviewDigest({ actorId: auth.actor.id, sessionId: auth.registry.id, kind: input.kind, recordId: input.recordId,
     recordVersion: context.version.toISOString(), scopeEpoch: context.scopeDigest, directoryBinding: resolved?.directoryBinding ?? canonicalSha256({ id: rule?.id ?? null, version: rule?.version ?? 0, active: rule?.active ?? false }),
-    recipientAccessBinding: canonicalSha256(recipients), patchDigest: canonicalSha256(input), selection: resolved?.selection ?? { people: [auth.actor.id], groups: [] },
-    events: input.events, mode: 'CRM', persistent: input.persistent || input.operation === 'RULE', ruleVersion: input.ruleVersion, commandId: input.commandId });
+    recipientAccessBinding: canonicalSha256(emailAuthority ? { recipients, emailAuthorityRevision: emailAuthority.revision } : recipients), patchDigest: canonicalSha256(input), selection: resolved?.selection ?? { people: [auth.actor.id], groups: [] },
+    events: input.events, mode, persistent: input.persistent || input.operation === 'RULE', ruleVersion: input.ruleVersion, commandId: input.commandId });
   await auth.finish();
-  return { input, auth, context, rule, resolved, admissions, recipients, summaries, digest, now };
+  return { input, auth, context, rule, resolved, admissions, recipients, summaries, digest, now, mode, emailAuthority };
 }
 const transaction = async <T>(db: PrismaClient, callback: (tx: Tx) => Promise<T>) => {
   try { return await db.$transaction(callback, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }); }
@@ -106,7 +111,7 @@ export async function previewRecordUpdate(db: PrismaClient, claimed: AuthSession
     const p = await proposal(tx, claimed, input);
     return { digest: p.digest, label: p.context.label, people: p.admissions.map(({ id, name, email, available, reason, communication }) =>
       ({ id, name, email, available, reason, communication })), summaries: p.summaries, operation: input.operation,
-      persistent: input.persistent || input.operation === 'RULE', events: input.events, expiresAt: input.expiresAt };
+      persistent: input.persistent || input.operation === 'RULE', events: input.events, expiresAt: input.expiresAt, mode: p.mode };
   });
 }
 export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession, raw: unknown, digest: string, proof: UpdateCredentials) {
@@ -130,6 +135,7 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
     await tx.recordUpdateCommand.create({ data: {
       id: input.commandId, actorId: p.auth.actor.id, actorEpoch: p.auth.actor.recordUpdateEpoch,
       kind: input.kind, recordId: input.recordId, digest: commandDigest, operation: input.operation,
+      mode: p.mode, emailAuthorityRevision: p.emailAuthority?.revision ?? null,
       scope: p.context.scope as Prisma.InputJsonValue, selection: input.selection, directoryBinding: p.resolved?.directoryBinding ?? digest,
       recipients: p.recipients, transactionId: transactionRow.id, createdAt: p.now,
     } });
@@ -137,6 +143,7 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
       await tx.recordUpdateRule.update({ where: { id: p.rule!.id, version: input.ruleVersion }, data: { active: false, version: { increment: 1 }, updatedAt: p.now } });
     } else if (input.operation === 'RULE' || input.persistent) {
       const data = { kind: input.kind, recordId: input.recordId, active: true, version: input.ruleVersion + 1,
+        mode: p.mode, emailAuthorityRevision: p.emailAuthority?.revision ?? null,
         authorId: p.auth.actor.id, authorEpoch: p.auth.actor.recordUpdateEpoch, scope: p.context.scope as Prisma.InputJsonValue,
         selection: p.resolved!.selection, directoryBinding: p.resolved!.directoryBinding, recipients: p.recipients,
         events: [...new Set(input.events)], expiresAt: input.expiresAt ? new Date(input.expiresAt) : null, updatedAt: p.now };
@@ -169,7 +176,7 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
     }
     await tx.auditLog.create({ data: { actorId: p.auth.actor.id, entityType: 'RecordUpdateCommand', entityId: input.commandId,
       event: 'record_update_confirmed', after: { operation: input.operation, kind: input.kind,
-        recipients: p.recipients.length, events: input.events, persistent: input.persistent || input.operation === 'RULE', channel: 'CRM',
+        recipients: p.recipients.length, events: input.events, persistent: input.persistent || input.operation === 'RULE', channel: p.mode,
         changed: p.summaries, proof: digest } } });
     await p.auth.finish();
     return { commandId: input.commandId, confirmed: true, replayed: false };
@@ -189,10 +196,13 @@ export async function readRecordUpdateSetup(db: PrismaClient, claimed: AuthSessi
       try { ruleCurrent = resolveUpdateSelection(rule.selection, directory).directoryBinding === rule.directoryBinding; } catch { /* requires reconfirmation */ }
     }
     const origin = context.clientId && recordUpdatePermission(auth.actor, 'client.read') ? await readCommercialOrigin(tx, context.clientId) : null;
+    const emailAuthority = await recordUpdateEmailAuthority(tx, auth.actor);
+    if (rule?.mode !== 'CRM' && rule?.emailAuthorityRevision !== emailAuthority?.revision) ruleCurrent = false;
     await auth.finish();
     return { kind, id, label: context.label, href: context.href, expectedVersion: context.version.toISOString(), patch: context.patch,
+      emailDraftsAvailable: kind !== 'PROJECT' && Boolean(emailAuthority),
       rule: rule ? { version: rule.version, active: rule.active, current: ruleCurrent, selection: rule.selection,
-        events: rule.events, expiresAt: rule.expiresAt?.toISOString() ?? null } : null,
+        events: rule.events, expiresAt: rule.expiresAt?.toISOString() ?? null, mode: rule.mode } : null,
       people: directory.filter(person => person.active && !person.deleted).map(({ id, name, email, role }) => ({ id, name, email, role })),
       originatorId: origin?.snapshot.contractedById ?? null };
   });

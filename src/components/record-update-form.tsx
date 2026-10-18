@@ -2,7 +2,7 @@
 import { useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { communicationRecipientGroups } from '@/lib/communication-recipient-groups';
-import { recordUpdateEvents, recordUpdateEventLabels, recordUpdateChangedLabels, type RecordUpdateEvent } from '@/lib/record-update-labels';
+import { recordUpdateEvents, recordUpdateEventLabels, recordUpdateChangedLabels, type RecordUpdateEvent, type RecordUpdateMode } from '@/lib/record-update-labels';
 import { updateFieldLabels, updatePatchSchema, type UpdateCommand, type UpdatePatch } from '@/lib/record-update-input';
 import { previewRecordUpdateAction, confirmRecordUpdateAction, verifyRecordUpdateResultAction } from '@/lib/record-update-actions';
 import type { readRecordUpdateSetup, previewRecordUpdate } from '@/lib/record-updates';
@@ -29,6 +29,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
   const [patch, setPatch] = useState<UpdatePatch>(setup.patch);
   const [operation, setOperation] = useState<'UPDATE' | 'RULE'>('UPDATE');
   const [persistent, setPersistent] = useState(false);
+  const [mode, setMode] = useState<RecordUpdateMode>(setup.emailDraftsAvailable ? (setup.rule?.mode as RecordUpdateMode ?? 'CRM') : 'CRM');
   const [expiry, setExpiry] = useState(setup.rule?.expiresAt ?? '');
   const [preview, setPreview] = useState<Preview | null>(null);
   const [command, setCommand] = useState<UpdateCommand | null>(null);
@@ -44,7 +45,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
     setBusy(true); setMessage(''); setConsent(false);
     const input: UpdateCommand = { commandId: crypto.randomUUID(), kind: setup.kind, recordId: setup.id,
       operation: revoke ? 'REVOKE' : operation, expectedVersion: setup.expectedVersion, ruleVersion: setup.rule?.version ?? 0,
-      selection: { people, groups }, events, persistent: !revoke && operation === 'UPDATE' && persistent,
+      mode: revoke ? 'CRM' : mode, selection: { people, groups }, events, persistent: !revoke && operation === 'UPDATE' && persistent,
       expiresAt: !revoke && (operation === 'RULE' || persistent) ? expiry || null : null, patch: !revoke && operation === 'UPDATE' ? patch : null };
     setCommand(input);
     try {
@@ -76,9 +77,14 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
   }
   const shape = updatePatchSchema.options.find(option => option.shape.kind.value === setup.kind)!.shape;
   return <div className="crm-space-y-5" data-testid="record-update-form" data-interactive-ready={ready}>
-    <p className="text-sm text-slate-600">Canale: <strong>avviso interno nel CRM</strong>. La scelta dei destinatari non concede accesso alla scheda. Nessuna email viene inviata.</p>
+    <p className="text-sm text-slate-600">La scelta dei destinatari non concede accesso alla scheda. Le email richiedono una bozza e una nuova approvazione personale del testo esatto.</p>
     {setup.rule && <p className="rounded-xl bg-slate-100 p-3 text-sm">Regola: <strong>{!setup.rule.active ? 'revocata' : setup.rule.current ? 'attiva' : 'da riconfermare: contesto, persone o permessi cambiati'}</strong>.</p>}
     <fieldset disabled={locked} className="crm-space-y-4">
+      <label className="block text-sm font-bold">Modalità di aggiornamento<select className={fieldClass} value={mode} onChange={e => setMode(e.target.value as RecordUpdateMode)}>
+        <option value="CRM">Avviso interno nel CRM</option>
+        {setup.emailDraftsAvailable && <><option value="EMAIL_DRAFT">Bozza email da approvare</option><option value="CRM_AND_EMAIL_DRAFT">Avviso CRM e bozza email da approvare</option></>}
+      </select></label>
+      {!setup.emailDraftsAvailable && <p className="text-xs text-slate-600">Per questa scheda e il tuo profilo è disponibile il canale CRM.</p>}
       <label className="block text-sm font-bold">Operazione<select className={fieldClass} value={operation} onChange={e => setOperation(e.target.value as 'UPDATE' | 'RULE')}>
         <option value="UPDATE">Salva e aggiorna</option><option value="RULE">Configura una regola per gli aggiornamenti futuri</option>
       </select></label>
@@ -120,11 +126,11 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
       {preview.summaries.map(summary => <p key={summary.event}>{recordUpdateEventLabels[summary.event]}: {summary.changed.map(field => recordUpdateChangedLabels[field]).join(', ')}.</p>)}
       {preview.people.map(person => <div key={person.id} className="min-w-0 rounded-xl bg-slate-50 p-3 text-sm">
         <p className="break-words font-bold">{person.name} · {person.email}</p>
-        <p>{person.available ? 'Riceve un avviso CRM; può aprire soltanto i dati già autorizzati.' : 'Escluso: non ha accesso corrente alla scheda. Nessun permesso viene aggiunto.'}</p>
+        <p>{person.available ? preview.mode === 'CRM' ? 'Riceve un avviso CRM; può aprire soltanto i dati già autorizzati.' : preview.mode === 'EMAIL_DRAFT' ? 'Una bozza email distinta sarà preparabile dall’Admin, con nuova approvazione prima dell’invio.' : 'Riceve un avviso CRM; una bozza email distinta sarà preparabile dall’Admin, con nuova approvazione prima dell’invio.' : 'Escluso: non ha accesso corrente alla scheda. Nessun permesso viene aggiunto.'}</p>
         {person.available && preview.events.includes('COMMUNICATION') && !person.communication && <p>Gli avvisi di comunicazione sono esclusi: manca il relativo permesso.</p>}
       </div>)}
       {preview.persistent && <p className="text-sm">Regola attiva per: {preview.events.map(event => recordUpdateEventLabels[event]).join(', ')}. {preview.expiresAt ? 'Scadenza: ' + new Date(preview.expiresAt).toLocaleString('it-IT') : 'Senza scadenza, revocabile da questa scheda.'}</p>}
-      <label className="flex items-start gap-2 text-sm font-bold"><input className="mt-1" type="checkbox" checked={consent} disabled={busy || uncertain} onChange={e => setConsent(e.target.checked)} />Confermo questa operazione, i destinatari ammessi e il canale CRM</label>
+      <label className="flex items-start gap-2 text-sm font-bold"><input className="mt-1" type="checkbox" checked={consent} disabled={busy || uncertain} onChange={e => setConsent(e.target.checked)} />Confermo questa operazione, i destinatari ammessi e la modalità {preview.mode === 'CRM' ? 'avviso CRM' : preview.mode === 'EMAIL_DRAFT' ? 'bozza email da approvare' : 'avviso CRM e bozza email da approvare'}</label>
       <div className="flex flex-wrap gap-3"><button className={buttonClass} type="button" disabled={!consent || busy || uncertain} onClick={confirm}>{preview.operation === 'UPDATE' ? 'Salva e aggiorna' : preview.operation === 'RULE' ? 'Attiva regola' : 'Conferma revoca'}</button>
         <button className="rounded-xl border px-4 py-2" type="button" disabled={busy || uncertain} onClick={() => { setPreview(null); setCommand(null); setConsent(false); }}>Modifica la scelta</button></div>
       <p className="text-xs text-slate-600">È richiesta la conferma amministrativa personale attiva nelle impostazioni di sicurezza.</p>
@@ -132,6 +138,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
     {message && <p role="status" className="rounded-xl bg-slate-100 p-3 text-sm">{message}</p>}
     {uncertain && !confirmed && <button type="button" className={buttonClass} disabled={busy} onClick={verify}>Verifica esito</button>}
     {(confirmed || uncertain) && <a className="inline-block font-bold underline" href={setup.href}>Torna alla scheda aggiornata</a>}
+    {setup.emailDraftsAvailable && <Link href="/communications/updates" className="block font-bold underline">Bozze da aggiornamenti</Link>}
     <Link href="/settings/security" className="block text-sm font-bold underline">Conferma amministrativa personale</Link>
   </div>;
 }
