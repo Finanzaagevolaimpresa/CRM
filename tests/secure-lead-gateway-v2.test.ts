@@ -462,7 +462,7 @@ test('N12 classifies security state and forbids telemetry, egress and legacy reu
   assert.doesNotMatch(implementation, /ip-address|user-agent|x-forwarded-for/i);
 });
 
-test('current CI preserves historical schema44 and applies schema53 with every N12/N13/N14/N15 mode disabled', () => {
+test('current CI preserves historical schema44 and applies schema54 with every N12/N13/N14/N15 mode disabled', () => {
   for (const path of ['.env.example', '.env.production.example', '.env.staging.example']) {
     const source = readFileSync(path, 'utf8');
     assert.match(source, /SECURE_LEAD_GATEWAY_MODE="disabled"/);
@@ -471,7 +471,7 @@ test('current CI preserves historical schema44 and applies schema53 with every N
     assert.match(source, /COMMERCIAL_LEAD_INBOX_MODE="disabled"/);
   }
   const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
-  assert.match(ci, /Verify historical schema44 then apply current schema53/);
+  assert.match(ci, /Verify historical schema44 then apply current schema54/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_MODE: disabled/);
   assert.match(ci, /SECURE_LEAD_GATEWAY_KEYRING_FILE: ""/);
   assert.match(ci, /LEAD_IDENTITY_KEY_FILE: ""/);

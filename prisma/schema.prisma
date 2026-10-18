@@ -371,6 +371,11 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  videoAssets VideoAsset[]
+  videoCreatedEntries VideoEntry[] @relation("VideoCreator")
+  videoPublishedEntries VideoEntry[] @relation("VideoPublisher")
+  videoRevisions VideoRevision[]
+  videoCommands VideoCommand[]
   recordUpdateEpoch Int @default(1)
   recordUpdateRules RecordUpdateRule[] @relation("RecordUpdateRuleAuthor")
   recordUpdateCommands RecordUpdateCommand[] @relation("RecordUpdateCommandActor")
@@ -3326,4 +3331,73 @@ model RecordUpdateDelivery {
   command RecordUpdateCommand? @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   @@unique([eventId, recipientId])
   @@index([recipientId, readAt, eventId])
+}
+
+model VideoAsset {
+  id String @id @db.Uuid
+  ownerId String
+  ownerEpoch Int
+  fileName String @db.VarChar(180)
+  mimeType String @db.VarChar(20)
+  sizeBytes Int
+  sha256 String @db.Char(64)
+  state String @default("RESERVED") @db.VarChar(12)
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  readyAt DateTime? @db.Timestamptz(3)
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  entries VideoEntry[]
+  @@index([ownerId, createdAt])
+}
+
+model VideoEntry {
+  id String @id @db.Uuid
+  fileId String @db.Uuid
+  version Int @default(1)
+  state String @default("DRAFT") @db.VarChar(12)
+  title String @db.VarChar(160)
+  description String @db.VarChar(3000)
+  category String @db.VarChar(80)
+  position Int @default(0)
+  selection Json
+  audience Json
+  directoryBinding String @db.Char(64)
+  publishedById String?
+  publisherEpoch Int?
+  downloadAllowed Boolean @default(false)
+  expiresAt DateTime? @db.Timestamptz(3)
+  createdById String
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  updatedAt DateTime @db.Timestamptz(3)
+  file VideoAsset @relation(fields: [fileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator User @relation("VideoCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  publisher User? @relation("VideoPublisher", fields: [publishedById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revisions VideoRevision[]
+  commands VideoCommand[]
+  @@index([state, position, id])
+}
+
+model VideoRevision {
+  videoId String @db.Uuid
+  version Int
+  snapshot Json
+  actorId String
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  @@id([videoId, version])
+  video VideoEntry @relation(fields: [videoId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model VideoCommand {
+  id String @id @db.Uuid
+  videoId String @db.Uuid
+  version Int
+  operation String @db.VarChar(20)
+  actorId String
+  actorEpoch Int
+  digest String @db.Char(64)
+  transactionId BigInt
+  createdAt DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(3)
+  @@unique([videoId, version])
+  video VideoEntry @relation(fields: [videoId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }

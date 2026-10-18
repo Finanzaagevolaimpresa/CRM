@@ -42,6 +42,7 @@ const sections: NavSection[] = [
       { label: "Task", href: "/tasks", requiredPermission: "service.read" },
       { label: "Scadenze", href: "/deadlines", requiredPermission: "service.read" },
       { label: "Documenti", href: "/documents", requiredPermission: "document.download" },
+      { label: "Video", href: "/videos", requiredPermission: "video.read" },
       { label: "Checklist documentale", href: "/document-checklists", requiredPermission: "document.download" },
     ],
   },

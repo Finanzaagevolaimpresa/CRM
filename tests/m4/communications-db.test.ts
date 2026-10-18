@@ -63,7 +63,7 @@ test('M4 migration registers exactly seven disabled mailboxes and preserves dorm
   assert.equal(boxes.length, 7); assert.ok(boxes.every(box => box.kind === 'UNATTESTED' && !box.enabled && !box.canSend && !box.testedAt));
   assert.equal(await db.communicationIntentRecord.count(), 0); assert.equal(await db.businessOutboxEvent.count(), 0);
   await assert.rejects(db.communicationMailbox.update({ where: { id: boxes[0].id }, data: { enabled: true } }));
-  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 53);
+  assert.equal(Number((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count), 54);
 });
 
 test('M4 exact admin approval, commercial preparation and changed versions are enforced in storage', { skip: !enabled }, async () => {

@@ -8,6 +8,8 @@ ddl=prisma/migrations/20261017160000_admin_email_contexts_v1/migration.sql
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 51
 if psql "$db" -v ON_ERROR_STOP=1 -f prisma/migrations/20261017200000_record_update_notifications_v1/migration.sql > "$evidence/update-wrong-base.log" 2>&1; then exit 1; fi
 grep -Fq RECORD_UPDATE_MIGRATION53_BASE_REQUIRED "$evidence/update-wrong-base.log"
+if psql "$db" -v ON_ERROR_STOP=1 -f prisma/migrations/20261018000000_private_video_library_v1/migration.sql > "$evidence/video-wrong-base.log" 2>&1; then exit 1; fi
+grep -Fq VIDEO_MIGRATION54_BASE_REQUIRED "$evidence/video-wrong-base.log"
 psql "$db" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$evidence/prefix51-before.txt"
 # Genuine v1 rows exist before the schema change; no new-context code seeds them.
 psql "$db" -v ON_ERROR_STOP=1 <<'SQL'
