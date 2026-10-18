@@ -27,6 +27,9 @@ async function prepare(page: Page, row: typeof f.rows[number]) {
   const preview = page.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
   await expect(preview).toBeVisible(); await expect(preview).toContainText(row.label);
   await expect(preview).not.toContainText(row.privateNote); await expect(preview).not.toContainText(row.companyName);
+  await expect(page.getByLabel('Persona esistente')).toHaveValue(row.readerId);
+  await expect(page.getByLabel('Denominazione', { exact: true })).toBeChecked();
+  await expect(page.getByLabel('Stato', { exact: true })).toBeChecked();
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
   await page.getByLabel('Confermo personalmente i campi, il destinatario e l’effetto sui permessi.').check();
 }
@@ -38,6 +41,9 @@ test('native selected client fields, indirect denials, open-session revocation a
   const admin = await ac.newPage(), reader = await rc.newPage();
   await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
   await reader.goto('/clients/' + row.clientId); await expect(reader.getByText(row.label, { exact: true }).first()).toBeVisible();
+  await prepare(admin, row);
+  await admin.getByLabel('Stato', { exact: true }).uncheck();
+  await expect(admin.getByRole('region', { name: 'Riepilogo e anteprima', exact: true })).toHaveCount(0);
   await prepare(admin, row);
   await admin.screenshot({ path: path.join(evidence, 'selective-client-preview-desktop.png'), fullPage: true });
   await admin.setViewportSize({ width: 390, height: 844 });

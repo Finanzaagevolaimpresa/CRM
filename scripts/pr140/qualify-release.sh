@@ -178,7 +178,7 @@ run_browser candidate-m1 tests/pr140-release/playwright.config.ts m1-recovery.sp
 node --import tsx tests/m4/release-state.ts
 node --import tsx tests/pr140-release/selective-state.ts
 node --import tsx tests/pr140-release/lead-state.ts
-node --import tsx tests/pr140-release/client-state.ts
+PRIVILEGED_ACCESS_MODE=enforced node --import tsx tests/pr140-release/client-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 export R05_SELECTIVE_PHASE=candidate
 run_browser candidate-selective tests/pr140-release/playwright.config.ts selective-recovery.spec.ts 1

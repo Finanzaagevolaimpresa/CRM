@@ -43,7 +43,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   const prepared = previewGeneration === generation && preview.preview;
   return <div className="min-w-0 space-y-6">
-    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
+    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
         <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => setRecipient(event.target.value)}>
           <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}
