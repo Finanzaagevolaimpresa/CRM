@@ -31,7 +31,7 @@ const nonAdminRoles = [
 ] as const;
 
 test('PR85 conserva la trentesima migration e i quattro record persistenti del gate', () => {
-  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 56);
+  assert.equal(readdirSync(resolve(root, 'prisma/migrations')).length, 57);
   for (const model of [
     'AiExecutionRequest',
     'AiExecutionDecision',

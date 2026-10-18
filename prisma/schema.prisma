@@ -371,6 +371,11 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  selectiveClientEpoch Int @default(1)
+  selectiveClientAuthority SelectiveClientAuthority?
+  selectiveClientGrants SelectiveClientGrant[]
+  selectiveClientCommands SelectiveClientCommand[] @relation("ClientCommandActor")
+  selectiveClientReceivedCommands SelectiveClientCommand[] @relation("ClientCommandRecipient")
   selectiveLeadEpoch Int @default(1)
   videoAssets VideoAsset[]
   videoCreatedEntries VideoEntry[] @relation("VideoCreator")
@@ -651,6 +656,8 @@ model CommercialOffer {
 }
 
 model Client {
+  selectiveGrants SelectiveClientGrant[]
+  selectiveCommands SelectiveClientCommand[]
   recordUpdateEpoch Int @default(1)
   communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]
@@ -855,6 +862,68 @@ model SelectiveLeadRevision {
   transactionId BigInt @default(dbgenerated("txid_current()"))
   grant SelectiveLeadGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command SelectiveLeadCommand @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([grantId, revision])
+}
+
+// Separate personal authority; migrations never enroll a real identity.
+model SelectiveClientAuthority {
+  id String @id @default("client-sharing")
+  userId String @unique
+  revision Int @default(1)
+  enabled Boolean @default(false)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+// The row survives revocation/expiry so ordinary rights cannot silently return.
+model SelectiveClientGrant {
+  id String @id @default(uuid()) @db.Uuid
+  clientId String
+  recipientId String
+  revision Int
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revisions SelectiveClientRevision[]
+  @@unique([clientId, recipientId])
+  @@index([recipientId])
+}
+
+model SelectiveClientCommand {
+  id String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  clientId String
+  recipientId String
+  expectedRevision Int
+  operation String @db.VarChar(12)
+  requestDigest String @db.VarChar(64)
+  receipt Json
+  receiptProof String @db.VarChar(64)
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation("ClientCommandActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation("ClientCommandRecipient", fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revision SelectiveClientRevision?
+  @@index([actorId, createdAt])
+}
+
+model SelectiveClientRevision {
+  id String @id @db.Uuid
+  grantId String @db.Uuid
+  revision Int
+  commandId String @unique @db.Uuid
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  grant SelectiveClientGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  command SelectiveClientCommand @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   @@unique([grantId, revision])
 }
 

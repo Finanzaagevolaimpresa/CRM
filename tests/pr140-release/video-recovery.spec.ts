@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-test('schema56 restart preserves private video playback, immutable history and revoked/archived audience', async ({ browser }) => {
+test('schema57 restart preserves private video playback, immutable history and revoked/archived audience', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_VIDEO_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; noProvider: boolean; readerEmail: string; otherEmail: string; revokedEmail: string;
     records: Record<'PUBLISHED' | 'ARCHIVED' | 'RESTORED' | 'REVOKED', string>; sizeBytes: number;

@@ -4,6 +4,7 @@ import type { TaskStatus } from "@prisma/client";
 import { leadVisibilityWhere } from "./core-query-policy";
 import { buildNotificationAccess } from "./internal-notification-policy";
 import { contextOutsideSelection } from './selective-project-policy';
+import { companyClientContextOutsideSelection } from './selective-client-policy';
 import { listRecordUpdates } from './record-update-delivery';
 import { internalSessionMode } from './session';
 
@@ -55,7 +56,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
             isRead: false,
             decidedAt: null,
             request: {
-              ...contextOutsideSelection(session),
+              AND: [contextOutsideSelection(session), companyClientContextOutsideSelection(session)],
               status: "PENDING_ADMIN_APPROVAL",
               expiresAt: { gt: now },
             },

@@ -13,7 +13,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const context = await getCompanyReadAccess(session, id);
   if (!context) return <PageHeader title="Azienda non trovata" description="Il record richiesto non esiste o non è accessibile." />;
   const { company } = context;
-  const people = await prisma.companyPerson.findMany({ where: { companyId: id } });
+  const people = await prisma.companyPerson.findMany({ where: { companyId: id, personId: { notIn: [...(session.selectiveClientPersonIds ?? [])] } } });
   const personRows = await prisma.person.findMany({ where: { id: { in: people.map(person => person.personId) }, deletedAt: null } });
   const personById = new Map(personRows.map(person => [person.id, person]));
   const canWrite = hasPermission(session, 'company.write') && canEditClient(session, context.client);

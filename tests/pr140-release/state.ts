@@ -45,7 +45,7 @@ async function main() {
     const select = { id: true, recordUpdateEpoch: true } as const;
     const orderBy = { id: 'asc' } as const;
     const epochs = {
-      users: await db.user.findMany({ select: { ...select, selectiveLeadEpoch: true }, orderBy }),
+      users: await db.user.findMany({ select: { ...select, selectiveLeadEpoch: true, selectiveClientEpoch: true }, orderBy }),
       leads: await db.lead.findMany({ select, orderBy }),
       clients: await db.client.findMany({ select, orderBy }),
       projects: await db.project.findMany({ select, orderBy }),
@@ -63,6 +63,14 @@ async function main() {
     const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
       UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
     const data = {
+      selectiveClientAuthority: await db.selectiveClientAuthority.findMany({ orderBy: { id: 'asc' } }),
+      selectiveClientGrants: await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }),
+      selectiveClientRevisions: (await db.selectiveClientRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectiveClientCommands: (await db.selectiveClientCommand.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectiveClientAudit: await db.auditLog.findMany({ where: { event: 'selective_client_changed' }, orderBy: { id: 'asc' } }),
+      selectiveClientUsers: await db.user.findMany({ where: { OR: [{ selectiveClientAuthority: { isNot: null } }, { selectiveClientGrants: { some: {} } }] },
+        orderBy: { id: 'asc' }, select: { id: true, selectiveClientEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
+      selectedClientRows: await db.client.findMany({ where: { selectiveGrants: { some: {} } }, orderBy: { id: 'asc' } }),
       selectiveLeadAuthority: await db.selectiveLeadAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveLeadGrants: await db.selectiveLeadGrant.findMany({ orderBy: { id: 'asc' } }),
       selectiveLeadRevisions: (await db.selectiveLeadRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
@@ -137,7 +145,12 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 56);
+    assert.equal(data.ledger.length, 57);
+    assert.equal(data.selectiveClientAuthority.length, 1); assert.equal(data.selectiveClientGrants.length, 2);
+    assert.equal(data.selectiveClientGrants.filter(row => row.revokedAt).length, 1);
+    assert.equal(data.selectiveClientRevisions.length, 3); assert.equal(data.selectiveClientCommands.length, 3);
+    assert.equal(data.selectiveClientAudit.length, 3); assert.equal(data.selectiveClientUsers.length, 2);
+    assert.equal(data.selectedClientRows.length, 2);
     assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 2);
     assert.equal(data.selectiveLeadGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectiveLeadRevisions.length, 3); assert.equal(data.selectiveLeadCommands.length, 3);

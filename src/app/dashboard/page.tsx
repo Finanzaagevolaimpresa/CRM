@@ -5,6 +5,7 @@ import {
 } from "@/components/ui";
 import { leadVisibilityWhere } from "@/lib/core-query-policy";
 import { selectiveAuditAllowed, contextOutsideSelection } from '@/lib/selective-project-policy';
+import { companyClientContextOutsideSelection } from '@/lib/selective-client-policy';
 import { prisma } from "@/lib/prisma";
 import { hasPermission, requireSession } from "@/lib/auth";
 import type { OperationalServiceStatus, TaskStatus } from "@prisma/client";
@@ -119,8 +120,8 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
   } = await loadDashboardPendingAiAuthorizations({
     isAdmin: session.role === "admin",
     now,
-    count: (where) => prisma.aiExecutionRequest.count({ where: { AND: [where, contextOutsideSelection(session)] } }),
-    preview: (query) => prisma.aiExecutionRequest.findMany({ ...query, where: { AND: [query.where, contextOutsideSelection(session)] } }),
+    count: (where) => prisma.aiExecutionRequest.count({ where: { AND: [where, contextOutsideSelection(session), companyClientContextOutsideSelection(session)] } }),
+    preview: (query) => prisma.aiExecutionRequest.findMany({ ...query, where: { AND: [query.where, contextOutsideSelection(session), companyClientContextOutsideSelection(session)] } }),
   });
   const pipelineStatuses: OperationalServiceStatus[] = [
     "nuova",

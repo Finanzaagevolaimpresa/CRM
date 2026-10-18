@@ -6,6 +6,7 @@ import { requireSession } from './auth';
 import { prisma } from './prisma';
 import { withAssignmentGuard } from './manual-assignment-guard';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
+import { assertNoSelectiveClientMutation } from './selective-client-scope';
 
 type State = { ok: boolean; message: string };
 const input = z.object({
@@ -30,6 +31,7 @@ async function save(kind: 'client' | 'project', form: FormData): Promise<State> 
     ], async tx => {
       const where = { id: data.id, updatedAt: new Date(data.updatedAt), deletedAt: null };
       if (kind === 'client') {
+        await assertNoSelectiveClientMutation(tx, session.userId, data.id);
         const before = await tx.client.findFirstOrThrow({ where });
         const after = await tx.client.update({ where, data: { salesOwnerId: commercial, consultantId: technical } });
         await tx.auditLog.create({ data: {

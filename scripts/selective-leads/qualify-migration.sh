@@ -37,7 +37,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM information_schema.columns WHERE t
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname LIKE 'fai_selective_lead_%'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npm run prisma:migrate:deploy
+historical="$RUNNER_TEMP/selective-lead-schema56"
+mkdir -p "$historical"
+git archive 2734f1b548efa973c7a1c78661fb901b8edde743 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 56
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261018140000_selective_lead_read_v1' ORDER BY migration_name" > "$evidence/prefix55-after.txt"
 cmp "$evidence/prefix55-before.txt" "$evidence/prefix55-after.txt"
@@ -56,7 +59,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_LEAD_SCHEMA55_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
 node --input-type=module - "$evidence/datamodel-diff.sql" <<'JS'
 import assert from 'node:assert/strict';

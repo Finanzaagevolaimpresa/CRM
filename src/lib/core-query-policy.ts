@@ -3,6 +3,7 @@ import type { AuthSession } from './auth';
 import { perimeterRoles, type ClientReadScope } from './client-read-perimeter-policy';
 import { hasGlobalReadAccess } from './read-supervision';
 import { leadOutsideSelection, type SelectiveLeadScope } from './selective-lead-policy';
+import { clientOutsideSelection, clientContextOutsideSelection, type SelectiveClientScope } from './selective-client-policy';
 
 export const CORE_QUERY_PAGE_SIZE = 50;
 export const CORE_QUERY_MAX_PAGE = 200;
@@ -54,19 +55,22 @@ export function coreQueryCandidateLimit(limit: number): number {
   return Math.min(Math.max(canonicalLimit * 5, canonicalLimit), CORE_QUERY_MAX_CANDIDATES);
 }
 
-export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & ClientReadScope): Prisma.ClientWhereInput {
-  if (hasGlobalReadAccess(session)) return {};
+export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & ClientReadScope & SelectiveClientScope): Prisma.ClientWhereInput {
+  const exclusion = { ...clientOutsideSelection(session), selectiveGrants: { none: { recipientId: session.userId } } };
+  if (hasGlobalReadAccess(session)) return exclusion;
   const readScope = perimeterRoles.includes(session.role) ? [...new Set(session.clientReadScope ?? [])] : [];
   const own: Prisma.ClientWhereInput[] = [];
   if (session.role === 'commerciale' || session.role === 'backoffice' || session.role === 'collaboratore_limitato') own.push({ salesOwnerId: session.userId });
   if (session.role === 'consulente' || session.role === 'backoffice' || session.role === 'collaboratore_limitato') own.push({ consultantId: session.userId });
   if (readScope.length) own.push({ id: { in: readScope } });
-  return own.length === 1 ? own[0] : own.length ? { OR: own } : { id: { in: [] } };
+  return { AND: [exclusion, own.length === 1 ? own[0] : own.length ? { OR: own } : { id: { in: [] } }] };
 }
 
-export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & SelectiveLeadScope): Prisma.LeadWhereInput {
+export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & SelectiveLeadScope & SelectiveClientScope): Prisma.LeadWhereInput {
   // The relation also catches a grant committed after getSession loaded scope.
-  const exclusion = { ...leadOutsideSelection(session), selectiveGrants: { none: { recipientId: session.userId } } };
+  const exclusion = { ...leadOutsideSelection(session), selectiveGrants: { none: { recipientId: session.userId } },
+    // A newly linked lead may not have existed when the identifier graph loaded.
+    AND: [clientContextOutsideSelection(session)] };
   if (hasGlobalReadAccess(session)) return exclusion;
   return { ...exclusion, assignedToId: session.userId };
 }

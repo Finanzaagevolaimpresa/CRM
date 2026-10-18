@@ -4,12 +4,14 @@ import type { SelectiveLeadScope } from './selective-lead-policy';
 
 /** Historical selections are exclusions even if expired, revoked or invalid.
  * This loader never authorizes the selected projection or mutates a record. */
-export async function loadSelectiveLeadScope(db: Prisma.TransactionClient, recipientId: string): Promise<SelectiveLeadScope & {
+export async function loadSelectiveLeadScope(db: Prisma.TransactionClient, recipientId: string, relatedLeadIds: readonly string[] = []): Promise<SelectiveLeadScope & {
   selectiveLeadOfferIds: string[];
 }> {
   const grants = await db.selectiveLeadGrant.findMany({ where: { recipientId },
     select: { id: true, leadId: true, revisions: { select: { id: true, commandId: true } } } });
-  const selectiveLeadIds = [...new Set(grants.map(row => row.leadId))];
+  // Related IDs are server-derived exclusions (for example a converted client),
+  // never a request parameter or a grant to a selected-lead projection.
+  const selectiveLeadIds = [...new Set([...grants.map(row => row.leadId), ...relatedLeadIds])];
   if (!selectiveLeadIds.length) return { selectiveLeadIds: [], selectiveLeadAuditEntityIds: [], selectiveLeadOfferIds: [], selectiveLeadIntakeIds: [], selectiveLeadInboxEventIds: [] };
   const leadWhere = { leadId: { in: selectiveLeadIds } };
   const [offers, ledgers, inbox, messages, files, privacy, candidates] = await Promise.all([
@@ -78,4 +80,9 @@ export async function assertNoSelectiveLeadMutation(db: Prisma.TransactionClient
   if (await db.selectiveLeadGrant.findUnique({ where: { leadId_recipientId: { leadId, recipientId } }, select: { id: true } })) {
     throw new Error('SELECTIVE_LEAD_READ_ONLY');
   }
+  const lead = await db.lead.findUnique({ where: { id: leadId }, select: { clientId: true } });
+  if (await db.client.findFirst({ where: {
+    OR: [{ leadId }, ...(lead?.clientId ? [{ id: lead.clientId }] : [])],
+    selectiveGrants: { some: { recipientId } },
+  }, select: { id: true } })) throw new Error('SELECTIVE_CLIENT_READ_ONLY');
 }

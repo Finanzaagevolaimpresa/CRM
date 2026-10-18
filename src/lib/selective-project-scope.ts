@@ -4,21 +4,27 @@ import { lockInternalUser } from './internal-session-registry';
 import { assertProjectOperational } from './project-lifecycle-lock';
 import { loadSelectiveLeadScope } from './selective-lead-scope';
 import type { SelectiveLeadScope } from './selective-lead-policy';
+import { loadSelectiveClientScope, type LoadedSelectiveClientScope } from './selective-client-scope';
 
 type Db = Prisma.TransactionClient;
-export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope> {
+export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope> {
   return loadCurrentExclusions(db, recipientId, true);
 }
 /** Management-only: keeps every personal selection, omits lifecycle exclusions. */
-export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope> {
+export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope> {
   return loadCurrentExclusions(db, recipientId, false);
 }
 async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean) {
   const project = await loadExclusions(db, recipientId, includeLifecycle);
-  const lead = await loadSelectiveLeadScope(db, recipientId);
-  return { ...project, ...lead,
-    selectiveOfferIds: [...new Set([...(project.selectiveOfferIds ?? []), ...lead.selectiveLeadOfferIds])],
-    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? [])])],
+  const client = await loadSelectiveClientScope(db, recipientId);
+  const lead = await loadSelectiveLeadScope(db, recipientId, client.selectiveClientLeadIds);
+  return { ...project, ...lead, ...client,
+    selectiveProjectIds: [...new Set([...(project.selectiveProjectIds ?? []), ...client.selectiveClientProjectIds])],
+    selectiveServiceIds: [...new Set([...(project.selectiveServiceIds ?? []), ...client.selectiveClientServiceIds])],
+    selectiveContractIds: [...new Set([...(project.selectiveContractIds ?? []), ...client.selectiveClientContractIds])],
+    selectiveDocumentIds: [...new Set([...(project.selectiveDocumentIds ?? []), ...client.selectiveClientDocumentIds])],
+    selectiveOfferIds: [...new Set([...(project.selectiveOfferIds ?? []), ...lead.selectiveLeadOfferIds, ...client.selectiveClientOfferIds])],
+    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? []), ...client.selectiveClientAuditEntityIds])],
   };
 }
 async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean): Promise<SelectiveProjectScope> {
@@ -88,10 +94,8 @@ export async function assertNoSelectiveProjectMutation(db: Db, recipientId: stri
   // Confirmation locks this same recipient before changing its perimeter.
   await lockInternalUser(db, recipientId);
   await assertProjectOperational(db, { projectId, clientServiceId: serviceId });
-  if (projectId && await db.selectiveProjectGrant.findUnique({ where: { projectId_recipientId: { projectId, recipientId } }, select: { id: true } })) {
-    throw new Error('SELECTIVE_PROJECT_READ_ONLY');
-  }
-  if (serviceId && (await loadSelectiveProjectScope(db, recipientId)).selectiveServiceIds?.includes(serviceId)) {
+  const scope = await loadSelectiveProjectScope(db, recipientId);
+  if ((projectId && scope.selectiveProjectIds?.includes(projectId)) || (serviceId && scope.selectiveServiceIds?.includes(serviceId))) {
     throw new Error('SELECTIVE_PROJECT_READ_ONLY');
   }
 }

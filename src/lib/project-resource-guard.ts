@@ -6,6 +6,7 @@ import { loadSelectiveProjectScope } from './selective-project-scope';
 import { withSerializableTransaction } from './serializable';
 
 export type ProjectResource = {
+  clientId?: string | null; companyId?: string | null;
   projectId?: string | null; clientServiceId?: string | null;
   documentId?: string | null; contractId?: string | null; commercialOfferId?: string | null;
 };
@@ -21,11 +22,11 @@ export async function guardProjectResources(tx: Prisma.TransactionClient, userId
   const offers = [...new Set(resources.flatMap(r => r.commercialOfferId ? [r.commercialOfferId] : []))];
   if (documents.length) {
     const [rows, signed, payments, formalizations, materials] = await Promise.all([
-      tx.document.findMany({ where: { id: { in: documents } }, select: { projectId: true, clientServiceId: true } }),
+      tx.document.findMany({ where: { id: { in: documents } }, select: { clientId: true, companyId: true, projectId: true, clientServiceId: true } }),
       tx.contract.findMany({ where: { signedDocumentId: { in: documents } }, select: { id: true } }),
       tx.payment.findMany({ where: { accountingDocumentId: { in: documents } }, select: { contractId: true } }),
       tx.practiceFormalization.findMany({ where: { signedDocumentId: { in: documents } }, select: { contractId: true } }),
-      tx.practiceMaterialEvidence.findMany({ where: { documentId: { in: documents } }, select: { practice: { select: { projectId: true, clientServiceId: true } } } }),
+      tx.practiceMaterialEvidence.findMany({ where: { documentId: { in: documents } }, select: { practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
     ]);
     contexts.push(...rows, ...materials.map(r => r.practice));
     signed.forEach(r => contracts.add(r.id));
@@ -34,18 +35,19 @@ export async function guardProjectResources(tx: Prisma.TransactionClient, userId
   if (contracts.size) {
     const ids = [...contracts];
     const [rows, services, formalizations] = await Promise.all([
-      tx.contract.findMany({ where: { id: { in: ids } }, select: { projectId: true } }),
+      tx.contract.findMany({ where: { id: { in: ids } }, select: { clientId: true, projectId: true } }),
       tx.clientService.findMany({ where: { contractId: { in: ids } }, select: { id: true, projectId: true } }),
-      tx.practiceFormalization.findMany({ where: { contractId: { in: ids } }, select: { practice: { select: { projectId: true, clientServiceId: true } } } }),
+      tx.practiceFormalization.findMany({ where: { contractId: { in: ids } }, select: { practice: { select: { clientId: true, projectId: true, clientServiceId: true } } } }),
     ]);
     contexts.push(...rows, ...services.map(r => ({ projectId: r.projectId })), ...formalizations.map(r => r.practice));
   }
   if (offers.length) {
-    const offerRows = await tx.commercialOffer.findMany({ where: { id: { in: offers } }, select: { leadId: true } });
+    const offerRows = await tx.commercialOffer.findMany({ where: { id: { in: offers } }, select: { clientId: true, leadId: true } });
+    contexts.push(...offerRows);
     for (const id of [...new Set(offerRows.flatMap(row => row.leadId ? [row.leadId] : []))].sort()) await assertLeadOperational(tx, id);
     const [practices, revisions] = await Promise.all([
-      tx.practiceReadiness.findMany({ where: { commercialOfferId: { in: offers } }, select: { projectId: true, clientServiceId: true } }),
-      tx.practiceOfferRevision.findMany({ where: { commercialOfferId: { in: offers } }, select: { projectId: true } }),
+      tx.practiceReadiness.findMany({ where: { commercialOfferId: { in: offers } }, select: { clientId: true, projectId: true, clientServiceId: true } }),
+      tx.practiceOfferRevision.findMany({ where: { commercialOfferId: { in: offers } }, select: { clientId: true, projectId: true } }),
     ]);
     contexts.push(...practices, ...revisions);
   }
@@ -53,7 +55,8 @@ export async function guardProjectResources(tx: Prisma.TransactionClient, userId
     await assertProjectOperational(tx, context);
   }
   const scope = await loadSelectiveProjectScope(tx, userId);
-  if (contexts.some(r => (r.projectId && scope.selectiveProjectIds?.includes(r.projectId)) || (r.clientServiceId && scope.selectiveServiceIds?.includes(r.clientServiceId)))
+  if (contexts.some(r => (r.clientId && scope.selectiveClientIds?.includes(r.clientId)) || (r.companyId && scope.selectiveClientCompanyIds.includes(r.companyId))
+    || (r.projectId && scope.selectiveProjectIds?.includes(r.projectId)) || (r.clientServiceId && scope.selectiveServiceIds?.includes(r.clientServiceId)))
     || documents.some(id => scope.selectiveDocumentIds?.includes(id)) || [...contracts].some(id => scope.selectiveContractIds?.includes(id))
     || offers.some(id => scope.selectiveOfferIds?.includes(id))) throw new ProjectUnavailableError();
   return scope;
