@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { UserFacingActionError } from './action-errors';
 import { hasSelectiveContext } from './selective-project-policy';
+import { hasSelectiveClientContext } from './selective-client-policy';
 import { hasPermission, type AuthSession } from './auth';
 import {
   AI_RUN_RELIABILITY_VERSION,
@@ -174,7 +175,7 @@ function sameReplacementContinuity(
 }
 
 function assertRequestCreationAllowed(session: AuthSession, input: RequestBinding) {
-  if (hasSelectiveContext(session, input)) throw new UserFacingActionError('Il progetto condiviso consente la sola consultazione selezionata.');
+  if (hasSelectiveContext(session, input) || hasSelectiveClientContext(session, input)) throw new UserFacingActionError('Il contesto condiviso consente la sola consultazione selezionata.');
   if (input.hashCanonicalizationVersion !== AI_EXECUTION_HASH_CANONICALIZATION_VERSION) {
     throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI non supportata.');
   }
@@ -196,9 +197,9 @@ export function effectiveAiExecutionRequestStatus(
 
 export function canViewAiExecutionRequest(
   session: AuthSession,
-  request: Pick<AiExecutionRequest, 'requesterUserId'> & Partial<Pick<AiExecutionRequest, 'projectId' | 'clientServiceId'>>,
+  request: Pick<AiExecutionRequest, 'requesterUserId'> & Partial<Pick<AiExecutionRequest, 'clientId' | 'companyId' | 'projectId' | 'clientServiceId'>>,
 ) {
-  if (hasSelectiveContext(session, request)) return false;
+  if (hasSelectiveContext(session, request) || hasSelectiveClientContext(session, request)) return false;
   return (session.role === 'admin' && hasPermission(session, 'ai.execution.audit'))
     || request.requesterUserId === session.userId;
 }
@@ -269,7 +270,7 @@ async function createAiExecutionRequestInternal(
 
   try {
     return await withSerializableTransaction(async (tx) => {
-      if (input.projectId || input.clientServiceId) await guardProjectResources(tx, session.userId, [input]);
+      if (input.clientId || input.companyId || input.projectId || input.clientServiceId) await guardProjectResources(tx, session.userId, [input]);
       const duplicate = await tx.aiExecutionRequest.findUnique({
         where: {
           origin_idempotencyKey: {
@@ -424,7 +425,7 @@ async function createDecision(
       throw new UserFacingActionError('Richiesta AI non disponibile nel perimetro autorizzato.');
     }
 
-    if (request.projectId || request.clientServiceId) await guardProjectResources(tx, session.userId, [request]);
+    if (request.clientId || request.companyId || request.projectId || request.clientServiceId) await guardProjectResources(tx, session.userId, [request]);
     const now = await databaseNow(tx);
     if (
       request.expiresAt <= now
@@ -611,7 +612,7 @@ export async function reserveAuthorizedAiRun(
     if (!request || ![1, 2].includes(request.hashCanonicalizationVersion)) {
       throw new UserFacingActionError('Versione di canonicalizzazione autorizzazione AI assente o sconosciuta.');
     }
-    if (request.projectId || request.clientServiceId) {
+    if (request.clientId || request.companyId || request.projectId || request.clientServiceId) {
       if (!request.requesterUserId) throw new UserFacingActionError('Richiesta AI priva di un richiedente autorizzato al progetto.');
       await guardProjectResources(tx, request.requesterUserId, [request]);
     }

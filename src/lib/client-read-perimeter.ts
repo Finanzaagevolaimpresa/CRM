@@ -3,6 +3,8 @@ import { UserFacingActionError } from './action-errors';
 import { authorizeManualAssignment, type AssignmentActor } from './manual-assignment-guard';
 import { lockInternalUser } from './internal-session-registry';
 import { perimeterRoles } from './client-read-perimeter-policy';
+import { assertNoSelectiveClientMutation } from './selective-client-scope';
+import { lockCommunicationDirectory } from './communication-directory-lock';
 
 export async function loadClientReadScope(db: PrismaClient | Prisma.TransactionClient, userId: string) {
   const rows = await db.clientReadGrant.findMany({
@@ -16,8 +18,14 @@ export async function changeClientReadGrant(
   input: { userId: string; clientId: string; expectedVersion: number; active: boolean }, privilegedAdmission: boolean,
 ) {
   if (!privilegedAdmission) throw new UserFacingActionError('Conferma amministrativa richiesta.');
+  // Personal selection uses the same directory and ordered user locks. Take
+  // both before session admission, which also locks the actor's user row.
+  await lockCommunicationDirectory(tx);
+  for (const id of [...new Set([actor.userId, input.userId])].sort()) await lockInternalUser(tx, id);
   await authorizeManualAssignment(tx, actor, []);
   const target = await lockInternalUser(tx, input.userId);
+  await assertNoSelectiveClientMutation(tx, actor.userId, input.clientId);
+  if (input.active) await assertNoSelectiveClientMutation(tx, input.userId, input.clientId);
   const targetRole = target && await tx.user.findUnique({ where: { id: input.userId }, select: { role: true } });
   if (!target || !targetRole || (input.active && (!target.active || target.deletedAt || !perimeterRoles.includes(targetRole.role)))) {
     throw new UserFacingActionError('Destinatario non disponibile per la consultazione.');

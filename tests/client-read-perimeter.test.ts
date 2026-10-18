@@ -35,13 +35,14 @@ for (const role of perimeterRoles) test(`${role}: client profile scope does not 
 });
 
 test('read scope is not a role bypass and does not revoke separate current ownership', () => {
+  const exclusion = { id: { notIn: [] }, selectiveGrants: { none: { recipientId: 'reader' } } };
   const unknown = { role: 'unknown' as RoleCode, userId: 'reader', clientReadScope: [client.id] };
   assert.equal(canViewClient(unknown, client), false);
-  assert.deepEqual(clientVisibilityWhere(unknown), { id: { in: [] } });
+  assert.deepEqual(clientVisibilityWhere(unknown), { AND: [exclusion, { id: { in: [] } }] });
   assert.equal(canViewClient({ role: 'commerciale', userId: 'sales', clientReadScope: [] }, client), true);
   for (const role of ['revisore'] as const) {
-    assert.deepEqual(clientVisibilityWhere({ role, userId: 'reader' }), { id: { in: [] } });
-    assert.deepEqual(clientVisibilityWhere({ role, userId: 'reader', clientReadScope: [client.id, client.id] }), { id: { in: [client.id] } });
+    assert.deepEqual(clientVisibilityWhere({ role, userId: 'reader' }), { AND: [exclusion, { id: { in: [] } }] });
+    assert.deepEqual(clientVisibilityWhere({ role, userId: 'reader', clientReadScope: [client.id, client.id] }), { AND: [exclusion, { id: { in: [client.id] } }] });
   }
-  assert.deepEqual(clientVisibilityWhere({ role: 'amministrazione', userId: 'reader' }), {});
+  assert.deepEqual(clientVisibilityWhere({ role: 'amministrazione', userId: 'reader' }), exclusion);
 });

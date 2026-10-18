@@ -53,6 +53,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
     <header>
       <h1 className="text-3xl font-bold text-fai-navy">Clienti</h1>
       <p className="mt-2 text-fai-gray">Lista clienti reale collegata a Prisma. Apri il fascicolo interno per consultare servizi, documenti, output AI e attività operative.</p>
+      <Link className="mt-3 inline-block font-semibold text-fai-blue underline" href="/shared-clients">Clienti condivisi con me</Link>
     </header>
     <Card title="Fascicoli Cliente Interni">
       {clients.length === 0 ? <p className="text-sm text-fai-gray">Nessun cliente registrato. Esegui il seed demo o crea un cliente dal flusso operativo interno.</p> : <><Table headers={['Nome cliente', 'Tipo cliente', 'Stato', 'Stato pratica', 'Referente / responsabile', 'Servizi acquistati', 'Documenti', 'Tracciabilità', 'Azione']} rows={clients.map((client) => [

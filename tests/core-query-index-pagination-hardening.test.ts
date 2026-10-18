@@ -29,15 +29,20 @@ function actor(role: RoleCode, userId = 'actor-1') {
 
 function matchesClientWhere(
   where: ReturnType<typeof clientVisibilityWhere>,
-  client: { id: string; salesOwnerId: string | null; consultantId: string | null },
+  client: { id: string; salesOwnerId: string | null; consultantId: string | null; selectiveRecipients?: string[] },
 ): boolean {
+  if (where.AND && !(Array.isArray(where.AND) ? where.AND : [where.AND]).every(item => matchesClientWhere(item, client))) return false;
+  if (where.OR && !where.OR.some(item => matchesClientWhere(item, client))) return false;
+  if (typeof where.id === 'string' && where.id !== client.id) return false;
   if (typeof where.id === 'object' && where.id !== null) {
-    const candidates = (where.id as { in?: unknown }).in;
-    return Array.isArray(candidates) && candidates.includes(client.id);
+    const filter = where.id as { in?: string[]; notIn?: string[] };
+    if (filter.in && !filter.in.includes(client.id)) return false;
+    if (filter.notIn?.includes(client.id)) return false;
   }
-  if (where.salesOwnerId !== undefined) return client.salesOwnerId === where.salesOwnerId;
-  if (where.consultantId !== undefined) return client.consultantId === where.consultantId;
-  if (where.OR) return where.OR.some((item) => matchesClientWhere(item, client));
+  const excludedRecipient = where.selectiveGrants?.none?.recipientId;
+  if (typeof excludedRecipient === 'string' && client.selectiveRecipients?.includes(excludedRecipient)) return false;
+  if (where.salesOwnerId !== undefined && client.salesOwnerId !== where.salesOwnerId) return false;
+  if (where.consultantId !== undefined && client.consultantId !== where.consultantId) return false;
   return true;
 }
 
@@ -106,6 +111,21 @@ test('N07 links retain allowlisted filters while canonicalizing the page paramet
   assert.equal(coreQueryPageHref('/leads', { status: 'nuovo', fonte: 'sito' }, 3), '/leads?fonte=sito&status=nuovo&page=3');
 });
 
+test('client list ceiling overrides ownership and full-read scope, including a selection added after session load', () => {
+  const selected = { id: 'selected', salesOwnerId: 'actor-1', consultantId: 'actor-1', selectiveRecipients: ['actor-1'] };
+  const ordinary = { ...selected, id: 'ordinary', selectiveRecipients: [] };
+  for (const role of ['admin', 'direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'amministrazione', 'collaboratore_limitato'] as const) {
+    const session = { ...actor(role), clientReadScope: ['selected', 'ordinary'], selectiveClientIds: ['selected'] };
+    assert.equal(matchesClientWhere(clientVisibilityWhere(session), selected), false, role);
+    assert.equal(canViewClient(session, selected), false, role);
+    assert.equal(matchesClientWhere(clientVisibilityWhere(session), ordinary), true, role);
+    // The relation predicate rejects a historical grant even when the in-memory
+    // snapshot predates it. No active/expiry filter can reopen the ordinary row.
+    assert.equal(matchesClientWhere(clientVisibilityWhere({ ...session, selectiveClientIds: [] }), selected), false, `${role}:stale`);
+    assert.equal(matchesClientWhere(clientVisibilityWhere({ ...session, selectiveClientIds: [] }), { ...selected, selectiveRecipients: ['another-recipient'] }), true, `${role}:other recipient`);
+  }
+});
+
 test('N07 core pages push visibility and limits into Prisma before rendering', () => {
   for (const [name, source] of [['leads', leadsPage], ['clients', clientsPage]] as const) {
     assert.match(source, /parseCoreQueryPage/);
@@ -131,7 +151,7 @@ test('N07 access helpers apply candidate limits at the database boundary and saf
 
 test('N07 migration 36 is additive, transactional and index-only', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 56);
+  assert.equal(names.length, 57);
   assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);

@@ -78,6 +78,9 @@ test('project authority does not enroll lead authority; read preview cannot boot
   assert.deepEqual(await db.selectiveLeadAuthority.findUnique({ where: { id: 'lead-sharing' } }),
     { id: 'lead-sharing', userId: admin.user.id, revision: 1, enabled: true });
   assert.equal(await db.auditLog.count({ where: { id: auditId, event: 'selective_lead_authority_enrolled', actorId: admin.user.id } }), 1);
+  const enrollmentAudit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
+  assert.deepEqual(enrollmentAudit.before, { version: 0 });
+  assert.deepEqual(enrollmentAudit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
   assert.throws(() => enroll(binding), /SELECTIVE_LEAD_ENROLLMENT_ALREADY_STARTED/);
   assert.equal(await db.selectiveLeadGrant.count(), 0);
 });

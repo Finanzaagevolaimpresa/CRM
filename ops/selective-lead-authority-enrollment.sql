@@ -18,11 +18,13 @@ BEGIN
     OR ((binding->>'approvalSha256') ~ '^[a-f0-9]{64}$') IS NOT TRUE
     OR ((binding->>'auditId') ~ '^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$') IS NOT TRUE
  THEN RAISE EXCEPTION 'SELECTIVE_LEAD_ENROLLMENT_BINDING_INVALID'; END IF;
- IF (SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)<>56
+ IF (SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL)<>57
     OR NOT EXISTS(SELECT 1 FROM "_prisma_migrations" WHERE migration_name='20261018140000_selective_lead_read_v1'
       AND checksum='29053ccb2bb289b24f34b18db9181019518e6dd39e83e7fac7dc49a5dbdde5d4'
       AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1)
- THEN RAISE EXCEPTION 'SELECTIVE_LEAD_ENROLLMENT_SCHEMA56_REQUIRED'; END IF;
+ OR NOT EXISTS(SELECT 1 FROM "_prisma_migrations" WHERE migration_name='20261018190000_selective_client_read_v1'
+      AND checksum='55cdaf7e5c714d1fc498ce2bf5131dedc1f05bbafdbb61de5d8dde7ffa753299' AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1)
+ THEN RAISE EXCEPTION 'SELECTIVE_LEAD_ENROLLMENT_SCHEMA57_REQUIRED'; END IF;
  PERFORM id FROM "ApplicationKeyVersion" WHERE purpose='PRIVILEGED_STEP_UP' FOR SHARE;
  IF (SELECT count(*) FROM "ApplicationKeyVersion" WHERE purpose='PRIVILEGED_STEP_UP' AND status='ACTIVE'
       AND "activatedAt" IS NOT NULL AND "retiredAt" IS NULL AND octet_length("keyDigest")=32)<>1
@@ -41,7 +43,7 @@ BEGIN
  INSERT INTO "SelectiveLeadAuthority" (id,"userId",revision,enabled) VALUES ('lead-sharing',actor.id,1,true);
  INSERT INTO "AuditLog" (id,"actorId",event,"entityType","entityId","before","after","createdAt")
  VALUES (binding->>'auditId',actor.id,'selective_lead_authority_enrolled','SelectiveLeadAuthority','lead-sharing',
-   '{"version":0}'::jsonb,jsonb_build_object('version',1,'enabled',true,'approvalSha256',binding->>'approvalSha256'),clock_timestamp());
+   '{"version":0}'::jsonb,jsonb_build_object('version',1,'enabled',true,'approvalHash',binding->>'approvalSha256'),clock_timestamp());
 END $enrollment$;
 COMMIT;
 SELECT 'SELECTIVE_LEAD_ENROLLMENT_COMMITTED';

@@ -64,6 +64,7 @@ jobs:
           git archive 1e463b01dd22f09aab73a35fac7203598dc7c044 prisma | tar -x -C "$prior"
           npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
           bash scripts/selective-leads/qualify-migration.sh
+          bash scripts/selective-clients/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash

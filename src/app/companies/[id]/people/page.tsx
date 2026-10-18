@@ -14,7 +14,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const session = await requirePermission('company.write'), { id } = await params;
   const context = await getCompanyReadAccess(session, id);
   if (!context || !canEditClient(session, context.client)) notFound();
-  const memberships = await prisma.companyPerson.findMany({ where: { companyId: id }, orderBy: { id: 'asc' } });
+  const memberships = await prisma.companyPerson.findMany({ where: { companyId: id, personId: { notIn: [...(session.selectiveClientPersonIds ?? [])] } }, orderBy: { id: 'asc' } });
   const people = await prisma.person.findMany({ where: { id: { in: memberships.map(link => link.personId) }, deletedAt: null } });
   const byId = new Map(people.map(person => [person.id, person]));
   return <div className="crm-space-y-6"><PageHeader title="Gestisci referenti" description={`Titolari, soci, amministratori e persone di contatto di ${context.company.name}.`} />

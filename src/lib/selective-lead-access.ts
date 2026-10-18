@@ -13,7 +13,7 @@ import { hasPermission } from './permission-evaluator';
 import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { internalSessionMode } from './session';
 import { withSerializableTransaction } from './serializable';
-import { loadSelectiveLeadScope } from './selective-lead-scope';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 import { leadFieldProjection, selectiveLeadSelectionSchema, type SelectiveLeadSelection } from './selective-lead-policy';
 import { createSelectiveLeadPreview, readSelectiveLeadPreview } from './selective-lead-preview';
 import { readSelectiveLeadGrant, selectiveLeadGrantPayloadSchema, type SelectiveLeadGrantPayload } from './selective-lead-grant';
@@ -80,7 +80,7 @@ async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientI
     const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
     if (!row || row.revokedAt || !row.active || row.deletedAt) deny();
     const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides],
-      registryExpiresAt: row.expiresAt, ...await loadSelectiveLeadScope(tx, claimed.userId) };
+      registryExpiresAt: row.expiresAt, ...await loadSelectiveProjectScope(tx, claimed.userId) };
     const actor = await liveUser(tx, claimed.userId), authorityUser = await liveUser(tx, binding.userId);
     if (!allowed(current) || authorityUser.role !== 'admin' || !allowed(authorityUser, true)) deny();
     await sessionLive(tx, current);
@@ -128,7 +128,7 @@ export async function previewLeadSharing(db: PrismaClient, claimed: AuthSession,
   const input = selectiveLeadSelectionSchema.parse(raw);
   return transaction(db, claimed, input.recipientId, null, async (tx, state) => {
     const selected = await selectedState(tx, state, input);
-    const targetScope = await loadSelectiveLeadScope(tx, input.recipientId);
+    const targetScope = await loadSelectiveProjectScope(tx, input.recipientId);
     return { token: createSelectiveLeadPreview(state.key, input, selected.admission, selected.now.getTime()), input,
       fields: leadFieldProjection(selected.row as unknown as Record<string, unknown>, input.fields),
       recipient: { name: selected.target.name, email: selected.target.email, role: selected.target.role },

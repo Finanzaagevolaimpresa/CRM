@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test,expect,type Page } from '@playwright/test';
 
-test('packaged schema56 restart retains context messages, private files and revoked participants',async({browser})=>{
+test('packaged schema57 restart retains context messages, private files and revoked participants',async({browser})=>{
   const f=JSON.parse(readFileSync(process.env.R05_CONTEXT_RECOVERY_FIXTURE!,'utf8')) as {
     synthetic:boolean;persistenceOnly:boolean;threadId:string;deletedThreadId:string;ownerEmail:string;memberEmail:string;otherEmail:string;
     leadId:string;clientId:string;fileId:string;revokedFileId:string;sha256:string;bytes:string;

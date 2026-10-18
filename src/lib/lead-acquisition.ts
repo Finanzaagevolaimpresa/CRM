@@ -4,7 +4,7 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import { coreQueryFetchSize, coreQueryOffset, parseCoreQueryPage, toCoreQueryPage } from './core-query-policy';
 import { acquisitionState, verifiedAcquisitionEvent } from './lead-acquisition-contract';
-import { loadSelectiveLeadScope } from './selective-lead-scope';
+import { loadSelectiveProjectScope } from './selective-project-scope';
 
 type Actor = { userId: string; sessionId?: string };
 export class LeadAcquisitionDenied extends Error {
@@ -17,7 +17,7 @@ async function authority(tx: Prisma.TransactionClient, actor: Actor, adminOnly: 
   }) : null;
   if (!fresh || !fresh.active || fresh.deletedAt || fresh.revokedAt || !fresh.live
     || !hasPermission(fresh, 'lead.read') || (adminOnly && fresh.role !== 'admin')) throw new LeadAcquisitionDenied();
-  return { ...fresh, ...await loadSelectiveLeadScope(tx, actor.userId) };
+  return { ...fresh, ...await loadSelectiveProjectScope(tx, actor.userId) };
 }
 
 export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input: { page?: string; leadId?: string; queue?: string }) {

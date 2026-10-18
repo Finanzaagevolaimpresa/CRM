@@ -4,6 +4,7 @@ import { withSerializableTransaction } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
+import { assertNoSelectiveClientMutation } from './selective-client-scope';
 import { guardProjectResources, withProjectResources } from './project-resource-guard';
 
 import { canAccessFinancialDocumentMetadata, financialReadAccess } from './financial-access';
@@ -855,18 +856,28 @@ export async function createCompany(form: FormData) {
   const s = await requirePermission('company.write');
   const data = companySchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId });
-  const company = await prisma.company.create({ data: data as never });
-  await audit(s.userId, 'company_create', 'Company', company.id, company);
-  return company;
+  return withProjectResources(prisma, s.userId, [data], async tx => {
+    const current = await lockLeadWriteActor(tx, s, ['company.write']);
+    await requireClientContextWriteAccess(current, { clientId: data.clientId }, tx);
+    const company = await tx.company.create({ data: data as never });
+    await audit(s.userId, 'company_create', 'Company', company.id, company, tx);
+    await assertLeadActorLive(tx, current);
+    return company;
+  });
 }
 
 export async function createProject(form: FormData) {
   const s = await requirePermission('project.write');
   const data = projectSchema.parse(clean(form));
   await requireClientContextWriteAccess(s, { clientId: data.clientId, companyId: data.companyId });
-  const project = await prisma.project.create({ data: { ...data, consultantId: null } as never });
-  await audit(s.userId, 'project_create', 'Project', project.id, project);
-  return project;
+  return withProjectResources(prisma, s.userId, [data], async tx => {
+    const current = await lockLeadWriteActor(tx, s, ['project.write']);
+    await requireClientContextWriteAccess(current, { clientId: data.clientId, companyId: data.companyId }, tx);
+    const project = await tx.project.create({ data: { ...data, consultantId: null } as never });
+    await audit(s.userId, 'project_create', 'Project', project.id, project, tx);
+    await assertLeadActorLive(tx, current);
+    return project;
+  });
 }
 
 export async function createProjectExpense(form: FormData) {
@@ -922,7 +933,7 @@ export async function createStandardDocumentChecklist(form: FormData) {
   const existingTitles = new Set(existing.map((item) => item.title.toLowerCase()));
   const toCreate = standardChecklistTitles.filter((title) => !existingTitles.has(title.toLowerCase()));
   if (toCreate.length === 0) return [];
-  return withProjectResources(prisma, s.userId, [{ projectId, clientServiceId }], async tx => {
+  return withProjectResources(prisma, s.userId, [{ clientId, projectId, clientServiceId }], async tx => {
     const created = await Promise.all(toCreate.map((title) => tx.documentChecklistItem.create({ data: { clientId, clientServiceId, projectId, title, createdById: s.userId, updatedById: s.userId } as never })));
     await Promise.all(created.map((item) => audit(s.userId, 'document_checklist_item_create', 'DocumentChecklistItem', item.id, item, tx)));
     return created;
@@ -1964,6 +1975,7 @@ export async function createTechnicalPractice(form: FormData) {
   if (assignmentRequested && s.role !== 'admin') denyManualAssignment();
   if (assignmentRequested) await requireEnforcedPrivilegedMutation(s, 'R05_RESPONSIBILITY');
   return withAssignmentGuard(prisma, s, assignmentRequested, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
+    await assertNoSelectiveClientMutation(tx, s.userId, data.clientId);
     await assertNoSelectiveProjectMutation(tx, s.userId, data.projectId, data.clientServiceId);
     await assertTechnicalPracticeOperational(tx, [data.clientId], data.status);
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
@@ -2045,6 +2057,7 @@ export async function updateTechnicalPractice(form: FormData) {
   if (!hasTechnicalPracticeChanges(before, { ...before, ...updateData, commercialOwnerId: commercialAssignment === undefined ? before.commercialOwnerId : commercialAssignment, technicalOwnerId: technicalAssignment === undefined ? before.technicalOwnerId : technicalAssignment })) return before;
   return withAssignmentGuard(prisma, s, ownerChanged, [{ userId: data.commercialOwnerId, roles: ['admin', 'direzione', 'commerciale'] }, { userId: data.technicalOwnerId, roles: ['admin', 'direzione', 'consulente', 'backoffice'] }], async tx => {
     await requireTechnicalPracticeMutationAccess(s, data.id, tx);
+    await assertNoSelectiveClientMutation(tx, s.userId, before.clientId, data.clientId);
     await assertNoSelectiveProjectMutation(tx, s.userId, nextProjectId, nextClientServiceId);
     await assertTechnicalPracticeOperational(tx, [before.clientId, data.clientId], updateData.status);
     const practice = await tx.technicalPractice.update({ where: { id: data.id, clientId: before.clientId, projectId: before.projectId, clientServiceId: before.clientServiceId, commercialOwnerId: before.commercialOwnerId, technicalOwnerId: before.technicalOwnerId, updatedAt: before.updatedAt, deletedAt: null }, data: updateData as never });
