@@ -61,7 +61,7 @@ function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snaps
       initialSelection={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.recipientSelection : undefined}
       initialExternal={snapshot?.schema === 'fai.approved-email.v2' ? snapshot.externalRecipients : snapshot ? { to: snapshot.to, cc: snapshot.cc, bcc: snapshot.bcc } : undefined} />}
     <label>Oggetto<input required maxLength={998} className={field} name="subject" defaultValue={snapshot?.subject ?? updateDraft?.subject} /></label>
-    <label>Testo esatto<textarea required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? updateDraft?.body} /></label>
+    <label>Testo esatto<textarea aria-label="Testo esatto" required rows={8} maxLength={200000} className={field} name="body" defaultValue={snapshot?.body ?? updateDraft?.body} /></label>
     <label>Riservatezza<select name="classification" className={field} defaultValue={snapshot?.classification ?? replySource?.classification ?? 'ORDINARY'}><option value="ORDINARY">Ordinaria</option><option value="SENSITIVE">Materiale sensibile</option>{data.isAdmin ? <option value="COMPLAINT">Reclamo · solo admin</option> : null}</select></label>
     <fieldset className="min-w-0 rounded-xl border p-3"><legend>Allegati · versioni esatte</legend>
       {data.contextFiles.map(file => <label key={file.id} className="flex items-start gap-2 break-words"><input type="checkbox" name="contextFileId" value={file.id}
