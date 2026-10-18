@@ -6,6 +6,7 @@ on:
       - 'src/**'
       - 'tests/pr140-release/**'
       - 'tests/practice-readiness-browser/**'
+      - 'tests/dashboard-browser/**'
       - 'scripts/pr140/**'
       - 'scripts/r05/**'
       - 'prisma/**'
@@ -14,11 +15,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/lib/internal-engagement*'
+      - 'src/**'
       - 'tests/pr140-release/**'
+      - 'tests/practice-readiness-browser/**'
+      - 'tests/dashboard-browser/**'
       - 'scripts/pr140/**'
       - 'scripts/r05/**'
       - 'prisma/**'
+      - 'Dockerfile.prod.example'
       - '.github/workflows/pr140-release-qualification.yml'
 permissions:
   contents: read
