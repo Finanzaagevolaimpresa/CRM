@@ -1,5 +1,5 @@
 'use server';
-import { assertLeadOperational, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
+import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
 import { withSerializableTransaction } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
 import { listAccessiblePracticeReadiness } from './practice-readiness';
@@ -735,80 +735,86 @@ export async function createCommercialOffer(form: FormData) {
   const { commercialAction: _commercialAction, ...offerData } = data;
   void _commercialAction;
   return withProjectResources(prisma, s.userId, [], async tx => {
+    const current = await lockLeadActor(tx, s);
     await assertLeadOperational(tx, data.leadId);
+    await requireCommercialOfferTargetAccess(current, data, tx);
     const offer = await tx.commercialOffer.create({ data: { ...offerData, createdById: s.userId } });
     await audit(s.userId, 'commercial_offer_create', 'CommercialOffer', offer.id, offer, tx);
+    await assertLeadActorLive(tx, current);
     return offer;
   });
 }
 export async function updateCommercialOffer(form: FormData) {
   const s = await requirePermission('lead.write');
   const data = commercialOfferUpdateSchema.parse(clean(form));
-  const { offer: before } = await requireCommercialOfferEditAccess(s, data.id);
-  const managedAcceptance = await prisma.practiceOfferAcceptance.findFirst({ where: { offerRevision: { commercialOfferId: data.id } }, select: { id: true } });
-  if (managedAcceptance) throw new Error('PRACTICE_OFFER_REVISION_IMMUTABLE');
+  await requireCommercialOfferEditAccess(s, data.id);
   await requireCommercialOfferTargetAccess(s, data);
-  const now = new Date();
-  const updateData: Prisma.CommercialOfferUpdateInput = {
-    leadId: data.leadId ?? null,
-    clientId: data.clientId ?? null,
-    title: data.title,
-    description: data.description,
-    services: data.services,
-    includedActivities: data.includedActivities,
-    taxableAmount: data.taxableAmount,
-    vatAmount: data.vatAmount,
-    totalAmount: data.totalAmount,
-    validUntil: data.validUntil ?? null,
-    operationalConditions: data.operationalConditions,
-    commercialProposal: data.commercialProposal,
-    status: data.status,
-    notes: data.notes,
-    sentAt: data.sentAt ?? null,
-    followUpAt: data.followUpAt ?? null,
-    followUpNote: data.followUpNote,
-    outcomeNote: data.outcomeNote,
-    acceptedAt: data.acceptedAt ?? null,
-    rejectedAt: data.rejectedAt ?? null,
-    rejectionReason: data.rejectionReason,
-  };
-  if (data.commercialAction === 'mark_sent') {
-    updateData.status = 'inviata';
-    updateData.sentAt = now;
-    updateData.acceptedAt = before.acceptedAt;
-    updateData.rejectedAt = before.rejectedAt;
-    updateData.rejectionReason = before.rejectionReason;
-  } else if (data.commercialAction === 'mark_accepted') {
-    updateData.status = 'accettata';
-    updateData.acceptedAt = now;
-    updateData.rejectedAt = null;
-    updateData.rejectionReason = null;
-    updateData.sentAt = before.sentAt;
-  } else if (data.commercialAction === 'mark_rejected') {
-    updateData.status = 'rifiutata';
-    updateData.rejectedAt = now;
-    updateData.acceptedAt = null;
-    updateData.sentAt = before.sentAt;
-  } else if (data.commercialAction === 'update_followup') {
-    updateData.status = before.status;
-    updateData.sentAt = before.sentAt;
-    updateData.acceptedAt = before.acceptedAt;
-    updateData.rejectedAt = before.rejectedAt;
-    updateData.rejectionReason = before.rejectionReason;
-  }
-  if (updateData.status === 'accettata') {
-    updateData.rejectedAt = null;
-    updateData.rejectionReason = null;
-    updateData.acceptedAt = updateData.acceptedAt ?? (before.status !== 'accettata' ? now : before.acceptedAt);
-  } else if (updateData.status === 'rifiutata') {
-    updateData.acceptedAt = null;
-    updateData.rejectedAt = updateData.rejectedAt ?? (before.status !== 'rifiutata' ? now : before.rejectedAt);
-  } else if (updateData.status === 'inviata' && !updateData.sentAt) {
-    updateData.sentAt = now;
-  }
   return withProjectResources(prisma, s.userId, [{ commercialOfferId: data.id }], async tx => {
-    await assertLeadOperational(tx, before.leadId);
-    await assertLeadOperational(tx, data.leadId);
+    const current = await lockLeadActor(tx, s);
+    await tx.$queryRaw`SELECT "id" FROM "CommercialOffer" WHERE "id"=${data.id} FOR UPDATE`;
+    const { offer: before } = await requireCommercialOfferEditAccess(current, data.id, tx);
+    for (const id of [...new Set([before.leadId, data.leadId].filter((id): id is string => !!id))].sort()) await assertLeadOperational(tx, id);
+    await requireCommercialOfferTargetAccess(current, data, tx);
+    const managedAcceptance = await tx.practiceOfferAcceptance.findFirst({ where: { offerRevision: { commercialOfferId: data.id } }, select: { id: true } });
+    if (managedAcceptance) throw new Error('PRACTICE_OFFER_REVISION_IMMUTABLE');
+    const now = new Date();
+    const updateData: Prisma.CommercialOfferUpdateInput = {
+      leadId: data.leadId ?? null,
+      clientId: data.clientId ?? null,
+      title: data.title,
+      description: data.description,
+      services: data.services,
+      includedActivities: data.includedActivities,
+      taxableAmount: data.taxableAmount,
+      vatAmount: data.vatAmount,
+      totalAmount: data.totalAmount,
+      validUntil: data.validUntil ?? null,
+      operationalConditions: data.operationalConditions,
+      commercialProposal: data.commercialProposal,
+      status: data.status,
+      notes: data.notes,
+      sentAt: data.sentAt ?? null,
+      followUpAt: data.followUpAt ?? null,
+      followUpNote: data.followUpNote,
+      outcomeNote: data.outcomeNote,
+      acceptedAt: data.acceptedAt ?? null,
+      rejectedAt: data.rejectedAt ?? null,
+      rejectionReason: data.rejectionReason,
+    };
+    if (data.commercialAction === 'mark_sent') {
+      updateData.status = 'inviata';
+      updateData.sentAt = now;
+      updateData.acceptedAt = before.acceptedAt;
+      updateData.rejectedAt = before.rejectedAt;
+      updateData.rejectionReason = before.rejectionReason;
+    } else if (data.commercialAction === 'mark_accepted') {
+      updateData.status = 'accettata';
+      updateData.acceptedAt = now;
+      updateData.rejectedAt = null;
+      updateData.rejectionReason = null;
+      updateData.sentAt = before.sentAt;
+    } else if (data.commercialAction === 'mark_rejected') {
+      updateData.status = 'rifiutata';
+      updateData.rejectedAt = now;
+      updateData.acceptedAt = null;
+      updateData.sentAt = before.sentAt;
+    } else if (data.commercialAction === 'update_followup') {
+      updateData.status = before.status;
+      updateData.sentAt = before.sentAt;
+      updateData.acceptedAt = before.acceptedAt;
+      updateData.rejectedAt = before.rejectedAt;
+      updateData.rejectionReason = before.rejectionReason;
+    }
+    if (updateData.status === 'accettata') {
+      updateData.rejectedAt = null;
+      updateData.rejectionReason = null;
+      updateData.acceptedAt = updateData.acceptedAt ?? (before.status !== 'accettata' ? now : before.acceptedAt);
+    } else if (updateData.status === 'rifiutata') {
+      updateData.acceptedAt = null;
+      updateData.rejectedAt = updateData.rejectedAt ?? (before.status !== 'rifiutata' ? now : before.rejectedAt);
+    } else if (updateData.status === 'inviata' && !updateData.sentAt) {
+      updateData.sentAt = now;
+    }
     const offer = await tx.commercialOffer.update({ where: { id: data.id }, data: updateData });
     const events = ['commercial_offer_update'];
     if (before.status !== offer.status) events.push('commercial_offer_status_change');
@@ -818,6 +824,7 @@ export async function updateCommercialOffer(form: FormData) {
     if (offer.status === 'rifiutata' && (before.status !== offer.status || before.rejectedAt?.getTime() !== offer.rejectedAt?.getTime())) events.push('commercial_offer_rejected');
     if (before.outcomeNote !== offer.outcomeNote || before.acceptedAt?.getTime() !== offer.acceptedAt?.getTime() || before.rejectedAt?.getTime() !== offer.rejectedAt?.getTime() || before.rejectionReason !== offer.rejectionReason) events.push('commercial_offer_outcome_update');
     await Promise.all([...new Set(events)].map((event) => audit(s.userId, event, 'CommercialOffer', offer.id, { before, after: offer }, tx)));
+    await assertLeadActorLive(tx, current);
     return offer;
   });
 }
@@ -831,9 +838,17 @@ export async function createClient(form: FormData) {
   const s = await requirePermission('client.write');
   const data = clientSchema.parse(clean(form));
   if (data.leadId) await requireLeadEditAccess(s, data.leadId);
-  const client = await prisma.client.create({ data: { ...data, salesOwnerId: null } });
-  await audit(s.userId, 'client_create', 'Client', client.id, client);
-  return client;
+  return withProjectResources(prisma, s.userId, [], async tx => {
+    const current = await lockLeadWriteActor(tx, s, data.leadId ? ['client.write', 'lead.read', 'lead.write'] : ['client.write']);
+    if (data.leadId) {
+      await assertLeadOperational(tx, data.leadId);
+      await requireLeadEditAccess(current, data.leadId, tx);
+    }
+    const client = await tx.client.create({ data: { ...data, salesOwnerId: null } });
+    await audit(s.userId, 'client_create', 'Client', client.id, client, tx);
+    await assertLeadActorLive(tx, current);
+    return client;
+  });
 }
 
 export async function createCompany(form: FormData) {

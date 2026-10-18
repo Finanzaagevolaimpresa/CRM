@@ -24,6 +24,9 @@ import { hasStrongRawLeadIdentityDuplicate } from '../src/lib/lead-identity';
 import { lockInternalUser, lockAuthoritativeInternalSession } from '../src/lib/internal-session-registry';
 import { listRecordUpdates } from '../src/lib/record-update-delivery';
 import { readLeadAcquisitions } from '../src/lib/lead-acquisition';
+import { actualLeadWriteActions, leadWriteActions, type LeadWriteAction } from './selective-leads/action-harness';
+import { withProjectResources } from '../src/lib/project-resource-guard';
+import { SerializableConflictError } from '../src/lib/serializable';
 
 const enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -358,4 +361,129 @@ test('personal authority suspension fails closed for management and open recipie
   await assert.rejects(leadSharingManagement(db, admin.session, f.lead.id));
   await db.selectiveLeadAuthority.update({ where: { id: binding.id }, data: { enabled: true, revision: binding.revision + 2 } });
   await assert.rejects(readLeadSharing(db, f.reader.session, f.lead.id)); await deniedOrdinary(f);
+});
+
+async function writeFixture(operation: LeadWriteAction) {
+  const f = await fixture();
+  // Exercise moving an offer from independent lead B to restricted target A.
+  if (operation === 'updateCommercialOffer') await db.commercialOffer.update({ where: { id: f.offer.id }, data: { leadId: f.other.id, clientId: null } });
+  const values = operation === 'createClient'
+    ? { type: 'societa', displayName: 'CLIENTE_AZIONE_SINTETICA_' + randomUUID(), leadId: f.lead.id }
+    : { id: f.offer.id, leadId: f.lead.id, title: 'OFFERTA_AZIONE_SINTETICA_' + randomUUID(),
+      taxableAmount: '100', vatAmount: '22', totalAmount: '122', status: 'bozza' };
+  const form = new FormData();
+  Object.entries(values).forEach(([key, value]) => { if (value !== undefined) form.set(key, value); });
+  return { ...f, form };
+}
+async function businessState(f: Awaited<ReturnType<typeof writeFixture>>) {
+  return {
+    offers: await db.commercialOffer.findMany({ where: { OR: [{ leadId: f.lead.id }, { id: f.offer.id }] }, orderBy: { id: 'asc' } }),
+    clients: await db.client.findMany({ where: { leadId: f.lead.id }, orderBy: { id: 'asc' } }),
+    audits: await db.auditLog.findMany({ where: { actorId: f.reader.user.id,
+      OR: [{ event: { startsWith: 'commercial_offer_' } }, { event: 'client_create' }] }, orderBy: { id: 'asc' } }),
+  };
+}
+async function waitForWriterLock(pid: number) {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`SELECT EXISTS(
+      SELECT 1 FROM pg_stat_activity a WHERE a.pid <> pg_backend_pid() AND ${pid} = ANY(pg_blocking_pids(a.pid))
+    ) AS blocked`;
+    if (row.blocked) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('The concurrent personal decision never waited on the action transaction lock');
+}
+
+for (const operation of leadWriteActions) {
+  test(`F200-01 ${operation}: ordinary independent target still saves with atomic business audit`, options, async () => {
+    const f = await writeFixture(operation);
+    // A limited grant on another lead must not remove independent rights.
+    await grantLead(db, admin, { ...f.input, leadId: f.other.id });
+    if (operation === 'updateCommercialOffer') {
+      const source = await db.lead.create({ data: { firstName: 'Fonte', lastName: 'Indipendente', assignedToId: f.reader.user.id } });
+      await db.commercialOffer.update({ where: { id: f.offer.id }, data: { leadId: source.id } });
+    }
+    const before = await businessState(f);
+    await actualLeadWriteActions(db, f.reader.session)[operation](f.form);
+    const after = await businessState(f);
+    assert.ok(after.audits.length > before.audits.length);
+    if (operation === 'createClient') assert.equal(after.clients.length, before.clients.length + 1);
+    else if (operation === 'createCommercialOffer') assert.equal(after.offers.length, before.offers.length + 1);
+    else assert.equal(after.offers.find(row => row.id === f.offer.id)!.leadId, f.lead.id);
+  });
+
+  test(`F200-01 ${operation}: existing and revoked selection deny before any business write`, options, async () => {
+    const f = await writeFixture(operation);
+    const grant = await grantLead(db, admin, f.input);
+    const before = await businessState(f);
+    await assert.rejects(actualLeadWriteActions(db, f.reader.session)[operation](f.form));
+    assert.deepEqual(await businessState(f), before);
+    await revoke(f, grant.receipt.grantId);
+    await assert.rejects(actualLeadWriteActions(db, f.reader.session)[operation](f.form));
+    assert.deepEqual(await businessState(f), before);
+  });
+
+  test(`F200-01 ${operation}: selection committed between precheck and transaction denies the actual action`, options, async () => {
+    const f = await writeFixture(operation), before = await businessState(f);
+    let barrier = 0;
+    const schedule: typeof withProjectResources = async (database, userId, resources, work) => {
+      barrier++;
+      await grantLead(db, admin, f.input); // A separate real transaction commits before the action resumes.
+      return withProjectResources(database, userId, resources, work);
+    };
+    await assert.rejects(actualLeadWriteActions(db, f.reader.session, schedule)[operation](f.form));
+    assert.equal(barrier, 1); assert.deepEqual(await businessState(f), before);
+    assert.equal(await db.selectiveLeadGrant.count({ where: { leadId: f.lead.id, recipientId: f.reader.user.id } }), 1);
+  });
+
+  test(`F200-01 ${operation}: an in-progress write locks out an interleaving personal decision`, options, async () => {
+    const f = await writeFixture(operation), preview = await previewLeadSharing(db, admin.session, f.input);
+    let decision: Promise<unknown> | undefined, decisionError: unknown, observedLock = false;
+    const schedule: typeof withProjectResources = (database, userId, resources, work) => withProjectResources(database, userId, resources, async tx => {
+      const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      decision = confirmLeadSharing(db, admin.session, f.input, preview.token, leadProof(admin)).catch(error => { decisionError = error; });
+      await waitForWriterLock(row.pid); observedLock = true;
+      assert.equal(await db.selectiveLeadGrant.count({ where: { leadId: f.lead.id, recipientId: f.reader.user.id } }), 0);
+      return work(tx);
+    });
+    try { await actualLeadWriteActions(db, f.reader.session, schedule)[operation](f.form); }
+    finally { await decision; }
+    assert.equal(observedLock, true);
+    assert.ok((await businessState(f)).audits.length > 0, 'the earlier authorized action committed');
+    // PostgreSQL may reject the later decision's old snapshot. No automatic retry.
+    if (decisionError) assert.ok(decisionError instanceof SerializableConflictError);
+    else assert.equal(await db.selectiveLeadGrant.count({ where: { leadId: f.lead.id, recipientId: f.reader.user.id } }), 1);
+  });
+
+  test(`F200-01 ${operation}: session revoked after precheck denies with no mutation or audit`, options, async () => {
+    const f = await writeFixture(operation), before = await businessState(f);
+    const schedule: typeof withProjectResources = async (database, userId, resources, work) => {
+      await db.internalSession.update({ where: { id: f.reader.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE' } });
+      return withProjectResources(database, userId, resources, work);
+    };
+    await assert.rejects(actualLeadWriteActions(db, f.reader.session, schedule)[operation](f.form));
+    assert.deepEqual(await businessState(f), before);
+  });
+
+  test(`F200-01 ${operation}: business audit fault rolls the actual mutation back`, options, async () => {
+    const f = await writeFixture(operation), before = await businessState(f);
+    const schedule: typeof withProjectResources = (database, userId, resources, work) => withProjectResources(database, userId, resources, tx => {
+      const fault = new Proxy(tx, { get(target, key) {
+        if (key === 'auditLog') return new Proxy(target.auditLog, { get(delegate, method) {
+          return method === 'create' ? async () => { throw new Error('SYNTHETIC_BUSINESS_AUDIT_FAULT'); } : Reflect.get(delegate, method);
+        } });
+        return Reflect.get(target, key);
+      } });
+      return work(fault);
+    });
+    await assert.rejects(actualLeadWriteActions(db, f.reader.session, schedule)[operation](f.form), /SYNTHETIC_BUSINESS_AUDIT_FAULT/);
+    assert.deepEqual(await businessState(f), before);
+  });
+}
+
+test('F200-01 client creation without a lead keeps its independent permission and atomic audit', options, async () => {
+  const person = await syntheticPerson(db, 'Cliente indipendente sintetico', 'admin');
+  const form = new FormData(); form.set('type', 'societa'); form.set('displayName', 'Cliente senza lead ' + randomUUID());
+  await actualLeadWriteActions(db, person.session).createClient(form);
+  assert.equal(await db.auditLog.count({ where: { actorId: person.user.id, event: 'client_create' } }), 1);
 });

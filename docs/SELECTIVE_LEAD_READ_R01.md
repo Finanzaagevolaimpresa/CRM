@@ -33,6 +33,8 @@ I grant sono firmati separatamente. Una generazione dedicata dell'utente (`selec
 
 Ordine dei lock della decisione: chiave, directory condivisa, identità lead, autorità, utenti ordinati/sessione, lead. La validità di sessione e step-up viene verificata anche dopo le attese. Le operazioni che concorrono sul lead usano le barriere esistenti. Un conflitto abortisce; non viene trasformato in approvazione.
 
+Creazione offerta, cambio del lead dell'offerta e creazione cliente collegato ricontrollano la sessione autorevole, i permessi e tutti i lead coinvolti nella transazione del salvataggio e dell'audit. Il lock utente è comune alla decisione selettiva; l'offerta aggiornata viene riletta sotto lock, compresa l'eventuale accettazione gestita. Una selezione committata dopo il controllo iniziale ma prima della transazione nega il salvataggio. Se la scrittura detiene già il lock, la decisione concorrente attende o termina con conflitto di serializzazione; nessuna delle due scritture viene ritentata automaticamente. Anche un errore nell'audit annulla la mutazione.
+
 Il registro di sessione acquisisce esplicitamente il lock utente prima del lock sessione anche per i chiamanti ordinari. Questo evita l'inversione osservata tra la lettura delle notifiche nel layout e la pagina di gestione. Una prova PostgreSQL osserva la seconda transazione in attesa e verifica che entrambe terminino, senza retry né attenuazione dei controlli.
 
 Le letture delle notifiche possono ripartire al massimo tre volte soltanto dopo un rollback PostgreSQL confermato per deadlock o serializzazione, rileggendo sessione e permessi dall'inizio. È lo stesso confine già usato dalle letture delle comunicazioni. Dinieghi, disconnessioni ed esiti incerti non vengono ritentati; la registrazione della presa visione resta una scrittura senza retry automatico. Una prova DB revoca la sessione tra rollback e nuova lettura e verifica il diniego.
@@ -55,6 +57,7 @@ PR140 deve qualificare l'immagine esatta del candidato e il suo riavvio compatib
 
 - Unit: input chiuso, canonizzazione, firme, anteprima/versioni, generazioni e proiezione.
 - PostgreSQL: autorità distinta, denieghi, revoche/scadenze, sessioni aperte, concorrenza, doppio comando, audit atomico, risposta persa, cambio ruolo e ritorno, modifica in attesa del lock.
+- F200-01 PostgreSQL: corpi invariati delle tre azioni pubbliche estratti via AST, form e validazione reali, guardie e transazioni reali; solo ingresso cookie e barriera temporale controllati dal test. Per ogni azione: diritto indipendente, selezione esistente/revocata, selezione committata fra precheck e transazione, attesa osservata con `pg_blocking_pids`, sessione revocata e fault audit con rollback. Cliente senza lead verificato separatamente. Queste prove non sono un test browser dei form.
 - Browser nativo sintetico: anteprima e conferma reali, due campi soltanto, percorsi indiretti, revoca nella sessione aperta, comando con risposta persa, sessione revocata, screenshot desktop/mobile.
 - Migrazione e recupero: dati esclusivamente sintetici in CI; build e invarianti dei percorsi esistenti.
 
