@@ -30,7 +30,7 @@ const UPDATES_MIGRATION = '20261017200000_record_update_notifications_v1';
 const UPDATES_MIGRATION_SHA256 = '11df35b3e90d69aa535104fcc8b15eb32ed218691c40dd85409cc51edf2a3ef0';
 
 const VIDEOS_MIGRATION = '20261018000000_private_video_library_v1';
-const VIDEOS_MIGRATION_SHA256 = '9e18345a37841ef6682c4f87ef564fdc48d289112b10c2299cb4b7f662e3e81e';
+const VIDEOS_MIGRATION_SHA256 = 'e61fd5ba2a6a9139a60155642fc4c473dd5e3523b24f2fccfff3879be7f9ebfc';
 
 /** A privileged, explicitly invoked operational act, never a public action.
  * The operator must acquire the human binding/scope and real TLS/authentication

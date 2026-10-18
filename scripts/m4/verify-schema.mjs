@@ -84,6 +84,15 @@ export function verifyCommunicationSchema() {
   assert.equal(createHash('sha256').update(schema53).digest('hex'), updates.schemaSha256, 'VIDEO_BASELINE_SCHEMA53');
   assert.equal(git('diff', '--name-only', videos.baseline, 'HEAD', '--', 'prisma/migrations'), videoPath, 'VIDEO_PREFIX53_UNCHANGED');
   assert.equal(hash(videoPath), videos.migrationSha256, 'VIDEO_MIGRATION_HASH');
+  // Admission must recognize the same reviewed SQL as the migration manifest.
+  // A stale pin denies even an otherwise valid explicit email activation.
+  const activationSource = readFileSync('src/lib/ordinary-email-activation.ts', 'utf8');
+  for (const [prefix, schemaBinding] of [['CONTEXT_', contexts], ['UPDATES_', updates], ['VIDEOS_', videos], ['', ordinary]]) {
+    const pinnedName = activationSource.match(new RegExp(`^const ${prefix}MIGRATION = '([^']+)';$`, 'm'))?.[1];
+    const pinnedHash = activationSource.match(new RegExp(`^const ${prefix}MIGRATION_SHA256 = '([a-f0-9]{64})';$`, 'm'))?.[1];
+    assert.equal(pinnedName, schemaBinding.migration, `EMAIL_ACTIVATION_${prefix}MIGRATION`);
+    assert.equal(pinnedHash, schemaBinding.migrationSha256, `EMAIL_ACTIVATION_${prefix}SQL_HASH`);
+  }
   return { protocol: 'PRIVATE_VIDEOS_SCHEMA54_BINDING', sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'),
     baseline: videos.baseline, qualifiedBaseline, migrations: 54, historicalMigrationPrefixUnchanged: 53, additiveMigration: videos.migration,
     schemaSha256: videos.schemaSha256, migrationSha256: videos.migrationSha256, productionContact: false };
