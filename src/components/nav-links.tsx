@@ -4,6 +4,7 @@ import type { RoleCode } from "@prisma/client";
 import type { Permission } from "@/lib/permissions";
 import { privilegedAccessPermissions } from "@/lib/privileged-access-contract";
 import Link from "next/link";
+import { DashboardIcon } from "./dashboard-icon";
 import { usePathname } from "next/navigation";
 
 export type NavItem = {
@@ -16,13 +17,9 @@ export type NavItem = {
 };
 
 function NavIcon({ href }: { href: string }) {
-  const isSearch = href === "/search";
-  const isNotification = href === "/notifications";
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5 shrink-0">
-      {isSearch ? <><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></> : isNotification ? <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></> : <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h8M8 17h5" /></>}
-    </svg>
-  );
+  const names: Record<string, string> = { '/dashboard': 'home', '/leads': 'people', '/clients': 'people', '/projects': 'folder',
+    '/technical-office': 'gear', '/communications': 'mail', '/documents': 'document', '/videos': 'video', '/settings/account': 'gear', '/search': 'search' };
+  return <DashboardIcon name={names[href] ?? 'document'} className="h-5 w-5 shrink-0"/>;
 }
 
 type NavSection = {
@@ -149,52 +146,27 @@ export function NavLinks({
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
-  return (
-    <nav className="crm-space-y-4 pb-1" aria-label="Navigazione principale">
-      {getVisibleNavItems({ role, effectivePermissions }).map((section) => {
-        const visibleItems = section.items;
-        return (
-          <div key={section.title} className="crm-space-y-1.5">
-            <p className="px-3 text-[0.62rem] font-black uppercase tracking-[0.16em] text-white/45">
-              {section.title}
-            </p>
-            {visibleItems.map(({ label, href }) => {
-              const active =
-                pathname === href || pathname.startsWith(`${href}/`);
-              return (
-                <Link
-                  aria-current={active ? "page" : undefined}
-                  className={`group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold ring-1 transition focus:outline-compat focus:ring-2 focus:ring-fai-lime ${active ? "bg-white/12 text-white ring-white/15 before:-ml-3 before:h-7 before:w-1 before:rounded-r before:bg-fai-lime" : "text-white/78 ring-transparent hover:bg-white/8 hover:text-white"}`}
-                  href={href}
-                  key={href}
-                  onClick={onNavigate}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                    <NavIcon href={href} />
-                    <span className="line-clamp-2 whitespace-normal break-words leading-snug">
-                      {label}
-                    </span>
-                  </span>
-                  {href === "/notifications" && notificationCount > 0 ? (
-                    <span className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-[0.65rem] font-black ${active ? "bg-fai-orange text-white" : "bg-fai-orange text-white"}`}>
-                      {notificationCount > 99 ? "99+" : notificationCount}
-                    </span>
-                  ) : (
-                    <span
-                      aria-hidden="true"
-                      className={`ml-2 shrink-0 text-xs transition ${active ? "text-fai-orange" : "text-white/20 group-hover:translate-x-0.5 group-hover:text-fai-lime"}`}
-                    >
-                      ›
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        );
-      })}
-    </nav>
-  );
+  const visibleSections = getVisibleNavItems({ role, effectivePermissions });
+  const all = visibleSections.flatMap(section => section.items);
+  const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/settings/account"];
+  const primary = primaryPaths.flatMap(path => all.filter(item => item.href === path));
+  // Keep every existing destination and permission predicate; promote the nine
+  // reference entries without duplicating them or granting new navigation.
+  const renderItem = ({ label, href }: NavItem, isPrimary = false) => {
+    const active = pathname === href || (pathname.startsWith(`${href}/`) && !all.some(item => item.href !== href && item.href.length > href.length && (pathname === item.href || pathname.startsWith(`${item.href}/`))));
+    const displayLabel = isPrimary && href === '/settings/account' ? 'Impostazioni' : isPrimary && href === '/leads' ? 'Lead' : label;
+    return <Link aria-current={active ? "page" : undefined} className="crm-nav-link group flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold transition focus:outline-compat focus:ring-2 focus:ring-fai-lime" href={href} key={href} onClick={onNavigate}>
+      <span className="flex min-w-0 flex-1 items-center gap-2.5"><NavIcon href={href}/><span className="line-clamp-2 whitespace-normal break-words leading-snug">{displayLabel}</span></span>
+      {href === '/notifications' && notificationCount > 0 ? <span className="ml-2 shrink-0 rounded-full bg-fai-orange px-2 py-0.5 text-[0.65rem] font-black text-white">{notificationCount > 99 ? '99+' : notificationCount}</span> : <span aria-hidden="true" className="crm-nav-arrow ml-2 shrink-0 text-lg">›</span>}
+    </Link>;
+  };
+  return <nav className="crm-space-y-4 pb-1" aria-label="Navigazione principale">
+    <div className="crm-nav-primary">{primary.map(item => renderItem(item, true))}</div>
+    {visibleSections.map(section => {
+      const secondary = section.items.filter(item => !primaryPaths.includes(item.href));
+      return secondary.length ? <div key={section.title} className="crm-space-y-1.5"><p className="crm-nav-section-title px-3 pt-2 text-[0.62rem] font-black uppercase tracking-[0.16em]">{section.title}</p>{secondary.map(item => renderItem(item))}</div> : null;
+    })}
+  </nav>;
 }
 
 

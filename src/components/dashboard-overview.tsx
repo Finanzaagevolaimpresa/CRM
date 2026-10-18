@@ -1,8 +1,13 @@
 import Link from "next/link";
+import { DashboardIcon } from "./dashboard-icon";
+import { DashboardSelectionFocus } from "./dashboard-selection-focus";
+import type { DashboardDetailItem } from "@/lib/dashboard-selection";
 import { AnimatedCounter } from './animated-counter';
 import type { DashboardCounterGroup } from "@/lib/dashboard-counter-groups";
 
 export type DashboardKpi = {
+  id?: string;
+  selectionHref?: string;
   label: string;
   value: number;
   description: string;
@@ -24,17 +29,6 @@ const pipelineColors = [
   "#043E8B", "#00693F", "#81CC2A", "#F68712", "#3D2974", "#62778F", "#C2416B",
   "#0891B2", "#A16207", "#7C3AED", "#DC2626", "#0F766E", "#B45309", "#475569",
 ];
-
-function KpiIcon({ tone, className = "h-6 w-6" }: { tone: DashboardKpi["tone"]; className?: string }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      {tone === "blue" && <><circle cx="9" cy="8" r="3" /><path d="M3 20c0-4 2-7 6-7s6 3 6 7M16 6a3 3 0 0 1 0 6M17 14c2.5.5 4 2.5 4 5" /></>}
-      {tone === "green" && <><path d="M7 3h8l4 4v14H7z" /><path d="M15 3v5h5M10 12h6M10 16h6" /></>}
-      {tone === "orange" && <><circle cx="12" cy="12" r="9" /><path d="M12 7v6l4 2" /></>}
-      {tone === "purple" && <><path d="M5 12.5 10 17l9-10" /><circle cx="12" cy="12" r="9" /></>}
-    </svg>
-  );
-}
 
 function AreaIcon({ id }: { id: string }) {
   return (
@@ -89,41 +83,76 @@ export function DashboardOverview({
   pipeline,
   shortcuts,
   counterGroups = [],
+  selectedKpiId,
+  detailItems = [],
+  userName,
+  priorityLinks = [],
+  focusSelection,
 }: {
   greeting: string;
   summary: string;
   kpis: DashboardKpi[];
   priorities: DashboardPriority[];
   pipeline: Array<{ label: string; value: number }>;
-  shortcuts: Array<{ label: string; description: string; href: string }>;
+  shortcuts: Array<{ label: string; description: string; href: string; icon?: string; tone?: string }>;
   counterGroups?: DashboardCounterGroup[];
+  selectedKpiId?: string | null;
+  detailItems?: DashboardDetailItem[];
+  userName?: string;
+  focusSelection?: string | null;
+  priorityLinks?: Array<{ label: string; href: string; icon: string; tone: string }>;
 }) {
+  const selected = kpis.find(item => item.id === selectedKpiId) ?? kpis.find(item => item.tone === "green") ?? kpis[0];
+  const icons = { blue: "people", green: "folder", purple: "document", orange: "calendar" };
+  const areaIcons = ["chart", "gear", "people", "calendar", "document", "search"];
+  const areaTones = ["blue", "green", "teal", "orange", "blue", "purple"];
   return (
-    <section aria-labelledby="dashboard-heading" className="crm-space-y-6">
-      <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 xl:flex-row xl:items-end xl:justify-between">
-        <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-fai-green">Panoramica operativa</p>
-          <h1 id="dashboard-heading" className="mt-2 text-3xl font-black tracking-tight text-fai-navy sm:text-4xl">{greeting}</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{summary}</p>
+    <section aria-labelledby="dashboard-heading" className="crm-dashboard crm-space-y-6">
+      <DashboardSelectionFocus selection={focusSelection}/>
+      <header className="crm-dashboard-header">
+        <div><h1 id="dashboard-heading">Dashboard</h1><p>Panoramica operativa</p><span className="sr-only">{greeting} {summary}</span></div>
+        <div className="crm-dashboard-account">
+          <details className="crm-perimeter-menu"><summary>Il mio perimetro <span aria-hidden="true">⌄</span></summary><div><strong>Dati accessibili al tuo profilo</strong><p>Contatori ed elenchi rispettano i tuoi permessi correnti.</p><Link href="/assignments">Le mie assegnazioni</Link><Link href="/shared-projects">Progetti condivisi</Link></div></details>
+          <Link href="/settings/account" className="crm-dashboard-user"><span className="crm-user-avatar"><DashboardIcon name="user"/></span><span>{userName ?? "Il mio account"}</span><span aria-hidden="true">⌄</span></Link>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Link href="/search" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime">Cerca nel CRM</Link>
-          <Link href="/notifications" className="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-fai-navy shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime">Notifiche</Link>
-        </div>
+      </header>
+      <div className="crm-dashboard-kpis" aria-label="Contatori operativi">
+        {kpis.map(kpi => {
+          const active = selected === kpi;
+          return <Link key={kpi.id ?? kpi.label} href={kpi.selectionHref ?? kpi.href} prefetch={false} scroll={false} aria-current={active ? "true" : undefined} aria-controls={kpi.selectionHref ? "dashboard-detail" : undefined} data-kpi={kpi.id ?? kpi.tone} data-tone={kpi.tone} className="crm-counter-hero crm-dashboard-kpi">
+            <div className="crm-kpi-heading"><span className="crm-kpi-icon"><DashboardIcon name={icons[kpi.tone]}/></span><h2>{kpi.label}</h2><span aria-hidden="true" className="crm-kpi-chevron">›</span></div>
+            {active && <span className="crm-kpi-selected" aria-hidden="true">✓</span>}
+            <div className="crm-kpi-ring">
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 240 240" className="crm-ring-art">
+                <circle className="crm-ring-dots" cx="120" cy="120" r="113"/>
+                <circle className="crm-ring-edge" cx="120" cy="120" r="104"/>
+                <circle className="crm-ring-base" cx="120" cy="120" r="96"/>
+                <circle className="crm-ring-light" cx="120" cy="120" r="96"/>
+                <circle className="crm-ring-inner" cx="120" cy="120" r="82"/>
+              </svg>
+              <AnimatedCounter value={kpi.value} variant="plain"/>
+            </div>
+            <span className="sr-only">{kpi.description}{active ? " · Selezionato" : ""}</span>
+            <span className="crm-kpi-footer">Apri elenco <span aria-hidden="true">→</span></span>
+          </Link>;
+        })}
       </div>
 
-      <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(17rem,1fr)]">
-        <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-          {kpis.map((kpi) => (
-            <Link key={kpi.label} href={kpi.href} data-tone={kpi.tone} className="crm-counter-panel crm-counter-hero group flex min-w-0 flex-col rounded-2xl p-4">
-              <div className="flex min-h-11 items-center gap-3"><span className="crm-counter-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"><KpiIcon tone={kpi.tone} /></span><p className="min-w-0 text-sm font-bold leading-5 text-fai-navy">{kpi.label}</p></div>
-              <div className="crm-counter-readout mt-4 flex-1 px-4 py-6"><AnimatedCounter value={kpi.value} /><p className="mt-5 text-center text-xs leading-5 text-slate-600">{kpi.description}</p></div>
-              <span className="crm-counter-hero-footer mt-4 flex min-h-10 items-center justify-center gap-3 pt-3 text-xs font-bold">Apri area <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" className="h-4 w-4"><path d="M3 10h13m-5-5 5 5-5 5" /></svg></span>
-            </Link>
-          ))}
-        </div>
-        <PipelineChart pipeline={pipeline} />
+      <div className="crm-dashboard-workspace">
+        <section className="crm-dashboard-areas" aria-labelledby="dashboard-areas-heading">
+          <h2 id="dashboard-areas-heading">Aree operative</h2>
+          <div className="crm-area-grid">{shortcuts.map((area, index) => <Link key={area.href} href={area.href} data-tone={area.tone ?? areaTones[index % areaTones.length]} className="crm-area-tile"><span className="crm-area-icon"><DashboardIcon name={area.icon ?? areaIcons[index % areaIcons.length]}/></span><span><strong>{area.label}</strong><small>{area.description}</small></span><span aria-hidden="true">›</span></Link>)}</div>
+          {shortcuts.length === 0 && <p className="crm-dashboard-empty">Nessuna area operativa disponibile per il tuo profilo.</p>}
+        </section>
+        <section id="dashboard-detail" tabIndex={-1} className="crm-dashboard-detail" data-tone={selected?.tone ?? "blue"} aria-labelledby="dashboard-detail-heading" aria-live="polite">
+          <div className="crm-detail-heading"><span className="crm-area-icon"><DashboardIcon name={selected ? icons[selected.tone] : "folder"}/></span><div><h2 id="dashboard-detail-heading">{selected?.label ?? "Dettaglio operativo"}</h2><p>Dettaglio selezionato</p></div><span aria-hidden="true">›</span></div>
+          <p className="crm-detail-description">{selected?.description ?? "Nessun contatore disponibile per il tuo profilo."}</p>
+          {detailItems.length > 0 ? <ul className="crm-detail-list">{detailItems.map(item => <li key={item.id}><Link href={item.href} prefetch={false}><strong>{item.title}</strong><span className="crm-detail-status">{item.status.replaceAll("_", " ")}</span><span aria-hidden="true">›</span></Link></li>)}</ul> : <p className="crm-dashboard-empty">{selected?.value ? "Apri l’elenco per consultare i record nel tuo perimetro." : "Nessun elemento nel filtro selezionato."}</p>}
+          {selected && <div className="crm-detail-footer"><Link href={selected.href} prefetch={false}>Vedi elenco completo <span aria-hidden="true">→</span></Link></div>}
+        </section>
+        <section className="crm-dashboard-today" aria-labelledby="dashboard-today-heading"><h2 id="dashboard-today-heading">Priorità di oggi</h2><div>{priorityLinks.map(link => <Link key={link.href} href={link.href} data-tone={link.tone}><span className="crm-priority-icon"><DashboardIcon name={link.icon}/></span><span>{link.label}</span><span aria-hidden="true">›</span></Link>)}</div>{priorityLinks.length === 0 && <p className="crm-dashboard-empty">Le attività disponibili sono riportate nel riepilogo seguente.</p>}</section>
       </div>
+      <p className="crm-dashboard-data-note">{summary}</p>
 
       {counterGroups.length > 0 && <section aria-labelledby="counter-areas-heading" className="crm-space-y-4">
         <div className="flex items-center gap-3"><span aria-hidden="true" className="h-7 w-1.5 rounded-full bg-fai-lime" /><h2 id="counter-areas-heading" className="text-xl font-black tracking-tight text-fai-navy">Contatori per area</h2></div>
@@ -152,6 +181,8 @@ export function DashboardOverview({
         </div>
       </section>}
 
+      <PipelineChart pipeline={pipeline} />
+
       <section aria-labelledby="dashboard-priorities-heading" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs">
         <div className="flex items-start justify-between gap-4"><div><h2 id="dashboard-priorities-heading" className="text-xl font-black text-fai-navy">Priorità</h2><p className="mt-1 text-sm text-slate-500">Le prossime attività autorizzate per urgenza.</p></div><span className="rounded-full bg-fai-lime/20 px-3 py-1 text-xs font-black tabular-nums text-fai-green">{priorities.length}</span></div>
         {priorities.length === 0 ? <p className="mt-6 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">Nessuna priorità operativa al momento.</p> : (
@@ -161,7 +192,7 @@ export function DashboardOverview({
         )}
       </section>
 
-      {shortcuts.length > 0 && <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shortcuts.map((shortcut) => <Link key={shortcut.href} href={shortcut.href} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs focus:outline-compat focus:ring-2 focus:ring-fai-lime"><span className="font-black text-fai-navy">{shortcut.label}</span><span className="mt-1 block text-xs leading-5 text-slate-500">{shortcut.description}</span><span className="mt-3 block text-xs font-black uppercase tracking-wide text-fai-green">Apri area →</span></Link>)}</div>}
+
     </section>
   );
 }

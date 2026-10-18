@@ -1,4 +1,6 @@
 export const dynamic = "force-dynamic";
+import Link from "next/link";
+import { listDashboardTodayTasks } from "@/lib/dashboard-detail";
 import { PrimaryButton } from "@/components/actions";
 import { completeTask } from "@/lib/form-actions";
 import {
@@ -14,10 +16,11 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission, requirePermission } from "@/lib/auth";
 import { canEditTask, canViewTask } from "@/lib/access-control";
 import { listAccessibleTasks } from "@/lib/read-access";
-export default async function Page() {
+export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
+  const todayOnly = (await searchParams)?.dashboard === "oggi";
   const session = await requirePermission("service.read");
   const [items, clientRows, projectRows, serviceRows, userRows] = await Promise.all([
-    listAccessibleTasks(session, { where: { deletedAt: null }, orderBy: { dueAt: "asc" } }),
+    todayOnly ? listDashboardTodayTasks(session, new Date()) : listAccessibleTasks(session, { where: { deletedAt: null }, orderBy: { dueAt: "asc" } }),
     prisma.client.findMany({ where: { deletedAt: null } }),
     prisma.project.findMany({ where: { deletedAt: null } }),
     prisma.clientService.findMany({ where: { deletedAt: null } }),
@@ -40,6 +43,7 @@ export default async function Page() {
         title="Attività e scadenze"
         description="Attività interne, priorità, assegnazioni e deadline operative."
       />
+      {todayOnly && <p role="status">Filtro dashboard: attività aperte in scadenza oggi. <Link href="/tasks" className="underline">Rimuovi filtro</Link></p>}
       <Card title="Elenco operativo">
         {visibleItems.length === 0 ? (
           <EmptyState title="Nessun elemento presente">

@@ -14,7 +14,7 @@ const segments = [
 const litSegments = ['012345', '12', '01346', '01236', '1256', '02356', '023456', '012', '0123456', '012356'];
 
 /** Only the decorative readout animates; the accessible value stays exact. */
-export function AnimatedCounter({ value }: { value: number }) {
+export function AnimatedCounter({ value, variant = "segments" }: { value: number; variant?: "segments" | "plain" }) {
   const visual = useRef<HTMLSpanElement>(null);
   const formatted = value.toLocaleString('it-IT');
   const characters = Array.from(formatted);
@@ -33,7 +33,8 @@ export function AnimatedCounter({ value }: { value: number }) {
       cells.forEach((cell, index) => {
         const char = aligned[index];
         cell.dataset.digit = char;
-        if (cell.dataset.separator === 'true') cell.style.visibility = char === ' ' ? 'hidden' : 'visible';
+        if (cell.dataset.plain === 'true') cell.textContent = char;
+        else if (cell.dataset.separator === 'true') cell.style.visibility = char === ' ' ? 'hidden' : 'visible';
         else cell.querySelectorAll('[data-segment]').forEach((segment, segmentIndex) => {
           segment.setAttribute('data-lit', String(char !== ' ' && litSegments[Number(char)]?.includes(String(segmentIndex)) === true));
         });
@@ -70,11 +71,13 @@ export function AnimatedCounter({ value }: { value: number }) {
     }
     preference.addEventListener('change', finish);
     return () => { cancelAnimationFrame(frame); observer?.disconnect(); preference.removeEventListener('change', finish); };
-  }, [value, formatted]);
+  }, [value, formatted, variant]);
 
-  return <span data-counter-final={value} className="crm-digital-counter" style={{ '--counter-units': Math.max(units, 1) } as CSSProperties}>
+  return <span data-counter-final={value} data-variant={variant} className="crm-digital-counter" style={{ '--counter-units': Math.max(units, 1) } as CSSProperties}>
     <span ref={visual} aria-hidden="true" className="crm-digital-visual" data-display-value={formatted} data-phase="settled">
-      {characters.map((char, index) => /\d/.test(char)
+      {characters.map((char, index) => variant === "plain"
+        ? <span key={index} data-digit={char} data-plain="true" className={/\d/.test(char) ? "crm-plain-digit" : "crm-plain-separator"}>{char}</span>
+        : /\d/.test(char)
         ? <svg key={index} data-digit={char} className="crm-digital-digit" viewBox="0 0 44 76" focusable="false">
           {segments.map((points, segmentIndex) => <polygon key={segmentIndex} points={points} data-segment={segmentIndex} data-lit={litSegments[Number(char)].includes(String(segmentIndex))} />)}
         </svg>

@@ -130,7 +130,7 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await page.goto("/?profile=commercial");
   await page.getByRole("button", { name: "Apri menu" }).click();
   await expect(page.getByRole("link", { name: "Checklist documentale" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead e offerte" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Utenti" })).toHaveCount(0);
   await page.getByRole("button", { name: "Chiudi menu" }).click();
   await page.getByRole("button", { name: "Apri menu" }).click();
@@ -139,7 +139,7 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(page.getByRole("button", { name: /menu/i })).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Navigazione principale" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead e offerte" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead", exact: true })).toBeVisible();
 });
 
 test("resize conserva il focus su controlli visibili", async ({ page }) => {
@@ -196,8 +196,11 @@ test("dashboard responsive usa logo e azioni reali senza intrappolare lo scroll"
   expect(logoImage.width).toBeGreaterThan(0);
   expect(logoImage.height).toBeGreaterThan(0);
   expect(logoImage.width / logoImage.height).toBeCloseTo(971 / 567, 1);
-  await expect(page.getByRole("link", { name: "Cerca nel CRM" })).toHaveAttribute("href", "/search");
-  await expect(page.getByRole("link", { name: "Notifiche" })).toHaveAttribute("href", "/notifications");
+  await page.getByRole("button", { name: "Apri menu" }).click();
+  const navigation = page.getByRole("navigation", { name: "Navigazione principale" });
+  await expect(navigation.getByRole("link", { name: "Ricerca", exact: true })).toHaveAttribute("href", "/search");
+  await expect(navigation.getByRole("link", { name: /^Notifiche/ })).toHaveAttribute("href", "/notifications");
+  await page.getByRole("button", { name: "Chiudi menu" }).click();
   await expect(page.getByText("Autorizzazioni AI in attesa")).toHaveCount(0);
   await expect(page.getByText("Pratiche tecniche attive")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -216,7 +219,7 @@ test("dashboard responsive usa logo e azioni reali senza intrappolare lo scroll"
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?profile=admin");
-  await expect(page.getByRole("heading", { name: "Buongiorno, Operatore." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "Finanza Agevola Impresa" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
   // A fullPage capture alone cannot expose content inside the desktop scrollport.
@@ -323,7 +326,7 @@ test("contatori zero restano visibili e numeri grandi non causano overflow mobil
   await lastCounter.scrollIntoViewIfNeeded();
   await expect(lastCounter).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
-  await page.getByRole("heading", { name: "Buongiorno, Operatore." }).scrollIntoViewIfNeeded();
+  await page.getByRole("heading", { name: "Dashboard", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("dashboard-counters-mobile-320.png"), fullPage: true });
 });
 

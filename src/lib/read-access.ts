@@ -347,7 +347,7 @@ type TaskAccessRecord = Pick<Task,
   'clientId' | 'projectId' | 'clientServiceId' | 'assignedToId' | 'createdById'
 >;
 
-async function filterAccessibleTasks<TTask extends TaskAccessRecord>(
+export async function filterAccessibleTasks<TTask extends TaskAccessRecord>(
   session: AuthSession,
   tasks: TTask[],
   db: Prisma.TransactionClient = prisma,
