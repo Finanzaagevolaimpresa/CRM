@@ -43,7 +43,7 @@ test('schema55 restart preserves selected work, read state and revoked rule deni
   await expect(owner.locator('a[href*="update=' + fixture.emails.UNSAVED.id + '"]')).toHaveText('Prepara bozza da aggiornamento');
   await expect(owner.locator('a[href*="update=' + fixture.emails.REVOKED.id + '"]')).toHaveCount(0);
   await owner.locator('a[href*="update=' + fixture.emails.AVAILABLE.id + '"]').click();
-  await expect(owner.getByText('SYNTHETIC EMAIL UPDATE HISTORY', { exact: true })).toBeVisible();
+  await expect(owner.locator('div.whitespace-pre-wrap').filter({ hasText: /^SYNTHETIC EMAIL UPDATE HISTORY$/ })).toBeVisible();
   await expect(owner.getByRole('button', { name: 'Salva bozza', exact: true })).toHaveCount(0);
   expect((await other.request.get(origin + '/communications/updates')).status()).toBe(404);
   expect((await owner.request.get(origin + '/communications?kind=LEAD&practice=' + fixture.emails.REVOKED.leadId + '&update=' + fixture.emails.REVOKED.id)).status()).toBe(404);

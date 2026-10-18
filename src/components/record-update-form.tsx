@@ -80,7 +80,7 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
     <p className="text-sm text-slate-600">La scelta dei destinatari non concede accesso alla scheda. Le email richiedono una bozza e una nuova approvazione personale del testo esatto.</p>
     {setup.rule && <p className="rounded-xl bg-slate-100 p-3 text-sm">Regola: <strong>{!setup.rule.active ? 'revocata' : setup.rule.current ? 'attiva' : 'da riconfermare: contesto, persone o permessi cambiati'}</strong>.</p>}
     <fieldset disabled={locked} className="crm-space-y-4">
-      <label className="block text-sm font-bold">Modalità di aggiornamento<select className={fieldClass} value={mode} onChange={e => setMode(e.target.value as RecordUpdateMode)}>
+      <label className="block text-sm font-bold">Modalità di aggiornamento<select aria-label="Modalità di aggiornamento" className={fieldClass} value={mode} onChange={e => setMode(e.target.value as RecordUpdateMode)}>
         <option value="CRM">Avviso interno nel CRM</option>
         {setup.emailDraftsAvailable && <><option value="EMAIL_DRAFT">Bozza email da approvare</option><option value="CRM_AND_EMAIL_DRAFT">Avviso CRM e bozza email da approvare</option></>}
       </select></label>

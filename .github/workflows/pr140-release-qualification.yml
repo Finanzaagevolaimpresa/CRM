@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   release-schema55:
-    name: Schema54 package with email state and selective access retained on restart
+    name: Schema55 package with email state and selective access retained on restart
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
