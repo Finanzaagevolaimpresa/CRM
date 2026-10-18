@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema57 restart preserves selected client fields and revoked indirect-resource denials', async ({ browser }) => {
+test('schema58 restart preserves selected client fields and revoked indirect-resource denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_CLIENT_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; rows: { id: string; label: string; companyId: string; projectId: string; leadId: string }[];
   };

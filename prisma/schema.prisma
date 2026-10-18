@@ -371,6 +371,11 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  selectivePracticeEpoch Int @default(1)
+  selectivePracticeAuthority SelectivePracticeAuthority?
+  selectivePracticeGrants SelectivePracticeGrant[]
+  selectivePracticeCommands SelectivePracticeCommand[] @relation("PracticeCommandActor")
+  selectivePracticeReceivedCommands SelectivePracticeCommand[] @relation("PracticeCommandRecipient")
   selectiveClientEpoch Int @default(1)
   selectiveClientAuthority SelectiveClientAuthority?
   selectiveClientGrants SelectiveClientGrant[]
@@ -924,6 +929,67 @@ model SelectiveClientRevision {
   transactionId BigInt @default(dbgenerated("txid_current()"))
   grant SelectiveClientGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command SelectiveClientCommand @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([grantId, revision])
+}
+
+model SelectivePracticeAuthority {
+  id String @id @default("practice-sharing")
+  userId String @unique
+  revision Int @default(1)
+  enabled Boolean @default(false)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+// The row survives revocation/expiry so ordinary rights cannot silently return.
+model SelectivePracticeGrant {
+  id String @id @default(uuid()) @db.Uuid
+  practiceId String
+  recipientId String
+  revision Int
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  practice TechnicalPractice @relation(fields: [practiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revisions SelectivePracticeRevision[]
+  @@unique([practiceId, recipientId])
+  @@index([recipientId])
+}
+
+model SelectivePracticeCommand {
+  id String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  practiceId String
+  recipientId String
+  expectedRevision Int
+  operation String @db.VarChar(12)
+  requestDigest String @db.VarChar(64)
+  receipt Json
+  receiptProof String @db.VarChar(64)
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation("PracticeCommandActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation("PracticeCommandRecipient", fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  practice TechnicalPractice @relation(fields: [practiceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revision SelectivePracticeRevision?
+  @@index([actorId, createdAt])
+}
+
+model SelectivePracticeRevision {
+  id String @id @db.Uuid
+  grantId String @db.Uuid
+  revision Int
+  commandId String @unique @db.Uuid
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  grant SelectivePracticeGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  command SelectivePracticeCommand @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   @@unique([grantId, revision])
 }
 
@@ -2248,6 +2314,8 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  selectivePracticeGrants SelectivePracticeGrant[]
+  selectivePracticeCommands SelectivePracticeCommand[]
   recordUpdateEpoch Int @default(1)
   communicationContextFiles CommunicationContextFile[]
   approvedCommunications ApprovedCommunication[]

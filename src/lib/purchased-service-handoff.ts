@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { isSelectivePractice } from './selective-practice-policy';
+import { assertNoSelectivePracticeMutation } from './selective-practice-scope';
 import { assertNoSelectiveProjectMutation, loadSelectiveProjectScope } from './selective-project-scope';
 import { z } from 'zod';
 import { type Prisma, type PrismaClient } from '@prisma/client';
@@ -96,6 +98,7 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
   await assertNoSelectiveProjectMutation(tx, actor.userId, selectedService?.projectId, input.serviceId);
   const fingerprint = canonicalSha256(input), existing = await getHandoffReceipt(tx, input.serviceId);
   const scope = await loadSelectiveProjectScope(tx, actor.userId);
+  if (existing && isSelectivePractice(scope, existing.receipt.technicalPracticeId)) return deny('Pratica non disponibile per questo accesso.');
   if ([selectedService?.contractId, existing?.receipt.contractId].some(contractId =>
     Boolean(contractId && scope.selectiveContractIds?.includes(contractId)))) return deny('Dati contrattuali non disponibili per questo accesso.');
   if (existing) {
@@ -103,6 +106,7 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
     return existing; // An HTTP retry never reapplies assignments, recreates tasks or overwrites subsequent work.
   }
   const preview = await previewPurchasedServiceHandoff(tx, input.serviceId);
+  if (preview.practice) await assertNoSelectivePracticeMutation(tx, actor.userId, preview.practice.id);
   await assertClientOperational(tx, preview.client.id);
   if (preview.expectedHash !== input.expectedHash) return deny('Incarico, pagamento o servizio cambiati. Riapri e verifica il riepilogo.');
   if (new Set(input.activities).size !== input.activities.length) return deny('Elimina le attività duplicate prima del passaggio.');

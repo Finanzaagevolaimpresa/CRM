@@ -11,6 +11,7 @@ import { prisma } from '@/lib/prisma';
 import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access';
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 import { clientVisibilityWhere, leadVisibilityWhere } from '@/lib/core-query-policy';
+import { practiceOutsideSelection } from '@/lib/selective-practice-policy';
 
 type SearchResult = {
   id: string;
@@ -72,6 +73,8 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
   let groups: ResultGroup[] = [];
 
   if (q.length >= 2) {
+    const selectedPracticeIds = [...new Set([...(session.selectivePracticeIds ?? []),
+      ...(await prisma.selectivePracticeGrant.findMany({ where: { recipientId: session.userId }, select: { practiceId: true } })).map(row => row.practiceId)])];
     const [clients, projects, services, documents, technicalPractices, tasks, communications, leads, offers] = await Promise.all([
       hasPermission(session, 'client.read')
         ? prisma.client.findMany({ where: { deletedAt: null, AND: [clientVisibilityWhere(session)], OR: [{ displayName: text(q) }, { status: text(q) }, { notes: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
@@ -82,13 +85,16 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
         ? prisma.document.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { fileName: text(q) }, { documentCategory: text(q) }, { type: text(q) }, ] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'technical.read')
-        ? prisma.technicalPractice.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { practiceType: text(q) }, { targetEntity: text(q) }, { targetPortal: text(q) }, { protocolNumber: text(q) }, { integrationRequestNote: text(q) }, { internalNotes: text(q) }, { clientVisibleStatus: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        ? prisma.technicalPractice.findMany({ where: { deletedAt: null, AND: [practiceOutsideSelection(session),
+          { selectivePracticeGrants: { none: { recipientId: session.userId } } }], OR: [{ title: text(q) }, { practiceType: text(q) }, { targetEntity: text(q) }, { targetPortal: text(q) }, { protocolNumber: text(q) }, { integrationRequestNote: text(q) }, { internalNotes: text(q) }, { clientVisibleStatus: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'service.read')
         ? listAccessibleTasks(session, { where: { deletedAt: null, OR: [{ title: text(q) }, { description: text(q) }, { type: text(q) }] }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }], take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'practice_communications.read')
-        ? prisma.practiceCommunication.findMany({ where: { deletedAt: null, OR: [{ title: text(q) }, { content: text(q) }, { internalNote: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
+        ? prisma.practiceCommunication.findMany({ where: { deletedAt: null,
+          technicalPracticeId: { notIn: selectedPracticeIds },
+          OR: [{ title: text(q) }, { content: text(q) }, { internalNote: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })
         : Promise.resolve([]),
       hasPermission(session, 'lead.read')
         ? prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)], OR: [{ firstName: text(q) }, { lastName: text(q) }, { companyName: text(q) }, { contactPerson: text(q) }, { phone: text(q) }, { email: text(q) }, { source: text(q) }, { region: text(q) }, { province: text(q) }, { city: text(q) }, { interest: text(q) }, { commercialStatus: text(q) }, { nextActionNote: text(q) }, { notes: text(q) }, { commercialProposal: text(q) }] }, orderBy: { updatedAt: 'desc' }, take: takePerCategory })

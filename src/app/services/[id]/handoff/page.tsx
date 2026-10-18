@@ -1,5 +1,6 @@
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { hasSelectiveContext } from '@/lib/selective-project-policy';
+import { isSelectivePractice } from '@/lib/selective-practice-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -21,7 +22,10 @@ export default async function Page({ params, searchParams }: {
   const context = await purchasedServiceContext(prisma, id).catch(() => null);
   if (!context) notFound();
   if (hasSelectiveContext(session, context.service) || session.selectiveServiceIds?.includes(id)) notFound();
+  if (await prisma.technicalPractice.findFirst({ where: { clientServiceId: id,
+    id: { in: [...(session.selectivePracticeIds ?? [])] } }, select: { id: true } })) notFound();
   const entry = await getHandoffReceipt(prisma, id), { client, service, project } = context;
+  if (entry && isSelectivePractice(session, entry.receipt.technicalPracticeId)) notFound();
   const practice = entry ? await prisma.technicalPractice.findFirst({ where: { id: entry.receipt.technicalPracticeId, clientId: client.id,
     clientServiceId: id, projectId: service.projectId, deletedAt: null } }) : null;
   if (session.role !== 'admin' && (!practice || !canViewTechnicalPractice(session, { ...practice, client,
@@ -72,6 +76,7 @@ export default async function Page({ params, searchParams }: {
   try { preview = await previewPurchasedServiceHandoff(prisma, id); }
   catch (error) { if (!(error instanceof UserFacingActionError)) throw error;
     return <Card title="Requisiti del passaggio da completare"><p>{error.message}</p><Link href={`/clients/${client.id}#servizi-acquistati`}>Torna al servizio acquistato</Link></Card>; }
+  if (preview.practice && isSelectivePractice(session, preview.practice.id)) notFound();
   const q = (query.q ?? '').trim().slice(0, 120), after = query.after && /^[a-zA-Z0-9_-]{1,128}$/.test(query.after) ? query.after : undefined;
   const candidates = await prisma.user.findMany({ where: { active: true, deletedAt: null, role: { in: [...technicalRoles] },
     ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}), ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 26, select: { id: true, name: true } });

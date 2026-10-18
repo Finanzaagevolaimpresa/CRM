@@ -1,3 +1,4 @@
+import { mayManagePracticeSharing } from '@/lib/selective-practice-access';
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
@@ -48,6 +49,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     clientService: service ? { ...service, client, project: serviceProject ? { ...serviceProject, client } : null } : null,
   })) return <h1 className="text-3xl font-bold text-fai-navy">Pratica non accessibile</h1>;
 
+  const sharingAvailable = await mayManagePracticeSharing(prisma, session);
   const purchasedHandoff = service ? await prisma.auditLog.findFirst({ where: { entityType: 'TechnicalPractice', entityId: practice.id, event: 'purchased_service_handoff' }, select: { id: true } }) : null;
   const canViewDocuments = hasPermission(session, 'document.download');
   const canReadSensitive = hasPermission(session, 'document.sensitive.read');
@@ -127,6 +129,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const timeline = allTimelineEvents.filter((event) => activeTimelineFilter === 'tutti' ? !isRedundantOperationalAudit(event, allTimelineEvents) : event.category === activeTimelineFilter).slice(0, 60);
 
   return <div className="crm-space-y-6"><PageHeader title={practice.title} description="Dettaglio pratica tecnica interna. Gli aggiornamenti al cliente vanno verificati prima dell’invio: il CRM non invia email, PEC o WhatsApp automatici." />
+    {sharingAvailable && <SecondaryLink href={`/technical-office/practices/${practice.id}/sharing`}>Condividi accesso selettivo</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PRACTICE/${practice.id}`}>Chi aggiornare</SecondaryLink>}
     <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">← Pratiche</SecondaryLink><SecondaryLink href={`/assignments/TechnicalPractice/${practice.id}`}>Responsabilità e presa in carico</SecondaryLink>{practice.clientServiceId && (session.role === 'admin' || purchasedHandoff) && <SecondaryLink href={`/services/${practice.clientServiceId}/handoff`}>Servizio acquistato e passaggio</SecondaryLink>}<SecondaryLink href={`/clients/${client.id}#ufficio-tecnico-pratiche`}>Fascicolo cliente</SecondaryLink><SecondaryLink href={`/technical-office/practices/${practice.id}/operational-report`}>Report operativo</SecondaryLink><SecondaryLink href={`/technical-office/practices/${practice.id}/operational-report/docx`}>Report Word</SecondaryLink><StatusBadge status={practice.status}/><StatusBadge status={practice.priority}/></div>
     <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]"><Card title="Dati pratica"><div className="grid gap-3 text-sm md:grid-cols-2"><p><b>Cliente:</b> {client.displayName}</p><p><b>Progetto:</b> {project?.title ?? '—'}</p><p><b>Servizio:</b> {service?.practiceType ?? service?.serviceCatalogId ?? '—'}</p><p><b>Commerciale referente:</b> {userOf(practice.commercialOwnerId)}</p><p><b>Responsabile tecnico:</b> {userOf(practice.technicalOwnerId)}</p><p><b>Ente/portale:</b> {practice.targetEntity}{practice.targetPortal ? ` · ${practice.targetPortal}` : ''}</p><p><b>Protocollo:</b> {practice.protocolNumber ?? '—'}</p><p><b>Presentata il:</b> {formatDateTime(practice.submittedAt)}</p><p><b>Scadenza:</b> {formatDateTime(practice.dueDate)}</p><p><b>Prossimo update cliente:</b> {formatDateTime(practice.nextClientUpdateAt)}</p></div><TimestampMeta createdAt={practice.createdAt} updatedAt={practice.updatedAt} createdBy={userOf(practice.createdById)} updatedBy={userOf(practice.technicalOwnerId)} /></Card>

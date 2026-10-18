@@ -1,4 +1,5 @@
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
+import { assertNoSelectivePracticeMutation } from './selective-practice-scope';
 import { assertNoSelectiveClientMutation } from './selective-client-scope';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { assertNoSelectiveProjectMutation } from './selective-project-scope';
@@ -95,6 +96,7 @@ export async function savePracticeResponsibility(tx: Prisma.TransactionClient, a
 }, admitted: boolean) {
   if (!admitted) return deny('Conferma amministrativa richiesta.');
   await authorizeManualAssignment(tx, actor, [{ userId: input.commercialOwnerId, roles: commercialRoles }, { userId: input.technicalOwnerId, roles: technicalRoles }]);
+  await assertNoSelectivePracticeMutation(tx, actor.userId, input.id);
   const context = await lockContext(tx, 'TechnicalPractice', input.id);
   await assertNoSelectiveClientMutation(tx, actor.userId, context?.state.clientId);
   await assertNoSelectiveProjectMutation(tx, actor.userId, context?.state.projectId, context?.state.clientServiceId);
@@ -127,6 +129,7 @@ export async function acceptResponsibility(tx: Prisma.TransactionClient, actor: 
   if (!session || !session.active || session.deletedAt || session.revokedAt || !session.live) return deny();
   if (!hasPermission(session, 'assignment.accept') || !hasPermission(session, input.kind === 'Lead' ? 'lead.read' : 'technical.read')) return deny();
   if (input.kind === 'Lead') await assertNoSelectiveLeadMutation(tx, actor.userId, input.id);
+  else await assertNoSelectivePracticeMutation(tx, actor.userId, input.id);
   const context = await lockContext(tx, input.kind, input.id), current = await latestResponsibility(tx, input.kind, input.id);
   await assertNoSelectiveClientMutation(tx, actor.userId, context?.state.clientId);
   await assertNoSelectiveProjectMutation(tx, actor.userId, context?.state.projectId, context?.state.clientServiceId);
