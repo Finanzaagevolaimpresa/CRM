@@ -307,3 +307,62 @@ test('native email draft lost response and replay retain a single version and no
   await expect(page.locator('a[href*="update=' + work.id + '"]')).toHaveText('Apri messaggio già salvato');
   await context.close();
 });
+
+test('native derived refusal preserves provenance for lead/client/practice; lost response and replay create one unapproved revision', async ({ browser }) => {
+  test.setTimeout(480_000);
+  const context = await browser.newContext(), page = await context.newPage(); let externalRequests = 0;
+  await context.route('**/*', route => {
+    if (new URL(route.request().url()).origin !== origin) { externalRequests++; return route.abort(); }
+    return route.continue();
+  });
+  await login(page, f.emails.admin, true);
+  for (const kind of ['LEAD', 'CLIENT', 'PRACTICE'] as const) {
+    const row = await fixture(kind), work = await emailUpdate(page, row), form = await openEmailDraft(page, work.id);
+    await form.getByRole('button', { name: 'Salva bozza', exact: true }).click();
+    await expect(page.getByRole('status')).toContainText('Operazione registrata');
+    const before = await db.communicationVersion.findFirstOrThrow({ where: { messageId: work.id, revision: 1 }, include: { approval: true } });
+    expect(before.updateSource).not.toBeNull(); expect(before.updateSourceHash).not.toBeNull();
+    await page.goto('/communications/updates'); await page.locator('a[href*="update=' + work.id + '"]').click();
+    const panel = page.getByRole('region', { name: 'Decisione personale email', exact: true });
+    const exact = page.getByRole('region', { name: 'Anteprima della versione esatta', exact: true });
+    await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click();
+    await expect(exact).toContainText(before.id);
+    await exact.getByLabel('Rifiuto personalmente questa versione esatta.').check();
+    let captured: { url: string; body: string; headers: Record<string, string> } | undefined, posts = 0;
+    if (kind === 'LEAD') await page.route('**/communications?**', async route => {
+      const request = route.request();
+      if (request.method() !== 'POST' || !request.postData()?.includes('RIFIUTO_QUESTA_VERSIONE')) return route.fallback();
+      posts++; captured = { url: request.url(), body: request.postData()!, headers: {
+        origin, 'next-action': request.headers()['next-action'], 'content-type': request.headers()['content-type'] } };
+      await route.fetch(); await route.abort('failed'); // Real action commits; only its browser response is lost.
+    });
+    await exact.getByRole('button', { name: 'Rifiuta versione 1', exact: true }).click();
+    await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: work.id } })).currentRevision).toBe(2);
+    if (kind === 'LEAD') {
+      await expect(panel).toContainText('Risposta non ricevuta');
+      await expect(panel.getByRole('button', { name: 'Anteprima email ordinaria' })).toBeDisabled();
+      expect(posts).toBe(1); expect(captured).toBeTruthy();
+      await page.unroute('**/communications?**');
+      const replay = await context.request.post(captured!.url, { headers: captured!.headers, data: captured!.body });
+      expect(await replay.text()).toContain('CHECK_CURRENT');
+    }
+    const saved = await db.approvedCommunication.findUniqueOrThrow({ where: { id: work.id } });
+    expect(saved.state).toBe('DRAFT'); expect(saved.updateDeliveryId).toBe(work.id);
+    const versions = await db.communicationVersion.findMany({ where: { messageId: work.id }, orderBy: { revision: 'asc' }, include: { approval: true } });
+    expect(versions.map(v => v.revision)).toEqual([1, 2]); expect(versions[0]).toEqual(before);
+    expect(versions[1].updateSource).toEqual(before.updateSource); expect(versions[1].updateSourceHash).toBe(before.updateSourceHash);
+    expect(versions[1].approval).toBeNull(); expect(versions[1].snapshot).toEqual({ ...before.snapshot as object, revision: 2 });
+    expect(await db.communicationEvent.count({ where: { messageId: work.id, event: 'ORDINARY_REJECTED' } })).toBe(1);
+    const audit = await db.auditLog.findMany({ where: { entityId: work.id, event: 'ordinary_email_rejected' } });
+    expect(audit).toHaveLength(1); expect(audit[0].after).toMatchObject({ rejectedVersion: 1, newVersion: 2, status: 'DRAFT' });
+    expect(await db.communicationAttempt.count({ where: { messageId: work.id } })).toBe(0);
+    expect(await db.ordinaryEmailAttempt.count({ where: { messageId: work.id } })).toBe(0);
+    expect(await db.ordinaryEmailDecision.count({ where: { messageId: work.id } })).toBe(0);
+    await page.reload(); await expect(panel).toContainText('versione salvata 2');
+    await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click(); await expect(exact).toContainText(versions[1].id);
+    await page.setViewportSize({ width: kind === 'CLIENT' ? 390 : 1440, height: kind === 'CLIENT' ? 844 : 1000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: path.join(evidence, 'update-email-' + kind.toLowerCase() + '-refused.png'), fullPage: true });
+  }
+  expect(externalRequests).toBe(0); await context.close();
+});

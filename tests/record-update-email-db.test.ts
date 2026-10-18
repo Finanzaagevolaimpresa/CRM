@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { before, after } from 'node:test';
 import { randomUUID, createHash } from 'node:crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { syntheticUpdateMailbox } from './record-updates/email-fixtures';
 import { storedNoticeMessage, linkedOrdinaryNoticeReply } from './record-updates/communication-fixtures';
@@ -12,6 +12,8 @@ import { listRecordUpdates } from '../src/lib/record-update-delivery';
 import { readRecordUpdateEmailQueue, readRecordUpdateEmailPrefill } from '../src/lib/record-update-email-queue';
 import { saveApprovedMessageDraft, readPracticeCommunications, loadOrdinaryMessageCandidateContext, submitApprovedMessage, approveExactMessage } from '../src/lib/approved-communications';
 import { emptyCommunicationRecipientSelection } from '../src/lib/communication-recipient-policy';
+import { rejectStoredOrdinaryEmail } from '../src/lib/ordinary-email-store-candidate';
+import { canonicalSha256 } from '../src/lib/canonical-json';
 import type { UpdateCommand } from '../src/lib/record-update-input';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_UPDATE_EMAIL_DB_TESTS === '1';
@@ -67,6 +69,19 @@ function draft(p: Awaited<ReturnType<typeof readRecordUpdateEmailPrefill>>) {
 }
 const currentMessage = (id: string) => db.$transaction(tx => loadOrdinaryMessageCandidateContext(tx, admin.session, id));
 const versions = (id: string) => db.communicationVersion.count({ where: { messageId: id } });
+const rejection = (saved: { id: string; revision: number; snapshotHash: string }) => ({ messageId: saved.id,
+  expectedRevision: saved.revision, snapshotHash: saved.snapshotHash, personalConfirmation: 'RIFIUTO_QUESTA_VERSIONE' as const });
+const reject = (saved: Parameters<typeof rejection>[0], store = db) =>
+  rejectStoredOrdinaryEmail(store, admin.session, rejection(saved), proof(), { key });
+async function refusalFootprint(id: string) {
+  return { message: await db.approvedCommunication.findUniqueOrThrow({ where: { id } }),
+    versions: await db.communicationVersion.findMany({ where: { messageId: id }, orderBy: { revision: 'asc' }, include: { approval: true } }),
+    events: await db.communicationEvent.findMany({ where: { messageId: id }, orderBy: { id: 'asc' } }),
+    audits: await db.auditLog.findMany({ where: { entityId: id }, orderBy: { id: 'asc' } }),
+    decisions: await db.ordinaryEmailDecision.count({ where: { messageId: id } }),
+    ordinaryAttempts: await db.ordinaryEmailAttempt.count({ where: { messageId: id } }),
+    manualAttempts: await db.communicationAttempt.count({ where: { messageId: id } }) };
+}
 
 for (const kind of ['LEAD', 'CLIENT', 'PRACTICE'] as const) test(kind + ': native selected event to read-only proposal to exact unapproved draft', options, async () => {
   const f = await fixture(kind), before = await db.approvedCommunication.count(), { work, prefill } = await prepare(f);
@@ -152,11 +167,72 @@ test('editing creates a new version without inheriting an earlier exact approval
   assert.equal(await db.communicationApproval.count({ where: { version: { messageId: saved.id } } }), 1);
 });
 
+for (const kind of ['LEAD', 'CLIENT', 'PRACTICE'] as const)
+test(kind + ': personal refusal preserves derived provenance and approved history but creates only an unapproved draft', options, async () => {
+  const f = await fixture(kind), { prefill } = await prepare(f);
+  const saved = await saveApprovedMessageDraft(db, admin.session, draft(prefill));
+  const transition = { messageId: saved.id, expectedRevision: saved.revision, snapshotHash: saved.snapshotHash };
+  await submitApprovedMessage(db, admin.session, transition); await approveExactMessage(db, admin.session, transition);
+  const before = await refusalFootprint(saved.id), result = await reject(saved), after = await refusalFootprint(saved.id);
+  assert.equal(result.revision, 2); assert.equal(after.message.state, 'DRAFT'); assert.equal(after.message.currentRevision, 2);
+  assert.equal(after.message.updateDeliveryId, prefill.deliveryId); assert.equal(after.versions.length, 2);
+  assert.deepEqual(after.versions[0], before.versions[0]); assert.ok(after.versions[0].approval);
+  const fresh = after.versions[1];
+  assert.deepEqual(fresh.snapshot, { ...before.versions[0].snapshot as object, revision: 2 });
+  assert.deepEqual(fresh.updateSource, before.versions[0].updateSource);
+  assert.equal(fresh.updateSourceHash, prefill.sourceHash); assert.equal(fresh.approval, null);
+  assert.equal(canonicalSha256(fresh.updateSource), fresh.updateSourceHash);
+  assert.notEqual(result.snapshotHash, saved.snapshotHash);
+  const expected = { rejectedVersion: 1, rejectedHash: saved.snapshotHash, newVersion: 2, newHash: result.snapshotHash,
+    versionId: 'communication_version_uuid_' + fresh.id.replaceAll('-', '') };
+  assert.deepEqual(after.events.filter(e => e.event === 'ORDINARY_REJECTED').map(e => e.evidence), [expected]);
+  assert.deepEqual(after.audits.filter(a => a.event === 'ordinary_email_rejected').map(a => a.after),
+    [{ action: 'rejected', ...expected, evidenceHash: canonicalSha256(expected), status: 'DRAFT' }]);
+  assert.equal(after.decisions + after.ordinaryAttempts + after.manualAttempts, 0);
+  assert.equal((await currentMessage(saved.id)).version.id, fresh.id, 'the new draft must remain currently admissible');
+  await assert.rejects(reject(saved)); // Obsolete UI request or lost-response replay cannot add another revision.
+  assert.deepEqual(await refusalFootprint(saved.id), after);
+});
+
+test('concurrent derived refusals commit one revision and replay leaves its origin and audit unchanged', options, async () => {
+  const f = await fixture(), { prefill } = await prepare(f), saved = await saveApprovedMessageDraft(db, admin.session, draft(prefill));
+  const results = await Promise.allSettled([reject(saved), reject(saved)]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  const after = await refusalFootprint(saved.id);
+  assert.deepEqual(after.versions.map(v => v.revision), [1, 2]);
+  assert.equal(after.versions[1].updateSourceHash, prefill.sourceHash);
+  assert.equal(after.events.filter(e => e.event === 'ORDINARY_REJECTED').length, 1);
+  assert.equal(after.audits.filter(a => a.event === 'ordinary_email_rejected').length, 1);
+  assert.equal(after.decisions + after.ordinaryAttempts + after.manualAttempts, 0);
+  await assert.rejects(reject(saved)); assert.deepEqual(await refusalFootprint(saved.id), after);
+});
+
+test('derived refusal audit failure rolls back the new provenance, revision and event atomically', options, async () => {
+  const f = await fixture(), { prefill } = await prepare(f), saved = await saveApprovedMessageDraft(db, admin.session, draft(prefill));
+  const before = await refusalFootprint(saved.id); let reachedAudit = false;
+  const failing = { $transaction: (work: (tx: Prisma.TransactionClient) => Promise<unknown>, opts: object) => db.$transaction(async tx => {
+    const hooked = new Proxy(tx, { get(target, name, receiver) {
+      if (name === 'auditLog') return new Proxy(target.auditLog, { get(delegate, method, context) {
+        if (method === 'create') return async (args: Prisma.AuditLogCreateArgs) => {
+          await delegate.create(args); reachedAudit = true; throw new Error('SYNTHETIC_DERIVED_REFUSAL_AUDIT_FAILURE');
+        };
+        return Reflect.get(delegate, method, context);
+      } });
+      return Reflect.get(target, name, receiver);
+    } });
+    return work(hooked);
+  }, opts) } as unknown as PrismaClient;
+  await assert.rejects(reject(saved, failing), /SYNTHETIC_DERIVED_REFUSAL_AUDIT_FAILURE/);
+  assert.equal(reachedAudit, true, 'SQL55 must admit the version before the deliberate audit fault');
+  assert.deepEqual(await refusalFootprint(saved.id), before);
+});
+
 test('record changes invalidate an open prefill and approval; a fresh explicit version is required', options, async () => {
   const f = await fixture(), { prefill } = await prepare(f), input = draft(prefill);
   const saved = await saveApprovedMessageDraft(db, admin.session, input);
   await db.lead.update({ where: { id: f.id }, data: { firstName: 'Changed synthetic record', updatedAt: new Date(Date.now() + 1) } });
   await assert.rejects(currentMessage(saved.id));
+  await assert.rejects(reject(saved));
   await assert.rejects(saveApprovedMessageDraft(db, admin.session, { ...input, expectedRevision: 1 }));
   const current = await readRecordUpdateEmailPrefill(db, admin.session, saved.id);
   assert.notEqual(current.sourceHash, prefill.sourceHash);
@@ -180,6 +256,7 @@ test(change + ': current admission blocks pending drafts and re-grant does not r
   if (change === 'owner') await db.lead.update({ where: { id: f.id }, data: { assignedToId: f.other.user.id } });
   if (change === 'authority') await db.ordinaryEmailAuthority.update({ where: { id: 'ordinary-email' }, data: { enabled: false, revision: { increment: 1 } } });
   await assert.rejects(readRecordUpdateEmailPrefill(db, admin.session, work.id)); await assert.rejects(currentMessage(saved.id));
+  await assert.rejects(reject(saved));
   if (change !== 'authority') assert.equal((await readRecordUpdateEmailQueue(db, admin.session)).some(r => r.deliveryId === work.id), false);
   if (change === 'permission') await db.userPermissionOverride.update({ where: { userId_permission: { userId: f.reader.user.id, permission: 'lead.read' } }, data: { allowed: true } });
   if (change === 'email') await db.user.update({ where: { id: f.reader.user.id }, data: { email: f.reader.user.email } });
@@ -187,6 +264,8 @@ test(change + ': current admission blocks pending drafts and re-grant does not r
   if (change === 'owner') await db.lead.update({ where: { id: f.id }, data: { assignedToId: f.reader.user.id } });
   if (change === 'authority') await db.ordinaryEmailAuthority.update({ where: { id: 'ordinary-email' }, data: { enabled: true, revision: { increment: 1 } } });
   await assert.rejects(currentMessage(saved.id));
+  await assert.rejects(reject(saved));
+  assert.equal(await db.communicationEvent.count({ where: { messageId: saved.id, event: 'ORDINARY_REJECTED' } }), 0);
   assert.equal(await versions(saved.id), 1); assert.equal(await db.ordinaryEmailAttempt.count({ where: { messageId: saved.id } }), 0);
 });
 

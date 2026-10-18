@@ -82,8 +82,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-update-email-db.test.ts | tee "$UPDATES_EVIDENCE/email-postgresql.tap"
-          grep -q '^# tests 26$' "$UPDATES_EVIDENCE/email-postgresql.tap"
-          grep -q '^# pass 26$' "$UPDATES_EVIDENCE/email-postgresql.tap"
+          grep -q '^# tests 31$' "$UPDATES_EVIDENCE/email-postgresql.tap"
+          grep -q '^# pass 31$' "$UPDATES_EVIDENCE/email-postgresql.tap"
           grep -q '^# skipped 0$' "$UPDATES_EVIDENCE/email-postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'
@@ -106,7 +106,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$UPDATES_EVIDENCE/playwright.json" npx playwright test --config tests/record-updates/playwright.config.ts --reporter=line,json | tee "$UPDATES_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==7 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$UPDATES_EVIDENCE/source.txt"

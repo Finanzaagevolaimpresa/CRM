@@ -19,6 +19,11 @@ progetto e non vengono creati clienti o pratiche fittizi.
 5. Usare il percorso esistente di anteprima, step-up e «Approva e invia» sulla
    versione esatta. La sola scelta della modalità non invia né approva email.
 
+«Rifiuta versione» conserva la versione e le eventuali approvazioni nello storico
+e crea una nuova bozza non approvata, mantenendo la provenienza dell'aggiornamento.
+Una richiesta obsoleta o ripetuta non crea altre versioni. In caso di risposta
+persa occorre verificare lo stato corrente prima di una nuova decisione.
+
 La proposta contiene il nome del record, il tipo di evento e i nomi dei campi
 cambiati. Non copia valori dei campi, note private, compensi, margini o allegati.
 Per questo incremento una proposta corrisponde a una persona: A è vincolato alla
@@ -65,3 +70,5 @@ Le prove locali, PostgreSQL CI, browser e recupero sono distinte. Fixture, casel
 indirizzi, sessioni e trasporti di test sono sintetici. Nessuna prova su dati reali
 o invio reale è incluso. La CI email ordinaria conserva le prove di anteprima,
 rifiuto, approvazione esatta, un solo consumo e gestione dell'esito incerto.
+Le regressioni specifiche del rifiuto derivato verificano fonte/hash, storico,
+audit atomico, concorrenza, revoche e risposta persa sui percorsi nativi.
