@@ -1,3 +1,5 @@
+import { leadVisibilityWhere } from './core-query-policy';
+import { isSelectiveLead } from './selective-lead-policy';
 import { randomUUID } from 'node:crypto';
 import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate } from './lead-identity';
 import { assertLeadOperational as lockOperationalLead, LeadLifecycleError } from './lead-lifecycle-lock';
@@ -110,12 +112,12 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
       const lead = await assertLeadOperational(tx, existing.leadId);
       if (!lead || lead.deletedAt) throw new ControlledIntakeError('DENIED');
       const canEdit = canEditLead(actor, lead);
-      const ownQueuedReceipt = lead.assignedToId === null && existing.operatorId === actor.userId;
+      const ownQueuedReceipt = !isSelectiveLead(actor, lead.id) && lead.assignedToId === null && existing.operatorId === actor.userId;
       if (!canEdit && !ownQueuedReceipt) throw new ControlledIntakeError('DENIED');
       if (existing.payloadHash !== payloadHash) throw new ControlledIntakeError('CONFLICT');
       // A creator may acknowledge an identical queued submission, not read its current dossier.
       if (!canEdit) return { id: existing.id, leadId: existing.leadId, queued: true as const };
-      const candidateLeads = await tx.lead.findMany({ where: { id: { in: existing.duplicateCandidates.map(({ leadId }) => leadId) }, deletedAt: null } });
+      const candidateLeads = await tx.lead.findMany({ where: { id: { in: existing.duplicateCandidates.map(({ leadId }) => leadId) }, deletedAt: null, AND: [leadVisibilityWhere(actor)] } });
       const visibleIds = new Set(candidateLeads.filter((candidate) => canEditLead(actor, candidate)).map(({ id }) => id));
       return { ...existing, duplicateCandidates: existing.duplicateCandidates.filter(({ leadId }) => visibleIds.has(leadId)), duplicateDecision: existing.duplicateDecision && visibleIds.has(existing.duplicateDecision.candidateLeadId) ? existing.duplicateDecision : null };
     }
@@ -123,7 +125,8 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
     const revision = await selectableRevision(tx, input.serviceCode, input.digitalProjectType, now);
     // A hidden identity must not be silently recreated through manual intake.
     if (await hasStrongRawLeadIdentityDuplicate(tx, { ...input, trashedOnly: true })) throw new ControlledIntakeError('CONFLICT');
-    const candidates = input.email ? (await tx.lead.findMany({ where: { email: { equals: input.email, mode: 'insensitive' }, deletedAt: null }, take: 20 })).filter((lead) => canEditLead(actor, lead)) : [];
+    if (await hasStrongRawLeadIdentityDuplicate(tx, { ...input, selectedForRecipientId: actor.userId })) throw new ControlledIntakeError('CONFLICT');
+    const candidates = input.email ? (await tx.lead.findMany({ where: { email: { equals: input.email, mode: 'insensitive' }, deletedAt: null, AND: [leadVisibilityWhere(actor)] }, take: 20 })).filter((lead) => canEditLead(actor, lead)) : [];
     let commercialOfferId: string | null = null; let contractId: string | null = null;
     if (input.commercialOfferId) {
       const offer = await tx.commercialOffer.findFirst({ where: { id: input.commercialOfferId, deletedAt: null } });
@@ -131,6 +134,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
       const offerClient = offer?.clientId ? await tx.client.findUnique({ where: { id: offer.clientId } }) : null;
       if (!offer || !canViewCommercialOffer(actor, { ...offer, lead: offerLead, client: offerClient })) throw new ControlledIntakeError('DENIED');
       const clientLead = offerClient?.leadId ? await tx.lead.findUnique({ where: { id: offerClient.leadId } }) : null;
+      if (clientLead && isSelectiveLead(actor, clientLead.id)) throw new ControlledIntakeError('DENIED');
       const relatedEmail = offerLead?.email ?? clientLead?.email;
       if (!input.email || relatedEmail?.toLowerCase() !== input.email.toLowerCase()) throw new ControlledIntakeError('CATALOG_INVALID');
       commercialOfferId = offer.id;
@@ -141,6 +145,7 @@ export async function createControlledIntake(db: Db, claimed: AuthSession, raw: 
       const client = contract ? await tx.client.findUnique({ where: { id: contract.clientId } }) : null;
       if (!contract || !client || !canViewClient(actor, client)) throw new ControlledIntakeError('DENIED');
       const clientLead = client.leadId ? await tx.lead.findUnique({ where: { id: client.leadId } }) : null;
+      if (clientLead && isSelectiveLead(actor, clientLead.id)) throw new ControlledIntakeError('DENIED');
       if (!input.email || clientLead?.email?.toLowerCase() !== input.email.toLowerCase()) throw new ControlledIntakeError('CATALOG_INVALID');
       contractId = contract.id;
     }

@@ -1,11 +1,12 @@
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import type { AuthSession } from './auth';
+import type { AuthSession, Permission } from './auth';
 import { UserFacingActionError } from './action-errors';
 import { canEditLead } from './access-control';
 import { hasPermission } from './permission-evaluator';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { internalSessionMode } from './session';
+import { loadSelectiveLeadScope } from './selective-lead-scope';
 
 export class LeadLifecycleError extends UserFacingActionError {
   constructor(readonly code: 'DENIED' | 'STALE') {
@@ -18,16 +19,19 @@ export async function leadClock(tx: Prisma.TransactionClient) {
   if (!row) throw new LeadLifecycleError('DENIED');
   return row.now;
 }
-export async function lockLeadActor(tx: Prisma.TransactionClient, claimed: AuthSession, write = true) {
+export async function lockLeadWriteActor(tx: Prisma.TransactionClient, claimed: AuthSession, permissions: readonly Permission[]) {
   if (internalSessionMode() !== 'registry' || !z.string().uuid().safeParse(claimed.sessionId).success) throw new LeadLifecycleError('DENIED');
   const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
   if (!row || row.revokedAt || !row.active || row.deletedAt) throw new LeadLifecycleError('DENIED');
-  const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides], registryExpiresAt: row.expiresAt };
+  const current = { ...claimed, ...await loadSelectiveLeadScope(tx, claimed.userId), role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides], registryExpiresAt: row.expiresAt };
   // An explicit suspension also blocks this personal operation for an Admin.
-  if (current.permissionOverrides.some(item => !item.allowed && (item.permission === 'lead.read' || (write && item.permission === 'lead.write')))) throw new LeadLifecycleError('DENIED');
-  if (!hasPermission(current, 'lead.read') || (write && !hasPermission(current, 'lead.write'))) throw new LeadLifecycleError('DENIED');
+  if (permissions.some(permission => !hasPermission(current, permission)
+    || current.permissionOverrides.some(item => item.permission === permission && !item.allowed))) throw new LeadLifecycleError('DENIED');
   await assertLeadActorLive(tx, current);
   return current;
+}
+export function lockLeadActor(tx: Prisma.TransactionClient, claimed: AuthSession, write = true) {
+  return lockLeadWriteActor(tx, claimed, write ? ['lead.read', 'lead.write'] : ['lead.read']);
 }
 export async function assertLeadActorLive(tx: Prisma.TransactionClient, current: AuthSession & { registryExpiresAt: Date }) {
   const now = await leadClock(tx);

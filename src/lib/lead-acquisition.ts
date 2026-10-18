@@ -4,6 +4,7 @@ import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
 import { coreQueryFetchSize, coreQueryOffset, parseCoreQueryPage, toCoreQueryPage } from './core-query-policy';
 import { acquisitionState, verifiedAcquisitionEvent } from './lead-acquisition-contract';
+import { loadSelectiveLeadScope } from './selective-lead-scope';
 
 type Actor = { userId: string; sessionId?: string };
 export class LeadAcquisitionDenied extends Error {
@@ -16,7 +17,7 @@ async function authority(tx: Prisma.TransactionClient, actor: Actor, adminOnly: 
   }) : null;
   if (!fresh || !fresh.active || fresh.deletedAt || fresh.revokedAt || !fresh.live
     || !hasPermission(fresh, 'lead.read') || (adminOnly && fresh.role !== 'admin')) throw new LeadAcquisitionDenied();
-  return fresh;
+  return { ...fresh, ...await loadSelectiveLeadScope(tx, actor.userId) };
 }
 
 export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input: { page?: string; leadId?: string; queue?: string }) {
@@ -24,8 +25,8 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
   return db.$transaction(async (tx) => {
     const fresh = await authority(tx, actor, !input.leadId);
     if (input.leadId) {
-      const rows = await tx.$queryRaw<Array<{ assignedToId: string | null }>>(Prisma.sql`
-        SELECT "assignedToId" FROM "Lead" WHERE id=${input.leadId} AND "deletedAt" IS NULL FOR SHARE`);
+      const rows = await tx.$queryRaw<Array<{ id: string; assignedToId: string | null }>>(Prisma.sql`
+        SELECT id, "assignedToId" FROM "Lead" WHERE id=${input.leadId} AND "deletedAt" IS NULL FOR SHARE`);
       if (!rows[0] || !canViewLead(fresh, rows[0])) throw new LeadAcquisitionDenied();
     }
     const where: Prisma.BusinessInboxEventWhereInput = input.leadId
@@ -33,7 +34,7 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
     where.AND = [{ OR: [
       { leadProjectionLedger: { is: null } },
       { leadProjectionLedger: { is: { OR: [{ leadId: null }, { lead: { is: { deletedAt: null } } }] } } },
-    ] }];
+    ] }, { id: { notIn: [...(fresh.selectiveLeadInboxEventIds ?? [])] } }];
     if (input.queue === 'errors') where.OR = [
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];
@@ -86,7 +87,11 @@ export async function readLeadAcquisitionSummary(db: PrismaClient, actor: Actor)
         )) AS "paidLeads"
       FROM "BusinessInboxEvent" inbox LEFT JOIN "LeadProjectionLedger" projection ON projection."inboxEventId"=inbox.id
       LEFT JOIN "Lead" lead ON lead.id=projection."leadId" AND lead."deletedAt" IS NULL
-      WHERE projection."leadId" IS NULL OR lead.id IS NOT NULL
+      WHERE (projection."leadId" IS NULL OR lead.id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM "SelectiveLeadGrant" g WHERE g."recipientId"=${actor.userId} AND g."leadId"=projection."leadId")
+      AND NOT EXISTS (SELECT 1 FROM "LeadDuplicateCase" dc JOIN "LeadDuplicateCandidate" c ON c."duplicateCaseId"=dc.id
+        JOIN "SelectiveLeadGrant" g ON g."leadId"=c."leadId" AND g."recipientId"=${actor.userId}
+        WHERE dc."projectionLedgerId"=projection.id)
       GROUP BY 1,2 ORDER BY 1,2`);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 8_000, maxWait: 2_000 });
 }

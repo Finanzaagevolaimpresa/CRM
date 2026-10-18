@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from './core-query-policy';
 import { hasPermission } from './permission-evaluator';
 import type { AiOutput, Prisma, Task } from '@prisma/client';
 import {
@@ -114,7 +115,7 @@ export async function getCommercialOfferReadAccess(session: AuthSession, offerId
   const offer = await prisma.commercialOffer.findFirst({ where: { id: offerId, deletedAt: null } });
   if (!offer) return null;
   const [lead, client] = await Promise.all([
-    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null } }) : null,
+    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null, AND: [leadVisibilityWhere(session)] } }) : null,
     offer.clientId ? loadClient(offer.clientId) : null,
   ]);
   return canViewCommercialOffer(session, { ...offer, lead, client }) ? { offer, lead, client } : null;

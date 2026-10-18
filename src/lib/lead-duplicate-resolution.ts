@@ -682,6 +682,11 @@ async function reopenResolvedCase(
     identityKeyVersionId: activeKey.id,
     signals,
   });
+  // Reopening discovers current identities, which may include a lead selected
+  // after the earlier decision. Reject atomically instead of exposing its match.
+  if (await tx.selectiveLeadGrant.count({ where: {
+    recipientId: input.actorUserId, leadId: { in: candidates.map(candidate => candidate.leadId) },
+  } })) return duplicateFail('N13_DUPLICATE_SESSION_DENIED');
   const revision = row.discoveryRevision + 1;
   const snapshots = snapshotsForRevision(row, revision, candidates);
   if (snapshots.length > 0) {
@@ -746,11 +751,17 @@ async function resolveInTransaction(
   input: LeadDuplicateResolutionInput,
   key: LeadIdentityKeyFile,
 ) {
-  await authorizeDecision(tx, input);
   await acquireLeadIdentityWriteLock(tx);
+  const session = await authorizeDecision(tx, input);
   const activeKey = await assertLeadIdentityKeyConsensus(tx, key);
   const row = await lockDuplicateCase(tx, input.caseId);
   if (!row) return duplicateFail('N13_DUPLICATE_CASE_NOT_FOUND');
+  // A prior selection is a durable ceiling, including revoked/expired grants.
+  const restricted = await tx.leadDuplicateCase.count({ where: { id: row.caseId, OR: [
+    { candidates: { some: { lead: { selectiveGrants: { some: { recipientId: input.actorUserId } } } } } },
+    { projectionLedger: { lead: { selectiveGrants: { some: { recipientId: input.actorUserId } } } } },
+  ] } });
+  if (restricted) return duplicateFail('N13_DUPLICATE_SESSION_DENIED');
   if (row.caseVersion !== input.expectedCaseVersion) {
     return duplicateFail('N13_DUPLICATE_CASE_VERSION_CONFLICT');
   }
@@ -759,6 +770,7 @@ async function resolveInTransaction(
   const candidates = await lockCurrentCandidates(tx, row);
   const previous = await previousDecision(tx, row.caseId);
   const now = await databaseNow(tx);
+  if (session.expiresAt <= now) return duplicateFail('N13_DUPLICATE_SESSION_DENIED');
   if (row.caseState === 'OPEN') {
     return resolveOpenCase(tx, input, row, event, key, activeKey, candidates, previous, now);
   }

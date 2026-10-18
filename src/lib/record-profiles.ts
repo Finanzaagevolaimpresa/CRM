@@ -5,20 +5,21 @@ import { hasPermission } from './permission-evaluator';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { acquireLeadIdentityWriteLock, hasStrongRawLeadIdentityDuplicate, normalizeLeadIdentityEmail, normalizeLeadIdentityPhone } from './lead-identity';
 import { RecordProfileError, personProfileVersion, profileCommandSchema } from './record-profile-contract';
+import { loadSelectiveLeadScope } from './selective-lead-scope';
 
 async function actor(tx: Prisma.TransactionClient, session: AuthSession, permission: Permission) {
   if (!session.active || !Number.isFinite(session.expiresAt) || session.expiresAt * 1000 <= Date.now()) throw new RecordProfileError('DENIED');
   if (session.sessionId) {
     const current = await lockAuthoritativeInternalSession(tx, { userId: session.userId, sessionId: session.sessionId });
     if (!current?.active || current.deletedAt || current.revokedAt || !current.live) throw new RecordProfileError('DENIED');
-    const fresh = { ...session, role: current.role, permissionOverrides: [...current.permissionOverrides] };
+    const fresh = { ...session, ...await loadSelectiveLeadScope(tx, session.userId), role: current.role, permissionOverrides: [...current.permissionOverrides] };
     if (!hasPermission(fresh, permission)) throw new RecordProfileError('DENIED');
     return fresh;
   }
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${session.userId} FOR UPDATE`;
   const current = await tx.user.findUnique({ where: { id: session.userId }, include: { permissionOverrides: true } });
   if (!current?.active || current.deletedAt) throw new RecordProfileError('DENIED');
-  const fresh = { ...session, role: current.role, permissionOverrides: current.permissionOverrides };
+  const fresh = { ...session, ...await loadSelectiveLeadScope(tx, session.userId), role: current.role, permissionOverrides: current.permissionOverrides };
   if (!hasPermission(fresh, permission)) throw new RecordProfileError('DENIED');
   return fresh;
 }

@@ -8,6 +8,8 @@ import { acquireLeadIdentityWriteLock } from './lead-identity';
 import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { withSerializableTransaction } from './serializable';
 import { leadLifecycleSchema, leadLifecycleActionAllowed } from './lead-lifecycle-policy';
+import { isSelectiveLead } from './selective-lead-policy';
+import { leadVisibilityWhere } from './core-query-policy';
 import { LeadLifecycleError, lockLeadActor, assertLeadActorLive, leadClock } from './lead-lifecycle-lock';
 
 export type LeadLifecycleCredentials = { sessionToken: string; stepUpToken: string; key: PrivilegedStepUpKey };
@@ -35,7 +37,7 @@ export async function transitionLeadLifecycle(db: PrismaClient, claimed: AuthSes
     await personalConfirmation(tx, current, proof);
     await tx.$queryRaw`SELECT "id" FROM "Lead" WHERE "id"=${input.id} FOR UPDATE`;
     const before = await tx.lead.findUnique({ where: { id: input.id } });
-    if (!before) throw new LeadLifecycleError('DENIED');
+    if (!before || isSelectiveLead(current, before.id)) throw new LeadLifecycleError('DENIED');
     if (before.updatedAt.toISOString() !== input.updatedAt || !leadLifecycleActionAllowed(before.deletedAt, input.action)) throw new LeadLifecycleError('STALE');
     const now = await leadClock(tx);
     const updatedAt = new Date(Math.max(now.getTime(), before.updatedAt.getTime() + 1));
@@ -60,7 +62,7 @@ export async function listTrashedLeads(db: PrismaClient, claimed: AuthSession, p
   return withSerializableTransaction(db, async tx => {
     const current = await lockLeadActor(tx, claimed, false);
     if (current.role !== 'admin') throw new LeadLifecycleError('DENIED');
-    const rows = await tx.lead.findMany({ where: { deletedAt: { not: null } }, orderBy: [{ deletedAt: 'desc' }, { id: 'asc' }],
+    const rows = await tx.lead.findMany({ where: { deletedAt: { not: null }, AND: [leadVisibilityWhere(current)] }, orderBy: [{ deletedAt: 'desc' }, { id: 'asc' }],
       skip: (Math.max(1, Math.min(10_000, Math.trunc(page))) - 1) * 30, take: 31,
       select: { id: true, companyName: true, firstName: true, lastName: true, status: true, deletedAt: true, updatedAt: true, clientId: true } });
     await assertLeadActorLive(tx, current);

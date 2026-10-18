@@ -381,7 +381,8 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
     ...(loaded.row.updateDeliveryId ? { updateSourceHash: loaded.version.updateSourceHash } : {}),
     actorId: current.userId, role: current.role, overrides: current.permissionOverrides,
     clientReadScope: [...(current.clientReadScope ?? [])].sort(),
-    selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort() })));
+    selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort(),
+    selectiveLeadIds: [...(current.selectiveLeadIds ?? [])].sort() })));
   return { ...loaded, materials: files.materials, contextHash, contextExpiresAt: expiryDate(Math.min(files.validUntil?.getTime() ?? Infinity, loaded.updateUntil)),
     actor: { userId: current.userId, sessionId: current.sessionId!, role: registry.role, active: registry.active,
       expiresAt: new Date(current.expiresAt * 1000), registryExpiresAt: registry.expiresAt } };

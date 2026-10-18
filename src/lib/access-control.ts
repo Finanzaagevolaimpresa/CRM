@@ -5,8 +5,9 @@ import { hasGlobalReadAccess } from './read-supervision';
 import type { FinancialDocumentMetadata } from './financial-privacy-policy';
 import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
 import { hasSelectiveContext, isSelectiveProject, type SelectiveProjectScope } from './selective-project-policy';
+import { isSelectiveLead, type SelectiveLeadScope } from './selective-lead-policy';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor & SelectiveProjectScope;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor & SelectiveProjectScope & SelectiveLeadScope;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -30,7 +31,7 @@ type CommercialOfferAccessContext = {
   createdById?: string | null;
   leadId?: string | null;
   clientId?: string | null;
-  lead?: Pick<Lead, 'assignedToId' | 'clientId'> & Partial<Pick<Lead, 'deletedAt'>> | null;
+  lead?: Pick<Lead, 'assignedToId' | 'clientId'> & Partial<Pick<Lead, 'id' | 'deletedAt'>> | null;
   client?: ClientAccessContext | null;
 };
 
@@ -101,7 +102,8 @@ export function canViewClient(user: Actor, client: Pick<Client, 'salesOwnerId' |
   return ['backoffice', 'collaboratore_limitato'].includes(user.role)
     && (client.salesOwnerId === id || client.consultantId === id);
 }
-export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'deletedAt'>>) {
+export function canViewLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'id' | 'deletedAt'>>) {
+  if (isSelectiveLead(user, lead.id)) return false;
   if (lead.deletedAt) return false;
   if (hasGlobalReadAccess(user)) return true;
   if (lead.assignedToId === null) return false;
@@ -172,7 +174,8 @@ export function canViewDocument(user: Actor, document: Pick<Document, 'clientId'
   return document.uploadedById === id && !!document.client && hasClientResponsibility(user, document.client);
 }
 
-export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'deletedAt'>>) {
+export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Partial<Pick<Lead, 'id' | 'deletedAt'>>) {
+  if (isSelectiveLead(user, lead.id)) return false;
   if (lead.deletedAt) return false;
   if (user.role === 'admin') return true;
   if (lead.assignedToId === null) return false;
@@ -182,6 +185,7 @@ export function canEditLead(user: Actor, lead: Pick<Lead, 'assignedToId'> & Part
 }
 
 export function canViewCommercialOffer(user: Actor, offer: CommercialOfferAccessContext) {
+  if ((offer.leadId || offer.lead) && isSelectiveLead(user, offer.leadId ?? offer.lead?.id)) return false;
   if (offer.lead?.deletedAt) return false;
   if (user.selectiveOfferIds?.length && (!offer.id || user.selectiveOfferIds.includes(offer.id))) return false;
   if (offer.leadId && !offer.lead) return false;

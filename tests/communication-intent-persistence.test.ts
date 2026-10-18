@@ -62,10 +62,11 @@ test('N15 migration 44 is one additive transaction with three dedicated dormant 
     '20261017200000_record_update_notifications_v1',
     '20261018000000_private_video_library_v1',
     '20261018060000_record_update_email_drafts_v1',
+    '20261018140000_selective_lead_read_v1',
   ].includes(name));
   assert.equal(names.length, 44);
   assert.equal(names.at(-1), '20260909120000_n15_dedicated_communication_persistence_v1');
-  assert.equal(allNames.length, 55);
+  assert.equal(allNames.length, 56);
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const sql = readFileSync(`prisma/migrations/${names.at(-1)}/migration.sql`, 'utf8');
   assert.match(sql, /^--[^\n]*\nBEGIN;/u);

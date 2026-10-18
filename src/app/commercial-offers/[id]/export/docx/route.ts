@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { NextResponse } from 'next/server';
 import { auditCommercialOfferExport } from '@/lib/actions';
 import { canEditCommercialOffer } from '@/lib/access-control';
@@ -16,7 +17,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
   const offer = await prisma.commercialOffer.findFirst({ where: { id, deletedAt: null } });
   if (!offer) return new NextResponse('Not found', { status: 404 });
   const [lead, client] = await Promise.all([
-    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null } }) : null,
+    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null, AND: [leadVisibilityWhere(session)] } }) : null,
     offer.clientId ? prisma.client.findFirst({ where: { id: offer.clientId, deletedAt: null } }) : null,
   ]);
   if (!canEditCommercialOffer(session, { ...offer, lead, client })) return new NextResponse('Not found', { status: 404 });

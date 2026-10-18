@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { PrismaClient } from '@prisma/client';
 import { createDisabledCommunicationGateSnapshotV1 } from '../../src/lib/communication-backbone-contract';
@@ -81,7 +82,7 @@ test.after(async () => {
 
 test('current fresh install applies 50 migrations, preserves N15 storage and leaves N11 untouched', { skip: !run }, async () => {
   const migrations = await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(Number(migrations[0]?.count), 55);
+  assert.equal(Number(migrations[0]?.count), 56);
   assert.deepEqual(await Promise.all([
     client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
   ]), [0, 0, 0]);
@@ -352,7 +353,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 55);
+  assert.equal(names.length, 56);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   for (const name of names.slice(0, 43)) cpSync(join('prisma/migrations', name), join(migrationsDirectory, name), { recursive: true });
@@ -360,7 +361,15 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   const url = new URL(process.env.DATABASE_URL!); url.searchParams.set('schema', oldSchema);
   await root!.$executeRawUnsafe(`CREATE SCHEMA "${oldSchema}"`);
   const oldClient = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+  // The old N14 behavior is exercised using the exact deployed predecessor.
+  // Current N14 intentionally requires schema56; a missing perimeter table
+  // must never be treated as an empty grant set or an ordinary-access fallback.
+  const predecessor = '1e463b01dd22f09aab73a35fac7203598dc7c044';
+  const historicalModule = resolve('src/lib', `commercial-lead-inbox-historical-${process.pid}.ts`);
+  const historicalSource = execFileSync('git', ['show', `${predecessor}:src/lib/commercial-lead-inbox.ts`]);
+  writeFileSync(historicalModule, historicalSource, { flag: 'wx' });
   try {
+    const historical = await import(pathToFileURL(historicalModule).href) as typeof import('../../src/lib/commercial-lead-inbox');
     execFileSync(resolve('node_modules/.bin/prisma'), ['migrate', 'deploy', '--schema', join(prismaDirectory, 'schema.prisma')], { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe', timeout: 180_000 });
     assert.equal(Number((await oldClient.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations"`)[0]?.count), 43);
     await assert.rejects(runCommunicationPersistenceTransactionV1(oldClient, (tx) => recordCommunicationIntentHeldV1(tx, authority, input(11))),
@@ -389,17 +398,26 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
         await oldClient.$executeRaw`INSERT INTO "Lead"
           (id,"firstName","lastName",source,"leadSource","updatedAt") VALUES
           (${lead.id},'Synthetic',${suffix},'CRM','manuale',NOW())`;
-        const item = await initializeCommercialLeadInboxItem(oldClient, { leadId: lead.id, actor,
+        await assert.rejects(initializeCommercialLeadInboxItem(oldClient, { leadId: lead.id, actor,
+          attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' }),
+        (error: unknown) => String(error).includes('SelectiveLeadGrant') && String(error).includes('does not exist'));
+        assert.equal(await oldClient.commercialLeadInboxItem.count({ where: { leadId: lead.id } }), 0);
+        const item = await historical.initializeCommercialLeadInboxItem(oldClient, { leadId: lead.id, actor,
           attribution: { originKind: 'MANUAL_CRM' }, reasonCode: 'MANUAL_INTAKE' });
         return { lead, item };
       };
       const disabled = await createItem('disabled');
       delete environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN;
-      await claimCommercialLeadInboxItem(oldClient, { leadId: disabled.lead.id, actor, expectedInboxVersion: 1 });
+      await assert.rejects(claimCommercialLeadInboxItem(oldClient, {
+        leadId: disabled.lead.id, actor, expectedInboxVersion: 1,
+      }), (error: unknown) => String(error).includes('SelectiveLeadGrant') && String(error).includes('does not exist'));
+      assert.equal((await oldClient.lead.findUniqueOrThrow({ where: { id: disabled.lead.id }, select: { assignedToId: true } })).assignedToId, null);
+      assert.equal((await oldClient.commercialLeadInboxItem.findUniqueOrThrow({ where: { id: disabled.item.id } })).version, 1);
+      await historical.claimCommercialLeadInboxItem(oldClient, { leadId: disabled.lead.id, actor, expectedInboxVersion: 1 });
       assert.equal((await oldClient.lead.findUniqueOrThrow({ where: { id: disabled.lead.id }, select: { assignedToId: true } })).assignedToId, userId);
       const enabled = await createItem('enabled');
       environment.N15_SYNTHETIC_SELF_CLAIM_OPT_IN = 'N15_SYNTHETIC_SELF_CLAIM_V1';
-      await assert.rejects(claimCommercialLeadInboxItem(oldClient, {
+      await assert.rejects(historical.claimCommercialLeadInboxItem(oldClient, {
         leadId: enabled.lead.id, actor, expectedInboxVersion: 1,
       }), (error: unknown) => error instanceof CommunicationPersistenceError && error.code === 'N15_SCHEMA_UNAVAILABLE');
       assert.equal((await oldClient.lead.findUniqueOrThrow({ where: { id: enabled.lead.id }, select: { assignedToId: true } })).assignedToId, null);
@@ -424,6 +442,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
     // Schema dormancy is checked here; the N05 Docker drill executes the actual N-1 application.
     assert.equal(await oldClient.businessInboxEvent.count(), 0);
   } finally {
+    rmSync(historicalModule);
     await oldClient.$disconnect();
     await root!.$executeRawUnsafe(`DROP SCHEMA "${oldSchema}" CASCADE`);
     rmSync(temporary, { recursive: true, force: true });

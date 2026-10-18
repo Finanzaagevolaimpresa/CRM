@@ -140,6 +140,10 @@ export async function lockAuthoritativeInternalSession(
   tx: Prisma.TransactionClient,
   input: { sessionId: string; userId: string },
 ) {
+  // Match account/login and selective-access writers: User before session.
+  // A joined FOR UPDATE alone may lock the session first and deadlock with
+  // a caller that already holds the same User row (for example layout/page).
+  await lockInternalUser(tx, input.userId);
   const rows = await tx.$queryRaw<Array<{
     id: string;
     userId: string;

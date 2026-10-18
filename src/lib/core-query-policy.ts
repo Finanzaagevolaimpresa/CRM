@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { perimeterRoles, type ClientReadScope } from './client-read-perimeter-policy';
 import { hasGlobalReadAccess } from './read-supervision';
+import { leadOutsideSelection, type SelectiveLeadScope } from './selective-lead-policy';
 
 export const CORE_QUERY_PAGE_SIZE = 50;
 export const CORE_QUERY_MAX_PAGE = 200;
@@ -63,9 +64,11 @@ export function clientVisibilityWhere(session: Pick<AuthSession, 'role' | 'userI
   return own.length === 1 ? own[0] : own.length ? { OR: own } : { id: { in: [] } };
 }
 
-export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'>): Prisma.LeadWhereInput {
-  if (hasGlobalReadAccess(session)) return {};
-  return { assignedToId: session.userId };
+export function leadVisibilityWhere(session: Pick<AuthSession, 'role' | 'userId'> & SelectiveLeadScope): Prisma.LeadWhereInput {
+  // The relation also catches a grant committed after getSession loaded scope.
+  const exclusion = { ...leadOutsideSelection(session), selectiveGrants: { none: { recipientId: session.userId } } };
+  if (hasGlobalReadAccess(session)) return exclusion;
+  return { ...exclusion, assignedToId: session.userId };
 }
 
 export function coreQueryPageHref(

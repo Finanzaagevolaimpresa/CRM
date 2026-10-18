@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { notFound } from 'next/navigation';
 import { PageHeader, Card } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
@@ -9,7 +10,7 @@ import { leadProfileFields } from '@/lib/record-profile-fields';
 import { recordProfileValues } from '@/lib/record-profile-view';
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('lead.write'), { id } = await params;
-  const lead = await prisma.lead.findFirst({ where: { id, deletedAt: null } });
+  const lead = await prisma.lead.findFirst({ where: { id, deletedAt: null, AND: [leadVisibilityWhere(session)] } });
   if (!lead || !canEditLead(session, lead)) notFound();
   return <div className="crm-space-y-6"><PageHeader title="Modifica anagrafica lead" description="Contatti e azienda dichiarata. Stato commerciale e assegnazioni restano nelle rispettive sezioni." />
     <SecondaryLink href={`/leads/${id}`}>Annulla e torna al lead</SecondaryLink>

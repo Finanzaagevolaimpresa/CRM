@@ -1,3 +1,4 @@
+import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { appendResponsibilityDecision } from './responsibility';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type ClientType, type PrismaClient } from '@prisma/client';
@@ -357,6 +358,7 @@ export async function initializeCommercialLeadInboxItem(
   const requirement = input.attribution.originKind === 'LEGACY_UNVERIFIED' ? 'MANAGE' : 'WORK';
   return transaction(db, async (tx, commandNow) => {
     await authorizeActor(tx, input.actor, requirement);
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     if (await lockItem(tx, input.leadId)) fail('N14_ITEM_ALREADY_EXISTS');
     const policy = await activePolicyAndClock(tx, commandNow);
@@ -493,6 +495,7 @@ async function mutateOwner(
       }
     }
     await authorizeActor(tx, input.actor, input.requirement);
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
@@ -575,6 +578,7 @@ export async function recordCommercialLeadFirstResponse(
   requireEnforcedMode();
   return transaction(db, async (tx, commandNow) => {
     await authorizeActor(tx, input.actor, 'WORK');
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
@@ -628,6 +632,7 @@ export async function closeCommercialLeadInboxItem(
   if (!Object.hasOwn(closeStatusByReason, input.reasonCode)) fail('N14_REASON_INVALID');
   return transaction(db, async (tx, commandNow) => {
     await authorizeActor(tx, input.actor, 'WORK');
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
@@ -677,6 +682,7 @@ export async function convertCommercialLeadInboxItem(
   requireEnforcedMode();
   return transaction(db, async (tx, commandNow) => {
     await authorizeActor(tx, input.actor, 'WORK');
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
@@ -752,6 +758,7 @@ export async function reopenCommercialLeadInboxItem(
   requireEnforcedMode();
   return transaction(db, async (tx, commandNow) => {
     await authorizeActor(tx, input.actor, 'MANAGE');
+    await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
