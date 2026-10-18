@@ -357,7 +357,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
   void _lastAiOutput;
   const lastAiOutput = accessibleAiContexts[0]?.output ?? null;
   const operationalOfferLeads = operationalOfferFollowUps.some((offer) => offer.leadId)
-    ? await prisma.lead.findMany({ where: { id: { in: operationalOfferFollowUps.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)) }, deletedAt: null } })
+    ? await prisma.lead.findMany({ where: { id: { in: operationalOfferFollowUps.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)) }, deletedAt: null, AND: [leadVisibilityWhere(session)] } })
     : [];
   const operationalOfferLeadById = new Map(operationalOfferLeads.map((lead) => [lead.id, lead]));
   const visibleOperationalOfferFollowUps = operationalOfferFollowUps.filter((offer) => canViewCommercialOffer(session, {

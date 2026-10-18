@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from './core-query-policy';
 import { canAccessFinancialDocument } from './financial-document-access';
 import type { Prisma, RoleCode } from '@prisma/client';
 import {
@@ -46,23 +47,23 @@ export async function requireActiveUser(userId?: string | null, allowedRoles?: r
 }
 
 export async function requireLeadEditAccess(session: AuthSession, leadId: string) {
-  const lead = await prisma.lead.findFirst({ where: { id: leadId, deletedAt: null } });
+  const lead = await prisma.lead.findFirst({ where: { id: leadId, deletedAt: null, AND: [leadVisibilityWhere(session)] } });
   if (!lead || !canEditLead(session, lead)) denyWriteAccess();
   return lead;
 }
 
-async function loadOfferContext(offerId: string) {
+async function loadOfferContext(session: AuthSession, offerId: string) {
   const offer = await prisma.commercialOffer.findFirst({ where: { id: offerId, deletedAt: null } });
   if (!offer) denyWriteAccess();
   const [lead, client] = await Promise.all([
-    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null } }) : null,
+    offer.leadId ? prisma.lead.findFirst({ where: { id: offer.leadId, deletedAt: null, AND: [leadVisibilityWhere(session)] } }) : null,
     offer.clientId ? prisma.client.findFirst({ where: { id: offer.clientId, deletedAt: null }, select: clientSelect }) : null,
   ]);
   return { offer, lead, client };
 }
 
 export async function requireCommercialOfferEditAccess(session: AuthSession, offerId: string) {
-  const context = await loadOfferContext(offerId);
+  const context = await loadOfferContext(session, offerId);
   if (!canEditCommercialOffer(session, { ...context.offer, lead: context.lead, client: context.client })) denyWriteAccess();
   return context;
 }
@@ -72,7 +73,7 @@ export async function requireCommercialOfferTargetAccess(
   target: { leadId?: string | null; clientId?: string | null },
 ) {
   const [lead, client] = await Promise.all([
-    target.leadId ? prisma.lead.findFirst({ where: { id: target.leadId, deletedAt: null } }) : null,
+    target.leadId ? prisma.lead.findFirst({ where: { id: target.leadId, deletedAt: null, AND: [leadVisibilityWhere(session)] } }) : null,
     target.clientId ? prisma.client.findFirst({ where: { id: target.clientId, deletedAt: null }, select: clientSelect }) : null,
   ]);
   if (target.leadId && (!lead || !canEditLead(session, lead))) denyWriteAccess();

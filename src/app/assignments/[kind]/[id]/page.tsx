@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Card, PageHeader, formatDateTime } from '@/components/ui';
@@ -18,7 +19,7 @@ export default async function Page({ params, searchParams }: {
   const parsed = responsibilityKind.safeParse(rawKind); if (!parsed.success) notFound();
   const kind = parsed.data, session = await requirePermission(kind === 'Lead' ? 'lead.read' : 'technical.read');
   if (kind === 'Lead') {
-    const lead = await prisma.lead.findFirst({ where: { id, deletedAt: null } });
+    const lead = await prisma.lead.findFirst({ where: { id, deletedAt: null, AND: [leadVisibilityWhere(session)] } });
     if (!lead || !canViewLead(session, lead)) notFound();
   } else {
     const practice = await prisma.technicalPractice.findFirst({ where: { id, deletedAt: null } });

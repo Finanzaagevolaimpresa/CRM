@@ -10,10 +10,11 @@ import { loadClientReadScope } from './client-read-perimeter';
 import type { ClientReadScope } from './client-read-perimeter-policy';
 import type { SelectiveProjectScope } from './selective-project-policy';
 import { loadSelectiveProjectScope } from './selective-project-scope';
+import type { SelectiveLeadScope } from './selective-lead-policy';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type AuthSession = SessionCookie & ClientReadScope & SelectiveProjectScope & {
+export type AuthSession = SessionCookie & ClientReadScope & SelectiveProjectScope & SelectiveLeadScope & {
   role: RoleCode;
   active: boolean;
   permissionOverrides: PermissionOverrideSnapshot[];

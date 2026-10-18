@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = 'force-dynamic';
 
 import { OpenLink } from '@/components/actions';
@@ -10,7 +11,7 @@ export default async function Page() {
   const session = await requirePermission('lead.read');
   const [offers, leads, clients] = await Promise.all([
     prisma.commercialOffer.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.lead.findMany({ where: { deletedAt: null } }),
+    prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)] } }),
     prisma.client.findMany({ where: { deletedAt: null } }),
   ]);
   const leadNames = new Map(leads.map((lead) => [lead.id, lead.companyName || `${lead.firstName} ${lead.lastName}`.trim()]));

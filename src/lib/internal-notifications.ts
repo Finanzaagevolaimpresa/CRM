@@ -42,7 +42,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
     prisma.project.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, consultantId: true, deletedAt: true } }),
     prisma.clientService.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true, assignedToId: true, deletedAt: true } }),
     prisma.technicalPractice.findMany({ where: { deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, commercialOwnerId: true, technicalOwnerId: true, deletedAt: true } }),
-    prisma.lead.findMany({ where: { deletedAt: null }, select: { id: true, assignedToId: true, clientId: true } }),
+    prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)] }, select: { id: true, assignedToId: true, clientId: true } }),
   ]);
   const access = buildNotificationAccess(session, { clients, projects, services, practices: practiceContexts, leads: leadContexts });
   const openTaskWhere = { deletedAt: null, status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] }, AND: [access.taskWhere] };

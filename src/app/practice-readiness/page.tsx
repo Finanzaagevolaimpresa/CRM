@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 export const dynamic = "force-dynamic";
 import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import { requirePermission, hasPermission } from "@/lib/auth";
@@ -62,7 +63,7 @@ export default async function Page({
   const clients = clientRows.filter(client => canViewClient(session, client));
   const clientIds = clientRows.map((x) => x.id);
   const leadRows = await prisma.lead.findMany({
-      where: { deletedAt: null, clientId: { in: clientIds } },
+      where: { deletedAt: null, clientId: { in: clientIds }, AND: [leadVisibilityWhere(session)] },
       select: { id: true, assignedToId: true, clientId: true },
     });
   const leadById = new Map(leadRows.map(lead => [lead.id, lead]));

@@ -480,7 +480,7 @@ async function qualifyMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const allNames = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(allNames.length, 55);
+  assert.equal(allNames.length, 56);
   assert.equal(allNames[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(allNames[47], '20260924100000_admin_client_read_perimeters_v1');
   const names = allNames.slice(0, 40);
@@ -604,7 +604,7 @@ async function qualifyCorrectiveMigration(upgrade: boolean) {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 55);
+  assert.equal(names.length, 56);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[39], migrationName);
@@ -762,7 +762,7 @@ async function qualifyCorrectiveExistingRowsFailClosed() {
   mkdirSync(migrationsDir, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDir, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 55);
+  assert.equal(names.length, 56);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[40], correctiveMigrationName);
@@ -1272,7 +1272,7 @@ test('VNX-01 gate and readiness precede claim, then the bounded bridge projects 
   assert.equal(duplicateLedger.state, 'REVIEW_REQUIRED');
   assert.equal(duplicateLedger.duplicateCase?.state, 'OPEN');
   assert.deepEqual(duplicateLedger.duplicateCase?.candidates.map(({ leadId }) => leadId), [existing.id]);
-  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { actorId: primaryUserId, skip: 0, take: 100 });
   const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateLedger.duplicateCase?.id);
   assert.ok(reviewItem);
   assert.equal(reviewItem.caseVersion, 1);
@@ -1433,7 +1433,7 @@ test('VNX-01 duplicate queue keeps valid high-cardinality cases workable with a 
   const duplicateCase = await client().leadDuplicateCase.findUniqueOrThrow({
     where: { projectionLedgerId: projected.result.ledgerId },
   });
-  const reviewQueue = await listLeadDuplicateReviewCases(client(), { skip: 0, take: 100 });
+  const reviewQueue = await listLeadDuplicateReviewCases(client(), { actorId: primaryUserId, skip: 0, take: 100 });
   const reviewItem = reviewQueue.find(({ caseId }) => caseId === duplicateCase.id);
   assert.ok(reviewItem);
   assert.equal(reviewItem.candidateCount, candidateCount);
@@ -2156,7 +2156,7 @@ test('trashed projected lead stays hidden while replay and a new website request
   const held = await projectClaimedLeadInboxEvent(client(), await m3Claim(admittedNew.inboxEventId, 102), projectionOptions());
   assert.equal(held.result.state, 'REVIEW_REQUIRED');
   const duplicate = await client().leadDuplicateCase.findUniqueOrThrow({ where: { projectionLedgerId: held.result.ledgerId } });
-  const visible = (await listLeadDuplicateReviewCases(client(), { skip: 0, take: 101 })).find(row => row.caseId === duplicate.id);
+  const visible = (await listLeadDuplicateReviewCases(client(), { actorId: primaryUserId, skip: 0, take: 101 })).find(row => row.caseId === duplicate.id);
   assert.ok(visible);
   const candidate = visible.candidates.find(row => row.leadId === leadId)!;
   assert.equal(candidate.selectable, false); assert.equal(candidate.lead.email, null); assert.equal(candidate.lead.companyName, null);

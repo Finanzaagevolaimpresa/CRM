@@ -28,7 +28,7 @@ export default async function Page({
   const pageNumber = parseCoreQueryPage(params.page);
   const [rows, readiness] = await Promise.all([
     listLeadDuplicateReviewCases(prisma, {
-      skip: coreQueryOffset(pageNumber),
+      actorId: session.userId, skip: coreQueryOffset(pageNumber),
       take: coreQueryFetchSize(),
     }),
     privilegedAccessReadiness(session),

@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import Link from 'next/link';
 import { Card, PageHeader } from '@/components/ui';
 import { hasPermission, requireAnyPermission } from '@/lib/auth';
@@ -12,7 +13,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
   const after = query.after && /^[a-zA-Z0-9_-]{1,128}$/.test(query.after) ? query.after : undefined;
   const cursor = after ? { id: { gt: after } } : {};
   const rows = !canRead ? [] : kind === 'Lead'
-    ? await prisma.lead.findMany({ where: { ...cursor, deletedAt: null, assignedToId: session.userId,
+    ? await prisma.lead.findMany({ where: { ...cursor, deletedAt: null, assignedToId: session.userId, AND: [leadVisibilityWhere(session)],
       status: { notIn: ['archiviato', 'cliente_acquisito', 'vinto', 'perso', 'non_qualificato'] } }, orderBy: { id: 'asc' }, take: 26,
       select: { id: true, companyName: true, firstName: true, lastName: true } }).then(leads => leads.map(row => ({ id: row.id, title: row.companyName || `${row.firstName} ${row.lastName}` })))
     : await prisma.technicalPractice.findMany({ where: { ...cursor, deletedAt: null, OR: [{ commercialOwnerId: session.userId }, { technicalOwnerId: session.userId }],

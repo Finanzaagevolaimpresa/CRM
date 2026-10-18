@@ -50,7 +50,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM information_schema.columns WHERE t
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='fai_record_update_email_source_guard'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npm run prisma:migrate:deploy
+historical="$RUNNER_TEMP/record-update-email-schema55"
+mkdir -p "$historical"
+git archive 1e463b01dd22f09aab73a35fac7203598dc7c044 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 55
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261018060000_record_update_email_drafts_v1' ORDER BY migration_name" > "$evidence/prefix54-after.txt"
 cmp "$evidence/prefix54-before.txt" "$evidence/prefix54-after.txt"
@@ -71,7 +74,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq RECORD_UPDATE_EMAIL_SCHEMA54_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
 node --input-type=module - "$evidence/datamodel-diff.sql" <<'JS'
 import assert from 'node:assert/strict';

@@ -1,3 +1,5 @@
+import { mayManageLeadSharing } from '@/lib/selective-lead-access';
+import { leadVisibilityWhere } from '@/lib/core-query-policy';
 import { LeadLifecycleControls } from "@/components/lead-lifecycle-controls";
 import { OpenLink, PrimaryButton, SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
@@ -20,8 +22,9 @@ const money = (value: unknown) => `€ ${Number(value).toLocaleString('it-IT', {
 export default async function Page({params}:{params:Promise<{id:string}>}){
   const session = await requirePermission('lead.read');
   const {id}=await params;
-  const lead = await prisma.lead.findFirst({where:{id,deletedAt:null}});
+  const lead = await prisma.lead.findFirst({where:{id,deletedAt:null,AND:[leadVisibilityWhere(session)]}});
   if(!lead || !canViewLead(session, lead)) return <PageHeader title="Lead non trovato" description="Il record richiesto non esiste o non è accessibile."/>;
+  const mayShare = await mayManageLeadSharing(prisma, session);
   const [users, clients, offers, inboxItem] = await Promise.all([
     prisma.user.findMany({where:{active:true}, select:{id:true,name:true,role:true}}),
     prisma.client.findMany({where:{deletedAt:null}, select:{id:true,displayName:true}}),
@@ -43,6 +46,7 @@ export default async function Page({params}:{params:Promise<{id:string}>}){
     ? await listN15SyntheticAssignmentsForLead(prisma, session, lead)
     : [];
   return <div className="lead-detail-page crm-space-y-6"><PageHeader title={`Lead — ${lead.companyName || `${lead.firstName} ${lead.lastName}`}`} description="Scheda commerciale con stato vendita, assegnazione, prossima azione, note, offerte e collegamento al cliente."/><SecondaryLink href="/leads">← Torna alla lista</SecondaryLink><SecondaryLink href={`/assignments/Lead/${lead.id}`}>Responsabilità e presa in carico</SecondaryLink><SecondaryLink href={`/leads/${lead.id}/requests`}>Richieste e provenienza</SecondaryLink>{canWrite && <SecondaryLink href={`/leads/${lead.id}/edit`}>Modifica anagrafica</SecondaryLink>}
+    {mayShare && <SecondaryLink href={`/leads/${id}/sharing`}>Condividi accesso selettivo</SecondaryLink>}
     {session.role === 'admin' && hasPermission(session, 'practice_communications.write') ? <SecondaryLink href={`/communications?kind=LEAD&practice=${lead.id}`}>Scrivi email</SecondaryLink> : null}
     {session.role === 'admin' && lead.status !== 'archiviato' && <SecondaryLink href={`/record-updates/LEAD/${lead.id}`}>Chi aggiornare</SecondaryLink>}
     <div className="grid gap-4 md:grid-cols-2"><Card title="Dati lead"><div className="crm-space-y-2 text-sm leading-7 text-slate-600"><p className="text-lg font-semibold text-fai-navy">{lead.companyName || `${lead.firstName} ${lead.lastName}`}</p><p>Referente: {lead.contactPerson || `${lead.firstName} ${lead.lastName}`}</p><p>Email: {lead.email??'—'} · Telefono: {lead.phone??'—'}</p><p>Provincia/Città: {[lead.province, lead.city].filter(Boolean).join(' / ') || '—'}</p><p>Fonte: <StatusBadge status={label(((lead.leadSource as LeadSource) ?? lead.source) || 'non definito')}/></p><p>Priorità: <StatusBadge status={lead.priority}/></p><p>Interesse: {lead.interest??'—'}</p>{sourcePage && <p>Pagina origine sito: {sourcePage}</p>}{requestedService && <p>Servizio richiesto dal sito: {requestedService}</p>}<p>Importo richiesto/stimato: {lead.requestedAmount ? `€ ${Number(lead.requestedAmount).toLocaleString('it-IT')}` : '—'}</p><p>Budget disponibile: {lead.availableBudget ? `€ ${Number(lead.availableBudget).toLocaleString('it-IT')}` : '—'}</p><p>Stato: <StatusBadge status={lead.status}/></p><p>Consulente assegnato: {owner?.name ?? 'Da assegnare'}</p><p>Cliente collegato: {client ? client.displayName : '—'}</p></div><TimestampMeta createdAt={lead.createdAt} updatedAt={lead.updatedAt} updatedBy={owner?.name ?? lead.assignedToId} /></Card>

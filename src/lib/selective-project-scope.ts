@@ -2,14 +2,24 @@ import type { Prisma } from '@prisma/client';
 import type { SelectiveProjectScope } from './selective-project-policy';
 import { lockInternalUser } from './internal-session-registry';
 import { assertProjectOperational } from './project-lifecycle-lock';
+import { loadSelectiveLeadScope } from './selective-lead-scope';
+import type { SelectiveLeadScope } from './selective-lead-policy';
 
 type Db = Prisma.TransactionClient;
-export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope> {
-  return loadExclusions(db, recipientId, true);
+export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope> {
+  return loadCurrentExclusions(db, recipientId, true);
 }
 /** Management-only: keeps every personal selection, omits lifecycle exclusions. */
-export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope> {
-  return loadExclusions(db, recipientId, false);
+export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope> {
+  return loadCurrentExclusions(db, recipientId, false);
+}
+async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean) {
+  const project = await loadExclusions(db, recipientId, includeLifecycle);
+  const lead = await loadSelectiveLeadScope(db, recipientId);
+  return { ...project, ...lead,
+    selectiveOfferIds: [...new Set([...(project.selectiveOfferIds ?? []), ...lead.selectiveLeadOfferIds])],
+    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? [])])],
+  };
 }
 async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean): Promise<SelectiveProjectScope> {
   // Deliberately includes revoked, expired and invalid grants. A missing proof

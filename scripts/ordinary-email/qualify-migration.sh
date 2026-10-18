@@ -62,3 +62,4 @@ bash scripts/record-updates/qualify-migration.sh
 
 bash scripts/private-videos/qualify-migration.sh
 bash scripts/record-update-email/qualify-migration.sh
+bash scripts/selective-leads/qualify-migration.sh

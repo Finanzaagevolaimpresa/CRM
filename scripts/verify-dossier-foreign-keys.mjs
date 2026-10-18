@@ -32,5 +32,11 @@ contextKeys.push('ApprovedCommunication_leadId_fkey', 'ApprovedCommunication_int
 assert.equal(contextKeys.length, 11, 'Every new context foreign key must be covered');
 assert.deepEqual(contextKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove context foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "(?:InternalCommunication|CommunicationContextFile)|ALTER TABLE "(?:InternalCommunication[^"]*|CommunicationContextFile)"[^;]*DROP COLUMN/);
+const leads = readFileSync('prisma/migrations/20261018140000_selective_lead_read_v1/migration.sql', 'utf8');
+const leadKeys = [...leads.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)]
+  .flatMap(([,table,columns]) => [...columns.matchAll(/"([^"]+)"[^\n]* REFERENCES /g)].map(([,column]) => table+'_'+column+'_fkey'));
+assert.equal(leadKeys.length, 8, 'Every selective lead foreign key must be covered');
+assert.deepEqual(leadKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove selective lead foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "SelectiveLead|ALTER TABLE "SelectiveLead[^"]*"[^;]*DROP COLUMN/);
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
-  communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length }));
+  communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length, selectiveLeadConstraints: leadKeys.length }));

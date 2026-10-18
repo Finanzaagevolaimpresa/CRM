@@ -408,6 +408,7 @@ export async function hasStrongRawLeadIdentityDuplicate(
     phone?: string | null;
     excludeLeadId?: string;
     trashedOnly?: boolean;
+    selectedForRecipientId?: string;
   }>,
 ) {
   const predicates: Prisma.Sql[] = [];
@@ -430,6 +431,7 @@ export async function hasStrongRawLeadIdentityDuplicate(
       SELECT 1 FROM "Lead"
       WHERE (${Prisma.join(predicates, ' OR ')})
         ${input.trashedOnly ? Prisma.sql`AND "deletedAt" IS NOT NULL` : Prisma.empty}
+        ${input.selectedForRecipientId ? Prisma.sql`AND EXISTS(SELECT 1 FROM "SelectiveLeadGrant" g WHERE g."leadId"="Lead".id AND g."recipientId"=${input.selectedForRecipientId})` : Prisma.empty}
         ${excluded}
     ) AS "duplicate"
   `);

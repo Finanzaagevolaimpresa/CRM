@@ -1,3 +1,4 @@
+import { leadOutsideSelection } from './selective-lead-policy';
 import type { Prisma } from '@prisma/client';
 import { loadSelectiveProjectScope } from './selective-project-scope';
 import { projectOutsideSelection, serviceOutsideSelection, contextOutsideSelection } from './selective-project-policy';
@@ -20,12 +21,13 @@ export async function loadAssignmentExceptions(
   });
   const invalidIds = users.map(user => user.id);
   const active = { deletedAt: null };
-  const leadWhere = { ...active, assignedToId: { in: invalidIds } };
+  const ownerWhere = { ...active, assignedToId: { in: invalidIds } };
+  const leadWhere = { ...ownerWhere, AND: [leadOutsideSelection(scope), { selectiveGrants: { none: { recipientId: actor.userId } } }] };
   const clientWhere = { ...active, OR: [{ salesOwnerId: { in: invalidIds } }, { consultantId: { in: invalidIds } }] };
   const projectWhere = { ...active, consultantId: { in: invalidIds }, AND: [projectOutsideSelection(scope)] };
   const practiceWhere = { ...active, OR: [{ commercialOwnerId: { in: invalidIds } }, { technicalOwnerId: { in: invalidIds } }], ...contextOutsideSelection(scope) };
-  const taskWhere = { ...leadWhere, ...contextOutsideSelection(scope) };
-  const serviceWhere = { ...leadWhere, AND: [serviceOutsideSelection(scope)] };
+  const taskWhere = { ...ownerWhere, ...contextOutsideSelection(scope) };
+  const serviceWhere = { ...ownerWhere, AND: [serviceOutsideSelection(scope)] };
   const values = await Promise.all([
     tx.lead.count({ where: leadWhere }), tx.client.count({ where: clientWhere }),
     tx.project.count({ where: projectWhere }), tx.task.count({ where: taskWhere }),

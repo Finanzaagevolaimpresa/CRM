@@ -1,0 +1,114 @@
+name: Selective lead access
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths: ['src/**', 'prisma/**', 'tests/selective-lead*', 'tests/selective-leads/**', 'scripts/selective-leads/**', '.github/workflows/selective-lead-access.yml']
+permissions: { contents: read }
+concurrency:
+  group: selective-lead-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  qualify:
+    name: Selective lead ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-selective-lead-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-selective-lead-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-selective-lead-auth-only-000000000
+      AUTH_COOKIE_NAME: fai_selective_lead_test_session
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3043
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-selective-lead-step-up-000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      SELECTIVE_LEAD_BROWSER_CONFIRMED: '1'
+      SELECTIVE_LEAD_BROWSER_PASSWORD: synthetic-selective-lead-password-000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Exact source and additive migration56 with preserved populated schema55
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          evidence="$RUNNER_TEMP/selective-lead-evidence"
+          mkdir -p "$evidence"
+          echo "SELECTIVE_LEAD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          prior="$RUNNER_TEMP/selective-lead-schema55"
+          mkdir -p "$prior"
+          git archive 1e463b01dd22f09aab73a35fac7203598dc7c044 prisma | tar -x -C "$prior"
+          npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
+          bash scripts/selective-leads/qualify-migration.sh
+      - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/selective-lead-access-db.test.ts | tee "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 22' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 22' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+      - name: Prepare synthetic native browser
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/selective-leads/provision-browser.ts
+      - name: Native preview, exact confirmation, revocation, lost response and mobile UI
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3043 > "$SELECTIVE_LEAD_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3043/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_LEAD_EVIDENCE/playwright.json" npx playwright test --config tests/selective-leads/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_LEAD_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.SELECTIVE_LEAD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind final source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_LEAD_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selective-lead-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/selective-lead-evidence
+            ${{ runner.temp }}/selective-lead-migration
+            test-results
+          if-no-files-found: error
+          retention-days: 14

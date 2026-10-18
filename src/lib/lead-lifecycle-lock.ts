@@ -6,6 +6,7 @@ import { canEditLead } from './access-control';
 import { hasPermission } from './permission-evaluator';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { internalSessionMode } from './session';
+import { loadSelectiveLeadScope } from './selective-lead-scope';
 
 export class LeadLifecycleError extends UserFacingActionError {
   constructor(readonly code: 'DENIED' | 'STALE') {
@@ -22,7 +23,7 @@ export async function lockLeadActor(tx: Prisma.TransactionClient, claimed: AuthS
   if (internalSessionMode() !== 'registry' || !z.string().uuid().safeParse(claimed.sessionId).success) throw new LeadLifecycleError('DENIED');
   const row = await lockAuthoritativeInternalSession(tx, { userId: claimed.userId, sessionId: claimed.sessionId! });
   if (!row || row.revokedAt || !row.active || row.deletedAt) throw new LeadLifecycleError('DENIED');
-  const current = { ...claimed, role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides], registryExpiresAt: row.expiresAt };
+  const current = { ...claimed, ...await loadSelectiveLeadScope(tx, claimed.userId), role: row.role, active: row.active, permissionOverrides: [...row.permissionOverrides], registryExpiresAt: row.expiresAt };
   // An explicit suspension also blocks this personal operation for an Admin.
   if (current.permissionOverrides.some(item => !item.allowed && (item.permission === 'lead.read' || (write && item.permission === 'lead.write')))) throw new LeadLifecycleError('DENIED');
   if (!hasPermission(current, 'lead.read') || (write && !hasPermission(current, 'lead.write'))) throw new LeadLifecycleError('DENIED');

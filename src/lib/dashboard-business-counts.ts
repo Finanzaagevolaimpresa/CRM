@@ -1,3 +1,4 @@
+import { leadVisibilityWhere } from './core-query-policy';
 import { hasPermission } from './permission-evaluator';
 import type { Dossier, Prisma } from '@prisma/client';
 import { canViewClient, canViewCommercialOffer, canViewProject } from './access-control';
@@ -69,7 +70,7 @@ export async function getAccessibleDashboardOfferIds(session: AuthSession): Prom
       });
       if (!offers.length) break;
       const [leads, clients] = await Promise.all([
-        tx.lead.findMany({ where: { id: { in: offers.flatMap(row => row.leadId ? [row.leadId] : []) }, deletedAt: null },
+        tx.lead.findMany({ where: { id: { in: offers.flatMap(row => row.leadId ? [row.leadId] : []) }, deletedAt: null, AND: [leadVisibilityWhere(session)] },
           select: { id: true, assignedToId: true, clientId: true } }),
         tx.client.findMany({ where: { id: { in: offers.flatMap(row => row.clientId ? [row.clientId] : []) }, deletedAt: null }, select: clientSelect }),
       ]);
@@ -107,7 +108,7 @@ export async function countAccessibleDashboardOffers(session: AuthSession): Prom
       const leadIds = [...new Set(offers.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)))];
       const clientIds = [...new Set(offers.map((offer) => offer.clientId).filter((id): id is string => Boolean(id)))];
       const leads = await tx.lead.findMany({
-        where: { id: { in: leadIds }, deletedAt: null },
+        where: { id: { in: leadIds }, deletedAt: null, AND: [leadVisibilityWhere(session)] },
         select: { id: true, assignedToId: true, clientId: true },
       });
       const clients = await tx.client.findMany({

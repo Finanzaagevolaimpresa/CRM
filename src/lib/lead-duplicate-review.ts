@@ -76,17 +76,19 @@ function exactCurrentCandidateWindow<T extends Readonly<{
 
 export async function listLeadDuplicateReviewCases(
   prisma: PrismaClient,
-  input: Readonly<{ skip: number; take: number }>,
+  input: Readonly<{ skip: number; take: number; actorId: string }>,
 ) {
-  if (!Number.isSafeInteger(input.skip) || input.skip < 0
+  if (!input.actorId || !Number.isSafeInteger(input.skip) || input.skip < 0
     || !Number.isSafeInteger(input.take) || input.take < 1 || input.take > 101) {
     return integrityFail();
   }
   const rows = await prisma.leadDuplicateCase.findMany({
     where: {
       state: 'OPEN',
+      candidates: { none: { lead: { selectiveGrants: { some: { recipientId: input.actorId } } } } },
       projectionLedger: {
         state: 'REVIEW_REQUIRED',
+        OR: [{ leadId: null }, { lead: { selectiveGrants: { none: { recipientId: input.actorId } } } }],
         inboxEvent: { state: 'PROCESSED' },
       },
     },

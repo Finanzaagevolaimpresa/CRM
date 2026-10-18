@@ -128,7 +128,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     const visibleLeads = leads.filter((lead) => canViewLead(session, lead));
     const offerLeadIds = [...new Set(offers.map((offer) => offer.leadId).filter((id): id is string => Boolean(id)))];
     const offerLeads = offerLeadIds.length
-      ? await prisma.lead.findMany({ where: { id: { in: offerLeadIds }, deletedAt: null } })
+      ? await prisma.lead.findMany({ where: { id: { in: offerLeadIds }, deletedAt: null, AND: [leadVisibilityWhere(session)] } })
       : [];
     const leadById = new Map(offerLeads.map((lead) => [lead.id, lead]));
     const visibleOffers = offers.filter((offer) => canViewCommercialOffer(session, { ...offer, lead: offer.leadId ? leadById.get(offer.leadId) ?? null : null, client: offer.clientId ? clientById.get(offer.clientId) ?? null : null }));

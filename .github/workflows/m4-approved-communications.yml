@@ -76,7 +76,7 @@ jobs:
           npm run prisma:migrate:deploy
           psql 'postgresql://postgres:synthetic-m4-only@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name LIMIT 48' > "$evidence/prefix48-after.txt"
           cmp "$evidence/prefix48-before.txt" "$evidence/prefix48-after.txt"
-          printf '{"synthetic":true,"before":48,"after":55,"failureAtomic":true,"prefix48Unchanged":true}\n' > "$evidence/migration-proof.json"
+          printf '{"synthetic":true,"before":48,"after":56,"failureAtomic":true,"prefix48Unchanged":true}\n' > "$evidence/migration-proof.json"
       - name: PostgreSQL approval, concurrency, revocation, privacy and reconciliation
         shell: bash
         run: |

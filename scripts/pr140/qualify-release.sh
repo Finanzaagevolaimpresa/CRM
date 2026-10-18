@@ -11,7 +11,7 @@ tree="$(git rev-parse HEAD^{tree})"
 recovery_head="$head"
 recovery_tree="$tree"
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema55 requires lifecycle, perimeters, contextual email, selected updates and private videos in every serving image. Qualify only
+# Schema56 also requires selective lead epochs, receipts and perimeters in every serving image. Qualify only
 # a restart of this exact candidate; an older binary is never a safe rollback.
 node scripts/m4/verify-schema.mjs
 git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
@@ -98,6 +98,7 @@ export R05_SELECTIVE_RECOVERY_FIXTURE="$evidence/selective-fixture.json"
 export R05_CONTEXT_RECOVERY_FIXTURE="$evidence/context-fixture.json"
 export R05_UPDATES_RECOVERY_FIXTURE="$evidence/updates-fixture.json"
 export R05_VIDEO_RECOVERY_FIXTURE="$evidence/video-fixture.json"
+export R05_LEAD_RECOVERY_FIXTURE="$evidence/lead-fixture.json"
 [[ ! -e "$LOCAL_DOCUMENT_STORAGE_ROOT" && ! -e "$R05_M1_RECOVERY_FIXTURE" ]] || exit 1
 mkdir -p "$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR"
 npm run prisma:migrate:deploy
@@ -175,9 +176,11 @@ tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf -
 run_browser candidate-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 node --import tsx tests/m4/release-state.ts
 node --import tsx tests/pr140-release/selective-state.ts
+node --import tsx tests/pr140-release/lead-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 export R05_SELECTIVE_PHASE=candidate
 run_browser candidate-selective tests/pr140-release/playwright.config.ts selective-recovery.spec.ts 1
+run_browser candidate-leads tests/pr140-release/playwright.config.ts lead-recovery.spec.ts 1
 node --import tsx tests/pr140-release/ordinary-state.ts
 node --import tsx tests/pr140-release/context-state.ts
 node --import tsx tests/pr140-release/updates-state.ts
@@ -207,6 +210,7 @@ run_browser recovery tests/pr140-release/playwright.config.ts '/recovery.spec.ts
 run_browser recovery-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.ts 2
 export R05_SELECTIVE_PHASE=restart
 run_browser restart-selective tests/pr140-release/playwright.config.ts selective-recovery.spec.ts 1
+run_browser restart-leads tests/pr140-release/playwright.config.ts lead-recovery.spec.ts 1
 run_browser restart-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser restart-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
 run_browser restart-videos tests/pr140-release/playwright.config.ts video-recovery.spec.ts 1
@@ -228,6 +232,7 @@ run_browser resume-m1 tests/pr140-release/playwright.config.ts m1-recovery.spec.
 run_browser resume-m2 tests/pr140-release/playwright.config.ts m2-resume.spec.ts 1
 export R05_SELECTIVE_PHASE=resume
 run_browser resume-selective tests/pr140-release/playwright.config.ts selective-recovery.spec.ts 1
+run_browser resume-leads tests/pr140-release/playwright.config.ts lead-recovery.spec.ts 1
 run_browser resume-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser resume-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
 run_browser resume-videos tests/pr140-release/playwright.config.ts video-recovery.spec.ts 1
@@ -236,6 +241,6 @@ cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA55_UPDATE_EMAIL_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":55,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA56_SELECTIVE_LEAD_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":56,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"

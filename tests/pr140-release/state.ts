@@ -45,7 +45,7 @@ async function main() {
     const select = { id: true, recordUpdateEpoch: true } as const;
     const orderBy = { id: 'asc' } as const;
     const epochs = {
-      users: await db.user.findMany({ select, orderBy }),
+      users: await db.user.findMany({ select: { ...select, selectiveLeadEpoch: true }, orderBy }),
       leads: await db.lead.findMany({ select, orderBy }),
       clients: await db.client.findMany({ select, orderBy }),
       projects: await db.project.findMany({ select, orderBy }),
@@ -63,6 +63,13 @@ async function main() {
     const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
       UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
     const data = {
+      selectiveLeadAuthority: await db.selectiveLeadAuthority.findMany({ orderBy: { id: 'asc' } }),
+      selectiveLeadGrants: await db.selectiveLeadGrant.findMany({ orderBy: { id: 'asc' } }),
+      selectiveLeadRevisions: (await db.selectiveLeadRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectiveLeadCommands: (await db.selectiveLeadCommand.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectiveLeadAudit: await db.auditLog.findMany({ where: { event: 'selective_lead_changed' }, orderBy: { id: 'asc' } }),
+      selectiveLeadUsers: await db.user.findMany({ where: { OR: [{ selectiveLeadAuthority: { isNot: null } }, { selectiveLeadGrants: { some: {} } }] },
+        orderBy: { id: 'asc' }, select: { id: true, selectiveLeadEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
       videoAssets, videoFiles,
       videos: await db.videoEntry.findMany({ orderBy: { id: 'asc' } }),
       videoRevisions: await db.videoRevision.findMany({ orderBy: [{ videoId: 'asc' }, { version: 'asc' }] }),
@@ -130,7 +137,11 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 55);
+    assert.equal(data.ledger.length, 56);
+    assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 2);
+    assert.equal(data.selectiveLeadGrants.filter(row => row.revokedAt).length, 1);
+    assert.equal(data.selectiveLeadRevisions.length, 3); assert.equal(data.selectiveLeadCommands.length, 3);
+    assert.equal(data.selectiveLeadAudit.length, 3); assert.equal(data.selectiveLeadUsers.length, 2);
     assert.equal(data.videoAssets.length, 5); assert.equal(data.videoAssets.filter(row => row.state === 'RESERVED').length, 1);
     assert.equal(data.videoFiles.length, 4); assert.equal(data.videos.length, 4);
     assert.equal(data.videoRevisions.length, 11); assert.equal(data.videoCommands.length, 11); assert.equal(data.videoAudit.length, 11);
