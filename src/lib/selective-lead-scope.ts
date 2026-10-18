@@ -10,7 +10,7 @@ export async function loadSelectiveLeadScope(db: Prisma.TransactionClient, recip
   const grants = await db.selectiveLeadGrant.findMany({ where: { recipientId },
     select: { id: true, leadId: true, revisions: { select: { id: true, commandId: true } } } });
   const selectiveLeadIds = [...new Set(grants.map(row => row.leadId))];
-  if (!selectiveLeadIds.length) return { selectiveLeadIds: [], selectiveLeadAuditEntityIds: [], selectiveLeadOfferIds: [] };
+  if (!selectiveLeadIds.length) return { selectiveLeadIds: [], selectiveLeadAuditEntityIds: [], selectiveLeadOfferIds: [], selectiveLeadIntakeIds: [], selectiveLeadInboxEventIds: [] };
   const leadWhere = { leadId: { in: selectiveLeadIds } };
   const [offers, ledgers, inbox, messages, files, privacy, candidates] = await Promise.all([
     db.commercialOffer.findMany({ where: leadWhere, select: { id: true } }),
@@ -63,7 +63,12 @@ export async function loadSelectiveLeadScope(db: Prisma.TransactionClient, recip
     ...privacy.flatMap(row => [row.id, row.websiteLeadReceiptId, row.businessInboxEventId].filter((id): id is string => !!id)),
     ...candidates.map(row => row.id), ...cases.flatMap(row => [row.id, row.projectionLedgerId, ...row.decisions.map(item => item.id)]),
   ])];
-  return { selectiveLeadIds, selectiveLeadOfferIds, selectiveLeadAuditEntityIds };
+  // Audit entity IDs deliberately span cuid/text and UUID domains. Typed
+  // resource queries must receive only IDs from their own table.
+  const selectiveLeadInboxEventIds = [...new Set([...ledgers, ...caseLedgers].map(row => row.inboxEventId)
+    .concat(privacy.flatMap(row => row.businessInboxEventId ? [row.businessInboxEventId] : [])))];
+  return { selectiveLeadIds, selectiveLeadOfferIds, selectiveLeadAuditEntityIds,
+    selectiveLeadIntakeIds: intakeIds, selectiveLeadInboxEventIds };
 }
 
 /** Confirmation holds the same recipient lock before changing any perimeter. */

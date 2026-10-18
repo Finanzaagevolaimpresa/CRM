@@ -34,7 +34,7 @@ export async function readLeadAcquisitions(db: PrismaClient, actor: Actor, input
     where.AND = [{ OR: [
       { leadProjectionLedger: { is: null } },
       { leadProjectionLedger: { is: { OR: [{ leadId: null }, { lead: { is: { deletedAt: null } } }] } } },
-    ] }, { id: { notIn: [...(fresh.selectiveLeadAuditEntityIds ?? [])] } }];
+    ] }, { id: { notIn: [...(fresh.selectiveLeadInboxEventIds ?? [])] } }];
     if (input.queue === 'errors') where.OR = [
       { state: 'DEAD_LETTER' }, { state: { in: ['AVAILABLE', 'LEASED'] }, lastFailureCode: { not: null } },
     ];

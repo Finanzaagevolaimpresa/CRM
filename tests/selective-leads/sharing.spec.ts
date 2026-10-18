@@ -46,8 +46,8 @@ test('native two-field selection, direct/indirect denials, open-session revocati
   await admin.screenshot({ path: path.join(evidence, 'selective-lead-preview-mobile.png'), fullPage: true });
   await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
   await expect.poll(() => db.selectiveLeadGrant.count({ where: { leadId: row.leadId } })).toBe(1);
-  for (const url of ['/leads', '/leads/inbox', '/leads/' + row.leadId, '/leads/' + row.leadId + '/edit', '/search?q=' + encodeURIComponent(row.privateEmail), '/dashboard', '/notifications', '/commercial-offers', '/assignments', '/controlled-intakes', '/leads/duplicates']) {
-    const response = await rc.request.get(url); expect(response.status()).toBeLessThan(500);
+  for (const url of ['/leads', '/leads/inbox', '/leads/' + row.leadId, '/leads/' + row.leadId + '/edit', '/search?q=' + encodeURIComponent(row.privateEmail), '/dashboard', '/notifications', '/commercial-offers', '/assignments', '/controlled-intakes', '/leads/duplicates', '/leads/acquisition']) {
+    const response = await rc.request.get(url); expect(response.status(), url).toBeLessThan(500);
     const html = await response.text(); expect(html).not.toContain(row.label); expect(html).not.toContain(row.offerTitle);
     // Search echoes the caller's query in its input, even when no record is returned.
     if (!url.startsWith('/search?')) expect(html).not.toContain(row.privateEmail);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test, { before, after } from 'node:test';
-import { PrismaClient, type Prisma } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { selectiveLeadFixture, grantLead, leadProof, type Person } from './selective-leads/fixtures';
@@ -20,6 +20,8 @@ import { readinessLeadFixture } from './lead-lifecycle/fixtures';
 import { canViewPracticeReadinessWork } from '../src/lib/practice-readiness-access';
 import { hasStrongRawLeadIdentityDuplicate } from '../src/lib/lead-identity';
 import { lockInternalUser, lockAuthoritativeInternalSession } from '../src/lib/internal-session-registry';
+import { listRecordUpdates } from '../src/lib/record-update-delivery';
+import { readLeadAcquisitions } from '../src/lib/lead-acquisition';
 
 const enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -88,6 +90,10 @@ test('project access does not reopen selected lead readiness, revision audit or 
   const current = await scope(f.reader);
   assert.equal(canViewPracticeReadinessWork(current, context), false);
   for (const id of [work.intake.id, work.revision.id, work.practice.id]) assert.ok(current.selectiveAuditEntityIds?.includes(id));
+  assert.ok(current.selectiveLeadIntakeIds?.includes(work.intake.id));
+  assert.ok(!current.selectiveLeadIntakeIds?.includes(row.id));
+  assert.equal(await db.controlledIntake.count({ where: { id: { notIn: [...(current.selectiveLeadIntakeIds ?? [])] }, leadId: row.id } }), 0);
+  await readLeadAcquisitions(db, f.reader.session, {});
   assert.equal(await hasStrongRawLeadIdentityDuplicate(db, { email: row.email, phone: null, selectedForRecipientId: f.reader.user.id }), true);
   assert.equal(await hasStrongRawLeadIdentityDuplicate(db, { email: row.email, phone: null, selectedForRecipientId: admin.user.id }), false);
 });
@@ -195,6 +201,9 @@ test('a different selection invalidates notification admissions but preserves un
 test('direct N14, assignment, conversion/update lock and email draft are denied on old session', options, async () => {
   const f = await fixture();
   const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  // An independently enrolled synthetic email principal is needed for the
+  // positive control; a generic Admin role cannot write a lead email draft.
+  await db.ordinaryEmailAuthority.create({ data: { id: 'ordinary-email', userId: f.reader.user.id, mailboxId: box.id, enabled: true } });
   const draft = { messageId: randomUUID(), expectedRevision: 0, context: { kind: 'LEAD', id: f.lead.id }, mailboxId: box.id,
     replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [], subject: 'Synthetic draft', body: 'Synthetic only', attachmentVersionIds: [], classification: 'ORDINARY' };
   await saveApprovedMessageDraft(db, f.reader.session, draft);
@@ -292,6 +301,29 @@ test('session admission and a caller holding User serialize without inverted row
     if (result.status === 'rejected') throw result.reason;
   }
 });
+test('notification read after a confirmed rollback revalidates a newly revoked session', options, async () => {
+  const f = await fixture(); let attempts = 0;
+  const before = await db.recordUpdateDelivery.count();
+  const intercepted = { $transaction: async (read: (tx: Prisma.TransactionClient) => Promise<unknown>, config: object) => {
+    const attempt = ++attempts;
+    try {
+      return await db.$transaction(async tx => {
+        const result = await read(tx);
+        if (attempt === 1) await tx.$executeRaw`DO $$ BEGIN RAISE EXCEPTION USING ERRCODE='40P01', MESSAGE='SYNTHETIC_NOTIFICATION_ABORT'; END $$`;
+        return result;
+      }, config);
+    } catch (error) {
+      if (attempt === 1) {
+        assert.ok(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2010' && error.meta?.code === '40P01');
+        await db.internalSession.update({ where: { id: f.reader.session.sessionId! }, data: { revokedAt: new Date() } });
+      }
+      throw error;
+    }
+  } } as unknown as PrismaClient;
+  await assert.rejects(listRecordUpdates(intercepted, f.reader.session), error => (error as { code?: string }).code === 'DENIED');
+  assert.equal(attempts, 2); assert.equal(await db.recordUpdateDelivery.count(), before);
+});
+
 test('personal authority suspension fails closed for management and open recipient sessions', options, async () => {
   const f = await fixture(); await grantLead(db, admin, f.input);
   const binding = await db.selectiveLeadAuthority.findUniqueOrThrow({ where: { id: 'lead-sharing' } });

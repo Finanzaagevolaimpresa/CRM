@@ -5,6 +5,7 @@ import { currentRecordUpdateUser } from './record-update-context';
 import { updateActor, updateDirectory } from './record-updates';
 import { admitCommunicationNotice } from './approved-communications';
 import { admitRecordUpdateWork, recordUpdateWorkInclude, type RecordUpdateWork } from './record-update-admission';
+import { confirmedReadRetry } from './confirmed-read-retry';
 
 type Tx = Prisma.TransactionClient;
 const include = recordUpdateWorkInclude;
@@ -20,7 +21,7 @@ async function visible(tx: Tx, actor: NonNullable<Awaited<ReturnType<typeof curr
     priority: 'bassa' as const, accessUntil: admitted.accessUntil };
 }
 export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, limit = 100, unreadOnly = true) {
-  return db.$transaction(async tx => {
+  return confirmedReadRetry(() => db.$transaction(async tx => {
     const auth = await updateActor(tx, claimed), directory = await updateDirectory(tx);
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     const result: NonNullable<Awaited<ReturnType<typeof visible>>>[] = [];
@@ -43,10 +44,10 @@ export async function listRecordUpdates(db: PrismaClient, claimed: AuthSession, 
     return result.filter(item => item.accessUntil > finishedAt.getTime())
       .sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, limit)
       .map(({ accessUntil, ...item }) => { void accessUntil; return item; });
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }));
 }
 export async function readRecordUpdate(db: PrismaClient, claimed: AuthSession, id: string, markRead = false) {
-  return db.$transaction(async tx => {
+  const read = () => db.$transaction(async tx => {
     const auth = await updateActor(tx, claimed);
     const work = await tx.recordUpdateDelivery.findFirst({ where: { id, recipientId: auth.actor.id }, include });
     if (!work) return null;
@@ -59,4 +60,5 @@ export async function readRecordUpdate(db: PrismaClient, claimed: AuthSession, i
     const { accessUntil, ...item } = result; void accessUntil;
     return { ...item, readAt: markRead ? work.readAt ?? clock.now : work.readAt };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+  return markRead ? read() : confirmedReadRetry(read);
 }

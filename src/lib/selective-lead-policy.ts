@@ -27,6 +27,8 @@ export type SelectiveLeadSelection = z.infer<typeof selectiveLeadSelectionSchema
 export type SelectiveLeadScope = {
   selectiveLeadIds?: readonly string[];
   selectiveLeadAuditEntityIds?: readonly string[];
+  selectiveLeadIntakeIds?: readonly string[];
+  selectiveLeadInboxEventIds?: readonly string[];
 };
 
 export function isSelectiveLead(scope: SelectiveLeadScope, id?: string | null) {

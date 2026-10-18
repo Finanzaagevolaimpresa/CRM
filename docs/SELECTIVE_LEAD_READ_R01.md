@@ -35,6 +35,10 @@ Ordine dei lock della decisione: chiave, directory condivisa, identità lead, au
 
 Il registro di sessione acquisisce esplicitamente il lock utente prima del lock sessione anche per i chiamanti ordinari. Questo evita l'inversione osservata tra la lettura delle notifiche nel layout e la pagina di gestione. Una prova PostgreSQL osserva la seconda transazione in attesa e verifica che entrambe terminino, senza retry né attenuazione dei controlli.
 
+Le letture delle notifiche possono ripartire al massimo tre volte soltanto dopo un rollback PostgreSQL confermato per deadlock o serializzazione, rileggendo sessione e permessi dall'inizio. È lo stesso confine già usato dalle letture delle comunicazioni. Dinieghi, disconnessioni ed esiti incerti non vengono ritentati; la registrazione della presa visione resta una scrittura senza retry automatico. Una prova DB revoca la sessione tra rollback e nuova lettura e verifica il diniego.
+
+Gli identificativi esclusi dalle interrogazioni di intake ed eventi sono separati per tabella. L'indice audit comprende identificativi testuali e UUID e viene usato solo sulle colonne testuali dell'audit.
+
 Grant, comando, revisione e audit minimizzato sono atomici. Trigger differiti richiedono il collegamento e la stessa transazione. Comandi e revisioni sono immutabili; la storia e le identità dei grant non sono eliminabili. L'audit contiene solo revisione, operazione e numero di campi, senza valori o indirizzi.
 
 Un UUID già consumato può restituire la stessa ricevuta solo per la stessa richiesta e sessione; non esegue un'altra mutazione. Il browser registra l'UUID nell'URL prima dell'invio. Se perde la risposta, blocca i nuovi invii e consente una riconciliazione in sola lettura o il ricaricamento. Una ricevuta storica è distinta dall'accesso attualmente valido.
