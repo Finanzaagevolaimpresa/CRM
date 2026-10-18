@@ -27,10 +27,10 @@ function file(bytes = 256, name = 'synthetic.mp4') {
   // Header-only fixtures exercise persistence; native browser separately tests a playable WebM.
   return new File([data], name, { type: 'video/mp4' });
 }
-async function fixture(p = admin) {
+async function fixture(p = admin, id: string = randomUUID()) {
   const viewer = await syntheticPerson(db, 'Synthetic video viewer', 'commerciale');
   const other = await syntheticPerson(db, 'Synthetic unselected viewer', 'backoffice');
-  const id = randomUUID(); await uploadVideo(db, p.session, id, file(), proof(p));
+  await uploadVideo(db, p.session, id, file(), proof(p));
   return { id, viewer, other, publisher: p };
 }
 async function command(f: Awaited<ReturnType<typeof fixture>>, operation: VideoCommand['operation'] = 'PUBLISH'): Promise<VideoCommand> {
@@ -186,6 +186,55 @@ test('audit failure rolls back publication, command and revision; direct unlogge
   assert.equal((await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } })).version, 1);
   await assert.rejects(db.videoEntry.update({ where: { id: f.id }, data: { title: 'Silent mutation', version: { increment: 1 } } }));
   await assert.rejects(db.videoRevision.deleteMany({ where: { videoId: f.id } }));
+});
+
+test('numeric UUID audit redaction cannot break the exact command link or silently discard a restore', options, async () => {
+  const ids = ['01234567-1234-4123-8123-012345678901', '02345678-1234-4123-8123-012345678902',
+    '03456789-1234-4123-8123-012345678903', '04567890-1234-4123-8123-012345678904'];
+  for (const id of ids) {
+    const [legacy] = await db.$queryRaw<Array<{ matches: boolean; redacted: boolean }>>`
+      SELECT "audit_sanitize_json_n04_v1"(jsonb_build_object('commandId',${id}::text))->>'commandId'=${id}::text AS matches,
+        "audit_redact_text_n04_v1"(${id}::text)<>${id}::text AS redacted`;
+    assert.deepEqual(legacy, { matches: false, redacted: true });
+  }
+  const f = await fixture(admin, ids[0]);
+  const operations = ['PUBLISH', 'ARCHIVE', 'RESTORE_DRAFT'] as const;
+  for (let i = 0; i < operations.length; i++) {
+    const input = { ...await command(f, operations[i]), commandId: ids[i + 1] };
+    assert.deepEqual(await confirm(f, input), { confirmed: true });
+    const receipt = await db.videoCommand.findUniqueOrThrow({ where: { id: input.commandId } });
+    assert.equal(receipt.operation, operations[i]); assert.equal(receipt.version, i + 2);
+  }
+  for (const id of ids) {
+    const audit = await db.auditLog.findUniqueOrThrow({ where: { id: 'video-command:' + id } });
+    assert.equal(audit.entityId, f.id); assert.equal(audit.actorId, admin.user.id);
+    assert.equal(audit.event, 'VIDEO_LIBRARY_MUTATION');
+    assert.equal(Object.hasOwn(audit.after as object, 'commandId'), false);
+  }
+  const restored = await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } });
+  assert.equal(restored.state, 'DRAFT'); assert.equal(restored.version, 4);
+  assert.deepEqual(restored.audience, []); assert.equal(restored.publishedById, null);
+  assert.equal(await db.videoRevision.count({ where: { videoId: f.id } }), 4);
+  await assert.rejects(readVideoBytes(db, f.viewer.session, f.id));
+});
+
+test('an invalid atomic audit link rejects inside the transaction and preserves the previous complete state', options, async () => {
+  const f = await fixture(), input = await command(f);
+  await db.$executeRawUnsafe(`CREATE FUNCTION video_test_misbind_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW."entityId"='synthetic-missing-video'; RETURN NEW; END $$`);
+  await db.$executeRawUnsafe(`CREATE TRIGGER video_test_misbind_audit BEFORE INSERT ON "AuditLog" FOR EACH ROW WHEN (NEW.event='VIDEO_LIBRARY_MUTATION') EXECUTE FUNCTION video_test_misbind_audit()`);
+  try { await assert.rejects(confirm(f, input), /VIDEO_ATOMIC_HISTORY_REQUIRED/); }
+  finally {
+    await db.$executeRawUnsafe('DROP TRIGGER video_test_misbind_audit ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION video_test_misbind_audit()');
+  }
+  const unchanged = await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } });
+  assert.equal(unchanged.state, 'DRAFT'); assert.equal(unchanged.version, 1);
+  assert.equal(await db.videoCommand.count({ where: { id: input.commandId } }), 0);
+  assert.equal(await db.videoRevision.count({ where: { videoId: f.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: 'video-command:' + input.commandId } }), 0);
+  assert.equal((await readVideoReceipt(db, admin.session, input.commandId)).confirmed, false);
+  await confirm(f, input);
+  assert.equal((await db.videoEntry.findUniqueOrThrow({ where: { id: f.id } })).state, 'PUBLISHED');
 });
 
 test('current session revocation and private-file corruption deny existing playback', options, async () => {

@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/video-library-db.test.ts | tee "$VIDEOS_EVIDENCE/postgresql.tap"
-          grep -q '^# tests 15$' "$VIDEOS_EVIDENCE/postgresql.tap"
-          grep -q '^# pass 15$' "$VIDEOS_EVIDENCE/postgresql.tap"
+          grep -q '^# tests 17$' "$VIDEOS_EVIDENCE/postgresql.tap"
+          grep -q '^# pass 17$' "$VIDEOS_EVIDENCE/postgresql.tap"
           grep -q '^# skipped 0$' "$VIDEOS_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic UI case
         if: matrix.target == 'browser'

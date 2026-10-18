@@ -109,7 +109,7 @@ BEGIN
    WHERE r."videoId"=NEW."id" AND r."version"=NEW."version" AND r."snapshot"=to_jsonb(NEW)
    AND r."actorId"=c."actorId" AND c."transactionId"=txid_current()
    AND EXISTS(SELECT 1 FROM "AuditLog" a WHERE a."actorId"=c."actorId" AND a."event"='VIDEO_LIBRARY_MUTATION'
-     AND a."entityType"='VideoEntry' AND a."entityId"=NEW."id"::text AND a."after"->>'commandId'=c."id"::text))
+     AND a."entityType"='VideoEntry' AND a."entityId"=NEW."id"::text AND a."id"='video-command:'||c."id"::text))
  THEN RAISE EXCEPTION 'VIDEO_ATOMIC_HISTORY_REQUIRED'; END IF;
  RETURN NEW;
 END $$;

@@ -79,9 +79,14 @@ async function history(tx: Tx, row: VideoEntry, command: { id: string; operation
   // DB-native snapshot preserves timestamp precision and the complete immutable revision.
   await tx.$executeRaw`INSERT INTO "VideoRevision" ("videoId","version","snapshot","actorId")
     SELECT id, version, to_jsonb(v), ${current.id} FROM "VideoEntry" v WHERE id=${row.id}::uuid`;
-  await tx.auditLog.create({ data: { actorId: current.id, event: 'VIDEO_LIBRARY_MUTATION', entityType: 'VideoEntry', entityId: row.id,
-    after: { commandId: command.id, operation: command.operation, version: row.version,
-      recipients: audienceSchema.parse(row.audience).length, downloadAllowed: row.downloadAllowed } } });
+  // The privacy sanitizer may redact phone-like numeric segments in UUID text.
+  // Bind the receipt through the opaque audit primary key, outside free text.
+  await tx.auditLog.create({ data: { id: 'video-command:' + command.id.toLowerCase(), actorId: current.id,
+    event: 'VIDEO_LIBRARY_MUTATION', entityType: 'VideoEntry', entityId: row.id,
+    after: { action: command.operation, version: row.version,
+      recipientCount: audienceSchema.parse(row.audience).length, downloadAllowed: row.downloadAllowed } } });
+  // Surface any deferred rejection inside the callback, before Prisma commits.
+  await tx.$executeRaw`SET CONSTRAINTS "VideoEntry_atomic_history" IMMEDIATE`;
 }
 
 /** File IO is bounded and private. Quota is reserved before any write. A lost
