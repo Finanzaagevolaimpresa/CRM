@@ -13,7 +13,7 @@ async function login(page: Page, email: string) {
 const kpi = (page: Page, id: string) => page.locator(`[data-kpi="${id}"]`);
 async function selectByKeyboard(page: Page, id: string) {
   // Server-rendered links can be visible before the client tree is ready.
-  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.locator('[data-dashboard-ready="true"]').waitFor({ state: 'attached' });
   const target = kpi(page, id);
   await target.focus(); await expect(target).toBeFocused();
   await target.press('Enter');
@@ -28,14 +28,30 @@ async function shot(page: Page, name: string, width: number) {
 }
 test.beforeAll(async () => { expect(f.synthetic).toBe(true); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.afterAll(async () => { await db.$disconnect(); });
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    const events: unknown[] = [];
+    Object.assign(window, { dashboardFocusEvents: events });
+    const record = (event: Event) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      events.push({ type: event.type, time: Math.round(performance.now()), tag: target?.tagName,
+        id: target?.id, kpi: target?.dataset.kpi, connected: target?.isConnected });
+      if (events.length > 40) events.shift();
+    };
+    for (const type of ['focusin', 'focusout', 'keydown']) document.addEventListener(type, record, true);
+  });
+});
 test.afterEach(async ({ page }, info) => {
   if (info.status === info.expectedStatus) return;
   const state = await page.evaluate(() => ({
     url: location.pathname + location.search, width: innerWidth,
     ready: !!document.querySelector('[data-interactive-ready="true"]'),
+    dashboardReady: !!document.querySelector('[data-dashboard-ready="true"]'),
+    focusedTag: document.activeElement?.tagName,
     focusedId: document.activeElement?.id,
     focusedKpi: document.activeElement?.getAttribute('data-kpi'),
     selectedKpi: document.querySelector('[data-kpi][aria-current="true"]')?.getAttribute('data-kpi'),
+    focusEvents: (window as Window & { dashboardFocusEvents?: unknown[] }).dashboardFocusEvents,
   }));
   await info.attach('dashboard-navigation-state', { body: JSON.stringify(state), contentType: 'application/json' });
 });
@@ -97,7 +113,7 @@ test('native mobile layout, keyboard focus and reduced motion keep all destinati
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/dashboard');
-    await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await page.locator('[data-dashboard-ready="true"]').waitFor({ state: 'attached' });
     await shot(page, `dashboard-native-mobile-${width}`, width);
     await selectByKeyboard(page, 'oggi');
     await expect(page.locator('#dashboard-detail')).toBeInViewport();
