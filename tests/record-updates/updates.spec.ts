@@ -326,7 +326,7 @@ test('native derived refusal preserves provenance for lead/client/practice; lost
     const panel = page.getByRole('region', { name: 'Decisione personale email', exact: true });
     const exact = page.getByRole('region', { name: 'Anteprima della versione esatta', exact: true });
     await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click();
-    await expect(exact).toContainText(before.id);
+    await expect(exact).toContainText(before.snapshotHash);
     await exact.getByLabel('Rifiuto personalmente questa versione esatta.').check();
     let captured: { url: string; body: string; headers: Record<string, string> } | undefined, posts = 0;
     if (kind === 'LEAD') await page.route('**/communications?**', async route => {
@@ -359,7 +359,7 @@ test('native derived refusal preserves provenance for lead/client/practice; lost
     expect(await db.ordinaryEmailAttempt.count({ where: { messageId: work.id } })).toBe(0);
     expect(await db.ordinaryEmailDecision.count({ where: { messageId: work.id } })).toBe(0);
     await page.reload(); await expect(panel).toContainText('versione salvata 2');
-    await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click(); await expect(exact).toContainText(versions[1].id);
+    await panel.getByRole('button', { name: 'Anteprima email ordinaria' }).click(); await expect(exact).toContainText(versions[1].snapshotHash);
     await page.setViewportSize({ width: kind === 'CLIENT' ? 390 : 1440, height: kind === 'CLIENT' ? 844 : 1000 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: path.join(evidence, 'update-email-' + kind.toLowerCase() + '-refused.png'), fullPage: true });
