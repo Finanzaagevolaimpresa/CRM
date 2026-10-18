@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   practice-readiness-db:
-    name: Dossier and practice PostgreSQL qualification (46 to 47 to 48 to 49 to 50 to 51 to 52 to 53 to 55 to 55)
+    name: Dossier and practice PostgreSQL qualification (46 to 47 to 48 to 49 to 50 to 51 to 52 to 53 to 54 to 55)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:

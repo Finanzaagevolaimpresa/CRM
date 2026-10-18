@@ -41,7 +41,7 @@ function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snaps
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
   const updateSelection = emptyCommunicationRecipientSelection();
   if (updateDraft) updateSelection.to.userIds = [updateDraft.recipientId];
-  return <form action={mutateApprovedMessageAction} className="grid min-w-0 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
+  return <form action={mutateApprovedMessageAction} className="grid min-w-0 max-w-full grid-cols-1 gap-3" data-message-draft={snapshot?.messageId} data-reply-draft={replySource?.id}>
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}

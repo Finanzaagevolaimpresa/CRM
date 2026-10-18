@@ -28,7 +28,13 @@ test('packaged schema55 restart retains context messages, private files and revo
   expect((await other.request.post(origin+'/communications/files/'+f.fileId,{headers:{origin},form:{kind:'INTERNAL',contextId:f.threadId,sha256:f.sha256}})).status()).toBe(404);
   for(const [kind,id] of [['LEAD',f.leadId],['CLIENT',f.clientId]]){
     await owner.goto(origin+'/communications?kind='+kind+'&practice='+id);await expect(owner.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
-    expect(await owner.getByRole('button',{name:'Salva bozza',exact:true}).count()).toBe(0);
+    // The updates fixture now binds this owner for synthetic draft preparation.
+    // The other Admin can read these records but never inherits that binding.
+    await expect(owner.getByRole('button',{name:'Salva bozza',exact:true})).toBeVisible();
+    await other.goto(origin+'/communications?kind='+kind+'&practice='+id);
+    await expect(other.locator('div.whitespace-pre-wrap').filter({hasText:/^SYNTHETIC_CONTEXT_RETAINED_BODY$/})).toBeVisible();
+    await expect(other.getByRole('button',{name:'Salva bozza',exact:true})).toHaveCount(0);
+    await expect(other.getByRole('button',{name:'Salva nuova versione da approvare',exact:true})).toHaveCount(0);
   }
   for(const context of contexts)await context.close();
 });
