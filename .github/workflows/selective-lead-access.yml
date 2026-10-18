@@ -70,8 +70,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selective-lead-access-db.test.ts | tee "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 22' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 22' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 23' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 23' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$SELECTIVE_LEAD_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic native browser

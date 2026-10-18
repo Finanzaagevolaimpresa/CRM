@@ -33,6 +33,8 @@ I grant sono firmati separatamente. Una generazione dedicata dell'utente (`selec
 
 Ordine dei lock della decisione: chiave, directory condivisa, identità lead, autorità, utenti ordinati/sessione, lead. La validità di sessione e step-up viene verificata anche dopo le attese. Le operazioni che concorrono sul lead usano le barriere esistenti. Un conflitto abortisce; non viene trasformato in approvazione.
 
+Il registro di sessione acquisisce esplicitamente il lock utente prima del lock sessione anche per i chiamanti ordinari. Questo evita l'inversione osservata tra la lettura delle notifiche nel layout e la pagina di gestione. Una prova PostgreSQL osserva la seconda transazione in attesa e verifica che entrambe terminino, senza retry né attenuazione dei controlli.
+
 Grant, comando, revisione e audit minimizzato sono atomici. Trigger differiti richiedono il collegamento e la stessa transazione. Comandi e revisioni sono immutabili; la storia e le identità dei grant non sono eliminabili. L'audit contiene solo revisione, operazione e numero di campi, senza valori o indirizzi.
 
 Un UUID già consumato può restituire la stessa ricevuta solo per la stessa richiesta e sessione; non esegue un'altra mutazione. Il browser registra l'UUID nell'URL prima dell'invio. Se perde la risposta, blocca i nuovi invii e consente una riconciliazione in sola lettura o il ricaricamento. Una ricevuta storica è distinta dall'accesso attualmente valido.

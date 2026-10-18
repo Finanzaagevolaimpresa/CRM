@@ -23,7 +23,15 @@ test('schema56 restart preserves exact selected lead fields and durable denial a
   await page.goto(origin + '/shared-leads/' + f.revokedId);
   await expect(page.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
   for (const id of [f.liveId, f.revokedId]) {
-    expect((await page.request.get(origin + '/leads/' + id)).status()).toBe(404);
+    // The existing lead detail returns its explicit inaccessible header (200).
+    // Assert the denial and the complete response, not an invented HTTP contract.
+    const denied = await page.request.get(origin + '/leads/' + id);
+    expect(denied.status()).toBe(200);
+    const html = await denied.text();
+    expect(html).toContain('Lead non trovato');
+    expect(html).not.toContain(f.liveLabel);
+    expect(html).not.toContain(f.privateEmail);
+    expect(html).not.toContain('LEAD_RECOVERY_PRIVATE');
     expect((await page.request.get(origin + '/leads/' + id + '/edit')).status()).toBe(404);
   }
   await page.goto(origin + '/leads/' + f.otherId);

@@ -58,8 +58,8 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
       </fieldset>
       <p role="status">{preview.message}</p>
     </form>
-    {prepared && !confirmation.ok && <section className="min-w-0 space-y-4 rounded-xl border border-amber-500 bg-amber-50 p-4">
-      <h2 className="text-xl font-bold">Riepilogo e anteprima</h2>
+    {prepared && !confirmation.ok && <section aria-labelledby="lead-sharing-preview-title" className="min-w-0 space-y-4 rounded-xl border border-amber-500 bg-amber-50 p-4">
+      <h2 id="lead-sharing-preview-title" className="text-xl font-bold">Riepilogo e anteprima</h2>
       <p className="break-words"><strong>{prepared.recipient.name}</strong> · {prepared.recipient.email} · {prepared.recipient.role}</p>
       <p>{prepared.replacesFullAccess ? 'La persona ha già accesso ordinario al lead: questa selezione lo sostituirà.' : 'La persona potrà leggere soltanto i campi indicati.'}</p>
       {prepared.replacesSelection && <p>La nuova selezione sostituirà la precedente.</p>}

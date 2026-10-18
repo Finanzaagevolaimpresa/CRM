@@ -19,6 +19,7 @@ import { withSerializableTransaction } from '../src/lib/serializable';
 import { readinessLeadFixture } from './lead-lifecycle/fixtures';
 import { canViewPracticeReadinessWork } from '../src/lib/practice-readiness-access';
 import { hasStrongRawLeadIdentityDuplicate } from '../src/lib/lead-identity';
+import { lockInternalUser, lockAuthoritativeInternalSession } from '../src/lib/internal-session-registry';
 
 const enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -174,10 +175,13 @@ test('trash/restore and ownership changes do not renew a selection or expose lin
   }
   await deniedOrdinary(f);
   assert.deepEqual(await db.document.findUniqueOrThrow({ where: { id: f.doc.id } }), f.doc);
-  const g = await fixture(); await grantLead(db, admin, g.input);
-  await db.lead.update({ where: { id: g.lead.id }, data: { assignedToId: admin.user.id } });
-  await db.lead.update({ where: { id: g.lead.id }, data: { assignedToId: g.reader.user.id } });
-  await assert.rejects(readLeadSharing(db, g.reader.session, g.lead.id));
+  const g = await fixture();
+  // Use the ordinary lead without an N14 inbox: N14 correctly rejects direct
+  // owner writes, and that protection is independent of this epoch test.
+  await grantLead(db, admin, { ...g.input, leadId: g.other.id });
+  await db.lead.update({ where: { id: g.other.id }, data: { assignedToId: admin.user.id } });
+  await db.lead.update({ where: { id: g.other.id }, data: { assignedToId: g.reader.user.id } });
+  await assert.rejects(readLeadSharing(db, g.reader.session, g.other.id));
 });
 test('a different selection invalidates notification admissions but preserves unrelated lead grants', options, async () => {
   const f = await fixture(); await grantLead(db, admin, f.input);
@@ -189,13 +193,18 @@ test('a different selection invalidates notification admissions but preserves un
   assert.equal((await readLeadSharing(db, f.reader.session, f.lead.id)).fields.length, 2);
 });
 test('direct N14, assignment, conversion/update lock and email draft are denied on old session', options, async () => {
-  const f = await fixture(); await grantLead(db, admin, f.input);
+  const f = await fixture();
+  const box = await db.communicationMailbox.findUniqueOrThrow({ where: { address: 'assistenza@finanzaagevolaimpresa.it' } });
+  const draft = { messageId: randomUUID(), expectedRevision: 0, context: { kind: 'LEAD', id: f.lead.id }, mailboxId: box.id,
+    replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [], subject: 'Synthetic draft', body: 'Synthetic only', attachmentVersionIds: [], classification: 'ORDINARY' };
+  await saveApprovedMessageDraft(db, f.reader.session, draft);
+  await grantLead(db, admin, f.input);
   const prior = process.env.COMMERCIAL_LEAD_INBOX_MODE; process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
   try { await assert.rejects(recordCommercialLeadFirstResponse(db, { leadId: f.lead.id, actor: { userId: f.reader.user.id, sessionId: f.reader.session.sessionId! }, expectedInboxVersion: f.item!.version })); }
   finally { if (prior === undefined) delete process.env.COMMERCIAL_LEAD_INBOX_MODE; else process.env.COMMERCIAL_LEAD_INBOX_MODE = prior; }
   await assert.rejects(db.$transaction(tx => confirmLeadResponsibility(tx, { userId: f.reader.user.id, sessionId: f.reader.session.sessionId }, { id: f.lead.id, expectedUpdatedAt: f.lead.updatedAt.toISOString(), expectedEntryId: '', reason: 'synthetic' }, true)));
-  const box = await db.communicationMailbox.findFirstOrThrow({ where: { kind: 'MAILBOX' } });
-  await assert.rejects(saveApprovedMessageDraft(db, f.reader.session, { messageId: randomUUID(), expectedRevision: 0, context: { kind: 'LEAD', id: f.lead.id }, mailboxId: box.id, replyTo: box.address, to: ['synthetic@invalid.test'], cc: [], bcc: [], subject: 'Forbidden synthetic draft', body: 'Synthetic only', attachmentVersionIds: [], classification: 'ORDINARY' }));
+  await assert.rejects(saveApprovedMessageDraft(db, f.reader.session, { ...draft, messageId: randomUUID() }));
+  await assert.rejects(saveApprovedMessageDraft(db, f.reader.session, { ...draft, expectedRevision: 1 }));
   await deniedOrdinary(f);
   assert.deepEqual(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: f.cycle!.id } }), f.cycle);
 });
@@ -249,6 +258,39 @@ test('database rejects an otherwise signed-looking grant without atomic command/
   const payload = { id, revision: 1, selection: f.input };
   await assert.rejects(db.selectiveLeadGrant.create({ data: { id, leadId: f.lead.id, recipientId: f.reader.user.id, revision: 1, payload: payload as Prisma.InputJsonValue, proof: 'a'.repeat(64) } }));
   assert.equal(await db.selectiveLeadGrant.count({ where: { id } }), 0);
+});
+test('session admission and a caller holding User serialize without inverted row-lock deadlock', options, async () => {
+  const person = await syntheticPerson(db, 'Synthetic concurrent session admission');
+  let ready!: () => void, release!: () => void, backend!: (pid: number) => void;
+  const held = new Promise<void>(resolve => { ready = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const pidReady = new Promise<number>(resolve => { backend = resolve; });
+  const input = { userId: person.user.id, sessionId: person.session.sessionId! };
+  const holder = db.$transaction(async tx => {
+    await lockInternalUser(tx, person.user.id); ready(); await gate;
+    assert.equal((await lockAuthoritativeInternalSession(tx, input))?.id, input.sessionId);
+  }, { timeout: 15_000 });
+  await held;
+  const reader = db.$transaction(async tx => {
+    const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    backend(row.pid);
+    assert.equal((await lockAuthoritativeInternalSession(tx, input))?.id, input.sessionId);
+  }, { timeout: 15_000 });
+  const results = Promise.allSettled([holder, reader]);
+  let waiting = false;
+  try {
+    const pid = await pidReady;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`SELECT wait_event_type='Lock' AS blocked FROM pg_stat_activity WHERE pid=${pid}`;
+      if (row?.blocked) { waiting = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  } finally { release(); }
+  const completed = await results;
+  assert.equal(waiting, true, 'second admission must be observed waiting on the first transaction');
+  for (const result of completed) {
+    if (result.status === 'rejected') throw result.reason;
+  }
 });
 test('personal authority suspension fails closed for management and open recipient sessions', options, async () => {
   const f = await fixture(); await grantLead(db, admin, f.input);

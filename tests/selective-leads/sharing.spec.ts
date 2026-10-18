@@ -25,7 +25,7 @@ async function prepare(page: Page, row: typeof f.rows[number]) {
   await page.getByLabel('Azienda', { exact: true }).check(); await page.getByLabel('Stato', { exact: true }).check();
   await page.getByRole('button', { name: 'Anteprima come destinatario' }).click();
   await expect(page.getByRole('heading', { name: 'Riepilogo e anteprima' })).toBeVisible();
-  const preview = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Riepilogo e anteprima' }) });
+  const preview = page.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
   await expect(preview).toContainText(row.label); await expect(preview).not.toContainText(row.privateNote);
   await expect(preview).not.toContainText(row.privateEmail);
   expect(await db.selectiveLeadGrant.count({ where: { leadId: row.leadId } })).toBe(0);
