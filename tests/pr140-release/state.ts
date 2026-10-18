@@ -45,7 +45,7 @@ async function main() {
     const select = { id: true, recordUpdateEpoch: true } as const;
     const orderBy = { id: 'asc' } as const;
     const epochs = {
-      users: await db.user.findMany({ select: { ...select, selectiveLeadEpoch: true, selectiveClientEpoch: true }, orderBy }),
+      users: await db.user.findMany({ select: { ...select, selectiveLeadEpoch: true, selectiveClientEpoch: true, selectivePracticeEpoch: true }, orderBy }),
       leads: await db.lead.findMany({ select, orderBy }),
       clients: await db.client.findMany({ select, orderBy }),
       projects: await db.project.findMany({ select, orderBy }),
@@ -62,7 +62,19 @@ async function main() {
     }
     const updateIdentities = await db.$queryRaw<Array<{ id: string }>>`SELECT "authorId" AS id FROM "RecordUpdateRule"
       UNION SELECT "actorId" FROM "RecordUpdateCommand" UNION SELECT "recipientId" FROM "RecordUpdateDelivery"`;
+    const selectedPracticeRows = await db.technicalPractice.findMany({
+      where: { selectivePracticeGrants: { some: {} } }, orderBy: { id: 'asc' },
+    });
     const data = {
+      selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
+      selectivePracticeGrants: await db.selectivePracticeGrant.findMany({ orderBy: { id: 'asc' } }),
+      selectivePracticeRevisions: (await db.selectivePracticeRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectivePracticeCommands: (await db.selectivePracticeCommand.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
+      selectivePracticeAudit: await db.auditLog.findMany({ where: { event: 'selective_practice_changed' }, orderBy: { id: 'asc' } }),
+      selectivePracticeUsers: await db.user.findMany({ where: { OR: [{ selectivePracticeAuthority: { isNot: null } }, { selectivePracticeGrants: { some: {} } }] },
+        orderBy: { id: 'asc' }, select: { id: true, selectivePracticeEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
+      selectedPracticeRows,
+      selectedPracticeClients: await db.client.findMany({ where: { id: { in: selectedPracticeRows.map(row => row.clientId) } }, orderBy: { id: 'asc' } }),
       selectiveClientAuthority: await db.selectiveClientAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveClientGrants: await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }),
       selectiveClientRevisions: (await db.selectiveClientRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
@@ -145,7 +157,13 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 57);
+    assert.equal(data.ledger.length, 58);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261018220000_selective_practice_read_v1');
+    assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 2);
+    assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
+    assert.equal(data.selectivePracticeRevisions.length, 3); assert.equal(data.selectivePracticeCommands.length, 3);
+    assert.equal(data.selectivePracticeAudit.length, 3); assert.equal(data.selectivePracticeUsers.length, 2);
+    assert.equal(data.selectedPracticeRows.length, 2); assert.equal(data.selectedPracticeClients.length, 1);
     assert.equal(data.selectiveClientAuthority.length, 1); assert.equal(data.selectiveClientGrants.length, 2);
     assert.equal(data.selectiveClientGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectiveClientRevisions.length, 3); assert.equal(data.selectiveClientCommands.length, 3);

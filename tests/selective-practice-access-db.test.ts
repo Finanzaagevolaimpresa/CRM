@@ -62,7 +62,7 @@ test('project authority cannot bootstrap practice sharing from a management GET 
     assert.throws(() => enroll(value), /SELECTIVE_PRACTICE_ENROLLMENT_BINDING_INVALID/);
   }
   assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_PRACTICE_ENROLLMENT_PROFILE_DENIED/);
-  assert.throws(() => enroll(binding, sql.replace('COMMIT;', "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /SYNTHETIC_ROLLBACK/);
+  assert.throws(() => enroll(binding, sql.replace('COMMIT;', () => "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /ERROR:\s+SYNTHETIC_ROLLBACK/);
   assert.equal(await db.selectivePracticeAuthority.count(), 0); assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
   assert.match(enroll(binding).toString(), /SELECTIVE_PRACTICE_ENROLLMENT_COMMITTED/);
   assert.deepEqual(await db.selectivePracticeAuthority.findUnique({ where: { id: 'practice-sharing' } }),
@@ -286,7 +286,7 @@ test('old notices and persistent rule work cannot disclose the newly selected pr
   const f = await fixture(), setup = await readRecordUpdateSetup(db, admin.session, 'PRACTICE', f.practice.id);
   const input = { commandId: randomUUID(), kind: 'PRACTICE' as const, recordId: f.practice.id,
     operation: 'RULE' as const, expectedVersion: setup.expectedVersion, ruleVersion: 0,
-    selection: { people: [f.reader.user.id], groups: [] }, events: ['STATE_CHANGED' as const], persistent: true, expiresAt: null, patch: null };
+    selection: { people: [f.reader.user.id], groups: [] }, events: ['STATE_CHANGED' as const], persistent: false, expiresAt: null, patch: null };
   const preview = await previewRecordUpdate(db, admin.session, input);
   await confirmRecordUpdate(db, admin.session, input, preview.digest, practiceProof(admin));
   await db.technicalPractice.update({ where: { id: f.practice.id }, data: { status: 'in_progettazione' } });
