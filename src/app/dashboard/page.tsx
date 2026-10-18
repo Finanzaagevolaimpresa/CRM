@@ -15,18 +15,18 @@ import { buildDashboardTechnicalCounterContext } from "@/lib/dashboard-technical
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
 import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
+import { dashboardDestinations, dashboardTodayWindow, selectDashboardView, type DashboardView } from "@/lib/dashboard-selection";
+import { loadDashboardLeadDetail, loadDashboardReviewDetail, loadDashboardTodayDetail } from "@/lib/dashboard-detail";
 export const dynamic = "force-dynamic";
-export default async function Dashboard() {
+export default async function Dashboard({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
+  const params = await searchParams ?? {};
   const session = await requireSession();
   const dashboardUser = await prisma.user.findUnique({
     where: { id: session.userId },
     select: { name: true },
   });
   const now = new Date();
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
+  const { startOfToday, endOfToday } = dashboardTodayWindow(now);
   const next7 = new Date(now);
   next7.setDate(next7.getDate() + 7);
   const canReadServices = hasPermission(session, "service.read");
@@ -742,15 +742,28 @@ export default async function Dashboard() {
     pipelineCounts.find((row) => row.operationalStatus === status)?._count
       ._all ?? 0;
   const dashboardKpis = [
-    canReadLeads && { label: "Lead nuovi", value: leadNuovi, description: "Nuovi contatti visibili da qualificare", href: "/leads", tone: "blue" as const },
-    canReadTechnical && { label: "Pratiche tecniche attive", value: activeTechnicalPracticesCount, description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices", tone: "green" as const },
-    canReadServices && { label: "Task scaduti", value: overdueTasks, description: "Attività aperte oltre la scadenza", href: "/tasks", tone: "orange" as const },
-    session.role === "admin" && { label: "Autorizzazioni AI in attesa", value: pendingAiAuthorizationRequestCount, description: "Richieste complete da decidere separatamente", href: "/settings/ai-authorizations", tone: "purple" as const },
-  ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
+    canReadLeads && { id: "lead" as const, label: "Lead da contattare", value: leadDaContattare, description: "Lead nello stato da contattare, nel tuo perimetro.", href: dashboardDestinations.lead, tone: "blue" as const },
+    canReadTechnical && { id: "pratiche" as const, label: "Pratiche attive", value: activeTechnicalPracticesCount, description: "Pratiche tecniche in stato operativo: escluse approvate, respinte e archiviate.", href: dashboardDestinations.pratiche, tone: "green" as const },
+    canReadDossiers && { id: "revisioni" as const, label: "Da revisionare", value: preReview, description: "Pre-analisi in bozza generata o da revisionare, accessibili al tuo profilo.", href: dashboardDestinations.revisioni, tone: "purple" as const },
+    canReadServices && { id: "oggi" as const, label: "In scadenza oggi", value: todayTasksCount, description: "Attività aperte o in lavorazione con scadenza nella giornata corrente.", href: dashboardDestinations.oggi, tone: "orange" as const },
+  ].filter((item): item is Exclude<typeof item, false> => Boolean(item)).map(item => ({ ...item, selectionHref: `/dashboard?vista=${item.id}` }));
+  const selectedView = selectDashboardView(params.vista, dashboardKpis.map(item => item.id as DashboardView));
+  const dashboardDetail = selectedView === "lead" ? await loadDashboardLeadDetail(session)
+    : selectedView === "revisioni" ? await loadDashboardReviewDetail(session)
+    : selectedView === "oggi" ? await loadDashboardTodayDetail(session, now)
+    : selectedView === "pratiche" ? operationalActivePractices.slice(0, 3).map(practice => ({ id: practice.id, title: practice.title, status: practice.status, href: `/technical-office/practices/${practice.id}` })) : [];
   const dashboardShortcuts = [
-    canReadLeads && { label: "Commerciale", description: "Lead, offerte e prossime azioni autorizzate", href: "/leads" },
-    canReadTechnical && { label: "Ufficio Tecnico", description: "Pratiche, scadenze e comunicazioni accessibili", href: "/technical-office" },
-    canReadClients && { label: "Clienti e pratiche", description: "Anagrafiche e fascicoli nel tuo perimetro", href: "/clients" },
+    canReadLeads && { label: "Commerciale", description: "Gestisci lead e opportunità", href: "/leads", icon: "chart", tone: "blue" },
+    canReadTechnical && { label: "Ufficio tecnico", description: "Segui le pratiche", href: "/technical-office", icon: "gear", tone: "green" },
+    canReadClients && { label: "Clienti e servizi", description: "Gestisci i rapporti", href: "/clients", icon: "people", tone: "teal" },
+    canReadServices && { label: "Attività e scadenze", description: "Monitora le attività", href: "/tasks", icon: "calendar", tone: "orange" },
+    canReadPayments && { label: "Amministrazione", description: "Segui i pagamenti", href: "/payments", icon: "document", tone: "blue" },
+    canReadDossiers && { label: "Revisioni", description: "Controlla le pre-analisi", href: dashboardDestinations.revisioni, icon: "search", tone: "purple" },
+  ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
+  const dashboardPriorityLinks = [
+    canReadLeads && { label: "Contatti da seguire", href: dashboardDestinations.lead, icon: "people", tone: "blue" },
+    canReadDossiers && { label: "Pre-analisi da verificare", href: dashboardDestinations.revisioni, icon: "document", tone: "orange" },
+    canReadPracticeCommunications && { label: "Comunicazioni", href: "/communications", icon: "mail", tone: "purple" },
   ].filter((item): item is Exclude<typeof item, false> => Boolean(item));
   const dashboardCounterGroups = buildDashboardCounterGroups({
     canReadLeads, canReadTechnical, canReviewPracticeCommunications,
@@ -770,6 +783,11 @@ export default async function Dashboard() {
         greeting={`Buongiorno${dashboardUser?.name ? `, ${dashboardUser.name.split(" ")[0]}` : ""}.`}
         summary={`${priorityItems.length} priorità operative nel tuo perimetro. Conteggi aggiornati dai dati CRM correnti.`}
         kpis={dashboardKpis}
+        selectedKpiId={selectedView}
+        focusSelection={typeof params.vista === "string" ? selectedView : null}
+        detailItems={dashboardDetail}
+        userName={dashboardUser?.name ?? "Il mio account"}
+        priorityLinks={dashboardPriorityLinks}
         priorities={priorityItems.map((item) => ({ ...item, related: item.related ?? "Nessun cliente collegato", date: formatDateTime(item.date) }))}
         pipeline={pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) }))}
         shortcuts={dashboardShortcuts}

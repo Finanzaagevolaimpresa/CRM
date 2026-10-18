@@ -87,7 +87,7 @@ test('below-fold readouts animate once on entry, not repeatedly while scrolling'
 test('forced colors keeps active segments distinct and zero remains a readable digit', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' });
   await page.goto('/?zero');
-  const digit = page.locator('[data-counter-final]').first().locator('svg[data-digit="0"]');
+  const digit = page.locator('[data-variant="segments"]').first().locator('svg[data-digit="0"]');
   await expect(digit).toHaveCount(1);
   const contrast = await digit.locator('polygon').evaluateAll(nodes => nodes.map(node => ({ lit: node.getAttribute('data-lit'), opacity: getComputedStyle(node).opacity })));
   expect(contrast.filter(segment => segment.lit === 'true')).toHaveLength(6);

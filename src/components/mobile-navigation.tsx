@@ -88,9 +88,8 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           lastFocusedRef.current = null;
         }
       }}
-      className="relative z-30 w-full shrink-0 overflow-hidden bg-fai-navy text-white shadow-xl shadow-fai-navy/20 md:flex md:h-screen md:w-64 md:flex-col md:p-4"
+      className="crm-navigation relative z-30 w-full shrink-0 overflow-hidden md:flex md:h-screen md:w-64 md:flex-col md:p-4"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_0%,rgba(128,204,42,.12),transparent_28%),linear-gradient(180deg,#052e70,#062958)]" />
       <div className="relative flex items-center gap-3 p-3 md:hidden">
         <Link
           ref={mobileLogoRef}
@@ -106,7 +105,7 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           type="button"
           aria-controls={panelId}
           aria-expanded={open}
-          className="min-h-12 shrink-0 rounded-xl border border-white/25 bg-white/10 px-4 text-sm font-black focus:outline-compat focus:ring-2 focus:ring-fai-lime"
+          className="crm-navigation-mobile-toggle min-h-12 shrink-0 rounded-xl border border-white/25 bg-white/10 px-4 text-sm font-black focus:outline-compat focus:ring-2 focus:ring-fai-lime"
           onClick={() => setOpen((current) => !current)}
         >
           {open ? "Chiudi menu" : "Apri menu"}
@@ -125,13 +124,10 @@ function NavigationForPath({ role, notificationCount, effectivePermissions }: {
           <SidebarLogo />
           <span className="sr-only">Gestionale CRM</span>
         </Link>
-        <div className="mb-4 hidden shrink-0 px-2 text-[0.68rem] font-bold uppercase tracking-[0.16em] text-white/55 md:block">
-          Gestionale CRM interno
-        </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
           <NavLinks effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={role} onNavigate={closeAfterNavigation} />
         </div>
-        <form action={logoutAction} className="mt-3 shrink-0 border-t border-white/15 pt-3">
+        <form action={logoutAction} className="crm-navigation-logout mt-3 shrink-0 border-t border-white/15 pt-3">
           <button className="min-h-11 w-full rounded-xl bg-white/8 px-3 py-2 text-left text-sm font-bold text-white transition hover:bg-white/15 focus:outline-compat focus:ring-2 focus:ring-fai-lime" type="submit">Esci dal CRM</button>
         </form>
       </div>

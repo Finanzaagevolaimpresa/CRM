@@ -9,7 +9,7 @@ const adminPermissions: Permission[] = [
   "contract.read", "payment.read", "client.read", "project.read", "dossier.read",
   "technical.read", "ai.review", "ai.execution.request", "ai.execution.audit",
   "ai_agents.read", "legal.read", "privacy.evidence.read", "user.read",
-  "settings.manage", "ai.orchestrator.read", "audit.read",
+  "settings.manage", "ai.orchestrator.read", "audit.read", "video.read",
   "practice_communications.read", "practice_communications.review",
 ];
 
@@ -28,7 +28,7 @@ const operationalPipelineStatuses = [
   "chiusa", "archiviata",
 ];
 
-export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string; pipeline?: string }> }) {
+export default async function MobileNavFixture({ searchParams }: { searchParams: Promise<{ profile?: string; priorities?: string; counters?: string; pipeline?: string; vista?: string }> }) {
   const params = await searchParams;
   const profile = ["commercial", "technical", "communications", "restricted"].includes(params.profile ?? "") ? params.profile : "admin";
   const permissions = profile === "commercial" ? commercialPermissions : profile === "technical" ? technicalPermissions : profile === "communications" ? communicationPermissions : profile === "restricted" ? [] : adminPermissions;
@@ -65,21 +65,37 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
       <Nav role={profile === "admin" ? "admin" : "commerciale"} effectivePermissions={permissions} notificationCount={123} />
       <div data-testid="page-content" className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
         <header className="border-b bg-white px-4 py-2"><p className="break-words text-xs font-bold text-slate-500">Fixture sintetica isolata dei componenti reali — nessuna autenticazione o permission server verificata qui</p></header>
-        <main className="crm-space-y-6 p-4 md:p-6">
+        <main className="crm-page-main crm-space-y-6 p-4 md:p-6">
           <span className="sr-only">Contenuto commerciale raggiungibile</span>
           <DashboardOverview
             greeting="Buongiorno, Operatore."
+            userName="Antonio · prova sintetica"
+            selectedKpiId={params.vista}
+            focusSelection={params.vista}
+            detailItems={can("technical.read") && (!params.vista || params.vista === "pratiche") ? [1, 2, 3].map(i => ({ id: `synthetic-detail-${i}`, title: `Pratica sintetica ${i}`, status: ["In lavorazione", "Documenti mancanti", "Da verificare"][i - 1], href: "/technical-office/practices" })) : []}
+            priorityLinks={[
+              ...(can("lead.read") ? [{ label: "Contatti da seguire", href: "/leads?status=da_contattare", icon: "people", tone: "blue" }] : []),
+              ...(can("dossier.read") ? [{ label: "Pre-analisi da verificare", href: "/preanalyses?dashboard=revisioni", icon: "document", tone: "orange" }] : []),
+              ...(can("practice_communications.read") ? [{ label: "Comunicazioni", href: "/communications", icon: "mail", tone: "purple" }] : []),
+            ]}
             summary={`${priorities.length} priorità operative sintetiche nel perimetro della fixture.`}
             kpis={[
-              ...(can("lead.read") ? [{ label: "Lead nuovi", value: count(7), description: "Nuovi contatti visibili da qualificare", href: "/leads", tone: "blue" as const }] : []),
-              ...(can("technical.read") ? [{ label: "Pratiche tecniche attive", value: count(11), description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices", tone: "green" as const }] : []),
-              ...(can("service.read") ? [{ label: "Task scaduti", value: count(2), description: "Attività aperte oltre la scadenza", href: "/tasks", tone: "orange" as const }] : []),
-              ...(profile === "admin" ? [{ label: "Autorizzazioni AI in attesa", value: count(47), description: "Richieste complete da decidere separatamente", href: "/settings/ai-authorizations", tone: "purple" as const }] : []),
+              ...(can("lead.read") ? [{ id: "lead", selectionHref: "/dashboard?vista=lead", label: "Lead da contattare", value: count(24), description: "Contatti visibili da contattare", href: "/leads?status=da_contattare", tone: "blue" as const }] : []),
+              ...(can("technical.read") ? [{ id: "pratiche", selectionHref: "/dashboard?vista=pratiche", label: "Pratiche attive", value: count(11), description: "Pratiche tecniche accessibili in stato operativo", href: "/technical-office/practices?dashboard=attive", tone: "green" as const }] : []),
+              ...(can("dossier.read") ? [{ id: "revisioni", selectionHref: "/dashboard?vista=revisioni", label: "Da revisionare", value: count(3), description: "Pre-analisi in bozza o da revisionare", href: "/preanalyses?dashboard=revisioni", tone: "purple" as const }] : []),
+              ...(can("service.read") ? [{ id: "oggi", selectionHref: "/dashboard?vista=oggi", label: "In scadenza oggi", value: count(6), description: "Attività aperte in scadenza oggi", href: "/tasks?dashboard=oggi", tone: "orange" as const }] : []),
             ]}
             counterGroups={counterGroups}
             priorities={priorities}
             pipeline={pipeline}
-            shortcuts={profile === "commercial" ? [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }] : [{ label: "Commerciale", description: "Lead e offerte autorizzati", href: "/leads" }, { label: "Ufficio Tecnico", description: "Pratiche e comunicazioni", href: "/technical-office" }]}
+            shortcuts={[
+              ...(can("lead.read") ? [{ label: "Commerciale", description: "Gestisci lead e opportunità", href: "/leads", icon: "chart", tone: "blue" }] : []),
+              ...(can("technical.read") ? [{ label: "Ufficio tecnico", description: "Segui le pratiche", href: "/technical-office", icon: "gear", tone: "green" }] : []),
+              ...(can("client.read") ? [{ label: "Clienti e servizi", description: "Gestisci i rapporti", href: "/clients", icon: "people", tone: "teal" }] : []),
+              ...(can("service.read") ? [{ label: "Attività e scadenze", description: "Monitora le attività", href: "/tasks", icon: "calendar", tone: "orange" }] : []),
+              ...(can("payment.read") ? [{ label: "Amministrazione", description: "Gestisci i pagamenti", href: "/payments", icon: "document", tone: "blue" }] : []),
+              ...(can("dossier.read") ? [{ label: "Revisioni", description: "Controlla le pre-analisi", href: "/preanalyses?dashboard=revisioni", icon: "search", tone: "purple" }] : []),
+            ]}
           />
           <Link className="underline" href="/external">Destinazione esterna al menu</Link>
           <div className="h-[800px] pt-4 text-sm text-slate-500">Area lunga per verificare lo scorrimento del contenuto.</div>

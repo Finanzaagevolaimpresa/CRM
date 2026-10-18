@@ -1,5 +1,6 @@
 import "./globals.css";
 import Link from "next/link";
+import { AppHeader } from "@/components/app-header";
 import { Nav } from "@/components/ui";
 import { InteractiveReadyMarker } from "@/components/interactive-ready-marker";
 import { getEffectivePermissions, getSession } from "@/lib/auth";
@@ -21,7 +22,7 @@ export default async function RootLayout({
         <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
           <Nav effectivePermissions={effectivePermissions} notificationCount={notificationCount} role={session?.role} />
           <div className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
-            <div className="sticky top-0 z-20 hidden border-b border-slate-200/80 bg-white/95 px-6 py-3 backdrop-blur-xl md:block">
+            <AppHeader><div className="sticky top-0 z-20 hidden border-b border-slate-200/80 bg-white/95 px-6 py-3 backdrop-blur-xl md:block">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-fai-navy">Area operativa riservata</p>
@@ -36,7 +37,7 @@ export default async function RootLayout({
                 </div>
               </div>
             </div>
-            <main className="p-4 md:p-6 xl:p-8">{children}</main>
+            </AppHeader><main className="crm-page-main p-4 md:p-6 xl:p-8">{children}</main>
           </div>
         </div>
       </body>
