@@ -15,7 +15,7 @@ type Tx = Prisma.TransactionClient;
 const EVENT = 'client_service_registration_v1';
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const receiptSchema = z.object({ type: z.literal('CLIENT_SERVICE_REGISTRATION_V1'),
-  operation: z.enum(['REGISTER', 'LINK_PAYMENT']), sourceHash: digest, sessionHash: digest,
+  action: z.enum(['REGISTER', 'LINK_PAYMENT']), sourceHash: digest, sessionHash: digest,
   serviceId: z.string().min(1), clientId: z.string().min(1), beforeHash: digest.nullable(), afterHash: digest,
 }).strict();
 function fail(code: ServiceRegistrationError['code']): never { throw new ServiceRegistrationError(code); }
@@ -116,7 +116,7 @@ export async function confirmServiceRegistration(db: PrismaClient, claimed: Auth
         paymentStatus: current.paymentStatus, recordUpdateEpoch: { increment: 1 } } });
     // A deliberately closed technical receipt: no names, amounts, descriptions,
     // contract/payment contents, recipient lists or copied full record in audit.
-    const after = receiptSchema.parse({ type: 'CLIENT_SERVICE_REGISTRATION_V1', operation: input.operation,
+    const after = receiptSchema.parse({ type: 'CLIENT_SERVICE_REGISTRATION_V1', action: input.operation,
       sourceHash: fingerprint(input), sessionHash: fingerprint(auth.registry.id), serviceId: service.id, clientId: service.clientId,
       beforeHash: current.existing ? fingerprint(current.existing) : null, afterHash: fingerprint(service) });
     await tx.auditLog.create({ data: { id: 'service_registration_' + input.commandId, actorId: auth.actor.id,

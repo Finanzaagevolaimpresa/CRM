@@ -9,13 +9,21 @@ import { previewServiceRegistration, confirmServiceRegistration, serviceRegistra
 import { previewPurchasedServiceHandoff, handoffPurchasedService } from '../src/lib/purchased-service-handoff';
 import { withSerializableTransaction } from '../src/lib/serializable';
 import type { ServiceRegistrationCommand } from '../src/lib/client-service-registration-contract';
-import { syntheticSession } from './selective-sharing/fixtures';
+import { syntheticAuthority, syntheticSession } from './selective-sharing/fixtures';
+import { grantClient, clientProof } from './selective-clients/fixtures';
+import { revokeClientSharing } from '../src/lib/selective-client-access';
+import { confirmSelectiveAccess, previewSelectiveAccess } from '../src/lib/selective-project-access';
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1';
 type Fixture = Awaited<ReturnType<typeof registrationFixture>>;
 const fixtures: Fixture[] = [];
 let admitted = false;
-before(async () => { if (enabled) { await assertAiOrchestratorEphemeralDatabaseIdentity(db); admitted = true; process.env.INTERNAL_SESSION_MODE = 'registry'; } });
+let authority: Awaited<ReturnType<typeof syntheticAuthority>>;
+before(async () => { if (enabled) {
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db); admitted = true; process.env.INTERNAL_SESSION_MODE = 'registry';
+  authority = await syntheticAuthority(db);
+  await db.selectiveClientAuthority.create({ data: { userId: authority.user.id, enabled: true } });
+} });
 after(async () => {
   if (admitted) {
     const clients = fixtures.map(f => f.client.id), users = fixtures.flatMap(f => [f.admin.id, f.tech.id, f.other.id]);
@@ -70,7 +78,7 @@ test('same request, double click and lost response create one service and one mi
   assert.equal(rows.length, 1);
   const receipt = JSON.stringify(rows[0].after);
   for (const secret of [f.client.displayName, f.contract.contractNumber, f.catalog.name, f.admin.email]) assert.equal(receipt.includes(secret), false);
-  assert.deepEqual(Object.keys(rows[0].after as object).sort(), ['type', 'operation', 'sourceHash', 'sessionHash', 'serviceId', 'clientId', 'beforeHash', 'afterHash'].sort());
+  assert.deepEqual(Object.keys(rows[0].after as object).sort(), ['type', 'action', 'sourceHash', 'sessionHash', 'serviceId', 'clientId', 'beforeHash', 'afterHash'].sort());
 });
 test('two tabs with distinct command IDs cannot register the same contract service twice', options, async () => {
   const f = await fixture(), other = { ...f.command, commandId: randomUUID() };
@@ -107,7 +115,7 @@ const staleCases: Array<[string, (f: Fixture) => Promise<unknown>]> = [
   ['client trash', f => db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } })],
   ['client suspended', f => db.client.update({ where: { id: f.client.id }, data: { status: 'sospeso' } })],
   ['session revoked', f => db.internalSession.update({ where: { id: f.admin.sessionId }, data: { revokedAt: new Date() } })],
-  ['session expired', f => db.internalSession.update({ where: { id: f.admin.sessionId }, data: { expiresAt: new Date(0) } })],
+  ['session expired', f => db.internalSession.update({ where: { id: f.admin.sessionId }, data: { createdAt: new Date(Date.now() - 120_000), expiresAt: new Date(Date.now() - 60_000) } })],
   ['role revoked', f => db.user.update({ where: { id: f.admin.id }, data: { role: 'commerciale' } })],
   ['explicit permission denial', f => db.userPermissionOverride.create({ data: { userId: f.admin.id, permission: 'service.write', allowed: false } })],
 ];
@@ -148,18 +156,21 @@ test('linking cannot overwrite a payment or a service already in progress', opti
   assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: result.serviceId } })).paymentId, null);
 });
 for (const revoked of [false, true]) test(`selective client perimeter blocks Admin registration, revoked=${revoked}`, options, async () => {
-  const f = await fixture(), p = await previewServiceRegistration(db, f.session, f.command);
-  await db.selectiveClientGrant.create({ data: { clientId: f.client.id, recipientId: f.admin.id, revision: 1,
-    payload: {}, proof: 'synthetic-invalid-proof-is-an-exclusion', revokedAt: revoked ? new Date() : null } });
+  // Retained grant history stays in the ephemeral database until its disposal.
+  const f = await registrationFixture(db), p = await previewServiceRegistration(db, f.session, f.command);
+  const { receipt } = await grantClient(db, authority, { clientId: f.client.id, recipientId: f.admin.id,
+    revision: 0, commandId: randomUUID(), fields: ['displayName'], expiresAt: null });
+  if (revoked) await revokeClientSharing(db, authority.session, { grantId: receipt.grantId, revision: 1, commandId: randomUUID() }, clientProof(authority));
   await assert.rejects(serviceRegistrationSetup(db, f.session, f.client.id));
   await assert.rejects(confirmServiceRegistration(db, f.session, f.command, p.digest));
   assert.equal(await db.clientService.count({ where: { clientId: f.client.id } }), 0);
 });
 test('restricted contract through a sibling project cannot be selected from a general client', options, async () => {
-  const f = await fixture(), project = await db.project.create({ data: { clientId: f.client.id, title: 'Restricted synthetic' } });
+  const f = await registrationFixture(db), project = await db.project.create({ data: { clientId: f.client.id, title: 'Restricted synthetic' } });
   await db.clientService.create({ data: { clientId: f.client.id, serviceCatalogId: f.catalog.id, projectId: project.id, contractId: f.contract.id } });
-  await db.selectiveProjectGrant.create({ data: { projectId: project.id, recipientId: f.admin.id, revision: 1, selection: {},
-    approvedById: f.admin.id, authorityRevision: 1, keyVersion: 1, proof: 'synthetic-invalid-proof-is-an-exclusion' } });
+  const preview = await previewSelectiveAccess(db, authority.session, { projectId: project.id, recipientId: f.admin.id,
+    revision: 0, fields: ['title'], documents: [], expiresAt: null });
+  await confirmSelectiveAccess(db, authority.session, preview.token, true);
   assert.equal((await serviceRegistrationSetup(db, f.session, f.client.id)).contracts.length, 0);
   await assert.rejects(previewServiceRegistration(db, f.session, f.command));
 });

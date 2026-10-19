@@ -88,17 +88,17 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
     <form onSubmit={prepare} aria-label="Registrazione servizio acquistato" className="grid gap-5">
       <fieldset disabled={pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Servizio del catalogo
-          <select className={field} value={catalogId} required disabled={Boolean(setup.serviceId)} onChange={e => { setCatalog(e.target.value); changed(); }}>
+          <select aria-label="Servizio del catalogo" className={field} value={catalogId} required disabled={Boolean(setup.serviceId)} onChange={e => { setCatalog(e.target.value); changed(); }}>
             <option value="">Seleziona il servizio</option>{setup.catalogs.map(c => <option key={c.id} value={c.id}>{c.name} · {c.code}</option>)}
           </select></label>
         <label className="grid gap-1 font-semibold">Incarico firmato del cliente
-          <select className={field} value={contractId} required disabled={Boolean(setup.serviceId)} onChange={e => { setContract(e.target.value); setPayment(''); changed(); }}>
+          <select aria-label="Incarico firmato del cliente" className={field} value={contractId} required disabled={Boolean(setup.serviceId)} onChange={e => { setContract(e.target.value); setPayment(''); changed(); }}>
             <option value="">Seleziona l’incarico</option>{setup.contracts.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select></label>
         {!setup.serviceId && <label className="grid gap-1 font-semibold">Data di acquisto
           <input className={field} type="date" value={purchasedOn} max={setup.today} required onChange={e => { setPurchased(e.target.value); changed(); }} /></label>}
         <label className="grid gap-1 font-semibold">Rata incassata{!setup.serviceId && ' (facoltativa)'}
-          <select className={field} value={paymentId} required={Boolean(setup.serviceId)} onChange={e => { setPayment(e.target.value); changed(); }}>
+          <select aria-label={setup.serviceId ? 'Rata incassata' : 'Rata incassata (facoltativa)'} className={field} value={paymentId} required={Boolean(setup.serviceId)} onChange={e => { setPayment(e.target.value); changed(); }}>
             <option value="">{setup.serviceId ? 'Seleziona la rata' : 'Collegherò il pagamento in seguito'}</option>
             {setup.payments.filter(p => p.contractId === contractId).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select></label>

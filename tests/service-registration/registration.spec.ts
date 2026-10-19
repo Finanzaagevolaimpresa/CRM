@@ -10,8 +10,10 @@ let f: Awaited<ReturnType<typeof registrationFixture>>;
 test.beforeAll(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   expect(password.length).toBeGreaterThanOrEqual(24);
-  await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE',
-    activatedAt: new Date(), keyDigest: privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!) } });
+  const keyDigest = privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!);
+  const existing = await db.applicationKeyVersion.findUnique({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } } });
+  if (existing) { expect(existing.status).toBe('ACTIVE'); expect(existing.keyDigest).toBe(keyDigest); }
+  else await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest } });
 });
 test.beforeEach(async () => { f = await registrationFixture(db, await bcrypt.hash(password, 4)); });
 test.afterAll(() => db.$disconnect());
