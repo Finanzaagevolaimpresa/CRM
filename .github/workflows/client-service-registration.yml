@@ -89,7 +89,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SERVICE_REGISTRATION_EVIDENCE/playwright.json" npx playwright test --config tests/service-registration/playwright.config.ts --reporter=line,json | tee "$SERVICE_REGISTRATION_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SERVICE_REGISTRATION_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SERVICE_REGISTRATION_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SERVICE_REGISTRATION_EVIDENCE/source.txt"

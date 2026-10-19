@@ -36,6 +36,26 @@ async function screenshot(page: Page, name: string) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(process.env.SERVICE_REGISTRATION_EVIDENCE!, name + '.png'), fullPage: true });
 }
+test('contract creation captures the service scope without declaring a signature or creating a purchase', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 }); await login(page);
+  await page.goto('/contracts');
+  const form = page.locator('form').filter({ has: page.getByRole('button', { name: 'Crea contratto', exact: true }) });
+  const number = `${f.tag}-ui`, scope = 'Verifica dei materiali e preparazione di un elaborato per revisione, come concordato nel contratto sintetico.';
+  await form.locator('select[name="clientId"]').selectOption(f.client.id);
+  await form.getByPlaceholder('Numero', { exact: true }).fill(number);
+  await form.getByPlaceholder('Servizio', { exact: true }).fill(f.catalog.name);
+  await form.getByLabel('Attività previste dall’incarico', { exact: true }).fill(scope);
+  await form.getByPlaceholder('Imponibile', { exact: true }).fill('100');
+  await form.getByPlaceholder('IVA', { exact: true }).fill('22');
+  await form.getByPlaceholder('Totale', { exact: true }).fill('122');
+  await screenshot(page, 'contract-scope-create');
+  await form.getByRole('button', { name: 'Crea contratto', exact: true }).click();
+  await expect(page.getByText(number, { exact: true })).toBeVisible();
+  const contract = await db.contract.findFirstOrThrow({ where: { clientId: f.client.id, contractNumber: number } });
+  expect(contract.serviceDescription).toBe(scope); expect(contract.signedAt).toBeNull(); expect(contract.signedDocumentId).toBeNull();
+  expect(await db.clientService.count({ where: { clientId: f.client.id } })).toBe(0);
+  await page.goto(`/contracts/${contract.id}`); await expect(page.getByText(scope, { exact: true })).toBeVisible();
+});
 test('desktop empty dossier to registration, exact preview and existing handoff page', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 }); await login(page);
   await page.goto(`/clients/${f.client.id}`);
