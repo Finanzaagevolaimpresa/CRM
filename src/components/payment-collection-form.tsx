@@ -83,8 +83,9 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     {!setup.reconciliationOnly && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
       <fieldset disabled={pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Data e ora effettive dell’incasso<input className={field} type="datetime-local" value={date} required onChange={e => { setDate(e.target.value); changed(); }} /></label>
-        <label className="grid gap-1 font-semibold">Prova dell’incasso<select className={field} value={documentVersionId} required onChange={e => { setDocument(e.target.value); changed(); }}>
-          <option value="">Scegli il documento verificato</option>{setup.documents.map(d => <option key={d.id} value={d.id}>{d.title} · versione {d.version}</option>)}</select></label>
+        <div className="grid gap-1 font-semibold"><label htmlFor="collection-proof">Prova dell’incasso</label>
+          <select id="collection-proof" className={field} value={documentVersionId} required onChange={e => { setDocument(e.target.value); changed(); }}>
+            <option value="">Scegli il documento verificato</option>{setup.documents.map(d => <option key={d.id} value={d.id}>{d.title} · versione {d.version}</option>)}</select></div>
         <button className={button} type="submit" disabled={!setup.documents.length}>Controlla riepilogo</button>
       </fieldset>
     </form>}

@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { collectionFixture, collectionKey } from './payment-collection/fixture';
-import { cleanupPurchasedFixtures } from './purchased-service-fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { previewPaymentCollection, confirmPaymentCollection, paymentCollectionSetup, readPaymentCollectionReceipt } from '../src/lib/payment-collection';
 import { previewServiceRegistration, confirmServiceRegistration } from '../src/lib/client-service-registration';
@@ -17,27 +16,20 @@ import { previewSelectiveAccess, confirmSelectiveAccess } from '../src/lib/selec
 
 const db = new PrismaClient(), enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled };
 type Fixture = Awaited<ReturnType<typeof collectionFixture>>;
-const fixtures: Fixture[] = [];
-let admitted = false, authority: Awaited<ReturnType<typeof syntheticPerson>>;
+let authority: Awaited<ReturnType<typeof syntheticPerson>>;
 before(async () => {
   if (!enabled) return;
-  await assertAiOrchestratorEphemeralDatabaseIdentity(db); admitted = true;
+  await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   await collectionKey(db); authority = await syntheticPerson(db, 'Collection scope test authority');
   await db.selectiveClientAuthority.create({ data: { userId: authority.user.id, enabled: true } });
   await db.selectiveAccessAuthority.create({ data: { userId: authority.user.id, enabled: true } });
 });
 after(async () => {
-  if (admitted) {
-    const clients = fixtures.map(f => f.client.id), users = fixtures.flatMap(f => [f.admin.id, f.tech.id, f.other.id]);
-    await db.auditLog.deleteMany({ where: { event: { in: ['payment_collection_v1', 'client_service_registration_v1'] }, actorId: { in: users } } });
-    await db.selectiveClientGrant.deleteMany({ where: { clientId: { in: clients } } });
-    await db.selectiveProjectGrant.deleteMany({ where: { recipientId: { in: users } } });
-    await db.project.deleteMany({ where: { clientId: { in: clients } } });
-    await cleanupPurchasedFixtures(db, fixtures);
-  }
+  // Retain immutable grant/audit history in the guarded ephemeral database.
+  // The CI runner disposes of the whole synthetic service after this job.
   await db.$disconnect();
 });
-async function fixture() { const f = await collectionFixture(db); fixtures.push(f); return f; }
+async function fixture() { return collectionFixture(db); }
 async function preview(f: Fixture) { return previewPaymentCollection(db, f.session, f.command); }
 async function save(f: Fixture) { return confirmPaymentCollection(db, f.session, f.command, (await preview(f)).digest, f.proof); }
 async function unchanged(f: Fixture) {
@@ -61,6 +53,7 @@ test('preview is read-only and limits choices to current separate verified evide
 });
 test('collection changes only the existing payment with a real minimized atomic N04 receipt', options, async () => {
   const f = await fixture(), contract = await db.contract.findUnique({ where: { id: f.contract.id } });
+  const client = await db.client.findUniqueOrThrow({ where: { id: f.client.id } });
   const docs = await db.document.findMany({ where: { clientId: f.client.id }, orderBy: { id: 'asc' } });
   await save(f);
   const row = await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } });
@@ -73,7 +66,7 @@ test('collection changes only the existing payment with a real minimized atomic 
   const audit = await db.auditLog.findUniqueOrThrow({ where: { id: 'payment_collection_' + f.command.commandId } });
   assert.deepEqual(Object.keys(audit.after as object).sort(), ['action','afterHash','beforeHash','clientId','documentVersionId','paymentId','sessionHash','sourceHash','type'].sort());
   for (const excluded of [f.admin.email, f.client.displayName, f.documents[1].title, f.documents[1].storagePath]) assert.ok(!JSON.stringify(audit.after).includes(excluded));
-  assert.equal((await db.client.findUniqueOrThrow({ where: { id: f.client.id } })).recordUpdateEpoch, f.client.recordUpdateEpoch + 1);
+  assert.deepEqual(await db.client.findUniqueOrThrow({ where: { id: f.client.id } }), client);
 });
 test('same command is idempotent while a changed replay is rejected', options, async () => {
   const f = await fixture(), p = await preview(f), first = await confirmPaymentCollection(db, f.session, f.command, p.digest, f.proof);
@@ -90,7 +83,9 @@ test('a step-up proof for the current session is mandatory', options, async () =
 test('expired step-up and expired registry session are rejected after preview', options, async () => {
   const f = await fixture(), p = await preview(f);
   await assert.rejects(confirmPaymentCollection(db, f.session, f.command, p.digest, clientProof(f.person, Math.floor(Date.now() / 1000) - 3600)));
-  await db.internalSession.update({ where: { id: f.session.sessionId! }, data: { expiresAt: new Date(1) } });
+  await db.internalSession.update({ where: { id: f.session.sessionId! }, data: {
+    createdAt: new Date(Date.now() - 120_000), expiresAt: new Date(Date.now() - 60_000),
+  } });
   await assert.rejects(confirmPaymentCollection(db, f.session, f.command, p.digest, f.proof)); await unchanged(f);
 });
 test('session revocation and explicit permission denial close an open preview', options, async () => {
@@ -191,8 +186,9 @@ test('simultaneous double confirmation yields one payment transition and one rec
   assert.equal(await db.auditLog.count({ where: { entityId: f.payment.id, event: 'payment_collection_v1' } }), 1);
   assert.deepEqual(await readPaymentCollectionReceipt(db, f.session, f.client.id, f.payment.id, f.command.commandId), { clientId: f.client.id, paymentId: f.payment.id });
 });
-test('audit storage failure rolls back both payment and client epoch', options, async () => {
+test('audit storage failure rolls back the payment and preserves the client', options, async () => {
   const f = await fixture(), p = await preview(f);
+  const client = await db.client.findUniqueOrThrow({ where: { id: f.client.id } });
   const failing = intercepted(tx => new Proxy(tx, { get(target, property) {
     if (property === 'auditLog') return new Proxy(target.auditLog, { get(delegate, key) {
       if (key === 'create') return async () => { throw new Error('Synthetic audit persistence failure'); };
@@ -201,7 +197,7 @@ test('audit storage failure rolls back both payment and client epoch', options, 
     return Reflect.get(target, property);
   } }));
   await assert.rejects(confirmPaymentCollection(failing, f.session, f.command, p.digest, f.proof), /Synthetic audit persistence failure/);
-  await unchanged(f); assert.equal((await db.client.findUniqueOrThrow({ where: { id: f.client.id } })).recordUpdateEpoch, f.client.recordUpdateEpoch);
+  await unchanged(f); assert.deepEqual(await db.client.findUniqueOrThrow({ where: { id: f.client.id } }), client);
 });
 test('receipt lookup racing an unacknowledged commit never reports a false absence', options, async () => {
   const f = await fixture(), p = await preview(f), held = latch(), release = latch();
@@ -258,7 +254,8 @@ test('collection, later payment link and technical handoff are three explicit sy
   await assert.rejects(previewPurchasedServiceHandoff(db, service.serviceId));
   await save(f);
   assert.equal((await db.clientService.findUniqueOrThrow({ where: { id: service.serviceId } })).paymentId, null);
-  const link = { ...f.registrationCommand, operation: 'LINK_PAYMENT' as const, serviceId: service.serviceId, commandId: randomUUID() };
+  const link = { operation: 'LINK_PAYMENT' as const, commandId: randomUUID(), clientId: f.client.id,
+    serviceId: service.serviceId, paymentId: f.payment.id };
   const linkPreview = await previewServiceRegistration(db, f.session, link);
   await confirmServiceRegistration(db, f.session, link, linkPreview.digest);
   assert.equal(await db.technicalPractice.count({ where: { clientId: f.client.id } }), 0);

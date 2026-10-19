@@ -11,7 +11,7 @@ export async function collectionKey(db: PrismaClient) {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const version = Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), keyDigest = privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!);
   const current = await db.applicationKeyVersion.findUnique({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version } } });
-  if (current) { assert.equal(current.status, 'ACTIVE'); assert.equal(current.keyDigest, keyDigest); }
+  if (current) { assert.equal(current.status, 'ACTIVE'); assert.deepEqual(current.keyDigest, keyDigest); }
   else await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version, keyDigest, status: 'ACTIVE', activatedAt: new Date() } });
 }
 export async function collectionFixture(db: PrismaClient, passwordHash?: string) {

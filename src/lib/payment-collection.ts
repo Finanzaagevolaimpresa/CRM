@@ -126,9 +126,8 @@ export async function confirmPaymentCollection(db: PrismaClient, actor: AuthSess
     const recorded = await tx.auditLog.create({ data: { id: 'payment_collection_' + input.commandId, actorId: c.actor.id,
       entityType: 'Payment', entityId: c.payment.id, event: EVENT, after } });
     if (fingerprint(receiptSchema.parse(recorded.after)) !== fingerprint(after)) fail('INVALID');
-    // A receipt reader waiting on this client must not use a snapshot from before
-    // the commit to report a false absence. This fence changes atomically.
-    await tx.client.update({ where: { id: c.client.id }, data: { recordUpdateEpoch: { increment: 1 } } });
+    // Receipt reads lock this same Payment row. Its atomic transition makes a
+    // pre-commit SERIALIZABLE snapshot conflict instead of reporting false absence.
     await c.finish();
     return { paymentId: c.payment.id, clientId: c.client.id };
   });
