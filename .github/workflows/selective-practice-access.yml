@@ -81,7 +81,7 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node --import tsx tests/selective-practices/provision-browser.ts
-      - name: Native preview, exact confirmation, revocation, lost response and mobile UI
+      - name: Native preview, assignments, revocation, expiry, lost response and mobile UI
         if: matrix.target == 'browser'
         shell: bash
         run: |
@@ -97,7 +97,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_PRACTICE_EVIDENCE/playwright.json" npx playwright test --config tests/selective-practices/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_PRACTICE_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_PRACTICE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_PRACTICE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==9 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_PRACTICE_EVIDENCE/source.txt"
