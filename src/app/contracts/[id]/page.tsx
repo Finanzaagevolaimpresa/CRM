@@ -43,6 +43,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <Card title="Dati contratto">
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>
       <p>Servizio: {contract.serviceName}</p>
+      <div className="mt-3"><p className="font-semibold">Attività previste dall’incarico</p><p className="whitespace-pre-wrap">{contract.serviceDescription || 'Non indicate nel contratto registrato.'}</p></div>
       <p>Totale: € {Number(contract.totalAmount).toLocaleString('it-IT')}</p>
       <p>Stato della firma: <StatusBadge status={contract.status} /></p>
       <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 font-semibold" data-contract-operational-state>{operationalLabel}</p>
