@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import Link from 'next/link';
 import { PrimaryButton } from '@/components/actions';
 import { Card, EmptyState, MetaCell, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
 import { canViewClient, canViewProject } from '@/lib/access-control';
@@ -48,7 +49,7 @@ export default async function Page() {
       </form>
     </Card> : null}
     <Card title="Elenco operativo">
-      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Totale', 'Metodo', 'Scadenza', 'Stato', 'Tracciabilità']} rows={visibleItems.map((payment) => [clientById.get(payment.clientId)?.displayName ?? '—', `€ ${Number(payment.totalAmount).toLocaleString('it-IT')}`, payment.method ?? '—', formatDateTime(payment.dueDate), <StatusBadge status={payment.status} key="s" />, <MetaCell key="m" createdAt={payment.createdAt} updatedAt={payment.updatedAt} />])} />}
+      {visibleItems.length === 0 ? <EmptyState title="Nessun elemento presente">Non ci sono pagamenti disponibili nel tuo perimetro.</EmptyState> : <Table headers={['Cliente', 'Totale', 'Metodo', 'Scadenza', 'Stato', 'Tracciabilità', 'Incasso']} rows={visibleItems.map((payment) => [clientById.get(payment.clientId)?.displayName ?? '—', `€ ${Number(payment.totalAmount).toLocaleString('it-IT')}`, payment.method ?? '—', formatDateTime(payment.dueDate), <StatusBadge status={payment.status} key="s" />, <MetaCell key="m" createdAt={payment.createdAt} updatedAt={payment.updatedAt} />, session.role === 'admin' && canWrite ? <Link key="collection" className="font-semibold text-fai-blue underline" href={`/payments/${payment.id}/collection`}>{payment.status === 'da_incassare' ? 'Conferma incasso' : 'Apri incasso'}</Link> : '—'])} />}
     </Card>
   </div>;
 }
