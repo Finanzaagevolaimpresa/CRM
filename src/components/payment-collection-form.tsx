@@ -9,11 +9,13 @@ type Setup = { clientId: string; paymentId: string; client: string; contract: st
   reconciliationOnly: boolean; documents: Array<{ id: string; title: string; version: number }> };
 const field = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-fai-blue px-5 py-3 font-semibold text-white disabled:opacity-50';
+const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 function subscribe(listener: () => void) {
   window.addEventListener('storage', listener); window.addEventListener('fai-payment-collection', listener);
   return () => { window.removeEventListener('storage', listener); window.removeEventListener('fai-payment-collection', listener); };
 }
 export function PaymentCollectionForm({ setup }: { setup: Setup }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [documentVersionId, setDocument] = useState(''), [date, setDate] = useState('');
   const [preview, setPreview] = useState<PaymentCollectionPreview | null>(null);
   const [command, setCommand] = useState<PaymentCollectionCommand | null>(null);
@@ -30,7 +32,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   function clear() { try { sessionStorage.removeItem(key); window.dispatchEvent(new Event('fai-payment-collection')); } catch { /* Keep in-memory outcome. */ } }
   function changed() { setPreview(null); setCommand(null); setConfirmed(false); setMessage(''); }
   async function prepare(event: React.FormEvent) {
-    event.preventDefault(); if (busy.current || uncertain || setup.reconciliationOnly) return;
+    event.preventDefault(); if (!ready || busy.current || uncertain || setup.reconciliationOnly) return;
     const timestamp = new Date(date);
     if (!Number.isFinite(timestamp.getTime())) { setMessage('Inserisci la data e l’ora effettive dell’incasso.'); return; }
     busy.current = true; setPending(true); setConfirmed(false); setMessage('');
@@ -45,7 +47,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     finally { busy.current = false; setPending(false); }
   }
   async function save() {
-    if (busy.current || uncertain || setup.reconciliationOnly || !preview || !command || !confirmed) return;
+    if (!ready || busy.current || uncertain || setup.reconciliationOnly || !preview || !command || !confirmed) return;
     busy.current = true; setPending(true); setMessage('');
     try { sessionStorage.setItem(key, command.commandId); window.dispatchEvent(new Event('fai-payment-collection')); }
     catch {
@@ -61,7 +63,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
   }
   async function verify() {
     const id = saved ?? commandId.current;
-    if (busy.current || !id) return;
+    if (!ready || busy.current || !id) return;
     busy.current = true; setPending(true);
     try {
       const response = await verifyPaymentCollectionAction(setup.clientId, setup.paymentId, id);
@@ -76,12 +78,12 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     <p>La tua dichiarazione e la versione della prova sono registrate. Puoi ora collegare questa rata al servizio acquistato nel fascicolo.</p>
     <Link className={button} href={`/clients/${result.clientId}#servizi-acquistati`}>Apri servizi acquistati</Link>
   </section>;
-  return <div className="grid min-w-0 gap-5">
+  return <div className="grid min-w-0 gap-5" data-testid="payment-collection-form" data-interactive-ready={ready}>
     {message && <p role="status" className="rounded-xl bg-amber-50 p-4">{message}</p>}
     {uncertain && <div className="grid gap-3"><p>Una conferma precedente è da verificare.</p><button className={button} disabled={pending} onClick={verify}>Verifica esito</button></div>}
     {setup.reconciliationOnly && <p className="rounded-xl bg-blue-50 p-4">Questa rata non è disponibile per una nuova conferma. Puoi verificare l’esito di una richiesta in sospeso oppure tornare all’elenco dei pagamenti.</p>}
     {!setup.reconciliationOnly && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
-      <fieldset disabled={pending || uncertain} className="grid min-w-0 gap-4">
+      <fieldset disabled={!ready || pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Data e ora effettive dell’incasso<input className={field} type="datetime-local" value={date} required onChange={e => { setDate(e.target.value); changed(); }} /></label>
         <div className="grid gap-1 font-semibold"><label htmlFor="collection-proof">Prova dell’incasso</label>
           <select id="collection-proof" className={field} value={documentVersionId} required onChange={e => { setDocument(e.target.value); changed(); }}>

@@ -24,8 +24,11 @@ async function login(page: Page, email = f.admin.email, proof = true) {
 }
 async function prepare(page: Page) {
   await page.goto(`/payments/${f.payment.id}/collection`);
-  await page.getByLabel('Data e ora effettive dell’incasso', { exact: true }).fill(new Date(Date.now() - 120_000).toISOString().slice(0, 16));
+  await expect(page.getByTestId('payment-collection-form')).toHaveAttribute('data-interactive-ready', 'true');
+  const date = new Date(Date.now() - 120_000).toISOString().slice(0, 16);
+  await page.getByLabel('Data e ora effettive dell’incasso', { exact: true }).fill(date);
   await page.getByLabel('Prova dell’incasso', { exact: true }).selectOption(f.command.documentVersionId);
+  await expect(page.getByLabel('Data e ora effettive dell’incasso', { exact: true })).toHaveValue(date);
   await page.getByRole('button', { name: 'Controlla riepilogo', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Riepilogo prima della conferma' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Conferma incasso', exact: true })).toBeDisabled();
