@@ -144,7 +144,7 @@ for (const owner of ['technical', 'commercial'] as const) {
       if (row.siblings.length > 25) {
         await page.screenshot({ path: path.join(evidence, 'selective-practice-assignments-desktop.png'), fullPage: true });
         await page.getByRole('link', { name: 'Altre assegnazioni', exact: true }).click();
-        expect(new URL(page.url()).searchParams.get('after')).toBe(row.siblings[24].id);
+        await expect(page).toHaveURL(url => url.searchParams.get('after') === row.siblings[24].id);
         await checkPage(row.siblings.slice(25));
         await expect(page.getByRole('link', { name: 'Altre assegnazioni', exact: true })).toHaveCount(0);
         await page.setViewportSize({ width: 390, height: 844 }); await page.goto(route);
