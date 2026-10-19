@@ -84,6 +84,40 @@ test('lost response survives reload and reconciliation never creates another ser
   await expect(page.getByRole('heading', { name: 'Servizio registrato nel fascicolo' })).toBeVisible();
   expect(await db.clientService.count({ where: { clientId: f.client.id } })).toBe(1);
 });
+test('lost payment-link response survives reload into a read-only reconciliation page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await login(page); await prepare(page, false);
+  await page.getByRole('button', { name: 'Registra servizio acquistato', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Servizio registrato nel fascicolo' })).toBeVisible();
+  const service = await db.clientService.findFirstOrThrow({ where: { clientId: f.client.id } });
+  await page.getByRole('link', { name: 'Apri servizio nel fascicolo', exact: true }).click();
+  await page.locator(`#service-${service.id}`).getByRole('link', { name: 'Collega pagamento', exact: true }).click();
+  await page.getByLabel('Rata incassata', { exact: true }).selectOption(f.payment.id);
+  await page.getByRole('button', { name: 'Controlla riepilogo', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Riepilogo prima della registrazione' })).toBeVisible();
+  await page.getByRole('checkbox').check();
+  const route = `**/clients/${f.client.id}/services/new?serviceId=${service.id}`;
+  await page.route(route, async intercepted => {
+    if (intercepted.request().method() === 'POST' && intercepted.request().headers()['next-action']) {
+      await intercepted.fetch(); await intercepted.abort('failed'); await page.unroute(route);
+    } else await intercepted.continue();
+  });
+  await page.getByRole('button', { name: 'Collega pagamento', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Registrazione servizio acquistato' })).toHaveCount(0);
+  await screenshot(page, 'mobile-payment-recovery');
+  await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Pagamento collegato al servizio' })).toBeVisible();
+  await screenshot(page, 'mobile-payment-reconciled');
+  expect(await db.clientService.count({ where: { clientId: f.client.id } })).toBe(1);
+  expect((await db.clientService.findUniqueOrThrow({ where: { id: service.id } })).paymentId).toBe(f.payment.id);
+  expect(await db.auditLog.count({ where: { event: 'client_service_registration_v1', entityId: service.id } })).toBe(2);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('form', { name: 'Registrazione servizio acquistato' })).toHaveCount(0);
+  await expect(page.getByText('Il servizio non richiede più un collegamento da questa pagina.', { exact: false })).toBeVisible();
+});
 test('open preview permission revocation and direct technician URL are denied', async ({ page, browser }) => {
   await login(page); await prepare(page);
   await db.userPermissionOverride.create({ data: { userId: f.admin.id, permission: 'service.write', allowed: false } });

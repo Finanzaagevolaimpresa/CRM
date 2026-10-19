@@ -36,15 +36,15 @@ export default async function RegisterServicePage({ params, searchParams }: {
     <PageHeader title={setup.serviceId ? 'Collega pagamento al servizio' : 'Registra servizio acquistato'} description={setup.client.name} />
     <Link className="font-semibold text-fai-blue underline" href={`/clients/${id}#servizi-acquistati`}>Torna ai servizi acquistati</Link>
     <Card title="Servizio e incarico del cliente">
-      <p className="mb-4 text-slate-600">Registra un servizio previsto da un incarico firmato già presente nel CRM. Il servizio apparirà nel fascicolo; potrai poi affidarlo all’ufficio tecnico.</p>
+      {!setup.reconciliationOnly && <p className="mb-4 text-slate-600">Registra un servizio previsto da un incarico firmato già presente nel CRM. Il servizio apparirà nel fascicolo; potrai poi affidarlo all’ufficio tecnico.</p>}
       {!setup.serviceId && <form method="get" className="mb-5 grid min-w-0 gap-3 sm:grid-cols-3" aria-label="Cerca servizio e incarico">
         <label className="min-w-0">Cerca nel catalogo<input name="catalogQ" maxLength={80} defaultValue={query.catalogQ ?? ''} className="block w-full min-w-0 rounded-xl border p-3" /></label>
         <label className="min-w-0">Cerca incarico<input name="contractQ" maxLength={80} defaultValue={query.contractQ ?? ''} className="block w-full min-w-0 rounded-xl border p-3" /></label>
         <button className="self-end rounded-xl border border-fai-blue p-3 font-semibold text-fai-blue">Cerca</button>
       </form>}
       {(setup.moreCatalogs || setup.moreContracts) && <p className="mb-3">Sono presenti altri risultati: restringi la ricerca con nome o numero.</p>}
-      {!setup.catalogs.length && <p className="mb-4 rounded-xl bg-amber-50 p-4">Nessun servizio attivo trovato. Verifica il <Link className="underline" href="/service-catalog">Catalogo servizi</Link> o modifica la ricerca.</p>}
-      {!setup.contracts.length && <p className="mb-4 rounded-xl bg-amber-50 p-4">Non risulta un incarico firmato disponibile per questa scelta. Apri <Link className="underline" href="/contracts">Contratti</Link>, registra l’incarico effettivo del cliente e completa la firma con il documento corrispondente. Poi torna qui.</p>}
+      {!setup.reconciliationOnly && !setup.catalogs.length && <p className="mb-4 rounded-xl bg-amber-50 p-4">Nessun servizio attivo trovato. Verifica il <Link className="underline" href="/service-catalog">Catalogo servizi</Link> o modifica la ricerca.</p>}
+      {!setup.reconciliationOnly && !setup.contracts.length && <p className="mb-4 rounded-xl bg-amber-50 p-4">Non risulta un incarico firmato disponibile per questa scelta. Apri <Link className="underline" href="/contracts">Contratti</Link>, registra l’incarico effettivo del cliente e completa la firma con il documento corrispondente. Poi torna qui.</p>}
       <ClientServiceRegistrationForm key={`${query.catalogQ ?? ''}:${query.contractQ ?? ''}:${setup.serviceId ?? ''}`} setup={setup} />
     </Card>
   </div>;

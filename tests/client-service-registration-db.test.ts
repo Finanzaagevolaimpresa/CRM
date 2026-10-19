@@ -67,6 +67,38 @@ test('registration without payment remains unassigned; later linking reuses the 
   assert.equal(after.contractId, before.contractId); assert.deepEqual(after.purchasedAt, before.purchasedAt); assert.equal(after.assignedToId, null);
   await previewPurchasedServiceHandoff(db, result.serviceId);
 });
+test('committed payment link remains reconcilable after reload without offering another mutation', options, async () => {
+  const f = await fixture(); f.command.paymentId = null;
+  const result = await save(f);
+  const input = { operation: 'LINK_PAYMENT' as const, commandId: randomUUID(), clientId: f.client.id, serviceId: result.serviceId, paymentId: f.payment.id };
+  const preview = await previewServiceRegistration(db, f.session, input);
+  await confirmServiceRegistration(db, f.session, input, preview.digest);
+  const before = await db.clientService.findUniqueOrThrow({ where: { id: result.serviceId } });
+  const clientBefore = await db.client.findUniqueOrThrow({ where: { id: f.client.id } });
+  const setup = await serviceRegistrationSetup(db, f.session, f.client.id, { serviceId: result.serviceId });
+  assert.equal(setup.reconciliationOnly, true); assert.equal(setup.serviceId, result.serviceId);
+  assert.deepEqual([setup.catalogs, setup.contracts, setup.payments], [[], [], []]);
+  assert.deepEqual(await readServiceRegistrationReceipt(db, f.session, f.client.id, input.commandId), result);
+  assert.deepEqual(await confirmServiceRegistration(db, f.session, input, preview.digest), result);
+  await assert.rejects(previewServiceRegistration(db, f.session, { ...input, commandId: randomUUID() }));
+  assert.equal(await readServiceRegistrationReceipt(db, f.session, f.client.id, randomUUID()), null);
+  assert.equal(await db.clientService.count({ where: { clientId: f.client.id } }), 1);
+  assert.equal(await db.auditLog.count({ where: { event: 'client_service_registration_v1', entityId: result.serviceId } }), 2);
+  assert.deepEqual(await db.clientService.findUniqueOrThrow({ where: { id: result.serviceId } }), before);
+  assert.deepEqual(await db.client.findUniqueOrThrow({ where: { id: f.client.id } }), clientBefore);
+});
+test('reconciliation-only page still denies revoked permissions and trashed or foreign services', options, async () => {
+  for (const denied of ['permission', 'service trash', 'client trash', 'foreign service']) {
+    const f = await fixture(), result = await save(f);
+    assert.equal((await serviceRegistrationSetup(db, f.session, f.client.id, { serviceId: result.serviceId })).reconciliationOnly, true);
+    if (denied === 'permission') await db.userPermissionOverride.create({ data: { userId: f.admin.id, permission: 'service.write', allowed: false } });
+    if (denied === 'service trash') await db.clientService.update({ where: { id: result.serviceId }, data: { deletedAt: new Date() } });
+    if (denied === 'client trash') await db.client.update({ where: { id: f.client.id }, data: { deletedAt: new Date() } });
+    const clientId = denied === 'foreign service' ? (await fixture()).client.id : f.client.id;
+    await assert.rejects(serviceRegistrationSetup(db, f.session, clientId, { serviceId: result.serviceId }));
+    await assert.rejects(readServiceRegistrationReceipt(db, f.session, clientId, f.command.commandId));
+  }
+});
 test('same request, double click and lost response create one service and one minimal receipt', options, async () => {
   const f = await fixture(), p = await previewServiceRegistration(db, f.session, f.command);
   const attempts = await Promise.allSettled([1, 2].map(() => confirmServiceRegistration(db, f.session, f.command, p.digest)));

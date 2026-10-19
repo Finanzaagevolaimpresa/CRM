@@ -138,11 +138,19 @@ export async function serviceRegistrationSetup(db: PrismaClient, claimed: AuthSe
   return withSerializableTransaction(db, async tx => {
     const auth = await admission(tx, claimed, clientId);
     const service = options.serviceId ? await tx.clientService.findUnique({ where: { id: options.serviceId } }) : null;
-    if (options.serviceId && (!service || service.deletedAt || service.clientId !== clientId || service.paymentId || service.status !== 'richiesto'
-      || service.operationalStatus !== 'nuova' || !service.contractId || await getHandoffReceipt(tx, service.id)
-      || await tx.technicalPractice.count({ where: { clientServiceId: service.id } }))) fail('CLOSED');
+    if (options.serviceId && (!service || service.deletedAt || service.clientId !== clientId)) fail('DENIED');
     if (service) await guardProjectResources(tx, auth.actor.id, [{ clientId, projectId: service.projectId,
       clientServiceId: service.id, companyId: service.companyId, contractId: service.contractId }]);
+    // Mutation eligibility can change because the pending command committed.
+    // Keep an authorized, read-only receipt surface after payment linking; do
+    // not load new choices or loosen the proposal/confirmation guards.
+    if (service && (service.paymentId || service.status !== 'richiesto' || service.operationalStatus !== 'nuova'
+      || !service.contractId || await getHandoffReceipt(tx, service.id)
+      || await tx.technicalPractice.count({ where: { clientServiceId: service.id } }))) {
+      await auth.finish();
+      return { client: { id: auth.client.id, name: auth.client.displayName }, catalogs: [], contracts: [], payments: [],
+        serviceId: service.id, contractId: null, today: today(), moreCatalogs: false, moreContracts: false, reconciliationOnly: true };
+    }
     const catalogQuery = (options.catalogQuery ?? '').trim().slice(0, 80), contractQuery = (options.contractQuery ?? '').trim().slice(0, 80);
     const catalogs = await tx.serviceCatalog.findMany({ where: service ? { id: service.serviceCatalogId } : { active: true,
       ...(catalogQuery ? { OR: [{ name: { contains: catalogQuery, mode: 'insensitive' } }, { code: { contains: catalogQuery, mode: 'insensitive' } }] } : {}) },
@@ -164,6 +172,6 @@ export async function serviceRegistrationSetup(db: PrismaClient, claimed: AuthSe
       contracts: eligible.map(c => ({ id: c.id, label: `${c.contractNumber} · ${c.serviceName}` })),
       payments: payments.map(p => ({ id: p.id, contractId: p.contractId, label: `€ ${p.totalAmount.toFixed(2)} · ${p.collectedAt!.toLocaleDateString('it-IT', { timeZone: 'Europe/Rome' })}` })),
       serviceId: service?.id ?? null, contractId: service?.contractId ?? null, today: today(),
-      moreCatalogs: catalogs.length > 100, moreContracts: contracts.length > 100 };
+      moreCatalogs: catalogs.length > 100, moreContracts: contracts.length > 100, reconciliationOnly: false };
   });
 }

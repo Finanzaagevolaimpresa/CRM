@@ -8,7 +8,7 @@ import type { ServiceRegistrationCommand, ServiceRegistrationPreview } from '@/l
 type Setup = {
   client: { id: string; name: string }; catalogs: Array<{ id: string; name: string; code: string }>;
   contracts: Array<{ id: string; label: string }>; payments: Array<{ id: string; contractId: string; label: string }>;
-  serviceId: string | null; contractId: string | null; today: string;
+  serviceId: string | null; contractId: string | null; today: string; reconciliationOnly: boolean;
 };
 const field = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-fai-blue px-5 py-3 font-semibold text-white disabled:opacity-50';
@@ -37,7 +37,7 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
   function clearPendingReceipt() { try { sessionStorage.removeItem(storageKey); window.dispatchEvent(new Event('fai-service-registration')); } catch { /* No persisted form contents. */ } }
   function changed() { setPreview(null); setCommand(null); setConfirmed(false); setMessage(''); }
   async function prepare(event: React.FormEvent) {
-    event.preventDefault(); if (busy.current || uncertain) return;
+    event.preventDefault(); if (busy.current || uncertain || setup.reconciliationOnly) return;
     busy.current = true; setPending(true); setMessage(''); setConfirmed(false);
     const id = crypto.randomUUID(); commandRef.current = id;
     const input: ServiceRegistrationCommand = setup.serviceId
@@ -51,7 +51,7 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
     finally { busy.current = false; setPending(false); }
   }
   async function save() {
-    if (busy.current || uncertain || !preview || !command || !confirmed) return;
+    if (busy.current || uncertain || setup.reconciliationOnly || !preview || !command || !confirmed) return;
     busy.current = true; setPending(true); setMessage('');
     // Save only the command identifier, before the request, to reconcile a lost
     // response after refresh. Never store names, financial details or documents.
@@ -85,7 +85,8 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
     {message && <p role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4">{message}</p>}
     {uncertain && !message && <p role="status">Un salvataggio precedente è da verificare.</p>}
     {uncertain && <button className={button} disabled={pending} onClick={verify}>Verifica esito</button>}
-    <form onSubmit={prepare} aria-label="Registrazione servizio acquistato" className="grid gap-5">
+    {setup.reconciliationOnly && <p role="status" className="rounded-xl bg-blue-50 p-4">Il servizio non richiede più un collegamento da questa pagina. Puoi verificare un salvataggio in sospeso oppure tornare al fascicolo per consultare lo stato corrente.</p>}
+    {!setup.reconciliationOnly && <form onSubmit={prepare} aria-label="Registrazione servizio acquistato" className="grid gap-5">
       <fieldset disabled={pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Servizio del catalogo
           <select aria-label="Servizio del catalogo" className={field} value={catalogId} required disabled={Boolean(setup.serviceId)} onChange={e => { setCatalog(e.target.value); changed(); }}>
@@ -105,8 +106,8 @@ export function ClientServiceRegistrationForm({ setup }: { setup: Setup }) {
         <p className="text-sm text-slate-600">Scegli il servizio previsto dall’incarico. La rata deve risultare già incassata nel CRM. Per affidare il lavoro al tecnico servono anche il documento firmato e la prova del pagamento verificati.</p>
         <button className={button} type="submit" disabled={!setup.contracts.length || !setup.catalogs.length}>Controlla riepilogo</button>
       </fieldset>
-    </form>
-    {preview && <section aria-label="Riepilogo servizio" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
+    </form>}
+    {!setup.reconciliationOnly && preview && <section aria-label="Riepilogo servizio" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
       <h2 className="text-xl font-bold">Riepilogo prima della registrazione</h2>
       <dl className="grid gap-2 break-words"><div><dt className="font-semibold">Cliente</dt><dd>{preview.client}</dd></div>
         <div><dt className="font-semibold">Servizio</dt><dd>{preview.service}</dd></div><div><dt className="font-semibold">Incarico</dt><dd>{preview.contract}</dd></div>
