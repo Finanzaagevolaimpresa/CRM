@@ -18,7 +18,9 @@ import { UserFacingActionError } from './action-errors';
 import { hasPermission, type AuthSession } from './auth';
 import { prisma } from './prisma';
 import { loadSelectiveProjectScope } from './selective-project-scope';
-import { lockInternalUser } from './internal-session-registry';
+import { lockAuthoritativeInternalSession, lockInternalUser } from './internal-session-registry';
+import { internalSessionMode } from './session';
+import type { Permission } from './permissions';
 import { assertProjectOperational } from './project-lifecycle-lock';
 
 const inaccessibleMessage = 'Risorsa non disponibile o non accessibile.';
@@ -269,9 +271,25 @@ export async function requireTechnicalPracticeEditAccess(session: AuthSession, p
 }
 
 /** Recheck fresh context while excluding concurrent grants and practice moves. */
-export async function requireTechnicalPracticeMutationAccess(session: AuthSession, practiceId: string, tx: Prisma.TransactionClient, mode: 'edit' | 'view' = 'edit') {
+export async function requireTechnicalPracticeMutationAccess(session: AuthSession, practiceId: string, tx: Prisma.TransactionClient,
+  mode: 'edit' | 'view' = 'edit', operationPermissions: readonly Permission[] = []) {
+  if (internalSessionMode() !== 'registry' || !session.sessionId) denyWriteAccess();
   await lockInternalUser(tx, session.userId);
+  const actor = await lockAuthoritativeInternalSession(tx, { userId: session.userId, sessionId: session.sessionId! });
+  if (!actor || actor.revokedAt || !actor.active || actor.deletedAt) denyWriteAccess();
+  const current = { ...session, role: actor.role, active: actor.active, permissionOverrides: [...actor.permissionOverrides] };
+  const permissions: readonly Permission[] = [...(mode === 'edit' ? ['technical.read', 'technical.write'] as const : ['technical.read'] as const), ...operationPermissions];
+  if (permissions.some(permission => !hasPermission(current, permission)
+    || current.permissionOverrides.some(item => item.permission === permission && !item.allowed))) denyWriteAccess();
+  const identity = await tx.technicalPractice.findUnique({ where: { id: practiceId }, select: { clientId: true } });
+  if (!identity) denyWriteAccess();
+  await tx.$queryRaw`SELECT "id" FROM "Client" WHERE "id"=${identity.clientId} FOR SHARE`;
   await tx.$queryRaw`SELECT "id" FROM "TechnicalPractice" WHERE "id"=${practiceId} FOR UPDATE`;
-  return mode === 'edit' ? requireTechnicalPracticeEditAccess(session, practiceId, tx)
-    : (await requireTechnicalPracticeViewAccess(session, practiceId, tx)).practice;
+  const practice = mode === 'edit' ? await requireTechnicalPracticeEditAccess(current, practiceId, tx)
+    : (await requireTechnicalPracticeViewAccess(current, practiceId, tx)).practice;
+  if (practice.clientId !== identity.clientId) denyWriteAccess();
+  const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
+  if (!clock || !Number.isFinite(session.expiresAt) || session.expiresAt * 1000 <= clock.now.getTime()
+    || actor.expiresAt <= clock.now) denyWriteAccess();
+  return practice;
 }

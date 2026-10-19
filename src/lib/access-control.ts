@@ -1,3 +1,4 @@
+import { isSelectivePractice, type SelectivePracticeScope } from './selective-practice-policy';
 import type { Client, ClientService, Document, DocumentChecklistItem, Lead, Project, RoleCode, Task, User } from '@prisma/client';
 import type { AuthSession } from './auth';
 import { hasClientReadGrant, type ClientReadScope } from './client-read-perimeter-policy';
@@ -8,7 +9,7 @@ import { hasSelectiveContext, isSelectiveProject, type SelectiveProjectScope } f
 import { isSelectiveLead, type SelectiveLeadScope } from './selective-lead-policy';
 import { hasSelectiveClientContext, isSelectiveClient, type SelectiveClientContext, type SelectiveClientScope } from './selective-client-policy';
 
-export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor & SelectiveProjectScope & SelectiveLeadScope & SelectiveClientScope;
+export type Actor = (Pick<User, 'id' | 'role'> | Pick<AuthSession, 'userId' | 'role'>) & ClientReadScope & FinancialActor & SelectiveProjectScope & SelectiveLeadScope & SelectiveClientScope & SelectivePracticeScope;
 type ClientAccessContext = Pick<Client, 'id' | 'salesOwnerId' | 'consultantId'>;
 type ProjectAccessContext = Pick<Project, 'clientId' | 'consultantId'> & {
   id?: Project['id'];
@@ -360,7 +361,8 @@ export function canEditDocument(user: Actor, document: Pick<Document, 'clientId'
   return document.uploadedById === id && !!document.client && canEditClient(user, document.client);
 }
 
-export function canViewTechnicalPractice(user: Actor, practice: ClientScopedContext & { projectId?: string | null; clientServiceId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null }) {
+export function canViewTechnicalPractice(user: Actor, practice: ClientScopedContext & { id?: string; projectId?: string | null; clientServiceId?: string | null; commercialOwnerId?: string | null; technicalOwnerId?: string | null }) {
+  if (isSelectivePractice(user, practice.id)) return false;
   if (hasSelectiveClientContext(user, practice)) return false;
   if (hasSelectiveContext(user, practice)) return false;
   if (!practice.client || !hasConsistentClientContext(practice)) return false;
@@ -379,7 +381,8 @@ export function canViewTechnicalPractice(user: Actor, practice: ClientScopedCont
   return hasClientResponsibility(user, practice.client);
 }
 
-export function canEditTechnicalPractice(user: Actor, practice?: Parameters<typeof hasSelectiveContext>[1] & SelectiveClientContext & { technicalOwnerId?: string | null }) {
+export function canEditTechnicalPractice(user: Actor, practice?: Parameters<typeof hasSelectiveContext>[1] & SelectiveClientContext & { id?: string; technicalOwnerId?: string | null }) {
+  if (practice && isSelectivePractice(user, practice.id)) return false;
   if (practice && hasSelectiveClientContext(user, practice)) return false;
   if (practice && hasSelectiveContext(user, practice)) return false;
   if (hasGlobalAccess(user)) return true;

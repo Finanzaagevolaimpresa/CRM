@@ -1,4 +1,5 @@
 import { leadOutsideSelection } from './selective-lead-policy';
+import { practiceOutsideSelection } from './selective-practice-policy';
 import { clientOutsideSelection, companyClientContextOutsideSelection } from './selective-client-policy';
 import type { Prisma } from '@prisma/client';
 import { loadSelectiveProjectScope } from './selective-project-scope';
@@ -28,7 +29,8 @@ export async function loadAssignmentExceptions(
     AND: [clientOutsideSelection(scope), { selectiveGrants: { none: { recipientId: actor.userId } } }] };
   const projectWhere = { ...active, consultantId: { in: invalidIds }, AND: [projectOutsideSelection(scope)] };
   const practiceWhere = { ...active, OR: [{ commercialOwnerId: { in: invalidIds } }, { technicalOwnerId: { in: invalidIds } }],
-    AND: [contextOutsideSelection(scope), { clientId: { notIn: [...scope.selectiveClientIds] } }] };
+    AND: [contextOutsideSelection(scope), practiceOutsideSelection(scope),
+      { selectivePracticeGrants: { none: { recipientId: actor.userId } } }, { clientId: { notIn: [...scope.selectiveClientIds] } }] };
   const taskWhere = { ...ownerWhere, AND: [contextOutsideSelection(scope), companyClientContextOutsideSelection(scope)] };
   const serviceWhere = { ...ownerWhere, AND: [serviceOutsideSelection(scope)] };
   const values = await Promise.all([

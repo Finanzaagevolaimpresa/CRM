@@ -44,6 +44,12 @@ const clientKeys = [...clients.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\)
 assert.equal(clientKeys.length, 8, 'Every selective client foreign key must be covered');
 assert.deepEqual(clientKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove selective client foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "SelectiveClient|ALTER TABLE "SelectiveClient[^"]*"[^;]*DROP COLUMN/);
+const practices = readFileSync('prisma/migrations/20261018220000_selective_practice_read_v1/migration.sql', 'utf8');
+const practiceKeys = [...practices.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)]
+  .flatMap(([,table,columns]) => [...columns.matchAll(/"([^"]+)"[^\n]* REFERENCES /g)].map(([,column]) => table+'_'+column+'_fkey'));
+assert.equal(practiceKeys.length, 8, 'Every selective practice foreign key must be covered');
+assert.deepEqual(practiceKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove selective practice foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "SelectivePractice|ALTER TABLE "SelectivePractice[^"]*"[^;]*DROP COLUMN/);
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
   communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length, selectiveLeadConstraints: leadKeys.length,
-  selectiveClientConstraints: clientKeys.length }));
+  selectiveClientConstraints: clientKeys.length, selectivePracticeConstraints: practiceKeys.length }));

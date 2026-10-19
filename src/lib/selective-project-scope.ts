@@ -1,3 +1,5 @@
+import { loadSelectivePracticeScope } from './selective-practice-scope';
+import type { SelectivePracticeScope } from './selective-practice-policy';
 import type { Prisma } from '@prisma/client';
 import type { SelectiveProjectScope } from './selective-project-policy';
 import { lockInternalUser } from './internal-session-registry';
@@ -7,24 +9,25 @@ import type { SelectiveLeadScope } from './selective-lead-policy';
 import { loadSelectiveClientScope, type LoadedSelectiveClientScope } from './selective-client-scope';
 
 type Db = Prisma.TransactionClient;
-export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope> {
+export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope & SelectivePracticeScope> {
   return loadCurrentExclusions(db, recipientId, true);
 }
 /** Management-only: keeps every personal selection, omits lifecycle exclusions. */
-export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope> {
+export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope & SelectivePracticeScope> {
   return loadCurrentExclusions(db, recipientId, false);
 }
 async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean) {
   const project = await loadExclusions(db, recipientId, includeLifecycle);
   const client = await loadSelectiveClientScope(db, recipientId);
   const lead = await loadSelectiveLeadScope(db, recipientId, client.selectiveClientLeadIds);
-  return { ...project, ...lead, ...client,
+  const practice = await loadSelectivePracticeScope(db, recipientId);
+  return { ...project, ...lead, ...client, ...practice,
     selectiveProjectIds: [...new Set([...(project.selectiveProjectIds ?? []), ...client.selectiveClientProjectIds])],
     selectiveServiceIds: [...new Set([...(project.selectiveServiceIds ?? []), ...client.selectiveClientServiceIds])],
     selectiveContractIds: [...new Set([...(project.selectiveContractIds ?? []), ...client.selectiveClientContractIds])],
     selectiveDocumentIds: [...new Set([...(project.selectiveDocumentIds ?? []), ...client.selectiveClientDocumentIds])],
     selectiveOfferIds: [...new Set([...(project.selectiveOfferIds ?? []), ...lead.selectiveLeadOfferIds, ...client.selectiveClientOfferIds])],
-    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? []), ...client.selectiveClientAuditEntityIds])],
+    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? []), ...client.selectiveClientAuditEntityIds, ...practice.selectivePracticeAuditEntityIds])],
   };
 }
 async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean): Promise<SelectiveProjectScope> {

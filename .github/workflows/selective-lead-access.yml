@@ -65,6 +65,7 @@ jobs:
           npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
           bash scripts/selective-leads/qualify-migration.sh
           bash scripts/selective-clients/qualify-migration.sh
+          bash scripts/selective-practices/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
@@ -110,6 +111,8 @@ jobs:
           path: |
             ${{ runner.temp }}/selective-lead-evidence
             ${{ runner.temp }}/selective-lead-migration
+            ${{ runner.temp }}/selective-client-migration
+            ${{ runner.temp }}/selective-practice-migration
             test-results
           if-no-files-found: error
           retention-days: 14

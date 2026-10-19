@@ -1,4 +1,5 @@
 import { leadVisibilityWhere } from '@/lib/core-query-policy';
+import { practiceOutsideSelection } from '@/lib/selective-practice-policy';
 import Link from 'next/link';
 import { Card, PageHeader } from '@/components/ui';
 import { hasPermission, requireAnyPermission } from '@/lib/auth';
@@ -17,7 +18,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       status: { notIn: ['archiviato', 'cliente_acquisito', 'vinto', 'perso', 'non_qualificato'] } }, orderBy: { id: 'asc' }, take: 26,
       select: { id: true, companyName: true, firstName: true, lastName: true } }).then(leads => leads.map(row => ({ id: row.id, title: row.companyName || `${row.firstName} ${row.lastName}` })))
     : await prisma.technicalPractice.findMany({ where: { ...cursor, deletedAt: null, OR: [{ commercialOwnerId: session.userId }, { technicalOwnerId: session.userId }],
-      status: { notIn: ['archiviata', 'approvata', 'respinta'] } }, orderBy: { id: 'asc' }, take: 26, select: { id: true, title: true } });
+      AND: [practiceOutsideSelection(session)], status: { notIn: ['archiviata', 'approvata', 'respinta'] } }, orderBy: { id: 'asc' }, take: 26, select: { id: true, title: true } });
   const visible = (await Promise.all(rows.slice(0, 25).map(async row => await responsibilityContext(prisma, kind, row.id) ? row : null))).filter(row => row !== null);
   return <div className="crm-space-y-6"><PageHeader title="Le mie assegnazioni" description="Lavori assegnati personalmente dall’amministratore. Apri la scheda per verificare responsabilità, storico e presa in carico." />
     <div className="flex gap-4">{hasPermission(session, 'lead.read') && <Link href="/assignments?kind=Lead">Lead assegnati</Link>}{hasPermission(session, 'technical.read') && <Link href="/assignments?kind=TechnicalPractice">Pratiche assegnate</Link>}</div>

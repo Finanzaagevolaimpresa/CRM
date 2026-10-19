@@ -1,3 +1,4 @@
+import type { SelectivePracticeScope } from './selective-practice-policy';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { RoleCode } from '@prisma/client';
@@ -15,7 +16,7 @@ import type { SelectiveClientScope } from './selective-client-policy';
 
 const cookieName = process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session';
 
-export type AuthSession = SessionCookie & ClientReadScope & SelectiveProjectScope & SelectiveLeadScope & SelectiveClientScope & {
+export type AuthSession = SessionCookie & ClientReadScope & SelectiveProjectScope & SelectiveLeadScope & SelectiveClientScope & SelectivePracticeScope & {
   role: RoleCode;
   active: boolean;
   permissionOverrides: PermissionOverrideSnapshot[];
