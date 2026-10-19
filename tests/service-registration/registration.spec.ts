@@ -12,7 +12,7 @@ test.beforeAll(async () => {
   expect(password.length).toBeGreaterThanOrEqual(24);
   const keyDigest = privilegedStepUpKeyDigest(process.env.PRIVILEGED_STEP_UP_SECRET!);
   const existing = await db.applicationKeyVersion.findUnique({ where: { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: 1 } } });
-  if (existing) { expect(existing.status).toBe('ACTIVE'); expect(existing.keyDigest).toBe(keyDigest); }
+  if (existing) { expect(existing.status).toBe('ACTIVE'); expect(existing.keyDigest).toEqual(keyDigest); }
   else await db.applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: 1, status: 'ACTIVE', activatedAt: new Date(), keyDigest } });
 });
 test.beforeEach(async () => { f = await registrationFixture(db, await bcrypt.hash(password, 4)); });
@@ -79,6 +79,7 @@ test('lost response survives reload and reconciliation never creates another ser
   await page.getByRole('button', { name: 'Registra servizio acquistato', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await page.reload();
+  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Verifica esito', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Servizio registrato nel fascicolo' })).toBeVisible();
   expect(await db.clientService.count({ where: { clientId: f.client.id } })).toBe(1);

@@ -8,14 +8,27 @@ import { Card, PageHeader } from '@/components/ui';
 import { ServiceRegistrationError } from '@/lib/client-service-registration-contract';
 import { RecordUpdateError } from '@/lib/record-update-contract';
 import { ProjectUnavailableError } from '@/lib/project-lifecycle-lock';
+import { SerializableConflictError } from '@/lib/serializable';
 
 export default async function RegisterServicePage({ params, searchParams }: {
   params: Promise<{ id: string }>; searchParams: Promise<{ catalogQ?: string; contractQ?: string; serviceId?: string }>;
 }) {
   const session = await requireSession(), { id } = await params, query = await searchParams;
   let setup: Awaited<ReturnType<typeof serviceRegistrationSetup>>;
-  try { setup = await serviceRegistrationSetup(prisma, session, id, { catalogQuery: query.catalogQ, contractQuery: query.contractQ, serviceId: query.serviceId }); }
+  try {
+    // A reload may race a committed registration. Retry only this read-only
+    // setup once with a fresh snapshot; never replay a mutation implicitly.
+    try { setup = await serviceRegistrationSetup(prisma, session, id, { catalogQuery: query.catalogQ, contractQuery: query.contractQ, serviceId: query.serviceId }); }
+    catch (error) {
+      if (!(error instanceof SerializableConflictError)) throw error;
+      setup = await serviceRegistrationSetup(prisma, session, id, { catalogQuery: query.catalogQ, contractQuery: query.contractQ, serviceId: query.serviceId });
+    }
+  }
   catch (error) {
+    if (error instanceof SerializableConflictError) return <Card title="Verifica del fascicolo in corso">
+      <p>Un’altra operazione sta aggiornando il fascicolo. Riapri il modulo per verificare l’esito del salvataggio precedente.</p>
+      <Link className="underline" href={`/clients/${id}/services/new${query.serviceId ? `?serviceId=${encodeURIComponent(query.serviceId)}` : ''}`}>Riapri il modulo</Link>
+    </Card>;
     if (error instanceof ServiceRegistrationError || error instanceof RecordUpdateError || error instanceof ProjectUnavailableError) notFound();
     throw error;
   }
