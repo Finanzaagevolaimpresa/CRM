@@ -48,10 +48,10 @@ export default async function Page({ params, searchParams }: {
     const visibleDocs = await filterFinancialDocuments(prisma, session, docs);
     const documentProject = project ? { ...project, client } : null;
     const scopeMatches = contract?.clientId === client.id && canonicalSha256(contract.serviceDescription) === receipt.scopeHash;
-    return <div className="crm-space-y-6"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
+    return <div className="crm-space-y-6 min-w-0 break-words"><PageHeader title="Passaggio del servizio acquistato" description={`Cliente: ${client.displayName}`} />
       <Card title="Passaggio registrato"><p>Registrato il {formatDateTime(entry.createdAt)} · variante {receipt.variantCode} · reparto iniziale {receipt.departmentCode}</p>
         <p>Passaggio operativo autorizzato dall’amministratore. La presa in carico personale è registrata separatamente.</p>
-        <div className="flex gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
+        <div className="flex flex-wrap gap-4"><Link href={`/technical-office/practices/${receipt.technicalPracticeId}`}>Apri la pratica</Link><Link href={`/assignments/TechnicalPractice/${receipt.technicalPracticeId}`}>Responsabilità e presa in carico</Link></div>
         {!practice && <p>La pratica non è attualmente disponibile; la ricevuta storica è conservata.</p>}
       </Card>
       {canViewContracts ? <Card title="Perimetro dell’incarico">{scopeMatches ? <p className="whitespace-pre-wrap">{contract!.serviceDescription}</p> : <p>L’incarico è cambiato dopo il passaggio. Verifica la versione firmata con l’amministratore prima di proseguire.</p>}</Card> : null}
@@ -66,6 +66,7 @@ export default async function Page({ params, searchParams }: {
         {tasks.length !== receipt.paths.length && <p>Alcune attività originarie sono archiviate o hanno cambiato collegamento. Verifica lo storico amministrativo.</p>}</Card>
       {hasPermission(session, 'document.upload') && canEditService(session, { ...service, client, project: documentProject }) && <Card title="Carica materiali o elaborati del servizio">
         <DocumentUploadForm fixedClientId={client.id} clients={[{ id: client.id, clientId: client.id, label: client.displayName, generalUploadAllowed: false }]}
+          className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-4 [&_input]:min-w-0 [&_input]:max-w-full [&_select]:min-w-0 [&_select]:max-w-full [&_label]:min-w-0"
           companies={[]} projects={[]} includeProject={false} services={[{ id, clientId: client.id, label: receipt.variantCode }]} serviceAreas={['altro']} />
       </Card>}
     </div>;

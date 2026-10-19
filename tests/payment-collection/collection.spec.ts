@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { collectionFixture, collectionKey } from './fixture';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { getHandoffReceipt } from '../../src/lib/purchased-service-handoff';
@@ -35,8 +36,16 @@ async function prepare(page: Page) {
   await page.getByRole('checkbox').check();
 }
 async function screenshot(page: Page, name: string) {
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(process.env.PAYMENT_COLLECTION_EVIDENCE!, name + '.png'), fullPage: true });
+  const layout = await page.evaluate(() => ({
+    viewport: window.innerWidth, width: document.documentElement.scrollWidth,
+    overflowing: [...document.querySelectorAll('main *')].map(element => {
+      const box = element.getBoundingClientRect();
+      return { tag: element.tagName, classes: element.getAttribute('class'), left: box.left, right: box.right, width: box.width };
+    }).filter(element => element.right > window.innerWidth || element.left < 0),
+  }));
+  await writeFile(path.join(process.env.PAYMENT_COLLECTION_EVIDENCE!, name + '-layout.json'), JSON.stringify(layout));
+  expect(layout.width).toBeLessThanOrEqual(layout.viewport);
 }
 async function unpaid() {
   const p = await db.payment.findUniqueOrThrow({ where: { id: f.payment.id } });
