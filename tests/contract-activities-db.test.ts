@@ -82,8 +82,11 @@ test('explicit permission revocation after preview prevents the write', options,
   await assert.rejects(confirmContractActivities(db, f.session, f.command, p.digest)); await unchanged(f);
 });
 test('registry session revocation or expiration closes a prepared command', options, async () => {
-  for (const data of [{ revokedAt: new Date() }, { createdAt: new Date(Date.now() - 120_000), expiresAt: new Date(Date.now() - 60_000) }]) {
+  for (const state of ['revoked', 'expired']) {
     const f = await fixture(), p = await preview(f);
+    const data = state === 'revoked'
+      ? { revokedAt: new Date() }
+      : { createdAt: new Date(Date.now() - 120_000), expiresAt: new Date(Date.now() - 60_000) };
     await db.internalSession.update({ where: { id: f.session.sessionId! }, data });
     await assert.rejects(confirmContractActivities(db, f.session, f.command, p.digest)); await unchanged(f);
   }

@@ -70,13 +70,19 @@ test('mobile completion retains the recorded signature and needs no new contract
 test('lost response and reload reconcile the original save without writing again', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await login(page); await prepare(page);
   const route = `**/contracts/${f.contract.id}/activities`;
+  let responseDropped!: () => void;
+  const dropped = new Promise<void>(resolve => { responseDropped = resolve; });
   await page.route(route, async intercepted => {
     if (intercepted.request().method() === 'POST' && intercepted.request().headers()['next-action']) {
       await intercepted.fetch(); await intercepted.abort('failed'); await page.unroute(route);
+      responseDropped();
     } else await intercepted.continue();
   });
   await page.getByRole('button', { name: 'Salva attività nel contratto', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
+  // Reload after the response is actually lost, not while the committed write
+  // is still finishing and a concurrent read can correctly reject its snapshot.
+  await dropped;
+  await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeEnabled();
   await page.reload(); await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await expect(page.getByRole('form', { name: 'Completa attività dell’incarico', exact: true })).toHaveCount(0);
   await screenshot(page, 'mobile-reconciliation');
