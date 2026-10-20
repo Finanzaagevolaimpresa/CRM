@@ -1,0 +1,107 @@
+name: Contract activities
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths: ['src/**', 'prisma/**', 'tests/contract-activities*', 'tests/contract-activities/**', '.github/workflows/contract-activities.yml']
+permissions: { contents: read }
+concurrency:
+  group: contract-activities-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  qualify:
+    name: Contract activities ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-contract-activities-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-contract-activities-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-contract-activities-auth-only-000000000
+      AUTH_COOKIE_NAME: fai_service_registration_test_session
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3048
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-contract-activities-step-up-000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      CONTRACT_ACTIVITIES_BROWSER_PASSWORD: synthetic-contract-activities-password-000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Exact source and unchanged schema58
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          git diff --exit-code d66d2396079d881399e74722241afb6b29fd7043 HEAD -- prisma
+          evidence="$RUNNER_TEMP/contract-activities-evidence"
+          mkdir -p "$evidence"
+          echo "CONTRACT_ACTIVITIES_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npx prisma migrate deploy
+      - name: PostgreSQL completion, concurrency, atomic audit, revocation and recovery
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/contract-activities-db.test.ts | tee "$CONTRACT_ACTIVITIES_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 20' "$CONTRACT_ACTIVITIES_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 20' "$CONTRACT_ACTIVITIES_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$CONTRACT_ACTIVITIES_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$CONTRACT_ACTIVITIES_EVIDENCE/postgresql.tap"
+      - name: Install synthetic browser
+        if: matrix.target == 'browser'
+        run: npx playwright install --with-deps chromium
+      - name: Native desktop/mobile completion, lost response and denial
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3048 > "$CONTRACT_ACTIVITIES_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3048/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$CONTRACT_ACTIVITIES_EVIDENCE/playwright.json" npx playwright test --config tests/contract-activities/playwright.config.ts --reporter=line,json | tee "$CONTRACT_ACTIVITIES_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.CONTRACT_ACTIVITIES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$CONTRACT_ACTIVITIES_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: contract-activities-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/contract-activities-evidence
+            test-results
+          if-no-files-found: error
+          retention-days: 14

@@ -11,6 +11,7 @@ import { contractSignatureDeclarationEvent, storedContractSignatureDeclarationSc
 import { ContractSignatureDeclarationForm } from '@/components/contract-signature-declaration-form';
 import { contractOperationalState, contractOperationalLabel } from '@/lib/contract-operational-state';
 import { hasPermission } from '@/lib/permission-evaluator';
+import { recordUpdatePermission } from '@/lib/record-update-context';
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const session = await requirePermission('contract.read');
@@ -44,6 +45,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       <p>Cliente: {client?.displayName ?? 'Cliente non disponibile'}</p>
       <p>Servizio: {contract.serviceName}</p>
       <div className="mt-3"><p className="font-semibold">Attività previste dall’incarico</p><p className="whitespace-pre-wrap">{contract.serviceDescription || 'Non indicate nel contratto registrato.'}</p></div>
+      {session.role === 'admin' && recordUpdatePermission(session, 'contract.write') ? <div className="mt-3">
+        <SecondaryLink href={`/contracts/${contract.id}/activities`}>{contract.serviceDescription?.trim()
+          ? 'Verifica compilazione delle attività' : 'Completa attività dell’incarico'}</SecondaryLink>
+      </div> : null}
       <p>Totale: € {Number(contract.totalAmount).toLocaleString('it-IT')}</p>
       <p>Stato della firma: <StatusBadge status={contract.status} /></p>
       <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 font-semibold" data-contract-operational-state>{operationalLabel}</p>
