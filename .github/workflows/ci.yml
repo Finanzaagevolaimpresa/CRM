@@ -95,7 +95,7 @@ jobs:
           npm run prisma:migrate:deploy
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 60
           test "$(psql 'postgresql://postgres:synthetic-readiness@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "ClientReadGrant"')" = 0
-          printf '{"synthetic":true,"schemaBefore":47,"schemaAfter":59,"injectedFailureRolledBack":true,"historicalPrefixUnchanged":47}\n' > "$evidence/perimeter-atomicity.json"
+          printf '{"synthetic":true,"schemaBefore":47,"schemaAfter":60,"injectedFailureRolledBack":true,"historicalPrefixUnchanged":47}\n' > "$evidence/perimeter-atomicity.json"
           npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/schema-diff.sql"
           node scripts/verify-dossier-foreign-keys.mjs "$evidence/schema-diff.sql" | tee "$evidence/schema-foreign-keys.json"
           if bash -o pipefail -c 'false | tee /dev/null'; then
@@ -116,7 +116,7 @@ jobs:
           test "$pass" = "$tests"
           test "$fail" = 0
           test "$skipped" = 0
-          printf '{"phase":"complete","synthetic":true,"ledgerBefore":46,"ledgerIntermediate":47,"ledgerAfter":59,"tests":%s,"pass":%s,"fail":0,"skipped":0}\n' "$tests" "$pass" > "$evidence/status.json"
+          printf '{"phase":"complete","synthetic":true,"ledgerBefore":46,"ledgerIntermediate":47,"ledgerAfter":60,"tests":%s,"pass":%s,"fail":0,"skipped":0}\n' "$tests" "$pass" > "$evidence/status.json"
       - if: always()
         uses: actions/upload-artifact@v4
         with:
