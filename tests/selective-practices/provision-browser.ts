@@ -23,6 +23,9 @@ async function main() {
     clientId: string; clientLabel: string; projectId: string; projectTitle: string; otherPracticeId: string; otherLabel: string; documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[] = [];
   for (let i = 0; i < 8; i++) {
     const f = await selectivePracticeFixture(db, admin, i === 4 ? 'amministrazione' : 'admin', hash);
+    // Financial eligibility does not confer technical access. This synthetic
+    // recipient has a separately configured permission; production roles are unchanged.
+    if (i === 4) await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'technical.read', allowed: true } });
     const documents = [];
     if (i >= 3) for (const kind of ['selected', 'unselected', 'financial']) {
       const content = `Synthetic document ${i} ${kind} only`, fileName = `${kind}.txt`;

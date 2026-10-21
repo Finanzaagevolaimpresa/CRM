@@ -473,13 +473,26 @@ test('new version does not inherit selection and invalidates even the old bytes 
   assert.equal((await readPracticeSharing(db, f.reader.session, f.practice.id)).documents[0].versionId, f.version.id);
 });
 
-test('financial selection denies Direzione and forced allow; Admin and Amministrazione remain eligible', options, async () => {
+test('financial selection denies Direzione and forced allow; financial roles also require current technical permission', options, async () => {
   const denied = await documentFixture('direzione', true);
   await db.userPermissionOverride.create({ data: { userId: denied.reader.user.id, permission: 'contract.read', allowed: true } });
   await assert.rejects(previewPracticeSharing(db, admin.session, denied.input));
   for (const role of ['admin', 'amministrazione'] as const) {
-    const f = await documentFixture(role, true); await grantPractice(db, admin, f.input);
+    const f = await documentFixture(role, true);
+    if (role === 'amministrazione') {
+      await assert.rejects(previewPracticeSharing(db, admin.session, f.input));
+      assert.equal((await practiceSharingManagement(db, admin.session, f.practice.id)).recipients.some(person => person.id === f.reader.user.id), false);
+      await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'technical.read', allowed: true } });
+    }
+    await grantPractice(db, admin, f.input);
     assert.equal((await readPracticeSharing(db, f.reader.session, f.practice.id)).documents.length, 1);
+    if (role === 'amministrazione') {
+      await db.userPermissionOverride.deleteMany({ where: { userId: f.reader.user.id, permission: 'technical.read' } });
+      await assert.rejects(readSharedPracticeDocument(db, f.reader.session, f.practice.id, f.version.id, false, async () => f.bytes));
+      await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'technical.read', allowed: true } });
+      await assert.rejects(readPracticeSharing(db, f.reader.session, f.practice.id));
+      await grantPractice(db, admin, { ...f.input, revision: 1, commandId: randomUUID() });
+    }
     await db.user.update({ where: { id: f.reader.user.id }, data: { role: 'direzione' } });
     await assert.rejects(readSharedPracticeDocument(db, f.reader.session, f.practice.id, f.version.id, false, async () => f.bytes));
   }
@@ -540,6 +553,7 @@ test('a document writer really blocks confirmation and makes its prior preview u
 
 test('financial parent history changes invalidate its accounting document even after timestamp restoration', options, async () => {
   const f = await documentFixture('amministrazione');
+  await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'technical.read', allowed: true } });
   const contract = await db.contract.create({ data: { clientId: f.client.id, contractNumber: 'SYNTHETIC_' + randomUUID(),
     serviceName: 'Synthetic accounting document parent', taxableAmount: 1, vatAmount: 0, totalAmount: 1 } });
   await db.payment.create({ data: { contractId: contract.id, clientId: f.client.id, taxableAmount: 1, vatAmount: 0,
