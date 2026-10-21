@@ -57,9 +57,9 @@ async function main() {
         email: "readiness-owner@invalid.test",
         name: "Responsabile Pratiche",
         passwordHash,
-        // The complete journey includes contract/payment writes: the actor is
-        // Admin. Separate role-change scenarios verify Direzione is excluded.
-        role: "admin",
+        // Operational work remains with Direzione; the separate Admin fixture
+        // performs only formalization and payment steps in the complete journey.
+        role: "direzione",
       },
       {
         id: "readiness-browser-reader",

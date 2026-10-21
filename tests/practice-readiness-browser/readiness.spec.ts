@@ -193,6 +193,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   const page = await context.newPage();
   expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("Europe/Rome");
   await login(page, "readiness-owner@invalid.test");
+  const financialContext = await browser.newContext({ timezoneId: "Europe/Rome" });
+  const financialPage = await financialContext.newPage();
+  await login(financialPage, "readiness-perimeter-admin@invalid.test");
   await page.goto(`${app}/practice-readiness`);
   await page
     .locator('[data-interactive-ready="true"]')
@@ -293,6 +296,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await expect(
       article.getByText(`Documento sensibile ${item.label}`, { exact: false }),
     ).toHaveCount(0);
+    await expect(article.locator('[name="contractId"]')).toHaveCount(0);
+    await expect(article.locator('[name="reference"]')).toHaveCount(0);
+    article = await reloadPractice(financialPage, practice.id);
     await article
       .locator('[name="contractId"]')
       .selectOption(`readiness-browser-contract-${item.key}`);
@@ -311,11 +317,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .locator('[name="signedDocumentVersionId"]')
       .selectOption(signedDocumentVersion.id);
     await submitAction(
-      page,
+      financialPage,
       article.getByRole("button", { name: "Conferma incarico formalizzato" }),
       `${item.key}:formalizzazione`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
+    await expect(financialPage.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
 
     if (item.key === cases[0].key) {
       const matching = await db.clientService.findUniqueOrThrow({ where: { id: `readiness-browser-service-${item.key}` } });
@@ -368,12 +374,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       : [["50.00", "unico"]];
     let stalePage: Page | null = null;
     for (const [amount, part] of payments) {
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const reference = `ACC-${item.key}-${part}`;
       await article.locator('[name="reference"]').fill(reference);
       await article.locator('[name="amount"]').fill(amount);
       await submitAction(
-        page,
+        financialPage,
         article.getByRole("button", { name: "Dichiara accredito" }),
         `${item.key}:accredito-${part}-dichiarato`,
       );
@@ -388,7 +394,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         },
         orderBy: { createdAt: "desc" },
       });
-      const declaredRow = page.locator(
+      const declaredRow = financialPage.locator(
         `[data-funding-evidence-id="${declared.id}"]`,
       );
       await expect(declaredRow).toHaveAttribute(
@@ -402,12 +408,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       await expect(declaredRow).toContainText(
         `${reference} · € ${amount} · DECLARED`,
       );
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const funding = article.locator(
         `[data-funding-evidence-id="${declared.id}"]`,
       );
       await submitAction(
-        page,
+        financialPage,
         funding.getByRole("button", { name: "Conferma accredito" }),
         `${item.key}:accredito-${part}-confermato`,
       );
@@ -422,7 +428,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
           successor: null,
         },
       });
-      const confirmedRow = page.locator(
+      const confirmedRow = financialPage.locator(
         `[data-funding-evidence-id="${confirmed.id}"]`,
       );
       await expect(confirmedRow).toHaveAttribute(
@@ -437,14 +443,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         `${reference} · € ${amount} · CONFIRMED`,
       );
       if (item.partial && part === "prima") {
-        article = await reloadPractice(page, practice.id);
+        article = await reloadPractice(financialPage, practice.id);
         await submitAction(
-          page,
+          financialPage,
           article.getByRole("button", { name: "Avvia esplicitamente" }),
           `${item.key}:avvio-parziale-negato`,
           "NOT_READY",
         );
-        await expect(page.locator('p[role="alert"]')).toContainText("NOT_READY");
+        await expect(financialPage.locator('p[role="alert"]')).toContainText("NOT_READY");
         expect(
           (
             await db.practiceReadiness.findUniqueOrThrow({
@@ -452,7 +458,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
             })
           ).startedAt,
         ).toBeNull();
-        stalePage = await context.newPage();
+        stalePage = await financialContext.newPage();
         await reloadPractice(stalePage, practice.id);
       }
       if (item.partial && part === "integrazione" && stalePage) {
@@ -477,6 +483,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         await stalePage.close();
       }
     }
+
+
 
     article = await reloadPractice(page, practice.id);
     await article
@@ -777,7 +785,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await expect(reviewerPage.getByPlaceholder("Motivazione della decisione")).toHaveCount(0);
     // This non-M5 fixture has no per-dossier review plan: explicitly assign its
-    // work and materials to the reviewer. The producer retains Admin access.
+    // work and materials to the reviewer. The producer retains direction access.
     const bound = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     await db.project.update({ where: { id: bound.projectId! }, data: { consultantId: 'readiness-browser-reader' } });
     await db.clientService.update({ where: { id: bound.clientServiceId! }, data: { assignedToId: 'readiness-browser-reader' } });
@@ -1034,6 +1042,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     { mode: 0o600 },
   );
   await reader.close();
+  await financialContext.close();
   await context.close();
 });
 
