@@ -102,7 +102,7 @@ test('project authority cannot bootstrap practice sharing from a management GET 
     assert.throws(() => enroll(binding), /SELECTIVE_PRACTICE_ENROLLMENT_ALREADY_STARTED/);
     assert.equal(await db.selectivePracticeGrant.count(), 0);
   });
-  // Explicit synthetic authority for the schema60 regression fixture only.
+  // Explicit synthetic authority for the schema61 regression fixture only.
   await db.selectivePracticeAuthority.create({ data: { userId: admin.user.id, enabled: true } });
 });
 

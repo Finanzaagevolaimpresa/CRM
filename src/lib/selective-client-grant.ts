@@ -3,6 +3,8 @@ import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { clientFieldProjection, selectiveClientSelectionSchema } from './selective-client-policy';
 import { verifySelectiveClientProof } from './selective-client-proof';
 import { clientDocumentChoicesMatch, clientDocumentSnapshotSchema, maxClientDocuments } from './selective-client-document-policy';
+import { clientCompanySnapshotSchema } from './selective-client-company-snapshot';
+import { maxClientCompanyChoices } from './selective-client-company-policy';
 
 const generation = z.number().int().positive().safe();
 const identifier = z.string().min(1).max(128);
@@ -11,10 +13,17 @@ export const selectiveClientGrantPayloadSchema = z.object({
   approvedById: identifier, approvedAt: z.string().datetime(), authorityRevision: generation,
   actorEpoch: generation, recipientEpoch: generation, clientEpoch: generation, keyVersion: generation,
   documents: z.array(clientDocumentSnapshotSchema).max(maxClientDocuments).optional(),
+  companies: z.array(clientCompanySnapshotSchema).max(maxClientCompanyChoices).optional(),
 }).strict().superRefine((value, context) => {
-  if ((value.selection.version === 2) !== (value.documents !== undefined)
+  if ((value.selection.version !== undefined) !== (value.documents !== undefined)
     || !clientDocumentChoicesMatch(value.selection.documents ?? [], value.documents ?? [])) {
     context.addIssue({ code: 'custom', message: 'Le versioni approvate non corrispondono alla selezione.' });
+  }
+  const choices = value.selection.companies ?? [], snapshots = value.companies ?? [];
+  if ((value.selection.version === 3) !== (value.companies !== undefined)
+    || choices.length !== snapshots.length || new Set(snapshots.map(row => row.companyId)).size !== snapshots.length
+    || choices.some(choice => !snapshots.some(row => row.companyId === choice.companyId))) {
+    context.addIssue({ code: 'custom', message: 'Le aziende approvate non corrispondono alla selezione.' });
   }
 });
 export type SelectiveClientGrantPayload = z.infer<typeof selectiveClientGrantPayloadSchema>;

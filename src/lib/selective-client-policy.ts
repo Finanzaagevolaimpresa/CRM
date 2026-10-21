@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { clientDocumentChoiceSchema, maxClientDocuments } from './selective-client-document-policy';
+import { clientCompanyChoiceSchema, maxClientCompanyChoices } from './selective-client-company-policy';
 
 /** Closed read catalogue; later fields and capabilities require a new selection. */
 export const selectiveClientFields = {
@@ -9,19 +10,22 @@ export type SelectiveClientField = keyof typeof selectiveClientFields;
 const field = z.enum(Object.keys(selectiveClientFields) as [SelectiveClientField, ...SelectiveClientField[]]);
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const selectiveClientSelectionSchema = z.object({
-  version: z.literal(2).optional(),
+  version: z.union([z.literal(2), z.literal(3)]).optional(),
   clientId: identifier,
   recipientId: identifier,
   revision: z.number().int().min(0),
   commandId: z.string().uuid(),
   fields: z.array(field).max(Object.keys(selectiveClientFields).length),
   documents: z.array(clientDocumentChoiceSchema).max(maxClientDocuments).optional(),
+  companies: z.array(clientCompanyChoiceSchema).max(maxClientCompanyChoices).optional(),
   expiresAt: z.string().datetime().transform(value => new Date(value).toISOString()).nullable(),
 }).strict().superRefine((value, context) => {
   // Historical signed payloads remain byte-for-byte canonical: no defaults are
-  // inserted. Only an explicit V2 selection can carry document permissions.
-  if ((value.version === 2) !== (value.documents !== undefined)
-    || (!value.fields.length && !value.documents?.length)
+  // inserted. Only explicit V2/V3 carry documents; only V3 carries companies.
+  if ((value.version !== undefined) !== (value.documents !== undefined)
+    || (value.version === 3) !== (value.companies !== undefined)
+    || new Set(value.companies?.map(row => row.companyId)).size !== (value.companies?.length ?? 0)
+    || (!value.fields.length && !value.documents?.length && !value.companies?.length)
     || new Set(value.documents?.map(row => row.versionId)).size !== (value.documents?.length ?? 0)) {
     context.addIssue({ code: 'custom', message: 'Scegli campi o singole versioni, senza duplicati.' });
   }

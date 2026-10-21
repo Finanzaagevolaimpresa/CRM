@@ -60,7 +60,7 @@ jobs:
           grep -Fx '# pass 3' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/ordinary-email/imap-tls.tap"
-      - name: Qualify historical migrations51-57 and additive migration60 with atomic failure and immutable prefixes
+      - name: Qualify historical migrations51-57 and additive migration61 with atomic failure and immutable prefixes
         shell: bash
         run: |
           set -euo pipefail

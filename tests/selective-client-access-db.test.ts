@@ -88,7 +88,7 @@ test('project authority cannot bootstrap client sharing from a management GET or
     assert.throws(() => enroll(binding), /SELECTIVE_CLIENT_ENROLLMENT_ALREADY_STARTED/);
     assert.equal(await db.selectiveClientGrant.count(), 0);
   });
-  // Explicit synthetic authority for the schema60 regression fixture only.
+  // Explicit synthetic authority for the schema61 regression fixture only.
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   assert.deepEqual(await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }), historicalGrants);
 });
@@ -546,4 +546,108 @@ test('V2 audit failure rolls back the decision and a failed access audit returns
     await db.$executeRawUnsafe('DROP FUNCTION synthetic_selected_document_audit_fault()');
   }
   assert.equal(await db.auditLog.count({ where: { entityId: f.document.id } }), count);
+});
+
+
+async function companyFixture() {
+  const f = await fixture();
+  return { ...f, input: { ...f.input, version: 3 as const, fields: [], documents: [],
+    companies: [{ companyId: f.company.id, fields: ['vatNumber' as const] }] } };
+}
+test('company-only V3 projects only selected data, keeps ordinary paths denied and records counts atomically', options, async () => {
+  const f = await companyFixture(), { preview, receipt } = await grantClient(db, admin, f.input);
+  const view = await readClientSharing(db, f.reader.session, f.client.id);
+  assert.deepEqual(view.companies, preview.companies);
+  assert.deepEqual(view.companies[0].fields.map(row => row.key), ['vatNumber']);
+  assert.doesNotMatch(JSON.stringify(view), /AZIENDA_SINTETICA_ESCLUSA|NOTA_PRIVATA_SINTETICA|PROGETTO_SINTETICO_ESCLUSO/);
+  assert.equal(receipt.protocol, 'SELECTIVE_CLIENT_RECEIPT_V3');
+  assert.deepEqual((await db.auditLog.findUniqueOrThrow({ where: { id: receipt.revisionId } })).after,
+    { version: 1, action: 'GRANT', fieldCount: 0, documentCount: 0, companyCount: 1, companyFieldCount: 1 });
+  await deniedOrdinary(f);
+  await db.company.create({ data: { clientId: f.client.id, name: 'NEW_COMPANY_MUST_NOT_INHERIT' } });
+  assert.deepEqual((await readClientSharing(db, f.reader.session, f.client.id)).companies, view.companies);
+});
+test('company changes and restored content invalidate preview and grant without silent resurrection', options, async () => {
+  const f = await companyFixture(), preview = await previewClientSharing(db, admin.session, f.input);
+  await db.company.update({ where: { id: f.company.id }, data: { vatNumber: 'CHANGED' } });
+  await db.company.update({ where: { id: f.company.id }, data: { vatNumber: f.company.vatNumber, updatedAt: f.company.updatedAt } });
+  await assert.rejects(confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin)));
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+  await grantClient(db, admin, f.input);
+  await db.company.update({ where: { id: f.company.id }, data: { city: 'Synthetic city' } });
+  await db.company.update({ where: { id: f.company.id }, data: { city: f.company.city, updatedAt: f.company.updatedAt } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+test('company.read denial for authority or recipient cannot be bypassed by Admin role or old open session', options, async () => {
+  const f = await companyFixture(); await grantClient(db, admin, f.input);
+  for (const userId of [f.reader.user.id, admin.user.id]) {
+    const override = await db.userPermissionOverride.create({ data: { userId, permission: 'company.read', allowed: false } });
+    try {
+      await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+      await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, revision: 1, commandId: randomUUID() }));
+    } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  }
+});
+test('company cross-client identity, trash and changed association are denied', options, async () => {
+  const f = await companyFixture();
+  await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, clientId: f.other.id }));
+  await grantClient(db, admin, f.input);
+  await db.company.update({ where: { id: f.company.id }, data: { clientId: f.other.id } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await db.company.update({ where: { id: f.company.id }, data: { clientId: f.client.id, deletedAt: new Date() } });
+  await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, revision: 1, commandId: randomUUID() }));
+});
+test('generation survives company deletion and reinsertion and rejects direct reduction, deletion and truncate', options, async () => {
+  const f = await companyFixture();
+  const c = await db.company.create({ data: { clientId: f.client.id, name: 'Synthetic detachable company' } });
+  const input = { ...f.input, companies: [{ companyId: c.id, fields: ['name'] }] };
+  await grantClient(db, admin, input);
+  const generation = async () => (await db.$queryRaw<Array<{ generation: number }>>`SELECT generation FROM "SelectiveCompanyGeneration" WHERE "companyId"=${c.id}`)[0].generation;
+  const before = await generation();
+  await db.company.delete({ where: { id: c.id } });
+  await db.company.create({ data: { ...c } });
+  assert.equal(await generation(), before + 2);
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await assert.rejects(db.$executeRaw`UPDATE "SelectiveCompanyGeneration" SET generation=1 WHERE "companyId"=${c.id}`);
+  await assert.rejects(db.$executeRaw`DELETE FROM "SelectiveCompanyGeneration" WHERE "companyId"=${c.id}`);
+  await assert.rejects(db.$executeRaw`TRUNCATE "SelectiveCompanyGeneration"`);
+  assert.equal(await generation(), before + 2);
+});
+test('company and V2 document selections coexist without adding generation bytes to Company or modifying legacy grants', options, async () => {
+  const f = await documentFixture();
+  await db.document.update({ where: { id: f.document.id }, data: { companyId: f.company.id } });
+  await grantClient(db, admin, f.input);
+  const old = await db.selectiveClientGrant.findUniqueOrThrow({ where: { clientId_recipientId: { clientId: f.client.id, recipientId: f.reader.user.id } } });
+  assert.equal(Object.hasOwn(await db.company.findUniqueOrThrow({ where: { id: f.company.id } }), 'companyEpoch'), false);
+  assert.equal((await readClientSharing(db, f.reader.session, f.client.id)).documents.length, 1);
+  const input = { ...f.input, version: 3, revision: 1, commandId: randomUUID(), companies: [{ companyId: f.company.id, fields: ['vatNumber'] }] };
+  const { receipt } = await grantClient(db, admin, input);
+  const view = await readClientSharing(db, f.reader.session, f.client.id);
+  assert.equal(view.documents.length, 1); assert.equal(view.companies.length, 1);
+  const legacy = await db.selectiveClientRevision.findUniqueOrThrow({ where: { grantId_revision: { grantId: old.id, revision: 1 } } });
+  assert.deepEqual(legacy.payload, old.payload); assert.equal(legacy.proof, old.proof);
+  await revokeClientSharing(db, admin.session, { grantId: receipt.grantId, revision: 2, commandId: randomUUID() }, clientProof(admin));
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+test('V3 duplicate command and lost reply keep a single grant, revision and minimized audit', options, async () => {
+  const f = await companyFixture(), p = await previewClientSharing(db, admin.session, f.input);
+  const receipt = await confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin));
+  assert.deepEqual(await confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin)), receipt);
+  assert.deepEqual(await readClientSharingReceipt(db, admin.session, f.input.commandId, f.client.id), receipt);
+  assert.equal(await db.selectiveClientRevision.count({ where: { grantId: receipt.grantId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: receipt.revisionId } }), 1);
+});
+test('pending V3 confirmation waits for actual company writer and denies after the change', options, async () => {
+  const f = await companyFixture(), p = await previewClientSharing(db, admin.session, f.input);
+  let confirm: Promise<unknown> | undefined, failure: unknown;
+  await db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Company" WHERE id=${f.company.id} FOR UPDATE`;
+    const [owner] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    confirm = confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin)).catch(error => { failure = error; });
+    await waitForWriterLock(owner.pid);
+    await tx.company.update({ where: { id: f.company.id }, data: { vatNumber: 'CONCURRENT_CHANGE' } });
+  });
+  await confirm; assert.ok(failure);
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 0);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
 });

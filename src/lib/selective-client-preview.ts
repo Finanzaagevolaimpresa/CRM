@@ -33,12 +33,13 @@ export function createSelectiveClientPreview(key: PrivilegedStepUpKey, input: un
 export function readSelectiveClientPreview(token: string, key: PrivilegedStepUpKey,
   current: SelectiveClientPreviewAdmission, now: number) {
   try {
-    if (!Number.isSafeInteger(now) || now < 0 || token.length > 12_000 || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
+    if (!Number.isSafeInteger(now) || now < 0 || token.length > 24_000 || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
     const raw = Buffer.from(token, 'base64url').toString('utf-8');
     if (Buffer.from(raw).toString('base64url') !== token) return null;
     const envelope = envelopeSchema.parse(JSON.parse(raw));
     if (canonicalJson(envelope) !== raw) return null;
     const p = envelope.payload;
+    if (p.input.version !== 3 && token.length > 12_000) return null;
     if (p.keyVersion !== key.version || p.issuedAt > now || p.expires <= now || p.expires - p.issuedAt !== lifetime
       || (p.input.expiresAt && new Date(p.input.expiresAt).getTime() <= now)
       || canonicalJson(p.admission) !== canonicalJson(admissionSchema.parse(current))

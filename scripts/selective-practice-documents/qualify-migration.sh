@@ -8,8 +8,9 @@ evidence="$RUNNER_TEMP/selective-practice-document-migration"
 mkdir -p "$evidence"
 ddl=prisma/migrations/20261021110000_selective_practice_documents_v1/migration.sql
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 59
+git show 2b0074d0510f479700c2dec93e72eec951404305:prisma/schema.prisma > "$evidence/schema60.prisma"
 psql "$db" -v ON_ERROR_STOP=1 -f scripts/selective-practice-documents/preserved-fixture.sql
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-before.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema60.prisma" --script > "$evidence/drift-before.sql"
 psql "$db" -Atc 'SELECT migration_name,checksum FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$evidence/prefix59-before.txt"
 psql "$db" -Atc "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_prisma_migrations' ORDER BY tablename" > "$evidence/tables.txt"
 footprint() {
@@ -34,7 +35,10 @@ structure > "$evidence/structure-after-fault.sql"
 cmp "$evidence/structure-before.sql" "$evidence/structure-after-fault.sql"
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$RUNNER_TEMP/selective-company-historical-schema60"
+mkdir -p "$historical"
+git archive 2b0074d0510f479700c2dec93e72eec951404305 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 60
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261021110000_selective_practice_documents_v1' ORDER BY migration_name" > "$evidence/prefix59-after.txt"
 cmp "$evidence/prefix59-before.txt" "$evidence/prefix59-after.txt"
@@ -53,7 +57,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_PRACTICE_DOCUMENT_SCHEMA59_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema60.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 psql "$db" -X -qAt -v ON_ERROR_STOP=1 -f scripts/selective-practice-documents/structure-readonly.sql > "$evidence/structure60.json"

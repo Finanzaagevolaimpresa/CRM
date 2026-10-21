@@ -86,7 +86,7 @@ test('project authority does not enroll lead authority; read preview cannot boot
     assert.throws(() => enroll(binding), /SELECTIVE_LEAD_ENROLLMENT_ALREADY_STARTED/);
     assert.equal(await db.selectiveLeadGrant.count(), 0);
   });
-  // Explicit synthetic authority for the schema60 regression fixture only.
+  // Explicit synthetic authority for the schema61 regression fixture only.
   await db.selectiveLeadAuthority.create({ data: { userId: admin.user.id, enabled: true } });
 });
 test('preview is read-only, actual recipient impact is explicit, persisted projection has only two fields', options, async () => {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
 
-test('schema60 restart preserves selected work, read state and revoked rule denial', async ({ browser }) => {
+test('schema61 restart preserves selected work, read state and revoked rule denial', async ({ browser }) => {
   const fixture = JSON.parse(readFileSync(process.env.R05_UPDATES_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; noProvider: boolean; readerEmail: string; otherEmail: string; ownerEmail: string;
     records: Record<'READ' | 'REVOKED' | 'AVAILABLE', { id: string; leadId: string }>;

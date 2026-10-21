@@ -103,7 +103,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_DOCUMENT_SCHEMA58_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/datamodel-diff.sql"
 cmp "$evidence/datamodel-diff-before.sql" "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
 psql "$db" -X -qAt -v ON_ERROR_STOP=1 -f scripts/selective-client-documents/structure-readonly.sql > "$evidence/structure59.json"
