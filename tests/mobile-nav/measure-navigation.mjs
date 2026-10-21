@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
+import { probeFixture } from "./readiness.mjs";
 
 const [sourceRoot, label, evidenceDir, portText] = process.argv.slice(2);
 if (!sourceRoot || !["baseline", "candidate"].includes(label) || !evidenceDir || !portText) {
@@ -16,25 +17,25 @@ const server = spawn(path.join(sourceRoot, "node_modules/.bin/next"), ["dev", "-
 });
 let serverLog = "";
 let spawnError;
+let browser;
 server.stdout.on("data", (chunk) => { serverLog += chunk; });
 server.stderr.on("data", (chunk) => { serverLog += chunk; });
 server.on("error", (error) => { spawnError = error; });
 
 try {
   const url = `http://127.0.0.1:${port}/?profile=admin`;
+  console.log(`MOBILE_NAV_READINESS ${label} starting`);
   for (let attempt = 0; attempt < 120; attempt += 1) {
     if (spawnError || server.exitCode !== null) {
       throw new Error(`fixture exited before readiness (${spawnError?.message ?? server.exitCode}): ${serverLog.slice(-4000)}`);
     }
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-      const body = await response.text();
-      if (response.ok && body.includes("Contenuto commerciale raggiungibile")) break;
-    } catch {}
+    if (await probeFixture(url, "Contenuto commerciale raggiungibile")) break;
+    if (attempt % 10 === 9) console.log(`MOBILE_NAV_READINESS ${label} attempt ${attempt + 1}`);
     if (attempt === 119) throw new Error(`fixture did not start: ${serverLog.slice(-2000)}`);
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const browser = await chromium.launch({ headless: true });
+  console.log(`MOBILE_NAV_READINESS ${label} ready`);
+  browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 320, height: 568 } });
   await page.goto(url);
   const metrics = await page.evaluate(() => {
@@ -60,8 +61,8 @@ try {
   if (label === "candidate" && (!metrics.mobileTriggerVisible || metrics.contentTop === null || metrics.contentTop >= metrics.viewport.height)) {
     throw new Error(`candidate measurement failed: ${JSON.stringify(metrics)}`);
   }
-  await browser.close();
 } finally {
+  await browser?.close();
   if (server.exitCode === null) {
     server.kill("SIGTERM");
     const stopped = await Promise.race([

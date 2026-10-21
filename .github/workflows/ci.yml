@@ -631,6 +631,7 @@ jobs:
           MOBILE_NAV_BASELINE_TREE: a66c2588972bf39fad8ed32e25597de06822bf87
           MOBILE_NAV_EVIDENCE_DIR: ${{ runner.temp }}/mobile-nav-evidence
         run: |
+          node --test tests/mobile-nav/readiness.test.mjs
           baseline_root="$(mktemp -d /tmp/fai-crm-mobile-baseline.XXXXXX)"
           cleanup() {
             git worktree remove --force "$baseline_root" 2>/dev/null || true
