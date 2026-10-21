@@ -658,7 +658,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     }
 
     article = await reloadPractice(page, practice.id);
-    page.on("request", (request) => {
+    article = await reloadPractice(financialPage, practice.id);
+    financialPage.on("request", (request) => {
       const headers = request.headers();
       if (
         !capturedStart &&
@@ -675,11 +676,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       }
     });
     await submitAction(
-      page,
+      financialPage,
       article.getByRole("button", { name: "Avvia esplicitamente" }),
       `${item.key}:avvio`,
     );
-    article = await reloadPractice(page, practice.id);
+    article = await reloadPractice(financialPage, practice.id);
     await expect(article.getByText("avviata")).toBeVisible();
 
     const persisted = await db.practiceReadiness.findUniqueOrThrow({
@@ -718,7 +719,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         startedById: persisted.startedById,
         startEvidence: persisted.startEvidence,
       };
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const confirmedFundingEvidence =
         await db.practiceFundingEvidence.findFirstOrThrow({
           where: {
@@ -736,11 +737,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         "CONFIRMED",
       );
       await submitAction(
-        page,
+        financialPage,
         confirmedFunding.getByRole("button", { name: "Rettifica / storna" }),
         "standard:storno-post-avvio",
       );
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       await expect(
         article.getByText("accredito_iniziale", { exact: false }),
       ).toBeVisible();
