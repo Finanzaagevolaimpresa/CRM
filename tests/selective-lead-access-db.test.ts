@@ -1,3 +1,4 @@
+import { withHistoricalEnrollment } from './selective-sharing/historical-enrollment';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -55,34 +56,38 @@ test('project authority does not enroll lead authority; read preview cannot boot
   assert.equal(await db.selectiveLeadAuthority.count(), 0);
   await assert.rejects(previewLeadSharing(db, admin.session, f.input));
   assert.equal(await db.selectiveLeadAuthority.count(), 0);
-  const sql = readFileSync('ops/selective-lead-authority-enrollment.sql', 'utf8');
-  const auditId = randomUUID(), target = new URL(process.env.DATABASE_URL!);
-  assert.equal(target.searchParams.get('schema') ?? 'public', 'public');
-  target.searchParams.delete('schema'); // Prisma-only parameter is not a libpq connection option.
-  const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
-    email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
-  const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
-    input: `SELECT set_config('fai.selective_lead_binding','${JSON.stringify(value).replaceAll("'", "''")}',false);\n${body}`,
-    stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+  await withHistoricalEnrollment(db, 'lead', async ({ db, admin, url }) => {
+    const sql = readFileSync('ops/selective-lead-authority-enrollment.sql', 'utf8');
+    const auditId = randomUUID(), target = new URL(url);
+    assert.equal(target.searchParams.get('schema') ?? 'public', 'public');
+    target.searchParams.delete('schema'); // Prisma-only parameter is not a libpq connection option.
+    const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
+      email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
+    const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
+      input: `SELECT set_config('fai.selective_lead_binding','${JSON.stringify(value).replaceAll("'", "''")}',false);\n${body}`,
+      stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+    });
+    for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }, { ...binding, userId: 1 }]) {
+      assert.throws(() => enroll(value), /SELECTIVE_LEAD_ENROLLMENT_BINDING_INVALID/);
+    }
+    assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_LEAD_ENROLLMENT_PROFILE_DENIED/);
+    assert.equal(await db.selectiveLeadAuthority.count(), 0);
+    // Fail after both insertions but before COMMIT: neither binding nor audit may persist.
+    assert.throws(() => enroll(binding, sql.replace('COMMIT;', "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /SYNTHETIC_ROLLBACK/);
+    assert.equal(await db.selectiveLeadAuthority.count(), 0);
+    assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
+    assert.match(enroll(binding).toString(), /SELECTIVE_LEAD_ENROLLMENT_COMMITTED/);
+    assert.deepEqual(await db.selectiveLeadAuthority.findUnique({ where: { id: 'lead-sharing' } }),
+      { id: 'lead-sharing', userId: admin.user.id, revision: 1, enabled: true });
+    assert.equal(await db.auditLog.count({ where: { id: auditId, event: 'selective_lead_authority_enrolled', actorId: admin.user.id } }), 1);
+    const enrollmentAudit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
+    assert.deepEqual(enrollmentAudit.before, { version: 0 });
+    assert.deepEqual(enrollmentAudit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
+    assert.throws(() => enroll(binding), /SELECTIVE_LEAD_ENROLLMENT_ALREADY_STARTED/);
+    assert.equal(await db.selectiveLeadGrant.count(), 0);
   });
-  for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }, { ...binding, userId: 1 }]) {
-    assert.throws(() => enroll(value), /SELECTIVE_LEAD_ENROLLMENT_BINDING_INVALID/);
-  }
-  assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_LEAD_ENROLLMENT_PROFILE_DENIED/);
-  assert.equal(await db.selectiveLeadAuthority.count(), 0);
-  // Fail after both insertions but before COMMIT: neither binding nor audit may persist.
-  assert.throws(() => enroll(binding, sql.replace('COMMIT;', "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /SYNTHETIC_ROLLBACK/);
-  assert.equal(await db.selectiveLeadAuthority.count(), 0);
-  assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
-  assert.match(enroll(binding).toString(), /SELECTIVE_LEAD_ENROLLMENT_COMMITTED/);
-  assert.deepEqual(await db.selectiveLeadAuthority.findUnique({ where: { id: 'lead-sharing' } }),
-    { id: 'lead-sharing', userId: admin.user.id, revision: 1, enabled: true });
-  assert.equal(await db.auditLog.count({ where: { id: auditId, event: 'selective_lead_authority_enrolled', actorId: admin.user.id } }), 1);
-  const enrollmentAudit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
-  assert.deepEqual(enrollmentAudit.before, { version: 0 });
-  assert.deepEqual(enrollmentAudit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
-  assert.throws(() => enroll(binding), /SELECTIVE_LEAD_ENROLLMENT_ALREADY_STARTED/);
-  assert.equal(await db.selectiveLeadGrant.count(), 0);
+  // Explicit synthetic authority for the schema59 regression fixture only.
+  await db.selectiveLeadAuthority.create({ data: { userId: admin.user.id, enabled: true } });
 });
 test('preview is read-only, actual recipient impact is explicit, persisted projection has only two fields', options, async () => {
   const f = await fixture(), counts = await Promise.all([db.selectiveLeadGrant.count(), db.auditLog.count()]);

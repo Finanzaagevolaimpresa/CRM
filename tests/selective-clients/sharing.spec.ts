@@ -149,7 +149,7 @@ test('exact document-only native selection, inline bytes, direct URL denial and 
   for (const text of [row.label, row.privateNote, row.companyName, row.documents[1].title, row.documents[2].title]) expect(html).not.toContain(text);
   const url = `/shared-clients/${row.clientId}/documents/${document.versionId}`;
   const response = await rc.request.get(url); expect(response.status()).toBe(200);
-  expect(await response.text()).toBe(document.content); expect(response.headers()['cache-control']).toBe('private, no-store');
+  expect(await response.text()).toBe(document.content); expect(response.headers()['cache-control']).toBe('private, no-store, max-age=0');
   expect(response.headers()['content-disposition']).toMatch(/^inline;/);
   expect((await rc.request.get(url + '?download=1')).status()).toBe(404);
   expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${row.documents[1].versionId}`)).status()).toBe(404);

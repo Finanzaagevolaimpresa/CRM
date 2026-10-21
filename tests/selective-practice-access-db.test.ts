@@ -1,3 +1,4 @@
+import { withHistoricalEnrollment } from './selective-sharing/historical-enrollment';
 // CI only: synthetic ephemeral PostgreSQL, never local or production data.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -49,31 +50,35 @@ test('project authority cannot bootstrap practice sharing from a management GET 
   await assert.rejects(practiceSharingManagement(db, admin.session, f.practice.id));
   await assert.rejects(previewPracticeSharing(db, admin.session, f.input));
   assert.equal(await db.selectivePracticeAuthority.count(), 0);
-  const sql = readFileSync('ops/selective-practice-authority-enrollment.sql', 'utf8'), auditId = randomUUID();
-  const target = new URL(process.env.DATABASE_URL!);
-  assert.equal(target.searchParams.get('schema') ?? 'public', 'public'); target.searchParams.delete('schema');
-  const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
-    email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
-  const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
-    input: "SELECT set_config('fai.selective_practice_binding','" + JSON.stringify(value).replaceAll("'", "''") + "',false);\n" + body,
-    stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+  await withHistoricalEnrollment(db, 'practice', async ({ db, admin, url }) => {
+    const sql = readFileSync('ops/selective-practice-authority-enrollment.sql', 'utf8'), auditId = randomUUID();
+    const target = new URL(url);
+    assert.equal(target.searchParams.get('schema') ?? 'public', 'public'); target.searchParams.delete('schema');
+    const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
+      email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
+    const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
+      input: "SELECT set_config('fai.selective_practice_binding','" + JSON.stringify(value).replaceAll("'", "''") + "',false);\n" + body,
+      stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+    });
+    for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }]) {
+      assert.throws(() => enroll(value), /SELECTIVE_PRACTICE_ENROLLMENT_BINDING_INVALID/);
+    }
+    assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_PRACTICE_ENROLLMENT_PROFILE_DENIED/);
+    assert.throws(() => enroll(binding, sql.replace('COMMIT;', () => "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /ERROR:\s+SYNTHETIC_ROLLBACK/);
+    assert.equal(await db.selectivePracticeAuthority.count(), 0); assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
+    assert.match(enroll(binding).toString(), /SELECTIVE_PRACTICE_ENROLLMENT_COMMITTED/);
+    assert.deepEqual(await db.selectivePracticeAuthority.findUnique({ where: { id: 'practice-sharing' } }),
+      { id: 'practice-sharing', userId: admin.user.id, revision: 1, enabled: true });
+    // Real canonical N04 trigger, including the complete persisted after value.
+    const audit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
+    assert.equal(audit.actorId, admin.user.id); assert.equal(audit.event, 'selective_practice_authority_enrolled');
+    assert.deepEqual(audit.before, { version: 0 });
+    assert.deepEqual(audit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
+    assert.throws(() => enroll(binding), /SELECTIVE_PRACTICE_ENROLLMENT_ALREADY_STARTED/);
+    assert.equal(await db.selectivePracticeGrant.count(), 0);
   });
-  for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }]) {
-    assert.throws(() => enroll(value), /SELECTIVE_PRACTICE_ENROLLMENT_BINDING_INVALID/);
-  }
-  assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_PRACTICE_ENROLLMENT_PROFILE_DENIED/);
-  assert.throws(() => enroll(binding, sql.replace('COMMIT;', () => "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /ERROR:\s+SYNTHETIC_ROLLBACK/);
-  assert.equal(await db.selectivePracticeAuthority.count(), 0); assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
-  assert.match(enroll(binding).toString(), /SELECTIVE_PRACTICE_ENROLLMENT_COMMITTED/);
-  assert.deepEqual(await db.selectivePracticeAuthority.findUnique({ where: { id: 'practice-sharing' } }),
-    { id: 'practice-sharing', userId: admin.user.id, revision: 1, enabled: true });
-  // Real canonical N04 trigger, including the complete persisted after value.
-  const audit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
-  assert.equal(audit.actorId, admin.user.id); assert.equal(audit.event, 'selective_practice_authority_enrolled');
-  assert.deepEqual(audit.before, { version: 0 });
-  assert.deepEqual(audit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
-  assert.throws(() => enroll(binding), /SELECTIVE_PRACTICE_ENROLLMENT_ALREADY_STARTED/);
-  assert.equal(await db.selectivePracticeGrant.count(), 0);
+  // Explicit synthetic authority for the schema59 regression fixture only.
+  await db.selectivePracticeAuthority.create({ data: { userId: admin.user.id, enabled: true } });
 });
 
 test('another Admin, self, substituted session and forged step-up cannot confirm', options, async () => {
