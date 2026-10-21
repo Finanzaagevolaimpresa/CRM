@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -19,6 +19,8 @@ import { clientFieldProjection, selectiveClientSelectionSchema, type SelectiveCl
 import { createSelectiveClientPreview, readSelectiveClientPreview } from './selective-client-preview';
 import { readSelectiveClientGrant, selectiveClientGrantPayloadSchema, type SelectiveClientGrantPayload } from './selective-client-grant';
 import { selectiveClientProof, verifySelectiveClientProof } from './selective-client-proof';
+import { selectClientDocuments, listClientDocumentOptions } from './selective-client-documents';
+import { maxClientDocumentBytes, maxClientDocuments } from './selective-client-document-policy';
 
 type Tx = Prisma.TransactionClient;
 export type ClientSharingCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -59,7 +61,8 @@ async function personal(tx: Tx, current: AuthSession, proof: ClientSharingCreden
 }
 
 /** Key → directory → conversion identity → ordered users/session → client. All state is
- * reread after locks. Read operations create neither a grant nor an audit. */
+ * reread after locks. Projection/management reads never create a grant. Only a
+ * successful byte read records the minimized document access audit. */
 async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientId: string | null,
   proof: ClientSharingCredentials | null, work: (tx: Tx, state: {
     current: AuthSession & SelectiveClientScope & { registryExpiresAt: Date }; key: PrivilegedStepUpKey;
@@ -114,12 +117,14 @@ async function selectedState(tx: Tx, state: State, input: SelectiveClientSelecti
   if ((previous?.revision ?? 0) !== input.revision) stale();
   const now = await clock(tx);
   if (input.expiresAt && new Date(input.expiresAt) <= now) stale();
+  const documents = await selectClientDocuments(tx, state.current.userId, target, row.id, input.documents ?? []);
   const admission = { actorId: state.actor.id, sessionId: state.current.sessionId!, authorityRevision: state.binding.revision,
     actorEpoch: state.actor.selectiveClientEpoch, recipientEpoch: target.selectiveClientEpoch, clientEpoch: row.recordUpdateEpoch,
     stateHash: canonicalSha256(asJson({ client: row, target: { id: target.id, name: target.name, email: target.email,
       role: target.role, epoch: target.selectiveClientEpoch, permissions: target.permissionOverrides },
-      previous: previous ? { id: previous.id, revision: previous.revision, proof: previous.proof, revokedAt: previous.revokedAt } : null })) };
-  return { row, target, previous, admission, now };
+      previous: previous ? { id: previous.id, revision: previous.revision, proof: previous.proof, revokedAt: previous.revokedAt } : null,
+      documents: documents.snapshots })) };
+  return { row, target, previous, admission, now, documents };
 }
 
 export async function mayManageClientSharing(db: PrismaClient, session: AuthSession) {
@@ -133,16 +138,24 @@ export async function previewClientSharing(db: PrismaClient, claimed: AuthSessio
     const targetScope = await loadSelectiveClientScope(tx, input.recipientId);
     return { token: createSelectiveClientPreview(state.key, input, selected.admission, selected.now.getTime()), input,
       fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, input.fields),
+      documents: selected.documents.snapshots,
       recipient: { name: selected.target.name, email: selected.target.email, role: selected.target.role },
       replacesFullAccess: canViewClient({ userId: selected.target.id, role: selected.target.role, clientReadScope: await loadClientReadScope(tx, selected.target.id), ...targetScope }, selected.row),
       replacesSelection: !!selected.previous };
   });
 }
 
-const receiptSchema = z.object({ protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V1'), commandId: z.string().uuid(),
+const legacyReceiptSchema = z.object({ protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V1'), commandId: z.string().uuid(),
   grantId: z.string().uuid(), revisionId: z.string().uuid(), revision: z.number().int().positive(),
   operation: z.enum(['GRANT', 'REVOKE']), fieldCount: z.number().int().min(1).max(3), keyVersion: z.number().int().positive(),
 }).strict();
+const receiptSchema = z.discriminatedUnion('protocol', [legacyReceiptSchema, legacyReceiptSchema.extend({
+  protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V2'), fieldCount: z.number().int().min(0).max(3),
+  documentCount: z.number().int().min(0).max(maxClientDocuments),
+})]);
+function selectionCounts(input: SelectiveClientSelection) {
+  return { fieldCount: input.fields.length, ...(input.version === 2 ? { documentCount: input.documents!.length } : {}) };
+}
 async function previousCommand(tx: Tx, state: State, id: string, digest: string) {
   const command = await tx.selectiveClientCommand.findUnique({ where: { id } });
   if (!command) return null;
@@ -159,8 +172,8 @@ async function persist(tx: Tx, state: State, input: SelectiveClientSelection, pa
   if (previous) await tx.selectiveClientGrant.update({ where: { id: previous.id, revision: previous.revision }, data });
   else await tx.selectiveClientGrant.create({ data });
   const revisionId = randomUUID();
-  const receipt = receiptSchema.parse({ protocol: 'SELECTIVE_CLIENT_RECEIPT_V1', commandId: input.commandId,
-    grantId: payload.id, revisionId, revision: payload.revision, operation, fieldCount: input.fields.length, keyVersion: state.key.version });
+  const receipt = receiptSchema.parse({ protocol: input.version === 2 ? 'SELECTIVE_CLIENT_RECEIPT_V2' : 'SELECTIVE_CLIENT_RECEIPT_V1', commandId: input.commandId,
+    grantId: payload.id, revisionId, revision: payload.revision, operation, ...selectionCounts(input), keyVersion: state.key.version });
   await tx.selectiveClientCommand.create({ data: { id: input.commandId, actorId: state.current.userId, sessionId: state.current.sessionId!,
     clientId: input.clientId, recipientId: input.recipientId, expectedRevision: input.revision, operation, requestDigest,
     receipt: asJson(receipt), receiptProof: selectiveClientProof(state.key, 'receipt', receipt) } });
@@ -168,7 +181,7 @@ async function persist(tx: Tx, state: State, input: SelectiveClientSelection, pa
     commandId: input.commandId, payload: asJson(payload), proof, revokedAt } });
   await tx.auditLog.create({ data: { id: revisionId, actorId: state.current.userId, entityType: 'SelectiveClientRevision', entityId: revisionId,
     event: 'selective_client_changed', before: { version: input.revision },
-    after: { version: payload.revision, action: operation, fieldCount: input.fields.length } } });
+    after: { version: payload.revision, action: operation, ...selectionCounts(input) } } });
   return receipt;
 }
 export async function confirmClientSharing(db: PrismaClient, claimed: AuthSession, raw: unknown, token: string, proof: ClientSharingCredentials) {
@@ -185,7 +198,8 @@ export async function confirmClientSharing(db: PrismaClient, claimed: AuthSessio
     const payload = selectiveClientGrantPayloadSchema.parse({ id: selected.previous?.id ?? randomUUID(), selection: input,
       revision: input.revision + 1, approvedById: state.current.userId, approvedAt: selected.now.toISOString(),
       authorityRevision: state.binding.revision, actorEpoch: state.actor.selectiveClientEpoch,
-      recipientEpoch: selected.target.selectiveClientEpoch, clientEpoch: selected.row.recordUpdateEpoch, keyVersion: state.key.version });
+      recipientEpoch: selected.target.selectiveClientEpoch, clientEpoch: selected.row.recordUpdateEpoch, keyVersion: state.key.version,
+      ...(input.version === 2 ? { documents: selected.documents.snapshots } : {}) });
     const receipt = await persist(tx, state, input, payload, selected.previous, 'GRANT', requestDigest, selected.now);
     if (!readSelectiveClientPreview(token, state.key, selected.admission, (await clock(tx)).getTime())) stale();
     return receipt;
@@ -218,8 +232,7 @@ export async function revokeClientSharing(db: PrismaClient, claimed: AuthSession
   });
 }
 
-export async function readClientSharing(db: PrismaClient, claimed: AuthSession, clientId: string) {
-  return transaction(db, claimed, null, null, async (tx, state) => {
+async function authorizedClientSharing(tx: Tx, state: State, clientId: string) {
     const row = await client(tx, clientId);
     const grant = await tx.selectiveClientGrant.findUnique({ where: { clientId_recipientId: { clientId, recipientId: state.current.userId } } });
     if (!grant) deny();
@@ -239,14 +252,42 @@ export async function readClientSharing(db: PrismaClient, claimed: AuthSession, 
       || revision.revokedAt || revision.command.operation !== 'GRANT' || revision.command.actorId !== payload.approvedById
       || revision.command.transactionId !== revision.transactionId || audit.actorId !== payload.approvedById
       || audit.event !== 'selective_client_changed' || audit.entityType !== 'SelectiveClientRevision' || audit.entityId !== revision.id
-      || canonicalSha256(audit.after) !== canonicalSha256({ version: grant.revision, action: 'GRANT', fieldCount: payload.selection.fields.length })) deny();
+      || canonicalSha256(audit.after) !== canonicalSha256({ version: grant.revision, action: 'GRANT', ...selectionCounts(payload.selection) })) deny();
     const receipt = receiptSchema.parse(revision.command.receipt);
     if (receipt.commandId !== revision.command.id || receipt.grantId !== grant.id || receipt.revisionId !== revision.id
       || receipt.revision !== grant.revision || receipt.operation !== 'GRANT' || receipt.fieldCount !== payload.selection.fields.length
+      || (receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V2') !== (payload.selection.version === 2)
+      || (receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V2' && receipt.documentCount !== payload.documents?.length)
       || receipt.keyVersion !== state.key.version || !verifySelectiveClientProof(state.key, 'receipt', receipt, revision.command.receiptProof)) deny();
     if (!readSelectiveClientGrant(raw, state.key, current, (await clock(tx)).getTime())) deny();
-    return { clientId, revision: grant.revision, fields: clientFieldProjection(row as unknown as Record<string, unknown>, payload.selection.fields),
-      expiresAt: payload.selection.expiresAt };
+    const documents = await selectClientDocuments(tx, state.binding.userId, state.actor, clientId, payload.selection.documents ?? []);
+    if (canonicalSha256(documents.snapshots) !== canonicalSha256(payload.documents ?? [])) deny();
+    return { row, grant, payload, documents, current, raw };
+}
+
+export async function readClientSharing(db: PrismaClient, claimed: AuthSession, clientId: string) {
+  return transaction(db, claimed, null, null, async (tx, state) => {
+    const selected = await authorizedClientSharing(tx, state, clientId);
+    if (!readSelectiveClientGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
+    return { clientId, revision: selected.grant.revision, fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, selected.payload.selection.fields),
+      documents: selected.documents.snapshots, expiresAt: selected.payload.selection.expiresAt };
+  });
+}
+
+export async function readSharedClientDocument(db: PrismaClient, claimed: AuthSession, clientId: string, versionId: string, download: boolean,
+  readBytes: (path: string, limit: number) => Promise<Buffer>) {
+  return transaction(db, claimed, null, null, async (tx, state) => {
+    const selected = await authorizedClientSharing(tx, state, clientId);
+    const document = selected.documents.snapshots.find(row => row.versionId === versionId);
+    const path = selected.documents.paths.get(versionId);
+    if (!document || !path || (download && !document.download)) deny();
+    const bytes = await readBytes(path, maxClientDocumentBytes);
+    if (bytes.length > maxClientDocumentBytes || createHash('sha256').update(bytes).digest('hex') !== document.checksum) deny();
+    await tx.auditLog.create({ data: { actorId: state.current.userId, entityType: 'Document', entityId: document.documentId,
+      event: download ? 'selective_client_document_download' : 'selective_client_document_view',
+      after: { versionId, grantId: selected.grant.id, revision: selected.grant.revision } } });
+    if (!readSelectiveClientGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
+    return { bytes, document };
   });
 }
 
@@ -273,14 +314,17 @@ export async function clientSharingManagement(db: PrismaClient, claimed: AuthSes
       include: { permissionOverrides: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] });
     const grants = await tx.selectiveClientGrant.findMany({ where: { clientId }, orderBy: { updatedAt: 'desc' },
       include: { recipient: { select: { name: true, email: true } } } });
-    return { clientId, title: row.displayName,
+    const { documentOptions, documentsLimited } = await listClientDocumentOptions(tx, state.actor, clientId);
+    return { clientId, title: row.displayName, documentOptions,
+      documentsLimited,
       recipients: people.filter(person => allowed(person)).map(({ id, name, email, role }) => ({ id, name, email, role })),
       grants: grants.map(grant => {
         const payload = selectiveClientGrantPayloadSchema.safeParse(grant.payload);
         return { id: grant.id, recipientId: grant.recipientId, recipientName: grant.recipient.name,
           recipientEmail: grant.recipient.email, revision: grant.revision, revoked: !!grant.revokedAt,
           expiresAt: payload.success ? payload.data.selection.expiresAt : null,
-          fields: payload.success ? payload.data.selection.fields : [] };
+          fields: payload.success ? payload.data.selection.fields : [],
+          documentCount: payload.success ? (payload.data.documents?.length ?? 0) : 0 };
       }) };
   });
 }

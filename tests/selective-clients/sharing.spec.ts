@@ -7,20 +7,25 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 const db = new PrismaClient(), evidence = process.env.SELECTIVE_CLIENT_EVIDENCE!, password = process.env.SELECTIVE_CLIENT_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
   synthetic: boolean; adminId: string; adminEmail: string; rows: { clientId: string; label: string; readerId: string; readerEmail: string;
-    privateNote: string; companyId: string; companyName: string; projectId: string; projectTitle: string; leadId: string; otherClientId: string; otherLabel: string }[];
+    privateNote: string; companyId: string; companyName: string; projectId: string; projectTitle: string; leadId: string; otherClientId: string; otherLabel: string;
+    documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[];
 };
 async function login(page: Page, email: string, stepUp = false) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) {
-    await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
+    await page.goto('/settings/security'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await page.getByLabel('Password corrente', { exact: true }).fill(password);
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/settings/security' && r.request().method() === 'POST');
     await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
+    expect((await response).status()).toBeLessThan(400);
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
 }
 async function prepare(page: Page, row: typeof f.rows[number]) {
   await page.goto('/clients/' + row.clientId + '/sharing');
+  await page.locator('[data-testid="client-sharing"][data-interactive-ready="true"]').waitFor();
   await page.getByLabel('Persona esistente').selectOption(row.readerId);
   await page.getByLabel('Denominazione', { exact: true }).check(); await page.getByLabel('Stato', { exact: true }).check();
   await page.getByRole('button', { name: 'Anteprima come destinatario' }).click();
@@ -31,7 +36,7 @@ async function prepare(page: Page, row: typeof f.rows[number]) {
   await expect(page.getByLabel('Denominazione', { exact: true })).toBeChecked();
   await expect(page.getByLabel('Stato', { exact: true })).toBeChecked();
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
-  await page.getByLabel('Confermo personalmente i campi, il destinatario e l’effetto sui permessi.').check();
+  await page.getByLabel('Confermo personalmente i campi, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
 }
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); });
 test.afterAll(async () => db.$disconnect());
@@ -47,7 +52,7 @@ test('native selected client fields, indirect denials, open-session revocation a
   await prepare(admin, row);
   await admin.screenshot({ path: path.join(evidence, 'selective-client-preview-desktop.png'), fullPage: true });
   await admin.setViewportSize({ width: 390, height: 844 });
-  expect(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await admin.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await admin.screenshot({ path: path.join(evidence, 'selective-client-preview-mobile.png'), fullPage: true });
   await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
   await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
@@ -70,7 +75,7 @@ test('native selected client fields, indirect denials, open-session revocation a
   expect(await reader.content()).not.toContain(row.privateNote); expect(await reader.content()).not.toContain(row.companyName);
   await reader.screenshot({ path: path.join(evidence, 'selective-client-recipient-desktop.png'), fullPage: true });
   await reader.setViewportSize({ width: 390, height: 844 });
-  expect(await reader.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await reader.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await reader.screenshot({ path: path.join(evidence, 'selective-client-recipient-mobile.png'), fullPage: true });
   await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
   await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
@@ -107,4 +112,92 @@ test('revoked session with an open native confirmation cannot create a client gr
   await expect(page).toHaveURL(/\/login/);
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
   await context.close();
+});
+
+async function prepareDocument(page: Page, row: typeof f.rows[number], document: typeof row.documents[number], download: boolean) {
+  await page.goto('/clients/' + row.clientId + '/sharing');
+  await page.locator('[data-testid="client-sharing"][data-interactive-ready="true"]').waitFor();
+  await page.getByLabel('Persona esistente').selectOption(row.readerId);
+  const choice = page.getByLabel(document.title + ' · versione 1', { exact: false });
+  await choice.check();
+  const card = choice.locator('xpath=../..');
+  if (download) await card.getByLabel('Consenti anche il download di questa versione', { exact: true }).check();
+  await page.getByRole('button', { name: 'Anteprima come destinatario', exact: true }).click();
+  const preview = page.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
+  await expect(preview).toBeVisible(); await expect(preview).toContainText(document.title);
+  await expect(preview).not.toContainText(row.label); await expect(preview).not.toContainText(row.privateNote);
+  await expect(preview.locator('dt')).toHaveCount(0);
+  await page.getByLabel('Confermo personalmente i campi, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
+}
+
+test('exact document-only native selection, inline bytes, direct URL denial and revocation on an open session', async ({ browser }) => {
+  const row = f.rows[3], document = row.documents[0], ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+  await prepareDocument(admin, row, document, false);
+  await admin.screenshot({ path: path.join(evidence, 'client-document-preview-desktop.png'), fullPage: true });
+  await admin.setViewportSize({ width: 390, height: 844 });
+  expect(await admin.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await admin.screenshot({ path: path.join(evidence, 'client-document-preview-mobile.png'), fullPage: true });
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+  await reader.goto('/shared-clients/' + row.clientId);
+  await expect(reader.getByRole('heading', { name: 'Documenti condivisi', exact: true })).toBeVisible();
+  await expect(reader.locator('dt')).toHaveCount(0);
+  await expect(reader.getByRole('link', { name: 'Scarica versione' })).toHaveCount(0);
+  const html = await reader.content();
+  for (const text of [row.label, row.privateNote, row.companyName, row.documents[1].title, row.documents[2].title]) expect(html).not.toContain(text);
+  const url = `/shared-clients/${row.clientId}/documents/${document.versionId}`;
+  const response = await rc.request.get(url); expect(response.status()).toBe(200);
+  expect(await response.text()).toBe(document.content); expect(response.headers()['cache-control']).toBe('private, no-store');
+  expect(response.headers()['content-disposition']).toMatch(/^inline;/);
+  expect((await rc.request.get(url + '?download=1')).status()).toBe(404);
+  expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${row.documents[1].versionId}`)).status()).toBe(404);
+  expect((await rc.request.get(`/documents/${document.id}/download`)).status()).toBe(403);
+  await reader.screenshot({ path: path.join(evidence, 'client-document-recipient-desktop.png'), fullPage: true });
+  await reader.setViewportSize({ width: 390, height: 844 });
+  expect(await reader.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await reader.screenshot({ path: path.join(evidence, 'client-document-recipient-mobile.png'), fullPage: true });
+  await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
+  await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
+  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+  expect((await rc.request.get(url)).status()).toBe(404);
+  await reader.reload(); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
+  await ac.close(); await rc.close();
+});
+
+test('financial selected version download is personal and stops immediately after the recipient role changes', async ({ browser }) => {
+  const row = f.rows[4], document = row.documents[2], ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+  await prepareDocument(admin, row, document, true);
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+  const url = `/shared-clients/${row.clientId}/documents/${document.versionId}?download=1`;
+  const downloaded = await rc.request.get(url); expect(downloaded.status()).toBe(200);
+  expect(await downloaded.text()).toBe(document.content); expect(downloaded.headers()['content-disposition']).toMatch(/^attachment;/);
+  await db.user.update({ where: { id: row.readerId }, data: { role: 'direzione' } });
+  expect((await rc.request.get(url)).status()).toBe(404);
+  await reader.goto('/shared-clients/' + row.clientId); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
+  await ac.close(); await rc.close();
+});
+
+test('native preview cannot approve a changed document and a future version never inherits access', async ({ browser }) => {
+  const row = f.rows[5], document = row.documents[0], ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+  await prepareDocument(admin, row, document, false);
+  const before = await db.document.findUniqueOrThrow({ where: { id: document.id } });
+  await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: true } });
+  await db.document.update({ where: { id: document.id }, data: { containsSensitiveData: false, updatedAt: before.updatedAt } });
+  const post = admin.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/sharing'));
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click(); await post;
+  expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
+  await prepareDocument(admin, row, document, false);
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+  const current = await db.documentVersion.findUniqueOrThrow({ where: { id: document.versionId } });
+  const newer = await db.documentVersion.create({ data: { documentId: document.id, version: 2, storagePath: current.storagePath, checksum: current.checksum } });
+  for (const version of [document.versionId, newer.id]) expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${version}`)).status()).toBe(404);
+  await ac.close(); await rc.close();
 });

@@ -23,6 +23,7 @@ export default async function Page({ params, searchParams }: {
       ? `Operazione registrata: ${receipt.operation === 'GRANT' ? 'selezione' : 'revoca'}, revisione ${receipt.revision}. Lo stato corrente è riportato sotto.`
       : 'Ricevuta non disponibile. Verifica lo stato corrente prima di una nuova operazione.'}</p>}
     <Card title="Scegli cosa condividere"><SelectiveClientSharing key={randomUUID()} clientId={id} recipients={data.recipients}
+      documentOptions={data.documentOptions} documentsLimited={data.documentsLimited}
       grants={data.grants.map(grant => ({ ...grant, commandId: randomUUID() }))} initialCommandId={randomUUID()} /></Card>
   </div>;
 }

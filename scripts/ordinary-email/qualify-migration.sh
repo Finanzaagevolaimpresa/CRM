@@ -65,3 +65,4 @@ bash scripts/record-update-email/qualify-migration.sh
 bash scripts/selective-leads/qualify-migration.sh
 bash scripts/selective-clients/qualify-migration.sh
 bash scripts/selective-practices/qualify-migration.sh
+bash scripts/selective-client-documents/qualify-migration.sh

@@ -7,6 +7,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 import { syntheticPerson } from '../selective-sharing/fixtures';
 import { grantClient, clientProof } from '../selective-clients/fixtures';
 import { readClientSharing, revokeClientSharing } from '../../src/lib/selective-client-access';
+import { savePrivateDocumentFile } from '../../src/lib/storage';
 
 const db = new PrismaClient();
 async function main() {
@@ -18,8 +19,9 @@ async function main() {
   const admin = await syntheticPerson(db, 'Synthetic client recovery authority', 'admin', hash);
   const reader = await syntheticPerson(db, 'Synthetic client recovery recipient', 'admin', hash);
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
-  const rows: { id: string; label: string; companyId: string; projectId: string; leadId: string }[] = [];
-  for (const suffix of ['LIVE', 'REVOKED', 'OTHER']) {
+  const rows: { id: string; label: string; companyId: string; projectId: string; leadId: string;
+    documents: { id: string; versionId: string; content: string; selected: boolean }[] }[] = [];
+  for (const suffix of ['LIVE', 'REVOKED', 'LEGACY', 'OTHER']) {
     const client = await db.client.create({ data: { type: 'societa', displayName: 'SELECTIVE_CLIENT_RECOVERY_' + suffix,
       salesOwnerId: reader.user.id, notes: 'CLIENT_RECOVERY_PRIVATE_' + suffix } });
     const company = await db.company.create({ data: { clientId: client.id, name: 'CLIENT_RECOVERY_COMPANY_' + suffix } });
@@ -27,14 +29,28 @@ async function main() {
       title: 'CLIENT_RECOVERY_PROJECT_' + suffix } });
     const lead = await db.lead.create({ data: { clientId: client.id, assignedToId: reader.user.id,
       firstName: 'Synthetic', lastName: suffix, companyName: 'CLIENT_RECOVERY_LEAD_' + suffix } });
-    rows.push({ id: client.id, label: client.displayName, companyId: company.id, projectId: project.id, leadId: lead.id });
+    const documents = [];
+    if (suffix === 'LIVE' || suffix === 'REVOKED') for (const selected of [true, false]) {
+      const content = `SYNTHETIC_CLIENT_RECOVERY_BYTES_${suffix}_${selected}`, fileName = `${suffix}-${selected}.txt`;
+      const stored = await savePrivateDocumentFile({ file: new File([content], fileName, { type: 'text/plain' }), fileName, clientId: client.id });
+      const document = await db.document.create({ data: { ...stored, clientId: client.id, title: fileName,
+        uploadedById: admin.user.id, type: 'altro', documentCategory: 'altro', fileName, mimeType: 'text/plain', status: 'verificato' } });
+      const version = await db.documentVersion.create({ data: { documentId: document.id, version: 1,
+        storagePath: stored.storagePath, checksum: stored.checksum } });
+      documents.push({ id: document.id, versionId: version.id, content, selected });
+    }
+    rows.push({ id: client.id, label: client.displayName, companyId: company.id, projectId: project.id, leadId: lead.id, documents });
     if (suffix === 'OTHER') continue;
     const { receipt } = await grantClient(db, admin, { clientId: client.id, recipientId: reader.user.id,
-      revision: 0, commandId: randomUUID(), fields: ['displayName', 'status'], expiresAt: null });
+      revision: 0, commandId: randomUUID(), fields: ['displayName', 'status'], expiresAt: null,
+      ...(documents.length ? { version: 2, documents: [{ versionId: documents[0].versionId, download: false }] } : {}) });
     if (suffix === 'REVOKED') await revokeClientSharing(db, admin.session,
       { grantId: receipt.grantId, revision: 1, commandId: randomUUID() }, clientProof(admin));
   }
   assert.equal((await readClientSharing(db, reader.session, rows[0].id)).fields.length, 2);
+  assert.equal((await readClientSharing(db, reader.session, rows[0].id)).documents.length, 1);
+  assert.equal((await readClientSharing(db, reader.session, rows[2].id)).fields.length, 2);
+  assert.equal((await readClientSharing(db, reader.session, rows[2].id)).documents.length, 0);
   await assert.rejects(readClientSharing(db, reader.session, rows[1].id));
   writeFileSync(process.env.R05_CLIENT_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true,
     adminId: admin.user.id, readerId: reader.user.id, email: reader.user.email, rows }) + '\n');

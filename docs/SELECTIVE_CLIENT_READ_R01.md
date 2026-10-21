@@ -1,5 +1,7 @@
 # Selective client access — candidate R01
 
+The schema59 extension for personally selected document versions is described in [SELECTIVE_CLIENT_DOCUMENTS_R01.md](SELECTIVE_CLIENT_DOCUMENTS_R01.md). The text below preserves the original schema57 boundary and its qualification history; later evidence must identify its own exact commit.
+
 This increment gives the personally bound Admin a client-specific selection, preview, expiry and revocation workflow. The recipient reads only explicitly selected scalar fields at `/shared-clients/[id]`. The initial closed catalogue is `displayName`, `type`, `status`. Notes, tax identifiers, contacts, companies, people, documents, practices, payments and write/upload operations are not in this catalogue.
 
 The local preparation snapshot in `SELECTIVE_CLIENT_READ_PREPARATION_R02.md` is historical. This document describes the integrated schema57 candidate; qualification results must identify the exact source commit and tree. PR200's frozen release and enrollment receipts remain separate.

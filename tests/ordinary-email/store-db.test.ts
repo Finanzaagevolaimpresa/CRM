@@ -141,9 +141,9 @@ function fault(mode: 'error' | 'delay' | 'outcome-error'): PrismaClient {
   }, opts) } as unknown as PrismaClient;
 }
 
-test('ordinary store uses schema58 and has a real native minimizer', options, async () => {
+test('ordinary store uses schema59 and has a real native minimizer', options, async () => {
   const [count] = await db.$queryRaw<Array<{ count: number }>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(count.count,58);
+  assert.equal(count.count,59);
   const [value] = await db.$queryRaw<Array<{ present: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='AuditLog_redaction_n04_v1' AND tgenabled='O') AS present`;
   assert.equal(value.present,true);
 });
@@ -184,7 +184,7 @@ test('operational activation denies stale evidence, wrong scope, identity, targe
   }
   await assert.rejects(activateOrdinaryEmail(db, f.plan, 'd'.repeat(64), key, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
   await assert.rejects(activateOrdinaryEmail(db, f.plan, canonicalSha256(f.plan), { ...key, secret: 'wrong'.repeat(16) }, sourceEnvironment()), { message: 'ORDINARY_EMAIL_ACTIVATION_DENIED' });
-  // The current binary admits only the exact complete schema58 ledger. Each
+  // The current binary admits only the exact complete schema59 ledger. Each
   // synthetic tamper is rolled back with the rejected activation transaction.
   for (const sql of [
     `UPDATE "_prisma_migrations" SET checksum=repeat('0',64) WHERE migration_name='20261018190000_selective_client_read_v1'`,

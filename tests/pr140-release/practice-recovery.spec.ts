@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema58 restart preserves selected practice fields and revoked indirect-resource denials', async ({ browser }) => {
+test('schema59 restart preserves selected practice fields and revoked indirect-resource denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_PRACTICE_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; rows: { id: string; label: string; clientId: string; projectId: string }[];
   };

@@ -11,6 +11,7 @@ import { handoffPurchasedService } from '../../src/lib/purchased-service-handoff
 import { acceptResponsibility } from '../../src/lib/responsibility';
 import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
 import { readPrivateVideoFile } from '../../src/lib/video-storage';
+import { readPrivateDocumentBounded } from '../../src/lib/storage';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -51,6 +52,7 @@ async function main() {
       projects: await db.project.findMany({ select, orderBy }),
       services: await db.clientService.findMany({ select, orderBy }),
       practices: await db.technicalPractice.findMany({ select, orderBy }),
+      documents: await db.document.findMany({ select: { id: true, selectiveEpoch: true }, orderBy }),
     };
     writeFileSync(process.argv[3], JSON.stringify(epochs, null, 2) + '\n');
   } else if (mode === 'footprint') {
@@ -65,6 +67,20 @@ async function main() {
     const selectedPracticeRows = await db.technicalPractice.findMany({
       where: { selectivePracticeGrants: { some: {} } }, orderBy: { id: 'asc' },
     });
+    const selectedClientIds = (await db.selectiveClientGrant.findMany({ select: { clientId: true } })).map(row => row.clientId);
+    const selectedClientDocuments = await db.document.findMany({
+      where: { clientId: { in: selectedClientIds } }, orderBy: { id: 'asc' },
+    });
+    const selectedClientVersions = await db.documentVersion.findMany({
+      where: { documentId: { in: selectedClientDocuments.map(row => row.id) } }, orderBy: { id: 'asc' },
+    });
+    const selectedClientFiles = [];
+    for (const version of selectedClientVersions) {
+      const bytes = await readPrivateDocumentBounded(version.storagePath, 1024 * 1024);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      assert.equal(sha256, version.checksum);
+      selectedClientFiles.push({ versionId: version.id, sha256, sizeBytes: bytes.length });
+    }
     const data = {
       selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeGrants: await db.selectivePracticeGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -83,6 +99,7 @@ async function main() {
       selectiveClientUsers: await db.user.findMany({ where: { OR: [{ selectiveClientAuthority: { isNot: null } }, { selectiveClientGrants: { some: {} } }] },
         orderBy: { id: 'asc' }, select: { id: true, selectiveClientEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
       selectedClientRows: await db.client.findMany({ where: { selectiveGrants: { some: {} } }, orderBy: { id: 'asc' } }),
+      selectedClientDocuments, selectedClientFiles,
       selectiveLeadAuthority: await db.selectiveLeadAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveLeadGrants: await db.selectiveLeadGrant.findMany({ orderBy: { id: 'asc' } }),
       selectiveLeadRevisions: (await db.selectiveLeadRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
@@ -157,18 +174,19 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 58);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261018220000_selective_practice_read_v1');
+    assert.equal(data.ledger.length, 59);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261021080000_selective_client_documents_v1');
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 2);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 3); assert.equal(data.selectivePracticeCommands.length, 3);
     assert.equal(data.selectivePracticeAudit.length, 3); assert.equal(data.selectivePracticeUsers.length, 2);
     assert.equal(data.selectedPracticeRows.length, 2); assert.equal(data.selectedPracticeClients.length, 1);
-    assert.equal(data.selectiveClientAuthority.length, 1); assert.equal(data.selectiveClientGrants.length, 2);
+    assert.equal(data.selectiveClientAuthority.length, 1); assert.equal(data.selectiveClientGrants.length, 3);
     assert.equal(data.selectiveClientGrants.filter(row => row.revokedAt).length, 1);
-    assert.equal(data.selectiveClientRevisions.length, 3); assert.equal(data.selectiveClientCommands.length, 3);
-    assert.equal(data.selectiveClientAudit.length, 3); assert.equal(data.selectiveClientUsers.length, 2);
-    assert.equal(data.selectedClientRows.length, 2);
+    assert.equal(data.selectiveClientRevisions.length, 4); assert.equal(data.selectiveClientCommands.length, 4);
+    assert.equal(data.selectiveClientAudit.length, 4); assert.equal(data.selectiveClientUsers.length, 2);
+    assert.equal(data.selectedClientRows.length, 3);
+    assert.equal(data.selectedClientDocuments.length, 4); assert.equal(data.selectedClientFiles.length, 4);
     assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 2);
     assert.equal(data.selectiveLeadGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectiveLeadRevisions.length, 3); assert.equal(data.selectiveLeadCommands.length, 3);
