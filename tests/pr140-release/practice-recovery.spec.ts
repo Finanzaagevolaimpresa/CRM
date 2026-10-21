@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema59 restart preserves selected practice fields and revoked indirect-resource denials', async ({ browser }) => {
+test('schema60 restart preserves selected practice fields and revoked indirect-resource denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_PRACTICE_RECOVERY_FIXTURE!, 'utf8')) as {
-    synthetic: boolean; email: string; rows: { id: string; label: string; clientId: string; projectId: string }[];
+    synthetic: boolean; email: string; rows: { id: string; label: string; clientId: string; projectId: string; documents: { id: string; versionId: string; content: string; selected: boolean }[] }[];
   };
   expect(f.synthetic).toBe(true);
   const context = await browser.newContext(), page = await context.newPage();
@@ -38,5 +38,21 @@ test('schema59 restart preserves selected practice fields and revoked indirect-r
   }
   await page.goto(origin + '/technical-office/practices/' + f.rows[2].id);
   await expect(page.locator('body')).toContainText(f.rows[2].label);
+  for (const [index, row] of f.rows.entries()) {
+    for (const document of row.documents) {
+      const url = origin + '/shared-practices/' + row.id + '/documents/' + document.versionId;
+      const response = await context.request.get(url);
+      if (index === 0 && document.selected) {
+        expect(response.status()).toBe(200); expect(await response.text()).toBe(document.content);
+        expect(response.headers()['content-disposition']).toMatch(/^inline;/);
+        expect((await context.request.get(url + '?download=1')).status()).toBe(404);
+        expect((await context.request.get(origin + '/shared-practices/' + f.rows[2].id + '/documents/' + document.versionId)).status()).toBe(404);
+      } else expect(response.status()).toBe(404);
+    }
+  }
+  await page.goto(origin + '/shared-practices/' + f.rows[3].id);
+  await expect(page.getByText(f.rows[3].label, { exact: true })).toBeVisible();
+  await expect(page.locator('dl dt')).toHaveCount(2);
+  await expect(page.getByRole('link', { name: 'Consulta versione' })).toHaveCount(0);
   await context.close();
 });

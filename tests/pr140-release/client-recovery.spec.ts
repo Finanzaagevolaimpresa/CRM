@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema59 restart preserves exact document bytes, V1 fields and selected/revoked denials', async ({ browser }) => {
+test('schema60 restart preserves exact document bytes, V1 fields and selected/revoked denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_CLIENT_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; rows: { id: string; label: string; companyId: string; projectId: string; leadId: string;
       documents: { id: string; versionId: string; content: string; selected: boolean }[] }[];

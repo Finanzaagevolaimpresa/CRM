@@ -81,6 +81,19 @@ async function main() {
       assert.equal(sha256, version.checksum);
       selectedClientFiles.push({ versionId: version.id, sha256, sizeBytes: bytes.length });
     }
+    const selectedPracticeDocuments = await db.document.findMany({
+      where: { clientId: { in: selectedPracticeRows.map(row => row.clientId) } }, orderBy: { id: 'asc' },
+    });
+    const selectedPracticeVersions = await db.documentVersion.findMany({
+      where: { documentId: { in: selectedPracticeDocuments.map(row => row.id) } }, orderBy: { id: 'asc' },
+    });
+    const selectedPracticeFiles = [];
+    for (const version of selectedPracticeVersions) {
+      const bytes = await readPrivateDocumentBounded(version.storagePath, 1024 * 1024);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      assert.equal(sha256, version.checksum);
+      selectedPracticeFiles.push({ versionId: version.id, sha256, sizeBytes: bytes.length });
+    }
     const data = {
       selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectivePracticeGrants: await db.selectivePracticeGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -89,7 +102,7 @@ async function main() {
       selectivePracticeAudit: await db.auditLog.findMany({ where: { event: 'selective_practice_changed' }, orderBy: { id: 'asc' } }),
       selectivePracticeUsers: await db.user.findMany({ where: { OR: [{ selectivePracticeAuthority: { isNot: null } }, { selectivePracticeGrants: { some: {} } }] },
         orderBy: { id: 'asc' }, select: { id: true, selectivePracticeEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
-      selectedPracticeRows,
+      selectedPracticeRows, selectedPracticeDocuments, selectedPracticeFiles,
       selectedPracticeClients: await db.client.findMany({ where: { id: { in: selectedPracticeRows.map(row => row.clientId) } }, orderBy: { id: 'asc' } }),
       selectiveClientAuthority: await db.selectiveClientAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveClientGrants: await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -174,13 +187,13 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 59);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261021080000_selective_client_documents_v1');
-    assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 2);
+    assert.equal(data.ledger.length, 60);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261021110000_selective_practice_documents_v1');
+    assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
-    assert.equal(data.selectivePracticeRevisions.length, 3); assert.equal(data.selectivePracticeCommands.length, 3);
-    assert.equal(data.selectivePracticeAudit.length, 3); assert.equal(data.selectivePracticeUsers.length, 2);
-    assert.equal(data.selectedPracticeRows.length, 2); assert.equal(data.selectedPracticeClients.length, 1);
+    assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
+    assert.equal(data.selectivePracticeAudit.length, 4); assert.equal(data.selectivePracticeUsers.length, 2);
+    assert.equal(data.selectedPracticeRows.length, 3); assert.equal(data.selectedPracticeClients.length, 1);
     assert.equal(data.selectiveClientAuthority.length, 1); assert.equal(data.selectiveClientGrants.length, 3);
     assert.equal(data.selectiveClientGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectiveClientRevisions.length, 4); assert.equal(data.selectiveClientCommands.length, 4);

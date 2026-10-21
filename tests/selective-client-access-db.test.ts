@@ -88,7 +88,7 @@ test('project authority cannot bootstrap client sharing from a management GET or
     assert.throws(() => enroll(binding), /SELECTIVE_CLIENT_ENROLLMENT_ALREADY_STARTED/);
     assert.equal(await db.selectiveClientGrant.count(), 0);
   });
-  // Explicit synthetic authority for the schema59 regression fixture only.
+  // Explicit synthetic authority for the schema60 regression fixture only.
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   assert.deepEqual(await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }), historicalGrants);
 });

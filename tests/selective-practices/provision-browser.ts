@@ -9,6 +9,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 import { revokeAllInternalSessions, assertRegistryActivationReady } from '../../src/lib/internal-session-registry';
 import { grantPractice, practiceProof, selectivePracticeFixture } from './fixtures';
 import { revokePracticeSharing } from '../../src/lib/selective-practice-access';
+import { savePrivateDocumentFile } from '../../src/lib/storage';
 const db = new PrismaClient();
 async function main() {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -19,13 +20,29 @@ async function main() {
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash);
   await db.selectivePracticeAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   const rows: { practiceId: string; label: string; readerId: string; readerEmail: string; privateNote: string | null;
-    clientId: string; clientLabel: string; projectId: string; projectTitle: string; otherPracticeId: string; otherLabel: string }[] = [];
-  for (let i = 0; i < 3; i++) {
-    const f = await selectivePracticeFixture(db, admin, 'admin', hash);
+    clientId: string; clientLabel: string; projectId: string; projectTitle: string; otherPracticeId: string; otherLabel: string; documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[] = [];
+  for (let i = 0; i < 10; i++) {
+    const f = await selectivePracticeFixture(db, admin, i === 4 ? 'amministrazione' : 'admin', hash);
+    // Financial eligibility does not confer technical access. This synthetic
+    // recipient has a separately configured permission; production roles are unchanged.
+    if (i === 4) await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'technical.read', allowed: true } });
+    const documents = [];
+    if (i >= 3) for (const kind of ['selected', 'unselected', 'financial']) {
+      const content = `Synthetic document ${i} ${kind} only`, fileName = `${kind}.txt`;
+      const file = new File([content], fileName, { type: 'text/plain' });
+      const stored = await savePrivateDocumentFile({ file, fileName, clientId: f.client.id });
+      const document = await db.document.create({ data: { ...stored, clientId: f.client.id, projectId: f.project.id, uploadedById: admin.user.id,
+        title: kind === 'financial' ? 'Contratto sintetico riservato' : `Documento sintetico ${kind}`,
+        type: kind === 'financial' ? 'contratto' : 'altro', documentCategory: kind === 'financial' ? 'contratto' : 'altro',
+        fileName, mimeType: 'text/plain', status: 'verificato' } });
+      const version = await db.documentVersion.create({ data: { documentId: document.id, version: 1,
+        storagePath: stored.storagePath, checksum: stored.checksum } });
+      documents.push({ id: document.id, versionId: version.id, title: document.title, content, financial: kind === 'financial' });
+    }
     rows.push({ practiceId: f.practice.id, label: f.practice.title, readerId: f.reader.user.id,
       readerEmail: f.reader.user.email, privateNote: f.practice.internalNotes, clientId: f.client.id,
       clientLabel: f.client.displayName, projectId: f.project.id, projectTitle: f.project.title,
-      otherPracticeId: f.other.id, otherLabel: f.other.title });
+      otherPracticeId: f.other.id, otherLabel: f.other.title, documents });
   }
   const assignments: { owner: 'technical' | 'commercial'; state: 'active' | 'revoked' | 'expired'; readerId: string; readerEmail: string;
     expiresAt: string | null; restricted: { id: string; title: string; grantId: string }[]; siblings: { id: string; title: string }[] }[] = [];

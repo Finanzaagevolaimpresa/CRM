@@ -73,7 +73,10 @@ cmp "$evidence/atomic-before.sql" "$evidence/atomic-after-fault.sql"
 cmp "$evidence/constraint-before.sql" "$evidence/constraint-after-fault.sql"
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$RUNNER_TEMP/selective-practice-document-historical-schema59"
+mkdir -p "$historical"
+git archive 64d8f4e4d761fdae6429f019f249f8f1fb3c55be prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 59
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261021080000_selective_client_documents_v1' ORDER BY migration_name" > "$evidence/prefix58-after.txt"
 cmp "$evidence/prefix58-before.txt" "$evidence/prefix58-after.txt"

@@ -77,84 +77,95 @@ export function verifyCommunicationSchema() {
   assert.equal(documents.historicalMigrationCount, 58);
   assert.equal(documents.migration, '20261021080000_selective_client_documents_v1');
   const documentPath = `prisma/migrations/${documents.migration}/migration.sql`;
+  const practiceDocuments = JSON.parse(readFileSync('scripts/selective-practice-documents/schema-binding.json', 'utf8'));
+  assert.equal(practiceDocuments.baseline, '64d8f4e4d761fdae6429f019f249f8f1fb3c55be');
+  assert.equal(practiceDocuments.baselineTree, '62ec6d6bf0a0dc6b9a6898065942a722c55b0dd7');
+  assert.equal(practiceDocuments.historicalMigrationCount, 59);
+  assert.equal(practiceDocuments.migration, '20261021110000_selective_practice_documents_v1');
+  const practiceDocumentPath = `prisma/migrations/${practiceDocuments.migration}/migration.sql`;
   const ordinaryPath = `prisma/migrations/${ordinary.migration}/migration.sql`;
   const selectivePath = `prisma/migrations/${selective.migration}/migration.sql`;
-  assert.deepEqual(names, [...prior, migration, selective.migration, ordinary.migration, contexts.migration, updates.migration, videos.migration, emailUpdates.migration, leads.migration, clients.migration, practices.migration, documents.migration], 'M4_EXACT_MIGRATION_SET');
+  assert.deepEqual(names, [...prior, migration, selective.migration, ordinary.migration, contexts.migration, updates.migration, videos.migration, emailUpdates.migration, leads.migration, clients.migration, practices.migration, documents.migration, practiceDocuments.migration], 'M4_EXACT_MIGRATION_SET');
   const path = `prisma/migrations/${migration}/migration.sql`;
-  assert.equal(git('diff', '--name-only', baseline, 'HEAD', '--', 'prisma/migrations'), `${path}\n${selectivePath}\n${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'M4_HISTORICAL_PREFIX');
+  assert.equal(git('diff', '--name-only', baseline, 'HEAD', '--', 'prisma/migrations'), `${path}\n${selectivePath}\n${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'M4_HISTORICAL_PREFIX');
   assert.equal(git('rev-parse', `${selective.baseline}^{tree}`), selective.baselineTree, 'SELECTIVE_BASELINE_TREE');
   git('merge-base', '--is-ancestor', selective.baseline, 'HEAD');
   assert.equal(hash(path), binding.migrationSha256, 'M4_MIGRATION_HASH');
-  assert.equal(git('diff', '--name-only', selective.baseline, 'HEAD', '--', 'prisma/migrations'), `${selectivePath}\n${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'SELECTIVE_PREFIX49_UNCHANGED');
+  assert.equal(git('diff', '--name-only', selective.baseline, 'HEAD', '--', 'prisma/migrations'), `${selectivePath}\n${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'SELECTIVE_PREFIX49_UNCHANGED');
   assert.equal(git('diff', '--name-only', 'HEAD', '--', 'prisma/schema.prisma', 'prisma/migrations'), '', 'M4_SCHEMA_DIRTY');
-  assert.equal(hash('prisma/schema.prisma'), documents.schemaSha256, 'M4_SCHEMA_HASH');
+  assert.equal(hash('prisma/schema.prisma'), practiceDocuments.schemaSha256, 'M4_SCHEMA_HASH');
   assert.equal(hash(path), binding.migrationSha256, 'M4_MIGRATION_HASH');
   assert.equal(hash(selectivePath), selective.migrationSha256, 'SELECTIVE_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${ordinary.baseline}^{tree}`), ordinary.baselineTree, 'ORDINARY_BASELINE_TREE');
   git('merge-base', '--is-ancestor', ordinary.baseline, 'HEAD');
   const historicalSchema = execFileSync('git', ['show', `${ordinary.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(historicalSchema).digest('hex'), selective.schemaSha256, 'ORDINARY_BASELINE_SCHEMA50');
-  assert.equal(git('diff', '--name-only', ordinary.baseline, 'HEAD', '--', 'prisma/migrations'), `${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'ORDINARY_PREFIX50_UNCHANGED');
+  assert.equal(git('diff', '--name-only', ordinary.baseline, 'HEAD', '--', 'prisma/migrations'), `${ordinaryPath}\n${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'ORDINARY_PREFIX50_UNCHANGED');
   assert.equal(hash(ordinaryPath), ordinary.migrationSha256, 'ORDINARY_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${contexts.baseline}^{tree}`), contexts.baselineTree, 'CONTEXT_BASELINE_TREE');
   git('merge-base', '--is-ancestor', contexts.baseline, 'HEAD');
   const schema51 = execFileSync('git', ['show', `${contexts.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema51).digest('hex'), ordinary.schemaSha256, 'CONTEXT_BASELINE_SCHEMA51');
-  assert.equal(git('diff', '--name-only', contexts.baseline, 'HEAD', '--', 'prisma/migrations'), `${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'CONTEXT_PREFIX51_UNCHANGED');
+  assert.equal(git('diff', '--name-only', contexts.baseline, 'HEAD', '--', 'prisma/migrations'), `${contextPath}\n${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'CONTEXT_PREFIX51_UNCHANGED');
   assert.equal(hash(contextPath), contexts.migrationSha256, 'CONTEXT_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${updates.baseline}^{tree}`), updates.baselineTree, 'UPDATE_BASELINE_TREE');
   git('merge-base', '--is-ancestor', updates.baseline, 'HEAD');
   const schema52 = execFileSync('git', ['show', `${updates.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema52).digest('hex'), contexts.schemaSha256, 'UPDATE_BASELINE_SCHEMA52');
-  assert.equal(git('diff', '--name-only', updates.baseline, 'HEAD', '--', 'prisma/migrations'), `${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'UPDATE_PREFIX52_UNCHANGED');
+  assert.equal(git('diff', '--name-only', updates.baseline, 'HEAD', '--', 'prisma/migrations'), `${updatePath}\n${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'UPDATE_PREFIX52_UNCHANGED');
   assert.equal(hash(updatePath), updates.migrationSha256, 'UPDATE_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${videos.baseline}^{tree}`), videos.baselineTree, 'VIDEO_BASELINE_TREE');
   git('merge-base', '--is-ancestor', videos.baseline, 'HEAD');
   const schema53 = execFileSync('git', ['show', `${videos.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema53).digest('hex'), updates.schemaSha256, 'VIDEO_BASELINE_SCHEMA53');
-  assert.equal(git('diff', '--name-only', videos.baseline, 'HEAD', '--', 'prisma/migrations'), `${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'VIDEO_PREFIX53_UNCHANGED');
+  assert.equal(git('diff', '--name-only', videos.baseline, 'HEAD', '--', 'prisma/migrations'), `${videoPath}\n${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'VIDEO_PREFIX53_UNCHANGED');
   assert.equal(hash(videoPath), videos.migrationSha256, 'VIDEO_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${emailUpdates.baseline}^{tree}`), emailUpdates.baselineTree, 'UPDATE_EMAIL_BASELINE_TREE');
   git('merge-base', '--is-ancestor', emailUpdates.baseline, 'HEAD');
   const schema54 = execFileSync('git', ['show', `${emailUpdates.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema54).digest('hex'), videos.schemaSha256, 'UPDATE_EMAIL_BASELINE_SCHEMA54');
-  assert.equal(git('diff', '--name-only', emailUpdates.baseline, 'HEAD', '--', 'prisma/migrations'), `${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'UPDATE_EMAIL_PREFIX54_UNCHANGED');
+  assert.equal(git('diff', '--name-only', emailUpdates.baseline, 'HEAD', '--', 'prisma/migrations'), `${emailUpdatePath}\n${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'UPDATE_EMAIL_PREFIX54_UNCHANGED');
   assert.equal(hash(emailUpdatePath), emailUpdates.migrationSha256, 'UPDATE_EMAIL_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${leads.baseline}^{tree}`), leads.baselineTree, 'LEAD_BASELINE_TREE');
   git('merge-base', '--is-ancestor', leads.baseline, 'HEAD');
   const schema55 = execFileSync('git', ['show', `${leads.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema55).digest('hex'), emailUpdates.schemaSha256, 'LEAD_BASELINE_SCHEMA55');
-  assert.equal(git('diff', '--name-only', leads.baseline, 'HEAD', '--', 'prisma/migrations'), `${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}`, 'LEAD_PREFIX55_UNCHANGED');
+  assert.equal(git('diff', '--name-only', leads.baseline, 'HEAD', '--', 'prisma/migrations'), `${leadPath}\n${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'LEAD_PREFIX55_UNCHANGED');
   assert.equal(hash(leadPath), leads.migrationSha256, 'LEAD_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${clients.baseline}^{tree}`), clients.baselineTree, 'CLIENT_BASELINE_TREE');
   git('merge-base', '--is-ancestor', clients.baseline, 'HEAD');
   const schema56 = execFileSync('git', ['show', `${clients.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema56).digest('hex'), leads.schemaSha256, 'CLIENT_BASELINE_SCHEMA56');
-  assert.equal(git('diff', '--name-only', clients.baseline, 'HEAD', '--', 'prisma/migrations'), `${clientPath}\n${practicePath}\n${documentPath}`, 'CLIENT_PREFIX56_UNCHANGED');
+  assert.equal(git('diff', '--name-only', clients.baseline, 'HEAD', '--', 'prisma/migrations'), `${clientPath}\n${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'CLIENT_PREFIX56_UNCHANGED');
   assert.equal(hash(clientPath), clients.migrationSha256, 'CLIENT_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${practices.baseline}^{tree}`), practices.baselineTree, 'PRACTICE_BASELINE_TREE');
   git('merge-base', '--is-ancestor', practices.baseline, 'HEAD');
   const schema57 = execFileSync('git', ['show', `${practices.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema57).digest('hex'), clients.schemaSha256, 'PRACTICE_BASELINE_SCHEMA57');
-  assert.equal(git('diff', '--name-only', practices.baseline, 'HEAD', '--', 'prisma/migrations'), `${practicePath}\n${documentPath}`, 'PRACTICE_PREFIX57_UNCHANGED');
+  assert.equal(git('diff', '--name-only', practices.baseline, 'HEAD', '--', 'prisma/migrations'), `${practicePath}\n${documentPath}\n${practiceDocumentPath}`, 'PRACTICE_PREFIX57_UNCHANGED');
   assert.equal(hash(practicePath), practices.migrationSha256, 'PRACTICE_MIGRATION_HASH');
   assert.equal(git('rev-parse', `${documents.baseline}^{tree}`), documents.baselineTree, 'DOCUMENT_BASELINE_TREE');
   git('merge-base', '--is-ancestor', documents.baseline, 'HEAD');
   const schema58 = execFileSync('git', ['show', `${documents.baseline}:prisma/schema.prisma`], { encoding: 'utf8' }).replaceAll('\r\n', '\n');
   assert.equal(createHash('sha256').update(schema58).digest('hex'), practices.schemaSha256, 'DOCUMENT_BASELINE_SCHEMA58');
-  assert.equal(git('diff', '--name-only', documents.baseline, 'HEAD', '--', 'prisma/migrations'), documentPath, 'DOCUMENT_PREFIX58_UNCHANGED');
+  assert.equal(git('diff', '--name-only', documents.baseline, 'HEAD', '--', 'prisma/migrations'), `${documentPath}\n${practiceDocumentPath}`, 'DOCUMENT_PREFIX58_UNCHANGED');
   assert.equal(hash(documentPath), documents.migrationSha256, 'DOCUMENT_MIGRATION_HASH');
+  assert.equal(git('rev-parse', `${practiceDocuments.baseline}^{tree}`), practiceDocuments.baselineTree, 'PRACTICE_DOCUMENT_BASELINE_TREE');
+  git('merge-base', '--is-ancestor', practiceDocuments.baseline, 'HEAD');
+  assert.equal(git('diff', '--name-only', practiceDocuments.baseline, 'HEAD', '--', 'prisma/schema.prisma'), '', 'PRACTICE_DOCUMENT_DATAMODEL_UNCHANGED');
+  assert.equal(git('diff', '--name-only', practiceDocuments.baseline, 'HEAD', '--', 'prisma/migrations'), practiceDocumentPath, 'PRACTICE_DOCUMENT_PREFIX59_UNCHANGED');
+  assert.equal(hash(practiceDocumentPath), practiceDocuments.migrationSha256, 'PRACTICE_DOCUMENT_MIGRATION_HASH');
   // Admission must recognize the same reviewed SQL as the migration manifest.
   // A stale pin denies even an otherwise valid explicit email activation.
   const activationSource = readFileSync('src/lib/ordinary-email-activation.ts', 'utf8');
-  for (const [prefix, schemaBinding] of [['CONTEXT_', contexts], ['UPDATES_', updates], ['VIDEOS_', videos], ['UPDATE_EMAIL_', emailUpdates], ['SELECTIVE_LEAD_', leads], ['SELECTIVE_CLIENT_', clients], ['SELECTIVE_PRACTICE_', practices], ['SELECTIVE_DOCUMENT_', documents], ['', ordinary]]) {
+  for (const [prefix, schemaBinding] of [['CONTEXT_', contexts], ['UPDATES_', updates], ['VIDEOS_', videos], ['UPDATE_EMAIL_', emailUpdates], ['SELECTIVE_LEAD_', leads], ['SELECTIVE_CLIENT_', clients], ['SELECTIVE_PRACTICE_', practices], ['SELECTIVE_DOCUMENT_', documents], ['SELECTIVE_PRACTICE_DOCUMENT_', practiceDocuments], ['', ordinary]]) {
     const pinnedName = activationSource.match(new RegExp(`^const ${prefix}MIGRATION = '([^']+)';$`, 'm'))?.[1];
     const pinnedHash = activationSource.match(new RegExp(`^const ${prefix}MIGRATION_SHA256 = '([a-f0-9]{64})';$`, 'm'))?.[1];
     assert.equal(pinnedName, schemaBinding.migration, `EMAIL_ACTIVATION_${prefix}MIGRATION`);
     assert.equal(pinnedHash, schemaBinding.migrationSha256, `EMAIL_ACTIVATION_${prefix}SQL_HASH`);
   }
-  return { protocol: 'SELECTIVE_CLIENT_DOCUMENT_SCHEMA59_BINDING', sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'),
-    baseline: documents.baseline, qualifiedBaseline, migrations: 59, historicalMigrationPrefixUnchanged: 58, additiveMigration: documents.migration,
-    schemaSha256: documents.schemaSha256, migrationSha256: documents.migrationSha256, productionContact: false };
+  return { protocol: 'SELECTIVE_PRACTICE_DOCUMENT_SCHEMA60_BINDING', sourceCommit: git('rev-parse', 'HEAD'), sourceTree: git('rev-parse', 'HEAD^{tree}'),
+    baseline: practiceDocuments.baseline, qualifiedBaseline, migrations: 60, historicalMigrationPrefixUnchanged: 59, additiveMigration: practiceDocuments.migration,
+    schemaSha256: practiceDocuments.schemaSha256, migrationSha256: practiceDocuments.migrationSha256, productionContact: false };
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.stdout.write(JSON.stringify(verifyCommunicationSchema()) + '\n');

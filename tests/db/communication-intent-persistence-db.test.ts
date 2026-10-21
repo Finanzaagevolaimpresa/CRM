@@ -82,7 +82,7 @@ test.after(async () => {
 
 test('current fresh install applies 50 migrations, preserves N15 storage and leaves N11 untouched', { skip: !run }, async () => {
   const migrations = await client().$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*)::bigint AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(Number(migrations[0]?.count), 59);
+  assert.equal(Number(migrations[0]?.count), 60);
   assert.deepEqual(await Promise.all([
     client().communicationIntentRecord.count(), client().communicationHeldDecision.count(), client().communicationIntentAudit.count(),
   ]), [0, 0, 0]);
@@ -353,7 +353,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   mkdirSync(migrationsDirectory, { recursive: true });
   cpSync('prisma/schema.prisma', join(prismaDirectory, 'schema.prisma'));
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/u.test(name)).sort();
-  assert.equal(names.length, 59);
+  assert.equal(names.length, 60);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   for (const name of names.slice(0, 43)) cpSync(join('prisma/migrations', name), join(migrationsDirectory, name), { recursive: true });
@@ -362,7 +362,7 @@ test('N15 upgrades 43 to 44 and the new API fails explicitly without its schema'
   await root!.$executeRawUnsafe(`CREATE SCHEMA "${oldSchema}"`);
   const oldClient = new PrismaClient({ datasources: { db: { url: url.toString() } } });
   // The old N14 behavior is exercised using the exact deployed predecessor.
-  // Current N14 intentionally requires schema59; a missing perimeter table
+  // Current N14 intentionally requires schema60; a missing perimeter table
   // must never be treated as an empty grant set or an ordinary-access fallback.
   const predecessor = '1e463b01dd22f09aab73a35fac7203598dc7c044';
   const historicalModule = resolve('src/lib', `commercial-lead-inbox-historical-${process.pid}.ts`);
