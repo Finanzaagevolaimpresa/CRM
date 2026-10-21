@@ -29,6 +29,11 @@ made. Revocation prevents later openings, not recall of an acquired copy.
 - Source document belongs to the same client; any project/service binding must match
   the technical practice's canonical project/service. The personal decision records
   the exact practice association; no fake client or practice is created.
+- Compatibility includes indirect payment/contract/service, formalization and
+  material contexts, using their canonical client/project/service rather than a
+  readiness record's ID. A generic document is eligible only when no incompatible
+  indirect context exists. The catalogue filters these relationships; authoritative
+  selection rereads them after resource locks and binds their current generations.
 - Independent parent/sibling permissions remain independent. A practice selection
   does not silently grant or revoke an existing client/project selection.
 - Contracts, payments and their canonical linked documents remain restricted to
@@ -69,11 +74,13 @@ email attempts retained. No down-migration, new backup or database restore is qu
 
 ## Qualification
 
-The candidate workflow retains 43 existing practice DB scenarios and adds 17 document
-scenarios: 60 in total. Native tests retain 9 existing flows and add 5 document flows:
-14 in total, including actual PDF and PNG rendering, stale confirmation, role change,
+The candidate workflow retains 43 existing practice DB scenarios and adds 25 document
+scenarios: 68 in total. Eight regression cases cover indirect contract/payment/service,
+formalization/material contexts and genuinely generic client documents. Native tests
+retain 9 existing flows and add 7 document flows: 16 in total, including actual PDF and PNG rendering, stale confirmation, role change,
 download denial, sibling-practice denial, revocation with an open session and responsive
-screenshots. No production record is a fixture.
+screenshots. Two desktop/mobile flows exercise incompatible indirect contexts in the
+catalogue, confirmation and open-session byte delivery. No production record is a fixture.
 
 PR140 package tests retain live/revoked V2 selected files and legacy V1 fields across
 candidate/restart/resume, compare exact file bytes and persistent state, and reject

@@ -21,6 +21,9 @@ import { savePracticeResponsibility, acceptResponsibility } from '../src/lib/res
 import { loadAssignmentExceptions } from '../src/lib/assignment-exceptions';
 import { selectiveAuditAllowed } from '../src/lib/selective-project-policy';
 import { grantClient } from './selective-clients/fixtures';
+import { readinessLeadFixture } from './lead-lifecycle/fixtures';
+import { prepareServiceCatalogV2 } from '../src/lib/service-catalog-v2-persistence';
+
 
 const enabled = process.env.RUN_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: PracticePerson;
@@ -42,6 +45,16 @@ async function documentFixture(role: 'admin' | 'direzione' | 'amministrazione' =
   const version = await db.documentVersion.create({ data: { documentId: document.id, version: 1, storagePath: document.storagePath, checksum } });
   const input = { ...f.input, version: 2 as const, fields: [], documents: [{ versionId: version.id, download: false }] };
   return { ...f, bytes, checksum, document, version, input };
+}
+async function syntheticDocumentContract(f: Awaited<ReturnType<typeof documentFixture>>, projectId: string | null) {
+  return db.contract.create({ data: { clientId: f.client.id, projectId, contractNumber: 'SYNTHETIC_CONTEXT_' + randomUUID(),
+    serviceName: 'Synthetic selected document context', taxableAmount: 1, vatAmount: 0, totalAmount: 1 } });
+}
+async function assertContextNotSelectable(f: Awaited<ReturnType<typeof documentFixture>>) {
+  const before = await db.selectivePracticeCommand.count({ where: { practiceId: f.practice.id } });
+  assert.equal((await practiceSharingManagement(db, admin.session, f.practice.id)).documentOptions.some(row => row.versionId === f.version.id), false);
+  await assert.rejects(previewPracticeSharing(db, admin.session, f.input));
+  assert.equal(await db.selectivePracticeCommand.count({ where: { practiceId: f.practice.id } }), before);
 }
 async function deniedOrdinary(f: Awaited<ReturnType<typeof fixture>>) {
   const actor = { ...f.reader.session, ...await loadSelectiveProjectScope(db, f.reader.user.id) };
@@ -655,4 +668,85 @@ test('concurrent V2 choices produce one revision with its exact snapshot and aud
   assert.equal(await db.selectivePracticeCommand.count({ where: { practiceId: f.practice.id } }), 1);
   assert.equal(await db.selectivePracticeRevision.count({ where: { grantId: grant.id } }), 1);
   assert.equal((await readPracticeSharing(db, f.reader.session, f.practice.id)).documents.length, 1);
+});
+
+for (const reference of ['signed-contract', 'payment-contract'] as const) test(reference + ': indirect sibling project is excluded, stale confirmation denied and open-session bytes blocked', options, async () => {
+  const f = await documentFixture('admin');
+  await db.document.update({ where: { id: f.document.id }, data: { projectId: null, clientServiceId: null } });
+  const contract = await syntheticDocumentContract(f, f.project.id);
+  if (reference === 'signed-contract') await db.contract.update({ where: { id: contract.id }, data: { signedDocumentId: f.document.id } });
+  else await db.payment.create({ data: { contractId: contract.id, clientId: f.client.id, taxableAmount: 1, vatAmount: 0, totalAmount: 1, accountingDocumentId: f.document.id } });
+  const preview = await previewPracticeSharing(db, admin.session, f.input);
+  const sibling = await db.project.create({ data: { clientId: f.client.id, title: 'Synthetic indirect sibling' } });
+  await db.contract.update({ where: { id: contract.id }, data: { projectId: sibling.id } });
+  await assertContextNotSelectable(f);
+  await assert.rejects(confirmPracticeSharing(db, admin.session, f.input, preview.token, practiceProof(admin)));
+  assert.equal(await db.selectivePracticeGrant.count({ where: { practiceId: f.practice.id } }), 0);
+  await db.contract.update({ where: { id: contract.id }, data: { projectId: f.project.id } });
+  await assert.rejects(confirmPracticeSharing(db, admin.session, f.input, preview.token, practiceProof(admin)));
+  await grantPractice(db, admin, f.input);
+  assert.equal((await readPracticeSharing(db, f.reader.session, f.practice.id)).documents[0].versionId, f.version.id);
+  const audits = await db.auditLog.count({ where: { entityId: f.document.id } });
+  await db.contract.update({ where: { id: contract.id }, data: { projectId: sibling.id } });
+  await assert.rejects(readSharedPracticeDocument(db, f.reader.session, f.practice.id, f.version.id, false, async () => f.bytes));
+  assert.equal(await db.auditLog.count({ where: { entityId: f.document.id } }), audits);
+  await db.contract.update({ where: { id: contract.id }, data: { projectId: f.project.id } });
+  await assert.rejects(readPracticeSharing(db, f.reader.session, f.practice.id));
+});
+
+for (const reference of ['direct-service-project', 'contract-service-project', 'contract-service-identity'] as const) test(reference + ': canonical service must match the practice and all its project contexts', options, async () => {
+  const f = await documentFixture('admin'), contract = await syntheticDocumentContract(f, null);
+  const catalog = await db.serviceCatalog.create({ data: { code: 'SYNTHETIC_' + randomUUID(), name: 'Synthetic context', category: 'sintetico', active: false } });
+  const service = await db.clientService.create({ data: { clientId: f.client.id, projectId: f.project.id, serviceCatalogId: catalog.id, contractId: contract.id } });
+  await db.technicalPractice.update({ where: { id: f.practice.id }, data: { clientServiceId: service.id } });
+  await db.document.update({ where: { id: f.document.id }, data: { projectId: null, clientServiceId: reference === 'direct-service-project' ? service.id : null } });
+  await db.payment.create({ data: { contractId: contract.id, clientId: f.client.id, taxableAmount: 1, vatAmount: 0, totalAmount: 1, accountingDocumentId: f.document.id } });
+  const preview = await previewPracticeSharing(db, admin.session, f.input);
+  if (reference === 'contract-service-identity') {
+    await db.clientService.create({ data: { clientId: f.client.id, projectId: f.project.id, serviceCatalogId: catalog.id, contractId: contract.id } });
+  } else {
+    const sibling = await db.project.create({ data: { clientId: f.client.id, title: 'Synthetic service sibling' } });
+    await db.clientService.update({ where: { id: service.id }, data: { projectId: sibling.id } });
+    // Keep the practice's own service coherent while the document's contract
+    // continues to refer to the incompatible service.
+    await db.technicalPractice.update({ where: { id: f.practice.id }, data: { clientServiceId: null } });
+  }
+  await assertContextNotSelectable(f);
+  await assert.rejects(confirmPracticeSharing(db, admin.session, f.input, preview.token, practiceProof(admin)));
+  assert.equal(await db.selectivePracticeGrant.count({ where: { practiceId: f.practice.id } }), 0);
+});
+
+for (const reference of ['material', 'formalization'] as const) test(reference + ': readiness identity is separate while its canonical project must remain compatible', options, async () => {
+  const f = await documentFixture('admin'); await prepareServiceCatalogV2(db);
+  const readiness = await readinessLeadFixture(db, admin.user.id, { clientId: f.client.id, projectId: f.project.id });
+  assert.notEqual(readiness.practice.id, f.practice.id);
+  await db.document.update({ where: { id: f.document.id }, data: { projectId: null } });
+  if (reference === 'material') {
+    const item = await db.documentChecklistItem.create({ data: { clientId: f.client.id, projectId: f.project.id, documentId: f.document.id, title: 'Synthetic material context', createdById: admin.user.id } });
+    await db.practiceMaterialEvidence.create({ data: { practiceId: readiness.practice.id, checklistItemId: item.id, documentId: f.document.id,
+      documentVersionId: f.version.id, documentChecksum: f.checksum, sequence: 1, status: 'VALIDATED',
+      payloadHash: randomUUID().replaceAll('-', '').repeat(2), decidedAt: new Date(), decidedById: admin.user.id } });
+  } else {
+    const contract = await syntheticDocumentContract(f, null);
+    const acceptance = await db.practiceOfferAcceptance.create({ data: { offerRevisionId: readiness.revision.id, acceptedAt: new Date(),
+      acceptedById: admin.user.id, evidenceHash: randomUUID().replaceAll('-', '').repeat(2) } });
+    await db.practiceFormalization.create({ data: { practiceId: readiness.practice.id, offerRevisionId: readiness.revision.id, offerAcceptanceId: acceptance.id,
+      contractId: contract.id, signedDocumentId: f.document.id, signedDocumentVersionId: f.version.id, formalizedAt: new Date(), formalizedById: admin.user.id,
+      payloadHash: randomUUID().replaceAll('-', '').repeat(2) } });
+  }
+  const preview = await previewPracticeSharing(db, admin.session, f.input);
+  const sibling = await db.project.create({ data: { clientId: f.client.id, title: 'Synthetic readiness sibling' } });
+  await db.practiceReadiness.update({ where: { id: readiness.practice.id }, data: { projectId: sibling.id } });
+  await assertContextNotSelectable(f);
+  await assert.rejects(confirmPracticeSharing(db, admin.session, f.input, preview.token, practiceProof(admin)));
+  assert.equal(await db.selectivePracticeGrant.count({ where: { practiceId: f.practice.id } }), 0);
+});
+
+test('a truly generic client document and a coherent indirect context retain exact selected access', options, async () => {
+  const f = await documentFixture();
+  await db.document.update({ where: { id: f.document.id }, data: { projectId: null, clientServiceId: null } });
+  assert.equal((await practiceSharingManagement(db, admin.session, f.practice.id)).documentOptions.some(row => row.versionId === f.version.id), true);
+  await grantPractice(db, admin, f.input);
+  assert.equal((await readPracticeSharing(db, f.reader.session, f.practice.id)).documents[0].versionId, f.version.id);
+  await readSharedPracticeDocument(db, f.reader.session, f.practice.id, f.version.id, false, async () => f.bytes);
 });

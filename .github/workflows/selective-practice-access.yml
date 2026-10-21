@@ -74,8 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selective-practice-access-db.test.ts | tee "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 60' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 60' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 68' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 68' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$SELECTIVE_PRACTICE_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic native browser
@@ -99,7 +99,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_PRACTICE_EVIDENCE/playwright.json" npx playwright test --config tests/selective-practices/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_PRACTICE_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_PRACTICE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==14 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_PRACTICE_EVIDENCE+"/playwright.json"); if(r.stats.expected!==16 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_PRACTICE_EVIDENCE/source.txt"

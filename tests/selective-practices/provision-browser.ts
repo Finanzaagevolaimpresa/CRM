@@ -21,7 +21,7 @@ async function main() {
   await db.selectivePracticeAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   const rows: { practiceId: string; label: string; readerId: string; readerEmail: string; privateNote: string | null;
     clientId: string; clientLabel: string; projectId: string; projectTitle: string; otherPracticeId: string; otherLabel: string; documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[] = [];
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     const f = await selectivePracticeFixture(db, admin, i === 4 ? 'amministrazione' : 'admin', hash);
     // Financial eligibility does not confer technical access. This synthetic
     // recipient has a separately configured permission; production roles are unchanged.

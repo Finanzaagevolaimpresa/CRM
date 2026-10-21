@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
@@ -174,6 +175,48 @@ async function prepareDocument(page: Page, row: typeof f.rows[number], document:
   await expect(preview).not.toContainText(row.label); await expect(preview).not.toContainText(row.privateNote);
   await expect(preview.locator('dt')).toHaveCount(0);
   await page.getByLabel('Confermo personalmente i campi, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
+}
+
+for (const [name, width, height, index] of [['desktop', 1280, 900, 8], ['mobile', 390, 844, 9]] as const) {
+  test(`indirect financial context ${name}: catalogue, stale confirmation and open-session bytes fail closed`, async ({ browser }) => {
+    const row = f.rows[index], document = row.documents[0];
+    const sibling = await db.project.create({ data: { clientId: row.clientId, title: 'Synthetic indirect sibling ' + randomUUID() } });
+    const contract = await db.contract.create({ data: { clientId: row.clientId, projectId: sibling.id,
+      contractNumber: 'SYNTHETIC_' + randomUUID(), serviceName: 'Synthetic indirect context', taxableAmount: 1, vatAmount: 0, totalAmount: 1 } });
+    await db.document.update({ where: { id: document.id }, data: { projectId: null, clientServiceId: null } });
+    await db.payment.create({ data: { contractId: contract.id, clientId: row.clientId, taxableAmount: 1, vatAmount: 0, totalAmount: 1, accountingDocumentId: document.id } });
+    const ac = await browser.newContext({ viewport: { width, height } }), rc = await browser.newContext({ viewport: { width, height } });
+    const admin = await ac.newPage(), reader = await rc.newPage();
+    try {
+      await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+      await admin.goto('/technical-office/practices/' + row.practiceId + '/sharing');
+      await admin.locator('[data-testid="practice-sharing"][data-interactive-ready="true"]').waitFor();
+      await expect(admin.getByLabel(document.title + ' · versione 1', { exact: false })).toHaveCount(0);
+      expect(await admin.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await admin.screenshot({ path: path.join(evidence, `indirect-context-catalogue-${name}.png`), fullPage: true });
+      await db.contract.update({ where: { id: contract.id }, data: { projectId: row.projectId } });
+      await prepareDocument(admin, row, document, false);
+      await db.contract.update({ where: { id: contract.id }, data: { projectId: sibling.id } });
+      const post = admin.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/sharing'));
+      await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click(); await post;
+      expect(await db.selectivePracticeGrant.count({ where: { practiceId: row.practiceId } })).toBe(0);
+      await db.contract.update({ where: { id: contract.id }, data: { projectId: row.projectId } });
+      await prepareDocument(admin, row, document, false);
+      await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+      await expect.poll(() => db.selectivePracticeGrant.count({ where: { practiceId: row.practiceId } })).toBe(1);
+      await reader.goto('/shared-practices/' + row.practiceId);
+      await expect(reader.getByRole('link', { name: 'Consulta versione', exact: true })).toBeVisible();
+      const url = `/shared-practices/${row.practiceId}/documents/${document.versionId}`;
+      const response = await rc.request.get(url); expect(response.status()).toBe(200); expect(await response.text()).toBe(document.content);
+      const audits = await db.auditLog.count({ where: { actorId: row.readerId, entityId: document.id, event: 'selective_practice_document_view' } });
+      await db.contract.update({ where: { id: contract.id }, data: { projectId: sibling.id } });
+      expect((await rc.request.get(url)).status()).toBe(404);
+      await reader.reload(); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
+      expect(await db.auditLog.count({ where: { actorId: row.readerId, entityId: document.id, event: 'selective_practice_document_view' } })).toBe(audits);
+      writeFileSync(path.join(evidence, `indirect-context-proof-${name}.json`), JSON.stringify({ synthetic: true, viewport: { width, height },
+        siblingIndirectCatalogueDenied: true, staleConfirmationDenied: true, coherentIndirectSelectedBytes: true, openSessionReadDenied: true, deniedBytesUnauditedAsSuccess: true }));
+    } finally { await ac.close(); await rc.close(); }
+  });
 }
 
 test('exact document-only native selection, inline bytes, direct URL denial and revocation on an open session', async ({ browser }) => {
