@@ -35,7 +35,10 @@ structure > "$evidence/structure-after-fault.sql"
 cmp "$evidence/structure-before.sql" "$evidence/structure-after-fault.sql"
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$RUNNER_TEMP/selective-people-historical-schema61"
+mkdir -p "$historical"
+git archive 4d6c73921b02699610cfd006f0fae0e9ea705483 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 61
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261021170000_selective_client_company_fields_v1' ORDER BY migration_name" > "$evidence/prefix60-after.txt"
 cmp "$evidence/prefix60-before.txt" "$evidence/prefix60-after.txt"
@@ -55,7 +58,7 @@ END $$;
 SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_COMPANY_SCHEMA60_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 printf '{"synthetic":true,"before":60,"after":61,"prefix60Unchanged":true,"allPriorRowsPreserved":true,"legacyV1V2HistoryAndCompanyBytesPreserved":true,"migrationCreatedNoGrantsOrAuthority":true,"generationsSeededSeparately":true,"atomicFailureRolledBack":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/migration61-proof.json"

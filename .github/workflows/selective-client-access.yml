@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', 'scripts/selective-client-documents/**', '.github/workflows/selective-client-access.yml']
+    paths: ['src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', 'scripts/selective-client-documents/**', 'scripts/selective-client-companies/**', 'scripts/selective-client-people/**', '.github/workflows/selective-client-access.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-client-${{ github.event.pull_request.number || github.ref }}
@@ -51,8 +51,8 @@ jobs:
       - run: npm ci
       - name: Validate qualification shell syntax
         run: |
-          for file in scripts/selective-client-companies/qualify-migration.sh scripts/selective-practice-documents/qualify-migration.sh scripts/selective-client-documents/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh; do bash -n "$file"; done
-      - name: Exact source and additive migration61 with preserved populated schema56
+          for file in scripts/selective-client-people/qualify-migration.sh scripts/selective-client-companies/qualify-migration.sh scripts/selective-practice-documents/qualify-migration.sh scripts/selective-client-documents/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh; do bash -n "$file"; done
+      - name: Exact source and additive migration62 with preserved populated schema56
         shell: bash
         run: |
           set -euo pipefail
@@ -71,14 +71,15 @@ jobs:
           bash scripts/selective-client-documents/qualify-migration.sh
           bash scripts/selective-practice-documents/qualify-migration.sh
           bash scripts/selective-client-companies/qualify-migration.sh
+          bash scripts/selective-client-people/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selective-client-access-db.test.ts | tee "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 48' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 48' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 58' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 58' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic native browser
@@ -102,7 +103,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_CLIENT_EVIDENCE/playwright.json" npx playwright test --config tests/selective-clients/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_CLIENT_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==11 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==14 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_CLIENT_EVIDENCE/source.txt"
@@ -120,6 +121,7 @@ jobs:
             ${{ runner.temp }}/selective-document-migration
             ${{ runner.temp }}/selective-practice-document-migration
             ${{ runner.temp }}/selective-company-migration
+            ${{ runner.temp }}/selective-person-migration
             test-results
           if-no-files-found: error
           retention-days: 14

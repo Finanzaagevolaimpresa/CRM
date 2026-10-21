@@ -5,6 +5,8 @@ import { verifySelectiveClientProof } from './selective-client-proof';
 import { clientDocumentChoicesMatch, clientDocumentSnapshotSchema, maxClientDocuments } from './selective-client-document-policy';
 import { clientCompanySnapshotSchema } from './selective-client-company-snapshot';
 import { maxClientCompanyChoices } from './selective-client-company-policy';
+import { clientPersonSnapshotSchema } from './selective-client-person-snapshot';
+import { maxClientPersonChoices } from './selective-client-person-policy';
 
 const generation = z.number().int().positive().safe();
 const identifier = z.string().min(1).max(128);
@@ -14,16 +16,24 @@ export const selectiveClientGrantPayloadSchema = z.object({
   actorEpoch: generation, recipientEpoch: generation, clientEpoch: generation, keyVersion: generation,
   documents: z.array(clientDocumentSnapshotSchema).max(maxClientDocuments).optional(),
   companies: z.array(clientCompanySnapshotSchema).max(maxClientCompanyChoices).optional(),
+  people: z.array(clientPersonSnapshotSchema).max(maxClientPersonChoices).optional(),
 }).strict().superRefine((value, context) => {
   if ((value.selection.version !== undefined) !== (value.documents !== undefined)
     || !clientDocumentChoicesMatch(value.selection.documents ?? [], value.documents ?? [])) {
     context.addIssue({ code: 'custom', message: 'Le versioni approvate non corrispondono alla selezione.' });
   }
   const choices = value.selection.companies ?? [], snapshots = value.companies ?? [];
-  if ((value.selection.version === 3) !== (value.companies !== undefined)
+  if ((value.selection.version === 3 || value.selection.version === 4) !== (value.companies !== undefined)
     || choices.length !== snapshots.length || new Set(snapshots.map(row => row.companyId)).size !== snapshots.length
     || choices.some(choice => !snapshots.some(row => row.companyId === choice.companyId))) {
     context.addIssue({ code: 'custom', message: 'Le aziende approvate non corrispondono alla selezione.' });
+  }
+  const people = value.selection.people ?? [], peopleSnapshots = value.people ?? [];
+  if ((value.selection.version === 4) !== (value.people !== undefined)
+    || people.length !== peopleSnapshots.length || new Set(peopleSnapshots.map(row => row.membershipId)).size !== peopleSnapshots.length
+    || people.some(choice => !peopleSnapshots.some(row => row.membershipId === choice.membershipId
+      && row.companyId === choice.companyId && row.personId === choice.personId))) {
+    context.addIssue({ code: 'custom', message: 'I referenti approvati non corrispondono alla relazione selezionata.' });
   }
 });
 export type SelectiveClientGrantPayload = z.infer<typeof selectiveClientGrantPayloadSchema>;

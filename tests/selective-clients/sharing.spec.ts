@@ -9,6 +9,7 @@ const db = new PrismaClient(), evidence = process.env.SELECTIVE_CLIENT_EVIDENCE!
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
   synthetic: boolean; adminId: string; adminEmail: string; rows: { clientId: string; label: string; readerId: string; readerEmail: string;
     privateNote: string; companyId: string; companyName: string; projectId: string; projectTitle: string; leadId: string; otherClientId: string; otherLabel: string;
+    person?: { id: string; membershipId: string; name: string; email: string };
     documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[];
 };
 async function login(page: Page, email: string, stepUp = false) {
@@ -37,7 +38,7 @@ async function prepare(page: Page, row: typeof f.rows[number]) {
   await expect(page.getByLabel('Denominazione', { exact: true })).toBeChecked();
   await expect(page.getByLabel('Stato', { exact: true })).toBeChecked();
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
-  await page.getByLabel('Confermo personalmente i campi del cliente e delle aziende, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
+  await page.getByLabel('Confermo personalmente i campi del cliente, delle aziende e dei referenti, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
 }
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); });
 test.afterAll(async () => db.$disconnect());
@@ -128,7 +129,7 @@ async function prepareDocument(page: Page, row: typeof f.rows[number], document:
   await expect(preview).toBeVisible(); await expect(preview).toContainText(document.title);
   await expect(preview).not.toContainText(row.label); await expect(preview).not.toContainText(row.privateNote);
   await expect(preview.locator('dt')).toHaveCount(0);
-  await page.getByLabel('Confermo personalmente i campi del cliente e delle aziende, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
+  await page.getByLabel('Confermo personalmente i campi del cliente, delle aziende e dei referenti, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
 }
 
 test('exact document-only native selection, inline bytes, direct URL denial and revocation on an open session', async ({ browser }) => {
@@ -325,7 +326,7 @@ test('native company preview becomes invalid after a value changes and is restor
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
   expect(await db.selectiveClientCommand.count({ where: { clientId: row.clientId } })).toBe(0); await c.close();
 });
-test('native V3 combines explicit company fields and a document without exposing sibling information', async ({ browser }) => {
+test('native V4 combines explicit company fields and a document without exposing sibling information', async ({ browser }) => {
   const row = f.rows[10], ac = await browser.newContext(), rc = await browser.newContext();
   const admin = await ac.newPage(), reader = await rc.newPage();
   await login(admin, f.adminEmail, true); await prepareCompany(admin, row, true);
@@ -339,5 +340,76 @@ test('native V3 combines explicit company fields and a document without exposing
   expect(await reader.content()).not.toContain(row.documents[2].title);
   const response = await rc.request.get('/shared-clients/' + row.clientId + '/documents/' + row.documents[0].versionId);
   expect(response.status()).toBe(200); expect(await response.text()).toBe(row.documents[0].content);
+  await ac.close(); await rc.close();
+});
+
+async function preparePerson(page: Page, row: typeof f.rows[number], combined = false) {
+  await page.goto('/clients/' + row.clientId + '/sharing');
+  await page.locator('[data-testid="client-sharing"][data-interactive-ready="true"]').waitFor();
+  await page.getByLabel('Persona esistente').selectOption(row.readerId);
+  const group = page.getByRole('group', { name: row.person!.name + ' · ' + row.companyName, exact: true });
+  await group.getByLabel('Email', { exact: true }).check();
+  await expect(group.getByLabel('Nome', { exact: true })).not.toBeChecked();
+  await expect(group.getByLabel('Cognome', { exact: true })).not.toBeChecked();
+  if (combined) {
+    await page.getByRole('group', { name: row.companyName, exact: true }).getByLabel('Partita IVA', { exact: true }).check();
+    await page.getByLabel(row.documents[0].title + ' · versione 1', { exact: false }).check();
+  }
+  await page.getByRole('button', { name: 'Anteprima come destinatario', exact: true }).click();
+  const preview = page.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
+  await expect(preview).toBeVisible(); await expect(preview).toContainText(row.person!.email);
+  await expect(preview).not.toContainText(row.person!.name); await expect(preview).not.toContainText(row.companyName);
+  await expect(preview).not.toContainText('PERSON_NOTE_MUST_NOT_LEAK');
+  await preview.getByRole('checkbox').check();
+}
+test('native person-only selection shows chosen contact without implicit names; desktop/mobile and open-session revocation', async ({ browser }) => {
+  const row = f.rows[11], ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.adminEmail, true); await login(reader, row.readerEmail); await preparePerson(admin, row);
+  for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844]] as const) {
+    await admin.setViewportSize({ width, height });
+    expect(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await admin.screenshot({ path: path.join(evidence, `selective-person-preview-${name}.png`), fullPage: true });
+  }
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+  await reader.goto('/shared-clients/' + row.clientId);
+  await expect(reader.getByText(row.person!.email, { exact: true })).toBeVisible(); await expect(reader.locator('dt')).toHaveCount(1);
+  for (const privateValue of [row.person!.name, row.companyName, row.privateNote, 'PERSON_NOTE_MUST_NOT_LEAK']) expect(await reader.content()).not.toContain(privateValue);
+  expect(await (await rc.request.get('/companies/' + row.companyId)).text()).not.toContain(row.person!.email);
+  for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844]] as const) {
+    await reader.setViewportSize({ width, height });
+    expect(await reader.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await reader.screenshot({ path: path.join(evidence, `selective-person-recipient-${name}.png`), fullPage: true });
+  }
+  await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
+  await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
+  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+  await reader.reload(); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
+  expect(await reader.content()).not.toContain(row.person!.email); await ac.close(); await rc.close();
+});
+test('native person preview is invalid after the person value is changed and restored', async ({ browser }) => {
+  const row = f.rows[12], context = await browser.newContext(), page = await context.newPage();
+  await login(page, f.adminEmail, true); await preparePerson(page, row);
+  await db.person.update({ where: { id: row.person!.id }, data: { email: 'temporary@example.invalid' } });
+  await db.person.update({ where: { id: row.person!.id }, data: { email: row.person!.email } });
+  await page.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect(page.getByText('Dati, destinatario o permessi cambiati. Ricarica la scheda e prepara una nuova anteprima.', { exact: true })).toBeVisible();
+  expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
+  expect(await db.selectiveClientCommand.count({ where: { clientId: row.clientId } })).toBe(0); await context.close();
+});
+test('native V4 can combine an explicit person field, company field and exact document version', async ({ browser }) => {
+  const row = f.rows[13], ac = await browser.newContext(), rc = await browser.newContext();
+  const admin = await ac.newPage(), reader = await rc.newPage();
+  await login(admin, f.adminEmail, true); await preparePerson(admin, row, true);
+  await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+  await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+  await login(reader, row.readerEmail); await reader.goto('/shared-clients/' + row.clientId);
+  await expect(reader.getByText(row.person!.email, { exact: true })).toBeVisible();
+  await expect(reader.getByText('SYNTHETIC_VAT', { exact: true })).toBeVisible();
+  await expect(reader.getByRole('link', { name: 'Consulta versione', exact: true })).toHaveCount(1);
+  await expect(reader.getByRole('link', { name: 'Scarica versione', exact: true })).toHaveCount(0);
+  expect(await reader.content()).not.toContain(row.person!.name); expect(await reader.content()).not.toContain(row.companyName);
+  expect(await reader.content()).not.toContain(row.documents[1].title); expect(await reader.content()).not.toContain(row.documents[2].title);
   await ac.close(); await rc.close();
 });

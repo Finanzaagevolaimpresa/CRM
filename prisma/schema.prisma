@@ -3624,3 +3624,14 @@ model SelectiveCompanyGeneration {
   companyId  String @id
   generation Int    @default(1)
 }
+
+// Persistent tombstones; source row removal never resets an approved identity.
+model SelectivePersonGeneration {
+  personId   String @id
+  generation Int    @default(1)
+}
+
+model SelectiveMembershipGeneration {
+  membershipId String @id
+  generation   Int    @default(1)
+}
