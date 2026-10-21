@@ -77,7 +77,7 @@ const manager = {
   userId: ids.manager,
   sessionId: ids.managerSession,
   expiresAt,
-  role: "direzione" as const,
+  role: "admin" as const,
   active: true,
   permissionOverrides: [],
 };
@@ -340,9 +340,9 @@ test.before(async () => {
       {
         id: ids.manager,
         email: `${ids.manager}@invalid.test`,
-        name: "Direzione sintetica",
+        name: "Admin sintetico per formalizzazione e accrediti",
         passwordHash: "synthetic",
-        role: "direzione",
+        role: "admin",
       },
     ],
   });

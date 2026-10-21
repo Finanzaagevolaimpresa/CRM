@@ -777,7 +777,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await reviewerPage.goto(`${app}/client-dossiers/${dossierId}`);
     await expect(reviewerPage.getByPlaceholder("Motivazione della decisione")).toHaveCount(0);
     // This non-M5 fixture has no per-dossier review plan: explicitly assign its
-    // work and materials to the reviewer. The producer retains direction access.
+    // work and materials to the reviewer. The producer retains Admin access.
     const bound = await db.clientDossier.findUniqueOrThrow({ where: { id: dossierId } });
     await db.project.update({ where: { id: bound.projectId! }, data: { consultantId: 'readiness-browser-reader' } });
     await db.clientService.update({ where: { id: bound.clientServiceId! }, data: { assignedToId: 'readiness-browser-reader' } });
