@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -21,6 +21,9 @@ import { practiceFieldProjection, selectivePracticeSelectionSchema, type Selecti
 import { createSelectivePracticePreview, readSelectivePracticePreview } from './selective-practice-preview';
 import { readSelectivePracticeGrant, selectivePracticeGrantPayloadSchema, type SelectivePracticeGrantPayload } from './selective-practice-grant';
 import { selectivePracticeProof, verifySelectivePracticeProof } from './selective-practice-proof';
+
+import { listPracticeDocumentOptions, selectPracticeDocuments } from './selective-practice-documents';
+import { maxPracticeDocumentBytes, maxPracticeDocuments, type PracticeDocumentContext } from './selective-practice-document-policy';
 
 type Tx = Prisma.TransactionClient;
 export type PracticeSharingCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -61,7 +64,7 @@ async function personal(tx: Tx, current: AuthSession, proof: PracticeSharingCred
 }
 
 /** Key → directory → conversion identity → ordered users/session → client → practice → service → ordered projects. All state is
- * reread after locks. Read operations create neither a grant nor an audit. */
+ * reread after locks. Management and projection reads create no grants; successful document bytes have a minimized access audit. */
 async function transaction<T>(db: PrismaClient, claimed: AuthSession, recipientId: string | null,
   proof: PracticeSharingCredentials | null, work: (tx: Tx, state: {
     current: AuthSession & SelectivePracticeScope & { registryExpiresAt: Date }; key: PrivilegedStepUpKey;
@@ -134,7 +137,9 @@ async function practice(tx: Tx, id: string, write = false, allowInactive = false
   const contextState = scope?.scope ?? asJson({ inactive: true, practice: [row.id, row.recordUpdateEpoch],
     client: [client.id, client.recordUpdateEpoch], service: service ? [service.id, service.recordUpdateEpoch] : null,
     projects: projects.map(item => [item.id, item.recordUpdateEpoch]) });
-  return { row, context, contextHash: canonicalSha256(contextState), operational };
+  const documentContext: PracticeDocumentContext = { id: row.id, clientId: row.clientId, projectId: row.projectId,
+    clientServiceId: row.clientServiceId, serviceProjectId: service?.projectId ?? null };
+  return { row, context, documentContext, contextHash: canonicalSha256(contextState), operational };
 }
 async function selectedState(tx: Tx, state: State, input: SelectivePracticeSelection, write = false) {
   manager(state);
@@ -149,12 +154,13 @@ async function selectedState(tx: Tx, state: State, input: SelectivePracticeSelec
   if ((previous?.revision ?? 0) !== input.revision) stale();
   const now = await clock(tx);
   if (input.expiresAt && new Date(input.expiresAt) <= now) stale();
+  const documents = await selectPracticeDocuments(tx, state.current.userId, target, resource.documentContext, input.documents ?? []);
   const admission = { actorId: state.actor.id, sessionId: state.current.sessionId!, authorityRevision: state.binding.revision,
     actorEpoch: state.actor.selectivePracticeEpoch, recipientEpoch: target.selectivePracticeEpoch, practiceEpoch: row.recordUpdateEpoch,
     contextHash: resource.contextHash, stateHash: canonicalSha256(asJson({ practice: row, contextHash: resource.contextHash, target: { id: target.id, name: target.name, email: target.email,
       role: target.role, epoch: target.selectivePracticeEpoch, permissions: target.permissionOverrides },
-      previous: previous ? { id: previous.id, revision: previous.revision, proof: previous.proof, revokedAt: previous.revokedAt } : null })) };
-  return { row, context: resource.context, target, previous, admission, now };
+      previous: previous ? { id: previous.id, revision: previous.revision, proof: previous.proof, revokedAt: previous.revokedAt } : null, documents: documents.snapshots })) };
+  return { row, context: resource.context, target, previous, admission, now, documents };
 }
 
 export async function mayManagePracticeSharing(db: PrismaClient, session: AuthSession) {
@@ -168,16 +174,24 @@ export async function previewPracticeSharing(db: PrismaClient, claimed: AuthSess
     const targetScope = await loadSelectiveProjectScope(tx, input.recipientId);
     return { token: createSelectivePracticePreview(state.key, input, selected.admission, selected.now.getTime()), input,
       fields: practiceFieldProjection(selected.row as unknown as Record<string, unknown>, input.fields),
+      documents: selected.documents.snapshots,
       recipient: { name: selected.target.name, email: selected.target.email, role: selected.target.role },
       replacesFullAccess: canViewTechnicalPractice({ userId: selected.target.id, role: selected.target.role, clientReadScope: await loadClientReadScope(tx, selected.target.id), ...targetScope }, selected.context),
       replacesSelection: !!selected.previous };
   });
 }
 
-const receiptSchema = z.object({ protocol: z.literal('SELECTIVE_PRACTICE_RECEIPT_V1'), commandId: z.string().uuid(),
+const legacyReceiptSchema = z.object({ protocol: z.literal('SELECTIVE_PRACTICE_RECEIPT_V1'), commandId: z.string().uuid(),
   grantId: z.string().uuid(), revisionId: z.string().uuid(), revision: z.number().int().positive(),
   operation: z.enum(['GRANT', 'REVOKE']), fieldCount: z.number().int().min(1).max(6), keyVersion: z.number().int().positive(),
 }).strict();
+const receiptSchema = z.discriminatedUnion('protocol', [legacyReceiptSchema, legacyReceiptSchema.extend({
+  protocol: z.literal('SELECTIVE_PRACTICE_RECEIPT_V2'), fieldCount: z.number().int().min(0).max(6),
+  documentCount: z.number().int().min(0).max(maxPracticeDocuments),
+})]);
+function selectionCounts(input: SelectivePracticeSelection) {
+  return { fieldCount: input.fields.length, ...(input.version === 2 ? { documentCount: input.documents!.length } : {}) };
+}
 async function previousCommand(tx: Tx, state: State, id: string, digest: string) {
   const command = await tx.selectivePracticeCommand.findUnique({ where: { id } });
   if (!command) return null;
@@ -194,8 +208,8 @@ async function persist(tx: Tx, state: State, input: SelectivePracticeSelection, 
   if (previous) await tx.selectivePracticeGrant.update({ where: { id: previous.id, revision: previous.revision }, data });
   else await tx.selectivePracticeGrant.create({ data });
   const revisionId = randomUUID();
-  const receipt = receiptSchema.parse({ protocol: 'SELECTIVE_PRACTICE_RECEIPT_V1', commandId: input.commandId,
-    grantId: payload.id, revisionId, revision: payload.revision, operation, fieldCount: input.fields.length, keyVersion: state.key.version });
+  const receipt = receiptSchema.parse({ protocol: input.version === 2 ? 'SELECTIVE_PRACTICE_RECEIPT_V2' : 'SELECTIVE_PRACTICE_RECEIPT_V1', commandId: input.commandId,
+    grantId: payload.id, revisionId, revision: payload.revision, operation, ...selectionCounts(input), keyVersion: state.key.version });
   await tx.selectivePracticeCommand.create({ data: { id: input.commandId, actorId: state.current.userId, sessionId: state.current.sessionId!,
     practiceId: input.practiceId, recipientId: input.recipientId, expectedRevision: input.revision, operation, requestDigest,
     receipt: asJson(receipt), receiptProof: selectivePracticeProof(state.key, 'receipt', receipt) } });
@@ -203,7 +217,7 @@ async function persist(tx: Tx, state: State, input: SelectivePracticeSelection, 
     commandId: input.commandId, payload: asJson(payload), proof, revokedAt } });
   await tx.auditLog.create({ data: { id: revisionId, actorId: state.current.userId, entityType: 'SelectivePracticeRevision', entityId: revisionId,
     event: 'selective_practice_changed', before: { version: input.revision },
-    after: { version: payload.revision, action: operation, fieldCount: input.fields.length } } });
+    after: { version: payload.revision, action: operation, ...selectionCounts(input) } } });
   return receipt;
 }
 export async function confirmPracticeSharing(db: PrismaClient, claimed: AuthSession, raw: unknown, token: string, proof: PracticeSharingCredentials) {
@@ -220,7 +234,8 @@ export async function confirmPracticeSharing(db: PrismaClient, claimed: AuthSess
     const payload = selectivePracticeGrantPayloadSchema.parse({ id: selected.previous?.id ?? randomUUID(), selection: input,
       revision: input.revision + 1, approvedById: state.current.userId, approvedAt: selected.now.toISOString(),
       authorityRevision: state.binding.revision, actorEpoch: state.actor.selectivePracticeEpoch,
-      recipientEpoch: selected.target.selectivePracticeEpoch, practiceEpoch: selected.row.recordUpdateEpoch, contextHash: selected.admission.contextHash, keyVersion: state.key.version });
+      recipientEpoch: selected.target.selectivePracticeEpoch, practiceEpoch: selected.row.recordUpdateEpoch, contextHash: selected.admission.contextHash, keyVersion: state.key.version,
+      ...(input.version === 2 ? { documents: selected.documents.snapshots } : {}) });
     const receipt = await persist(tx, state, input, payload, selected.previous, 'GRANT', requestDigest, selected.now);
     if (!readSelectivePracticePreview(token, state.key, selected.admission, (await clock(tx)).getTime())) stale();
     return receipt;
@@ -255,8 +270,7 @@ export async function revokePracticeSharing(db: PrismaClient, claimed: AuthSessi
   });
 }
 
-export async function readPracticeSharing(db: PrismaClient, claimed: AuthSession, practiceId: string) {
-  return transaction(db, claimed, null, null, async (tx, state) => {
+async function authorizedPracticeSharing(tx: Tx, state: State, practiceId: string) {
     const resource = await practice(tx, practiceId), row = resource.row;
     if (hasSelectiveContext(state.current, resource.context) || hasSelectiveClientContext(state.current, resource.context)) deny();
     const grant = await tx.selectivePracticeGrant.findUnique({ where: { practiceId_recipientId: { practiceId, recipientId: state.current.userId } } });
@@ -277,14 +291,43 @@ export async function readPracticeSharing(db: PrismaClient, claimed: AuthSession
       || revision.revokedAt || revision.command.operation !== 'GRANT' || revision.command.actorId !== payload.approvedById
       || revision.command.transactionId !== revision.transactionId || audit.actorId !== payload.approvedById
       || audit.event !== 'selective_practice_changed' || audit.entityType !== 'SelectivePracticeRevision' || audit.entityId !== revision.id
-      || canonicalSha256(audit.after) !== canonicalSha256({ version: grant.revision, action: 'GRANT', fieldCount: payload.selection.fields.length })) deny();
+      || canonicalSha256(audit.after) !== canonicalSha256({ version: grant.revision, action: 'GRANT', ...selectionCounts(payload.selection) })) deny();
     const receipt = receiptSchema.parse(revision.command.receipt);
     if (receipt.commandId !== revision.command.id || receipt.grantId !== grant.id || receipt.revisionId !== revision.id
       || receipt.revision !== grant.revision || receipt.operation !== 'GRANT' || receipt.fieldCount !== payload.selection.fields.length
+      || (receipt.protocol === 'SELECTIVE_PRACTICE_RECEIPT_V2') !== (payload.selection.version === 2)
+      || (receipt.protocol === 'SELECTIVE_PRACTICE_RECEIPT_V2' && receipt.documentCount !== payload.documents?.length)
       || receipt.keyVersion !== state.key.version || !verifySelectivePracticeProof(state.key, 'receipt', receipt, revision.command.receiptProof)) deny();
     if (!readSelectivePracticeGrant(raw, state.key, current, (await clock(tx)).getTime())) deny();
-    return { practiceId, revision: grant.revision, fields: practiceFieldProjection(row as unknown as Record<string, unknown>, payload.selection.fields),
-      expiresAt: payload.selection.expiresAt };
+    const documents = await selectPracticeDocuments(tx, state.binding.userId, state.actor, resource.documentContext, payload.selection.documents ?? []);
+    if (canonicalSha256(documents.snapshots) !== canonicalSha256(payload.documents ?? [])) deny();
+    return { row, grant, payload, documents, current, raw };
+}
+
+export async function readPracticeSharing(db: PrismaClient, claimed: AuthSession, practiceId: string) {
+  return transaction(db, claimed, null, null, async (tx, state) => {
+    const selected = await authorizedPracticeSharing(tx, state, practiceId);
+    if (!readSelectivePracticeGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
+    return { practiceId, revision: selected.grant.revision,
+      fields: practiceFieldProjection(selected.row as unknown as Record<string, unknown>, selected.payload.selection.fields),
+      documents: selected.documents.snapshots, expiresAt: selected.payload.selection.expiresAt };
+  });
+}
+
+export async function readSharedPracticeDocument(db: PrismaClient, claimed: AuthSession, practiceId: string, versionId: string, download: boolean,
+  readBytes: (path: string, limit: number) => Promise<Buffer>) {
+  return transaction(db, claimed, null, null, async (tx, state) => {
+    const selected = await authorizedPracticeSharing(tx, state, practiceId);
+    const document = selected.documents.snapshots.find(row => row.versionId === versionId);
+    const path = selected.documents.paths.get(versionId);
+    if (!document || !path || (download && !document.download)) deny();
+    const bytes = await readBytes(path, maxPracticeDocumentBytes);
+    if (bytes.length > maxPracticeDocumentBytes || createHash('sha256').update(bytes).digest('hex') !== document.checksum) deny();
+    await tx.auditLog.create({ data: { actorId: state.current.userId, entityType: 'Document', entityId: document.documentId,
+      event: download ? 'selective_practice_document_download' : 'selective_practice_document_view',
+      after: { versionId, grantId: selected.grant.id, revision: selected.grant.revision } } });
+    if (!readSelectivePracticeGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
+    return { bytes, document };
   });
 }
 
@@ -314,14 +357,17 @@ export async function practiceSharingManagement(db: PrismaClient, claimed: AuthS
       include: { permissionOverrides: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] });
     const grants = await tx.selectivePracticeGrant.findMany({ where: { practiceId }, orderBy: { updatedAt: 'desc' },
       include: { recipient: { select: { name: true, email: true } } } });
-    return { practiceId, title: row.title, operational: resource.operational,
+    const options = resource.operational ? await listPracticeDocumentOptions(tx, state.actor, resource.documentContext)
+      : { documentOptions: [], documentsLimited: false };
+    return { practiceId, title: row.title, operational: resource.operational, ...options,
       recipients: people.filter(person => allowed(person)).map(({ id, name, email, role }) => ({ id, name, email, role })),
       grants: grants.map(grant => {
         const payload = selectivePracticeGrantPayloadSchema.safeParse(grant.payload);
         return { id: grant.id, recipientId: grant.recipientId, recipientName: grant.recipient.name,
           recipientEmail: grant.recipient.email, revision: grant.revision, revoked: !!grant.revokedAt,
           expiresAt: payload.success ? payload.data.selection.expiresAt : null,
-          fields: payload.success ? payload.data.selection.fields : [] };
+          fields: payload.success ? payload.data.selection.fields : [],
+          documentCount: payload.success ? (payload.data.documents?.length ?? 0) : 0 };
       }) };
   });
 }

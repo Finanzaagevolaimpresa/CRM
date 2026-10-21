@@ -46,6 +46,9 @@ const SELECTIVE_PRACTICE_MIGRATION_SHA256 = '98ccebc553699d31ffbfa9cbdf7de028482
 const SELECTIVE_DOCUMENT_MIGRATION = '20261021080000_selective_client_documents_v1';
 const SELECTIVE_DOCUMENT_MIGRATION_SHA256 = '1890bda902d186dd8ea1b84cac2b46b9412e0740c1cf02b413384f086761f053';
 
+const SELECTIVE_PRACTICE_DOCUMENT_MIGRATION = '20261021110000_selective_practice_documents_v1';
+const SELECTIVE_PRACTICE_DOCUMENT_MIGRATION_SHA256 = '3c5be559feca7757ed3e3e9ff56a312489303b896f5a984cc99c571cbc3be791';
+
 /** A privileged, explicitly invoked operational act, never a public action.
  * The operator must acquire the human binding/scope and real TLS/authentication
  * evidence first. Hashing that act does not create its authority. The CLI
@@ -60,7 +63,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   return db.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
-    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; now: Date }>>`
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; selectivePracticeDocumentChecksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
         (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
         (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
@@ -72,9 +75,10 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_LEAD_MIGRATION}) AS "selectiveLeadChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_CLIENT_MIGRATION}) AS "selectiveClientChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_PRACTICE_MIGRATION}) AS "selectivePracticeChecksum",
-        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_DOCUMENT_MIGRATION}) AS "selectiveDocumentChecksum"`;
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_DOCUMENT_MIGRATION}) AS "selectiveDocumentChecksum",
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_PRACTICE_DOCUMENT_MIGRATION}) AS "selectivePracticeDocumentChecksum"`;
     const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
-    if (state.database !== plan.targetDatabase || state.count !== 59 || !state.complete || state.checksum !== MIGRATION_SHA256
+    if (state.database !== plan.targetDatabase || state.count !== 60 || !state.complete || state.checksum !== MIGRATION_SHA256
       || state.contextChecksum !== CONTEXT_MIGRATION_SHA256
       || state.updatesChecksum !== UPDATES_MIGRATION_SHA256
       || state.videosChecksum !== VIDEOS_MIGRATION_SHA256
@@ -83,6 +87,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
       || state.selectiveClientChecksum !== SELECTIVE_CLIENT_MIGRATION_SHA256
       || state.selectivePracticeChecksum !== SELECTIVE_PRACTICE_MIGRATION_SHA256
       || state.selectiveDocumentChecksum !== SELECTIVE_DOCUMENT_MIGRATION_SHA256
+      || state.selectivePracticeDocumentChecksum !== SELECTIVE_PRACTICE_DOCUMENT_MIGRATION_SHA256
       || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
       || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
     // Lock both people before the mailbox, following native admission ordering.

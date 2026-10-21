@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema59 restart preserves exact selected lead fields and durable denial after revocation', async ({ browser }) => {
+test('schema60 restart preserves exact selected lead fields and durable denial after revocation', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_LEAD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; liveId: string; liveLabel: string; privateEmail: string;
     revokedId: string; otherId: string; otherLabel: string;

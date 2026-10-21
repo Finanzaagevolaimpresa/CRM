@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { practiceFieldProjection, selectivePracticeSelectionSchema } from './selective-practice-policy';
 import { verifySelectivePracticeProof } from './selective-practice-proof';
+import { maxPracticeDocuments, practiceDocumentChoicesMatch, practiceDocumentSnapshotSchema } from './selective-practice-document-policy';
 
 const generation = z.number().int().positive().safe();
 const identifier = z.string().min(1).max(128);
@@ -9,7 +10,13 @@ export const selectivePracticeGrantPayloadSchema = z.object({
   id: z.string().uuid(), selection: selectivePracticeSelectionSchema, revision: generation,
   approvedById: identifier, approvedAt: z.string().datetime(), authorityRevision: generation,
   actorEpoch: generation, recipientEpoch: generation, practiceEpoch: generation, contextHash: z.string().regex(/^[a-f0-9]{64}$/), keyVersion: generation,
-}).strict();
+  documents: z.array(practiceDocumentSnapshotSchema).max(maxPracticeDocuments).optional(),
+}).strict().superRefine((value, context) => {
+  if ((value.selection.version === 2) !== (value.documents !== undefined)
+    || !practiceDocumentChoicesMatch(value.selection.practiceId, value.selection.documents ?? [], value.documents ?? [])) {
+    context.addIssue({ code: 'custom', message: 'Le versioni approvate non corrispondono alla pratica e alla selezione.' });
+  }
+});
 export type SelectivePracticeGrantPayload = z.infer<typeof selectivePracticeGrantPayloadSchema>;
 
 export type SelectivePracticeGrantAdmission = {

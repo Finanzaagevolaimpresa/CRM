@@ -9,7 +9,7 @@ import { syntheticPerson } from './fixtures';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 
 /** Keep the original schema58 enrollment qualification on its exact schema.
- * Schema59 upgrade fixtures and immutable history remain in the primary DB.
+ * Schema60 upgrade fixtures and immutable history remain in the primary DB.
  * Both databases belong only to the isolated CI service, disposed by the job. */
 export async function withHistoricalEnrollment(main: PrismaClient, kind: 'lead' | 'client' | 'practice',
   work: (fixture: { db: PrismaClient; admin: Awaited<ReturnType<typeof syntheticPerson>>; url: string }) => Promise<void>) {

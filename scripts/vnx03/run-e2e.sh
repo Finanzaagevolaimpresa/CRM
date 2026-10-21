@@ -94,6 +94,10 @@ case "$VNX03_QUALIFICATION_PROFILE" in
     node scripts/vnx03/verify-candidate-communications-scope.mjs
     export VNX03_EXPECTED_MIGRATIONS=59
     ;;
+  candidate-schema60)
+    node scripts/vnx03/verify-candidate-communications-scope.mjs
+    export VNX03_EXPECTED_MIGRATIONS=60
+    ;;
   *) fail 'VNX03_QUALIFICATION_PROFILE_INVALID' ;;
 esac
 

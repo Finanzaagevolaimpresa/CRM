@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { maxPracticeDocuments, practiceDocumentChoiceSchema } from './selective-practice-document-policy';
 
 /** Closed catalogue. Neither parent records nor future fields are included. */
 export const selectivePracticeFields = {
@@ -9,10 +10,18 @@ export type SelectivePracticeField = keyof typeof selectivePracticeFields;
 const field = z.enum(Object.keys(selectivePracticeFields) as [SelectivePracticeField, ...SelectivePracticeField[]]);
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const selectivePracticeSelectionSchema = z.object({
+  version: z.literal(2).optional(),
   practiceId: identifier, recipientId: identifier, revision: z.number().int().min(0),
-  commandId: z.string().uuid(), fields: z.array(field).min(1).max(Object.keys(selectivePracticeFields).length),
+  commandId: z.string().uuid(), fields: z.array(field).max(Object.keys(selectivePracticeFields).length),
+  documents: z.array(practiceDocumentChoiceSchema).max(maxPracticeDocuments).optional(),
   expiresAt: z.string().datetime().transform(value => new Date(value).toISOString()).nullable(),
 }).strict().superRefine((value, context) => {
+  // Do not add defaults to historical HMAC payloads. V1 cannot gain documents.
+  if ((value.version === 2) !== (value.documents !== undefined)
+    || (!value.fields.length && !value.documents?.length)
+    || new Set(value.documents?.map(row => row.versionId)).size !== (value.documents?.length ?? 0)) {
+    context.addIssue({ code: 'custom', message: 'Scegli campi o singole versioni, senza duplicati.' });
+  }
   if (new Set(value.fields).size !== value.fields.length) {
     context.addIssue({ code: 'custom', message: 'Ogni campo può essere selezionato una sola volta.' });
   }
@@ -37,7 +46,7 @@ export function practiceContextOutsideSelection(scope: SelectivePracticeScope) {
 
 /** Project only the selected scalar values. Date formatting remains deterministic. */
 export function practiceFieldProjection(practice: Record<string, unknown>, chosen: readonly SelectivePracticeField[]) {
-  const fields = z.array(field).min(1).max(Object.keys(selectivePracticeFields).length).parse(chosen);
+  const fields = z.array(field).max(Object.keys(selectivePracticeFields).length).parse(chosen);
   if (new Set(fields).size !== fields.length) throw new Error('SELECTIVE_PRACTICE_DUPLICATE_FIELD');
   return fields.map(key => {
     let value = practice[key];

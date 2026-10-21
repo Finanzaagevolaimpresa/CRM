@@ -43,7 +43,7 @@ export async function confirmPracticeSharingAction(_previous: PracticeSharingSta
     const receipt = await confirmPracticeSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')),
       String(form.get('token') ?? ''), await credentials());
     refresh();
-    return { ok: true, message: 'Accesso confermato: la persona può leggere soltanto i campi scelti.', receipt };
+    return { ok: true, message: 'Accesso confermato: la persona può consultare i campi e le versioni scelti per questa pratica.', receipt };
   } catch (error) { return failure(error); }
 }
 export async function revokePracticeSharingAction(_previous: PracticeSharingState, form: FormData): Promise<PracticeSharingState> {
