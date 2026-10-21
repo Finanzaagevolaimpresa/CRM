@@ -41,6 +41,7 @@ psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHER
 cmp "$evidence/prefix60-before.txt" "$evidence/prefix60-after.txt"
 footprint "$evidence/after.txt"
 cmp "$evidence/before.txt" "$evidence/after.txt"
+psql "$db" -v ON_ERROR_STOP=1 -At -f scripts/selective-client-companies/structure.sql > "$evidence/structure61.json"
 psql "$db" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM "Company" c LEFT JOIN "SelectiveCompanyGeneration" g ON g."companyId"=c.id WHERE g.generation IS DISTINCT FROM 1)
