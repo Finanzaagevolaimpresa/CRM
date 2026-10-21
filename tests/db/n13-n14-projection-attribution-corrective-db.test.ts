@@ -350,7 +350,7 @@ test('fresh60 preserves exact N13/N14 provenance types, validated CHECK, correct
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 60);
+  assert.equal(names.length, 61);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migration42Name);
@@ -412,7 +412,7 @@ test('exact 42 to 43 upgrade preserves a sentinel and the immutable finished mig
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
-  assert.equal(names.length, 60);
+  assert.equal(names.length, 61);
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   const fixture = await createFixture('upgrade', names.slice(0, 42));

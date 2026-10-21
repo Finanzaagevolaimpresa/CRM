@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation';
 import { prepareClientSharing, confirmClientSharingAction, revokeClientSharingAction, checkClientSharingReceipt, type ClientSharingState } from '@/lib/selective-client-actions';
 import { selectiveClientFields, type SelectiveClientField } from '@/lib/selective-client-policy';
 import { maxClientDocuments, type ClientDocumentChoice } from '@/lib/selective-client-document-policy';
+import { selectiveClientCompanyFields, maxClientCompanyChoices, type ClientCompanyChoice, type SelectiveClientCompanyField } from '@/lib/selective-client-company-policy';
 
 const initial: ClientSharingState = { ok: false, message: '' };
 const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 type Grant = { id: string; recipientId: string; recipientName: string; recipientEmail: string; revision: number;
-  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; commandId: string; documentCount: number };
+  revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number };
 type DocumentOption = { documentId: string; versionId: string; version: number; title: string; fileName: string; category: string; area: string };
 function rememberCommand(id: string) {
   // A lost response can be reconciled after reload without creating a command.
@@ -27,14 +28,16 @@ function Receipt({ commandId, clientId }: { commandId: string; clientId: string 
     <p role="status">{state.message}</p>
   </form>;
 }
-export function SelectiveClientSharing({ clientId, recipients, grants, initialCommandId, documentOptions, documentsLimited }: {
+export function SelectiveClientSharing({ clientId, recipients, grants, initialCommandId, documentOptions, documentsLimited, companyOptions, companiesLimited }: {
   clientId: string; recipients: { id: string; name: string; email: string; role: string }[];
   grants: Grant[]; initialCommandId: string; documentOptions: DocumentOption[]; documentsLimited: boolean;
+  companyOptions: { id: string; name: string }[]; companiesLimited: boolean;
 }) {
   const router = useRouter();
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectiveClientField[]>([]);
   const [documents, setDocuments] = useState<ClientDocumentChoice[]>([]), [documentSearch, setDocumentSearch] = useState('');
+  const [companies, setCompanies] = useState<ClientCompanyChoice[]>([]), [companySearch, setCompanySearch] = useState('');
   const [expires, setExpires] = useState(''), [commandId, setCommand] = useState(initialCommandId);
   const [generation, setGeneration] = useState(0), [previewGeneration, setPreviewGeneration] = useState(-1);
   const [preview, prepare, preparing] = useActionState(prepareClientSharing, initial);
@@ -42,7 +45,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   const grant = grants.find(row => row.recipientId === recipientId);
   const expiresTime = expires ? new Date(expires).getTime() : null;
   const validExpiry = expiresTime === null || Number.isFinite(expiresTime);
-  const selection = { version: 2 as const, clientId, recipientId, revision: grant?.revision ?? 0, commandId, fields, documents,
+  const selection = { version: 3 as const, clientId, recipientId, revision: grant?.revision ?? 0, commandId, fields, documents, companies,
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
   const locked = confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
@@ -57,6 +60,26 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
           {(Object.entries(selectiveClientFields) as [SelectiveClientField, string][]).map(([key, label]) => <label className="flex items-center gap-2 rounded-lg border p-3" key={key}>
             <input type="checkbox" checked={fields.includes(key)} onChange={event => setFields(old => event.target.checked ? [...old, key] : old.filter(value => value !== key))} />{label}</label>)}
         </div></fieldset>
+        <fieldset className="min-w-0 space-y-3"><legend className="mb-2 font-semibold">Informazioni delle aziende da condividere</legend>
+          <p className="text-sm text-slate-600">Scegli i singoli campi per ciascuna azienda, fino a {maxClientCompanyChoices} aziende. Anche la denominazione richiede una scelta. Le aziende aggiunte in futuro restano escluse.</p>
+          <label className="block">Cerca fra le aziende disponibili<input className={control} value={companySearch} onChange={event => setCompanySearch(event.target.value)} /></label>
+          {!companyOptions.length && <p>Nessuna azienda disponibile con i permessi correnti.</p>}
+          {companiesLimited && <p>Sono mostrate le prime 100 aziende in ordine alfabetico. Le altre non verranno incluse.</p>}
+          <div className="max-h-96 space-y-3 overflow-y-auto">{companyOptions.filter(row => row.name.toLocaleLowerCase('it').includes(companySearch.toLocaleLowerCase('it'))).map(company => {
+            const selected = companies.find(row => row.companyId === company.id);
+            return <fieldset key={company.id} className="min-w-0 rounded-xl border p-3">
+              <legend className="max-w-full break-words px-1 font-semibold">{company.name}</legend>
+              <div className="grid min-w-0 gap-3 sm:grid-cols-2">{(Object.entries(selectiveClientCompanyFields) as [SelectiveClientCompanyField, string][]).map(([key, label]) => <label key={key} className="flex min-w-0 items-start gap-2">
+                <input type="checkbox" checked={selected?.fields.includes(key) ?? false} disabled={!selected && companies.length >= maxClientCompanyChoices}
+                  onChange={event => setCompanies(old => {
+                    const previous = old.find(row => row.companyId === company.id);
+                    const next = event.target.checked ? [...(previous?.fields ?? []), key] : (previous?.fields ?? []).filter(value => value !== key);
+                    return [...old.filter(row => row.companyId !== company.id), ...(next.length ? [{ companyId: company.id, fields: next }] : [])];
+                  })} /><span className="break-words">{label}</span></label>)}</div>
+            </fieldset>;
+          })}</div>
+          <p className="text-sm text-slate-600">Dopo una modifica dell’azienda sarà necessaria una nuova conferma della selezione. Non vengono condivisi soci, contatti personali, note o dati economici.</p>
+        </fieldset>
         <fieldset className="min-w-0 space-y-3"><legend className="mb-2 font-semibold">Documenti e versioni da condividere</legend>
           <p className="text-sm text-slate-600">Scegli fino a {maxClientDocuments} versioni. Le versioni future non saranno condivise automaticamente. Contratti e pagamenti sono riservati ad Admin e Amministrazione.</p>
           <label className="block">Cerca fra le versioni disponibili<input className={control} value={documentSearch} onChange={event => setDocumentSearch(event.target.value)} /></label>
@@ -75,9 +98,9 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
           <p className="text-sm text-slate-600">La consultazione mostra il contenuto nel browser: non può impedire copie o schermate già acquisite. La revoca blocca le aperture successive.</p>
         </fieldset>
         <label className="block font-semibold">Scadenza facoltativa<input className={control} type="datetime-local" value={expires} onChange={event => setExpires(event.target.value)} /></label>
-        <p className="text-sm text-slate-600">Solo i campi e le versioni scelti. Aziende, persone collegate, progetti, pratiche, note private, altri documenti e comunicazioni restano esclusi. Nessuna modifica o caricamento. Per gli altri clienti valgono i propri permessi.</p>
+        <p className="text-sm text-slate-600">Solo le informazioni e le versioni scelte. Persone collegate, progetti, pratiche, note private, altri documenti e comunicazioni restano esclusi. Nessuna modifica o caricamento. Per gli altri clienti valgono i propri permessi.</p>
         <input type="hidden" name="selection" value={JSON.stringify(selection)} />
-        <button className={button} disabled={!recipientId || (!fields.length && !documents.length) || !validExpiry}>{preparing ? 'Preparazione…' : 'Anteprima come destinatario'}</button>
+        <button className={button} disabled={!recipientId || (!fields.length && !documents.length && !companies.length) || !validExpiry}>{preparing ? 'Preparazione…' : 'Anteprima come destinatario'}</button>
       </fieldset>
       <p role="status">{preview.message}</p>
     </form>
@@ -89,10 +112,13 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
       <p>Alla revoca o alla scadenza, l’accesso precedente non si riattiva. Il ruolo Admin e le assegnazioni non ampliano la selezione.</p>
       <p>{prepared.input.expiresAt ? `Scadenza: ${new Date(prepared.input.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza, revocabile in questa pagina.'}</p>
       <dl className="grid min-w-0 gap-3 rounded-xl bg-white p-4 sm:grid-cols-2">{prepared.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold">{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
+      {!!prepared.companies.length && <div className="space-y-3 rounded-xl bg-white p-4"><h3 className="font-semibold">Informazioni aziendali visibili al destinatario</h3>{prepared.companies.map((company, index) => <section key={company.companyId} className="min-w-0 space-y-2 rounded-xl border p-3">
+        <h4 className="font-semibold">Azienda {index + 1}</h4><dl className="grid min-w-0 gap-3 sm:grid-cols-2">{company.fields.map(field => <div key={field.key} className="min-w-0"><dt>{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
+      </section>)}</div>}
       {!!prepared.documents.length && <div className="space-y-2 rounded-xl bg-white p-4"><h3 className="font-semibold">Versioni visibili al destinatario</h3>{prepared.documents.map(document => <p key={document.versionId} className="break-words">{document.title} · versione {document.version} · {document.fileName} · {document.download ? 'Consultazione e download' : 'Consultazione'}</p>)}</div>}
       <form action={confirm} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
         <input type="hidden" name="selection" value={JSON.stringify(prepared.input)} /><input type="hidden" name="token" value={prepared.token} />
-        <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi, le versioni dei documenti, il destinatario e l’effetto sui permessi.</label>
+        <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi del cliente e delle aziende, le versioni dei documenti, il destinatario e l’effetto sui permessi.</label>
         <p className="text-sm">È necessaria la conferma di sicurezza del profilo personale autorizzato.</p>
         <button className={button} disabled={locked}>{confirming ? 'Conferma in corso…' : 'Conferma accesso selettivo'}</button>
       </form>
@@ -113,6 +139,7 @@ function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
     <p>Revisione {grant.revision} · {grant.revoked ? 'Revocata' : 'Selezione registrata; validità verificata a ogni apertura'}</p>
     <p className="text-sm">Campi: {grant.fields.map(field => selectiveClientFields[field]).join(', ') || 'Nessun campo selezionato'}</p>
     <p className="text-sm">Versioni di documenti selezionate: {grant.documentCount}</p>
+    <p className="text-sm">Aziende selezionate: {grant.companyCount} · campi aziendali: {grant.companyFieldCount}</p>
     <p>{grant.expiresAt ? `Scadenza: ${new Date(grant.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza indicata'}</p>
     {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(grant.commandId)} className="space-y-3">
       <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={grant.commandId} />

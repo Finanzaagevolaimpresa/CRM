@@ -67,3 +67,4 @@ bash scripts/selective-clients/qualify-migration.sh
 bash scripts/selective-practices/qualify-migration.sh
 bash scripts/selective-client-documents/qualify-migration.sh
 bash scripts/selective-practice-documents/qualify-migration.sh
+bash scripts/selective-client-companies/qualify-migration.sh

@@ -50,8 +50,8 @@ jobs:
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
       - name: Validate qualification shell syntax
-        run: bash -n scripts/selective-practice-documents/qualify-migration.sh scripts/selective-client-documents/qualify-migration.sh scripts/selective-practices/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
-      - name: Exact source and additive migration60 with preserved populated schema57
+        run: bash -n scripts/selective-client-companies/qualify-migration.sh scripts/selective-practice-documents/qualify-migration.sh scripts/selective-client-documents/qualify-migration.sh scripts/selective-practices/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
+      - name: Exact source and additive migration61 with preserved populated schema57
         shell: bash
         run: |
           set -euo pipefail
@@ -68,6 +68,7 @@ jobs:
           bash scripts/selective-practices/qualify-migration.sh
           bash scripts/selective-client-documents/qualify-migration.sh
           bash scripts/selective-practice-documents/qualify-migration.sh
+          bash scripts/selective-client-companies/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
@@ -115,6 +116,7 @@ jobs:
             ${{ runner.temp }}/selective-practice-migration
             ${{ runner.temp }}/selective-document-migration
             ${{ runner.temp }}/selective-practice-document-migration
+            ${{ runner.temp }}/selective-company-migration
             test-results
           if-no-files-found: error
           retention-days: 14

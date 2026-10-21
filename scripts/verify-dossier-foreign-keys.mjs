@@ -50,6 +50,7 @@ const practiceKeys = [...practices.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)
 assert.equal(practiceKeys.length, 8, 'Every selective practice foreign key must be covered');
 assert.deepEqual(practiceKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove selective practice foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "SelectivePractice|ALTER TABLE "SelectivePractice[^"]*"[^;]*DROP COLUMN/);
+assert.doesNotMatch(diff, /DROP TABLE "SelectiveCompanyGeneration"|ALTER TABLE "SelectiveCompanyGeneration"[^;]*DROP COLUMN/);
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
   communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length, selectiveLeadConstraints: leadKeys.length,
   selectiveClientConstraints: clientKeys.length, selectivePracticeConstraints: practiceKeys.length }));

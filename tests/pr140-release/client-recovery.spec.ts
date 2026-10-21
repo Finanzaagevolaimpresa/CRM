@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema60 restart preserves exact document bytes, V1 fields and selected/revoked denials', async ({ browser }) => {
+test('schema61 restart preserves exact document bytes, V1 fields and selected/revoked denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_CLIENT_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; rows: { id: string; label: string; companyId: string; projectId: string; leadId: string;
       documents: { id: string; versionId: string; content: string; selected: boolean }[] }[];
@@ -54,5 +54,15 @@ test('schema60 restart preserves exact document bytes, V1 fields and selected/re
   await expect(page.locator('dl dt')).toHaveCount(2);
   await page.goto(origin + '/clients/' + f.rows[3].id);
   await expect(page.locator('body')).toContainText(f.rows[3].label);
+  for (const [index, row] of f.rows.slice(4).entries()) {
+    await page.goto(origin + '/shared-clients/' + row.id);
+    if (index === 0) {
+      await expect(page.getByText('SYNTHETIC_COMPANY_RECOVERY_VAT_COMPANY_LIVE', { exact: true })).toBeVisible();
+      await expect(page.locator('dl dt')).toHaveCount(1);
+      expect(await page.content()).not.toContain('CLIENT_RECOVERY_COMPANY_COMPANY_LIVE');
+    } else await expect(page.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
+    const direct = await page.request.get(origin + '/companies/' + row.companyId);
+    expect(await direct.text()).not.toContain('CLIENT_RECOVERY_COMPANY_');
+  }
   await context.close();
 });

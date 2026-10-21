@@ -21,10 +21,10 @@ async function main() {
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   const rows: { id: string; label: string; companyId: string; projectId: string; leadId: string;
     documents: { id: string; versionId: string; content: string; selected: boolean }[] }[] = [];
-  for (const suffix of ['LIVE', 'REVOKED', 'LEGACY', 'OTHER']) {
+  for (const suffix of ['LIVE', 'REVOKED', 'LEGACY', 'OTHER', 'COMPANY_LIVE', 'COMPANY_REVOKED', 'COMPANY_STALE']) {
     const client = await db.client.create({ data: { type: 'societa', displayName: 'SELECTIVE_CLIENT_RECOVERY_' + suffix,
       salesOwnerId: reader.user.id, notes: 'CLIENT_RECOVERY_PRIVATE_' + suffix } });
-    const company = await db.company.create({ data: { clientId: client.id, name: 'CLIENT_RECOVERY_COMPANY_' + suffix } });
+    const company = await db.company.create({ data: { clientId: client.id, name: 'CLIENT_RECOVERY_COMPANY_' + suffix, vatNumber: 'SYNTHETIC_COMPANY_RECOVERY_VAT_' + suffix } });
     const project = await db.project.create({ data: { clientId: client.id, companyId: company.id,
       title: 'CLIENT_RECOVERY_PROJECT_' + suffix } });
     const lead = await db.lead.create({ data: { clientId: client.id, assignedToId: reader.user.id,
@@ -42,16 +42,23 @@ async function main() {
     rows.push({ id: client.id, label: client.displayName, companyId: company.id, projectId: project.id, leadId: lead.id, documents });
     if (suffix === 'OTHER') continue;
     const { receipt } = await grantClient(db, admin, { clientId: client.id, recipientId: reader.user.id,
-      revision: 0, commandId: randomUUID(), fields: ['displayName', 'status'], expiresAt: null,
+      revision: 0, commandId: randomUUID(), fields: suffix.startsWith('COMPANY_') ? [] : ['displayName', 'status'], expiresAt: null,
+      ...(suffix.startsWith('COMPANY_') ? { version: 3, documents: [], companies: [{ companyId: company.id, fields: ['vatNumber'] }] } : {}),
       ...(documents.length ? { version: 2, documents: [{ versionId: documents[0].versionId, download: false }] } : {}) });
-    if (suffix === 'REVOKED') await revokeClientSharing(db, admin.session,
+    if (suffix === 'REVOKED' || suffix === 'COMPANY_REVOKED') await revokeClientSharing(db, admin.session,
       { grantId: receipt.grantId, revision: 1, commandId: randomUUID() }, clientProof(admin));
+    if (suffix === 'COMPANY_STALE') {
+      await db.company.update({ where: { id: company.id }, data: { vatNumber: 'SYNTHETIC_TEMPORARY_CHANGE' } });
+      await db.company.update({ where: { id: company.id }, data: { vatNumber: company.vatNumber, updatedAt: company.updatedAt } });
+    }
   }
   assert.equal((await readClientSharing(db, reader.session, rows[0].id)).fields.length, 2);
   assert.equal((await readClientSharing(db, reader.session, rows[0].id)).documents.length, 1);
   assert.equal((await readClientSharing(db, reader.session, rows[2].id)).fields.length, 2);
   assert.equal((await readClientSharing(db, reader.session, rows[2].id)).documents.length, 0);
   await assert.rejects(readClientSharing(db, reader.session, rows[1].id));
+  assert.equal((await readClientSharing(db, reader.session, rows[4].id)).companies[0].fields[0].value, 'SYNTHETIC_COMPANY_RECOVERY_VAT_COMPANY_LIVE');
+  for (const row of rows.slice(5)) await assert.rejects(readClientSharing(db, reader.session, row.id));
   writeFileSync(process.env.R05_CLIENT_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true,
     adminId: admin.user.id, readerId: reader.user.id, email: reader.user.email, rows }) + '\n');
 }

@@ -3618,3 +3618,9 @@ model VideoCommand {
   video VideoEntry @relation(fields: [videoId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }
+
+// Survives company removal/reinsertion; no cascading relation by design.
+model SelectiveCompanyGeneration {
+  companyId  String @id
+  generation Int    @default(1)
+}
