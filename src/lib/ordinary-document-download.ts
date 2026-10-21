@@ -9,12 +9,13 @@ import { internalSessionMode } from './session';
 import { guardProjectResources } from './project-resource-guard';
 import { getEngagementMaterialDownloadAccessTx } from './engagement-dossier';
 import { loadClientReadScope } from './client-read-perimeter';
-import { privateDocumentExists, readPrivateDocument } from './storage';
+import { privateDocumentExists, readPrivateDocument, readPrivateDocumentBounded } from './storage';
+import { documentPreviewMaxBytes, documentPreviewMime } from './document-preview';
 
 export class DocumentDownloadError extends Error {
-  constructor(readonly status: 403 | 404 | 409) { super('DOCUMENT_UNAVAILABLE'); }
+  constructor(readonly status: 403 | 404 | 409 | 415) { super('DOCUMENT_UNAVAILABLE'); }
 }
-type Runtime = { exists?: typeof privateDocumentExists; read?: typeof readPrivateDocument };
+type Runtime = { exists?: typeof privateDocumentExists; read?: typeof readPrivateDocument; intent?: 'view' | 'download' };
 
 /** Keep session, project state, linked financial scope and audit valid until
  * the bytes have been read. A concurrent archive must precede or follow this
@@ -55,12 +56,20 @@ export async function readOrdinaryDocument(db: PrismaClient, claimed: AuthSessio
     const path = review?.storagePath ?? version?.storagePath ?? document.storagePath;
     const checksum = review?.checksum ?? version?.checksum ?? document.checksum;
     if (!await (runtime.exists ?? privateDocumentExists)(path)) throw new DocumentDownloadError(404);
-    const bytes = await (runtime.read ?? readPrivateDocument)(path);
+    const viewing = runtime.intent === 'view';
+    if (viewing && !/\.(pdf|png|jpe?g|txt)$/i.test(document.fileName)) throw new DocumentDownloadError(415);
+    const previewRead = async (p: string) => {
+      try { return await readPrivateDocumentBounded(p, documentPreviewMaxBytes); }
+      catch { throw new DocumentDownloadError(415); }
+    };
+    const bytes = await (runtime.read ?? (viewing ? previewRead : readPrivateDocument))(path);
     if (checksum && createHash('sha256').update(bytes).digest('hex') !== checksum) throw new DocumentDownloadError(409);
+    const mimeType = viewing ? documentPreviewMime(document.fileName, bytes) : document.mimeType;
+    if (viewing && !mimeType) throw new DocumentDownloadError(415);
     if (isSensitiveDocument(document)) await tx.auditLog.create({ data: { actorId: session.userId, event: 'document_sensitive_access', entityType: 'Document', entityId: id, after: { category: document.documentCategory } } });
-    await tx.auditLog.create({ data: { actorId: session.userId, event: 'document_download', entityType: 'Document', entityId: id, after: { sizeBytes: bytes.length } } });
+    await tx.auditLog.create({ data: { actorId: session.userId, event: viewing ? 'document_view' : 'document_download', entityType: 'Document', entityId: id, after: { sizeBytes: bytes.length } } });
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (!clock || !Number.isFinite(session.expiresAt) || session.expiresAt * 1000 <= clock.now.getTime() || (registry && registry.expiresAt <= clock.now)) throw new DocumentDownloadError(403);
-    return { bytes, fileName: document.fileName, mimeType: document.mimeType };
+    return { bytes, fileName: document.fileName, mimeType };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
 }

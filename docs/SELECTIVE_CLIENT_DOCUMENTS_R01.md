@@ -24,6 +24,14 @@ I lock sono acquisiti nell'ordine esistente per autorità, persone/sessioni, cli
 
 ## Schema59 e recuperabilità
 
+### Anteprima nei documenti ordinari
+
+Nell'elenco Documenti e nel fascicolo cliente, «Visualizza» apre il file in una nuova scheda; «Scarica» resta distinto. L'anteprima ammette PDF, PNG, JPEG e testo UTF-8 fino a 25 MB, verificando estensione e firma dei byte. HTML, SVG, archivi e altri formati rimangono scaricabili soltanto con i permessi correnti. Non sono convertiti né inviati a servizi esterni.
+
+Il nuovo percorso `/documents/[id]/view` usa la stessa ammissione transazionale del download, compreso il limite finanziario, la sessione corrente, i perimetri e il checksum. Registra `document_view` senza inventare un download. Non acquisisce accessi dalla concessione selettiva: i percorsi ordinari e selettivi restano distinti. La risposta usa inline, no-store, sandbox e nosniff. L'anteprima non impedisce di conservare byte già visualizzati.
+
+Le regressioni native verificano entrambe le route per gli otto ruoli, le versioni e la revoca a sessione aperta. Due scenari aggiuntivi desktop/mobile cliccano «Visualizza», controllano la decodifica effettiva di un'immagine privata e il rifiuto della riapertura dopo il cestino. Le risposte PDF sono confrontate byte per byte; la disponibilità del lettore PDF integrato dipende dal browser.
+
 `20261021080000_selective_client_documents_v1` parte dal prefisso schema58 immutato. Aggiunge `Document.selectiveEpoch` e aggiorna i vincoli dei payload per accogliere V2 preservando V1. Otto trigger mantengono la generazione monotona e invalidano le decisioni quando cambiano documento, versione, riferimenti di contratto/pagamento/formalizzazione/materiali, azienda o contesto della pratica. Le generazioni già esistenti di cliente, progetto e servizio restano nel contenuto verificato.
 
 La migration non crea destinatari, autorità, concessioni o file. Prima della produzione servono SQL/hash/target esatti, riesame pertinente, autorizzazione specifica, qualifica dell'immagine schema59 e preflight fresco. Nessun down-migrate o ritorno a codice che ignora questi controlli. Nessun nuovo backup o restore DB è dedotto dalle autorizzazioni precedenti.
