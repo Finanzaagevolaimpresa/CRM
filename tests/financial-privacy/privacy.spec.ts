@@ -37,8 +37,12 @@ for (const [name, width, height, role] of [['desktop', 1280, 900, 'admin'], ['mo
         await expect.poll(async () => {
           for (const frame of viewer.frames()) {
             const rendered = await frame.evaluate(() => {
-              const pdf = document.querySelector('pdf-viewer') as (HTMLElement & { loadState_?: string; showErrorDialog?: boolean; documentDimensions?: { pageDimensions?: unknown[] } }) | null;
-              return pdf?.loadState_ === 'success' && pdf.showErrorDialog === false && pdf.documentDimensions?.pageDimensions?.length === 1;
+              const pdf = document.querySelector('pdf-viewer') as (HTMLElement & { loadState_?: string; documentDimensions?: { pageDimensions?: Array<{ width: number; height: number }> } }) | null;
+              const pages = pdf?.documentDimensions?.pageDimensions;
+              // Chromium's reactive showErrorDialog accessor is not exposed in
+              // every build. Inspect the actual error UI and positive renderer state.
+              return pdf?.loadState_ === 'success' && !!pdf.shadowRoot && !pdf.shadowRoot.querySelector('viewer-error-dialog')
+                && pages?.length === 1 && pages[0].width >= 600 && pages[0].height >= 360;
             }).catch(() => false);
             if (rendered) return true;
           }
