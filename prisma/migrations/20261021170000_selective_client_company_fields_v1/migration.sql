@@ -118,7 +118,7 @@ BEGIN
  SELECT * INTO a FROM "AuditLog" WHERE id=h.id::text;
  expected_audit:=jsonb_build_object('version',rev,'action',c.operation,'fieldCount',jsonb_array_length(g.payload->'selection'->'fields'));
  IF g.payload->'selection'->'version' IN ('2'::jsonb,'3'::jsonb) THEN
-  IF c.receipt->>'protocol' IS DISTINCT FROM CASE WHEN g.payload->'selection'->'version'='3'::jsonb THEN 'SELECTIVE_CLIENT_RECEIPT_V3' ELSE 'SELECTIVE_CLIENT_RECEIPT_V2' END
+  IF c.receipt->>'protocol' IS DISTINCT FROM (CASE WHEN g.payload->'selection'->'version'='3'::jsonb THEN 'SELECTIVE_CLIENT_RECEIPT_V3' ELSE 'SELECTIVE_CLIENT_RECEIPT_V2' END)
    OR c.receipt->>'documentCount' IS DISTINCT FROM jsonb_array_length(g.payload->'selection'->'documents')::text THEN
    RAISE EXCEPTION 'SELECTIVE_CLIENT_DOCUMENT_ATOMIC_RECEIPT'; END IF;
   expected_audit:=expected_audit || jsonb_build_object('documentCount',jsonb_array_length(g.payload->'selection'->'documents'));

@@ -50,7 +50,7 @@ const SELECTIVE_PRACTICE_DOCUMENT_MIGRATION = '20261021110000_selective_practice
 const SELECTIVE_PRACTICE_DOCUMENT_MIGRATION_SHA256 = '3c5be559feca7757ed3e3e9ff56a312489303b896f5a984cc99c571cbc3be791';
 
 const SELECTIVE_COMPANY_MIGRATION = '20261021170000_selective_client_company_fields_v1';
-const SELECTIVE_COMPANY_MIGRATION_SHA256 = 'e766c661b58410b2c0db4bbdfb29bc9488666d675c5b2c81e710bf2772291283';
+const SELECTIVE_COMPANY_MIGRATION_SHA256 = '9c65f0a874c1abdb6529fa87e2a9dac2c991c7412fbc9e795a18d89968fc7fd5';
 
 /** A privileged, explicitly invoked operational act, never a public action.
  * The operator must acquire the human binding/scope and real TLS/authentication

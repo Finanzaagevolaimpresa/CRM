@@ -53,6 +53,7 @@ async function main() {
       services: await db.clientService.findMany({ select, orderBy }),
       practices: await db.technicalPractice.findMany({ select, orderBy }),
       documents: await db.document.findMany({ select: { id: true, selectiveEpoch: true }, orderBy }),
+      companies: await db.selectiveCompanyGeneration.findMany({ orderBy: { companyId: 'asc' } }),
     };
     writeFileSync(process.argv[3], JSON.stringify(epochs, null, 2) + '\n');
   } else if (mode === 'footprint') {
@@ -113,6 +114,7 @@ async function main() {
       selectiveClientUsers: await db.user.findMany({ where: { OR: [{ selectiveClientAuthority: { isNot: null } }, { selectiveClientGrants: { some: {} } }] },
         orderBy: { id: 'asc' }, select: { id: true, selectiveClientEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
       selectedClientRows: await db.client.findMany({ where: { selectiveGrants: { some: {} } }, orderBy: { id: 'asc' } }),
+      selectedClientCompanies: await db.company.findMany({ where: { clientId: { in: selectedClientIds } }, orderBy: { id: 'asc' } }),
       selectedClientDocuments, selectedClientFiles,
       selectiveLeadAuthority: await db.selectiveLeadAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveLeadGrants: await db.selectiveLeadGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -199,7 +201,8 @@ async function main() {
     assert.equal(data.selectiveClientGrants.filter(row => row.revokedAt).length, 2);
     assert.equal(data.selectiveClientRevisions.length, 8); assert.equal(data.selectiveClientCommands.length, 8);
     assert.equal(data.selectiveClientAudit.length, 8); assert.equal(data.selectiveClientUsers.length, 2);
-    assert.equal(data.selectedClientRows.length, 3);
+    assert.equal(data.selectedClientRows.length, 6);
+    assert.equal(data.selectedClientCompanies.length, 6);
     assert.equal(data.selectedClientDocuments.length, 4); assert.equal(data.selectedClientFiles.length, 4);
     assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 2);
     assert.equal(data.selectiveLeadGrants.filter(row => row.revokedAt).length, 1);
