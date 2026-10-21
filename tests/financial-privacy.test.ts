@@ -8,8 +8,8 @@ import { hasPermission } from '../src/lib/permission-evaluator';
 import { roleHasPermission } from '../src/lib/permissions';
 import { canViewPaymentListRecord } from '../src/lib/business-list-access';
 
-const allowed = ['admin', 'amministrazione', 'direzione'] as const;
-const excluded = ['commerciale', 'consulente', 'revisore', 'backoffice', 'collaboratore_limitato'] as const;
+const allowed = ['admin', 'amministrazione'] as const;
+const excluded = ['direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'collaboratore_limitato'] as const;
 const client = { id: 'c', salesOwnerId: 'owner', consultantId: 'owner' };
 const document = { id: 'doc', clientId: 'c', projectId: null, clientServiceId: null, client, uploadedById: 'owner', containsSensitiveData: false, documentCategory: 'altro', type: 'application/pdf', title: 'Documento tecnico', fileName: 'tecnico.pdf' };
 
@@ -71,7 +71,8 @@ test('binding lookup failure denies the entire read instead of returning unfilte
 for (const role of ['direzione', 'amministrazione'] as const) {
   for (const denied of ['contract.read', 'payment.read'] as const) test(`${role}: ${denied} deny survives metadata, bindings and operational projections`, async () => {
     const actor = { role, active: true, userId: 'owner', permissionOverrides: [{ permission: denied, allowed: false }] };
-    const contract = denied !== 'contract.read', payment = denied !== 'payment.read';
+    const contract = role === 'amministrazione' && denied !== 'contract.read';
+    const payment = role === 'amministrazione' && denied !== 'payment.read';
     const cases = [
       { metadata: { title: 'Contratto firmato' }, allowed: contract },
       { metadata: { fileName: 'bonifico.pdf' }, allowed: payment },
@@ -90,7 +91,7 @@ for (const role of ['direzione', 'amministrazione'] as const) {
       practiceFormalization: { findMany: async () => [{ signedDocumentId: 'historic' }] },
     } as unknown as Parameters<typeof filterFinancialDocuments>[0];
     const files = ['signed', 'paid', 'historic', 'both', 'ordinary'].map(id => ({ ...document, id }));
-    assert.deepEqual((await filterFinancialDocuments(db, actor, files)).map(x => x.id), contract ? ['signed', 'historic', 'ordinary'] : ['paid', 'ordinary']);
+    assert.deepEqual((await filterFinancialDocuments(db, actor, files)).map(x => x.id), contract ? ['signed', 'historic', 'ordinary'] : payment ? ['paid', 'ordinary'] : ['ordinary']);
     assert.equal(operationalServiceStatus(actor, 'pagato'), payment ? 'pagato' : 'disponibile');
     assert.equal(canViewPaymentListRecord(actor, { payment: { clientId: 'c', contractId: 'k' }, contract: { id: 'k', clientId: 'c', projectId: null }, client, project: null }), payment);
   });

@@ -1283,7 +1283,7 @@ test('M2 Work package returns as a new draft before independent review and simul
   await reviewerContext.close();
 });
 
-test('financial read overrides protect readiness HTML and downloadable Work manifests for both supervising roles', async ({ page }) => {
+test('financial ceiling and individual denies protect readiness HTML and downloadable Work manifests', async ({ page }) => {
   await assertSyntheticCatalogDatabase(db);
   await login(page, 'readiness-owner@invalid.test');
   const userId = 'readiness-browser-owner';
@@ -1304,10 +1304,10 @@ test('financial read overrides protect readiness HTML and downloadable Work mani
           const response = await page.goto(`${app}/practice-readiness`); expect(response?.status()).toBe(200);
           const article = page.locator(`#practice-${practice.id}`);
           const html = await article.innerHTML();
-          expect(html.includes(practice.contractId!)).toBe(permission !== 'contract.read');
-          expect(html.includes(practice.signedDocumentVersionId!)).toBe(permission !== 'contract.read');
-          expect(html.includes('Accrediti confermati')).toBe(permission !== 'payment.read');
-          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(permission !== 'payment.read');
+          expect(html.includes(practice.contractId!)).toBe(role === 'amministrazione' && permission !== 'contract.read');
+          expect(html.includes(practice.signedDocumentVersionId!)).toBe(role === 'amministrazione' && permission !== 'contract.read');
+          expect(html.includes('Accrediti confermati')).toBe(role === 'amministrazione' && permission !== 'payment.read');
+          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(role === 'amministrazione' && permission !== 'payment.read');
           const exported = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
             form: { expectedVersionId: dossier.currentVersionId!, packageId: randomUUID(), manualTransferAuthorized: 'on' },
             headers: { origin: app }, maxRedirects: 0,
@@ -1315,8 +1315,8 @@ test('financial read overrides protect readiness HTML and downloadable Work mani
           expect(exported.status(), `${role}/${permission}`).toBe(200);
           const bytes = await exported.body();
           const manifest = JSON.parse(zipEntryText(bytes, 'manifest.json'));
-          expect(manifest.engagement.contractId).toBe(permission === 'contract.read' ? null : practice.contractId);
-          expect(manifest.engagement.formalizationId).toBe(permission === 'contract.read' ? null : practice.currentFormalizationId);
+          expect(manifest.engagement.contractId).toBe(role === 'direzione' || permission === 'contract.read' ? null : practice.contractId);
+          expect(manifest.engagement.formalizationId).toBe(role === 'direzione' || permission === 'contract.read' ? null : practice.currentFormalizationId);
           expect(manifest.files.length).toBeGreaterThan(0);
           for (const file of manifest.files) expect(zipEntryText(bytes, file.name).length).toBeGreaterThan(0);
         } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }

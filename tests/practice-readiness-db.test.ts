@@ -2176,7 +2176,7 @@ test('M4 communications reuse readiness identity and fresh client/project scope'
   }), error => error instanceof Error && error.message === 'M4_READINESS_FIXTURE_ROLLBACK');
 });
 
-test('Direzione and Amministrazione individual denies redact readiness and Work manifests independently', { skip: !enabled }, async () => {
+test('Direzione ceiling and Amministrazione individual denies redact readiness and Work manifests independently', { skip: !enabled }, async () => {
   const practice = await db.practiceReadiness.findUniqueOrThrow({ where: { controlledIntakeId: a.intake.id }, include: { funding: true } });
   const dossier = await db.clientDossier.findFirstOrThrow({ where: { practiceReadinessId: practice.id } });
   assert.ok(practice.currentFormalizationId && practice.startEvidence && practice.funding.length);
@@ -2197,18 +2197,18 @@ test('Direzione and Amministrazione individual denies redact readiness and Work 
           assert.ok(row);
           assert.equal(row.startEvidence, null);
           assert.ok(row.materials.some(item => item.documentId === a.document.id));
-          assert.equal(row.contractId, permission === 'contract.read' ? null : practice.contractId);
-          assert.equal(row.currentFormalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
-          assert.equal(row.signedDocumentId, permission === 'contract.read' ? null : practice.signedDocumentId);
-          assert.equal(row.formalizations.length > 0, permission !== 'contract.read');
-          assert.equal(row.requiredInitialAmount?.toFixed(2) ?? null, permission === 'payment.read' ? null : practice.requiredInitialAmount.toFixed(2));
-          assert.equal(row.funding.length, permission === 'payment.read' ? 0 : practice.funding.length);
-          assert.equal(row.prerequisites.availableFunding === null, permission === 'payment.read');
+          assert.equal(row.contractId, role === 'direzione' || permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(row.currentFormalizationId, role === 'direzione' || permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(row.signedDocumentId, role === 'direzione' || permission === 'contract.read' ? null : practice.signedDocumentId);
+          assert.equal(row.formalizations.length > 0, role === 'amministrazione' && permission !== 'contract.read');
+          assert.equal(row.requiredInitialAmount?.toFixed(2) ?? null, role === 'direzione' || permission === 'payment.read' ? null : practice.requiredInitialAmount.toFixed(2));
+          assert.equal(row.funding.length, role === 'direzione' || permission === 'payment.read' ? 0 : practice.funding.length);
+          assert.equal(row.prerequisites.availableFunding === null, role === 'direzione' || permission === 'payment.read');
           const result = await exportEngagementWorkPackage(db, manager, { dossierId: dossier.id, expectedVersionId: dossier.currentVersionId, packageId: randomUUID(), manualTransferAuthorized: true }, {
             readDocument: async path => { assert.equal(path, a.documentVersion.storagePath); return Buffer.from('material A'); },
           });
-          assert.equal(result.receipt.manifest.engagement.contractId, permission === 'contract.read' ? null : practice.contractId);
-          assert.equal(result.receipt.manifest.engagement.formalizationId, permission === 'contract.read' ? null : practice.currentFormalizationId);
+          assert.equal(result.receipt.manifest.engagement.contractId, role === 'direzione' || permission === 'contract.read' ? null : practice.contractId);
+          assert.equal(result.receipt.manifest.engagement.formalizationId, role === 'direzione' || permission === 'contract.read' ? null : practice.currentFormalizationId);
           assert.equal(result.receipt.manifest.files.length, 1, 'technical material remains exportable');
         } finally { await db.userPermissionOverride.delete({ where: { id: deniedOverride.id } }); }
       }

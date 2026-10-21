@@ -5,18 +5,18 @@ import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), root = process.env.FINANCIAL_PRIVACY_EVIDENCE!, password = process.env.FINANCIAL_PRIVACY_BROWSER_PASSWORD!;
 type Fixture = { role: string; key: string; denied: string | null; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
-const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean };
+const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean; blockedDelegationRoles: string[] };
 async function login(page: Page, role: string) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(`privacy-${role}@example.test`);
   await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
-test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.FINANCIAL_PRIVACY_BROWSER_CONFIRMED).toBe('1'); expect(fixture.synthetic).toBe(true); expect(fixture.overrideDelegationDenied).toBe(true); });
+test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.FINANCIAL_PRIVACY_BROWSER_CONFIRMED).toBe('1'); expect(fixture.synthetic).toBe(true); expect(fixture.overrideDelegationDenied).toBe(true); expect(fixture.blockedDelegationRoles).toContain('direzione'); });
 test.afterAll(async () => { await db.$disconnect(); });
 for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
   await login(page, f.role);
-  const financial = ['admin', 'amministrazione', 'direzione'].includes(f.role);
+  const financial = ['admin', 'amministrazione'].includes(f.role);
   const progress = await page.goto(`/progress?client=${f.clientId}`); expect(progress?.status()).toBe(200);
   const progressHtml = await progress!.text();
   expect(progressHtml.includes(`data-progress-contract="${f.contractId}"`)).toBe(financial);
@@ -80,7 +80,8 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
 
 for (const f of fixture.fixtures.filter(f => f.denied)) test(`${f.key}: individual deny applies to HTML, exports, handoff and both download routes`, async ({ page }) => {
   await login(page, f.key);
-  const canReadContract = f.denied !== 'contract.read', canReadPayment = f.denied !== 'payment.read';
+  const canReadContract = f.role === 'amministrazione' && f.denied !== 'contract.read';
+  const canReadPayment = f.role === 'amministrazione' && f.denied !== 'payment.read';
   const progress = await page.goto(`/progress?client=${f.clientId}`); expect(progress?.status()).toBe(200);
   const progressHtml = await progress!.text();
   expect(progressHtml.includes(`data-progress-contract="${f.contractId}"`)).toBe(canReadContract);
@@ -237,4 +238,42 @@ test('P2-01 real preparation, ordinary preparation edit and stopping actions rem
     expect(await db.auditLog.count({ where: { entityId: id, event: 'technical_practice_update' } })).toBe(1);
     expect(await db.auditLog.count({ where: { entityId: id, event: 'technical_practice_status_change' } })).toBe(2);
   } finally { await db.client.update({ where: { id: f.clientId }, data: { status: 'attivo' } }); }
+});
+
+
+test('open financial session loses contracts, payment bytes and metadata immediately after role changes to Direzione', async ({ page }) => {
+  const f = fixture.fixtures.find(item => item.role === 'amministrazione' && !item.denied)!;
+  await login(page, f.key);
+  await page.goto(`/contracts/${f.contractId}`);
+  await expect(page).toHaveURL(new RegExp(`/contracts/${f.contractId}$`));
+  const protectedDocs = f.docs.filter(doc => doc.kind !== 'ordinary');
+  for (const doc of protectedDocs) expect((await page.request.get(`/documents/${doc.id}/download`)).status()).toBe(200);
+  await db.user.update({ where: { id: f.userId }, data: { role: 'direzione' } });
+  try {
+    const auditFilter = { actorId: f.userId, event: { in: ['document_download', 'document_sensitive_access'] }, entityId: { in: protectedDocs.map(doc => doc.id) } };
+    const before = await db.auditLog.count({ where: auditFilter });
+    for (const doc of protectedDocs) for (const suffix of ['', `?versionId=${doc.versionId}`]) {
+      expect((await page.request.get(`/documents/${doc.id}/download${suffix}`)).status()).toBe(403);
+    }
+    expect(await db.auditLog.count({ where: auditFilter })).toBe(before);
+    await page.reload();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    for (const path of ['/contracts', '/payments', '/audit-log']) {
+      await page.goto(path); await expect(page).toHaveURL(/\/dashboard$/);
+    }
+    for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844]] as const) {
+      await page.setViewportSize({ width, height });
+      const response = await page.goto(`/clients/${f.clientId}`);
+      expect(response?.status()).toBe(200);
+      const html = await response!.text();
+      for (const doc of protectedDocs) expect(html).not.toContain(doc.title);
+      expect(html).not.toContain(`CONTRACT_SECRET_${f.key}`);
+      expect(html).not.toContain(`PAYMENT_SECRET_${f.key}`);
+      const ordinary = f.docs.find(doc => doc.kind === 'ordinary')!;
+      await expect(page.getByText(ordinary.title, { exact: false }).first()).toBeVisible();
+      expect((await page.request.get(`/documents/${ordinary.id}/download`)).status()).toBe(200);
+      await page.screenshot({ path: join(root, `direzione-operational-${name}.png`), fullPage: true });
+    }
+    writeFileSync(join(root, 'financial-ceiling-session-proof.json'), JSON.stringify({ synthetic: true, roleChangedWithoutNewLogin: true, currentAndVersionedDownloadsDenied: true, deniedDownloadAuditUnchanged: true, ordinaryDocumentPreserved: true }));
+  } finally { await db.user.update({ where: { id: f.userId }, data: { role: 'amministrazione' } }); }
 });

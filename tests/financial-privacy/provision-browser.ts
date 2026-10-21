@@ -60,11 +60,17 @@ async function main() {
       activities: ['Verifica tecnica sintetica'], confirmed: true, reason: 'Collaudo sintetico dei dinieghi individuali',
     }, true));
   }
-  const denied = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId, sessionId: session.id }, excluded.userId, [{ permission: 'payment.read', allowed: true }]));
-  assert.equal(denied.ok, false, 'Even admin cannot delegate reserved access to an excluded role');
-  if (!denied.ok) assert.match(denied.message, /Contratti, pagamenti/);
+  const blockedDelegationRoles = ['consulente', 'direzione'] as const;
+  for (const role of blockedDelegationRoles) {
+    const target: { userId: string } = fixtures.find(item => item.role === role && !item.denied)!;
+    const before = await db.userPermissionOverride.findMany({ where: { userId: target.userId }, orderBy: { permission: 'asc' } });
+    const denied: Awaited<ReturnType<typeof updatePermissionOverridesWithAudit>> = await db.$transaction(tx => updatePermissionOverridesWithAudit(tx, { userId: adminId, sessionId: session.id }, target.userId, [{ permission: 'payment.read', allowed: true }]));
+    assert.equal(denied.ok, false, 'Even admin cannot delegate reserved access to an excluded role');
+    if (!denied.ok) assert.match(denied.message, /Contratti, pagamenti/);
+    assert.deepEqual(await db.userPermissionOverride.findMany({ where: { userId: target.userId }, orderBy: { permission: 'asc' } }), before);
+  }
   await db.internalSession.update({ where: { id: session.id }, data: { revokedAt: new Date() } });
   mkdirSync(evidence, { recursive: true });
-  writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, fixtures, overrideDelegationDenied: true }));
+  writeFileSync(join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, fixtures, overrideDelegationDenied: true, blockedDelegationRoles }));
 }
 main().finally(() => db.$disconnect()).catch(error => { console.error('SYNTHETIC_PRIVACY_FIXTURE_FAILED', error); process.exitCode = 1; });

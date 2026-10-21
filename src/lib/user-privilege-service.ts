@@ -143,7 +143,7 @@ export async function updatePermissionOverridesWithAudit(tx: Tx, actor: Privileg
     return denied('Gli admin sono immuni dagli override.');
   }
   if (!hasFinancialRole(user) && overrides.some(item => item.allowed && isFinancialPermission(item.permission))) {
-    return denied('Contratti, pagamenti e relativo audit sono riservati ad Admin, Amministrazione e Direzione.');
+    return denied('Contratti, pagamenti e relativo audit sono riservati ad Admin e Amministrazione.');
   }
   const before = user.permissionOverrides.map(({ permission, allowed }) => ({ permission, allowed }));
   await tx.userPermissionOverride.deleteMany({ where: { userId: user.id } });
