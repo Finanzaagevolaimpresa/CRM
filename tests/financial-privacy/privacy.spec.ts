@@ -278,8 +278,10 @@ test('open financial session loses contracts, payment bytes and metadata immedia
         await scroller.scrollIntoViewIfNeeded();
         await scroller.evaluate(element => { element.scrollLeft = element.scrollWidth; });
         await expect(documents.getByRole('link', { name: 'Scarica', exact: true })).toBeInViewport();
+        await documents.getByRole('link', { name: 'Scarica', exact: true }).click({ trial: true });
         await scroller.evaluate(element => { element.scrollLeft = 0; });
       }
+      await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
       const layout = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth }));
       expect(layout.width).toBeLessThanOrEqual(layout.viewport + 1);
       writeFileSync(join(root, `direzione-operational-${name}-layout.json`), JSON.stringify(layout));
