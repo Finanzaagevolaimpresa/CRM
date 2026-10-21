@@ -37,9 +37,13 @@ for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844
   const link = page.locator(`#documenti a[href="/documents/${doc.id}/view"]`);
   await expect(link).toHaveText('Visualizza');
   const popupPromise = context.waitForEvent('page'); await link.click(); const viewer = await popupPromise;
+  // A new tab starts with the context viewport, not page.setViewportSize().
+  await viewer.setViewportSize({ width, height });
   await viewer.waitForLoadState('load');
   await expect(viewer.locator('img')).toBeVisible();
   await expect.poll(() => viewer.locator('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth === 600 && img.naturalHeight === 240)).toBe(true);
+  expect(viewer.viewportSize()).toEqual({ width, height });
+  expect(await viewer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await viewer.screenshot({ path: join(root, `private-document-view-${name}.png`), fullPage: true });
   const viewed = await page.request.get(`/documents/${doc.id}/view`); expect(viewed.status()).toBe(200);
   expect(await viewed.body()).toEqual(bytes);

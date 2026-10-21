@@ -103,6 +103,7 @@ grep -Fq SELECTIVE_DOCUMENT_SCHEMA58_REQUIRED "$evidence/replay.log"
 npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
 cmp "$evidence/datamodel-diff-before.sql" "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
+psql "$db" -X -qAt -v ON_ERROR_STOP=1 -f scripts/selective-client-documents/structure-readonly.sql > "$evidence/structure59.json"
 node --input-type=module - "$evidence/datamodel-diff.sql" "$ddl" <<'JS'
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
