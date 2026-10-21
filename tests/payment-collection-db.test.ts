@@ -60,7 +60,10 @@ test('collection changes only the existing payment with a real minimized atomic 
   assert.equal(row.status, 'incassato'); assert.equal(row.collectedAt?.toISOString(), f.command.collectedAt);
   assert.equal(row.accountingDocumentId, f.documents[1].id); assert.equal(row.totalAmount.toFixed(2), '61.00');
   assert.deepEqual(await db.contract.findUnique({ where: { id: f.contract.id } }), contract);
-  assert.deepEqual(await db.document.findMany({ where: { clientId: f.client.id }, orderBy: { id: 'asc' } }), docs);
+  // Linking the accounting evidence invalidates selections of that document;
+  // every other field and every unrelated document must stay identical.
+  const expectedDocs = docs.map(doc => doc.id === f.documents[1].id ? { ...doc, selectiveEpoch: doc.selectiveEpoch + 1 } : doc);
+  assert.deepEqual(await db.document.findMany({ where: { clientId: f.client.id }, orderBy: { id: 'asc' } }), expectedDocs);
   assert.equal(await db.clientService.count({ where: { clientId: f.client.id } }), 0);
   assert.equal(await db.technicalPractice.count({ where: { clientId: f.client.id } }), 0);
   const audit = await db.auditLog.findUniqueOrThrow({ where: { id: 'payment_collection_' + f.command.commandId } });

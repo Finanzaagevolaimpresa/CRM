@@ -82,7 +82,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
     {message && <p role="status" className="rounded-xl bg-amber-50 p-4">{message}</p>}
     {uncertain && <div className="grid gap-3"><p>Una conferma precedente è da verificare.</p><button className={button} disabled={pending} onClick={verify}>Verifica esito</button></div>}
     {setup.reconciliationOnly && <p className="rounded-xl bg-blue-50 p-4">Questa rata non è disponibile per una nuova conferma. Puoi verificare l’esito di una richiesta in sospeso oppure tornare all’elenco dei pagamenti.</p>}
-    {!setup.reconciliationOnly && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
+    {!setup.reconciliationOnly && !uncertain && <form onSubmit={prepare} aria-label="Conferma incasso" className="grid gap-4">
       <fieldset disabled={!ready || pending || uncertain} className="grid min-w-0 gap-4">
         <label className="grid gap-1 font-semibold">Data e ora effettive dell’incasso<input className={field} type="datetime-local" value={date} required onChange={e => { setDate(e.target.value); changed(); }} /></label>
         <div className="grid gap-1 font-semibold"><label htmlFor="collection-proof">Prova dell’incasso</label>
@@ -91,7 +91,7 @@ export function PaymentCollectionForm({ setup }: { setup: Setup }) {
         <button className={button} type="submit" disabled={!setup.documents.length}>Controlla riepilogo</button>
       </fieldset>
     </form>}
-    {!setup.reconciliationOnly && preview && <section aria-label="Riepilogo incasso" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
+    {!setup.reconciliationOnly && !uncertain && preview && <section aria-label="Riepilogo incasso" className="grid gap-4 rounded-2xl border border-fai-blue/30 bg-blue-50 p-5">
       <h2 className="text-xl font-bold">Riepilogo prima della conferma</h2>
       <dl className="grid gap-2 break-words"><div><dt className="font-semibold">Cliente</dt><dd>{preview.client}</dd></div>
         <div><dt className="font-semibold">Incarico</dt><dd>{preview.contract}</dd></div><div><dt className="font-semibold">Rata</dt><dd>€ {preview.amount}</dd></div>

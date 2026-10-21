@@ -111,6 +111,8 @@ test('lost response and reload reconcile the collected payment without another w
   });
   await page.getByRole('button', { name: 'Conferma incasso', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
   await page.reload(); await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await expect(page.getByRole('form', { name: 'Conferma incasso', exact: true })).toHaveCount(0);
   await screenshot(page, 'mobile-reconciliation');

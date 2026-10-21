@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
-          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 58
+          test "$(find prisma/migrations -mindepth 2 -maxdepth 2 -name migration.sql | wc -l | tr -d ' ')" = 59
           node scripts/m4/verify-schema.mjs
           evidence="$RUNNER_TEMP/m3-browser"
           mkdir -p "$evidence"

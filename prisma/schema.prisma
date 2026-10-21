@@ -1079,6 +1079,7 @@ model CumulabilityAssessment {
 
 model Document {
   id                    String         @id @default(cuid())
+  selectiveEpoch        Int            @default(1)
   clientId              String?
   companyId             String?
   projectId             String?

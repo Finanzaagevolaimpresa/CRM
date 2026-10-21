@@ -50,8 +50,8 @@ jobs:
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
       - name: Validate qualification shell syntax
-        run: bash -n scripts/selective-practices/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
-      - name: Exact source and additive migration58 with preserved populated schema57
+        run: bash -n scripts/selective-client-documents/qualify-migration.sh scripts/selective-practices/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
+      - name: Exact source and additive migration59 with preserved populated schema57
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +66,7 @@ jobs:
           git archive b7f9702d32382ede9b1a43076cf4378979f01b82 prisma | tar -x -C "$prior"
           npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
           bash scripts/selective-practices/qualify-migration.sh
+          bash scripts/selective-client-documents/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
@@ -111,6 +112,7 @@ jobs:
           path: |
             ${{ runner.temp }}/selective-practice-evidence
             ${{ runner.temp }}/selective-practice-migration
+            ${{ runner.temp }}/selective-document-migration
             test-results
           if-no-files-found: error
           retention-days: 14

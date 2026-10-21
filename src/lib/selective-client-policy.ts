@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clientDocumentChoiceSchema, maxClientDocuments } from './selective-client-document-policy';
 
 /** Closed read catalogue; later fields and capabilities require a new selection. */
 export const selectiveClientFields = {
@@ -8,13 +9,22 @@ export type SelectiveClientField = keyof typeof selectiveClientFields;
 const field = z.enum(Object.keys(selectiveClientFields) as [SelectiveClientField, ...SelectiveClientField[]]);
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const selectiveClientSelectionSchema = z.object({
+  version: z.literal(2).optional(),
   clientId: identifier,
   recipientId: identifier,
   revision: z.number().int().min(0),
   commandId: z.string().uuid(),
-  fields: z.array(field).min(1).max(Object.keys(selectiveClientFields).length),
+  fields: z.array(field).max(Object.keys(selectiveClientFields).length),
+  documents: z.array(clientDocumentChoiceSchema).max(maxClientDocuments).optional(),
   expiresAt: z.string().datetime().transform(value => new Date(value).toISOString()).nullable(),
 }).strict().superRefine((value, context) => {
+  // Historical signed payloads remain byte-for-byte canonical: no defaults are
+  // inserted. Only an explicit V2 selection can carry document permissions.
+  if ((value.version === 2) !== (value.documents !== undefined)
+    || (!value.fields.length && !value.documents?.length)
+    || new Set(value.documents?.map(row => row.versionId)).size !== (value.documents?.length ?? 0)) {
+    context.addIssue({ code: 'custom', message: 'Scegli campi o singole versioni, senza duplicati.' });
+  }
   if (new Set(value.fields).size !== value.fields.length) {
     context.addIssue({ code: 'custom', message: 'Ogni campo può essere selezionato una sola volta.' });
   }
@@ -82,7 +92,7 @@ export function selectiveClientAuditAllowed(scope: SelectiveClientScope,
 
 /** Only chosen scalar values leave this boundary; never spread the source record. */
 export function clientFieldProjection(client: Record<string, unknown>, chosen: readonly SelectiveClientField[]) {
-  const fields = z.array(field).min(1).max(Object.keys(selectiveClientFields).length).parse(chosen);
+  const fields = z.array(field).max(Object.keys(selectiveClientFields).length).parse(chosen);
   if (new Set(fields).size !== fields.length) throw new Error('SELECTIVE_CLIENT_DUPLICATE_FIELD');
   return fields.map(key => {
     const value = client[key];

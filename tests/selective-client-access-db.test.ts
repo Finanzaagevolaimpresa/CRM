@@ -1,6 +1,7 @@
+import { withHistoricalEnrollment } from './selective-sharing/historical-enrollment';
 // CI-only integration qualification. Do not execute against a local or real database.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { actualClientWriteActions, clientWriteActions, type ClientWriteAction } from './selective-clients/action-harness';
@@ -11,7 +12,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestra
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { clientProof, grantClient, selectiveClientFixture, type ClientPerson } from './selective-clients/fixtures';
 import { clientSharingManagement, confirmClientSharing, previewClientSharing, readClientSharing,
-  readClientSharingReceipt, revokeClientSharing } from '../src/lib/selective-client-access';
+  readClientSharingReceipt, revokeClientSharing, readSharedClientDocument } from '../src/lib/selective-client-access';
 import { canEditClient, canViewClient, canViewLead, canViewProject } from '../src/lib/access-control';
 import { clientVisibilityWhere, leadVisibilityWhere } from '../src/lib/core-query-policy';
 import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
@@ -27,6 +28,18 @@ before(async () => {
 });
 after(async () => db.$disconnect());
 const fixture = () => selectiveClientFixture(db, admin);
+async function documentFixture(role: 'admin' | 'direzione' | 'amministrazione' = 'direzione', financial = false) {
+  const f = await selectiveClientFixture(db, admin, role);
+  const bytes = Buffer.from('SYNTHETIC_SELECTED_DOCUMENT_' + randomUUID());
+  const checksum = createHash('sha256').update(bytes).digest('hex');
+  const document = await db.document.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    title: 'Documento sintetico scelto', fileName: 'synthetic.txt', mimeType: 'text/plain', sizeBytes: bytes.length,
+    storagePath: 'synthetic-no-real-file', checksum, uploadedById: admin.user.id, type: financial ? 'contratto' : 'altro',
+    documentCategory: financial ? 'contratto' : 'altro', status: 'verificato' } });
+  const version = await db.documentVersion.create({ data: { documentId: document.id, version: 1, storagePath: document.storagePath, checksum } });
+  const input = { ...f.input, version: 2 as const, fields: [], documents: [{ versionId: version.id, download: false }] };
+  return { ...f, bytes, checksum, document, version, input };
+}
 async function deniedOrdinary(f: Awaited<ReturnType<typeof fixture>>) {
   const actor = { ...f.reader.session, ...await loadSelectiveProjectScope(db, f.reader.user.id) };
   assert.equal(canViewClient(actor, f.client), false);
@@ -43,35 +56,41 @@ async function deniedOrdinary(f: Awaited<ReturnType<typeof fixture>>) {
 
 test('project authority cannot bootstrap client sharing from a management GET or preview', options, async () => {
   const f = await fixture();
+  const historicalGrants = await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } });
   assert.equal(await db.selectiveClientAuthority.count(), 0);
   await assert.rejects(clientSharingManagement(db, admin.session, f.client.id));
   await assert.rejects(previewClientSharing(db, admin.session, f.input));
   assert.equal(await db.selectiveClientAuthority.count(), 0);
-  const sql = readFileSync('ops/selective-client-authority-enrollment.sql', 'utf8'), auditId = randomUUID();
-  const target = new URL(process.env.DATABASE_URL!);
-  assert.equal(target.searchParams.get('schema') ?? 'public', 'public'); target.searchParams.delete('schema');
-  const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
-    email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
-  const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
-    input: "SELECT set_config('fai.selective_client_binding','" + JSON.stringify(value).replaceAll("'", "''") + "',false);\n" + body,
-    stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+  await withHistoricalEnrollment(db, 'client', async ({ db, admin, url }) => {
+    const sql = readFileSync('ops/selective-client-authority-enrollment.sql', 'utf8'), auditId = randomUUID();
+    const target = new URL(url);
+    assert.equal(target.searchParams.get('schema') ?? 'public', 'public'); target.searchParams.delete('schema');
+    const binding = { database: target.pathname.slice(1), userId: admin.user.id, name: admin.user.name,
+      email: admin.user.email, approvalSha256: 'a'.repeat(64), auditId };
+    const enroll = (value: unknown, body = sql) => execFileSync('psql', ['-X', '-qAt', '-v', 'ON_ERROR_STOP=1', target.toString()], {
+      input: "SELECT set_config('fai.selective_client_binding','" + JSON.stringify(value).replaceAll("'", "''") + "',false);\n" + body,
+      stdio: ['pipe', 'pipe', 'pipe'], timeout: 20_000,
+    });
+    for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }]) {
+      assert.throws(() => enroll(value), /SELECTIVE_CLIENT_ENROLLMENT_BINDING_INVALID/);
+    }
+    assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_CLIENT_ENROLLMENT_PROFILE_DENIED/);
+    assert.throws(() => enroll(binding, sql.replace('COMMIT;', "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /SYNTHETIC_ROLLBACK/);
+    assert.equal(await db.selectiveClientAuthority.count(), 0); assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
+    assert.match(enroll(binding).toString(), /SELECTIVE_CLIENT_ENROLLMENT_COMMITTED/);
+    assert.deepEqual(await db.selectiveClientAuthority.findUnique({ where: { id: 'client-sharing' } }),
+      { id: 'client-sharing', userId: admin.user.id, revision: 1, enabled: true });
+    // Real canonical N04 trigger, including the complete persisted after value.
+    const audit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
+    assert.equal(audit.actorId, admin.user.id); assert.equal(audit.event, 'selective_client_authority_enrolled');
+    assert.deepEqual(audit.before, { version: 0 });
+    assert.deepEqual(audit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
+    assert.throws(() => enroll(binding), /SELECTIVE_CLIENT_ENROLLMENT_ALREADY_STARTED/);
+    assert.equal(await db.selectiveClientGrant.count(), 0);
   });
-  for (const value of [null, [], { ...binding, approvalSha256: null }, { ...binding, auditId: null }, { ...binding, name: '' }]) {
-    assert.throws(() => enroll(value), /SELECTIVE_CLIENT_ENROLLMENT_BINDING_INVALID/);
-  }
-  assert.throws(() => enroll({ ...binding, email: 'wrong@invalid.test' }), /SELECTIVE_CLIENT_ENROLLMENT_PROFILE_DENIED/);
-  assert.throws(() => enroll(binding, sql.replace('COMMIT;', "DO $$ BEGIN RAISE EXCEPTION 'SYNTHETIC_ROLLBACK'; END $$; COMMIT;")), /SYNTHETIC_ROLLBACK/);
-  assert.equal(await db.selectiveClientAuthority.count(), 0); assert.equal(await db.auditLog.count({ where: { id: auditId } }), 0);
-  assert.match(enroll(binding).toString(), /SELECTIVE_CLIENT_ENROLLMENT_COMMITTED/);
-  assert.deepEqual(await db.selectiveClientAuthority.findUnique({ where: { id: 'client-sharing' } }),
-    { id: 'client-sharing', userId: admin.user.id, revision: 1, enabled: true });
-  // Real canonical N04 trigger, including the complete persisted after value.
-  const audit = await db.auditLog.findUniqueOrThrow({ where: { id: auditId } });
-  assert.equal(audit.actorId, admin.user.id); assert.equal(audit.event, 'selective_client_authority_enrolled');
-  assert.deepEqual(audit.before, { version: 0 });
-  assert.deepEqual(audit.after, { version: 1, enabled: true, approvalHash: binding.approvalSha256 });
-  assert.throws(() => enroll(binding), /SELECTIVE_CLIENT_ENROLLMENT_ALREADY_STARTED/);
-  assert.equal(await db.selectiveClientGrant.count(), 0);
+  // Explicit synthetic authority for the schema59 regression fixture only.
+  await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
+  assert.deepEqual(await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }), historicalGrants);
 });
 
 test('preview and selected read expose only chosen scalars; broad roles and child records stay excluded', options, async () => {
@@ -358,3 +377,173 @@ for (const operation of clientWriteActions) {
     assert.deepEqual(await businessState(f), before);
   });
 }
+
+test('V2 document-only grant preserves ordinary exclusions and separates view from download', options, async () => {
+  const f = await documentFixture();
+  const { receipt } = await grantClient(db, admin, f.input);
+  assert.equal(receipt.protocol, 'SELECTIVE_CLIENT_RECEIPT_V2');
+  assert.equal(receipt.fieldCount, 0);
+  const selected = await readClientSharing(db, f.reader.session, f.client.id);
+  assert.deepEqual(selected.fields, []); assert.equal(selected.documents.length, 1);
+  assert.doesNotMatch(JSON.stringify(selected), /storagePath|NOTA_PRIVATA|AZIENDA_SINTETICA|PROGETTO_SINTETICO/);
+  const view = await readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, false, async () => f.bytes);
+  assert.deepEqual(view.bytes, f.bytes);
+  let read = false;
+  await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, true, async () => { read = true; return f.bytes; }));
+  assert.equal(read, false);
+  await deniedOrdinary(f);
+  const audit = await db.auditLog.findUniqueOrThrow({ where: { id: receipt.revisionId } });
+  assert.deepEqual(audit.after, { version: 1, action: 'GRANT', fieldCount: 0, documentCount: 1 });
+});
+
+test('V2 download requires exact choice, valid bytes and current permission; denial leaves no audit', options, async () => {
+  const f = await documentFixture(); f.input.documents[0].download = true;
+  await grantClient(db, admin, f.input);
+  const view = await readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, true, async () => f.bytes);
+  assert.deepEqual(view.bytes, f.bytes);
+  const before = await db.auditLog.count({ where: { entityId: f.document.id } });
+  await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, true, async () => Buffer.from('ALTERED')));
+  await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, 'unselected-version', false, async () => f.bytes));
+  assert.equal(await db.auditLog.count({ where: { entityId: f.document.id } }), before);
+  await db.userPermissionOverride.create({ data: { userId: f.reader.user.id, permission: 'document.download', allowed: false } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+
+test('document changes restored to prior metadata never revive a previous selection or preview', options, async () => {
+  const f = await documentFixture(); const preview = await previewClientSharing(db, admin.session, f.input);
+  const before = await db.document.findUniqueOrThrow({ where: { id: f.document.id } });
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: true } });
+  await db.document.update({ where: { id: f.document.id }, data: { containsSensitiveData: false, updatedAt: before.updatedAt } });
+  const after = await db.document.findUniqueOrThrow({ where: { id: f.document.id } });
+  assert.ok(after.selectiveEpoch > before.selectiveEpoch);
+  await assert.rejects(confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin)));
+  await grantClient(db, admin, f.input);
+  await db.document.update({ where: { id: f.document.id }, data: { visibilityLevel: 'privato' } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await db.document.update({ where: { id: f.document.id }, data: { visibilityLevel: 'interno', updatedAt: after.updatedAt } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await assert.rejects(db.document.update({ where: { id: f.document.id }, data: { selectiveEpoch: 1 } }));
+});
+
+test('new version does not inherit selection and invalidates even the old bytes until a fresh personal choice', options, async () => {
+  const f = await documentFixture(); await grantClient(db, admin, f.input);
+  const next = await db.documentVersion.create({ data: { documentId: f.document.id, version: 2,
+    storagePath: 'synthetic-second-version', checksum: 'c'.repeat(64) } });
+  for (const versionId of [f.version.id, next.id]) await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, versionId, false, async () => f.bytes));
+  await db.documentVersion.delete({ where: { id: next.id } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  const renewed = { ...f.input, commandId: randomUUID(), revision: 1 };
+  await grantClient(db, admin, renewed);
+  assert.equal((await readClientSharing(db, f.reader.session, f.client.id)).documents[0].versionId, f.version.id);
+});
+
+test('financial selection denies Direzione and forced allow; Admin and Amministrazione remain eligible', options, async () => {
+  const denied = await documentFixture('direzione', true);
+  await db.userPermissionOverride.create({ data: { userId: denied.reader.user.id, permission: 'contract.read', allowed: true } });
+  await assert.rejects(previewClientSharing(db, admin.session, denied.input));
+  for (const role of ['admin', 'amministrazione'] as const) {
+    const f = await documentFixture(role, true); await grantClient(db, admin, f.input);
+    assert.equal((await readClientSharing(db, f.reader.session, f.client.id)).documents.length, 1);
+    await db.user.update({ where: { id: f.reader.user.id }, data: { role: 'direzione' } });
+    await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, false, async () => f.bytes));
+  }
+});
+
+test('document revocation is retained, receipt is reconcilable and duplicate confirmation cannot create another revision', options, async () => {
+  const f = await documentFixture(); const { preview, receipt } = await grantClient(db, admin, f.input);
+  assert.deepEqual(await confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin)), receipt);
+  assert.deepEqual(await readClientSharingReceipt(db, admin.session, f.input.commandId, f.client.id), receipt);
+  const command = { grantId: receipt.grantId, revision: 1, commandId: randomUUID() };
+  const revoked = await revokeClientSharing(db, admin.session, command, clientProof(admin));
+  assert.equal(revoked.protocol, 'SELECTIVE_CLIENT_RECEIPT_V2');
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  assert.equal(await db.selectiveClientRevision.count({ where: { grantId: receipt.grantId } }), 2);
+  await deniedOrdinary(f);
+});
+
+for (const reference of ['contract', 'payment'] as const) test(reference + ': canonical financial reassociation never revives an ordinary document selection', options, async () => {
+  const f = await documentFixture(); await grantClient(db, admin, f.input);
+  const contract = await db.contract.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    contractNumber: 'SYNTHETIC_' + randomUUID(), serviceName: 'Synthetic recovery association',
+    taxableAmount: 1, vatAmount: 0, totalAmount: 1 } });
+  const before = await db.document.findUniqueOrThrow({ where: { id: f.document.id } });
+  if (reference === 'contract') {
+    await db.contract.update({ where: { id: contract.id }, data: { signedDocumentId: f.document.id } });
+  } else {
+    await db.payment.create({ data: { contractId: contract.id, clientId: f.client.id,
+      taxableAmount: 1, vatAmount: 0, totalAmount: 1, accountingDocumentId: f.document.id } });
+  }
+  await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, false, async () => f.bytes));
+  const renewed = { ...f.input, commandId: randomUUID(), revision: 1 };
+  await assert.rejects(previewClientSharing(db, admin.session, renewed));
+  if (reference === 'contract') await db.contract.update({ where: { id: contract.id }, data: { signedDocumentId: null } });
+  else await db.payment.updateMany({ where: { contractId: contract.id }, data: { accountingDocumentId: null } });
+  assert.ok((await db.document.findUniqueOrThrow({ where: { id: f.document.id } })).selectiveEpoch >= before.selectiveEpoch + 2);
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await grantClient(db, admin, renewed);
+  assert.deepEqual((await readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, false, async () => f.bytes)).bytes, f.bytes);
+});
+
+test('a document writer really blocks confirmation and makes its prior preview unusable', options, async () => {
+  const f = await documentFixture(), preview = await previewClientSharing(db, admin.session, f.input);
+  let release!: () => void, ready!: (pid: number) => void;
+  const started = new Promise<number>(resolve => { ready = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const writer = db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Document" WHERE id=${f.document.id} FOR UPDATE`;
+    const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+    ready(row.pid); await gate;
+    await tx.document.update({ where: { id: f.document.id }, data: { title: 'Concurrent synthetic document mutation' } });
+  });
+  const pid = await started;
+  const result = Promise.allSettled([confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin))]);
+  try { await waitForWriterLock(pid); } finally { release(); await writer; }
+  assert.equal((await result)[0].status, 'rejected');
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 0);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+});
+
+test('financial parent history changes invalidate its accounting document even after timestamp restoration', options, async () => {
+  const f = await documentFixture('amministrazione');
+  const contract = await db.contract.create({ data: { clientId: f.client.id, contractNumber: 'SYNTHETIC_' + randomUUID(),
+    serviceName: 'Synthetic accounting document parent', taxableAmount: 1, vatAmount: 0, totalAmount: 1 } });
+  await db.payment.create({ data: { contractId: contract.id, clientId: f.client.id, taxableAmount: 1, vatAmount: 0,
+    totalAmount: 1, accountingDocumentId: f.document.id } });
+  await grantClient(db, admin, f.input);
+  const before = await db.document.findUniqueOrThrow({ where: { id: f.document.id } });
+  await db.contract.update({ where: { id: contract.id }, data: { status: 'firmato' } });
+  await db.contract.update({ where: { id: contract.id }, data: { status: contract.status, updatedAt: contract.updatedAt } });
+  assert.ok((await db.document.findUniqueOrThrow({ where: { id: f.document.id } })).selectiveEpoch >= before.selectiveEpoch + 2);
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+
+test('company reassociation restored to its prior client and timestamp cannot revive document access', options, async () => {
+  const f = await documentFixture();
+  await db.document.update({ where: { id: f.document.id }, data: { companyId: f.company.id } });
+  await grantClient(db, admin, f.input);
+  const before = await db.document.findUniqueOrThrow({ where: { id: f.document.id } });
+  await db.company.update({ where: { id: f.company.id }, data: { clientId: f.other.id } });
+  await db.company.update({ where: { id: f.company.id }, data: { clientId: f.client.id, updatedAt: f.company.updatedAt } });
+  assert.ok((await db.document.findUniqueOrThrow({ where: { id: f.document.id } })).selectiveEpoch >= before.selectiveEpoch + 2);
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+
+test('V2 audit failure rolls back the decision and a failed access audit returns no bytes', options, async () => {
+  const f = await documentFixture(), preview = await previewClientSharing(db, admin.session, f.input);
+  const before = await db.user.findUniqueOrThrow({ where: { id: f.reader.user.id } });
+  await db.$executeRawUnsafe("CREATE FUNCTION synthetic_selected_document_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event IN ('selective_client_changed','selective_client_document_view') THEN RAISE EXCEPTION 'SYNTHETIC_SELECTED_DOCUMENT_AUDIT_FAULT'; END IF; RETURN NEW; END $$");
+  await db.$executeRawUnsafe('CREATE TRIGGER synthetic_selected_document_audit_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_selected_document_audit_fault()');
+  try { await assert.rejects(confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin))); }
+  finally { await db.$executeRawUnsafe('DROP TRIGGER synthetic_selected_document_audit_fault ON "AuditLog"'); }
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 0);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+  assert.deepEqual(await db.user.findUniqueOrThrow({ where: { id: f.reader.user.id } }), before);
+  await grantClient(db, admin, f.input);
+  const count = await db.auditLog.count({ where: { entityId: f.document.id } });
+  await db.$executeRawUnsafe('CREATE TRIGGER synthetic_selected_document_audit_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_selected_document_audit_fault()');
+  try { await assert.rejects(readSharedClientDocument(db, f.reader.session, f.client.id, f.version.id, false, async () => f.bytes)); }
+  finally {
+    await db.$executeRawUnsafe('DROP TRIGGER synthetic_selected_document_audit_fault ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION synthetic_selected_document_audit_fault()');
+  }
+  assert.equal(await db.auditLog.count({ where: { entityId: f.document.id } }), count);
+});

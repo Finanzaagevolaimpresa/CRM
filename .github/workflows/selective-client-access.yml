@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', '.github/workflows/selective-client-access.yml']
+    paths: ['src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', 'scripts/selective-client-documents/**', '.github/workflows/selective-client-access.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-client-${{ github.event.pull_request.number || github.ref }}
@@ -50,8 +50,8 @@ jobs:
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
       - name: Validate qualification shell syntax
-        run: bash -n scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
-      - name: Exact source and additive migration58 with preserved populated schema56
+        run: bash -n scripts/selective-client-documents/qualify-migration.sh scripts/selective-clients/qualify-migration.sh scripts/selective-leads/qualify-migration.sh scripts/ordinary-email/qualify-migration.sh scripts/pr140/qualify-release.sh scripts/vnx03/run-e2e.sh scripts/vnx03/wpforms-profile.sh
+      - name: Exact source and additive migration59 with preserved populated schema56
         shell: bash
         run: |
           set -euo pipefail
@@ -67,14 +67,15 @@ jobs:
           npx prisma migrate deploy --schema "$prior/prisma/schema.prisma"
           bash scripts/selective-clients/qualify-migration.sh
           bash scripts/selective-practices/qualify-migration.sh
+          bash scripts/selective-client-documents/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/selective-client-access-db.test.ts | tee "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 28' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 28' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 40' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 40' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$SELECTIVE_CLIENT_EVIDENCE/postgresql.tap"
       - name: Prepare synthetic native browser
@@ -98,7 +99,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_CLIENT_EVIDENCE/playwright.json" npx playwright test --config tests/selective-clients/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_CLIENT_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_CLIENT_EVIDENCE/source.txt"
@@ -113,6 +114,7 @@ jobs:
             ${{ runner.temp }}/selective-client-evidence
             ${{ runner.temp }}/selective-client-migration
             ${{ runner.temp }}/selective-practice-migration
+            ${{ runner.temp }}/selective-document-migration
             test-results
           if-no-files-found: error
           retention-days: 14

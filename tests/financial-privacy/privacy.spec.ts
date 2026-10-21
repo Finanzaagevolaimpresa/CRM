@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { savePrivateDocumentFile } from '../../src/lib/storage';
 const db = new PrismaClient(), root = process.env.FINANCIAL_PRIVACY_EVIDENCE!, password = process.env.FINANCIAL_PRIVACY_BROWSER_PASSWORD!;
 type Fixture = { role: string; key: string; denied: string | null; userId: string; clientId: string; projectId: string; serviceId: string; contractId: string; paymentId: string; docs: { kind: string; id: string; versionId: string; title: string }[] };
 const fixture = JSON.parse(readFileSync(join(root, 'fixture.json'), 'utf8')) as { synthetic: boolean; fixtures: Fixture[]; overrideDelegationDenied: boolean; blockedDelegationRoles: string[] };
@@ -14,6 +15,102 @@ async function login(page: Page, role: string) {
 }
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.FINANCIAL_PRIVACY_BROWSER_CONFIRMED).toBe('1'); expect(fixture.synthetic).toBe(true); expect(fixture.overrideDelegationDenied).toBe(true); expect(fixture.blockedDelegationRoles).toContain('direzione'); });
 test.afterAll(async () => { await db.$disconnect(); });
+for (const [name, width, height, role] of [['desktop', 1280, 900, 'admin'], ['mobile', 390, 844, 'amministrazione']] as const) {
+  test.describe(`Native PDF preview ${name}`, () => {
+    test.use({ viewport: { width, height } });
+    test('Visualizza renders a valid private PDF and rechecks access on reopening', async ({ page, context }) => {
+      const f = fixture.fixtures.find(f => f.role === role && !f.denied)!;
+      const fixturePage = await context.newPage();
+      await fixturePage.setContent('<!doctype html><html lang="it"><body style="font-family:sans-serif;color:#123466"><h1>Contratto sintetico</h1><p>Anteprima PDF leggibile nel CRM.</p><p>Documento di collaudo: nessun dato reale.</p></body></html>');
+      const bytes = await fixturePage.pdf({ width: '600px', height: '360px', printBackground: true, margin: { top: '24px', right: '24px', bottom: '24px', left: '24px' } });
+      await fixturePage.close();
+      const fileName = `preview-contract-${name}.pdf`;
+      const saved = await savePrivateDocumentFile({ file: new File([new Uint8Array(bytes)], fileName, { type: 'application/pdf' }), clientId: f.clientId, fileName });
+      const doc = await db.document.create({ data: { ...saved, fileName, mimeType: 'application/pdf', type: 'application/pdf',
+        title: `Contratto sintetico anteprima ${name}`, serviceArea: 'contratti', clientId: f.clientId, projectId: f.projectId, status: 'verificato', uploadedById: f.userId } });
+      await db.documentVersion.create({ data: { documentId: doc.id, version: 1, storagePath: doc.storagePath, checksum: doc.checksum } });
+      await login(page, f.key); await page.goto(`/clients/${f.clientId}#documenti`);
+      const link = page.locator(`#documenti a[href="/documents/${doc.id}/view"]`);
+      await expect(link).toHaveText('Visualizza');
+      const popupPromise = context.waitForEvent('page'); await link.click(); const viewer = await popupPromise;
+      try {
+        await expect.poll(async () => {
+          for (const frame of viewer.frames()) {
+            const rendered = await frame.evaluate(() => {
+              const pdf = document.querySelector('pdf-viewer') as (HTMLElement & { loadState_?: string; documentDimensions?: { pageDimensions?: Array<{ width: number; height: number }> } }) | null;
+              const pages = pdf?.documentDimensions?.pageDimensions;
+              // Chromium's reactive showErrorDialog accessor is not exposed in
+              // every build. Inspect the actual error UI and positive renderer state.
+              return pdf?.loadState_ === 'success' && !!pdf.shadowRoot && !pdf.shadowRoot.querySelector('viewer-error-dialog')
+                && pages?.length === 1 && pages[0].width >= 600 && pages[0].height >= 360;
+            }).catch(() => false);
+            if (rendered) return true;
+          }
+          return false;
+        }, { timeout: 60_000, message: 'Native PDF renderer must load one actual page, not only return PDF bytes' }).toBe(true);
+        expect(viewer.viewportSize()).toEqual({ width, height });
+        await viewer.screenshot({ path: join(root, `private-pdf-view-${name}.png`), fullPage: true });
+        const response = await page.request.get(`/documents/${doc.id}/view`);
+        expect(response.status()).toBe(200); expect(await response.body()).toEqual(bytes);
+        expect(response.headers()['content-disposition']).toContain('inline');
+        expect(response.headers()['content-security-policy']).toContain('sandbox');
+        expect(response.headers()['cache-control']).toContain('no-store');
+        expect(await db.auditLog.count({ where: { actorId: f.userId, entityId: doc.id, event: 'document_view' } })).toBeGreaterThanOrEqual(2);
+        expect(await db.auditLog.count({ where: { actorId: f.userId, entityId: doc.id, event: 'document_download' } })).toBe(0);
+        await db.document.update({ where: { id: doc.id }, data: { deletedAt: new Date() } });
+        const denied = await viewer.reload(); expect(denied?.status()).toBe(404);
+        await expect(viewer.getByText('Documento non disponibile', { exact: true })).toBeVisible();
+        writeFileSync(join(root, `private-pdf-proof-${name}.json`), JSON.stringify({ synthetic: true, role, viewport: { width, height }, nativePdfPageRendered: true, exactBytes: true, privateHeaders: true, viewAuditOnly: true, reopeningDeletedDocumentDenied: true }));
+      } catch (error) {
+        await viewer.screenshot({ path: join(root, `private-pdf-failure-${name}.png`), fullPage: true }).catch(() => undefined);
+        const frames = await Promise.all(viewer.frames().map(async frame => ({ url: frame.url(), state: await frame.evaluate(() => {
+          const pdf = document.querySelector('pdf-viewer') as (HTMLElement & { loadState_?: string; showErrorDialog?: boolean; documentDimensions?: unknown }) | null;
+          return { found: !!pdf, loadState: pdf?.loadState_, showErrorDialog: pdf?.showErrorDialog, dimensions: pdf?.documentDimensions };
+        }).catch(() => null) })));
+        writeFileSync(join(root, `private-pdf-failure-${name}.json`), JSON.stringify({ synthetic: true, frames }));
+        throw error;
+      } finally { await viewer.close(); }
+    });
+  });
+}
+for (const [name, width, height] of [['desktop', 1280, 900], ['mobile', 390, 844]] as const) test(`${name}: Visualizza renders actual private image bytes and revocation blocks reopening`, async ({ page, context }) => {
+  const f = fixture.fixtures.find(f => f.role === 'admin' && !f.denied)!;
+  await page.setViewportSize({ width, height }); await login(page, f.key);
+  const dataUrl = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 600; canvas.height = 240;
+    const drawing = canvas.getContext('2d')!;
+    drawing.fillStyle = '#fff'; drawing.fillRect(0, 0, 600, 240);
+    drawing.fillStyle = '#123466'; drawing.font = '26px sans-serif';
+    drawing.fillText('Anteprima documento sintetico', 25, 70);
+    drawing.font = '18px sans-serif'; drawing.fillText('Contenuto visibile nel browser · nessun dato reale', 25, 120);
+    return canvas.toDataURL('image/png');
+  });
+  const bytes = Buffer.from(dataUrl.split(',')[1], 'base64'), fileName = `preview-${name}.png`;
+  const file = new File([bytes], fileName, { type: 'image/png' });
+  const saved = await savePrivateDocumentFile({ file, clientId: f.clientId, fileName });
+  const doc = await db.document.create({ data: { ...saved, fileName, mimeType: 'image/png', type: 'image/png',
+    title: `Anteprima sintetica ${name}`, serviceArea: 'contratti', clientId: f.clientId, projectId: f.projectId, status: 'verificato', uploadedById: f.userId } });
+  await db.documentVersion.create({ data: { documentId: doc.id, version: 1, storagePath: doc.storagePath, checksum: doc.checksum } });
+  await page.goto(`/clients/${f.clientId}#documenti`);
+  const link = page.locator(`#documenti a[href="/documents/${doc.id}/view"]`);
+  await expect(link).toHaveText('Visualizza');
+  const popupPromise = context.waitForEvent('page'); await link.click(); const viewer = await popupPromise;
+  // A new tab starts with the context viewport, not page.setViewportSize().
+  await viewer.setViewportSize({ width, height });
+  await viewer.waitForLoadState('load');
+  await expect(viewer.locator('img')).toBeVisible();
+  await expect.poll(() => viewer.locator('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth === 600 && img.naturalHeight === 240)).toBe(true);
+  expect(viewer.viewportSize()).toEqual({ width, height });
+  expect(await viewer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await viewer.screenshot({ path: join(root, `private-document-view-${name}.png`), fullPage: true });
+  const viewed = await page.request.get(`/documents/${doc.id}/view`); expect(viewed.status()).toBe(200);
+  expect(await viewed.body()).toEqual(bytes);
+  expect(await db.auditLog.count({ where: { actorId: f.userId, entityId: doc.id, event: 'document_view' } })).toBeGreaterThanOrEqual(2);
+  expect(await db.auditLog.count({ where: { actorId: f.userId, entityId: doc.id, event: 'document_download' } })).toBe(0);
+  await db.document.update({ where: { id: doc.id }, data: { deletedAt: new Date() } });
+  const denied = await viewer.reload(); expect(denied?.status()).toBe(404); await expect(viewer.locator('img')).toHaveCount(0);
+  await viewer.close();
+});
 for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real lists, details, HTML, report and versioned downloads obey the ceiling`, async ({ page }) => {
   await login(page, f.role);
   const financial = ['admin', 'amministrazione'].includes(f.role);
@@ -31,6 +128,15 @@ for (const f of fixture.fixtures.filter(f => !f.denied)) test(`${f.role}: real l
       const response = await page.request.get(`/documents/${document.id}/download${suffix}`);
       expect(response.status(), `${f.role}/${document.kind}${suffix}`).toBe(expected);
       if (expected === 200) expect(response.headers()['content-disposition']).toContain('attachment');
+      const view = await page.request.get(`/documents/${document.id}/view${suffix}`);
+      expect(view.status(), `${f.role}/inline/${document.kind}${suffix}`).toBe(expected === 200 && document.kind === 'archive' ? 415 : expected);
+      if (view.status() === 200) {
+        expect(view.headers()['content-disposition']).toContain('inline');
+        expect(view.headers()['content-type']).toBe('application/pdf');
+        expect(view.headers()['cache-control']).toContain('no-store');
+        expect(view.headers()['content-security-policy']).toContain('sandbox');
+        expect(await view.body()).toEqual(await response.body());
+      }
     }
   }
   for (const route of [`/clients/${f.clientId}`, '/documents', `/search?q=${encodeURIComponent(f.docs[0].title)}`]) {
@@ -250,10 +356,11 @@ test('open financial session loses contracts, payment bytes and metadata immedia
   for (const doc of protectedDocs) expect((await page.request.get(`/documents/${doc.id}/download`)).status()).toBe(200);
   await db.user.update({ where: { id: f.userId }, data: { role: 'direzione' } });
   try {
-    const auditFilter = { actorId: f.userId, event: { in: ['document_download', 'document_sensitive_access'] }, entityId: { in: protectedDocs.map(doc => doc.id) } };
+    const auditFilter = { actorId: f.userId, event: { in: ['document_download', 'document_view', 'document_sensitive_access'] }, entityId: { in: protectedDocs.map(doc => doc.id) } };
     const before = await db.auditLog.count({ where: auditFilter });
     for (const doc of protectedDocs) for (const suffix of ['', `?versionId=${doc.versionId}`]) {
       expect((await page.request.get(`/documents/${doc.id}/download${suffix}`)).status()).toBe(403);
+      expect((await page.request.get(`/documents/${doc.id}/view${suffix}`)).status()).toBe(403);
     }
     expect(await db.auditLog.count({ where: auditFilter })).toBe(before);
     await page.reload();

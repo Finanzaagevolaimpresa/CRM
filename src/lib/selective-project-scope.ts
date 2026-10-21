@@ -9,6 +9,11 @@ import type { SelectiveLeadScope } from './selective-lead-policy';
 import { loadSelectiveClientScope, type LoadedSelectiveClientScope } from './selective-client-scope';
 
 type Db = Prisma.TransactionClient;
+/** Used by a separately signed client-document projection. Only the client
+ * exclusion is handled by that projection; project restrictions still apply. */
+export async function loadIndependentProjectExclusions(db: Db, recipientId: string) {
+  return loadExclusions(db, recipientId, true);
+}
 export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope & SelectivePracticeScope> {
   return loadCurrentExclusions(db, recipientId, true);
 }

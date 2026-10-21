@@ -43,7 +43,7 @@ export async function confirmClientSharingAction(_previous: ClientSharingState, 
     const receipt = await confirmClientSharing(prisma, session, JSON.parse(String(form.get('selection') ?? '')),
       String(form.get('token') ?? ''), await credentials());
     refresh();
-    return { ok: true, message: 'Accesso confermato: la persona può leggere soltanto i campi scelti.', receipt };
+    return { ok: true, message: 'Accesso confermato: la persona può leggere soltanto i campi e le versioni scelti.', receipt };
   } catch (error) { return failure(error); }
 }
 export async function revokeClientSharingAction(_previous: ClientSharingState, form: FormData): Promise<ClientSharingState> {
