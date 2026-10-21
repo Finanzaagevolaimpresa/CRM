@@ -8,6 +8,12 @@ evidence="$RUNNER_TEMP/selective-document-migration"
 mkdir -p "$evidence"
 ddl=prisma/migrations/20261021080000_selective_client_documents_v1/migration.sql
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 58
+# Preserve the complete historical Prisma drift, including legacy defaults.
+# No new mismatch is admitted by the migration to schema59.
+baseline="$(node --input-type=module -e "import {readFileSync} from 'node:fs';process.stdout.write(JSON.parse(readFileSync('scripts/selective-client-documents/schema-binding.json','utf8')).baseline)")"
+[[ "$baseline" =~ ^[a-f0-9]{40}$ ]]
+git show "$baseline:prisma/schema.prisma" > "$evidence/schema58.prisma"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$evidence/schema58.prisma" --script > "$evidence/datamodel-diff-before.sql"
 # A structurally valid historical V1 command is retained byte for byte. Its
 # synthetic proof is deliberately unusable by the application HMAC verifier.
 psql "$db" -v ON_ERROR_STOP=1 <<'SQL'
@@ -95,6 +101,7 @@ SQL
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_DOCUMENT_SCHEMA58_REQUIRED "$evidence/replay.log"
 npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/datamodel-diff.sql"
+cmp "$evidence/datamodel-diff-before.sql" "$evidence/datamodel-diff.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/datamodel-diff.sql"
 node --input-type=module - "$evidence/datamodel-diff.sql" "$ddl" <<'JS'
 import assert from 'node:assert/strict';
@@ -102,7 +109,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 const binding=JSON.parse(readFileSync('scripts/selective-client-documents/schema-binding.json','utf8'));
 assert.equal(createHash('sha256').update(readFileSync(process.argv[3])).digest('hex'),binding.migrationSha256);
-assert.doesNotMatch(readFileSync(process.argv[2],'utf8'), /(?:ALTER|DROP|CREATE) TABLE "(?:SelectiveClient|Document)/);
+assert.doesNotMatch(readFileSync(process.argv[2],'utf8'), /selectiveEpoch/);
 JS
 printf '{"synthetic":true,"before":58,"after":59,"prefix58Unchanged":true,"allLegacyRowsPreserved":true,"legacyV1CommandHistoryAndAuditPreserved":true,"migrationCreatedNoGrantsOrAuthority":true,"atomicFailureRolledBack":true,"replayDenied":true,"documentGenerationMonotonic":true,"productionContact":false}\n' > "$evidence/migration59-proof.json"
 cat "$evidence/migration59-proof.json"

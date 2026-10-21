@@ -20,7 +20,9 @@ export async function leadFixture(db: PrismaClient, ownerId: string, withInbox =
   const cycle = item && policy ? await db.commercialLeadSlaCycle.create({ data: { inboxItemId: item.id, policyVersionId: policy.id,
     sequence: 1, availableAt, dueAt: new Date(availableAt.getTime() + policy.responseTargetSeconds * 1000),
     firstResponseAt: new Date(availableAt.getTime() + 1000) } }) : null;
-  return { lead, client, offer, doc, version, item, cycle, label };
+  // Version creation advances the document generation before lifecycle begins.
+  const currentDoc = await db.document.findUniqueOrThrow({ where: { id: doc.id } });
+  return { lead, client, offer, doc: currentDoc, version, item, cycle, label };
 }
 
 
