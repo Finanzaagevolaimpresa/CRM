@@ -185,3 +185,7 @@ input:focus, select:focus, textarea:focus {
 .client-detail-page { min-width: 0; overflow-wrap: anywhere; }
 .client-detail-page .grid > *, .client-detail-page .flex > * { min-width: 0; }
 .client-detail-page input, .client-detail-page textarea, .client-detail-page select { min-width: 0; max-width: 100%; }
+.client-detail-page table { overflow-wrap: normal; }
+.client-detail-page th { white-space: nowrap; }
+.client-detail-page #timeline-operativa > div:first-child { flex-wrap: wrap; }
+.client-detail-page #timeline-operativa h2 { overflow-wrap: normal; }

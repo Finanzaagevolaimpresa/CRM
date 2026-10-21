@@ -37,7 +37,7 @@ export function DocumentBatchUpload({ children, className, submitLabel = 'Carica
         }} />
       </label>
       <input className="rounded-xl border p-3" name="title" maxLength={160} placeholder="Titolo facoltativo; altrimenti nome del file" aria-label="Titolo documenti" />
-      <p className="text-sm text-slate-600 md:col-span-full">Fino a 20 file per operazione, 25 MB ciascuno. Gli ZIP restano archivi senza estrazione e sono riservati ad Admin, Amministrazione e Direzione. Categoria e collegamenti si applicano a tutti i file selezionati.</p>
+      <p className="text-sm text-slate-600 md:col-span-full">Fino a 20 file per operazione, 25 MB ciascuno. Gli ZIP restano archivi senza estrazione e sono riservati ad Admin e Amministrazione. Categoria e collegamenti si applicano a tutti i file selezionati.</p>
       {error ? <p role="alert" className="text-red-700 md:col-span-full">{error}</p> : null}
       <ul aria-live="polite" aria-label="Esito caricamenti" className="text-sm md:col-span-full">{files.map((file, index) => <li key={index}>
         {file.name}: {results[index] ? (results[index].ok ? 'Caricato' : results[index].message) : busy ? 'In attesa' : attempted ? 'Non inviato' : 'Pronto'}
