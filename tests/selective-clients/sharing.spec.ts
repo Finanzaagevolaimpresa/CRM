@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { savePrivateDocumentFile } from '../../src/lib/storage';
 
 const db = new PrismaClient(), evidence = process.env.SELECTIVE_CLIENT_EVIDENCE!, password = process.env.SELECTIVE_CLIENT_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
@@ -201,3 +202,71 @@ test('native preview cannot approve a changed document and a future version neve
   for (const version of [document.versionId, newer.id]) expect((await rc.request.get(`/shared-clients/${row.clientId}/documents/${version}`)).status()).toBe(404);
   await ac.close(); await rc.close();
 });
+
+for (const [name, width, height, format, index] of [['desktop', 1280, 900, 'pdf', 6], ['mobile', 390, 844, 'png', 7]] as const) {
+  test.describe(`Actual selected ${format} ${name}`, () => {
+    test('native file link renders selected bytes and an open-session revocation prevents reopening', async ({ browser }) => {
+      const row = f.rows[index], document = row.documents[0];
+      const ac = await browser.newContext({ viewport: { width, height } }), rc = await browser.newContext({ viewport: { width, height } });
+      const admin = await ac.newPage(), reader = await rc.newPage();
+      await admin.setContent('<!doctype html><html lang="it"><body style="font-family:sans-serif;color:#123466"><h1>Documento selezionato</h1><p>Anteprima PDF della sola versione autorizzata.</p><p>Collaudo sintetico: nessun dato reale.</p></body></html>');
+      const bytes = format === 'pdf'
+        ? await admin.pdf({ width: '600px', height: '360px', printBackground: true, margin: { top: '24px', right: '24px', bottom: '24px', left: '24px' } })
+        : Buffer.from((await admin.evaluate(() => {
+          const canvas = window.document.createElement('canvas'); canvas.width = 600; canvas.height = 240;
+          const drawing = canvas.getContext('2d')!; drawing.fillStyle = '#fff'; drawing.fillRect(0, 0, 600, 240);
+          drawing.fillStyle = '#123466'; drawing.font = '26px sans-serif'; drawing.fillText('Versione documentale selezionata', 25, 70);
+          drawing.font = '18px sans-serif'; drawing.fillText('Solo il contenuto autorizzato · prova sintetica', 25, 120);
+          return canvas.toDataURL('image/png');
+        })).split(',')[1], 'base64');
+      const fileName = `selected-preview-${name}.${format}`, mimeType = format === 'pdf' ? 'application/pdf' : 'image/png';
+      const saved = await savePrivateDocumentFile({ file: new File([new Uint8Array(bytes)], fileName, { type: mimeType }), fileName, clientId: row.clientId });
+      await db.document.update({ where: { id: document.id }, data: { ...saved, fileName, mimeType } });
+      await db.documentVersion.update({ where: { id: document.versionId }, data: { storagePath: saved.storagePath, checksum: saved.checksum } });
+      await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+      await prepareDocument(admin, row, document, false);
+      await admin.getByRole('button', { name: 'Conferma accesso selettivo', exact: true }).click();
+      await expect.poll(() => db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(1);
+      await reader.goto('/shared-clients/' + row.clientId);
+      expect(await db.auditLog.count({ where: { actorId: row.readerId, entityId: document.id, event: 'selective_client_document_view' } })).toBe(0);
+      const url = `/shared-clients/${row.clientId}/documents/${document.versionId}`;
+      const link = reader.getByRole('link', { name: 'Consulta versione', exact: true });
+      await expect(link).toHaveAttribute('href', url); await expect(link).toHaveAttribute('target', '_blank');
+      const popup = rc.waitForEvent('page'); await link.click(); const viewer = await popup;
+      try {
+        if (format === 'png') {
+          await expect(viewer.locator('img')).toBeVisible();
+          await expect.poll(() => viewer.locator('img').evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth === 600 && img.naturalHeight === 240)).toBe(true);
+          expect(await viewer.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } else {
+          await expect.poll(async () => {
+            for (const frame of viewer.frames()) {
+              if (await frame.evaluate(() => {
+                const pdf = window.document.querySelector('pdf-viewer') as (HTMLElement & { loadState_?: string; showErrorDialog?: boolean; documentDimensions?: { pageDimensions?: unknown[] } }) | null;
+                return pdf?.loadState_ === 'success' && pdf.showErrorDialog === false && pdf.documentDimensions?.pageDimensions?.length === 1;
+              }).catch(() => false)) return true;
+            }
+            return false;
+          }, { timeout: 60_000, message: 'Selected PDF must render one actual page' }).toBe(true);
+        }
+        expect(viewer.viewportSize()).toEqual({ width, height });
+        await viewer.screenshot({ path: path.join(evidence, `selected-file-render-${name}.png`), fullPage: true });
+        const response = await rc.request.get(url); expect(response.status()).toBe(200); expect(await response.body()).toEqual(bytes);
+        expect(response.headers()['content-security-policy']).toContain('sandbox');
+        expect(response.headers()['cache-control']).toContain('no-store');
+        expect((await rc.request.get(url + '?download=1')).status()).toBe(404);
+        expect((await rc.request.get(`/documents/${document.id}/view`)).status()).toBe(403);
+        await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
+        await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
+        await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+        const denied = await viewer.reload(); expect(denied?.status()).toBe(404);
+        await expect(viewer.getByText('Documento non disponibile', { exact: true })).toBeVisible();
+        writeFileSync(path.join(evidence, `selected-file-proof-${name}.json`), JSON.stringify({ synthetic: true, format, viewport: { width, height }, selectedBytesRendered: true, exactBytes: true, downloadDenied: true, ordinaryViewDenied: true, revocationDeniedOnOpenSession: true }));
+      } catch (error) {
+        await viewer.screenshot({ path: path.join(evidence, `selected-file-failure-${name}.png`), fullPage: true }).catch(() => undefined);
+        writeFileSync(path.join(evidence, `selected-file-failure-${name}.json`), JSON.stringify({ synthetic: true, frames: viewer.frames().map(frame => frame.url()) }));
+        throw error;
+      } finally { await ac.close(); await rc.close(); }
+    });
+  });
+}

@@ -21,7 +21,7 @@ async function main() {
     companyId: string; companyName: string; projectId: string; projectTitle: string; leadId: string;
     otherClientId: string; otherLabel: string;
     documents: { id: string; versionId: string; title: string; content: string; financial: boolean }[] }[] = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const f = await selectiveClientFixture(db, admin, i === 4 ? 'amministrazione' : 'admin', hash);
     const documents = [];
     if (i >= 3) for (const kind of ['selected', 'unselected', 'financial']) {

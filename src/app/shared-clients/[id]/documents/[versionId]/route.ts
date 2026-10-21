@@ -14,7 +14,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       'Content-Type': document.mimeType,
       'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
       'Cache-Control': 'private, no-store, max-age=0', 'Pragma': 'no-cache',
-      'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'; frame-ancestors 'self'",
+      'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'",
       'Referrer-Policy': 'no-referrer', 'Content-Length': String(bytes.length),
     } });
   } catch { return new NextResponse('Documento non disponibile', { status: 404, headers: { 'Cache-Control': 'private, no-store' } }); }

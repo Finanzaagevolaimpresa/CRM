@@ -17,8 +17,7 @@ test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity
 test.afterAll(async () => { await db.$disconnect(); });
 for (const [name, width, height, role] of [['desktop', 1280, 900, 'admin'], ['mobile', 390, 844, 'amministrazione']] as const) {
   test.describe(`Native PDF preview ${name}`, () => {
-    // Full Chromium includes the PDF renderer; the default headless shell does not.
-    test.use({ channel: 'chromium', viewport: { width, height } });
+    test.use({ viewport: { width, height } });
     test('Visualizza renders a valid private PDF and rechecks access on reopening', async ({ page, context }) => {
       const f = fixture.fixtures.find(f => f.role === role && !f.denied)!;
       const fixturePage = await context.newPage();

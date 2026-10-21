@@ -99,7 +99,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$SELECTIVE_CLIENT_EVIDENCE/playwright.json" npx playwright test --config tests/selective-clients/playwright.config.ts --reporter=line,json | tee "$SELECTIVE_CLIENT_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.SELECTIVE_CLIENT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$SELECTIVE_CLIENT_EVIDENCE/source.txt"
