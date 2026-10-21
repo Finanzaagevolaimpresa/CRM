@@ -1,5 +1,5 @@
 /** Mandatory role ceiling: assignments and permission overrides cannot widen it. */
-export const financialRoles = ['admin', 'amministrazione', 'direzione'] as const;
+export const financialRoles = ['admin', 'amministrazione'] as const;
 export function hasFinancialRole(actor: { role: string; active?: boolean }) {
   return actor.active !== false && (financialRoles as readonly string[]).includes(actor.role);
 }

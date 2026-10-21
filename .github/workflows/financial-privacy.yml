@@ -1,8 +1,11 @@
 name: Financial privacy and document upload qualification
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main]
 permissions: { contents: read }
 concurrency:
-  group: financial-privacy-${{ github.event.pull_request.number }}
+  group: financial-privacy-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 jobs:
   qualification:
@@ -32,7 +35,7 @@ jobs:
       FINANCIAL_PRIVACY_BROWSER_CONFIRMED: '1'
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci && npx playwright install --with-deps chromium
@@ -43,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
           evidence="$RUNNER_TEMP/financial-privacy-evidence"
           mkdir -p "$evidence"
           echo "FINANCIAL_PRIVACY_EVIDENCE=$evidence" >> "$GITHUB_ENV"

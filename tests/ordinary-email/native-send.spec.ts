@@ -24,8 +24,15 @@ async function login(page: Page, email: string) {
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
 }
 async function stepUp(page: Page) {
-  await page.goto('/settings/security'); await page.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
-  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click(); await expect(page).toHaveURL(/status=active/);
+  await page.goto('/settings/security');
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.getByLabel('Password corrente').fill(process.env.ORDINARY_EMAIL_BROWSER_PASSWORD!);
+  const submitted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/settings/security');
+  await page.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
+  expect((await submitted).status()).toBeLessThan(400);
+  await expect(page).toHaveURL(/status=active/);
+  await expect(page.getByText('Conferma privilegiata attiva per cinque minuti e vincolata alla sessione corrente.', { exact: true })).toBeVisible();
 }
 
 test('native personal send uses isolated verified TLS, exact decisions and durable receipts without replay', async ({ browser }) => {

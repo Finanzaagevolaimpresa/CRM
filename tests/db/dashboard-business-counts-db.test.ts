@@ -117,7 +117,8 @@ test('dashboard payment totals enforce financial roles and reject inconsistent l
   const prefix = `${runPrefix}payments-`;
   const owner = actor(`${prefix}owner`, 'consulente');
   const admin = actor(`${prefix}admin`, 'admin');
-  const financialReaders = [admin, actor(`${prefix}administration`, 'amministrazione'), actor(`${prefix}direction`, 'direzione')];
+  const financialReaders = [admin, actor(`${prefix}administration`, 'amministrazione')];
+  const direction = actor(`${prefix}direction`, 'direzione');
   const beforeCounts = new Map(await Promise.all(financialReaders.map(async reader =>
     [reader.role, await countAccessibleDashboardPayments(reader)] as const)));
   const ownerWithLegacyAllows: AuthSession = { ...owner, permissionOverrides: [
@@ -186,7 +187,7 @@ test('dashboard payment totals enforce financial roles and reject inconsistent l
     ] });
     // Assignment and old individual allow overrides must not widen the role ceiling.
     // Check both the count and canonical detail reader against actual database rows.
-    for (const excluded of [owner, ownerWithLegacyAllows]) {
+    for (const excluded of [owner, ownerWithLegacyAllows, direction, { ...direction, permissionOverrides: ownerWithLegacyAllows.permissionOverrides }]) {
       assert.equal(await countAccessibleDashboardPayments(excluded), 0);
       assert.equal(await getPaymentReadAccess(excluded, rowId(`${prefix}valid-`, 0)), null);
       assert.equal(await getPaymentReadAccess(excluded, `${prefix}project-only-payment`), null);

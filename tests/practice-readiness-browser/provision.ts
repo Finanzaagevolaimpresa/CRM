@@ -57,7 +57,8 @@ async function main() {
         email: "readiness-owner@invalid.test",
         name: "Responsabile Pratiche",
         passwordHash,
-        // This complete journey includes restricted financial operations.
+        // Operational work remains with Direzione; the separate Admin fixture
+        // performs only formalization and payment steps in the complete journey.
         role: "direzione",
       },
       {

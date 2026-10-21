@@ -193,6 +193,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
   const page = await context.newPage();
   expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("Europe/Rome");
   await login(page, "readiness-owner@invalid.test");
+  const financialContext = await browser.newContext({ timezoneId: "Europe/Rome" });
+  const financialPage = await financialContext.newPage();
+  await login(financialPage, "readiness-perimeter-admin@invalid.test");
   await page.goto(`${app}/practice-readiness`);
   await page
     .locator('[data-interactive-ready="true"]')
@@ -293,6 +296,9 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     await expect(
       article.getByText(`Documento sensibile ${item.label}`, { exact: false }),
     ).toHaveCount(0);
+    await expect(article.locator('[name="contractId"]')).toHaveCount(0);
+    await expect(article.locator('[name="reference"]')).toHaveCount(0);
+    article = await reloadPractice(financialPage, practice.id);
     await article
       .locator('[name="contractId"]')
       .selectOption(`readiness-browser-contract-${item.key}`);
@@ -311,11 +317,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       .locator('[name="signedDocumentVersionId"]')
       .selectOption(signedDocumentVersion.id);
     await submitAction(
-      page,
+      financialPage,
       article.getByRole("button", { name: "Conferma incarico formalizzato" }),
       `${item.key}:formalizzazione`,
     );
-    await expect(page.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
+    await expect(financialPage.locator(`#practice-${practice.id}`).getByText(signedDocumentVersion.id, { exact: false })).toBeVisible();
 
     if (item.key === cases[0].key) {
       const matching = await db.clientService.findUniqueOrThrow({ where: { id: `readiness-browser-service-${item.key}` } });
@@ -368,12 +374,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       : [["50.00", "unico"]];
     let stalePage: Page | null = null;
     for (const [amount, part] of payments) {
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const reference = `ACC-${item.key}-${part}`;
       await article.locator('[name="reference"]').fill(reference);
       await article.locator('[name="amount"]').fill(amount);
       await submitAction(
-        page,
+        financialPage,
         article.getByRole("button", { name: "Dichiara accredito" }),
         `${item.key}:accredito-${part}-dichiarato`,
       );
@@ -388,7 +394,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         },
         orderBy: { createdAt: "desc" },
       });
-      const declaredRow = page.locator(
+      const declaredRow = financialPage.locator(
         `[data-funding-evidence-id="${declared.id}"]`,
       );
       await expect(declaredRow).toHaveAttribute(
@@ -402,12 +408,12 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       await expect(declaredRow).toContainText(
         `${reference} · € ${amount} · DECLARED`,
       );
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const funding = article.locator(
         `[data-funding-evidence-id="${declared.id}"]`,
       );
       await submitAction(
-        page,
+        financialPage,
         funding.getByRole("button", { name: "Conferma accredito" }),
         `${item.key}:accredito-${part}-confermato`,
       );
@@ -422,7 +428,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
           successor: null,
         },
       });
-      const confirmedRow = page.locator(
+      const confirmedRow = financialPage.locator(
         `[data-funding-evidence-id="${confirmed.id}"]`,
       );
       await expect(confirmedRow).toHaveAttribute(
@@ -437,14 +443,14 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         `${reference} · € ${amount} · CONFIRMED`,
       );
       if (item.partial && part === "prima") {
-        article = await reloadPractice(page, practice.id);
+        article = await reloadPractice(financialPage, practice.id);
         await submitAction(
-          page,
+          financialPage,
           article.getByRole("button", { name: "Avvia esplicitamente" }),
           `${item.key}:avvio-parziale-negato`,
           "NOT_READY",
         );
-        await expect(page.locator('p[role="alert"]')).toContainText("NOT_READY");
+        await expect(financialPage.locator('p[role="alert"]')).toContainText("NOT_READY");
         expect(
           (
             await db.practiceReadiness.findUniqueOrThrow({
@@ -452,7 +458,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
             })
           ).startedAt,
         ).toBeNull();
-        stalePage = await context.newPage();
+        stalePage = await financialContext.newPage();
         await reloadPractice(stalePage, practice.id);
       }
       if (item.partial && part === "integrazione" && stalePage) {
@@ -477,6 +483,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         await stalePage.close();
       }
     }
+
+
 
     article = await reloadPractice(page, practice.id);
     await article
@@ -650,7 +658,8 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     }
 
     article = await reloadPractice(page, practice.id);
-    page.on("request", (request) => {
+    article = await reloadPractice(financialPage, practice.id);
+    financialPage.on("request", (request) => {
       const headers = request.headers();
       if (
         !capturedStart &&
@@ -667,11 +676,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
       }
     });
     await submitAction(
-      page,
+      financialPage,
       article.getByRole("button", { name: "Avvia esplicitamente" }),
       `${item.key}:avvio`,
     );
-    article = await reloadPractice(page, practice.id);
+    article = await reloadPractice(financialPage, practice.id);
     await expect(article.getByText("avviata")).toBeVisible();
 
     const persisted = await db.practiceReadiness.findUniqueOrThrow({
@@ -710,7 +719,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         startedById: persisted.startedById,
         startEvidence: persisted.startEvidence,
       };
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       const confirmedFundingEvidence =
         await db.practiceFundingEvidence.findFirstOrThrow({
           where: {
@@ -728,11 +737,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
         "CONFIRMED",
       );
       await submitAction(
-        page,
+        financialPage,
         confirmedFunding.getByRole("button", { name: "Rettifica / storna" }),
         "standard:storno-post-avvio",
       );
-      article = await reloadPractice(page, practice.id);
+      article = await reloadPractice(financialPage, practice.id);
       await expect(
         article.getByText("accredito_iniziale", { exact: false }),
       ).toBeVisible();
@@ -1034,6 +1043,7 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     { mode: 0o600 },
   );
   await reader.close();
+  await financialContext.close();
   await context.close();
 });
 
@@ -1283,7 +1293,7 @@ test('M2 Work package returns as a new draft before independent review and simul
   await reviewerContext.close();
 });
 
-test('financial read overrides protect readiness HTML and downloadable Work manifests for both supervising roles', async ({ page }) => {
+test('financial ceiling and individual denies protect readiness HTML and downloadable Work manifests', async ({ page }) => {
   await assertSyntheticCatalogDatabase(db);
   await login(page, 'readiness-owner@invalid.test');
   const userId = 'readiness-browser-owner';
@@ -1304,10 +1314,10 @@ test('financial read overrides protect readiness HTML and downloadable Work mani
           const response = await page.goto(`${app}/practice-readiness`); expect(response?.status()).toBe(200);
           const article = page.locator(`#practice-${practice.id}`);
           const html = await article.innerHTML();
-          expect(html.includes(practice.contractId!)).toBe(permission !== 'contract.read');
-          expect(html.includes(practice.signedDocumentVersionId!)).toBe(permission !== 'contract.read');
-          expect(html.includes('Accrediti confermati')).toBe(permission !== 'payment.read');
-          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(permission !== 'payment.read');
+          expect(html.includes(practice.contractId!)).toBe(role === 'amministrazione' && permission !== 'contract.read');
+          expect(html.includes(practice.signedDocumentVersionId!)).toBe(role === 'amministrazione' && permission !== 'contract.read');
+          expect(html.includes('Accrediti confermati')).toBe(role === 'amministrazione' && permission !== 'payment.read');
+          for (const evidence of practice.funding) expect(html.includes(evidence.reference)).toBe(role === 'amministrazione' && permission !== 'payment.read');
           const exported = await page.request.post(`${app}/client-dossiers/${dossier.id}/work-export`, {
             form: { expectedVersionId: dossier.currentVersionId!, packageId: randomUUID(), manualTransferAuthorized: 'on' },
             headers: { origin: app }, maxRedirects: 0,
@@ -1315,8 +1325,8 @@ test('financial read overrides protect readiness HTML and downloadable Work mani
           expect(exported.status(), `${role}/${permission}`).toBe(200);
           const bytes = await exported.body();
           const manifest = JSON.parse(zipEntryText(bytes, 'manifest.json'));
-          expect(manifest.engagement.contractId).toBe(permission === 'contract.read' ? null : practice.contractId);
-          expect(manifest.engagement.formalizationId).toBe(permission === 'contract.read' ? null : practice.currentFormalizationId);
+          expect(manifest.engagement.contractId).toBe(role === 'direzione' || permission === 'contract.read' ? null : practice.contractId);
+          expect(manifest.engagement.formalizationId).toBe(role === 'direzione' || permission === 'contract.read' ? null : practice.currentFormalizationId);
           expect(manifest.files.length).toBeGreaterThan(0);
           for (const file of manifest.files) expect(zipEntryText(bytes, file.name).length).toBeGreaterThan(0);
         } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
