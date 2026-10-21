@@ -79,4 +79,3 @@ PR140 package tests retain live/revoked V2 selected files and legacy V1 fields a
 candidate/restart/resume, compare exact file bytes and persistent state, and reject
 unselected/sibling URLs and nonapproved downloads. These are planned CI assertions;
 a passing result is attributed only to its actual source/tree and run, not this document.
-

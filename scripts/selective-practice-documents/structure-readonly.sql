@@ -10,4 +10,3 @@ SELECT json_build_object('functions',(SELECT COALESCE(json_agg(json_build_object
  'validated',c.convalidated,'type',c.contype) ORDER BY c.conname),'[]'::json) FROM pg_constraint c
  JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='public' AND c.conname='selective_practice_payload_structure'));
 ROLLBACK;
-

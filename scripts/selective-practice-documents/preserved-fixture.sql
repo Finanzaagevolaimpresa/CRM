@@ -26,4 +26,3 @@ BEGIN
   jsonb_build_object('version',0),jsonb_build_object('version',1,'action','GRANT','fieldCount',1));
 END $$;
 COMMIT;
-

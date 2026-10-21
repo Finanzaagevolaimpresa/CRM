@@ -66,4 +66,3 @@ assert.equal(createHash('sha256').update(readFileSync('prisma/migrations/'+bindi
 JS
 printf '{"synthetic":true,"before":59,"after":60,"prefix59Unchanged":true,"allRowsPreserved":true,"legacyV1PracticeHistoryAndAuditPreserved":true,"migrationCreatedNoGrantsOrAuthority":true,"atomicFailureRolledBack":true,"replayDenied":true,"crossPracticeSnapshotDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/migration60-proof.json"
 cat "$evidence/migration60-proof.json"
-
