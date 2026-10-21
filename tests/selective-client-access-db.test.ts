@@ -743,12 +743,22 @@ test('V4 permission revocation for authority or recipient denies open sessions w
 });
 test('V4 repeated confirmation and lost reply produce one receipt; revocation denies current reads', options, async () => {
   const f = await personFixture(), p = await previewClientSharing(db, admin.session, f.input);
-  const receipts = await Promise.all([1, 2].map(() => confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin))));
-  assert.deepEqual(receipts[0], receipts[1]);
-  assert.deepEqual(await readClientSharingReceipt(db, admin.session, f.input.commandId, f.client.id), receipts[0]);
-  assert.equal(await db.selectiveClientRevision.count({ where: { grantId: receipts[0].grantId } }), 1);
-  assert.equal(await db.auditLog.count({ where: { id: receipts[0].revisionId } }), 1);
-  await revokeClientSharing(db, admin.session, { grantId: receipts[0].grantId, revision: 1, commandId: randomUUID() }, clientProof(admin));
+  const attempts = await Promise.allSettled([1, 2].map(() => confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin))));
+  const committed = attempts.filter(row => row.status === 'fulfilled');
+  assert.ok(committed.length >= 1, 'one concurrent request must commit');
+  const receipt = committed[0].value;
+  for (const attempt of attempts) {
+    if (attempt.status === 'fulfilled') assert.deepEqual(attempt.value, receipt);
+    else assert.ok(attempt.reason instanceof SerializableConflictError, 'only a serialization conflict may be retried');
+    // Retry the same command after a conflict or a lost reply, without a new decision.
+    assert.deepEqual(await confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin)), receipt);
+  }
+  assert.deepEqual(await readClientSharingReceipt(db, admin.session, f.input.commandId, f.client.id), receipt);
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 1);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 1);
+  assert.equal(await db.selectiveClientRevision.count({ where: { grantId: receipt.grantId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: receipt.revisionId } }), 1);
+  await revokeClientSharing(db, admin.session, { grantId: receipt.grantId, revision: 1, commandId: randomUUID() }, clientProof(admin));
   await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
 });
 test('V4 pending confirmation waits for person/membership writers then rejects stale values', options, async () => {
