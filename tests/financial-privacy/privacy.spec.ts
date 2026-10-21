@@ -272,6 +272,9 @@ test('open financial session loses contracts, payment bytes and metadata immedia
       const ordinary = f.docs.find(doc => doc.kind === 'ordinary')!;
       await expect(page.getByText(ordinary.title, { exact: false }).first()).toBeVisible();
       expect((await page.request.get(`/documents/${ordinary.id}/download`)).status()).toBe(200);
+      const layout = await page.evaluate(() => ({ viewport: innerWidth, width: document.documentElement.scrollWidth }));
+      expect(layout.width).toBeLessThanOrEqual(layout.viewport + 1);
+      writeFileSync(join(root, `direzione-operational-${name}-layout.json`), JSON.stringify(layout));
       await page.screenshot({ path: join(root, `direzione-operational-${name}.png`), fullPage: true });
     }
     writeFileSync(join(root, 'financial-ceiling-session-proof.json'), JSON.stringify({ synthetic: true, roleChangedWithoutNewLogin: true, currentAndVersionedDownloadsDenied: true, deniedDownloadAuditUnchanged: true, ordinaryDocumentPreserved: true }));

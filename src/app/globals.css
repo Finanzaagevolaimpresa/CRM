@@ -180,3 +180,8 @@ input:focus, select:focus, textarea:focus {
 .lead-detail-page { min-width: 0; overflow-wrap: anywhere; }
 .lead-detail-page .grid > *, .lead-detail-page header .flex > * { min-width: 0; }
 .lead-detail-page input, .lead-detail-page textarea, .lead-detail-page select { min-width: 0; max-width: 100%; }
+
+/* The operational client record remains usable when financial sections disappear. */
+.client-detail-page { min-width: 0; overflow-wrap: anywhere; }
+.client-detail-page .grid > *, .client-detail-page .flex > * { min-width: 0; }
+.client-detail-page input, .client-detail-page textarea, .client-detail-page select { min-width: 0; max-width: 100%; }
