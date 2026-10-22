@@ -1,4 +1,4 @@
--- LOCAL DRAFT. Not in prisma/migrations, not applied or PostgreSQL-qualified.
+-- DRAFT outside prisma/migrations; isolated PostgreSQL qualification only.
 -- Empty structures only; no authority, capability, recipient or mutation is enrolled.
 BEGIN;
 SET LOCAL lock_timeout = '5s';

@@ -78,7 +78,7 @@ export async function lockLeadEditCapability(tx: Tx, state: LeadEditTransactionS
   return { grant, raw, payload, current, now };
 }
 
-/** Data for the future restricted form: only explicitly editable/readable values
+/** Data for the restricted form: only explicitly editable/readable values
  * and concurrency identifiers. No names, owner, notes or ordinary lead payload.
  * No grant, audit, command or other row is created by this read operation.
  */

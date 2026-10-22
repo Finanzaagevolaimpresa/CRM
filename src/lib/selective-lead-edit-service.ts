@@ -40,9 +40,7 @@ function boundCommand(raw: unknown, read: ReadContext, capability: Capability) {
   return { command, fields };
 }
 
-/** Future POST preview. This performs locks/reads only, with no command or audit
- * writes; it is not exported by an action or route until DB/browser qualification.
- */
+/** POST preview uses locks and reads only, with no command or audit writes. */
 export async function previewLeadEdit(db: PrismaClient, claimed: AuthSession, raw: unknown) {
   const input = selectiveLeadEditCommandSchema.parse(raw);
   return withLeadEditTransaction(db, claimed, claimed.userId, null, async (tx, state) => {
@@ -80,10 +78,8 @@ async function previousCommand(tx: Tx, state: LeadEditTransactionState, read: Re
   return receipt;
 }
 
-/** Single recipient command, not personal authority enrollment. Persistence is
- * deliberately unreachable from product routes until the future SQL, admin
- * capability management and PostgreSQL/browser gates are complete.
- */
+/** Single recipient command. The separately enrolled personal authority and
+ * exact current capability are required before any field can be persisted. */
 export async function confirmLeadEdit(db: PrismaClient, claimed: AuthSession, raw: unknown, token: string, confirmed: boolean) {
   if (confirmed !== true || typeof token !== 'string' || token.length > 32_000) denied();
   const input = selectiveLeadEditCommandSchema.parse(raw);

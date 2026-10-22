@@ -123,7 +123,7 @@ async function persistDecision(tx: Tx, state: LeadEditTransactionState, payload:
   return receipt;
 }
 
-/** The future management UI calls this as a read-only POST preview. */
+/** A read-only POST preview: selecting fields never creates a capability. */
 export async function previewLeadEditingSelection(db: PrismaClient, claimed: AuthSession, raw: unknown) {
   const input = selectiveLeadEditSelectionSchema.parse(raw);
   return withLeadEditTransaction(db, claimed, input.recipientId, null, async (tx, state) => {
@@ -155,6 +155,31 @@ export async function confirmLeadEditingSelection(db: PrismaClient, claimed: Aut
   });
 }
 const revokeSchema = z.object({ grantId: z.string().uuid(), revision: z.number().int().positive().max(2_147_483_646), commandId: z.string().uuid() }).strict();
+
+export async function mayManageLeadEditing(db: PrismaClient, claimed: AuthSession) {
+  try {
+    return await withLeadEditTransaction(db, claimed, claimed.userId, null, async (_tx, state) => {
+      manager(state, true); return true;
+    });
+  } catch { return false; }
+}
+
+/** The receipt contains only the recorded operation and counts. Its original
+ * personal actor/session and the current authority are checked again. It is
+ * not evidence that a historical grant is still effective. */
+export async function readLeadEditingDecision(db: PrismaClient, claimed: AuthSession, commandId: string) {
+  z.string().uuid().parse(commandId);
+  const hints = await db.$queryRaw<Array<{ leadId: string; recipientId: string }>>`
+    SELECT "leadId","recipientId" FROM "SelectiveLeadEditDecision" WHERE id=${commandId}::uuid`;
+  const hint = hints[0]; if (!hint) return null;
+  return withLeadEditTransaction(db, claimed, hint.recipientId, null, async (tx, state) => {
+    await managerLead(tx, state, hint.leadId, false, true);
+    const rows = await tx.$queryRaw<Array<{ operation: 'GRANT' | 'REVOKE'; requestDigest: string }>>`
+      SELECT operation,"requestDigest" FROM "SelectiveLeadEditDecision" WHERE id=${commandId}::uuid FOR SHARE`;
+    const row = rows[0]; if (!row) return null;
+    return replayDecision(tx, state, commandId, row.requestDigest, hint.leadId, row.operation);
+  });
+}
 
 /** Management choices are limited to existing valid read selections. The
  * directory/identity/lead locks retain one coherent view, and the actual

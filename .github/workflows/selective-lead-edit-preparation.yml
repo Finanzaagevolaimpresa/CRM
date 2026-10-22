@@ -1,16 +1,19 @@
 name: Selective lead edit preparation
 on:
   pull_request:
-    paths: ['src/lib/selective-lead-edit*', 'tests/selective-lead-edit*', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+    paths: ['src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   postgresql:
-    name: Draft lead edit SQL and actual server transactions
+    name: Draft lead edit ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
     services:
       postgres:
         image: postgres:16
@@ -34,6 +37,11 @@ jobs:
       PRIVILEGED_STEP_UP_KEY_VERSION: '1'
       PRIVILEGED_STEP_UP_SECRET: synthetic-lead-edit-step-up-000000000000
       COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3051
+      LEAD_EDIT_BROWSER_CONFIRMED: '1'
+      LEAD_EDIT_BROWSER_PASSWORD: synthetic-lead-edit-password-000000000
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
@@ -65,6 +73,7 @@ jobs:
           test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'SelectiveLeadEdit%'")" = 5
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveLeadEditAuthority"')" = 0
       - name: Actual PostgreSQL admission, exact mutation, concurrency, replay and atomic audit
+        if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
@@ -73,10 +82,40 @@ jobs:
           grep -Fx '# pass 16' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+      - name: Prepare the isolated native browser
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/selective-lead-edit/provision-browser.ts
+      - name: Native personal decision, restricted edit, uncertain result and session revocation
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3051 > "$LEAD_EDIT_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3051/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$LEAD_EDIT_EVIDENCE/playwright.json" npx playwright test --config tests/selective-lead-edit/playwright.config.ts --reporter=line,json | tee "$LEAD_EDIT_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.LEAD_EDIT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind final source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$LEAD_EDIT_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: selective-lead-edit-preparation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/lead-edit-preparation
+          name: selective-lead-edit-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/lead-edit-preparation
+            test-results
           if-no-files-found: error
           retention-days: 14

@@ -5,7 +5,8 @@ import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { grantLead, leadProof, type Person } from './selective-leads/fixtures';
-import { previewLeadEditingSelection, confirmLeadEditingSelection, revokeLeadEditing, readLeadEditingManagement } from '../src/lib/selective-lead-edit-management';
+import { previewLeadEditingSelection, confirmLeadEditingSelection, revokeLeadEditing, readLeadEditingManagement,
+  readLeadEditingDecision, mayManageLeadEditing } from '../src/lib/selective-lead-edit-management';
 import { readLeadEditing } from '../src/lib/selective-lead-edit-access';
 import { previewLeadEdit, confirmLeadEdit, readLeadEditOutcome, readLeadEditOutcomeByReference } from '../src/lib/selective-lead-edit-service';
 import { revokeLeadSharing } from '../src/lib/selective-lead-access';
@@ -83,6 +84,8 @@ test('read authority cannot enroll editing; preview leaves all empty edit struct
 test('preview writes nothing and the recipient gets only explicitly editable readable values', options, async () => {
   const f = await fixture(), prior = await counts(f.lead.id);
   const setup = await readLeadEditingManagement(db, admin.session, f.lead.id);
+  assert.equal(await mayManageLeadEditing(db, admin.session), true);
+  assert.equal(await mayManageLeadEditing(db, f.reader.session), false);
   assert.deepEqual(setup.choices.map(choice => ({ id: choice.id, fields: choice.fields })),
     [{ id: f.reader.user.id, fields: ['interest', 'priority'] }]);
   assert.deepEqual(setup.grants, []);
@@ -92,7 +95,12 @@ test('preview writes nothing and the recipient gets only explicitly editable rea
   const p = await previewLeadEditingSelection(db, admin.session, f.selection);
   assert.deepEqual(p.fields.map(x => x.key), ['priority']);
   assert.deepEqual(await counts(f.lead.id), prior);
-  await confirmLeadEditingSelection(db, admin.session, f.selection, p.token, leadProof(admin));
+  const decision = await confirmLeadEditingSelection(db, admin.session, f.selection, p.token, leadProof(admin));
+  assert.deepEqual(await readLeadEditingDecision(db, admin.session, f.selection.commandId), decision);
+  const recorded = await counts(f.lead.id);
+  await assert.rejects(readLeadEditingDecision(db, f.reader.session, f.selection.commandId));
+  await assert.rejects(readLeadEditingDecision(db, { ...admin.session, sessionId: randomUUID() }, f.selection.commandId));
+  assert.deepEqual(await counts(f.lead.id), recorded);
   const view = await readLeadEditing(db, f.reader.session, f.lead.id);
   assert.deepEqual(view.fields, [{ key: 'priority', label: 'Priorità', value: 'media' }]);
   for (const secret of [f.lead.notes!, f.lead.email!, f.lead.phone!, f.lead.companyName!, f.lead.interest!]) {

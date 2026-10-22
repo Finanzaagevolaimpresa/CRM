@@ -71,9 +71,9 @@ export type LeadEditTransactionState = {
 
 /** Transaction foundation only: this does not admit a lead, a capability or a
  * mutation. The callback must lock the lead and verify both signed journals.
- * The future empty SelectiveLeadEditAuthority table requires its own reviewed
+ * The empty SelectiveLeadEditAuthority table requires its own reviewed
  * SQL and personal binding; there is no fallback to the read-only authority.
- * No action or route uses this module before the complete service is qualified.
+ * An absent or disabled authority fails closed, including for Admin accounts.
  */
 export async function withLeadEditTransaction<T>(db: PrismaClient, claimed: AuthSession,
   recipientId: string, proof: LeadEditPersonalProof | null,

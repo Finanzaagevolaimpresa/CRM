@@ -36,8 +36,7 @@ function Outcome({ leadId, commandId, action }: { leadId: string; commandId: str
   </section>;
 }
 
-/** Prepared recipient component. It is not routed or activated until the
- * distinct authority, SQL, full application flow and native CI are qualified. */
+/** The restricted form receives only the fields admitted by the server. */
 export function SelectiveLeadEditor({ view, initialCommandId, recoverCommandId,
   previewAction, confirmAction, outcomeAction }: {
   view: View; initialCommandId: string; recoverCommandId?: string;
