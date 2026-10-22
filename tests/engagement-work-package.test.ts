@@ -74,3 +74,13 @@ test('Work receipts preserve only technical evidence through the unchanged audit
   assert.deepEqual(workImportReceiptSchema.parse(redactAuditPayload(workAuditEvidence(returned))), returned);
   assert.equal(workExportReceiptSchema.safeParse({ ...workAuditEvidence(evidence), serviceRevisionId: 'work_uuid_not_hex' }).success, false);
 });
+
+test('opaque synthetic actor identities do not collide with phone redaction', () => {
+  const suffix = '00000000-0000-4000-8000-000000000003';
+  const oldIdentity = `readiness-a-${suffix}`;
+  assert.notDeepEqual(redactAuditPayload({ exportedById: oldIdentity }), { exportedById: oldIdentity });
+  for (const prefix of ['readiness_a_', 'readiness_b_', 'readiness_manager_']) {
+    const identity = `${prefix}${suffix.replaceAll('-', '')}`;
+    assert.deepEqual(redactAuditPayload({ exportedById: identity }), { exportedById: identity });
+  }
+});
