@@ -1,0 +1,82 @@
+name: Selective lead edit preparation
+on:
+  pull_request:
+    paths: ['src/lib/selective-lead-edit*', 'tests/selective-lead-edit*', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+permissions: { contents: read }
+concurrency:
+  group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  postgresql:
+    name: Draft lead edit SQL and actual server transactions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-lead-edit-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-lead-edit-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      RUN_SELECTIVE_LEAD_EDIT_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-lead-edit-auth-only-000000000
+      AUTH_COOKIE_NAME: fai_lead_edit_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-lead-edit-step-up-000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify the local draft on isolated schema62 only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/lead-edit-preparation"
+          mkdir -p "$evidence"
+          echo "LEAD_EDIT_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema62-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npx prisma migrate deploy
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 62
+          draft=docs/SELECTIVE_LEAD_EDIT_SCHEMA_DRAFT_R01.sql
+          sha256sum "$draft" > "$evidence/draft-sha256.txt"
+          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$draft" > "$evidence/draft-fault.sql"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/draft-fault.sql" > "$evidence/draft-fault.log" 2>&1; then
+            echo 'Injected DDL fault did not fail' >&2
+            exit 1
+          fi
+          grep -F 'division by zero' "$evidence/draft-fault.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'SelectiveLeadEdit%'")" = 0
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$draft" > "$evidence/draft-apply.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'SelectiveLeadEdit%'")" = 5
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveLeadEditAuthority"')" = 0
+      - name: Actual PostgreSQL admission, exact mutation, concurrency, replay and atomic audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/selective-lead-edit-access-db.test.ts | tee "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 15' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 15' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selective-lead-edit-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lead-edit-preparation
+          if-no-files-found: error
+          retention-days: 14
