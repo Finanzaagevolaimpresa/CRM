@@ -67,13 +67,14 @@ export function SelectiveLeadEditor({ view, initialCommandId, recoverCommandId,
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
         <legend className="mb-3 font-semibold">Campi abilitati alla modifica</legend>
-        {view.fields.map(field => <label key={field.key} className="block min-w-0 font-semibold">{field.label}
-          {field.key === 'priority' ? <select className={control} value={values.priority}
+        {view.fields.map(field => <div key={field.key} className="min-w-0 font-semibold">
+          <label htmlFor={`lead-edit-${field.key}`}>{field.label}</label>
+          {field.key === 'priority' ? <select id={`lead-edit-${field.key}`} className={control} value={values.priority}
             onChange={event => setValues(old => ({ ...old, priority: event.target.value }))}>
             {Object.entries(priorities).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </select> : <textarea className={control} maxLength={5000} rows={4} value={values.interest}
+          </select> : <textarea id={`lead-edit-${field.key}`} className={control} maxLength={5000} rows={4} value={values.interest}
             onChange={event => setValues(old => ({ ...old, interest: event.target.value }))} />}
-        </label>)}
+        </div>)}
         <input type="hidden" name="command" value={JSON.stringify(command)} />
         <button className={button} disabled={!Object.keys(changes).length}>{preparing ? 'Preparazione…' : 'Rivedi le modifiche'}</button>
       </fieldset>

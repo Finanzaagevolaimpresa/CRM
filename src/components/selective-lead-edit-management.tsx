@@ -52,10 +52,11 @@ export function SelectiveLeadEditManagement({ data, initialCommandId, recoverCom
     {recoverCommandId && <Decision commandId={recoverCommandId} leadId={data.leadId} action={receiptAction} />}
     <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
-        <label className="block font-semibold">Persona con accesso selettivo<select className={control} required value={recipientId}
+        <div className="font-semibold"><label htmlFor="lead-edit-recipient">Persona con accesso selettivo</label>
+          <select id="lead-edit-recipient" className={control} required value={recipientId}
           onChange={event => { setRecipient(event.target.value); setFields([]); setExpires(''); }}>
           <option value="">Seleziona una persona</option>{data.choices.map(row => <option key={row.id} value={row.id}>{row.name} · {row.email} · {row.role}</option>)}
-        </select></label>
+        </select></div>
         {!data.choices.length && <p>Nessuna persona ha una selezione di lettura valida per i campi modificabili. Imposta prima la lettura dalla pagina di accesso selettivo.</p>}
         {person && <fieldset><legend className="mb-2 font-semibold">Campi che la persona potrà modificare</legend>
           <div className="grid gap-3 sm:grid-cols-2">{person.fields.map(field => <label key={field} className="flex items-center gap-2 rounded-xl border p-3">
