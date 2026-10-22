@@ -69,6 +69,7 @@ jobs:
           bash scripts/selective-client-documents/qualify-migration.sh
           bash scripts/selective-practice-documents/qualify-migration.sh
           bash scripts/selective-client-companies/qualify-migration.sh
+          bash scripts/selective-client-people/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash

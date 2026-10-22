@@ -23,6 +23,8 @@ import { selectClientDocuments, listClientDocumentOptions } from './selective-cl
 import { maxClientDocumentBytes, maxClientDocuments } from './selective-client-document-policy';
 import { selectClientCompanies, listClientCompanyOptions } from './selective-client-companies';
 import { maxClientCompanyChoices, selectiveClientCompanyFields } from './selective-client-company-policy';
+import { selectClientPeople, listClientPeopleOptions } from './selective-client-people';
+import { maxClientPersonChoices, selectiveClientPersonFields } from './selective-client-person-policy';
 
 type Tx = Prisma.TransactionClient;
 export type ClientSharingCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -119,6 +121,7 @@ async function selectedState(tx: Tx, state: State, input: SelectiveClientSelecti
   if ((previous?.revision ?? 0) !== input.revision) stale();
   const now = await clock(tx);
   if (input.expiresAt && new Date(input.expiresAt) <= now) stale();
+  const people = await selectClientPeople(tx, state.authorityUser, target, row.id, input.people ?? [], input.companies ?? []);
   const companies = await selectClientCompanies(tx, state.authorityUser, target, row.id, input.companies ?? []);
   const documents = await selectClientDocuments(tx, state.current.userId, target, row.id, input.documents ?? []);
   const admission = { actorId: state.actor.id, sessionId: state.current.sessionId!, authorityRevision: state.binding.revision,
@@ -126,8 +129,9 @@ async function selectedState(tx: Tx, state: State, input: SelectiveClientSelecti
     stateHash: canonicalSha256(asJson({ client: row, target: { id: target.id, name: target.name, email: target.email,
       role: target.role, epoch: target.selectiveClientEpoch, permissions: target.permissionOverrides },
       previous: previous ? { id: previous.id, revision: previous.revision, proof: previous.proof, revokedAt: previous.revokedAt } : null,
-      documents: documents.snapshots, ...(input.version === 3 ? { companies: companies.snapshots } : {}) })) };
-  return { row, target, previous, admission, now: await clock(tx), documents, companies };
+      documents: documents.snapshots, ...((input.version === 3 || input.version === 4) ? { companies: companies.snapshots } : {}),
+      ...(input.version === 4 ? { people: people.snapshots } : {}) })) };
+  return { row, target, previous, admission, now: await clock(tx), documents, companies, people };
 }
 
 export async function mayManageClientSharing(db: PrismaClient, session: AuthSession) {
@@ -141,7 +145,7 @@ export async function previewClientSharing(db: PrismaClient, claimed: AuthSessio
     const targetScope = await loadSelectiveClientScope(tx, input.recipientId);
     return { token: createSelectiveClientPreview(state.key, input, selected.admission, selected.now.getTime()), input,
       fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, input.fields),
-      documents: selected.documents.snapshots, companies: selected.companies.projection,
+      documents: selected.documents.snapshots, companies: selected.companies.projection, people: selected.people.projection,
       recipient: { name: selected.target.name, email: selected.target.email, role: selected.target.role },
       replacesFullAccess: canViewClient({ userId: selected.target.id, role: selected.target.role, clientReadScope: await loadClientReadScope(tx, selected.target.id), ...targetScope }, selected.row),
       replacesSelection: !!selected.previous };
@@ -156,16 +160,21 @@ const documentReceiptSchema = legacyReceiptSchema.extend({
   protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V2'), fieldCount: z.number().int().min(0).max(3),
   documentCount: z.number().int().min(0).max(maxClientDocuments),
 });
-const receiptSchema = z.discriminatedUnion('protocol', [legacyReceiptSchema, documentReceiptSchema, documentReceiptSchema.extend({
+const companyReceiptSchema = documentReceiptSchema.extend({
   protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V3'), companyCount: z.number().int().min(0).max(maxClientCompanyChoices),
   companyFieldCount: z.number().int().min(0).max(maxClientCompanyChoices * Object.keys(selectiveClientCompanyFields).length),
+});
+const receiptSchema = z.discriminatedUnion('protocol', [legacyReceiptSchema, documentReceiptSchema, companyReceiptSchema, companyReceiptSchema.extend({
+  protocol: z.literal('SELECTIVE_CLIENT_RECEIPT_V4'), personCount: z.number().int().min(0).max(maxClientPersonChoices),
+  personFieldCount: z.number().int().min(0).max(maxClientPersonChoices * Object.keys(selectiveClientPersonFields).length),
 })]);
 function receiptProtocol(input: SelectiveClientSelection) {
-  return input.version === 3 ? 'SELECTIVE_CLIENT_RECEIPT_V3' : input.version === 2 ? 'SELECTIVE_CLIENT_RECEIPT_V2' : 'SELECTIVE_CLIENT_RECEIPT_V1';
+  return input.version === 4 ? 'SELECTIVE_CLIENT_RECEIPT_V4' : input.version === 3 ? 'SELECTIVE_CLIENT_RECEIPT_V3' : input.version === 2 ? 'SELECTIVE_CLIENT_RECEIPT_V2' : 'SELECTIVE_CLIENT_RECEIPT_V1';
 }
 function selectionCounts(input: SelectiveClientSelection) {
   return { fieldCount: input.fields.length, ...(input.version !== undefined ? { documentCount: input.documents!.length } : {}),
-    ...(input.version === 3 ? { companyCount: input.companies!.length, companyFieldCount: input.companies!.reduce((sum, row) => sum + row.fields.length, 0) } : {}) };
+    ...((input.version === 3 || input.version === 4) ? { companyCount: input.companies!.length, companyFieldCount: input.companies!.reduce((sum, row) => sum + row.fields.length, 0) } : {}),
+    ...(input.version === 4 ? { personCount: input.people!.length, personFieldCount: input.people!.reduce((sum, row) => sum + row.fields.length, 0) } : {}) };
 }
 async function previousCommand(tx: Tx, state: State, id: string, digest: string) {
   const command = await tx.selectiveClientCommand.findUnique({ where: { id } });
@@ -197,7 +206,7 @@ async function persist(tx: Tx, state: State, input: SelectiveClientSelection, pa
 }
 export async function confirmClientSharing(db: PrismaClient, claimed: AuthSession, raw: unknown, token: string, proof: ClientSharingCredentials) {
   const input = selectiveClientSelectionSchema.parse(raw);
-  if (token.length > (input.version === 3 ? 24_000 : 12_000)) deny();
+  if (token.length > (input.version === 4 ? 40_000 : input.version === 3 ? 24_000 : 12_000)) deny();
   const requestDigest = canonicalSha256({ operation: 'GRANT', input, token });
   return transaction(db, claimed, input.recipientId, proof, async (tx, state) => {
     manager(state);
@@ -211,7 +220,8 @@ export async function confirmClientSharing(db: PrismaClient, claimed: AuthSessio
       authorityRevision: state.binding.revision, actorEpoch: state.actor.selectiveClientEpoch,
       recipientEpoch: selected.target.selectiveClientEpoch, clientEpoch: selected.row.recordUpdateEpoch, keyVersion: state.key.version,
       ...(input.version !== undefined ? { documents: selected.documents.snapshots } : {}),
-      ...(input.version === 3 ? { companies: selected.companies.snapshots } : {}) });
+      ...((input.version === 3 || input.version === 4) ? { companies: selected.companies.snapshots } : {}),
+      ...(input.version === 4 ? { people: selected.people.snapshots } : {}) });
     const receipt = await persist(tx, state, input, payload, selected.previous, 'GRANT', requestDigest, selected.now);
     if (!readSelectiveClientPreview(token, state.key, selected.admission, (await clock(tx)).getTime())) stale();
     return receipt;
@@ -270,15 +280,19 @@ async function authorizedClientSharing(tx: Tx, state: State, clientId: string) {
       || receipt.revision !== grant.revision || receipt.operation !== 'GRANT' || receipt.fieldCount !== payload.selection.fields.length
       || receipt.protocol !== receiptProtocol(payload.selection)
       || (receipt.protocol !== 'SELECTIVE_CLIENT_RECEIPT_V1' && receipt.documentCount !== payload.documents?.length)
-      || (receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V3' && (receipt.companyCount !== payload.companies?.length
+      || ((receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V3' || receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V4') && (receipt.companyCount !== payload.companies?.length
         || receipt.companyFieldCount !== payload.selection.companies?.reduce((sum, row) => sum + row.fields.length, 0)))
+      || (receipt.protocol === 'SELECTIVE_CLIENT_RECEIPT_V4' && (receipt.personCount !== payload.people?.length
+        || receipt.personFieldCount !== payload.selection.people?.reduce((sum, row) => sum + row.fields.length, 0)))
       || receipt.keyVersion !== state.key.version || !verifySelectiveClientProof(state.key, 'receipt', receipt, revision.command.receiptProof)) deny();
     if (!readSelectiveClientGrant(raw, state.key, current, (await clock(tx)).getTime())) deny();
+    const people = await selectClientPeople(tx, state.authorityUser, state.actor, clientId, payload.selection.people ?? [], payload.selection.companies ?? []);
+    if (canonicalSha256(people.snapshots) !== canonicalSha256(payload.people ?? [])) deny();
     const companies = await selectClientCompanies(tx, state.authorityUser, state.actor, clientId, payload.selection.companies ?? []);
     if (canonicalSha256(companies.snapshots) !== canonicalSha256(payload.companies ?? [])) deny();
     const documents = await selectClientDocuments(tx, state.binding.userId, state.actor, clientId, payload.selection.documents ?? []);
     if (canonicalSha256(documents.snapshots) !== canonicalSha256(payload.documents ?? [])) deny();
-    return { row, grant, payload, documents, companies, current, raw };
+    return { row, grant, payload, documents, companies, people, current, raw };
 }
 
 export async function readClientSharing(db: PrismaClient, claimed: AuthSession, clientId: string) {
@@ -286,7 +300,7 @@ export async function readClientSharing(db: PrismaClient, claimed: AuthSession, 
     const selected = await authorizedClientSharing(tx, state, clientId);
     if (!readSelectiveClientGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
     return { clientId, revision: selected.grant.revision, fields: clientFieldProjection(selected.row as unknown as Record<string, unknown>, selected.payload.selection.fields),
-      documents: selected.documents.snapshots, companies: selected.companies.projection, expiresAt: selected.payload.selection.expiresAt };
+      documents: selected.documents.snapshots, companies: selected.companies.projection, people: selected.people.projection, expiresAt: selected.payload.selection.expiresAt };
   });
 }
 
@@ -332,7 +346,8 @@ export async function clientSharingManagement(db: PrismaClient, claimed: AuthSes
       include: { recipient: { select: { name: true, email: true } } } });
     const { documentOptions, documentsLimited } = await listClientDocumentOptions(tx, state.actor, clientId);
     const companies = await listClientCompanyOptions(tx, state.authorityUser, clientId);
-    return { clientId, title: row.displayName, documentOptions, ...companies,
+    const personCatalogue = await listClientPeopleOptions(tx, state.authorityUser, clientId);
+    return { clientId, title: row.displayName, documentOptions, ...companies, ...personCatalogue,
       documentsLimited,
       recipients: people.filter(person => allowed(person)).map(({ id, name, email, role }) => ({ id, name, email, role })),
       grants: grants.map(grant => {
@@ -343,7 +358,9 @@ export async function clientSharingManagement(db: PrismaClient, claimed: AuthSes
           fields: payload.success ? payload.data.selection.fields : [],
           documentCount: payload.success ? (payload.data.documents?.length ?? 0) : 0,
           companyCount: payload.success ? (payload.data.companies?.length ?? 0) : 0,
-          companyFieldCount: payload.success ? (payload.data.selection.companies?.reduce((sum, row) => sum + row.fields.length, 0) ?? 0) : 0 };
+          companyFieldCount: payload.success ? (payload.data.selection.companies?.reduce((sum, row) => sum + row.fields.length, 0) ?? 0) : 0,
+          personCount: payload.success ? (payload.data.people?.length ?? 0) : 0,
+          personFieldCount: payload.success ? (payload.data.selection.people?.reduce((sum, row) => sum + row.fields.length, 0) ?? 0) : 0 };
       }) };
   });
 }

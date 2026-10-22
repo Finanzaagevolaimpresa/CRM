@@ -1,0 +1,17 @@
+# Dati dei referenti nella selezione personale del cliente
+
+L’autorità personale `client-sharing` sceglie fino a 20 collegamenti persona–azienda del cliente e i singoli campi di ogni collegamento: nome, cognome, email, telefono, codice fiscale, ruolo nell’azienda e quota di partecipazione. Non eredita nomi, recapiti, note private, altre aziende o altri collegamenti. La denominazione aziendale richiede la distinta selezione aziendale. Il catalogo del gestore è limitato ai primi 100 collegamenti correnti; l’anteprima mostra soltanto i valori scelti.
+
+Il protocollo V4 contiene esplicitamente `fields`, `documents`, `companies` e `people`. Le decisioni V1/V2/V3 restano immutate, senza aggiungere array o riscrivere firme. Destinatario e autorità devono avere il permesso corrente `company.read`; un diniego prevale anche sul ruolo Admin. I permessi ordinari del cliente rimangono esclusi per il destinatario della concessione, anche dopo revoca o scadenza.
+
+Ogni scelta identifica `membershipId`, `companyId` e `personId`. Anteprima, conferma e lettura acquisiscono i lock di attori/sessioni/cliente, l’intero insieme ordinato delle aziende, i collegamenti, le persone e i registri delle generazioni prima dei documenti. Lo stato firmato comprende le tre identità, le generazioni di azienda/persona/collegamento e i soli valori scelti. Modifiche, cancellazioni e reinserimenti invalidano l’approvazione anche se il contenuto ritorna uguale. Nessun GET crea generazioni, concessioni o ricevute.
+
+Grant, comando, revisione immutabile e audit restano nella stessa transazione. L’audit V4 conserva conteggi, non nomi o recapiti. Il database verifica i conteggi di persone/campi e la ricevuta V4, oltre ai controlli storici. Un errore di audit annulla l’intera operazione. Il comando esatto consente di riconciliare una risposta persa; una concessione revocata o scaduta non ripristina permessi ordinari.
+
+## Schema 62 e recuperabilità
+
+`20261021220000_selective_client_person_fields_v1` richiede schema61 con SQL61 esatta. Aggiunge e inizializza due registri separati (`SelectivePersonGeneration`, `SelectiveMembershipGeneration`), senza modificare i byte delle righe `Person`, `CompanyPerson` o delle decisioni pregresse. I registri mantengono le identità dopo la rimozione delle righe sorgente; non hanno FK a cascata. Trigger vietano riduzioni, riscritture dirette e TRUNCATE, e incrementano le generazioni solo quando cambia la riga sorgente. La migrazione amplia il vincolo dei payload e l’audit atomico per V4.
+
+La qualifica CI usa esclusivamente PostgreSQL sintetico identificato da sentinella: conserva tutte le righe preesistenti e il prefisso61, inietta un errore prima del COMMIT, verifica rollback DDL, seed separato e diniego di replay. Le prove applicative coprono proiezione, contesto, ABA, concorrenza, dinieghi, revoca, risposta persa e audit. Il browser nativo usa i componenti e le azioni reali, con schermate desktop/mobile. La qualifica dell’immagine comprende il riavvio sullo stesso schema62, con selezioni V1/V2/V3/V4, documenti, generazioni e dinieghi preservati.
+
+La presenza di queste prove nel repository non ne attesta l’esito: occorrono CI verde e riesame sull’HEAD esatto. La produzione richiede SQL, target, impatti e recuperabilità concreti, riesame pertinente e autorizzazione specifica. Nessun down-migrate, nuovo backup, restore DB qualificato, binding, concessione o invio reale è incluso nello sviluppo.

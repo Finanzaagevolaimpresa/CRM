@@ -88,7 +88,7 @@ test('project authority cannot bootstrap client sharing from a management GET or
     assert.throws(() => enroll(binding), /SELECTIVE_CLIENT_ENROLLMENT_ALREADY_STARTED/);
     assert.equal(await db.selectiveClientGrant.count(), 0);
   });
-  // Explicit synthetic authority for the schema61 regression fixture only.
+  // Explicit synthetic authority for the schema62 regression fixture only.
   await db.selectiveClientAuthority.create({ data: { userId: admin.user.id, enabled: true } });
   assert.deepEqual(await db.selectiveClientGrant.findMany({ orderBy: { id: 'asc' } }), historicalGrants);
 });
@@ -650,4 +650,166 @@ test('pending V3 confirmation waits for actual company writer and denies after t
   await confirm; assert.ok(failure);
   assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 0);
   assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+});
+
+async function personFixture() {
+  const f = await fixture();
+  const person = await db.person.create({ data: { firstName: 'PRIVATE_SYNTHETIC_FIRST', lastName: 'PRIVATE_SYNTHETIC_LAST',
+    email: 'selected@example.invalid', phone: 'PRIVATE_SYNTHETIC_PHONE', notes: 'PRIVATE_SYNTHETIC_PERSON_NOTE' } });
+  const membership = await db.companyPerson.create({ data: { companyId: f.company.id, personId: person.id, role: 'Referente', ownershipPercent: '12.34567890123456789' } });
+  const choice = { membershipId: membership.id, companyId: f.company.id, personId: person.id, fields: ['email'] };
+  const input = { ...f.input, version: 4, fields: [], documents: [], companies: [], people: [choice] };
+  return { ...f, person, membership, choice, input };
+}
+test('V4 person-only choice exposes no implicit names, company or other membership and keeps minimized atomic counts', options, async () => {
+  const f = await personFixture();
+  const otherCompany = await db.company.create({ data: { clientId: f.other.id, name: 'PRIVATE_OTHER_PERSON_COMPANY' } });
+  await db.companyPerson.create({ data: { companyId: otherCompany.id, personId: f.person.id, role: 'PRIVATE_OTHER_MEMBERSHIP' } });
+  const { preview, receipt } = await grantClient(db, admin, f.input);
+  const view = await readClientSharing(db, f.reader.session, f.client.id);
+  assert.deepEqual(view.people, preview.people); assert.deepEqual(view.people[0].fields.map(row => row.key), ['email']);
+  assert.equal(view.people[0].fields[0].value, f.person.email);
+  for (const privateValue of [f.person.firstName, f.person.lastName, f.person.notes!, f.company.name, otherCompany.name, 'PRIVATE_OTHER_MEMBERSHIP']) assert.ok(!JSON.stringify(view).includes(privateValue));
+  assert.equal(receipt.protocol, 'SELECTIVE_CLIENT_RECEIPT_V4');
+  assert.deepEqual((await db.auditLog.findUniqueOrThrow({ where: { id: receipt.revisionId } })).after,
+    { version: 1, action: 'GRANT', fieldCount: 0, documentCount: 0, companyCount: 0, companyFieldCount: 0, personCount: 1, personFieldCount: 1 });
+  await deniedOrdinary(f);
+  const catalogue = await clientSharingManagement(db, admin.session, f.client.id);
+  assert.deepEqual(catalogue.personOptions.map(row => row.membershipId), [f.membership.id]);
+});
+test('V4 modified and restored person or membership invalidates both preview and persisted approval', options, async () => {
+  for (const kind of ['person', 'membership'] as const) {
+    const f = await personFixture(), preview = await previewClientSharing(db, admin.session, f.input);
+    const changeAndRestore = async () => {
+      if (kind === 'person') {
+        await db.person.update({ where: { id: f.person.id }, data: { phone: 'CHANGED' } });
+        await db.person.update({ where: { id: f.person.id }, data: { phone: f.person.phone } });
+      } else {
+        await db.companyPerson.update({ where: { id: f.membership.id }, data: { role: 'CHANGED' } });
+        await db.companyPerson.update({ where: { id: f.membership.id }, data: { role: f.membership.role } });
+      }
+    };
+    await changeAndRestore();
+    await assert.rejects(confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin)));
+    assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+    await grantClient(db, admin, f.input); await changeAndRestore();
+    await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  }
+});
+test('V4 rejects substituted membership identity, foreign client, reparenting and person trash without resurrection', options, async () => {
+  const f = await personFixture();
+  for (const patch of [{ personId: 'wrong' }, { companyId: 'wrong' }, { membershipId: 'wrong' }]) {
+    await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, people: [{ ...f.choice, ...patch }] }));
+  }
+  await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, clientId: f.other.id }));
+  await grantClient(db, admin, f.input);
+  await db.person.update({ where: { id: f.person.id }, data: { deletedAt: new Date() } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await db.person.update({ where: { id: f.person.id }, data: { deletedAt: null } });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await db.company.update({ where: { id: f.company.id }, data: { clientId: f.other.id } });
+  await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, revision: 1, commandId: randomUUID() }));
+});
+test('V4 tombstones survive deletion and reinsertion; source no-op is stable and direct ledger rewrites/truncates are denied', options, async () => {
+  const f = await personFixture(); await grantClient(db, admin, f.input);
+  const epochs = async () => (await db.$queryRaw<Array<{ person: number; membership: number }>>`SELECT
+    (SELECT generation FROM "SelectivePersonGeneration" WHERE "personId"=${f.person.id}) AS person,
+    (SELECT generation FROM "SelectiveMembershipGeneration" WHERE "membershipId"=${f.membership.id}) AS membership`)[0];
+  const before = await epochs();
+  await db.person.update({ where: { id: f.person.id }, data: { email: f.person.email } });
+  await db.companyPerson.update({ where: { id: f.membership.id }, data: { role: f.membership.role } });
+  assert.deepEqual(await epochs(), before);
+  await db.companyPerson.delete({ where: { id: f.membership.id } });
+  await db.person.delete({ where: { id: f.person.id } });
+  await db.person.create({ data: f.person }); await db.companyPerson.create({ data: f.membership });
+  assert.deepEqual(await epochs(), { person: before.person + 2, membership: before.membership + 2 });
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+  await assert.rejects(db.$executeRaw`UPDATE "SelectivePersonGeneration" SET generation=1 WHERE "personId"=${f.person.id}`);
+  await assert.rejects(db.$executeRaw`DELETE FROM "SelectiveMembershipGeneration" WHERE "membershipId"=${f.membership.id}`);
+  for (const table of ['SelectivePersonGeneration', 'SelectiveMembershipGeneration', 'Person', 'CompanyPerson']) {
+    await assert.rejects(db.$executeRawUnsafe(`TRUNCATE "${table}"`));
+  }
+});
+test('V4 permission revocation for authority or recipient denies open sessions without ordinary fallback', options, async () => {
+  const f = await personFixture(); await grantClient(db, admin, f.input);
+  for (const userId of [f.reader.user.id, admin.user.id]) {
+    const override = await db.userPermissionOverride.create({ data: { userId, permission: 'company.read', allowed: false } });
+    try {
+      await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+      await assert.rejects(previewClientSharing(db, admin.session, { ...f.input, revision: 1, commandId: randomUUID() }));
+    } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); }
+  }
+  await deniedOrdinary(f);
+});
+test('V4 repeated confirmation and lost reply produce one receipt; revocation denies current reads', options, async () => {
+  const f = await personFixture(), p = await previewClientSharing(db, admin.session, f.input);
+  const attempts = await Promise.allSettled([1, 2].map(() => confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin))));
+  const committed = attempts.filter(row => row.status === 'fulfilled');
+  assert.ok(committed.length >= 1, 'one concurrent request must commit');
+  const receipt = committed[0].value;
+  for (const attempt of attempts) {
+    if (attempt.status === 'fulfilled') assert.deepEqual(attempt.value, receipt);
+    else assert.ok(attempt.reason instanceof SerializableConflictError, 'only a serialization conflict may be retried');
+    // Retry the same command after a conflict or a lost reply, without a new decision.
+    assert.deepEqual(await confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin)), receipt);
+  }
+  assert.deepEqual(await readClientSharingReceipt(db, admin.session, f.input.commandId, f.client.id), receipt);
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 1);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 1);
+  assert.equal(await db.selectiveClientRevision.count({ where: { grantId: receipt.grantId } }), 1);
+  assert.equal(await db.auditLog.count({ where: { id: receipt.revisionId } }), 1);
+  await revokeClientSharing(db, admin.session, { grantId: receipt.grantId, revision: 1, commandId: randomUUID() }, clientProof(admin));
+  await assert.rejects(readClientSharing(db, f.reader.session, f.client.id));
+});
+test('V4 pending confirmation waits for person/membership writers then rejects stale values', options, async () => {
+  for (const kind of ['person', 'membership'] as const) {
+    const f = await personFixture(), p = await previewClientSharing(db, admin.session, f.input);
+    let confirm: Promise<unknown> | undefined, failure: unknown;
+    await db.$transaction(async tx => {
+      if (kind === 'person') await tx.$queryRaw`SELECT id FROM "Person" WHERE id=${f.person.id} FOR UPDATE`;
+      else await tx.$queryRaw`SELECT id FROM "CompanyPerson" WHERE id=${f.membership.id} FOR UPDATE`;
+      const [owner] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      confirm = confirmClientSharing(db, admin.session, f.input, p.token, clientProof(admin)).catch(error => { failure = error; });
+      await waitForWriterLock(owner.pid);
+      if (kind === 'person') await tx.person.update({ where: { id: f.person.id }, data: { email: 'changed@example.invalid' } });
+      else await tx.companyPerson.update({ where: { id: f.membership.id }, data: { role: 'Changed' } });
+    });
+    await confirm; assert.ok(failure); assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+  }
+});
+test('V4 audit failure rolls back grant, command and history together', options, async () => {
+  const f = await personFixture(), preview = await previewClientSharing(db, admin.session, f.input);
+  await db.$executeRawUnsafe("CREATE FUNCTION synthetic_person_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='selective_client_changed' THEN RAISE EXCEPTION 'SYNTHETIC_PERSON_AUDIT_FAULT'; END IF; RETURN NEW; END $$");
+  await db.$executeRawUnsafe('CREATE TRIGGER synthetic_person_audit_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_person_audit_fault()');
+  try { await assert.rejects(confirmClientSharing(db, admin.session, f.input, preview.token, clientProof(admin))); }
+  finally {
+    await db.$executeRawUnsafe('DROP TRIGGER synthetic_person_audit_fault ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION synthetic_person_audit_fault()');
+  }
+  assert.equal(await db.selectiveClientGrant.count({ where: { clientId: f.client.id } }), 0);
+  assert.equal(await db.selectiveClientCommand.count({ where: { clientId: f.client.id } }), 0);
+});
+test('V4 database validator independently denies malformed identities, duplicate membership and inconsistent epochs', options, async () => {
+  const f = await personFixture(), { receipt } = await grantClient(db, admin, f.input);
+  const payload = (await db.selectiveClientGrant.findUniqueOrThrow({ where: { id: receipt.grantId } })).payload;
+  const valid = async (value: unknown) => (await db.$queryRaw<Array<{ valid: boolean }>>`SELECT fai_selective_client_people_valid(${JSON.stringify(value)}::jsonb) AS valid`)[0].valid;
+  assert.equal(await valid(payload), true);
+  const p = JSON.parse(JSON.stringify(payload));
+  for (const people of [[], [p.people[0], p.people[0]], [{ ...p.people[0], personEpoch: 0 }], [{ ...p.people[0], membershipEpoch: 2147483648 }], [{ ...p.people[0], personId: 'other' }]]) {
+    assert.equal(await valid({ ...p, people }), false);
+  }
+  assert.equal(await valid({ ...p, selection: { ...p.selection, people: [{ ...f.choice, fields: ['notes'] }] } }), false);
+  assert.equal(await valid({ ...p, selection: { ...p.selection, people: [f.choice, f.choice] } }), false);
+});
+test('V4 personal fields coexist with selected company fields and documents while preserving old V2 history', options, async () => {
+  const f = await documentFixture(), { receipt: old } = await grantClient(db, admin, f.input);
+  const legacy = await db.selectiveClientRevision.findUniqueOrThrow({ where: { id: old.revisionId } });
+  const person = await db.person.create({ data: { firstName: 'Private', lastName: 'Synthetic', email: 'combined@example.invalid' } });
+  const membership = await db.companyPerson.create({ data: { companyId: f.company.id, personId: person.id, role: 'Referente' } });
+  const input = { ...f.input, version: 4, revision: 1, commandId: randomUUID(), companies: [{ companyId: f.company.id, fields: ['vatNumber'] }],
+    people: [{ membershipId: membership.id, companyId: f.company.id, personId: person.id, fields: ['email'] }] };
+  await grantClient(db, admin, input);
+  const view = await readClientSharing(db, f.reader.session, f.client.id);
+  assert.equal(view.companies.length, 1); assert.equal(view.people.length, 1); assert.equal(view.documents.length, 1);
+  assert.deepEqual(await db.selectiveClientRevision.findUniqueOrThrow({ where: { id: old.revisionId } }), legacy);
 });

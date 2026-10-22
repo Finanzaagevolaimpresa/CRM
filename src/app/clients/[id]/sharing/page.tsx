@@ -25,6 +25,7 @@ export default async function Page({ params, searchParams }: {
     <Card title="Scegli cosa condividere"><SelectiveClientSharing key={randomUUID()} clientId={id} recipients={data.recipients}
       documentOptions={data.documentOptions} documentsLimited={data.documentsLimited}
       companyOptions={data.companyOptions} companiesLimited={data.companiesLimited}
+      personOptions={data.personOptions} peopleLimited={data.peopleLimited}
       grants={data.grants.map(grant => ({ ...grant, commandId: randomUUID() }))} initialCommandId={randomUUID()} /></Card>
   </div>;
 }
