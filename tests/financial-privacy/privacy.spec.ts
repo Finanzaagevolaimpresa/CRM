@@ -293,14 +293,16 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
     await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
     const before = await technicalFootprint(f.clientId);
     try {
-      const pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
-      await form.getByRole('button', { name: buttonName, exact: true }).click();
-      const response = await pending;
-      expect(response.status()).toBe(500);
+      // Capture the real response body immediately: the error boundary can
+      // navigate away while a later database query is still in progress.
+      const pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']))
+        .then(async response => ({ status: response.status(), body: await response.text() }));
+      const [response] = await Promise.all([pending, form.getByRole('button', { name: buttonName, exact: true }).click()]);
+      expect(response.status).toBe(500);
       expect(await technicalFootprint(f.clientId)).toEqual(before);
       // Check the actual RSC denial and guard, independently of Chromium's
       // accented-text representation in the development error envelope.
-      const failureLine = (await response.text()).split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
+      const failureLine = response.body.split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
       expect(failureLine).toBeTruthy();
       const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
       expect(failure.name).toBe('UserFacingActionError');
