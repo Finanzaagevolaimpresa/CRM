@@ -94,9 +94,9 @@ test('fresh session, role, deny and expiry override a stale page snapshot', opti
   await db.user.update({ where: { id: f.a.userId }, data: { role: 'commerciale' } });
   await assert.rejects(readCommercialProgress(db, { ...f.a, sessionId: f.b.sessionId }, {}), CommercialProgressUnavailable);
   await assert.rejects(readCommercialProgress(db, { ...f.a, expiresAt: 0 }, {}), CommercialProgressUnavailable);
-  await db.internalSession.update({ where: { id: f.a.sessionId }, data: { expiresAt: new Date(0) } });
+  await db.internalSession.update({ where: { id: f.a.sessionId }, data: { createdAt: new Date(Date.now() - 120000), expiresAt: new Date(Date.now() - 60000) } });
   await assert.rejects(readCommercialProgress(db, f.a, {}), CommercialProgressUnavailable);
-  await db.internalSession.update({ where: { id: f.b.sessionId }, data: { revokedAt: new Date() } });
+  await db.internalSession.update({ where: { id: f.b.sessionId }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE' } });
   await assert.rejects(readCommercialProgress(db, f.b, {}), CommercialProgressUnavailable);
 });
 

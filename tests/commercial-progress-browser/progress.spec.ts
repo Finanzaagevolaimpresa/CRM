@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect, type BrowserContext } from '@playwright/test';
@@ -15,7 +16,7 @@ test.beforeAll(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   assert.ok(evidence); mkdirSync(evidence, { recursive: true });
   for (const [key, role] of [['sales_a', 'commerciale'], ['sales_b', 'commerciale'], ['tech_a', 'consulente'], ['tech_b', 'backoffice']] as const) {
-    actors[key] = await db.user.create({ data: { name: `Synthetic ${key}`, email: `progress-${key}@example.test`, passwordHash: 'synthetic-no-login-password', role } });
+    actors[key] = await db.user.create({ data: { name: `Synthetic ${key}`, email: `progress-${key}-${randomUUID()}@example.test`, passwordHash: 'synthetic-no-login-password', role } });
   }
   for (const side of ['a', 'b']) {
     const name = side === 'a' ? 'Cliente sintetico Alfa' : 'Cliente sintetico Beta';
@@ -41,7 +42,7 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
       await expect(page.getByRole('heading', { name: 'Stato e prossime azioni', exact: true })).toBeVisible();
       const section = page.getByRole('region', { name: 'Avanzamento tecnico dei miei clienti' });
       await expect(section.getByText(fixtures[side].name, { exact: true })).toBeVisible();
-      await expect(section.getByText('In lavorazione', { exact: true })).toBeVisible();
+      await expect(section.getByText('Stato della pratica: In lavorazione', { exact: true })).toBeVisible();
       await expect(section.locator('[data-commercial-progress]')).toHaveCount(1);
       expect(await page.locator('main').innerText()).not.toContain(fixtures[side === 'a' ? 'b' : 'a'].name);
       for (const forbidden of ['PRIVATE_PROJECT_TITLE', 'PRIVATE_PRACTICE_TITLE', 'PRIVATE_ENTITY', 'PRIVATE_TECH_NOTE', 'UNAPPROVED_FREE_TEXT']) expect(await page.locator('main').innerText()).not.toContain(forbidden);
@@ -73,7 +74,7 @@ test('registry revocation, sales reassignment and both technical accounts cannot
   expect((await (await context.request.get('/api/commercial-progress')).json()).items).toEqual([]);
   await db.client.update({ where: { id: fixtures.a.clientId }, data: { salesOwnerId: actors.sales_a.id } });
   expect((await (await context.request.get('/api/commercial-progress')).json()).items).toHaveLength(1);
-  await db.internalSession.update({ where: { id: registry.id }, data: { revokedAt: new Date() } });
+  await db.internalSession.update({ where: { id: registry.id }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE' } });
   expect((await context.request.get('/api/commercial-progress')).status()).toBe(401);
   await context.close();
   writeFileSync(join(evidence, 'projection-proof.json'), JSON.stringify({ synthetic: true, salesAccounts: 2, technicalAccounts: 2, currentSessionRevocation: true, currentSalesReference: true, noFinancialPayload: true, productionContact: false }));
