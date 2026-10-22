@@ -11,10 +11,13 @@ import { contractSignatureDeclarationEvent, storedContractSignatureDeclarationSc
 import { Card, EmptyState, PageHeader, formatDateTime } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
 import { contractOperationalState, contractOperationalLabel } from '@/lib/contract-operational-state';
+import { CommercialProgress } from '@/components/commercial-progress';
+import { readCommercialProgress } from '@/lib/commercial-progress';
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ client?: string; q?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ client?: string; q?: string; after?: string }> }) {
   const session = await requirePermission('client.read');
   const query = await searchParams;
+  const technicalProgress = session.role === 'commerciale' ? await readCommercialProgress(prisma, session, query) : null;
   const needle = (query.q ?? '').trim().slice(0, 100).toLocaleLowerCase('it');
   const clients = (await prisma.client.findMany({ where: { deletedAt: null, ...(query.client ? { id: query.client } : {}) }, orderBy: [{ displayName: 'asc' }, { id: 'asc' }] }))
     .filter(client => canViewClient(session, client) && (!needle || client.displayName.toLocaleLowerCase('it').includes(needle)));
@@ -81,6 +84,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
     <form method="get" className="flex flex-wrap gap-3">{query.client ? <input type="hidden" name="client" value={query.client} /> : null}
       <label>Cerca cliente<input name="q" defaultValue={query.q ?? ''} maxLength={100} className="ml-2 rounded-xl border p-2" /></label><button type="submit" className="rounded-xl border px-4">Cerca</button><Link href="/progress">Tutti i clienti accessibili</Link></form>
     <p>{clients.length} clienti accessibili corrispondenti · {practices.length} percorsi. L’elenco non si limita alle prime dieci priorità.</p>
+    {technicalProgress ? <CommercialProgress result={technicalProgress} query={query} /> : null}
     {practiceCards}
     {!practices.length ? <EmptyState title="Nessun percorso accessibile corrispondente">Apri il fascicolo per proseguire dai dati già salvati. Non creare un duplicato dopo un esito incerto.</EmptyState> : null}
     {contracts.map(contract => {
