@@ -1,7 +1,7 @@
 name: Selective lead edit
 on:
   pull_request:
-    paths: ['prisma/**', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+    paths: ['prisma/**', 'ops/selective-lead-edit-authority-enrollment.sql', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}
@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix: { target: [postgresql, browser] }
+      matrix: { target: [postgresql, browser, enrollment] }
     services:
       postgres:
         image: postgres:16
@@ -68,6 +68,10 @@ jobs:
           git archive d6a5a3d14a9b3a1ade0d33e6b156ad71da5d9b0f prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/selective-lead-edit/qualify-migration.sh
+      - name: Operator-only enrollment, denials, concurrent single use and atomic audit
+        if: matrix.target == 'enrollment'
+        env: { RUN_LEAD_EDIT_ENROLLMENT_TESTS: '1' }
+        run: python3 scripts/selective-lead-edit/qualify-enrollment.py
       - name: Actual PostgreSQL admission, exact mutation, concurrency, replay and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
