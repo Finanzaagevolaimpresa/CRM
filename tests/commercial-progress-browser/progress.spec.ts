@@ -99,6 +99,13 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
         return nav;
       };
       try {
+        if (!sales) {
+          // Mirror the relevant saved restrictions observed on the two technical
+          // roles, using only these disposable actors and no real account data.
+          for (const permission of ['client.read', 'client.write', 'company.read', 'company.write', 'lead.read', 'lead.write', 'service.read', 'service.write', 'service.assign', 'project.write']) {
+            await db.userPermissionOverride.create({ data: { userId: actors[key].id, permission, allowed: false } });
+          }
+        }
         await page.goto('/dashboard');
         await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
         const main = page.locator('main');
@@ -139,7 +146,7 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
         for (const path of allowed.filter(path => path !== '/documents')) await expect(restrictedNav.locator(`a[href="${path}"]`)).toHaveCount(0);
         if (sales) expect((await context.request.get('/api/commercial-progress')).status()).toBe(403);
         expect((await db.internalSession.findUniqueOrThrow({ where: { id: registry.id } })).revokedAt).toBeNull();
-        observations.push({ actor: key, role: actors[key].role, positiveOwnCount: 1, foreignDetailAbsent: true, currentPermissionDenialWithoutRelogin: true });
+        observations.push({ actor: key, role: actors[key].role, positiveOwnCount: 1, foreignDetailAbsent: true, currentPermissionDenialWithoutRelogin: true, technicalParentListRestrictions: !sales });
       } finally {
         await db.userPermissionOverride.deleteMany({ where: { userId: actors[key].id } });
         await context.close();

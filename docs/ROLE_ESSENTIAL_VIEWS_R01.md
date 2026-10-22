@@ -18,8 +18,10 @@ non sostituisce l'enforcement server su URL, API, ricerca, documenti e
 operazioni. Assegnazioni tecniche multiple, completamento dei moduli tecnici
 e coda delle richieste all'Admin rimangono incrementi distinti. Nascondere le
 voci dei moduli «In preparazione» non ne dichiara il completamento. Nessun
-account reale viene riclassificato e la corrispondenza con i profili nominativi
-del collaudo umano deve essere verificata separatamente.
+account reale viene riclassificato. La lettura circoscritta dei ruoli correnti
+ha confermato i due codici tecnici e le restrizioni alle liste di clienti,
+aziende, lead e servizi: le prove le riproducono su utenti sintetici, senza
+usare identificativi o dati personali degli account reali.
 
 ## Verifica
 
