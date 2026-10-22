@@ -267,7 +267,7 @@ test('codici e messaggi UI sono chiusi, minimizzati e non riflettono valori arbi
   }
 });
 
-test('la matrice UI e la navigazione applicano i permessi Orchestrator senza hard-code di ruolo', () => {
+test('la matrice UI richiede i permessi Orchestrator e il menu conserva le aree pertinenti al ruolo', () => {
   assert.deepEqual(getAiOrchestratorAdminUiPermissions([]), {
     canRead: false,
     canAudit: false,
@@ -297,10 +297,14 @@ test('la matrice UI e la navigazione applicano i permessi Orchestrator senza har
   });
 
   const readOverride = visibleNavItemsForTest({
-    role: 'collaboratore_limitato',
+    role: 'admin',
     effectivePermissions: ['ai.orchestrator.read'],
   });
   assert.ok(readOverride.includes('/settings/ai-orchestrator'));
+  assert.ok(!visibleNavItemsForTest({
+    role: 'collaboratore_limitato',
+    effectivePermissions: ['ai.orchestrator.read'],
+  }).includes('/settings/ai-orchestrator'));
   for (const permissions of [[], ['ai.orchestrator.audit'], ['ai.orchestrator.configure'], ['ai.orchestrator.kill']] as const) {
     assert.ok(!visibleNavItemsForTest({
       role: 'admin',

@@ -33,6 +33,13 @@ mentre la stessa sessione rimane aperta. Le restrizioni sono create solo nel
 database effimero verificato dal guard. Le prove pure coprono anche il
 collaboratore limitato e i gruppi vietati con valore zero.
 
+Le regressioni storiche dei menu verificano ora insieme pertinenza del ruolo
+e permesso corrente: gli override non fanno comparire aree amministrative nel
+menu limitato. Le prove positive degli strumenti amministrativi conservano
+attori pertinenti e quelle negative restano esplicite. Il test nativo della
+riassegnazione lead usa un commerciale; un tecnico sintetico distinto rimane
+responsabile dei progetti e delle pratiche del fixture.
+
 Schema e migration restano invariati a 63. Nessun invio, concessione reale,
 binding, provider o scheduler viene creato da questa modifica. La qualifica
 CI e il riesame devono riferirsi all'HEAD definitivo di questo incremento;
