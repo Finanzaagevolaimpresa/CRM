@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/contract-activities*', 'tests/contract-activities/**', '.github/workflows/contract-activities.yml']
+    paths: ['package.json', 'package-lock.json', 'src/**', 'prisma/**', 'tests/contract-activities*', 'tests/contract-activities/**', '.github/workflows/contract-activities.yml']
 permissions: { contents: read }
 concurrency:
   group: contract-activities-${{ github.event.pull_request.number || github.ref }}
