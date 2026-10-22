@@ -117,6 +117,12 @@ export async function withLeadEditTransaction<T>(db: PrismaClient, claimed: Auth
     await liveSession(tx, current);
     if (proof) await personal(tx, current, proof);
     const result = await work(tx, { current, key, readAuthority, editAuthority, authorityUser, actor, recipient });
+    // Surface deferred integrity errors inside the callback. A successful
+    // callback value must never be mistaken for a committed command when a
+    // deferred PostgreSQL trigger rejects COMMIT through the ORM adapter.
+    await tx.$executeRaw`SET CONSTRAINTS selective_lead_edit_grant_atomic,
+      selective_lead_edit_revision_atomic, selective_lead_edit_decision_atomic,
+      selective_lead_edit_command_atomic IMMEDIATE`;
     await liveSession(tx, current);
     if (proof) await personal(tx, current, proof);
     return result;

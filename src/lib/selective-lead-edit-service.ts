@@ -73,7 +73,7 @@ async function previousCommand(tx: Tx, state: LeadEditTransactionState, read: Re
   if (!audit || audit.actorId !== state.current.userId || audit.entityType !== 'SelectiveLeadEditCommand'
     || audit.entityId !== row.id || audit.event !== 'selective_lead_edit_applied'
     || canonicalSha256(audit.before) !== canonicalSha256({ version: receipt.beforeVersion })
-    || canonicalSha256(audit.after) !== canonicalSha256({ version: receipt.afterVersion, fields: receipt.changedFields })) denied();
+    || canonicalSha256(audit.after) !== canonicalSha256({ version: receipt.afterVersion, changedPaths: receipt.changedFields })) denied();
   return receipt;
 }
 
@@ -115,7 +115,7 @@ export async function confirmLeadEdit(db: PrismaClient, claimed: AuthSession, ra
        ${fields}::text[],${JSON.stringify(signed.payload)}::jsonb,${signed.proof},${recordedAt})`;
     await tx.auditLog.create({ data: { id: command.commandId, actorId: state.current.userId,
       entityType: 'SelectiveLeadEditCommand', entityId: command.commandId, event: 'selective_lead_edit_applied', createdAt: recordedAt,
-      before: { version: signed.payload.beforeVersion }, after: { version: signed.payload.afterVersion, fields } } });
+      before: { version: signed.payload.beforeVersion }, after: { version: signed.payload.afterVersion, changedPaths: fields } } });
     const finish = await leadEditClock(tx);
     if (!readSelectiveLeadEditGrant(capability.raw, read.raw, state.key, capability.current, finish.getTime())
       || !readLeadEditPreview('change', state.key, token, admission, finish.getTime())) stale();

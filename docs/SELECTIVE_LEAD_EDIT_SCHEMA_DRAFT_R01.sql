@@ -200,7 +200,7 @@ BEGIN
   OR a."actorId" IS DISTINCT FROM NEW."actorId" OR a.event<>'selective_lead_edit_applied'
   OR a."entityType"<>'SelectiveLeadEditCommand' OR a."entityId"<>NEW.id::text
   OR a."before" IS DISTINCT FROM jsonb_build_object('version',NEW.receipt->>'beforeVersion')
-  OR a."after" IS DISTINCT FROM jsonb_build_object('version',NEW.receipt->>'afterVersion','fields',to_jsonb(NEW."changedFields")) THEN
+  OR a."after" IS DISTINCT FROM jsonb_build_object('version',NEW.receipt->>'afterVersion','changedPaths',to_jsonb(NEW."changedFields")) THEN
   RAISE EXCEPTION 'SELECTIVE_LEAD_EDIT_ATOMIC_COMMAND';
  END IF;
  RETURN NULL;

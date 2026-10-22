@@ -120,7 +120,7 @@ test('one exact mutation preserves unselected lead fields, Inbox, SLA and minimi
   assert.deepEqual(receipt.changedFields, ['priority']);
   const audit = await db.auditLog.findUniqueOrThrow({ where: { id: input.commandId } });
   assert.deepEqual(audit.before, { version: input.expectedVersion });
-  assert.deepEqual(audit.after, { version: receipt.afterVersion, fields: ['priority'] });
+  assert.deepEqual(audit.after, { version: receipt.afterVersion, changedPaths: ['priority'] });
   assert.equal((await counts(f.lead.id)).commands, 1n); assert.equal((await counts(f.lead.id)).audits, 1n);
   for (const excluded of [f.lead.notes!, f.lead.email!, f.lead.interest!, 'alta']) assert.equal(JSON.stringify(audit).includes(excluded), false);
 });
@@ -179,17 +179,20 @@ test('inactive recipients may be revoked by the personal manager but cannot reop
 test('trash and restore do not renew read or edit approvals', options, async () => {
   const f = await fixture(); await grant(f);
   const beforeLead = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
-  await transitionLeadLifecycle(db, admin.session, { id: f.lead.id, updatedAt: beforeLead.updatedAt.toISOString(), action: 'trash' }, leadProof(admin));
+  await transitionLeadLifecycle(db, admin.session, { id: f.lead.id, updatedAt: beforeLead.updatedAt.toISOString(), action: 'trash', confirmed: 'yes' }, leadProof(admin));
   await assert.rejects(readLeadEditing(db, f.reader.session, f.lead.id));
   const trashed = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
-  await transitionLeadLifecycle(db, admin.session, { id: f.lead.id, updatedAt: trashed.updatedAt.toISOString(), action: 'restore' }, leadProof(admin));
+  await transitionLeadLifecycle(db, admin.session, { id: f.lead.id, updatedAt: trashed.updatedAt.toISOString(), action: 'restore', confirmed: 'yes' }, leadProof(admin));
   await assert.rejects(readLeadEditing(db, f.reader.session, f.lead.id));
 });
 
-test('conversion blocks an already previewed edit and preserves the client link', options, async () => {
+test('an existing client link blocks an already previewed edit regardless of the commercial status', options, async () => {
   const f = await fixture(); await grant(f); const input = await command(f), p = await previewLeadEdit(db, f.reader.session, input);
   const client = await db.client.create({ data: { type: 'persona_fisica', displayName: 'Cliente convertito sintetico' } });
-  await db.lead.update({ where: { id: f.lead.id }, data: { clientId: client.id, status: 'vinto', updatedAt: new Date() } });
+  await withSerializableTransaction(db, async tx => {
+    await lockLeadForMutation(tx, admin.session, f.lead.id, input.expectedVersion);
+    await tx.lead.update({ where: { id: f.lead.id }, data: { clientId: client.id, updatedAt: new Date() } });
+  });
   await assert.rejects(confirmLeadEdit(db, f.reader.session, input, p.token, true));
   assert.equal((await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } })).clientId, client.id);
   assert.equal((await counts(f.lead.id)).commands, 0n);
@@ -246,4 +249,26 @@ test('committed decisions, revisions and commands reject physical deletion or re
   await assert.rejects(db.$executeRaw`DELETE FROM "SelectiveLeadEditRevision" WHERE id=${selection.revisionId}::uuid`, /SELECTIVE_LEAD_EDIT_HISTORY_RETAINED/);
   await assert.rejects(db.$executeRaw`DELETE FROM "SelectiveLeadEditDecision" WHERE id=${f.selection.commandId}::uuid`, /SELECTIVE_LEAD_EDIT_HISTORY_RETAINED/);
   assert.equal((await counts(f.lead.id)).commands, 1n);
+});
+
+test('a deferred integrity failure rejects the call instead of returning an uncommitted receipt', options, async () => {
+  const f = await fixture(); await grant(f); const input = await command(f), p = await previewLeadEdit(db, f.reader.session, input);
+  const beforeLead = await db.lead.findUniqueOrThrow({ where: { id: f.lead.id } });
+  const name = `zz_synthetic_edit_deferred_${randomUUID().replaceAll('-', '')}`;
+  assert.match(name, /^[a-z0-9_]+$/); assert.match(input.commandId, /^[a-f0-9-]{36}$/);
+  await db.$executeRawUnsafe(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id='${input.commandId}' THEN NEW."after" := NEW."after" - 'changedPaths'; END IF; RETURN NEW; END $$`);
+  await db.$executeRawUnsafe(`CREATE TRIGGER ${name} BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION ${name}()`);
+  try {
+    await assert.rejects(confirmLeadEdit(db, f.reader.session, input, p.token, true), /SELECTIVE_LEAD_EDIT_ATOMIC_COMMAND/);
+    assert.deepEqual(await db.lead.findUnique({ where: { id: f.lead.id } }), beforeLead);
+    assert.equal((await counts(f.lead.id)).commands, 0n);
+    assert.equal((await counts(f.lead.id)).audits, 0n);
+    assert.equal(await readLeadEditOutcome(db, f.reader.session, input), null);
+  } finally {
+    await db.$executeRawUnsafe(`DROP TRIGGER ${name} ON "AuditLog"`);
+    await db.$executeRawUnsafe(`DROP FUNCTION ${name}()`);
+  }
+  const receipt = await confirmLeadEdit(db, f.reader.session, input, p.token, true);
+  assert.equal((await counts(f.lead.id)).commands, 1n);
+  assert.deepEqual(await readLeadEditOutcome(db, f.reader.session, input), receipt);
 });
