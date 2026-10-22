@@ -42,7 +42,7 @@ test('N02 middleware is syntactic only', () => {
   assert.match(instrumentation, /assertLegacyStartupReady\(prisma\)/);
 });
 test('N02 migration and privacy are exact', () => {
-  assert.equal(readdirSync('prisma/migrations').length, 62);
+  assert.equal(readdirSync('prisma/migrations').length, 63);
   const sql = readFileSync('prisma/migrations/20260815120000_internal_session_registry_revocation_v1/migration.sql', 'utf8');
   assert.match(sql, /octet_length\("tokenDigest"\) = 32/); assert.match(sql, /ON DELETE CASCADE/); assert.match(sql, /ON DELETE SET NULL/);
   assert.doesNotMatch(sql, /^\s*(?:DROP|DELETE|UPDATE|INSERT)\b/im);

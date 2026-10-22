@@ -6,7 +6,7 @@ La proiezione richiede sessione registry corrente, ruolo Commerciale attivo, `cl
 
 Non vengono restituiti titolo libero della pratica, note interne, testo libero di comunicazioni, contratti, pagamenti, ID di progetto/servizio o documenti. I contesti comunicazione e le versioni documentali restano soggetti ai loro flussi distinti. Nessuna nuova migration, autorità, concessione, notifica o invio è richiesto da questa proiezione.
 
-Qualifica prevista: policy pura; PostgreSQL su database effimero identificato dal sentinel; browser nativo con due commerciali e due tecnici, ricerca/API, cambio tecnico, cambio commerciale, sessione revocata, desktop/mobile. Le prove locali non attestano il browser, il database o la produzione. Il branch parte da PR210/schema62; qualunque nuova baseline va riconciliata prima di riesame e rilascio.
+Qualifica prevista: policy pura; PostgreSQL su database effimero identificato dal sentinel; browser nativo con due commerciali e due tecnici, ricerca/API, cambio tecnico, cambio commerciale, sessione revocata, desktop/mobile. Le prove locali non attestano il browser, il database o la produzione. Il branch è riconciliato con il merge PR211 `42e0577ed7fd8b541812940fd5193a1f499657b5`, schema63. I risultati del precedente candidato su schema62 restano storici: la CI va completata sull'HEAD riconciliato prima del riesame.
 
 ## Residui espliciti del mandato
 

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('schema62 restart preserves exact selected lead fields and durable denial after revocation', async ({ browser }) => {
+test('schema63 restart preserves exact selected lead fields and durable denial after revocation', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_LEAD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; email: string; liveId: string; liveLabel: string; privateEmail: string;
     revokedId: string; otherId: string; otherLabel: string;
@@ -36,5 +36,46 @@ test('schema62 restart preserves exact selected lead fields and durable denial a
   }
   await page.goto(origin + '/leads/' + f.otherId);
   await expect(page.locator('body')).toContainText(f.otherLabel);
+  await context.close();
+});
+
+test('schema63 restart preserves narrow edits, receipts and revoked editing without revoking reading', async ({ browser }) => {
+  const f = JSON.parse(readFileSync(process.env.R05_LEAD_RECOVERY_FIXTURE!, 'utf8')) as {
+    synthetic: boolean; email: string; editing: Array<{ id: string; commandId?: string; excluded: string[] }>;
+  };
+  expect(f.synthetic).toBe(true);
+  expect(f.editing).toHaveLength(2);
+  const [live, revoked] = f.editing;
+  const context = await browser.newContext(), page = await context.newPage();
+  const origin = process.env.PRACTICE_READINESS_BROWSER_ORIGIN!;
+  await page.goto(origin + '/login');
+  await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+  await page.getByLabel('Email').fill(f.email);
+  await page.getByLabel('Password').fill(process.env.PRACTICE_READINESS_BROWSER_PASSWORD!);
+  await page.getByRole('button', { name: 'Login interno' }).click();
+  await expect(page).toHaveURL(origin + '/dashboard');
+  await page.goto(origin + '/leads/' + live.id + '/edit-selected');
+  await expect(page.getByLabel('Priorità', { exact: true })).toHaveValue('alta');
+  await expect(page.locator('textarea')).toHaveCount(0);
+  for (const excluded of live.excluded) await expect(page.locator('body')).not.toContainText(excluded);
+  await page.getByLabel('Priorità', { exact: true }).selectOption('urgente');
+  await page.getByRole('button', { name: 'Rivedi le modifiche', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Conferma le modifiche', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Priorità', { exact: true })).toHaveValue('urgente');
+  // Preview must not alter the saved value or any recovery footprint.
+  await page.reload();
+  await expect(page.getByLabel('Priorità', { exact: true })).toHaveValue('alta');
+  expect(live.commandId).toBeTruthy();
+  await page.goto(origin + '/leads/' + live.id + '/edit-selected?editCommandId=' + live.commandId);
+  await page.getByRole('button', { name: 'Verifica esito della modifica', exact: true }).click();
+  // A new login cannot read a receipt bound to the original synthetic session.
+  await expect(page.getByText('Dati o permessi cambiati. Ricarica la pagina e prepara una nuova anteprima.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Conferma e salva modifiche', exact: true })).toHaveCount(0);
+  await page.goto(origin + '/shared-leads/' + revoked.id);
+  await expect(page.locator('dl dt')).toHaveCount(2);
+  await expect(page.getByText('Interesse conservato', { exact: true })).toBeVisible();
+  const denied = await page.request.get(origin + '/leads/' + revoked.id + '/edit-selected');
+  expect(denied.status()).toBe(404);
+  for (const excluded of revoked.excluded) expect(await denied.text()).not.toContain(excluded);
   await context.close();
 });

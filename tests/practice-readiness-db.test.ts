@@ -48,10 +48,13 @@ const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({
 });
 const db = new PrismaClient();
 const suffix = randomUUID();
+// User identities are opaque identifiers. Hyphenated random UUID fragments can
+// accidentally look like telephone numbers to the unchanged audit redactor.
+const actorSuffix = suffix.replaceAll('-', '');
 const ids = {
-  userA: `readiness-a-${suffix}`,
-  userB: `readiness-b-${suffix}`,
-  manager: `readiness-manager-${suffix}`,
+  userA: `readiness_a_${actorSuffix}`,
+  userB: `readiness_b_${actorSuffix}`,
+  manager: `readiness_manager_${actorSuffix}`,
   sessionA: randomUUID(),
   sessionB: randomUUID(),
   managerSession: randomUUID(),
@@ -319,6 +322,9 @@ test.before(async () => {
   if (!enabled) return;
   // This identity check intentionally precedes every fixture/catalog write.
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
+  const actorIdentityEvidence = { actorId: ids.userA, exportedById: ids.userB, reviewerId: ids.manager };
+  const preservedActors = await db.$queryRaw<Array<{ evidence: unknown }>>`SELECT audit_sanitize_json_n04_v1(${JSON.stringify(actorIdentityEvidence)}::jsonb) AS evidence`;
+  assert.deepEqual(preservedActors[0].evidence, actorIdentityEvidence, 'opaque synthetic actor IDs survive the real audit privacy policy');
   process.env.PRACTICE_READINESS_MODE = "synthetic";
   await prepareServiceCatalogV2(db);
   await db.user.createMany({
