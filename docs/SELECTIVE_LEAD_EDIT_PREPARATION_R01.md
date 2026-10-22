@@ -2,8 +2,9 @@
 
 PR211 resta una bozza non distribuita, basata sul merge PR210
 d6a5a3d14a9b3a1ade0d33e6b156ad71da5d9b0f (schema62).
-La SQL è ancora esterna alla catena Prisma e il binding personale
-lead-edit non è stato creato in produzione.
+La nuova migration candidata `20261022110000_selective_lead_edit_v1` porta
+la catena Prisma da 62 a 63. Il binding personale lead-edit non è stato
+creato in produzione. La SQL bozza conservata in docs è soltanto storica.
 
 ## Comportamento del candidato
 
@@ -50,16 +51,29 @@ Queste prove riguardano i servizi, la SQL bozza e il precedente modulo non
 collegato; non vengono attribuite al successivo delta di route, action e
 interfaccia Admin.
 
-Il nuovo workflow prepara un database PostgreSQL effimero con schema62, verifica
-rollback della SQL bozza e autorità inizialmente vuota. In job separati esegue
+Il commit 1f970a12bf50896cdc1426544caac8fa8ab148fe ha superato 16 prove DB
+e tre scenari browser nativi sulla SQL bozza, run39755587556. Le quattro
+schermate desktop/mobile sono state ispezionate: nessun overflow e selezioni
+coerenti con l'anteprima dopo la correzione del reset automatico dei form.
+Queste prove non vengono attribuite alla successiva integrazione schema63.
+
+Il workflow corrente prepara un database PostgreSQL effimero con schema62, verifica
+rollback della nuova migration e autorità inizialmente vuota. In job separati esegue
 le 16 prove dei servizi e tre scenari browser nativi: decisione personale,
 modifica precisa, revoca con form aperto, risposte perse di decisione e modifica,
 sessione revocata, dinieghi diretti, controlli e screenshot desktop/mobile.
 Non usa dati o credenziali reali e non attiva provider.
 
+La qualifica dell'immagine candidata prepara anche due permessi di modifica
+sintetici, uno ancora valido e uno revocato, e un solo aggiornamento registrato.
+Prima e dopo riavvio e ripresa controlla valori salvati, anteprima senza scritture,
+diniego della modifica revocata e della ricevuta da un'altra sessione. Confronta
+tutte le cinque tabelle nuove, audit, lead, inbox e SLA per conservarne lo stato.
+Questa nuova prova richiede ancora l'esecuzione CI sul candidato schema63.
+
 Restano prima della revisione e del rilascio:
-- acquisire le nuove prove sull'HEAD esatto e ispezionare gli screenshot;
-- integrare SQL e modelli nella catena Prisma con qualifica della migrazione;
+- acquisire le prove sull'HEAD che integra schema63;
+- qualificare la migrazione e la recuperabilità dei permessi di modifica;
 - preparare il piano preciso di rilascio, recuperabilità e binding personale;
 - ottenere PASS pertinente e l'autorizzazione specifica alle nuove SQL/binding.
 

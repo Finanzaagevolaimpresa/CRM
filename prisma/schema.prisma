@@ -398,6 +398,11 @@ model User {
   ordinaryEmailDecisions OrdinaryEmailDecision[]
   ordinaryInboundLinks OrdinaryEmailInboundLink[]
   selectiveAccessAuthority SelectiveAccessAuthority?
+  selectiveLeadEditAuthority SelectiveLeadEditAuthority?
+  selectiveLeadEditGrants SelectiveLeadEditGrant[]
+  selectiveLeadEditDecisions SelectiveLeadEditDecision[] @relation("LeadEditDecisionActor")
+  selectiveLeadEditReceivedDecisions SelectiveLeadEditDecision[] @relation("LeadEditDecisionRecipient")
+  selectiveLeadEdits SelectiveLeadEditCommand[]
   selectiveLeadAuthority SelectiveLeadAuthority?
   selectiveLeadGrants SelectiveLeadGrant[]
   selectiveLeadCommands SelectiveLeadCommand[] @relation("LeadCommandActor")
@@ -535,6 +540,9 @@ model ClientReadGrant {
 }
 
 model Lead {
+  selectiveEditGrants SelectiveLeadEditGrant[]
+  selectiveEditDecisions SelectiveLeadEditDecision[]
+  selectiveEdits SelectiveLeadEditCommand[]
   selectiveGrants SelectiveLeadGrant[]
   selectiveCommands SelectiveLeadCommand[]
   recordUpdateEpoch Int @default(1)
@@ -819,6 +827,7 @@ model SelectiveLeadAuthority {
 
 // The row survives revocation/expiry so ordinary rights cannot silently return.
 model SelectiveLeadGrant {
+  editGrants SelectiveLeadEditGrant[]
   id String @id @default(uuid()) @db.Uuid
   leadId String
   recipientId String
@@ -868,6 +877,92 @@ model SelectiveLeadRevision {
   grant SelectiveLeadGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command SelectiveLeadCommand @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   @@unique([grantId, revision])
+}
+
+// Personal edit authority is distinct from reading; migration never enrolls it.
+model SelectiveLeadEditAuthority {
+  id String @id @default("lead-edit")
+  userId String @unique
+  revision Int @default(1)
+  enabled Boolean @default(false)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model SelectiveLeadEditGrant {
+  id String @id @db.Uuid
+  leadId String
+  recipientId String
+  readGrantId String @db.Uuid
+  revision Int
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  readGrant SelectiveLeadGrant @relation(fields: [readGrantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revisions SelectiveLeadEditRevision[]
+  commands SelectiveLeadEditCommand[]
+  @@unique([leadId, recipientId])
+  @@index([recipientId])
+}
+
+model SelectiveLeadEditDecision {
+  id String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  leadId String
+  recipientId String
+  expectedRevision Int
+  operation String @db.VarChar(12)
+  requestDigest String @db.VarChar(64)
+  receipt Json
+  receiptProof String @db.VarChar(64)
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation("LeadEditDecisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  recipient User @relation("LeadEditDecisionRecipient", fields: [recipientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revision SelectiveLeadEditRevision?
+  @@index([actorId, createdAt])
+}
+
+model SelectiveLeadEditRevision {
+  id String @id @db.Uuid
+  grantId String @db.Uuid
+  revision Int
+  commandId String @unique @db.Uuid
+  payload Json
+  proof String
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  grant SelectiveLeadEditGrant @relation(fields: [grantId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  command SelectiveLeadEditDecision @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([grantId, revision])
+}
+
+model SelectiveLeadEditCommand {
+  id String @id @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  leadId String
+  capabilityId String @db.Uuid
+  capabilityRevision Int
+  requestDigest String @db.VarChar(64)
+  beforeVersion DateTime
+  afterVersion DateTime
+  changedFields String[]
+  receipt Json
+  receiptProof String @db.VarChar(64)
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  capability SelectiveLeadEditGrant @relation(fields: [capabilityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([leadId, transactionId])
+  @@index([actorId, createdAt])
 }
 
 // Separate personal authority; migrations never enroll a real identity.

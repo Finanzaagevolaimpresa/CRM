@@ -14,8 +14,8 @@ import { transitionLeadLifecycle } from '../src/lib/lead-lifecycle';
 import { lockLeadForMutation } from '../src/lib/lead-lifecycle-lock';
 import { withSerializableTransaction } from '../src/lib/serializable';
 
-// A separate, explicit CI entry point applies the SQL draft to an ephemeral
-// schema62 database. Ordinary test discovery cannot execute this preparation.
+// A separate CI entry point qualifies migration63 on an ephemeral database.
+// Ordinary test discovery cannot execute these PostgreSQL operations.
 const enabled = process.env.RUN_SELECTIVE_LEAD_EDIT_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;

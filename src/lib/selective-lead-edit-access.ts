@@ -25,8 +25,8 @@ export const leadEditDecisionReceiptSchema = z.object({
 function deny(): never { throw new LeadEditError('DENIED'); }
 
 /** Internal only. The caller must already hold withLeadEditTransaction and the
- * lead/read-grant locks. Future tables are intentionally absent from schema62;
- * this module has no action/route callers until the full increment is qualified.
+ * lead/read-grant locks. Public callers use the guarded server actions;
+ * personal editing remains unavailable without its distinct current authority.
  */
 export async function lockLeadEditCapability(tx: Tx, state: LeadEditTransactionState, read: ReadContext) {
   const rows = await tx.$queryRaw<GrantRow[]>`

@@ -1,14 +1,14 @@
-name: Selective lead edit preparation
+name: Selective lead edit
 on:
   pull_request:
-    paths: ['src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+    paths: ['prisma/**', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   postgresql:
-    name: Draft lead edit ${{ matrix.target }}
+    name: Selective lead edit ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Qualify the local draft on isolated schema62 only
+      - name: Qualify migration63 from isolated schema62
         shell: bash
         run: |
           set -euo pipefail
@@ -56,22 +56,18 @@ jobs:
           evidence="$RUNNER_TEMP/lead-edit-preparation"
           mkdir -p "$evidence"
           echo "LEAD_EDIT_EVIDENCE=$evidence" >> "$GITHUB_ENV"
-          node scripts/m4/verify-schema.mjs > "$evidence/schema62-binding.json"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema63-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-          npx prisma migrate deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 62
-          draft=docs/SELECTIVE_LEAD_EDIT_SCHEMA_DRAFT_R01.sql
-          sha256sum "$draft" > "$evidence/draft-sha256.txt"
-          sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$draft" > "$evidence/draft-fault.sql"
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$evidence/draft-fault.sql" > "$evidence/draft-fault.log" 2>&1; then
-            echo 'Injected DDL fault did not fail' >&2
-            exit 1
-          fi
-          grep -F 'division by zero' "$evidence/draft-fault.log"
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'SelectiveLeadEdit%'")" = 0
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f "$draft" > "$evidence/draft-apply.log"
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'SelectiveLeadEdit%'")" = 5
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "SelectiveLeadEditAuthority"')" = 0
+          historical="$RUNNER_TEMP/lead-edit-schema62"
+          mkdir -p "$historical"
+          git archive 4d6c73921b02699610cfd006f0fae0e9ea705483 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261022110000_selective_lead_edit_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq SELECTIVE_LEAD_EDIT_SCHEMA62_REQUIRED "$evidence/wrong-base.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'SelectiveLeadEdit%'")" = 0
+          git archive d6a5a3d14a9b3a1ade0d33e6b156ad71da5d9b0f prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/selective-lead-edit/qualify-migration.sh
       - name: Actual PostgreSQL admission, exact mutation, concurrency, replay and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
@@ -116,6 +112,7 @@ jobs:
           name: selective-lead-edit-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/lead-edit-preparation
+            ${{ runner.temp }}/selective-lead-edit-migration
             test-results
           if-no-files-found: error
           retention-days: 14
