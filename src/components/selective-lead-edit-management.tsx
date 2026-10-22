@@ -50,7 +50,8 @@ export function SelectiveLeadEditManagement({ data, initialCommandId, recoverCom
   return <div className="min-w-0 space-y-6">
     <p>Abilita la modifica soltanto per una persona che dispone già di una selezione di lettura valida. Scegli separatamente i campi che potrà cambiare.</p>
     {recoverCommandId && <Decision commandId={recoverCommandId} leadId={data.leadId} action={receiptAction} />}
-    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
+    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed}
+      onReset={event => event.preventDefault()} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
         <div className="font-semibold"><label htmlFor="lead-edit-recipient">Persona con accesso selettivo</label>
           <select id="lead-edit-recipient" className={control} required value={recipientId}

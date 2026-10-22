@@ -64,7 +64,8 @@ export function SelectiveLeadEditor({ view, initialCommandId, recoverCommandId,
   if (recoverCommandId) return <Outcome leadId={view.leadId} commandId={recoverCommandId} action={outcomeAction} />;
   return <div className="min-w-0 space-y-6">
     <p>Puoi modificare soltanto i campi abilitati personalmente dall’Admin. Le autorizzazioni vengono verificate di nuovo al salvataggio.</p>
-    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
+    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed}
+      onReset={event => event.preventDefault()} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
         <legend className="mb-3 font-semibold">Campi abilitati alla modifica</legend>
         {view.fields.map(field => <div key={field.key} className="min-w-0 font-semibold">

@@ -35,6 +35,8 @@ async function prepareGrant(page: Page, row: Row) {
   await page.getByLabel('Priorità', { exact: true }).check();
   await page.getByRole('button', { name: 'Anteprima dei permessi di modifica' }).click();
   await expect(page.getByRole('heading', { name: 'Conferma persona e campi modificabili' })).toBeVisible();
+  await expect(page.getByLabel('Persona con accesso selettivo', { exact: true })).toHaveValue(row.readerId);
+  await expect(page.getByLabel('Priorità', { exact: true })).toBeChecked();
   const preview = page.getByRole('region', { name: 'Conferma persona e campi modificabili' });
   expect(await preview.locator('dt').count()).toBe(1);
   expect(await grantCount(row.leadId)).toBe(0);
@@ -53,6 +55,7 @@ async function prepareEdit(page: Page, row: Row, priority = 'alta') {
   await page.getByLabel('Priorità', { exact: true }).selectOption(priority);
   await page.getByRole('button', { name: 'Rivedi le modifiche', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma le modifiche', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Priorità', { exact: true })).toHaveValue(priority);
   await page.getByLabel('Confermo questi valori e il salvataggio sul lead.').check();
 }
 async function lostResponse(page: Page, button: string) {
