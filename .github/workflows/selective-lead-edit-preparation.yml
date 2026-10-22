@@ -1,0 +1,122 @@
+name: Selective lead edit
+on:
+  pull_request:
+    paths: ['prisma/**', 'ops/selective-lead-edit-authority-enrollment.sql', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+permissions: { contents: read }
+concurrency:
+  group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  postgresql:
+    name: Selective lead edit ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser, enrollment] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-lead-edit-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-lead-edit-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      RUN_SELECTIVE_LEAD_EDIT_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-lead-edit-auth-only-000000000
+      AUTH_COOKIE_NAME: fai_lead_edit_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-lead-edit-step-up-000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3051
+      LEAD_EDIT_BROWSER_CONFIRMED: '1'
+      LEAD_EDIT_BROWSER_PASSWORD: synthetic-lead-edit-password-000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify migration63 from isolated schema62
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/lead-edit-preparation"
+          mkdir -p "$evidence"
+          echo "LEAD_EDIT_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema63-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/lead-edit-schema62"
+          mkdir -p "$historical"
+          git archive 4d6c73921b02699610cfd006f0fae0e9ea705483 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261022110000_selective_lead_edit_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq SELECTIVE_LEAD_EDIT_SCHEMA62_REQUIRED "$evidence/wrong-base.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'SelectiveLeadEdit%'")" = 0
+          git archive d6a5a3d14a9b3a1ade0d33e6b156ad71da5d9b0f prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/selective-lead-edit/qualify-migration.sh
+      - name: Operator-only enrollment, denials, concurrent single use and atomic audit
+        if: matrix.target == 'enrollment'
+        env: { RUN_LEAD_EDIT_ENROLLMENT_TESTS: '1' }
+        run: python3 scripts/selective-lead-edit/qualify-enrollment.py
+      - name: Actual PostgreSQL admission, exact mutation, concurrency, replay and atomic audit
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/selective-lead-edit-access-db.test.ts | tee "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 16' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 16' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
+      - name: Prepare the isolated native browser
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/selective-lead-edit/provision-browser.ts
+      - name: Native personal decision, restricted edit, uncertain result and session revocation
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3051 > "$LEAD_EDIT_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3051/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$LEAD_EDIT_EVIDENCE/playwright.json" npx playwright test --config tests/selective-lead-edit/playwright.config.ts --reporter=line,json | tee "$LEAD_EDIT_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.LEAD_EDIT_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind final source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$LEAD_EDIT_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selective-lead-edit-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/lead-edit-preparation
+            ${{ runner.temp }}/selective-lead-edit-migration
+            test-results
+          if-no-files-found: error
+          retention-days: 14

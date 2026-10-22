@@ -127,6 +127,13 @@ async function main() {
       selectiveLeadRevisions: (await db.selectiveLeadRevision.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
       selectiveLeadCommands: (await db.selectiveLeadCommand.findMany({ orderBy: { id: 'asc' } })).map(row => ({ ...row, transactionId: String(row.transactionId) })),
       selectiveLeadAudit: await db.auditLog.findMany({ where: { event: 'selective_lead_changed' }, orderBy: { id: 'asc' } }),
+      selectiveLeadEditAuthority: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "SelectiveLeadEditAuthority" ORDER BY id`,
+      selectiveLeadEditGrants: await db.$queryRaw<Array<{ revokedAt: Date | null }>>`SELECT * FROM "SelectiveLeadEditGrant" ORDER BY id`,
+      selectiveLeadEditDecisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "SelectiveLeadEditDecision" ORDER BY id`,
+      selectiveLeadEditRevisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "SelectiveLeadEditRevision" ORDER BY id`,
+      selectiveLeadEditCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "SelectiveLeadEditCommand" ORDER BY id`,
+      selectiveLeadEditAudit: await db.auditLog.findMany({ where: { event: { in:
+        ['selective_lead_edit_capability_changed', 'selective_lead_edit_applied'] } }, orderBy: { id: 'asc' } }),
       selectiveLeadUsers: await db.user.findMany({ where: { OR: [{ selectiveLeadAuthority: { isNot: null } }, { selectiveLeadGrants: { some: {} } }] },
         orderBy: { id: 'asc' }, select: { id: true, selectiveLeadEpoch: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
       videoAssets, videoFiles,
@@ -196,8 +203,8 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 62);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261021220000_selective_client_person_fields_v1');
+    assert.equal(data.ledger.length, 63);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261022110000_selective_lead_edit_v1');
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
@@ -210,10 +217,14 @@ async function main() {
     assert.equal(data.selectedClientRows.length, 9);
     assert.equal(data.selectedClientCompanies.length, 9);
     assert.equal(data.selectedClientDocuments.length, 4); assert.equal(data.selectedClientFiles.length, 4);
-    assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 2);
+    assert.equal(data.selectiveLeadAuthority.length, 1); assert.equal(data.selectiveLeadGrants.length, 4);
     assert.equal(data.selectiveLeadGrants.filter(row => row.revokedAt).length, 1);
-    assert.equal(data.selectiveLeadRevisions.length, 3); assert.equal(data.selectiveLeadCommands.length, 3);
-    assert.equal(data.selectiveLeadAudit.length, 3); assert.equal(data.selectiveLeadUsers.length, 2);
+    assert.equal(data.selectiveLeadRevisions.length, 5); assert.equal(data.selectiveLeadCommands.length, 5);
+    assert.equal(data.selectiveLeadAudit.length, 5); assert.equal(data.selectiveLeadUsers.length, 2);
+    assert.equal(data.selectiveLeadEditAuthority.length, 1); assert.equal(data.selectiveLeadEditGrants.length, 2);
+    assert.equal(data.selectiveLeadEditGrants.filter(row => row.revokedAt).length, 1);
+    assert.equal(data.selectiveLeadEditDecisions.length, 3); assert.equal(data.selectiveLeadEditRevisions.length, 3);
+    assert.equal(data.selectiveLeadEditCommands.length, 1); assert.equal(data.selectiveLeadEditAudit.length, 4);
     assert.equal(data.videoAssets.length, 5); assert.equal(data.videoAssets.filter(row => row.state === 'RESERVED').length, 1);
     assert.equal(data.videoFiles.length, 4); assert.equal(data.videos.length, 4);
     assert.equal(data.videoRevisions.length, 11); assert.equal(data.videoCommands.length, 11); assert.equal(data.videoAudit.length, 11);
