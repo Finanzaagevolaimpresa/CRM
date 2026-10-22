@@ -88,6 +88,8 @@ export function DashboardOverview({
   userName,
   priorityLinks = [],
   focusSelection,
+  showPipeline = true,
+  perimeterLinks = [{ label: "Le mie assegnazioni", href: "/assignments" }, { label: "Progetti condivisi", href: "/shared-projects" }],
 }: {
   greeting: string;
   summary: string;
@@ -101,6 +103,8 @@ export function DashboardOverview({
   userName?: string;
   focusSelection?: string | null;
   priorityLinks?: Array<{ label: string; href: string; icon: string; tone: string }>;
+  showPipeline?: boolean;
+  perimeterLinks?: Array<{ label: string; href: string }>;
 }) {
   const selected = kpis.find(item => item.id === selectedKpiId) ?? kpis.find(item => item.tone === "green") ?? kpis[0];
   const icons = { blue: "people", green: "folder", purple: "document", orange: "calendar" };
@@ -112,7 +116,7 @@ export function DashboardOverview({
       <header className="crm-dashboard-header">
         <div><h1 id="dashboard-heading">Dashboard</h1><p>Panoramica operativa</p><span className="sr-only">{greeting} {summary}</span></div>
         <div className="crm-dashboard-account">
-          <details className="crm-perimeter-menu"><summary>Il mio perimetro <span aria-hidden="true">⌄</span></summary><div><strong>Dati accessibili al tuo profilo</strong><p>Contatori ed elenchi rispettano i tuoi permessi correnti.</p><Link href="/assignments">Le mie assegnazioni</Link><Link href="/shared-projects">Progetti condivisi</Link></div></details>
+          <details className="crm-perimeter-menu"><summary>Il mio perimetro <span aria-hidden="true">⌄</span></summary><div><strong>Dati accessibili al tuo profilo</strong><p>Contatori ed elenchi rispettano i tuoi permessi correnti.</p>{perimeterLinks.map(link => <Link key={link.href} href={link.href}>{link.label}</Link>)}</div></details>
           <Link href="/settings/account" className="crm-dashboard-user"><span className="crm-user-avatar"><DashboardIcon name="user"/></span><span>{userName ?? "Il mio account"}</span><span aria-hidden="true">⌄</span></Link>
         </div>
       </header>
@@ -181,7 +185,7 @@ export function DashboardOverview({
         </div>
       </section>}
 
-      <PipelineChart pipeline={pipeline} />
+      {showPipeline && <PipelineChart pipeline={pipeline} />}
 
       <section aria-labelledby="dashboard-priorities-heading" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs">
         <div className="flex items-start justify-between gap-4"><div><h2 id="dashboard-priorities-heading" className="text-xl font-black text-fai-navy">Priorità</h2><p className="mt-1 text-sm text-slate-500">Le prossime attività autorizzate per urgenza.</p></div><span className="rounded-full bg-fai-lime/20 px-3 py-1 text-xs font-black tabular-nums text-fai-green">{priorities.length}</span></div>

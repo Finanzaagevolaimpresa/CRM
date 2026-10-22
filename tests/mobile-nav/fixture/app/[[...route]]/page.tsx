@@ -14,7 +14,7 @@ const adminPermissions: Permission[] = [
 ];
 
 const commercialPermissions: Permission[] = [
-  "service.read", "document.download", "lead.read", "contract.read", "payment.read",
+  "service.read", "document.download", "lead.read", "client.read", "contract.read", "payment.read",
 ];
 
 const technicalPermissions: Permission[] = ["service.read", "technical.read", "document.download", "practice_communications.read", "practice_communications.review"];
@@ -62,7 +62,7 @@ export default async function MobileNavFixture({ searchParams }: { searchParams:
   }));
   return (
     <div className="flex min-h-screen min-w-0 flex-col md:h-screen md:overflow-hidden md:flex-row">
-      <Nav role={profile === "admin" ? "admin" : "commerciale"} effectivePermissions={permissions} notificationCount={123} />
+      <Nav role={profile === "admin" ? "admin" : profile === "technical" ? "consulente" : profile === "restricted" ? "collaboratore_limitato" : "commerciale"} effectivePermissions={permissions} notificationCount={123} />
       <div data-testid="page-content" className="min-h-0 min-w-0 flex-1 md:overflow-y-auto">
         <header className="border-b bg-white px-4 py-2"><p className="break-words text-xs font-bold text-slate-500">Fixture sintetica isolata dei componenti reali — nessuna autenticazione o permission server verificata qui</p></header>
         <main className="crm-page-main crm-space-y-6 p-4 md:p-6">

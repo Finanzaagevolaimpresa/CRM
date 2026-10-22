@@ -125,11 +125,13 @@ for (const viewport of [
   });
 }
 
-test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }) => {
+test("menu Commerciale e tecnico pertinenti, testi lunghi, riapertura e desktop", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?profile=commercial");
   await page.getByRole("button", { name: "Apri menu" }).click();
-  await expect(page.getByRole("link", { name: "Checklist documentale" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Stato e prossime azioni" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Checklist documentale" })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: /^(Contratti|Pagamenti)$/ })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Utenti" })).toHaveCount(0);
   await page.getByRole("button", { name: "Chiudi menu" }).click();
@@ -140,6 +142,15 @@ test("permessi Commerciale, testi lunghi, riapertura e desktop", async ({ page }
   await expect(page.getByRole("button", { name: /menu/i })).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Navigazione principale" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Lead", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Stato e prossime azioni" })).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?profile=technical");
+  await page.getByRole("button", { name: "Apri menu" }).click();
+  await expect(page.getByRole("link", { name: "Checklist documentale" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: "Ufficio Tecnico", exact: true })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navigazione principale" }).getByRole("link", { name: /^(Lead|Clienti|Contratti|Pagamenti|Utenti)$/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Stato e prossime azioni" })).toHaveCount(0);
 });
 
 test("resize conserva il focus su controlli visibili", async ({ page }) => {
@@ -279,7 +290,8 @@ for (const profile of ["commercial", "technical", "restricted"]) {
       return;
     }
     await expect(areas.getByRole("region", { name: "Revisioni e autorizzazioni", exact: true })).toHaveCount(0);
-    await expect(areas.getByRole("link", { name: /Clienti attivi|Progetti attivi/ })).toHaveCount(0);
+    await expect(areas.getByRole("link", { name: /Clienti attivi/ })).toHaveCount(profile === "commercial" ? 1 : 0);
+    await expect(areas.getByRole("link", { name: /Progetti attivi/ })).toHaveCount(0);
     await expect(areas.getByRole("region", { name: "Ufficio Tecnico", exact: true })).toHaveCount(profile === "technical" ? 1 : 0);
     await expect(areas.getByRole("region", { name: "Commerciale", exact: true })).toHaveCount(profile === "commercial" ? 1 : 0);
     await expect(areas.getByRole("region", { name: "Amministrazione", exact: true })).toHaveCount(profile === "commercial" ? 1 : 0);

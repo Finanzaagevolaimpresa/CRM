@@ -158,16 +158,19 @@ test('azioni proteggono auto-disattivazione, ultimo admin e override admin con t
   assert.match(source, /blocked_user_privilege_change/);
 });
 
-test('navigazione filtrata in base ai permessi effettivi', () => {
+test('navigazione richiede sia area pertinente al ruolo sia permessi effettivi', () => {
   const limited = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['client.read'] });
   assert.ok(limited.includes('/clients'));
   assert.ok(!limited.includes('/audit-log'));
   const granted = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['audit.read'] });
-  assert.ok(granted.includes('/audit-log'));
+  assert.ok(!granted.includes('/audit-log'));
   const technicalOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['technical.read'] });
-  assert.ok(technicalOverride.includes('/technical-office'));
+  assert.ok(!technicalOverride.includes('/technical-office'));
   const contractOverride = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['legal.read'] });
-  assert.ok(contractOverride.includes('/legal-compliance'));
+  assert.ok(!contractOverride.includes('/legal-compliance'));
+  assert.ok(visibleNavItemsForTest({ role: 'admin', effectivePermissions: ['audit.read'] }).includes('/audit-log'));
+  assert.ok(visibleNavItemsForTest({ role: 'consulente', effectivePermissions: ['technical.read'] }).includes('/technical-office'));
+  assert.ok(visibleNavItemsForTest({ role: 'admin', effectivePermissions: ['legal.read'] }).includes('/legal-compliance'));
 });
 
 
@@ -175,33 +178,36 @@ test('navigazione filtrata in base ai permessi effettivi', () => {
 
 
 test('navigazione AI richiede ai.review per control center e output', () => {
-  const reviewer = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.review'] });
+  const reviewer = visibleNavItemsForTest({ role: 'admin', effectivePermissions: ['ai.review'] });
   assert.ok(reviewer.includes('/ai'));
   assert.ok(reviewer.includes('/ai/outputs'));
 
-  const runnerOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.run'] });
+  const runnerOnly = visibleNavItemsForTest({ role: 'admin', effectivePermissions: ['ai.run'] });
   assert.ok(!runnerOnly.includes('/ai'));
   assert.ok(!runnerOnly.includes('/ai/outputs'));
 
-  const approverOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.approve'] });
+  const approverOnly = visibleNavItemsForTest({ role: 'admin', effectivePermissions: ['ai.approve'] });
   assert.ok(!approverOnly.includes('/ai'));
   assert.ok(!approverOnly.includes('/ai/outputs'));
 
-  const deniedReview = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: [] });
+  const deniedReview = visibleNavItemsForTest({ role: 'admin', effectivePermissions: [] });
   assert.ok(!deniedReview.includes('/ai'));
   assert.ok(!deniedReview.includes('/ai/outputs'));
+  const focusedReviewer = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['ai.review'] });
+  assert.ok(!focusedReviewer.includes('/ai'));
+  assert.ok(!focusedReviewer.includes('/ai/outputs'));
 });
 
 test('navigazione documentale richiede document.download per documenti e checklist', () => {
-  const canDownload = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['document.download'] });
+  const canDownload = visibleNavItemsForTest({ role: 'consulente', effectivePermissions: ['document.download'] });
   assert.ok(canDownload.includes('/documents'));
   assert.ok(canDownload.includes('/document-checklists'));
 
-  const uploadOnly = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: ['document.upload'] });
+  const uploadOnly = visibleNavItemsForTest({ role: 'consulente', effectivePermissions: ['document.upload'] });
   assert.ok(!uploadOnly.includes('/documents'));
   assert.ok(!uploadOnly.includes('/document-checklists'));
 
-  const deniedDownload = visibleNavItemsForTest({ role: 'collaboratore_limitato', effectivePermissions: [] });
+  const deniedDownload = visibleNavItemsForTest({ role: 'consulente', effectivePermissions: [] });
   assert.ok(!deniedDownload.includes('/documents'));
   assert.ok(!deniedDownload.includes('/document-checklists'));
 });
