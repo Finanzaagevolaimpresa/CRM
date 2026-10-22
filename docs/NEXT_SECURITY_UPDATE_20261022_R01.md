@@ -14,6 +14,8 @@ The regenerated lock has 471 non-root entries and 463 distinct package/version c
 
 ## Qualification and release boundary
 
+Include `package.json` and `package-lock.json` in both the pull-request and main-push path filters of PR140 release qualification. Dependency-only changes previously omitted that workflow, although they change the executable image. This change runs the existing qualification unchanged on the exact candidate and eventual merge; it does not waive any check or add production activation.
+
 Run the existing glob compatibility checks, complete lint/typecheck, application security/audit tests, and both runtime and complete npm audits. Full CI on the exact new HEAD must qualify native browser, PostgreSQL, role menus, selective access, communications, and schema63-compatible image restart. Linux CI uses the repository's Node22 target; local Windows Node24 results are supporting evidence only. Do not retry the unchanged failing PR213 audit or treat an unrelated image workflow as a complete green CI result.
 
 The corrected candidate contains the PR213 interface changes because it starts from that merge. Production remains PR212 until a new exact candidate, independent review, concrete app-only plan, and corresponding release authority are reconciled. The PR213 R01 approval is tied to its original head/tree; it is not an approval for this dependency delta. No migration, binding, grant, real send, new backup, or automatic rollback is introduced. Returning to the previous dependency lock reintroduces the audit blocker and is not a qualified production recovery.
