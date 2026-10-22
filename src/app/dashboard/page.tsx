@@ -16,6 +16,7 @@ import { buildDashboardTechnicalCounterContext } from "@/lib/dashboard-technical
 import { loadDashboardPendingAiAuthorizations } from "@/lib/dashboard-ai-authorizations";
 import { DashboardOverview } from "@/components/dashboard-overview";
 import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
+import { operationalDashboardView, operationalNavigationAllows } from "@/lib/operational-role-view";
 import { dashboardDestinations, dashboardTodayWindow, selectDashboardView, type DashboardView } from "@/lib/dashboard-selection";
 import { loadDashboardLeadDetail, loadDashboardReviewDetail, loadDashboardTodayDetail } from "@/lib/dashboard-detail";
 export const dynamic = "force-dynamic";
@@ -30,24 +31,10 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
   const { startOfToday, endOfToday } = dashboardTodayWindow(now);
   const next7 = new Date(now);
   next7.setDate(next7.getDate() + 7);
-  const canReadServices = hasPermission(session, "service.read");
-  const canReadTechnical = hasPermission(session, "technical.read");
-  const canReadPracticeCommunications = hasPermission(
-    session,
-    "practice_communications.read",
-  );
-  const canReviewPracticeCommunications = hasPermission(
-    session,
-    "practice_communications.review",
-  );
-  const canReadLeads = hasPermission(session, "lead.read");
-  const canReadClients = hasPermission(session, "client.read");
-  const canReadProjects = hasPermission(session, "project.read");
-  const canReadDossiers = hasPermission(session, "dossier.read");
-  const canReadPayments = hasPermission(session, "payment.read");
-  const canReviewAiOutputs = hasPermission(session, "ai.review");
-  const canReadAiOutputs = canReviewAiOutputs || hasPermission(session, "ai.approve");
-  const canReadAudit = hasPermission(session, "audit.read");
+  const view = operationalDashboardView(session.role, permission => hasPermission(session, permission));
+  const { canReadServices, canReadTechnical, canReadPracticeCommunications, canReviewPracticeCommunications,
+    canReadLeads, canReadClients, canReadProjects, canReadDossiers, canReadPayments,
+    canReviewAiOutputs, canReadAiOutputs, canReadAudit } = view;
   const needsCommunicationCounts = canReadPracticeCommunications || canReviewPracticeCommunications;
   const needsTechnicalContext = canReadTechnical || needsCommunicationCounts;
   const [offerCounts, paymentCount, dossierCounts, visibleOfferIds] = await Promise.all([
@@ -289,7 +276,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
     canReadProjects ? prisma.project.count({
       where: { id: { in: visibleProjectIds }, deletedAt: null, status: { notIn: ["chiuso", "archiviato"] } },
     }) : 0,
-    canReadServices ? prisma.clientService.count({ where: { id: { in: visibleServiceIds }, deletedAt: null } }) : 0,
+    view.showServicePortfolio ? prisma.clientService.count({ where: { id: { in: visibleServiceIds }, deletedAt: null } }) : 0,
     dossierCounts.preReview,
     dossierCounts.draftDossiers,
     paymentCount,
@@ -302,7 +289,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
     null,
     canReadPayments ? prisma.payment.findFirst({ where: { clientId: { in: visibleClientIds }, contractId: { notIn: [...(session.selectiveContractIds ?? [])] } }, orderBy: { createdAt: "desc" } }) : null,
     accessibleOpenTasks[0] ?? null,
-    canReadServices
+    view.showPipeline
       ? prisma.clientService.groupBy({
           by: ["operationalStatus"],
           where: { id: { in: visibleServiceIds }, deletedAt: null },
@@ -754,9 +741,10 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
     : selectedView === "oggi" ? await loadDashboardTodayDetail(session, now)
     : selectedView === "pratiche" ? operationalActivePractices.slice(0, 3).map(practice => ({ id: practice.id, title: practice.title, status: practice.status, href: `/technical-office/practices/${practice.id}` })) : [];
   const dashboardShortcuts = [
+    view.canReadCommercialProgress && { label: "Stato e prossime azioni", description: "Segui l’avanzamento dei tuoi clienti", href: "/progress", icon: "folder", tone: "green" },
     canReadLeads && { label: "Commerciale", description: "Gestisci lead e opportunità", href: "/leads", icon: "chart", tone: "blue" },
     canReadTechnical && { label: "Ufficio tecnico", description: "Segui le pratiche", href: "/technical-office", icon: "gear", tone: "green" },
-    canReadClients && { label: "Clienti e servizi", description: "Gestisci i rapporti", href: "/clients", icon: "people", tone: "teal" },
+    canReadClients && { label: view.showServicePortfolio ? "Clienti e servizi" : "Clienti", description: "Gestisci i rapporti", href: "/clients", icon: "people", tone: "teal" },
     canReadServices && { label: "Attività e scadenze", description: "Monitora le attività", href: "/tasks", icon: "calendar", tone: "orange" },
     canReadPayments && { label: "Amministrazione", description: "Segui i pagamenti", href: "/payments", icon: "document", tone: "blue" },
     canReadDossiers && { label: "Revisioni", description: "Controlla le pre-analisi", href: dashboardDestinations.revisioni, icon: "search", tone: "purple" },
@@ -771,6 +759,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
     canReadPracticeCommunications, canReadClients, canReadProjects,
     canReadServices, canReadPayments, canReadDossiers, canReadAiOutputs, canReviewAiOutputs,
     isAdmin: session.role === "admin",
+    showServicePortfolio: view.showServicePortfolio,
   }, {
     leadDaContattare, trattativeAperte, offerteInviate, offerteAccettate,
     activeTechnicalPracticesCount, overdueClientUpdates, commsToReview,
@@ -790,11 +779,17 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
         userName={dashboardUser?.name ?? "Il mio account"}
         priorityLinks={dashboardPriorityLinks}
         priorities={priorityItems.map((item) => ({ ...item, related: item.related ?? "Nessun cliente collegato", date: formatDateTime(item.date) }))}
-        pipeline={pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) }))}
+        pipeline={view.showPipeline ? pipelineStatuses.map((status) => ({ label: statusLabel(status), value: pipelineCount(status) })) : []}
+        showPipeline={view.showPipeline}
+        perimeterLinks={[
+          (canReadLeads || canReadTechnical) && operationalNavigationAllows(session.role, "/assignments") && { label: "Le mie assegnazioni", href: "/assignments" },
+          hasPermission(session, "project.read") && { label: "Progetti condivisi", href: "/shared-projects" },
+          view.canReadCommercialProgress && { label: "Stato e prossime azioni", href: "/progress" },
+        ].filter((item): item is Exclude<typeof item, false> => Boolean(item))}
         shortcuts={dashboardShortcuts}
         counterGroups={dashboardCounterGroups}
       />
-      <details className="group rounded-2xl border border-slate-200 bg-white shadow-xs">
+      {view.showLegacyDetails && <><details className="group rounded-2xl border border-slate-200 bg-white shadow-xs">
         <summary className="cursor-pointer list-none px-5 py-4 font-black text-fai-navy focus:outline-compat focus:ring-2 focus:ring-inset focus:ring-fai-lime">Dettaglio operativo completo <span className="float-right text-fai-green group-open:rotate-90">›</span></summary>
         <div className="crm-space-y-6 border-t border-slate-100 p-5">
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
@@ -924,7 +919,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
             Human review obbligatoria sugli output AI
           </div>
         </Card>
-      </section>
+      </section></>}
     </div>
   );
 }

@@ -83,7 +83,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$COMMERCIAL_PROGRESS_EVIDENCE/playwright.json" npx playwright test --config tests/commercial-progress-browser/playwright.config.ts --reporter=line,json | tee "$COMMERCIAL_PROGRESS_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.COMMERCIAL_PROGRESS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0) process.exit(1)'
+          node -e 'const r=require(process.env.COMMERCIAL_PROGRESS_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0) process.exit(1)'
       - name: Bind evidence and verify tracked source remains exact
         run: |
           git rev-parse HEAD HEAD^{tree} > "$COMMERCIAL_PROGRESS_EVIDENCE/source.txt"

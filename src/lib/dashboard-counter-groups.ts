@@ -11,6 +11,7 @@ export type DashboardCounterAccess = {
   canReadAiOutputs: boolean;
   canReviewAiOutputs: boolean;
   isAdmin: boolean;
+  showServicePortfolio?: boolean;
 };
 
 export type DashboardCounterCounts = {
@@ -139,6 +140,7 @@ export function buildDashboardCounterGroups(
   return groups.flatMap(({ counters, ...group }) => {
     const visibleCounters = counters
       .filter((counter) => access[counter.permission])
+      .filter((counter) => counter.count !== "serviziAcquistati" || access.showServicePortfolio !== false)
       .map((counter) => ({
         label: counter.label,
         description: counter.description,
@@ -147,6 +149,9 @@ export function buildDashboardCounterGroups(
           : counter.href,
         value: counts[counter.count],
       }));
-    return visibleCounters.length > 0 ? [{ ...group, counters: visibleCounters }] : [];
+    const presentedGroup = group.id === "clienti-servizi" && !access.canReadClients && access.canReadProjects
+      ? { ...group, title: "Progetti", description: "Progetti accessibili nel tuo perimetro corrente." }
+      : group;
+    return visibleCounters.length > 0 ? [{ ...presentedGroup, counters: visibleCounters }] : [];
   });
 }

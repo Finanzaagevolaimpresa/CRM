@@ -3,6 +3,7 @@
 import type { RoleCode } from "@prisma/client";
 import type { Permission } from "@/lib/permissions";
 import { privilegedAccessPermissions } from "@/lib/privileged-access-contract";
+import { operationalNavigationAllows } from "@/lib/operational-role-view";
 import Link from "next/link";
 import { DashboardIcon } from "./dashboard-icon";
 import { usePathname } from "next/navigation";
@@ -59,6 +60,7 @@ const sections: NavSection[] = [
     title: "Clienti e pratiche",
     items: [
       { label: "Clienti", href: "/clients", requiredPermission: "client.read" },
+      { label: "Stato e prossime azioni", href: "/progress", roles: ["commerciale"], requiredPermission: "client.read" },
       { label: "Progetti", href: "/projects", requiredPermission: "project.read" },
       { label: "Progetti condivisi", href: "/shared-projects" },
       { label: "Pre-analisi", href: "/preanalyses", requiredPermission: "dossier.read" },
@@ -124,6 +126,7 @@ export function getVisibleNavItems({ role, effectivePermissions = [] }: { role?:
   const effectivePermissionSet = new Set(effectivePermissions);
   return sections.flatMap((section) => {
     const visibleItems = section.items.filter((item) => {
+      if (!operationalNavigationAllows(role, item.href)) return false;
       if (item.adminOnly && !canSeeAdmin) return false;
       if (item.roles && (!role || !item.roles.includes(role))) return false;
       if (item.requiredPermission && !effectivePermissionSet.has(item.requiredPermission)) return false;
@@ -150,8 +153,7 @@ export function NavLinks({
   const all = visibleSections.flatMap(section => section.items);
   const primaryPaths = ["/dashboard", "/leads", "/clients", "/projects", "/technical-office", "/communications", "/documents", "/videos", "/settings/account"];
   const primary = primaryPaths.flatMap(path => all.filter(item => item.href === path));
-  // Keep every existing destination and permission predicate; promote the nine
-  // reference entries without duplicating them or granting new navigation.
+  // Promote only destinations admitted by both the role view and current permissions.
   const renderItem = ({ label, href }: NavItem, isPrimary = false) => {
     const active = pathname === href || (pathname.startsWith(`${href}/`) && !all.some(item => item.href !== href && item.href.length > href.length && (pathname === item.href || pathname.startsWith(`${item.href}/`))));
     const displayLabel = isPrimary && href === '/settings/account' ? 'Impostazioni' : isPrimary && href === '/leads' ? 'Lead' : label;
