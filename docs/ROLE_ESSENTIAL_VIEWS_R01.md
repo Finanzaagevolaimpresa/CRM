@@ -40,6 +40,12 @@ attori pertinenti e quelle negative restano esplicite. Il test nativo della
 riassegnazione lead usa un commerciale; un tecnico sintetico distinto rimane
 responsabile dei progetti e delle pratiche del fixture.
 
+La regressione del menu mobile conserva riapertura, resize e testi lunghi:
+verifica «Stato e prossime azioni» per il commerciale e «Checklist documentale»
+per il tecnico, con le rispettive voci estranee assenti anche quando un override
+sintetico concede il solo permesso di base. La fixture usa i codici ruolo
+pertinenti; non verifica autenticazione o autorizzazioni server.
+
 Schema e migration restano invariati a 63. Nessun invio, concessione reale,
 binding, provider o scheduler viene creato da questa modifica. La qualifica
 CI e il riesame devono riferirsi all'HEAD definitivo di questo incremento;
