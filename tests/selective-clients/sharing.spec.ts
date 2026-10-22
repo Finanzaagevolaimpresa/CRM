@@ -40,6 +40,35 @@ async function prepare(page: Page, row: typeof f.rows[number]) {
   expect(await db.selectiveClientGrant.count({ where: { clientId: row.clientId } })).toBe(0);
   await page.getByLabel('Confermo personalmente i campi del cliente, delle aziende e dei referenti, le versioni dei documenti, il destinatario e l’effetto sui permessi.').check();
 }
+
+async function revokeAfterReload(page: Page, clientId: string, delayHydration = false) {
+  const scripts = /\/_next\/static\/.*\.js(?:\?|$)/;
+  let releaseScripts!: () => void, blockedScripts = 0;
+  const gate = new Promise<void>(resolve => { releaseScripts = resolve; });
+  if (delayHydration) await page.route(scripts, async route => {
+    blockedScripts++; await gate; await route.continue();
+  });
+  const confirmation = page.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.');
+  const revoke = page.getByRole('button', { name: 'Revoca accesso', exact: true });
+  try {
+    await page.reload({ waitUntil: delayHydration ? 'commit' : 'load' });
+    if (delayHydration) {
+      await expect(revoke).toBeVisible(); await expect(revoke).toBeDisabled(); await expect(confirmation).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Verifica ricevuta dell’operazione', exact: true })).toBeDisabled();
+      await expect.poll(() => blockedScripts).toBeGreaterThan(0);
+      await expect(page.getByTestId('client-sharing')).toHaveAttribute('data-interactive-ready', 'false');
+    }
+  } finally { releaseScripts(); }
+  await expect(page.getByTestId('client-sharing')).toHaveAttribute('data-interactive-ready', 'true');
+  if (delayHydration) await page.unroute(scripts);
+  await confirmation.check();
+  const response = page.waitForResponse(r => new URL(r.url()).pathname === `/clients/${clientId}/sharing` && r.request().method() === 'POST');
+  await revoke.click();
+  const result = await response, request = result.request(), headers = await request.allHeaders();
+  expect(result.status()).toBe(200); expect(request.isNavigationRequest()).toBe(false);
+  expect(headers['next-action']).toBeTruthy(); expect(headers.origin).toBe(new URL(page.url()).origin);
+  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId } })).revokedAt !== null).toBe(true);
+}
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); });
 test.afterAll(async () => db.$disconnect());
 
@@ -79,9 +108,7 @@ test('native selected client fields, indirect denials, open-session revocation a
   await reader.setViewportSize({ width: 390, height: 844 });
   expect(await reader.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await reader.screenshot({ path: path.join(evidence, 'selective-client-recipient-mobile.png'), fullPage: true });
-  await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
-  await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
-  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+  await revokeAfterReload(admin, row.clientId);
   await reader.reload(); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
   expect(await reader.content()).not.toContain(row.label);
   expect(await (await rc.request.get('/clients/' + row.clientId)).text()).not.toContain(row.label);
@@ -160,9 +187,7 @@ test('exact document-only native selection, inline bytes, direct URL denial and 
   await reader.setViewportSize({ width: 390, height: 844 });
   expect(await reader.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await reader.screenshot({ path: path.join(evidence, 'client-document-recipient-mobile.png'), fullPage: true });
-  await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
-  await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
-  await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+  await revokeAfterReload(admin, row.clientId);
   expect((await rc.request.get(url)).status()).toBe(404);
   await reader.reload(); await expect(reader.getByText('Selezione non disponibile', { exact: true })).toBeVisible();
   await ac.close(); await rc.close();
@@ -259,12 +284,10 @@ for (const [name, width, height, format, index] of [['desktop', 1280, 900, 'pdf'
         expect(response.headers()['cache-control']).toContain('no-store');
         expect((await rc.request.get(url + '?download=1')).status()).toBe(404);
         expect((await rc.request.get(`/documents/${document.id}/view`)).status()).toBe(403);
-        await admin.reload(); await admin.getByLabel('Confermo la revoca. Le copie già acquisite non possono essere recuperate.').check();
-        await admin.getByRole('button', { name: 'Revoca accesso', exact: true }).click();
-        await expect.poll(async () => (await db.selectiveClientGrant.findFirstOrThrow({ where: { clientId: row.clientId } })).revokedAt !== null).toBe(true);
+        await revokeAfterReload(admin, row.clientId, name === 'mobile');
         const denied = await viewer.reload(); expect(denied?.status()).toBe(404);
         await expect(viewer.getByText('Documento non disponibile', { exact: true })).toBeVisible();
-        writeFileSync(path.join(evidence, `selected-file-proof-${name}.json`), JSON.stringify({ synthetic: true, format, viewport: { width, height }, selectedBytesRendered: true, exactBytes: true, downloadDenied: true, ordinaryViewDenied: true, revocationDeniedOnOpenSession: true }));
+        writeFileSync(path.join(evidence, `selected-file-proof-${name}.json`), JSON.stringify({ synthetic: true, format, viewport: { width, height }, selectedBytesRendered: true, exactBytes: true, downloadDenied: true, ordinaryViewDenied: true, revocationDeniedOnOpenSession: true, concreteActionOriginVerified: true, hydrationGateVerified: name === 'mobile' }));
       } catch (error) {
         await viewer.screenshot({ path: path.join(evidence, `selected-file-failure-${name}.png`), fullPage: true }).catch(() => undefined);
         writeFileSync(path.join(evidence, `selected-file-failure-${name}.json`), JSON.stringify({ synthetic: true, frames: viewer.frames().map(frame => frame.url()) }));
