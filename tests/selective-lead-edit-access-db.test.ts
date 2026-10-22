@@ -5,9 +5,9 @@ import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { syntheticAuthority, syntheticPerson } from './selective-sharing/fixtures';
 import { grantLead, leadProof, type Person } from './selective-leads/fixtures';
-import { previewLeadEditingSelection, confirmLeadEditingSelection, revokeLeadEditing } from '../src/lib/selective-lead-edit-management';
+import { previewLeadEditingSelection, confirmLeadEditingSelection, revokeLeadEditing, readLeadEditingManagement } from '../src/lib/selective-lead-edit-management';
 import { readLeadEditing } from '../src/lib/selective-lead-edit-access';
-import { previewLeadEdit, confirmLeadEdit, readLeadEditOutcome } from '../src/lib/selective-lead-edit-service';
+import { previewLeadEdit, confirmLeadEdit, readLeadEditOutcome, readLeadEditOutcomeByReference } from '../src/lib/selective-lead-edit-service';
 import { revokeLeadSharing } from '../src/lib/selective-lead-access';
 import { transitionLeadLifecycle } from '../src/lib/lead-lifecycle';
 import { lockLeadForMutation } from '../src/lib/lead-lifecycle-lock';
@@ -82,6 +82,12 @@ test('read authority cannot enroll editing; preview leaves all empty edit struct
 
 test('preview writes nothing and the recipient gets only explicitly editable readable values', options, async () => {
   const f = await fixture(), prior = await counts(f.lead.id);
+  const setup = await readLeadEditingManagement(db, admin.session, f.lead.id);
+  assert.deepEqual(setup.choices.map(choice => ({ id: choice.id, fields: choice.fields })),
+    [{ id: f.reader.user.id, fields: ['interest', 'priority'] }]);
+  assert.deepEqual(setup.grants, []);
+  assert.deepEqual(await counts(f.lead.id), prior);
+  await assert.rejects(readLeadEditingManagement(db, f.reader.session, f.lead.id));
   await assert.rejects(readLeadEditing(db, f.reader.session, f.lead.id));
   const p = await previewLeadEditingSelection(db, admin.session, f.selection);
   assert.deepEqual(p.fields.map(x => x.key), ['priority']);
@@ -130,6 +136,10 @@ test('lost response and double click leave one mutation, one audit and the same 
   const results = await Promise.allSettled([confirmLeadEdit(db, f.reader.session, input, p.token, true), confirmLeadEdit(db, f.reader.session, input, p.token, true)]);
   assert.ok(results.some(x => x.status === 'fulfilled'));
   const receipt = await readLeadEditOutcome(db, f.reader.session, input); assert.ok(receipt);
+  const reference = { leadId: f.lead.id, commandId: input.commandId };
+  assert.deepEqual(await readLeadEditOutcomeByReference(db, f.reader.session, reference), receipt);
+  await assert.rejects(readLeadEditOutcomeByReference(db, admin.session, reference));
+  await assert.rejects(readLeadEditOutcomeByReference(db, { ...f.reader.session, sessionId: admin.session.sessionId }, reference));
   assert.deepEqual(await confirmLeadEdit(db, f.reader.session, input, p.token, true), receipt);
   assert.equal((await counts(f.lead.id)).commands, 1n); assert.equal((await counts(f.lead.id)).audits, 1n);
   await assert.rejects(confirmLeadEdit(db, f.reader.session, { ...input, changes: { priority: 'urgente' } }, p.token, true));
@@ -163,6 +173,7 @@ test('revoked read grant blocks edits and receipt disclosure after a previously 
   await confirmLeadEdit(db, f.reader.session, input, p.token, true);
   await revokeLeadSharing(db, admin.session, { grantId: f.read.id, revision: f.read.revision, commandId: randomUUID() }, leadProof(admin));
   await assert.rejects(readLeadEditOutcome(db, f.reader.session, input));
+  await assert.rejects(readLeadEditOutcomeByReference(db, f.reader.session, { leadId: f.lead.id, commandId: input.commandId }));
   await assert.rejects(confirmLeadEdit(db, f.reader.session, input, p.token, true));
   assert.equal((await counts(f.lead.id)).commands, 1n);
 });
@@ -170,6 +181,8 @@ test('revoked read grant blocks edits and receipt disclosure after a previously 
 test('inactive recipients may be revoked by the personal manager but cannot reopen their capability', options, async () => {
   const f = await fixture(), selection = await grant(f);
   await db.user.update({ where: { id: f.reader.user.id }, data: { active: false } });
+  const setup = await readLeadEditingManagement(db, admin.session, f.lead.id);
+  assert.deepEqual(setup.choices, []); assert.equal(setup.grants.length, 1);
   const receipt = await revokeLeadEditing(db, admin.session, { grantId: selection.grantId, revision: 1, commandId: randomUUID() }, leadProof(admin));
   assert.equal(receipt.operation, 'REVOKE');
   await db.user.update({ where: { id: f.reader.user.id }, data: { active: true } });

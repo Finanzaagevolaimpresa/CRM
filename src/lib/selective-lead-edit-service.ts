@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
+import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
 import { lockLeadEditCapability } from './selective-lead-edit-access';
@@ -54,18 +55,20 @@ export async function previewLeadEdit(db: PrismaClient, claimed: AuthSession, ra
   });
 }
 
-async function previousCommand(tx: Tx, state: LeadEditTransactionState, read: ReadContext, capability: Capability, input: Command) {
+async function previousCommand(tx: Tx, state: LeadEditTransactionState, read: ReadContext, capability: Capability,
+  identity: { commandId: string; leadId: string }, input?: Command) {
   const rows = await tx.$queryRaw<JournalRow[]>`
     SELECT id,"actorId","sessionId","leadId","capabilityId","capabilityRevision","requestDigest",
       "beforeVersion","afterVersion","changedFields",receipt,"receiptProof","createdAt"
-    FROM "SelectiveLeadEditCommand" WHERE id=${input.commandId}::uuid FOR SHARE`;
+    FROM "SelectiveLeadEditCommand" WHERE id=${identity.commandId}::uuid FOR SHARE`;
   const row = rows[0];
   if (!row) return null;
-  const digest = leadEditRequestDigest(input);
+  const digest = input ? leadEditRequestDigest(input) : row.requestDigest;
   if (row.actorId !== state.current.userId || row.sessionId !== state.current.sessionId
-    || row.leadId !== input.leadId || row.requestDigest !== digest || row.beforeVersion.toISOString() !== input.expectedVersion) stale();
+    || row.leadId !== identity.leadId || row.requestDigest !== digest
+    || (input && row.beforeVersion.toISOString() !== input.expectedVersion)) stale();
   const receipt = readLeadEditReceipt({ payload: row.receipt, proof: row.receiptProof }, capability.raw, read.raw,
-    state.key, capability.current, { commandId: input.commandId, requestDigest: digest }, (await leadEditClock(tx)).getTime());
+    state.key, capability.current, { commandId: identity.commandId, requestDigest: digest }, (await leadEditClock(tx)).getTime());
   if (!receipt || row.capabilityId !== receipt.capabilityId || row.capabilityRevision !== receipt.capabilityRevision
     || row.beforeVersion.toISOString() !== receipt.beforeVersion || row.afterVersion.toISOString() !== receipt.afterVersion
     || row.createdAt.toISOString() !== receipt.recordedAt || canonicalSha256(row.changedFields) !== canonicalSha256(receipt.changedFields)) denied();
@@ -87,7 +90,7 @@ export async function confirmLeadEdit(db: PrismaClient, claimed: AuthSession, ra
   return withLeadEditTransaction(db, claimed, claimed.userId, null, async (tx, state) => {
     const read = await lockLeadEditReadContext(tx, state, input.leadId, true);
     const capability = await lockLeadEditCapability(tx, state, read);
-    const previous = await previousCommand(tx, state, read, capability, input);
+    const previous = await previousCommand(tx, state, read, capability, input, input);
     if (previous) return previous;
     const { command, fields } = boundCommand(input, read, capability);
     const admission = previewAdmission(state, read, capability), now = await leadEditClock(tx);
@@ -128,6 +131,21 @@ export async function confirmLeadEdit(db: PrismaClient, claimed: AuthSession, ra
  */
 export async function readLeadEditOutcome(db: PrismaClient, claimed: AuthSession, raw: unknown) {
   const input = selectiveLeadEditCommandSchema.parse(raw);
+  return withLeadEditTransaction(db, claimed, claimed.userId, null, async (tx, state) => {
+    const read = await lockLeadEditReadContext(tx, state, input.leadId);
+    const capability = await lockLeadEditCapability(tx, state, read);
+    return previousCommand(tx, state, read, capability, input, input);
+  });
+}
+
+const outcomeReference = z.object({ leadId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
+  commandId: z.string().uuid() }).strict();
+/** Reload recovery needs only opaque identifiers, not retained field values in
+ * browser storage. Current read/edit admission and the original actor/session
+ * are checked before the signed receipt is returned. No new command is created.
+ */
+export async function readLeadEditOutcomeByReference(db: PrismaClient, claimed: AuthSession, raw: unknown) {
+  const input = outcomeReference.parse(raw);
   return withLeadEditTransaction(db, claimed, claimed.userId, null, async (tx, state) => {
     const read = await lockLeadEditReadContext(tx, state, input.leadId);
     const capability = await lockLeadEditCapability(tx, state, read);

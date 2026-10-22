@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { canonicalSha256 } from './canonical-json';
-import { leadFieldProjection } from './selective-lead-policy';
+import { selectiveLeadEditableFields } from './selective-lead-edit-policy';
 import { readSelectiveLeadEditGrant, selectiveLeadEditProof, type SelectiveLeadEditAdmission } from './selective-lead-edit-grant';
 import { LeadEditError, leadEditClock, lockLeadEditReadContext, withLeadEditTransaction,
   type LeadEditTransactionState } from './selective-lead-edit-transaction';
@@ -90,6 +90,7 @@ export async function readLeadEditing(db: PrismaClient, claimed: AuthSession, le
       capabilityId: capability.grant.id, capabilityRevision: capability.grant.revision,
       readGrantId: read.grant.id, readGrantRevision: read.grant.revision, readGrantProof: read.grant.proof,
       expiresAt: capability.payload.selection.expiresAt,
-      fields: leadFieldProjection(read.lead as unknown as Record<string, unknown>, capability.payload.selection.fields) };
+      fields: capability.payload.selection.fields.map(key => ({ key,
+        label: selectiveLeadEditableFields[key], value: read.lead[key] })) };
   });
 }

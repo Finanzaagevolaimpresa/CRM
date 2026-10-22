@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { canViewLead } from './access-control';
+import { hasPermission } from './permission-evaluator';
 import { canonicalSha256 } from './canonical-json';
 import { leadFieldProjection } from './selective-lead-policy';
 import { leadEditDecisionReceiptSchema } from './selective-lead-edit-access';
@@ -21,9 +22,9 @@ type Decision = { id: string; actorId: string; sessionId: string; leadId: string
 const plain = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 function deny(): never { throw new LeadEditError('DENIED'); }
 function stale(): never { throw new LeadEditError('STALE'); }
-function manager(state: LeadEditTransactionState) {
+function manager(state: LeadEditTransactionState, allowSelf = false) {
   if (state.current.userId !== state.editAuthority.userId || state.current.role !== 'admin'
-    || state.current.userId === state.recipient.id) deny();
+    || (!allowSelf && state.current.userId === state.recipient.id)) deny();
 }
 async function managerLead(tx: Tx, state: LeadEditTransactionState, id: string, write: boolean, revoking = false) {
   manager(state);
@@ -154,6 +155,51 @@ export async function confirmLeadEditingSelection(db: PrismaClient, claimed: Aut
   });
 }
 const revokeSchema = z.object({ grantId: z.string().uuid(), revision: z.number().int().positive().max(2_147_483_646), commandId: z.string().uuid() }).strict();
+
+/** Management choices are limited to existing valid read selections. The
+ * directory/identity/lead locks retain one coherent view, and the actual
+ * preview/confirmation rereads everything. No choice enrolls editing. */
+export async function readLeadEditingManagement(db: PrismaClient, claimed: AuthSession, leadId: string) {
+  z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).parse(leadId);
+  return withLeadEditTransaction(db, claimed, claimed.userId, null, async (tx, state) => {
+    manager(state, true);
+    await tx.$queryRaw`SELECT id FROM "Lead" WHERE id=${leadId} FOR SHARE`;
+    const row = await tx.lead.findUnique({ where: { id: leadId } });
+    if (!row || !canViewLead(state.current, { ...row, deletedAt: null })) deny();
+    const reads = await tx.selectiveLeadGrant.findMany({ where: { leadId }, orderBy: { recipientId: 'asc' },
+      include: { recipient: { include: { permissionOverrides: true } } } });
+    const edits = await tx.$queryRaw<Grant[]>`SELECT id,"leadId","recipientId","readGrantId",revision,payload,proof,"revokedAt"
+      FROM "SelectiveLeadEditGrant" WHERE "leadId"=${leadId} ORDER BY "recipientId" FOR SHARE`;
+    const choices: Array<{ id: string; name: string; email: string; role: string; readGrantId: string;
+      readGrantRevision: number; readGrantProof: string; revision: number; fields: Array<'interest' | 'priority'>; expiresAt: string | null }> = [];
+    for (const read of reads) {
+      const person = read.recipient;
+      if (person.id === state.current.userId || !person.active || person.deletedAt
+        || !hasPermission(person, 'lead.read')
+        || person.permissionOverrides.some(item => ['lead.read', 'lead.write'].includes(item.permission) && !item.allowed)) continue;
+      try {
+        const valid = await lockLeadEditReadContext(tx, { ...state, recipient: person }, leadId);
+        const fields = valid.payload.selection.fields.filter((field): field is 'interest' | 'priority' => field === 'interest' || field === 'priority');
+        if (fields.length) choices.push({ id: person.id, name: person.name, email: person.email, role: person.role,
+          readGrantId: valid.grant.id, readGrantRevision: valid.grant.revision, readGrantProof: valid.grant.proof,
+          revision: edits.find(edit => edit.recipientId === person.id)?.revision ?? 0,
+          fields, expiresAt: valid.payload.selection.expiresAt });
+      } catch (error) {
+        if (!(error instanceof LeadEditError && error.code === 'DENIED') && !(error instanceof z.ZodError)) throw error;
+      }
+    }
+    return { leadId, choices, grants: edits.map(edit => {
+      const person = reads.find(read => read.id === edit.readGrantId)?.recipient;
+      if (!person) deny();
+      const parsed = selectiveLeadEditPayloadSchema.safeParse(edit.payload);
+      return { id: edit.id, revision: edit.revision, recipientId: person.id, recipientName: person.name,
+        recipientEmail: person.email, revoked: !!edit.revokedAt,
+        fields: parsed.success ? parsed.data.selection.fields : [],
+        expiresAt: parsed.success ? parsed.data.selection.expiresAt : null };
+    }) };
+  });
+}
+
 export async function revokeLeadEditing(db: PrismaClient, claimed: AuthSession, raw: unknown, proof: LeadEditPersonalProof) {
   const input = revokeSchema.parse(raw), digest = canonicalSha256({ operation: 'REVOKE', input });
   // Identity hints only; all state is reread under the transaction's locks.
