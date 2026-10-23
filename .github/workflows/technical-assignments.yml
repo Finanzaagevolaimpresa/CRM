@@ -70,7 +70,7 @@ jobs:
           git archive 3a43977b585a9af43e4ef0c489841ce9a699a2c3 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/technical-assignments/qualify-migration.sh
-          bash scripts/admin-requests/qualify-migration.sh
+          if [ "${{ matrix.target }}" != enrollment ]; then bash scripts/admin-requests/qualify-migration.sh; fi
       - name: Operator-only enrollment, denials, concurrent single use and atomic audit
         if: matrix.target == 'enrollment'
         env: { RUN_TECHNICAL_ENROLLMENT_TESTS: '1' }

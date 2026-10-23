@@ -190,3 +190,42 @@ test('append-only history, atomic events and no hidden grant or email fields in 
   await assert.rejects(submitAdminRequest(db, f.salesA.session, { ...input, commandId: randomUUID(), to: ['hidden@invalid.test'] }));
   assert.deepEqual(await counts(receipt.requestId), { events: 1, audits: 1 });
 });
+
+test('Admin reviews current requester identity after the old requester session closes, without impersonation', options, async () => {
+  const f = await fixture(), { receipt } = await submit(f);
+  await db.internalSession.update({ where: { id: f.salesA.session.sessionId! }, data: {
+    revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: admin.user.id } });
+  await assert.rejects(readAdminRequest(db, f.salesA.session, receipt.requestId));
+  const current = await readAdminRequest(db, admin.session, receipt.requestId);
+  assert.equal(current.authorId, f.salesA.user.id); assert.equal(current.status, 'OPEN');
+  await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId);
+});
+
+test('concurrent first draft save and a repeated save cannot create another version or approval', options, async () => {
+  const f = await fixture(), { receipt } = await submit(f);
+  const p = await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId), input = requestDraft(p, box.address);
+  const result = await Promise.allSettled([saveApprovedMessageDraft(db, admin.session, input), saveApprovedMessageDraft(db, admin.session, input)]);
+  assert.equal(result.filter(r => r.status === 'fulfilled').length, 1);
+  await assert.rejects(saveApprovedMessageDraft(db, admin.session, input));
+  assert.equal(await db.communicationVersion.count({ where: { messageId: receipt.requestId } }), 1);
+  assert.equal(await db.communicationApproval.count({ where: { version: { messageId: receipt.requestId } } }), 0);
+  assert.deepEqual(await counts(receipt.requestId), { events: 2, audits: 2 });
+  assert.equal((await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId)).saved, true);
+});
+
+test('draft audit failure rolls back message, version, link and request transition together', options, async () => {
+  const f = await fixture(), { receipt } = await submit(f);
+  const p = await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId);
+  await db.$executeRawUnsafe("CREATE FUNCTION synthetic_request_draft_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='admin_request_changed' AND NEW.after->>'operation'='PREPARE_DRAFT' THEN RAISE EXCEPTION 'SYNTHETIC_DRAFT_FAULT'; END IF; RETURN NEW; END $$");
+  await db.$executeRawUnsafe('CREATE TRIGGER synthetic_request_draft_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_request_draft_fault()');
+  try {
+    await assert.rejects(saveApprovedMessageDraft(db, admin.session, requestDraft(p, box.address)));
+    assert.equal(await db.approvedCommunication.findUnique({ where: { id: receipt.requestId } }), null);
+    assert.equal(await db.communicationVersion.count({ where: { messageId: receipt.requestId } }), 0);
+    assert.deepEqual(await counts(receipt.requestId), { events: 1, audits: 1 });
+    assert.equal((await readAdminRequest(db, admin.session, receipt.requestId)).status, 'OPEN');
+  } finally {
+    await db.$executeRawUnsafe('DROP TRIGGER synthetic_request_draft_fault ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION synthetic_request_draft_fault()');
+  }
+});

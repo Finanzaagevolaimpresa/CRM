@@ -10,7 +10,11 @@ export async function requestFixture(db: PrismaClient, admin: Person, passwordHa
   for (const person of [f.techA, f.techB]) {
     for (const kind of ['Project', 'TechnicalPractice'] as const) {
       const target = technicalTarget(f, kind), input = await assignmentInput(db, admin, target, person);
-      input.selection.actions.push('request_admin');
+      // Backoffice may request help for an assigned project, but has no project.write.
+      // Keep the fixture within the real role ceiling; do not grant that permission.
+      if (kind === 'Project' && person.user.role === 'backoffice') {
+        input.selection.actions = ['request_admin']; input.selection.editableFields = [];
+      } else input.selection.actions.push('request_admin');
       const ref = { ...target, recipientId: person.user.id };
       const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
       await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true);

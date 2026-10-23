@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   release-schema65:
-    name: Schema64 package with selected document versions and all earlier state retained on restart
+    name: Schema65 private Admin requests and earlier state retained on restart
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

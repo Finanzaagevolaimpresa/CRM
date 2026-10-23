@@ -74,8 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-request-queue-db.test.ts | tee "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 15' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 15' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 18' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 18' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser

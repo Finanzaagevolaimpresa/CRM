@@ -22,6 +22,9 @@ async function main() {
     const lead = await db.lead.create({ data: { firstName: 'Synthetic request', lastName: status, assignedToId: sales.user.id } });
     const input = await requestInput(db, sales, { kind: 'Lead', targetId: lead.id });
     const receipt = await submitAdminRequest(db, sales.session, input);
+    assert.equal(receipt.requestId, input.commandId);
+    const savedRows = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest" WHERE id=${receipt.requestId}::uuid`;
+    assert.equal(savedRows.length, 1, `Committed synthetic request missing: ${status}`);
     if (status.includes('DRAFT')) {
       const source = await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId);
       await saveApprovedMessageDraft(db, admin.session, requestDraft(source, box.address));
