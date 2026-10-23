@@ -1,6 +1,10 @@
 # Coda richieste interne all'Admin — preparazione
 
-Questo branch prosegue il mandato sui perimetri dopo la candidata PR215. Non introduce una pagina operativa, una migration, un binding, un provider o un invio. Non modifica il candidato PR215 congelato per il riesame.
+Questo branch prosegue il mandato sui perimetri dopo PR215. La base è stata riconciliata con il merge distribuito `4c2fe838e9c557d59802a71aa4f42fbae5c74327` preservando i commit di preparazione. Non introduce una pagina operativa, una migration, un binding, un provider o un invio. Non modifica il candidato PR215 congelato.
+
+`admin-request-commercial-context.ts` aggiunge l'impronta canonica di lead/cliente: proprietà commerciale e contatori di versione per cambi di titolare, cestino e ripristino. Un lead collegato non può diventare una richiesta sul cliente di un altro commerciale. Titoli, contatti, note, dati economici e timestamp delle normali modifiche non entrano nell'impronta. Le otto prove aggiuntive distinguono due commerciali, parentela incoerente, cambio A→B→A, revoche e campi privati. Il contatore corrente del record può invalidare una richiesta anche per cambi ulteriori registrati da quel contatore: la futura gestione dello storico deve trattarla come obsoleta, senza riattivarla automaticamente.
+
+`admin-request-commercial-loader.ts` prepara il collegamento alla sessione reale e alle righe correnti sotto lock, nella medesima transazione serializzabile del futuro comando. Rilegge proprietà, permessi e limiti selettivi e ricontrolla la scadenza della sessione prima del commit. Non è collegato a route, non scrive richieste e non impersona altri utenti. Il comportamento PostgreSQL del loader resta da qualificare nella CI prima di renderlo operativo.
 
 `admin-request-contract.ts` definisce la richiesta iniziale di documento/integrazione: identificativo del comando, record, impronta del contesto e versioni correnti, titolo e dettaglio limitati. Non accetta destinatari, allegati, approvazioni, identità dichiarate dal modulo o comandi d'invio. Il digest distingue persona, sessione e richiesta normalizzata; non costituisce una firma di approvazione.
 
