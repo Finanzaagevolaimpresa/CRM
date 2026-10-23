@@ -84,6 +84,16 @@ async function screenshot(page: Page, name: string) {
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true });
 }
+async function ordinaryPageDenied(page: Page, url: string, heading: string, row: Row) {
+  // Legacy dossier/project pages render an explicit denial with HTTP 200.
+  // Assert both that denial and the absence of record data, including streamed HTML.
+  const response = await page.goto(url); expect(response?.status()).toBe(200);
+  await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  const html = (await response!.text()) + (await page.content());
+  for (const text of [...row.excluded, 'Cliente tecnico A sintetico', 'Progetto tecnico multiplo sintetico',
+    'PROGETTO_ESTRANEO_NON_ASSEGNATO', ...row.documents.flatMap(doc => [doc.title, doc.text])]) expect(html).not.toContain(text);
+  await expect(page.locator('main form')).toHaveCount(0);
+}
 test.beforeAll(async () => { expect(process.env.CI).toBe('true'); expect(f.synthetic).toBe(true); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.afterAll(async () => db.$disconnect());
 
@@ -103,7 +113,9 @@ test('two technicians use exact personal assignments, private preview/download a
   expect((await bc.request.get(work(row) + '/documents/' + row.documents[0].fileId + '?download=1')).status()).toBe(404);
   const download = await bc.request.get(work(row) + '/documents/' + row.documents[1].fileId + '?download=1');
   expect(download.status()).toBe(200); expect(download.headers()['content-disposition']).toMatch(/^attachment;/);
-  for (const url of ['/clients/' + row.clientId, '/projects/' + row.otherProjectId, management(row), work(row) + '/documents/' + row.documents[2].fileId]) expect((await bc.request.get(url)).status()).toBe(404);
+  await ordinaryPageDenied(second, '/clients/' + row.clientId, 'Cliente non trovato o non accessibile', row);
+  await ordinaryPageDenied(second, '/projects/' + row.otherProjectId, 'Progetto non trovato', row);
+  for (const url of [management(row), work(row) + '/documents/' + row.documents[2].fileId]) expect((await bc.request.get(url)).status(), url).toBe(404);
   const current = await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } });
   expect(current.commercialOwnerId).toBe(row.salesA.id); expect(current.technicalOwnerId).toBe(row.techA.id);
   await ac.close(); await tc.close(); await bc.close();
@@ -139,7 +151,8 @@ test('native revocation stops an open preview, direct documents and ordinary fal
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click();
   await expect(tech.getByText('La modifica non è stata registrata: dati, incarico o permessi non più validi. Ricarica prima di riprovare.', { exact: true })).toBeVisible();
   expect(await count(row)).toBe(0); expect(await assignments(row)).toBe(1);
-  for (const url of [work(row), work(row) + '/documents/' + row.documents[0].fileId, '/clients/' + row.clientId]) expect((await tc.request.get(url)).status()).toBe(404);
+  for (const url of [work(row), work(row) + '/documents/' + row.documents[0].fileId]) expect((await tc.request.get(url)).status(), url).toBe(404);
+  await ordinaryPageDenied(tech, '/clients/' + row.clientId, 'Cliente non trovato o non accessibile', row);
   await ac.close(); await tc.close();
 });
 
@@ -156,6 +169,11 @@ test('project operation has its own exact grant and native status changes do not
   expect((await db.project.findUniqueOrThrow({ where: { id: row.projectId } })).status).toBe('in_analisi');
   expect((await tc.request.get(work(row))).status()).toBe(404);
   await tech.goto('/search?q=' + encodeURIComponent('Progetto tecnico multiplo'));
-  await expect(tech.getByRole('link', { name: 'Progetto tecnico multiplo sintetico', exact: true }).first()).toBeVisible();
-  expect(await tech.content()).not.toContain(row.excluded[1]); await ac.close(); await tc.close();
+  await expect(tech.getByRole('heading', { name: 'Progetti con incarico personale (1)', exact: true })).toBeVisible();
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  const result = tech.locator(`a[href="${work(row, true)}"]`).filter({ hasText: 'Apri' });
+  await expect(result).toHaveCount(1); expect(await tech.content()).not.toContain(row.excluded[1]);
+  await result.click(); await expect(tech).toHaveURL(new RegExp(work(row, true) + '$'));
+  await expect(tech.getByText('Descrizione progetto aggiornata', { exact: true }).first()).toBeVisible();
+  await ac.close(); await tc.close();
 });
