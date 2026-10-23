@@ -22,4 +22,6 @@ Le pagine `technical-office/portals`, `integrations` e `reporting` contengono an
 
 `technical-work-item-contract.ts` prepara selezione e proiezione chiuse per singoli elementi, con diniego su target diverso, revoca, scadenza, cambio di contesto, metadati finanziari e campi non scelti. Non viene importato dal runtime; non amplia `technicalImplementedActions`. Le transizioni di stato e i collegamenti documentali non sono ancora scrivibili da questo contratto.
 
+`technical-work-item-context.ts` prepara il legame al preciso target: una decisione personale conservata deve essere verificata prima di chiamarlo; collegamenti azienda/progetto/servizio già presenti impongono ulteriori limiti. Nessun riferimento viene riempito automaticamente. L’impronta cambia con revisione del legame e contesto corrente. Le due componenti superano 18 prove pure, lint mirato e typecheck; non sono ancora prova della persistenza o del percorso browser.
+
 Prima di dichiarare l’incremento implementato servono persistenza e vincoli, chiusura delle vie ordinarie, UI di scelta/anteprima/lavoro, prove DB/browser con due tecnici e due commerciali, regressioni, migration concreta se necessaria e stesso riesame. Prima della produzione servono autorità precise sul nuovo piano. Nessun dato reale viene creato per collaudare le pagine.
