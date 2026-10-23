@@ -229,3 +229,17 @@ test('draft audit failure rolls back message, version, link and request transiti
     await db.$executeRawUnsafe('DROP FUNCTION synthetic_request_draft_fault()');
   }
 });
+
+test('a deferred audit mismatch is reported as failure before a submission receipt can escape', options, async () => {
+  const f = await fixture(), input = await requestInput(db, f.salesA, lead(f));
+  await db.$executeRawUnsafe(`CREATE FUNCTION synthetic_request_audit_mismatch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='admin_request_changed' THEN NEW.after=jsonb_set(NEW.after,'{action}','"REJECT"'::jsonb); END IF; RETURN NEW; END $$`);
+  await db.$executeRawUnsafe('CREATE TRIGGER synthetic_request_audit_mismatch BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_request_audit_mismatch()');
+  try {
+    await assert.rejects(submitAdminRequest(db, f.salesA.session, input), /ADMIN_REQUEST_ATOMIC_EVENT_AUDIT_REQUIRED/);
+    assert.deepEqual(await counts(input.commandId), { events: 0, audits: 0 });
+    assert.equal((await readAdminRequestOutcome(db, f.salesA.session, input.commandId)).status, 'NOT_FOUND');
+  } finally {
+    await db.$executeRawUnsafe('DROP TRIGGER synthetic_request_audit_mismatch ON "AuditLog"');
+    await db.$executeRawUnsafe('DROP FUNCTION synthetic_request_audit_mismatch()');
+  }
+});

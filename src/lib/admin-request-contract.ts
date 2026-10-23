@@ -4,8 +4,8 @@ import { canonicalJson } from './canonical-json';
 import { admitsTechnicalAssignmentAction, type CurrentTechnicalAssignmentAdmission,
   type TechnicalAssignmentSelection } from './technical-assignment-contract';
 
-// Preparation for the Admin request queue. No route, persistence, permission
-// enrollment, provider or technical action is activated by this contract.
+// Pure admission contract used by the private queue. It grants no permission
+// and carries no email approval or external delivery authority.
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const revision = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);

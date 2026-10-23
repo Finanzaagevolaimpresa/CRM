@@ -82,8 +82,8 @@ BEGIN
  IF r.id IS NULL OR e.id IS NULL OR a.id IS NULL OR e."transactionId"<>txid_current()
   OR r.revision<>rev OR r.state<>e.state OR r."stateHash"<>e."stateHash"
   OR a."actorId"<>e."actorId" OR a.event<>'admin_request_changed' OR a."entityType"<>'AdminRequestEvent' OR a."entityId"<>e.id::text
-  OR a.before IS DISTINCT FROM jsonb_build_object('revision',rev-1)
-  OR a.after IS DISTINCT FROM jsonb_build_object('revision',rev,'operation',e.operation,'stateHash',e."stateHash")
+  OR a.before IS DISTINCT FROM jsonb_build_object('version',rev-1)
+  OR a.after IS DISTINCT FROM jsonb_build_object('version',rev,'action',e.operation,'stateHash',e."stateHash")
  THEN RAISE EXCEPTION 'ADMIN_REQUEST_ATOMIC_EVENT_AUDIT_REQUIRED'; END IF;
  IF rev=1 AND (e.operation<>'SUBMIT' OR e."actorId"<>r."authorId" OR r.state->>'status'<>'OPEN')
  THEN RAISE EXCEPTION 'ADMIN_REQUEST_INITIAL_EVENT_REQUIRED'; END IF;

@@ -5,7 +5,7 @@ import type { CommunicationPrincipal } from './communication-principal';
 import { canonicalSha256 } from './canonical-json';
 import { recordUpdateEmailAuthority } from './record-update-email-authority';
 import { admitAdminRequestOrigin, exactRequestOrigin, requestDenied, requestStale } from './admin-request-admission';
-import { lockAdminRequest, requestDraftOrigin, appendAdminRequest, requestCommandHash } from './admin-request-storage';
+import { lockAdminRequest, requestDraftOrigin, appendAdminRequest, requestCommandHash, flushAdminRequestConstraints } from './admin-request-storage';
 
 type Tx = Prisma.TransactionClient;
 export const adminRequestDraftSource = z.object({ requestId: z.string().uuid(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -45,4 +45,5 @@ export async function linkAdminRequestDraft(tx: Tx, current: CommunicationPrinci
     requestCommandHash(current.userId, current.sessionId, 'PREPARE_DRAFT', { commandId, sourceHash: admitted.sourceHash }));
   await tx.$executeRaw`INSERT INTO "AdminRequestDraft"("requestId","messageId","sourceHash","authorityRevision","createdById","eventId")
     VALUES(${messageId}::uuid,${messageId}::uuid,${admitted.sourceHash},${admitted.authority.revision},${current.userId},${event.eventId}::uuid)`;
+  await flushAdminRequestConstraints(tx);
 }

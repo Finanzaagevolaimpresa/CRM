@@ -32,8 +32,8 @@ export async function lockAdminRequest(tx: Tx, id: string) {
   const audit = event ? await tx.auditLog.findUnique({ where: { id: event.id } }) : null;
   if (!event || canonicalSha256(event.state) !== row.stateHash || event.stateHash !== row.stateHash
     || !audit || audit.actorId !== event.actorId || audit.entityId !== event.id || audit.entityType !== 'AdminRequestEvent'
-    || audit.event !== 'admin_request_changed' || canonicalSha256(audit.before) !== canonicalSha256({ revision: state.revision - 1 })
-    || canonicalSha256(audit.after) !== canonicalSha256({ revision: state.revision, operation: event.operation, stateHash: row.stateHash })) unavailable();
+    || audit.event !== 'admin_request_changed' || canonicalSha256(audit.before) !== canonicalSha256({ version: state.revision - 1 })
+    || canonicalSha256(audit.after) !== canonicalSha256({ version: state.revision, action: event.operation, stateHash: row.stateHash })) unavailable();
   return { state, createdAt: row.createdAt };
 }
 export function requestCommandHash(actorId: string, sessionId: string, operation: string, command: unknown) {
@@ -64,7 +64,8 @@ export async function appendAdminRequest(tx: Tx, state: RequestState, actorId: s
   await tx.$executeRaw`INSERT INTO "AdminRequestEvent"(id,"requestId",revision,"commandId","actorId","sessionId",operation,"commandHash",state,"stateHash")
     VALUES(${eventId}::uuid,${state.requestId}::uuid,${state.revision},${commandId}::uuid,${actorId},${sessionId}::uuid,${operation},${commandHash},${payload}::jsonb,${hash})`;
   await tx.auditLog.create({ data: { id: eventId, actorId, event: 'admin_request_changed', entityType: 'AdminRequestEvent', entityId: eventId,
-    before: { revision: state.revision - 1 }, after: { revision: state.revision, operation, stateHash: hash } } });
+    before: { version: state.revision - 1 }, after: { version: state.revision, action: operation, stateHash: hash } } });
+  if (operation !== 'PREPARE_DRAFT') await flushAdminRequestConstraints(tx);
   return { requestId: state.requestId, revision: state.revision, eventId, operation };
 }
 
@@ -73,4 +74,10 @@ export async function requestDraftOrigin(tx: Tx, id: string) {
   const [row] = await tx.$queryRaw<RequestDraftOrigin[]>`SELECT "requestId","messageId","sourceHash","authorityRevision","createdById"
     FROM "AdminRequestDraft" WHERE "messageId"=${id}::uuid`;
   return row ?? null;
+}
+
+/** Resolve the deferred constraints while the caller can still observe an error.
+ * Never return a receipt before the database has accepted the complete unit. */
+export async function flushAdminRequestConstraints(tx: Tx) {
+  await tx.$executeRaw`SET CONSTRAINTS admin_request_atomic, admin_request_event_atomic, admin_request_draft_atomic IMMEDIATE`;
 }

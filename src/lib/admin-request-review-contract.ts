@@ -28,7 +28,7 @@ export type CurrentAdminRequestReviewAdmission = {
   registryCurrent: boolean; personalEmailAuthority: boolean; contextCurrent: boolean;
 };
 
-/** Pure preparation only. The future writer must obtain every admission fact
+/** Pure transition plan. The writer obtains every admission fact
  * from current locked records and commit revision, event, receipt and audit in
  * one transaction. This return value is not a receipt or an email approval. */
 export function planAdminRequestReview(

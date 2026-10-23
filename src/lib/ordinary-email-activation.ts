@@ -1,5 +1,5 @@
 const ADMIN_REQUEST_MIGRATION = '20261023160000_admin_request_queue_v1';
-const ADMIN_REQUEST_MIGRATION_SHA256 = '9276a979e65d24a78fdf7f007d8c27d6c2e7041f058206178457faaf0f648e48';
+const ADMIN_REQUEST_MIGRATION_SHA256 = 'f25dd5563bcfc8ecf165bf0c4929ad70c6023dff8e35a5292ce2f1dd94833f06';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { canonicalSha256 } from './canonical-json';
