@@ -126,8 +126,9 @@ test('idempotency is bound to author, session, command and exact normalized requ
   assert.throws(() => adminRequestSubmissionDigest({ ...author, userId: '' }, request));
 });
 
-test('request status cannot manufacture a send, delivery, read receipt or enable a dormant operation', () => {
+test('request capability is explicit while request status cannot manufacture approval, send or delivery', () => {
   for (const state of ['SENT', 'DELIVERED', 'READ', 'APPROVED', 'ACCEPTED']) assert(!adminRequestStatus.safeParse(state).success);
   assert.equal(adminRequestStatusLabels.DRAFT_PREPARED, 'Bozza preparata, invio da decidere');
-  assert(!technicalImplementedActions.some(action => String(action) === 'request_admin'));
+  assert(technicalImplementedActions.some(action => String(action) === 'request_admin'));
+  assert(!technicalImplementedActions.some(action => /send|approve|dispatch/.test(action)));
 });

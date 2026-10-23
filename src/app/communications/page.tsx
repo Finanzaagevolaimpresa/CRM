@@ -20,6 +20,7 @@ import { ordinaryEmailUiAuthorityFromRequest } from '@/lib/ordinary-email-server
 import { communicationDeliveryLabel, hasBlockingOrdinaryReceipt } from '@/lib/ordinary-email-receipt';
 import { readPracticeCommunications } from '@/lib/approved-communications';
 import { readRecordUpdateEmailPrefill } from '@/lib/record-update-email-queue';
+import { readAdminRequestDraftPrefill, isRequestUnavailable } from '@/lib/admin-request-service';
 import { RecordUpdateError } from '@/lib/record-update-contract';
 import { emptyCommunicationRecipientSelection } from '@/lib/communication-recipient-policy';
 import { mutateApprovedMessageAction } from '@/lib/approved-communication-actions';
@@ -36,8 +37,9 @@ function BindingFields({ context, message }: { context: CommunicationContext; me
     <input type="hidden" name="expectedRevision" value={message.currentRevision} /><input type="hidden" name="snapshotHash" value={message.snapshotHash} /></>;
 }
 type UpdateDraft = NonNullable<Data['messages'][number]['updateDraft']> & { subject?: string; body?: string; mailboxId?: string };
-function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snapshot?: ApprovedMessageSnapshot;
+function Draft({ data, snapshot, replySource, updateDraft, requestSource }: { data: Data; snapshot?: ApprovedMessageSnapshot;
   updateDraft?: UpdateDraft;
+  requestSource?: { requestId: string; sourceHash: string; mailboxId: string };
   replySource?: { id: string; contentHash: string; classification: ApprovedMessageSnapshot['classification'] } }) {
   const updateSelection = emptyCommunicationRecipientSelection();
   if (updateDraft) updateSelection.to.userIds = [updateDraft.recipientId];
@@ -45,9 +47,11 @@ function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snaps
     <ContextFields context={data.context} /><input type="hidden" name="intent" value="draft" />
     {replySource ? <><input type="hidden" name="replySourceId" value={replySource.id} /><input type="hidden" name="replySourceHash" value={replySource.contentHash} />
       <p>Prepara una nuova bozza. Scegli mittente, destinatari e allegati; poi scrivi il testo da sottoporre ad approvazione.</p></> : null}
-    <input type="hidden" name="messageId" value={snapshot?.messageId ?? updateDraft?.deliveryId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
+    {requestSource && <><input type="hidden" name="adminRequestId" value={requestSource.requestId} /><input type="hidden" name="adminRequestSourceHash" value={requestSource.sourceHash} />
+      <p>Bozza collegata alla richiesta interna. Scegli destinatari, testo e allegati: il salvataggio non approva né invia email.</p></>}
+    <input type="hidden" name="messageId" value={snapshot?.messageId ?? updateDraft?.deliveryId ?? requestSource?.requestId ?? randomUUID()} /><input type="hidden" name="expectedRevision" value={snapshot?.revision ?? 0} />
     <label>Mittente<select required className={field} name="mailboxId" defaultValue={snapshot?.mailboxId ?? ''}>
-      <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.filter(box => !updateDraft?.mailboxId || box.id === updateDraft.mailboxId).map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
+      <option value="" disabled>Seleziona una casella registrata</option>{data.mailboxes.filter(box => (!updateDraft?.mailboxId || box.id === updateDraft.mailboxId) && (!requestSource || box.id === requestSource.mailboxId)).map(box => <option key={box.id} value={box.id}>{box.address}{box.qualification.enabled ? ' · abilitata' : ' · da qualificare'}</option>)}
     </select></label>
     <label>Reply-To<input required className={field} type="email" name="replyTo" defaultValue={snapshot?.replyTo} /></label>
     {updateDraft ? <section className="rounded-xl border p-3" aria-label="Destinatario dell’aggiornamento">
@@ -73,11 +77,11 @@ function Draft({ data, snapshot, replySource, updateDraft }: { data: Data; snaps
   </form>;
 }
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ kind?: string; practice?: string; result?: string; page?: string; reply?: string; update?: string; request?: string }> }) {
   const query = await searchParams, session = await requireAnyPermission(['practice_communications.read', 'communications.internal.read']);
   const context = communicationContextSchema.safeParse({ kind: query.kind, id: query.practice });
   if (!context.success) {
-    if (query.kind || query.practice || query.update) notFound();
+    if (query.kind || query.practice || query.update || query.request) notFound();
     const threads = hasPermission(session,'communications.internal.read') ? await listInternalCommunications(prisma, session) : [];
     const authority = await ordinaryEmailUiAuthorityFromRequest(session);
     const directory = authority ? await readCommunicationDirectory(prisma, session) : [];
@@ -96,9 +100,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
     catch (error) { if (error instanceof RecordUpdateError) notFound(); throw error; }
     if (updatePrefill.context.kind !== context.data.kind || updatePrefill.context.id !== context.data.id) notFound();
   }
+  let requestPrefill: Awaited<ReturnType<typeof readAdminRequestDraftPrefill>> | undefined;
+  if (query.request) {
+    if (query.reply || query.update) notFound();
+    try { requestPrefill = await readAdminRequestDraftPrefill(prisma, session, query.request); }
+    catch (error) { if (isRequestUnavailable(error)) notFound(); throw error; }
+    if (requestPrefill.context.kind !== context.data.kind || requestPrefill.context.id !== context.data.id) notFound();
+  }
   let data: Data;
   try { data = await readPracticeCommunications(prisma, session, context.data, query.page === undefined ? 1 : Number(query.page),
-    updatePrefill?.saved ? updatePrefill.deliveryId : undefined); }
+    updatePrefill?.saved ? updatePrefill.deliveryId : requestPrefill?.saved ? requestPrefill.requestId : undefined); }
   catch (error) { if (error instanceof ApprovedCommunicationError) notFound(); throw error; }
   const replyParent = query.reply ? data.messages.find(message => message.replies.some(reply => reply.id === query.reply)) : undefined;
   const replySource = replyParent?.replies.find(reply => reply.id === query.reply);
@@ -117,11 +128,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
       <CommunicationFiles key={`${data.context.kind}-${data.context.id}-${data.contextFiles.map(file=>file.id).join(',')}`}
         context={data.context} files={data.contextFiles} canWrite={data.canWrite && data.personal} requestId={randomUUID()} />
     </details>
-    {data.canWrite && !updatePrefill?.saved ? <Card title={updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
+    {data.canWrite && !updatePrefill?.saved && !requestPrefill?.saved ? <Card title={requestPrefill ? 'Bozza dalla richiesta interna' : updatePrefill ? 'Bozza da aggiornamento' : replySource ? 'Bozza da risposta ricevuta' : 'Nuova comunicazione'}>
+      {requestPrefill && <aside className="mb-4 rounded-xl border p-3"><h3 className="font-bold">{requestPrefill.requestTitle}</h3><p className="whitespace-pre-wrap break-words">{requestPrefill.requestDetails}</p><p>Indicazioni interne: rivedile prima di comporre il testo per il destinatario.</p></aside>}
       {replySource ? <aside className="mb-4 rounded-xl border p-3"><p>{replySource.sender} · {replySource.receivedAt.toISOString()}</p>
         <h3 className="font-bold">{replySource.subject}</h3><p className="whitespace-pre-wrap break-words">{replySource.body}</p>
         <p className="text-sm">Testo ricevuto dall’esterno, da valutare prima di rispondere.</p></aside> : null}
-      <Draft data={data} updateDraft={updatePrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
+      <Draft data={data} updateDraft={updatePrefill} requestSource={requestPrefill} replySource={replySource && replyParent ? { id: replySource.id, contentHash: replySource.contentHash, classification: replyParent.snapshot.classification } : undefined} />
     </Card> : null}
     {data.messages.map(message => <Card key={message.id} title={`${message.snapshot.subject} · v${message.currentRevision}`}>
       <p className="font-bold">{communicationDeliveryLabel(message.state, message.currentRevision, message.ordinaryReceipts, message.attempts)}</p>
@@ -136,7 +148,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ k
           eligible={!message.updateDraft?.stale && ordinaryAuthority?.mailboxId === message.mailboxId && message.snapshot.classification === 'ORDINARY'
             && !hasBlockingOrdinaryReceipt(message.ordinaryReceipts) && !message.attempts.some(attempt => ['SENDING','UNCERTAIN','SENT'].includes(attempt.state))}
           stepUpActive={ordinaryAuthority?.stepUpActive ?? false}>
-          <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} updateDraft={message.updateDraft ?? undefined} /></details>
+          <details><summary className="cursor-pointer font-bold">Modifica e invalida l’approvazione precedente</summary><Draft data={data} snapshot={message.snapshot} requestSource={message.requestSource ?? undefined} updateDraft={message.updateDraft ?? undefined} /></details>
         </OrdinaryEmailReview> : null}
         {data.canWrite && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'DRAFT' ? <form action={mutateApprovedMessageAction}><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="submit" /><PrimaryButton type="submit">Richiedi approvazione admin</PrimaryButton></form> : null}
         {data.isAdmin && (!message.updateDeliveryId || (message.updateDraft && !message.updateDraft.stale)) && message.state === 'PENDING' ? <form action={mutateApprovedMessageAction} className="grid gap-3"><BindingFields context={data.context} message={message} /><input type="hidden" name="intent" value="approve" /><label className="flex gap-2"><input type="checkbox" required name="exactApproval" value="APPROVO_IL_MESSAGGIO_ESATTO" />Approvo questo messaggio esatto, inclusi mittente, Reply-To, A/CC/BCC e versioni degli allegati.</label><PrimaryButton type="submit">Approva versione {message.currentRevision}</PrimaryButton></form> : null}

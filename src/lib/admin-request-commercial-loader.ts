@@ -20,7 +20,7 @@ export class AdminRequestContextUnavailable extends Error {
 }
 function deny(): never { throw new AdminRequestContextUnavailable(); }
 
-/** Preparation for a future atomic writer. The caller must have acquired the
+/** Shared admission for the atomic queue writer. The caller must have acquired the
  * directory/user/session locks; actor is a current DB principal, not a cookie.
  * Parent linkage is read again after locking. No text or financial data is read.
  */
@@ -47,8 +47,8 @@ export async function lockCommercialAdminRequestContext(tx: Tx, actor: Actor, ra
   return context;
 }
 
-/** No route calls this preparation yet. This is a real session boundary, not a
- * way for an Admin to impersonate a requester. A future command must persist
+/** Session-bound helper for commercial-only callers, not a
+ * way for an Admin to impersonate a requester. A command must persist
  * its event/receipt/audit inside work(), before the final DB clock check.
  * GET loaders must provide a read-only callback; this helper writes nothing.
  */

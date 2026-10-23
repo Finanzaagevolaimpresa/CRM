@@ -37,6 +37,7 @@ export async function mutateApprovedMessageAction(form: FormData) {
       ...(form.has('recipientSelection') ? { recipientSelection: JSON.parse(value(form, 'recipientSelection')) } : {}),
       ...(form.has('replySourceId') ? { replySource: { id: value(form,'replySourceId'), contentHash: value(form,'replySourceHash') } } : {}),
       ...(form.has('updateDeliveryId') ? { updateSource: { deliveryId: value(form,'updateDeliveryId'), sourceHash: value(form,'updateSourceHash') } } : {}),
+      ...(form.has('adminRequestId') ? { requestSource: { requestId: value(form,'adminRequestId'), sourceHash: value(form,'adminRequestSourceHash') } } : {}),
     });
     else if (intent === 'submit') await submitApprovedMessage(prisma, session, { messageId: value(form, 'messageId'), expectedRevision: Number(value(form, 'expectedRevision')), snapshotHash: value(form, 'snapshotHash') });
     else if (intent === 'approve') {

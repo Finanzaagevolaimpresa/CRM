@@ -36,7 +36,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND (proname LIKE 'fai_technical_assignment_%' OR proname='fai_technical_work_atomic')")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$RUNNER_TEMP/admin-requests-historical64"
+mkdir -p "$historical"
+git archive 4c2fe838e9c557d59802a71aa4f42fbae5c74327 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 64
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261022200000_technical_assignments_v1' ORDER BY migration_name" > "$evidence/prefix63-after.txt"
 cmp "$evidence/prefix63-before.txt" "$evidence/prefix63-after.txt"
@@ -66,7 +69,7 @@ SQL
 psql "$db" -v ON_ERROR_STOP=1 -At -f scripts/technical-assignments/structure.sql > "$evidence/structure64.json"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq TECHNICAL_ASSIGNMENT_SCHEMA63_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 printf '{"synthetic":true,"before":63,"after":64,"prefix63Unchanged":true,"allPriorRowsPreserved":true,"newTablesEmpty":true,"personalAuthorityEnrolled":false,"restrictiveForeignKeys":10,"atomicTriggers":4,"historyTruncateDenied":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/migration64-proof.json"

@@ -58,7 +58,7 @@ jobs:
           echo "TECHNICAL_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/technical-private-documents"
           echo "LOCAL_DOCUMENT_STORAGE_ROOT=$RUNNER_TEMP/technical-private-documents" >> "$GITHUB_ENV"
-          node scripts/m4/verify-schema.mjs > "$evidence/current-schema64-binding.json"
+          node scripts/m4/verify-schema.mjs > "$evidence/current-schema65-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           historical="$RUNNER_TEMP/technical-schema63"
           mkdir -p "$historical"
@@ -70,6 +70,7 @@ jobs:
           git archive 3a43977b585a9af43e4ef0c489841ce9a699a2c3 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/technical-assignments/qualify-migration.sh
+          bash scripts/admin-requests/qualify-migration.sh
       - name: Operator-only enrollment, denials, concurrent single use and atomic audit
         if: matrix.target == 'enrollment'
         env: { RUN_TECHNICAL_ENROLLMENT_TESTS: '1' }

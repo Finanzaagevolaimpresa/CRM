@@ -107,6 +107,10 @@ async function main() {
       assert.equal(sha256, doc.checksum); technicalFiles.push({ id: doc.id, sizeBytes: bytes.length, sha256 });
     }
     const data = {
+      adminRequests: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequest" ORDER BY id`,
+      adminRequestEvents: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestEvent" ORDER BY id`,
+      adminRequestDrafts: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestDraft" ORDER BY "requestId"`,
+      adminRequestAudit: await db.auditLog.findMany({ where: { event: 'admin_request_changed' }, orderBy: { id: 'asc' } }),
       technicalAssignments, technicalDocuments, technicalFiles,
       technicalAuthority: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentAuthority" ORDER BY id`,
       technicalDecisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentDecision" ORDER BY id`,
@@ -220,8 +224,10 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 64);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261022200000_technical_assignments_v1');
+    assert.equal(data.ledger.length, 65);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261023160000_admin_request_queue_v1');
+    assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
+    assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
     assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 3);
     assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 1);
     assert.equal(data.technicalDecisions.length, 4); assert.equal(data.technicalRevisions.length, 4);
