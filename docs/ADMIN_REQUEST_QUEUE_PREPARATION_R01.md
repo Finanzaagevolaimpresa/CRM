@@ -6,7 +6,9 @@ Questo branch prosegue il mandato sui perimetri dopo la candidata PR215. Non int
 
 L'ammissione del commerciale richiede il suo lead/cliente corrente, sessione e registry validi, record operativo e perimetro corrente. L'ammissione tecnica riusa il controllo degli incarichi con la distinta azione `request_admin`. Tale azione resta non concedibile nella lista runtime della PR215: il contratto non attiva codice futuro. Due tecnici devono avere ammissioni personali distinte; una relazione con il cliente non le sostituisce.
 
-Le dodici prove pure coprono separazione dei commerciali, due tecnici, record estraneo, ruolo Admin non sostitutivo, revoche, scadenza, cambi di contesto/versioni, richieste che tentano di contenere invii o approvazioni, limiti del testo e idempotenza. Non sono prove PostgreSQL, browser o del flusso completo.
+Le diciassette prove pure coprono separazione dei commerciali, due tecnici, record estraneo, ruolo Admin non sostitutivo, revoche, scadenza, cambi di contesto/versioni, richieste che tentano di contenere invii o approvazioni, limiti del testo, idempotenza e proiezione riservata al richiedente. Non sono prove PostgreSQL, browser o del flusso completo.
+
+`admin-request-projection.ts` restituisce soltanto richiesta propria e risposta interna deliberatamente indirizzata al richiedente, rileggendo l'ammissione corrente. Non restituisce note private, identificativi della bozza, destinatari, allegati, dati finanziari o ricevute di invio/lettura. Il contenuto resta testo da rendere con escaping nell'interfaccia futura.
 
 Resta da realizzare la persistenza transazionale con storico/audit e ricevute, i resolver canonici sotto lock, la coda privata per l'Admin titolare, la risposta minimizzata al richiedente, il legame esatto richiesta/versione→bozza/versione e l'integrazione nel percorso email già qualificato. La bozza deve essere modificabile o rifiutabile e richiedere la decisione personale sull'esatta versione prima dell'invio; nessun avviso al cliente nasce dalla richiesta. I risultati di invio, consegna e lettura richiedono le rispettive ricevute e non sono stati della richiesta.
 
