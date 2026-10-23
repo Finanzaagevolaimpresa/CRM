@@ -108,27 +108,38 @@ export async function readAdminRequest(db: PrismaClient, claimed: AuthSession, i
 export function isRequestUnavailable(error: unknown) {
   return error instanceof AdminRequestContextUnavailable || error instanceof AdminRequestError && ['DENIED', 'STALE'].includes(error.code);
 }
+export class AdminRequestQueueLimitError extends Error {
+  constructor(readonly isAdmin: boolean) { super('Restringi la ricerca per consultare le richieste disponibili.'); }
+}
 export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '') {
   const skip = (z.number().int().min(1).max(200).parse(page) - 1) * 30;
   const term = z.string().trim().max(160).parse(query).toLocaleLowerCase('it-IT');
   return withSerializableTransaction(db, async tx => {
     const auth = await session(tx, claimed);
-    // No global counts or unadmitted search snippets. The scan is bounded;
-    // filtering occurs only after fresh authorization of each origin.
-    const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest"
-      WHERE (${auth.isAdmin} OR "authorId"=${auth.actor.id})
-      AND (${term}='' OR position(${term} in lower(state->'submitted'->>'title'))>0)
-      ORDER BY "createdAt" DESC,id OFFSET ${skip} LIMIT 31`;
-    const items = []; let until = Infinity;
-    for (const candidate of candidates) {
-      try {
-        const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
-        if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
-        items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
-        until = Math.min(until, row.origin.accessUntil);
-      } catch (error) { if (!isRequestUnavailable(error)) throw error; }
+    // Paginate admitted rows, never the unfiltered window: revoked origins
+    // must not hide later requests or contribute to counts/next-page hints.
+    const items = []; let until = Infinity, admitted = 0, exhausted = false;
+    for (let offset = 0; offset < 6000; offset += 60) {
+      const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest"
+        WHERE (${auth.isAdmin} OR "authorId"=${auth.actor.id})
+        AND (${term}='' OR position(${term} in lower(state->'submitted'->>'title'))>0)
+        ORDER BY "createdAt" DESC,id OFFSET ${offset} LIMIT 60`;
+      for (const candidate of candidates) {
+        try {
+          const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
+          if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
+          until = Math.min(until, row.origin.accessUntil);
+          if (admitted++ < skip) continue;
+          items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
+          if (items.length === 31) break;
+        } catch (error) { if (!isRequestUnavailable(error)) throw error; }
+      }
+      exhausted = candidates.length < 60;
+      if (exhausted || items.length === 31) break;
     }
     await finish(tx, auth, until);
+    // A bounded scan never reports a false empty queue or a false last page.
+    if (!exhausted && items.length < 31) throw new AdminRequestQueueLimitError(auth.isAdmin);
     return { isAdmin: auth.isAdmin, items: items.slice(0, 30), hasNext: items.length > 30 };
   });
 }

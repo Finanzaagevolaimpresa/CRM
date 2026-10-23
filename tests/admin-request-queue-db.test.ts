@@ -216,7 +216,7 @@ test('concurrent first draft save and a repeated save cannot create another vers
 test('draft audit failure rolls back message, version, link and request transition together', options, async () => {
   const f = await fixture(), { receipt } = await submit(f);
   const p = await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId);
-  await db.$executeRawUnsafe("CREATE FUNCTION synthetic_request_draft_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='admin_request_changed' AND NEW.after->>'operation'='PREPARE_DRAFT' THEN RAISE EXCEPTION 'SYNTHETIC_DRAFT_FAULT'; END IF; RETURN NEW; END $$");
+  await db.$executeRawUnsafe("CREATE FUNCTION synthetic_request_draft_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='admin_request_changed' AND NEW.after->>'action'='PREPARE_DRAFT' THEN RAISE EXCEPTION 'SYNTHETIC_DRAFT_FAULT'; END IF; RETURN NEW; END $$");
   await db.$executeRawUnsafe('CREATE TRIGGER synthetic_request_draft_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION synthetic_request_draft_fault()');
   try {
     await assert.rejects(saveApprovedMessageDraft(db, admin.session, requestDraft(p, box.address)));
@@ -242,4 +242,27 @@ test('a deferred audit mismatch is reported as failure before a submission recei
     await db.$executeRawUnsafe('DROP TRIGGER synthetic_request_audit_mismatch ON "AuditLog"');
     await db.$executeRawUnsafe('DROP FUNCTION synthetic_request_audit_mismatch()');
   }
+});
+
+test('pagination and search cross revoked origins without hiding admitted requests or counting foreign ones', options, async () => {
+  const f = await fixture(), term = `Coda ${randomUUID()}`, ids = new Set<string>();
+  const clientInput = await requestInput(db, f.salesA, { kind: 'Client', targetId: f.client.id });
+  for (let i = 0; i < 33; i++) {
+    const receipt = await submitAdminRequest(db, f.salesA.session, { ...clientInput, commandId: randomUUID(), title: `${term} ${i}` });
+    ids.add(receipt.requestId);
+  }
+  const leadInput = await requestInput(db, f.salesA, lead(f));
+  for (let i = 0; i < 31; i++) await submitAdminRequest(db, f.salesA.session, { ...leadInput, commandId: randomUUID(), title: `${term} revoked ${i}` });
+  await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: f.salesB.user.id } });
+  const foreign = await requestInput(db, f.salesB, { kind: 'Client', targetId: f.otherClient.id });
+  await submitAdminRequest(db, f.salesB.session, { ...foreign, title: `${term} foreign` });
+  const before = await db.auditLog.count();
+  const first = await readAdminRequestQueue(db, f.salesA.session, 1, term);
+  const second = await readAdminRequestQueue(db, f.salesA.session, 2, term);
+  assert.equal(first.items.length, 30); assert.equal(first.hasNext, true);
+  assert.equal(second.items.length, 3); assert.equal(second.hasNext, false);
+  assert.deepEqual(new Set([...first.items, ...second.items].map(r => r.id)), ids);
+  assert.equal((await readAdminRequestQueue(db, f.salesB.session, 1, term)).items.length, 1);
+  assert.equal((await readAdminRequestQueue(db, f.salesA.session, 1, `${term} revoked`)).hasNext, false);
+  assert.equal(await db.auditLog.count(), before);
 });
