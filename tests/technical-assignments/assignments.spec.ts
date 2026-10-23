@@ -31,18 +31,20 @@ async function assignments(row: Row) {
   return Number(r.n);
 }
 async function coldEditor(page: Page, url: string, marker: string, control: string, button: string) {
-  let release!: () => void;
+  let release!: () => void, blockedScripts = 0;
   const scripts = new Promise<void>(resolve => { release = resolve; });
   const pattern = /\/_next\/static\/.*\.js(?:\?.*)?$/;
-  await page.route(pattern, async route => { await scripts; await route.continue(); });
+  await page.route(pattern, async route => { blockedScripts++; await scripts; await route.continue(); });
   try {
     await page.goto(url, { waitUntil: 'commit' });
+    await expect.poll(() => blockedScripts).toBeGreaterThan(0);
     await expect(page.locator(`[${marker}="false"]`)).toBeVisible();
     await expect(page.getByRole('combobox', { name: control, exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: button, exact: true })).toBeDisabled();
-  } finally { release(); await page.unroute(pattern); }
+  } finally { release(); }
   await expect(page.locator(`[${marker}="true"]`)).toBeVisible();
   await expect(page.getByRole('combobox', { name: control, exact: true })).toBeEnabled();
+  await page.unrouteAll({ behavior: 'wait' });
 }
 async function prepareAssignment(page: Page, row: Row, person: Row['techA'], project = false) {
   await page.goto(management(row, project));
