@@ -7,9 +7,11 @@ import { readAdminRequest, isRequestUnavailable, readAdminRequestDraftPrefill } 
 import { AdminRequestForm } from '@/components/admin-request-form';
 import { adminRequestStatusLabels } from '@/lib/admin-request-contract';
 import { PageHeader } from '@/components/ui';
+import { z } from 'zod';
 export const dynamic = 'force-dynamic';
 export default async function Page({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ result?: string }> }) {
   const { id } = await params, query = await searchParams, user = await requireSession(); let request;
+  if (!z.string().uuid().safeParse(id).success) notFound();
   try { request = await readAdminRequest(prisma, user, id); }
   catch (error) { if (isRequestUnavailable(error)) notFound(); throw error; }
   const open = ['OPEN', 'NEEDS_INFORMATION'].includes(request.status);
@@ -26,14 +28,14 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <section className="rounded-xl border p-4"><h2 className="font-bold">Indicazioni interne</h2><p className="whitespace-pre-wrap">{request.submitted.details}</p></section>
     {request.requesterReply && <section className="rounded-xl border p-4"><h2 className="font-bold">Risposta interna dell’Admin</h2><p className="whitespace-pre-wrap">{request.requesterReply}</p></section>}
     {request.isAdmin && draftHref && <Link className="inline-block rounded-xl bg-fai-navy p-3 font-bold text-white" href={draftHref}>{request.draftHref ? 'Apri bozza email collegata' : 'Prepara bozza email da approvare'}</Link>}
-    {open && request.isAdmin && <AdminRequestForm className="grid max-w-3xl gap-3">{fields}<input type="hidden" name="commandId" value={randomUUID()} />
+    {open && request.isAdmin && <AdminRequestForm key={`review-${request.revision}`} className="grid max-w-3xl gap-3">{fields}<input type="hidden" name="commandId" value={randomUUID()} />
       <label>Risposta visibile all’autore<textarea className="block w-full rounded-xl border p-3" required minLength={3} maxLength={2000} rows={4} name="requesterReply" /></label>
       <div className="flex flex-wrap gap-3"><button className="rounded-xl border p-3" name="action" value="REQUEST_INFORMATION">Chiedi integrazione interna</button><button className="rounded-xl border p-3" name="action" value="REJECT">Rifiuta richiesta</button></div></AdminRequestForm>}
-    {open && !request.isAdmin && <><AdminRequestForm className="grid max-w-3xl gap-3">{fields}<input type="hidden" name="commandId" value={randomUUID()} /><input type="hidden" name="action" value="AMEND" />
+    {open && !request.isAdmin && <><AdminRequestForm key={`amend-${request.revision}`} className="grid max-w-3xl gap-3">{fields}<input type="hidden" name="commandId" value={randomUUID()} /><input type="hidden" name="action" value="AMEND" />
       <label>Oggetto della richiesta<input required minLength={3} maxLength={160} className="block w-full rounded-xl border p-3" name="title" defaultValue={request.submitted.title} /></label>
-      <label>Indicazioni interne<textarea required minLength={3} maxLength={3000} rows={6} className="block w-full rounded-xl border p-3" name="details" defaultValue={request.submitted.details} /></label>
+      <div><label htmlFor="request-details">Indicazioni interne</label><textarea id="request-details" required minLength={3} maxLength={3000} rows={6} className="block w-full rounded-xl border p-3" name="details" defaultValue={request.submitted.details} /></div>
       <button className="rounded-xl border p-3">Salva integrazione interna</button></AdminRequestForm>
-      <AdminRequestForm>{fields}<input type="hidden" name="commandId" value={randomUUID()} /><input type="hidden" name="action" value="WITHDRAW" /><button className="rounded-xl border p-3">Ritira richiesta interna</button></AdminRequestForm></>}
+      <AdminRequestForm key={`withdraw-${request.revision}`}>{fields}<input type="hidden" name="commandId" value={randomUUID()} /><input type="hidden" name="action" value="WITHDRAW" /><button className="rounded-xl border p-3">Ritira richiesta interna</button></AdminRequestForm></>}
     <section><h2 className="font-bold">Storico della richiesta</h2><ol>{request.history.map(event => <li key={event.revision}>{event.createdAt.toLocaleString('it-IT')} · {labels[event.operation] ?? 'Evento registrato'} · versione {event.revision}</li>)}</ol></section>
     <p>Lo stato della richiesta non è una ricevuta di invio o di lettura. L’approvazione e l’invio sono decisioni personali separate sulla versione esatta dell’email.</p>
   </div>;

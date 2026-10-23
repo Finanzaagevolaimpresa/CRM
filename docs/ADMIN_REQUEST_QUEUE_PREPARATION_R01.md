@@ -1,5 +1,7 @@
 # Coda richieste interne all'Admin — preparazione
 
+Documento storico della sola preparazione precedente all’implementazione. Lo stato funzionale corrente e i gate della PR216 sono descritti in [ADMIN_REQUEST_QUEUE_R01.md](ADMIN_REQUEST_QUEUE_R01.md); i limiti sotto riportati non descrivono il codice aggiunto successivamente.
+
 Questo branch prosegue il mandato sui perimetri dopo PR215. La base è stata riconciliata con il merge distribuito `4c2fe838e9c557d59802a71aa4f42fbae5c74327` preservando i commit di preparazione. Non introduce una pagina operativa, una migration, un binding, un provider o un invio. Non modifica il candidato PR215 congelato.
 
 `admin-request-commercial-context.ts` aggiunge l'impronta canonica di lead/cliente: proprietà commerciale e contatori di versione per cambi di titolare, cestino e ripristino. Un lead collegato non può diventare una richiesta sul cliente di un altro commerciale. Titoli, contatti, note, dati economici e timestamp delle normali modifiche non entrano nell'impronta. Le otto prove aggiuntive distinguono due commerciali, parentela incoerente, cambio A→B→A, revoche e campi privati. Il contatore corrente del record può invalidare una richiesta anche per cambi ulteriori registrati da quel contatore: la futura gestione dello storico deve trattarla come obsoleta, senza riattivarla automaticamente.

@@ -34,6 +34,8 @@ cmp "$evidence/prefix64-before.txt" "$evidence/prefix64-after.txt"
 footprint "$evidence/after.txt"
 cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT (SELECT count(*) FROM "AdminRequest")+(SELECT count(*) FROM "AdminRequestEvent")+(SELECT count(*) FROM "AdminRequestDraft")')" = 0
+psql "$db" -v ON_ERROR_STOP=1 -At -f scripts/admin-requests/structure.sql > "$evidence/structure65.json"
+node -e 'const a=require("node:assert/strict"),s=require(process.argv[1]); a.deepEqual(s.tables.map(t=>t.name),["AdminRequest","AdminRequestDraft","AdminRequestEvent"]); a.equal(s.functions.length,3); a.equal(s.triggers.length,9); a.equal(s.constraints.filter(c=>c.type==="f").length,11); a.equal(s.triggers.filter(t=>t.deferrable&&t.initiallyDeferred).length,3); a(s.tables.every(t=>t.kind==="r"&&t.persistence==="p"&&t.ownerMatches)); a(s.constraints.every(c=>c.validated));' "$evidence/structure65.json"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ADMIN_REQUEST_SCHEMA64_REQUIRED "$evidence/replay.log"
 npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"

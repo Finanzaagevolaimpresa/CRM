@@ -45,9 +45,11 @@ test('commercial request, internal clarification, explicit Admin draft and priva
   await decision.getByLabel('Risposta visibile all’autore', { exact: true }).fill('Chiarisci il documento necessario prima della bozza.');
   await decision.getByRole('button', { name: 'Chiedi integrazione interna', exact: true }).click();
   await expect.poll(() => count(id)).toBe(2);
+  await expect(decision.getByRole('status')).toHaveText('Operazione registrata nello storico. Nessuna email inviata.');
   await page.goto('/admin-requests/' + id); await expect(page.getByText('Chiarisci il documento necessario prima della bozza.', { exact: true })).toBeVisible();
   await page.getByLabel('Indicazioni interne', { exact: true }).fill('Occorre il documento tecnico aggiornato, senza dati economici.');
   await page.getByRole('button', { name: 'Salva integrazione interna', exact: true }).click(); await expect.poll(() => count(id)).toBe(3);
+  await expect(page.getByRole('status')).toHaveText('Operazione registrata nello storico. Nessuna email inviata.');
   await decision.goto('/admin-requests/' + id);
   await decision.setViewportSize({ width: 1440, height: 1000 }); await decision.screenshot({ path: path.join(evidence, 'review-desktop.png'), fullPage: true });
   await decision.getByRole('link', { name: 'Prepara bozza email da approvare', exact: true }).click();
@@ -127,5 +129,6 @@ test('stale commercial owner form and invalid/foreign API identifiers cannot dis
   await expect(page.getByRole('status')).toContainText('perimetro non è più valido');
   expect(await count(id)).toBe(0);
   expect((await page.request.get('/api/admin-requests/outcome?commandId=not-a-uuid')).status()).toBe(404);
+  expect((await page.request.get('/admin-requests/not-a-uuid')).status()).toBe(404);
   expect(await db.communicationAttempt.count()).toBe(0);
 });
