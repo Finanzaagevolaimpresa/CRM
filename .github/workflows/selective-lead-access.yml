@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/selective-lead*', 'tests/selective-leads/**', 'scripts/selective-leads/**', '.github/workflows/selective-lead-access.yml']
+    paths: ['package.json', 'package-lock.json', 'src/**', 'prisma/**', 'tests/selective-lead*', 'tests/selective-leads/**', 'scripts/selective-leads/**', '.github/workflows/selective-lead-access.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-lead-${{ github.event.pull_request.number || github.ref }}

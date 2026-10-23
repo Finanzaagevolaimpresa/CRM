@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', 'scripts/selective-client-documents/**', 'scripts/selective-client-companies/**', 'scripts/selective-client-people/**', '.github/workflows/selective-client-access.yml']
+    paths: ['package.json', 'package-lock.json', 'src/**', 'prisma/**', 'tests/selective-client*', 'tests/selective-clients/**', 'scripts/selective-clients/**', 'scripts/selective-client-documents/**', 'scripts/selective-client-companies/**', 'scripts/selective-client-people/**', '.github/workflows/selective-client-access.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-client-${{ github.event.pull_request.number || github.ref }}

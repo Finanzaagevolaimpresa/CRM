@@ -22,7 +22,9 @@ async function login(page: Page, role: string) {
 function form(page: Page, intent: string) { return page.locator('form').filter({ has: page.locator('input[name="intent"][value="' + intent + '"]') }); }
 async function submit(page: Page, button: Locator) {
   const [response] = await Promise.all([page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action'])), button.click()]);
-  await response.finished(); expect(response.status()).toBeLessThan(400);
+  // Streaming EOF is not the commit boundary. Both callers poll the actual
+  // persisted authorization/receipt and then verify the version and UI.
+  expect(response.status()).toBeLessThan(400);
 }
 test.afterAll(async () => db.$disconnect());
 test('M5 five service templates, authenticated actors, version-bound reviews, original logo export and synthetic delivery', async ({ browser }) => {

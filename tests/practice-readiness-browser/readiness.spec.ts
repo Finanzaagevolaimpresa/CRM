@@ -63,9 +63,9 @@ async function submitDossierAction(page: Page, button: Locator, phase: string) {
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
   await button.click();
   const response = await responsePromise;
-  // Packaged RSC streams may remain open after the action has committed.
-  // Callers still verify navigation, rendered state and persisted data.
-  if (process.env.PRACTICE_READINESS_PACKAGED !== "1") await response.finished();
+  // RSC streams can remain open after commit in development and packaged mode.
+  // Completion is verified by the redirect and each caller's rendered state,
+  // exact dossier version, audit and persisted-data assertions, not stream EOF.
   expect(response.status(), phase).toBe(200);
   const redirect = response.headers()["x-action-redirect"] ?? "";
   expect(redirect, phase).not.toContain("dossierError=");
@@ -918,8 +918,11 @@ test("standard, quote-only and forming-subject paths reach an explicit synchroni
     const responsePromise = actorPage.waitForResponse((response) => response.request().method() === "POST" && Boolean(response.request().headers()["next-action"]));
     await form.getByRole("button", { name: buttonName }).click();
     const legitimateResponse = await responsePromise;
-    if (process.env.PRACTICE_READINESS_PACKAGED !== "1") await legitimateResponse.finished();
     expect(legitimateResponse.status()).toBe(200);
+    await expect.poll(async () => {
+      const saved = await db.clientDossier.findUniqueOrThrow({ where: { id: legacy.id } });
+      return { status: saved.status, updatedById: saved.updatedById };
+    }).toEqual({ status: buttonName === "Salva modifiche" ? "bozza" : "revisionata", updatedById: buttonName === "Salva modifiche" ? "readiness-browser-owner" : "readiness-browser-reader" });
     const legitimate = await db.clientDossier.findUniqueOrThrow({ where: { id: legacy.id } });
     expect(legitimate.status).toBe(buttonName === "Salva modifiche" ? "bozza" : "revisionata");
     expect(legitimate.updatedById).toBe(buttonName === "Salva modifiche" ? "readiness-browser-owner" : "readiness-browser-reader");

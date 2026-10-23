@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ['src/**', 'prisma/**', 'tests/selective-practice*', 'tests/selective-practices/**', 'scripts/selective-practices/**', 'scripts/selective-practice-documents/**', '.github/workflows/selective-practice-access.yml']
+    paths: ['package.json', 'package-lock.json', 'src/**', 'prisma/**', 'tests/selective-practice*', 'tests/selective-practices/**', 'scripts/selective-practices/**', 'scripts/selective-practice-documents/**', '.github/workflows/selective-practice-access.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-practice-${{ github.event.pull_request.number || github.ref }}

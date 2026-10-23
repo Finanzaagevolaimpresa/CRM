@@ -1,5 +1,5 @@
 {
-  "nextPlugin": "16.3.8",
+  "nextPlugin": "16.4.2",
   "consumer": "dist/utils/get-root-dirs.js",
   "consumerSha256": "886677432990a735e5ebdfb345ff1cbd40e264f9947a8432eeeb254b3a926bde",
   "rootMode": "default-only",

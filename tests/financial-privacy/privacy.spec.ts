@@ -293,14 +293,36 @@ for (const role of ['admin', 'consulente']) for (const action of ['create', 'edi
     await db.client.update({ where: { id: f.clientId }, data: { status: 'sospeso' } });
     const before = await technicalFootprint(f.clientId);
     try {
-      const pending = page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action']));
+      // Capture inside the page before Next consumes the error and navigates.
+      // Chromium can discard Network.getResponseBody even in its response event.
+      // The native fetch runs exactly once; its request and returned response are
+      // unchanged. Read only a clone, without mocking or replaying the action.
+      const captured: { status: number; body: string }[] = [];
+      await page.exposeFunction('__captureHeldClientAction', (response: { status: number; body: string }) => { captured.push(response); });
+      await page.evaluate(() => {
+        const nativeFetch = window.fetch.bind(window);
+        const capture = (window as unknown as { __captureHeldClientAction: (response: { status: number; body: string }) => Promise<void> }).__captureHeldClientAction;
+        window.fetch = async (input, init) => {
+          const response = await nativeFetch(input, init);
+          const request = input instanceof Request ? input : undefined;
+          const headers = new Headers(init?.headers ?? request?.headers);
+          if ((init?.method ?? request?.method ?? 'GET').toUpperCase() === 'POST' && headers.has('next-action')) {
+            await capture({ status: response.status, body: await response.clone().text() });
+          }
+          return response;
+        };
+      });
+      let actionRequests = 0;
+      page.on('request', request => { if (request.method() === 'POST' && request.headers()['next-action']) actionRequests += 1; });
       await form.getByRole('button', { name: buttonName, exact: true }).click();
-      const response = await pending;
-      expect(response.status()).toBe(500);
+      await expect.poll(() => captured.length).toBe(1);
+      expect(actionRequests).toBe(1);
+      const response = captured[0];
+      expect(response.status).toBe(500);
       expect(await technicalFootprint(f.clientId)).toEqual(before);
       // Check the actual RSC denial and guard, independently of Chromium's
       // accented-text representation in the development error envelope.
-      const failureLine = (await response.text()).split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
+      const failureLine = response.body.split('\n').find(line => /^[0-9a-f]+:E\{/.test(line));
       expect(failureLine).toBeTruthy();
       const failure = JSON.parse(failureLine!.slice(failureLine!.indexOf('{'))) as { name: string; message: string; stack: Array<[string, ...unknown[]]> };
       expect(failure.name).toBe('UserFacingActionError');

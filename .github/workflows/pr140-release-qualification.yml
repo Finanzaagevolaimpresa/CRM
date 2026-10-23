@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'package.json'
+      - 'package-lock.json'
       - 'src/**'
       - 'tests/pr140-release/**'
       - 'tests/practice-readiness-browser/**'
@@ -15,6 +17,8 @@ on:
   push:
     branches: [main]
     paths:
+      - 'package.json'
+      - 'package-lock.json'
       - 'src/**'
       - 'tests/pr140-release/**'
       - 'tests/practice-readiness-browser/**'

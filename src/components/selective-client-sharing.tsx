@@ -22,11 +22,12 @@ function rememberCommand(id: string) {
   window.history.replaceState(window.history.state, '', url);
 }
 function Receipt({ commandId, clientId }: { commandId: string; clientId: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(checkClientSharingReceipt, initial);
   return <form action={action} className="space-y-2 rounded-xl bg-slate-50 p-3">
     <input type="hidden" name="commandId" value={commandId} />
     <input type="hidden" name="clientId" value={clientId} />
-    <button disabled={pending} className="font-semibold underline">Verifica ricevuta dell’operazione</button>
+    <button disabled={!ready || pending} className="font-semibold underline">Verifica ricevuta dell’operazione</button>
     <p role="status">{state.message}</p>
   </form>;
 }
@@ -141,6 +142,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
   </div>;
 }
 function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(revokeClientSharingAction, initial);
   return <div className="min-w-0 space-y-3 rounded-xl border p-4">
     <p className="break-words font-semibold">{grant.recipientName} · {grant.recipientEmail}</p>
@@ -152,8 +154,8 @@ function Revoke({ grant, clientId }: { grant: Grant; clientId: string }) {
     <p>{grant.expiresAt ? `Scadenza: ${new Date(grant.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza indicata'}</p>
     {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(grant.commandId)} className="space-y-3">
       <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={grant.commandId} />
-      <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
-      <button disabled={pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
+      <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={!ready || pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
+      <button disabled={!ready || pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
     <p role="status">{state.message}</p>{!grant.revoked && <Receipt commandId={grant.commandId} clientId={clientId} />}
   </div>;
