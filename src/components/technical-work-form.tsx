@@ -68,7 +68,7 @@ export function TechnicalWorkForm({ data, commandId: initialId, previewAction, c
   function changed() { setCommandId(crypto.randomUUID()); setError(''); }
   return <section className="min-w-0 space-y-4" aria-label="Lavora sul tuo incarico">
     <h2 className="text-xl font-bold">Aggiorna il lavoro tecnico</h2>
-    <form action={submit} onSubmit={event => {
+    <form action={submit} onReset={event => event.preventDefault()} onSubmit={event => {
       if (action === 'update_fields' && !selected.length) { event.preventDefault(); setError('Scegli almeno un campo da modificare.'); }
     }} className="space-y-4">
       <input type="hidden" name="target" value={JSON.stringify(data.target)} />

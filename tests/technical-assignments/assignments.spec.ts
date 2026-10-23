@@ -49,6 +49,12 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Incarico sintetico qualificazione browser');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
+  for (const name of ['Modificare i campi scelti', 'Aggiornare lo stato', 'Titolo', 'Stato', project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente']) {
+    await expect(page.getByLabel(name, { exact: true })).toBeChecked();
+  }
+  await expect(page.getByLabel(new RegExp(row.documents[0].title + ' ·'))).toBeChecked();
+  await expect(downloadable).toBeChecked();
   await page.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
 }
 async function assign(page: Page, row: Row, person: Row['techA'], project = false) {
@@ -65,6 +71,8 @@ async function prepareWork(page: Page, row: Row, value: string, project = false)
   await page.getByRole('textbox', { name: label, exact: true }).fill(value);
   await page.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Modifica ' + label.toLocaleLowerCase('it-IT'), { exact: true })).toBeChecked();
+  await expect(page.getByRole('textbox', { name: label, exact: true })).toHaveValue(value);
   await page.getByLabel('Confermo soltanto le modifiche riepilogate.').check();
 }
 async function lostResponse(page: Page, button: string, pattern: string) {
