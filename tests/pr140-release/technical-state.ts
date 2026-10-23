@@ -46,4 +46,3 @@ async function main() {
   } finally { if (previous === undefined) delete process.env.PRIVILEGED_ACCESS_MODE; else process.env.PRIVILEGED_ACCESS_MODE = previous; }
 }
 main().finally(() => db.$disconnect()).catch(error => { console.error(error); process.exitCode = 1; });
-

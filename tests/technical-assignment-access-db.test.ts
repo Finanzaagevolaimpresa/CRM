@@ -120,7 +120,19 @@ test('technical updates are exact, audited and visible only in the original comm
   assert.equal(row.clientVisibleStatus, input.patch.clientVisibleStatus); assert.equal(row.internalNotes, f.practice.internalNotes);
   assert.equal(row.commercialOwnerId, f.salesA.user.id); assert.equal(row.technicalOwnerId, f.techA.user.id);
   const a = await readCommercialProgress(db, f.salesA.session, { client: f.client.id });
-  assert.equal(a.items.length, 1); assert(JSON.stringify(a).includes(String(input.patch.clientVisibleStatus)));
+  assert.equal(a.items.length, 1);
+  // The commercial projection exposes canonical progress, never technical free text.
+  assert.equal(JSON.stringify(a).includes(String(input.patch.clientVisibleStatus)), false);
+  const statusInput = await workInput(db, f.techA, target, { status: 'in_progettazione' });
+  const statusPreview = await previewTechnicalWork(db, f.techA.session, target, statusInput);
+  const statusReceipt = await confirmTechnicalWork(db, f.techA.session, target, statusPreview.command, statusPreview.token, true);
+  const progressed = await readCommercialProgress(db, f.salesA.session, { client: f.client.id });
+  assert.equal(progressed.items[0].status, 'in_progettazione');
+  assert.equal(progressed.items[0].statusLabel, 'In lavorazione');
+  assert.equal(JSON.stringify(progressed).includes(String(input.patch.clientVisibleStatus)), false);
+  assert.deepEqual((await db.auditLog.findUniqueOrThrow({ where: { id: statusReceipt.commandId } })).after,
+    { action: 'update_status', fieldCount: 1 });
+  assert.equal(await workCount(target.targetId), 2n);
   const b = await readCommercialProgress(db, f.salesB.session, { client: f.client.id });
   assert.equal(b.items.length, 0);
   const bOwn = await readCommercialProgress(db, f.salesB.session, {}); assert.equal(bOwn.items.length, 1);
@@ -195,7 +207,7 @@ test('permission and registry-session revocation are reread despite a live old c
   await assert.rejects(confirmTechnicalWork(db, f.techA.session, target, p.command, p.token, true));
   // A second assigned person proves the session boundary independently.
   await assignTechnical(db, admin, target, f.techB);
-  await db.internalSession.update({ where: { id: f.techB.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'synthetic qualification' } });
+  await db.internalSession.update({ where: { id: f.techB.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE', revokedByUserId: admin.user.id } });
   await assert.rejects(readTechnicalWork(db, f.techB.session, target));
   assert.equal(await workCount(target.targetId), 0n);
 });
@@ -259,7 +271,9 @@ test('immutable history rejects updates/deletes and a fabricated command without
 });
 
 test('project assignments are independent of practice grants and cannot open financial or unrelated project fields', options, async () => {
-  const f = await fixture(), target = technicalTarget(f, 'Project');
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), target = technicalTarget(f, 'Project');
+  const backoffice = await syntheticPerson(db, 'Backoffice senza modifica progetti', 'backoffice');
+  await assert.rejects(assignTechnical(db, admin, target, backoffice));
   await assignTechnical(db, admin, target, f.techA); await assignTechnical(db, admin, target, f.techB);
   const view = await readTechnicalWork(db, f.techB.session, target);
   assert.deepEqual(view.fields.map(row => row.key), ['title', 'description', 'status']);

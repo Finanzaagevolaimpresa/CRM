@@ -71,6 +71,7 @@ jobs:
           bash scripts/selective-client-companies/qualify-migration.sh
           bash scripts/selective-client-people/qualify-migration.sh
           bash scripts/selective-lead-edit/qualify-migration.sh
+          bash scripts/technical-assignments/qualify-migration.sh
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash
@@ -119,6 +120,7 @@ jobs:
             ${{ runner.temp }}/selective-document-migration
             ${{ runner.temp }}/selective-practice-document-migration
             ${{ runner.temp }}/selective-company-migration
+            ${{ runner.temp }}/technical-assignment-migration
             test-results
           if-no-files-found: error
           retention-days: 14

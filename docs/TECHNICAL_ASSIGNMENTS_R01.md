@@ -34,4 +34,3 @@ PR140 aggiunge la verifica nell'immagine confezionata e nel suo riavvio. Le prov
 Questo incremento non chiude il mandato complessivo. Richieste interne all'Admin, gestione checklist, scadenze e caricamento documenti sono azioni previste dal contratto futuro ma non concedibili qui. Nessun invio email, provider, cron o binding reale deriva dallo sviluppo.
 
 Restano separati il riesame indipendente, l'autorità specifica per SQL64/enrollment/merge/deploy e il collaudo umano operativo. La produzione rimane PR214/schema63 fino al rilascio autorizzato. I dati reali non sono fixture.
-

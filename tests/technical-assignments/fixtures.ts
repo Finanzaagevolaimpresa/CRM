@@ -10,12 +10,12 @@ import { technicalWorkCommand } from '../../src/lib/technical-work-contract';
 import type { TechnicalTargetReference } from '../../src/lib/technical-assignment-display';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 
-export async function technicalFixture(db: PrismaClient, admin: Person, passwordHash?: string) {
+export async function technicalFixture(db: PrismaClient, admin: Person, passwordHash?: string, secondTechnicalRole: 'consulente' | 'backoffice' = 'backoffice') {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   const salesA = await syntheticPerson(db, 'Commerciale A sintetico', 'commerciale', passwordHash);
   const salesB = await syntheticPerson(db, 'Commerciale B sintetico', 'commerciale', passwordHash);
   const techA = await syntheticPerson(db, 'Tecnico A sintetico', 'consulente', passwordHash);
-  const techB = await syntheticPerson(db, 'Tecnico B sintetico', 'backoffice', passwordHash);
+  const techB = await syntheticPerson(db, 'Tecnico B sintetico', secondTechnicalRole, passwordHash);
   // Legacy ownership is deliberate: the explicit scope must close its broader
   // dossier/ordinary-route fallback without overwriting the commercial owner.
   const client = await db.client.create({ data: { type: 'societa', displayName: 'Cliente tecnico A sintetico',

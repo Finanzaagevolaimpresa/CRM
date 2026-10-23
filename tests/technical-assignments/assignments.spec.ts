@@ -32,10 +32,10 @@ async function assignments(row: Row) {
 }
 async function prepareAssignment(page: Page, row: Row, person: Row['techA'], project = false) {
   await page.goto(management(row, project));
-  await page.getByLabel('Persona da incaricare', { exact: true }).selectOption(person.id);
+  await page.getByRole('combobox', { name: 'Persona da incaricare', exact: true }).selectOption(person.id);
   await page.getByRole('button', { name: 'Apri scelte per la persona', exact: true }).click();
   await expect(page).toHaveURL(new RegExp('recipient=' + person.id));
-  await page.getByLabel('Responsabilità', { exact: true }).selectOption('co_responsabile');
+  await page.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('co_responsabile');
   await page.getByLabel('Modificare i campi scelti', { exact: true }).check();
   await page.getByLabel('Aggiornare lo stato', { exact: true }).check();
   for (const name of ['Titolo', 'Stato', project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente']) await page.getByLabel(name, { exact: true }).check();
@@ -148,8 +148,8 @@ test('project operation has its own exact grant and native status changes do not
   const admin = await ac.newPage(), tech = await tc.newPage(); await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
   await assign(admin, row, row.techB, true); await prepareWork(tech, row, 'Descrizione progetto aggiornata', true);
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(1);
-  await tech.goto(work(row, true)); await tech.getByLabel('Operazione', { exact: true }).selectOption('update_status');
-  await tech.getByLabel('Nuovo stato', { exact: true }).selectOption('in_analisi');
+  await tech.goto(work(row, true)); await tech.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('update_status');
+  await tech.getByRole('combobox', { name: 'Nuovo stato', exact: true }).selectOption('in_analisi');
   await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
   await tech.getByLabel('Confermo soltanto le modifiche riepilogate.').check();
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(2);

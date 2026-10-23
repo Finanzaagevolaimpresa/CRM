@@ -50,4 +50,3 @@ test('schema64 restart retains technical work, exact documents, revoked assignme
   await expect(page.getByText('Ricarica il lavoro corrente', { exact: true })).toHaveCount(0);
   await live.close(); await revoked.close(); await sales.close();
 });
-

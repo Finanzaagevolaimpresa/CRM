@@ -18,7 +18,7 @@ async function main() {
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
   for (let index = 0; index < 4; index++) {
-    const f = await technicalFixture(db, admin, hash);
+    const f = await technicalFixture(db, admin, hash, index === 3 ? 'consulente' : 'backoffice');
     for (const doc of f.documents) {
       const dest = localPathFromStoragePath(doc.doc.storagePath);
       await mkdir(path.dirname(dest), { recursive: true }); await writeFile(dest, doc.bytes, { flag: 'wx', mode: 0o600 });
