@@ -1,7 +1,7 @@
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { withSerializableTransaction } from './serializable';
+import { withSerializableTransaction, serializableOptions, mapSerializableConflict, SerializableConflictError } from './serializable';
 import { updateActor } from './record-updates';
 import { recordUpdateEmailAuthority } from './record-update-email-authority';
 import { adminRequestSubmission, adminRequestSubmissionDigest } from './admin-request-contract';
@@ -12,6 +12,18 @@ import { appendAdminRequest, lockAdminRequest, requestCommandReceipt, requestCom
 import { admitAdminRequestDraft } from './admin-request-draft-source';
 
 type Tx = Prisma.TransactionClient;
+async function readRequestTransaction<T>(db: PrismaClient, read: (tx: Tx) => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await db.$transaction(read, { ...serializableOptions, timeout: 30_000 }); }
+    catch (error) {
+      const mapped = mapSerializableConflict(error);
+      // Concurrent author/Admin views can meet the same request and identity
+      // locks in opposite orders. Restart only a confirmed aborted READ, with
+      // fresh session/origin admission. Never retry commands or uncertain errors.
+      if (!(mapped instanceof SerializableConflictError) || attempt === 3) throw mapped;
+    }
+  }
+}
 async function session(tx: Tx, claimed: AuthSession) {
   const auth = await updateActor(tx, claimed);
   if (!auth.registry.live || !['admin', 'commerciale', 'consulente', 'backoffice'].includes(auth.actor.role)) requestDenied();
@@ -31,7 +43,7 @@ async function finish(tx: Tx, auth: Awaited<ReturnType<typeof session>>, until =
   if (now.getTime() >= until) requestDenied();
 }
 export async function readAdminRequestEntry(db: PrismaClient, claimed: AuthSession, rawSubject: unknown) {
-  return withSerializableTransaction(db, async tx => {
+  return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
     if (auth.isAdmin) requestDenied();
     const origin = await admitAdminRequestOrigin(tx, auth.actor.id, requestSubject.parse(rawSubject));
@@ -95,7 +107,7 @@ export async function changeAdminRequest(db: PrismaClient, claimed: AuthSession,
   });
 }
 export async function readAdminRequest(db: PrismaClient, claimed: AuthSession, id: string) {
-  return withSerializableTransaction(db, async tx => {
+  return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed), row = await admittedRequest(tx, auth, id);
     const events = await tx.$queryRaw<RequestEvent[]>`SELECT * FROM "AdminRequestEvent" WHERE "requestId"=${id}::uuid ORDER BY revision`;
     const draft = auth.isAdmin ? await requestDraftOrigin(tx, id) : null;
@@ -114,7 +126,7 @@ export class AdminRequestQueueLimitError extends Error {
 export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '') {
   const skip = (z.number().int().min(1).max(200).parse(page) - 1) * 30;
   const term = z.string().trim().max(160).parse(query).toLocaleLowerCase('it-IT');
-  return withSerializableTransaction(db, async tx => {
+  return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
     // Paginate admitted rows, never the unfiltered window: revoked origins
     // must not hide later requests or contribute to counts/next-page hints.
@@ -144,7 +156,7 @@ export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSessi
   });
 }
 export async function readAdminRequestDraftPrefill(db: PrismaClient, claimed: AuthSession, id: string) {
-  return withSerializableTransaction(db, async tx => {
+  return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
     if (!auth.isAdmin) requestDenied();
     const admitted = await admitAdminRequestDraft(tx, auth.actor, id);
@@ -158,7 +170,7 @@ export async function readAdminRequestDraftPrefill(db: PrismaClient, claimed: Au
  * renewal. A foreign session, revoked origin or changed user cannot obtain it. */
 export async function readAdminRequestOutcome(db: PrismaClient, claimed: AuthSession, commandId: string) {
   z.string().uuid().parse(commandId);
-  return withSerializableTransaction(db, async tx => {
+  return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
     const [event] = await tx.$queryRaw<RequestEvent[]>`SELECT * FROM "AdminRequestEvent" WHERE "commandId"=${commandId}::uuid`;
     if (!event) { await finish(tx, auth); return { status: 'NOT_FOUND' as const }; }

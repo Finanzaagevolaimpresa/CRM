@@ -266,3 +266,25 @@ test('pagination and search cross revoked origins without hiding admitted reques
   assert.equal((await readAdminRequestQueue(db, f.salesA.session, 1, `${term} revoked`)).hasNext, false);
   assert.equal(await db.auditLog.count(), before);
 });
+
+test('simultaneous author, personal Admin and linked email reads resolve without another event or disclosure', options, async () => {
+  const f = await fixture(), { receipt } = await submit(f);
+  const p = await readAdminRequestDraftPrefill(db, admin.session, receipt.requestId);
+  await saveApprovedMessageDraft(db, admin.session, requestDraft(p, box.address));
+  const before = await db.auditLog.count();
+  for (let i = 0; i < 3; i++) {
+    const [own, review, messages] = await Promise.all([
+      readAdminRequest(db, f.salesA.session, receipt.requestId),
+      readAdminRequest(db, admin.session, receipt.requestId),
+      readPracticeCommunications(db, admin.session, p.context),
+    ]);
+    assert.equal(own.status, 'DRAFT_PREPARED'); assert.equal(own.draftHref, null);
+    assert.doesNotMatch(JSON.stringify(own), /synthetic-recipient|Testo composto|snapshotHash/);
+    assert.equal(review.status, 'DRAFT_PREPARED'); assert.ok(review.draftHref);
+    assert.ok(messages.messages.some(m => m.id === receipt.requestId));
+  }
+  assert.equal(await db.auditLog.count(), before);
+  assert.deepEqual(await counts(receipt.requestId), { events: 2, audits: 2 });
+  assert.equal(await db.communicationVersion.count({ where: { messageId: receipt.requestId } }), 1);
+  assert.equal(await db.communicationAttempt.count({ where: { messageId: receipt.requestId } }), 0);
+});
