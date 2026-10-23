@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useActionState, useState } from 'react';
+import { startTransition, useActionState, useState, useSyncExternalStore } from 'react';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from '@/lib/technical-assignment-service';
 import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
@@ -18,6 +18,7 @@ const initial: TechnicalAssignmentManagementState = { ok: false, message: '' };
 const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const when = (value: string) => new Date(value).toLocaleString('it-IT');
+const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 function remember(ref: TechnicalAssignmentReference, commandId: string) {
   const url = new URL(window.location.href);
   url.searchParams.set('recipient', ref.recipientId); url.searchParams.set('assignmentDecision', commandId);
@@ -25,12 +26,13 @@ function remember(ref: TechnicalAssignmentReference, commandId: string) {
 }
 function Recovery({ reference, commandId, action }: { reference: TechnicalAssignmentReference; commandId: string;
   action: TechnicalAssignmentManagementAction }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(action, initial);
   return <section className="space-y-3 rounded-xl border border-amber-400 bg-amber-50 p-4" aria-label="Verifica esito incarico">
     <p>Verifica l’esito prima di decidere un altro incarico. Questa consultazione non modifica i permessi.</p>
     <form action={submit}><input type="hidden" name="reference" value={JSON.stringify(reference)} />
       <input type="hidden" name="commandId" value={commandId} />
-      <button className={button} disabled={pending}>Verifica esito della decisione</button></form>
+      <button className={button} disabled={!ready || pending}>Verifica esito della decisione</button></form>
     <p role="status">{state.message}</p>
     {state.outcome?.status === 'RECORDED' && <a className="font-semibold underline" href={technicalManagementPath(reference)}>Ricarica gli incarichi correnti</a>}
   </section>;
@@ -38,9 +40,10 @@ function Recovery({ reference, commandId, action }: { reference: TechnicalAssign
 
 function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
   preview: NonNullable<TechnicalAssignmentManagementState['preview']>; blocked: boolean }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(confirmAction, initial);
   const assign = 'selection' in preview.input ? preview.input.selection : null;
-  const locked = blocked || pending || state.ok || !!state.uncertain;
+  const locked = !ready || blocked || pending || state.ok || !!state.uncertain;
   return <section className="min-w-0 space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo incarico">
     <h2 className="text-xl font-bold">{assign ? 'Conferma incarico e perimetro' : 'Conferma revoca dell’incarico'}</h2>
     <p className="break-words"><strong>{preview.recipient.name}</strong> · {preview.recipient.email}</p>
@@ -75,6 +78,7 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
 
 export function TechnicalAssignmentManagement({ data, initialCommandId, revocationCommandId, recoverCommandId, ...actions }: Actions & {
   data: Data; initialCommandId: string; revocationCommandId: string; recoverCommandId?: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>('supporto');
   const [readable, setReadable] = useState<string[]>([]), [editable, setEditable] = useState<string[]>([]);
   const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>([]);
@@ -95,11 +99,11 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
         documentId: doc.documentId, fileId: doc.fileId, version: doc.version, contentSha256: doc.contentSha256,
         contextSha256: doc.contextSha256, allowDownload: chosenDocuments[doc.fileId] })) }, reason } : null;
   const valid = data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
-  const blocked = submitted || !!recoverCommandId;
+  const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   const prepared = previewGeneration === generation ? preview.preview : undefined;
   const preparedRevoke = preparedRevokeGeneration === revokeGeneration ? revocation.preview : undefined;
-  return <div className="min-w-0 space-y-6">
+  return <div className="min-w-0 space-y-6" data-technical-editor-ready={ready ? 'true' : 'false'}>
     <p>Scegli una persona e il lavoro che potrà svolgere su questo record. Gli incarichi di altri tecnici e il referente commerciale restano distinti.</p>
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
       <label className="block font-semibold">Persona da incaricare<select name="recipient" className={control} defaultValue={data.recipient?.id ?? ''} disabled={blocked} required>

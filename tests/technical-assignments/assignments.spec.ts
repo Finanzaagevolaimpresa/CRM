@@ -30,6 +30,20 @@ async function assignments(row: Row) {
   const [r] = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalAssignment" WHERE "practiceId"=${row.practiceId} OR "projectId"=${row.projectId}`;
   return Number(r.n);
 }
+async function coldEditor(page: Page, url: string, marker: string, control: string, button: string) {
+  let release!: () => void;
+  const scripts = new Promise<void>(resolve => { release = resolve; });
+  const pattern = /\/_next\/static\/.*\.js(?:\?.*)?$/;
+  await page.route(pattern, async route => { await scripts; await route.continue(); });
+  try {
+    await page.goto(url, { waitUntil: 'commit' });
+    await expect(page.locator(`[${marker}="false"]`)).toBeVisible();
+    await expect(page.getByRole('combobox', { name: control, exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: button, exact: true })).toBeDisabled();
+  } finally { release(); await page.unroute(pattern); }
+  await expect(page.locator(`[${marker}="true"]`)).toBeVisible();
+  await expect(page.getByRole('combobox', { name: control, exact: true })).toBeEnabled();
+}
 async function prepareAssignment(page: Page, row: Row, person: Row['techA'], project = false) {
   await page.goto(management(row, project));
   await page.getByRole('combobox', { name: 'Persona da incaricare', exact: true }).selectOption(person.id);
@@ -47,6 +61,8 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   await expect(page.getByText(row.documents[2].title, { exact: false })).toHaveCount(0);
   await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600_000).toISOString().slice(0, 16));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Incarico sintetico qualificazione browser');
+  await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
+  expect(JSON.parse(await page.locator('input[name="command"]').first().inputValue()).selection.responsibility).toBe('co_responsabile');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
@@ -109,9 +125,13 @@ test('two technicians use exact personal assignments, private preview/download a
   const row = f.rows[0], ac = await browser.newContext(), tc = await browser.newContext(), bc = await browser.newContext();
   const admin = await ac.newPage(), tech = await tc.newPage(), second = await bc.newPage();
   await login(admin, f.adminEmail, true); await login(tech, row.techA.email); await login(second, row.techB.email);
+  await coldEditor(admin, management(row) + '?recipient=' + row.techA.id, 'data-technical-editor-ready', 'Responsabilità', 'Anteprima dell’incarico');
+  expect(await assignments(row)).toBe(0);
   await prepareAssignment(admin, row, row.techA); expect(await assignments(row)).toBe(0); await screenshot(admin, 'assignment-management');
   await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click(); await expect.poll(() => assignments(row)).toBe(1);
   await assign(admin, row, row.techB);
+  await coldEditor(tech, work(row), 'data-technical-work-ready', 'Operazione', 'Prepara riepilogo della modifica');
+  expect(await count(row)).toBe(0);
   await prepareWork(tech, row, 'Avanzamento nativo sintetico'); await screenshot(tech, 'assigned-work');
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row)).toBe(1);
   await second.goto(work(row)); await expect(second.getByText('Avanzamento nativo sintetico', { exact: true }).first()).toBeVisible();

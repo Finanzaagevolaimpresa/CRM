@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useActionState, useState } from 'react';
+import { startTransition, useActionState, useState, useSyncExternalStore } from 'react';
 import type { readTechnicalWork } from '@/lib/technical-assignment-access';
 import type { previewTechnicalWork, readTechnicalWorkOutcome } from '@/lib/technical-work-service';
 import { technicalWorkPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
@@ -10,6 +10,7 @@ export type TechnicalWorkState = { ok: boolean; message: string; uncertain?: boo
   preview?: Awaited<ReturnType<typeof previewTechnicalWork>>; outcome?: Awaited<ReturnType<typeof readTechnicalWorkOutcome>> };
 export type TechnicalWorkAction = (previous: TechnicalWorkState, form: FormData) => Promise<TechnicalWorkState>;
 const initial: TechnicalWorkState = { ok: false, message: '' };
+const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3 disabled:bg-slate-100';
 const dateFields = new Set(['dueDate', 'submittedAt', 'nextClientUpdateAt']);
@@ -18,11 +19,12 @@ const statuses = { Project: ['idea', 'raccolta_dati', 'in_analisi', 'preanalisi_
     'presentata', 'integrazione_richiesta', 'in_istruttoria', 'approvata', 'respinta'] } as const;
 
 export function TechnicalWorkRecovery({ target, commandId, action }: { target: TechnicalTargetReference; commandId: string; action: TechnicalWorkAction }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(action, initial);
   return <section className="space-y-3 rounded-xl border border-amber-400 bg-amber-50 p-4" aria-label="Verifica esito del lavoro tecnico">
     <p>Un salvataggio è stato preparato. Verifica l’esito prima di ripeterlo.</p>
     <form action={submit}><input type="hidden" name="target" value={JSON.stringify(target)} />
-      <input type="hidden" name="commandId" value={commandId} /><button className={button} disabled={pending}>Verifica esito del salvataggio</button></form>
+      <input type="hidden" name="commandId" value={commandId} /><button className={button} disabled={!ready || pending}>Verifica esito del salvataggio</button></form>
     <p role="status">{state.message}</p>
     {state.outcome?.status === 'RECORDED' && <a href={technicalWorkPath(target)} className="font-semibold underline">Ricarica il lavoro corrente</a>}
   </section>;
@@ -30,8 +32,9 @@ export function TechnicalWorkRecovery({ target, commandId, action }: { target: T
 
 function Confirmation({ preview, action, recovery, edit }: { preview: NonNullable<TechnicalWorkState['preview']>;
   action: TechnicalWorkAction; recovery: TechnicalWorkAction; edit: () => void }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(action, initial), [sent, setSent] = useState(false);
-  const locked = sent || pending;
+  const locked = !ready || sent || pending;
   return <section className="space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo modifica tecnica">
     <h3 className="text-lg font-bold">Riepilogo della modifica</h3>
     <div className="grid min-w-0 gap-3 sm:grid-cols-2">{preview.fields.map(field => <div key={field.key} className="min-w-0 rounded-xl bg-white p-3">
@@ -56,6 +59,7 @@ function Confirmation({ preview, action, recovery, edit }: { preview: NonNullabl
 
 export function TechnicalWorkForm({ data, commandId: initialId, previewAction, confirmAction, receiptAction }:
   { data: Data; commandId: string; previewAction: TechnicalWorkAction; confirmAction: TechnicalWorkAction; receiptAction: TechnicalWorkAction }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(previewAction, initial);
   const [commandId, setCommandId] = useState(initialId), [action, setAction] = useState<'update_fields' | 'update_status'>(
     data.actions.includes('update_fields') ? 'update_fields' : 'update_status');
@@ -64,9 +68,9 @@ export function TechnicalWorkForm({ data, commandId: initialId, previewAction, c
   const [error, setError] = useState('');
   const editable = data.fields.filter(field => data.editableFields.some(key => key === field.key));
   const preview = state.preview?.command.commandId === commandId ? state.preview : null;
-  const locked = pending || !!preview;
+  const locked = !ready || pending || !!preview;
   function changed() { setCommandId(crypto.randomUUID()); setError(''); }
-  return <section className="min-w-0 space-y-4" aria-label="Lavora sul tuo incarico">
+  return <section className="min-w-0 space-y-4" aria-label="Lavora sul tuo incarico" data-technical-work-ready={ready ? 'true' : 'false'}>
     <h2 className="text-xl font-bold">Aggiorna il lavoro tecnico</h2>
     <form action={submit} onSubmit={event => {
       event.preventDefault();
