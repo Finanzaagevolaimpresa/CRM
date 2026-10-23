@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { startTransition, useActionState, useState } from 'react';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from '@/lib/technical-assignment-service';
 import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
@@ -111,7 +111,13 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     {data.recipient && <>
       <h2 className="break-words text-xl font-bold">{data.recipient.name} · {data.recipient.email}</h2>
       {!data.recipientEligible && <p role="status">Un nuovo incarico non è disponibile con lo stato, i permessi o le selezioni di lettura correnti. Gli accessi esistenti non vengono ampliati.</p>}
-      {data.recipientEligible && <form action={prepare} onReset={event => event.preventDefault()} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
+      {data.recipientEligible && <form action={prepare} onSubmit={event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        setPreviewGeneration(generation);
+        // Preview keeps the editor intact; only confirmation consumes the command.
+        startTransition(() => prepare(form));
+      }} onChange={changed} className="space-y-4">
         <fieldset className="min-w-0 space-y-4" disabled={blocked || preparing || preparingRevoke}>
           <label className="block font-semibold">Responsabilità<select className={control} value={responsibility}
             onChange={event => setResponsibility(event.target.value as TechnicalAssignmentSelection['responsibility'])}>
@@ -138,7 +144,12 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       </form>}
       {prepared && <div onSubmitCapture={event => { if ((event.target as HTMLFormElement).elements.namedItem('confirmed')) setSubmitted(true); }}>
         <Confirm key={prepared.token} {...actions} preview={prepared} blocked={blocked} /></div>}
-      {data.currentAssignmentId && data.currentRevokedAt === null && <form action={revokePreview} onReset={event => event.preventDefault()} onSubmit={() => setPreparedRevokeGeneration(revokeGeneration)} className="space-y-3 rounded-xl border p-4">
+      {data.currentAssignmentId && data.currentRevokedAt === null && <form action={revokePreview} onSubmit={event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        setPreparedRevokeGeneration(revokeGeneration);
+        startTransition(() => revokePreview(form));
+      }} className="space-y-3 rounded-xl border p-4">
         <h2 className="text-xl font-bold">Revoca l’incarico della persona</h2>
         <fieldset disabled={blocked || preparing || preparingRevoke} className="space-y-3">
           <label className="block font-semibold">Motivo della revoca<textarea className={control} required minLength={3} maxLength={500} value={revokeReason} onChange={event => { setRevokeReason(event.target.value); setRevokeGeneration(old => old + 1); }} /></label>

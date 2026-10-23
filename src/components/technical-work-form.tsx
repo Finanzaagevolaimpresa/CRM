@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { startTransition, useActionState, useState } from 'react';
 import type { readTechnicalWork } from '@/lib/technical-assignment-access';
 import type { previewTechnicalWork, readTechnicalWorkOutcome } from '@/lib/technical-work-service';
 import { technicalWorkPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
@@ -68,8 +68,11 @@ export function TechnicalWorkForm({ data, commandId: initialId, previewAction, c
   function changed() { setCommandId(crypto.randomUUID()); setError(''); }
   return <section className="min-w-0 space-y-4" aria-label="Lavora sul tuo incarico">
     <h2 className="text-xl font-bold">Aggiorna il lavoro tecnico</h2>
-    <form action={submit} onReset={event => event.preventDefault()} onSubmit={event => {
-      if (action === 'update_fields' && !selected.length) { event.preventDefault(); setError('Scegli almeno un campo da modificare.'); }
+    <form action={submit} onSubmit={event => {
+      event.preventDefault();
+      if (action === 'update_fields' && !selected.length) { setError('Scegli almeno un campo da modificare.'); return; }
+      const form = new FormData(event.currentTarget);
+      startTransition(() => submit(form));
     }} className="space-y-4">
       <input type="hidden" name="target" value={JSON.stringify(data.target)} />
       <input type="hidden" name="command" value={JSON.stringify({ commandId, assignmentId: data.assignmentId,
