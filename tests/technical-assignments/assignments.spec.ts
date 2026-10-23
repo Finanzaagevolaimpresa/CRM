@@ -85,7 +85,7 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true });
 }
 async function ordinaryPageDenied(page: Page, url: string, heading: string, row: Row) {
-  // Legacy dossier/project pages render an explicit denial with HTTP 200.
+  // The legacy client dossier renders an explicit denial with HTTP 200.
   // Assert both that denial and the absence of record data, including streamed HTML.
   const response = await page.goto(url); expect(response?.status()).toBe(200);
   await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
@@ -114,8 +114,10 @@ test('two technicians use exact personal assignments, private preview/download a
   const download = await bc.request.get(work(row) + '/documents/' + row.documents[1].fileId + '?download=1');
   expect(download.status()).toBe(200); expect(download.headers()['content-disposition']).toMatch(/^attachment;/);
   await ordinaryPageDenied(second, '/clients/' + row.clientId, 'Cliente non trovato o non accessibile', row);
-  await ordinaryPageDenied(second, '/projects/' + row.otherProjectId, 'Progetto non trovato', row);
-  for (const url of [management(row), work(row) + '/documents/' + row.documents[2].fileId]) expect((await bc.request.get(url)).status(), url).toBe(404);
+  for (const url of ['/projects/' + row.otherProjectId, management(row), work(row) + '/documents/' + row.documents[2].fileId]) {
+    const denied = await bc.request.get(url); expect(denied.status(), url).toBe(404);
+    for (const text of [...row.excluded, 'PROGETTO_ESTRANEO_NON_ASSEGNATO', row.documents[2].text]) expect(await denied.text()).not.toContain(text);
+  }
   const current = await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } });
   expect(current.commercialOwnerId).toBe(row.salesA.id); expect(current.technicalOwnerId).toBe(row.techA.id);
   await ac.close(); await tc.close(); await bc.close();
