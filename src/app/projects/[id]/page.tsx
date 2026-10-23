@@ -57,6 +57,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Chi aggiornare</SecondaryLink>}
     {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
+    {session.role === 'admin' && <SecondaryLink href={`/projects/${id}/assignments`}>Gestisci incarichi tecnici e perimetri</SecondaryLink>}
     {hasPermission(session, 'project.write') && canEditProject(session, project) && <Card title="Gestisci progetto">
       <ProjectLifecycleControls id={project.id} updatedAt={project.updatedAt.toISOString()} state="active" />
     </Card>}

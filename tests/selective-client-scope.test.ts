@@ -29,7 +29,15 @@ function project(row: Row, select: Row): Row {
 function database(tables: Table) {
   const calls: Array<{ table: string; operation: string; query?: Query }> = [];
   const db = new Proxy({}, { get: (_target, name: string) => {
-    if (name === '$queryRaw') return async () => { calls.push({ table: 'User', operation: 'lock' }); return [{ id: 'recipient', active: true, deletedAt: null }]; };
+    if (name === '$queryRaw') return async (parts: TemplateStringsArray | Prisma.Sql) => {
+      const sql = ('strings' in parts ? parts.strings : parts).join('?');
+      if (sql.includes('FROM "TechnicalAssignment"')) {
+        calls.push({ table: 'TechnicalAssignment', operation: 'read', query: { where: {},
+          select: { id: true, kind: true, projectId: true, practiceId: true } } }); return [];
+      }
+      assert.match(sql, /FROM "User"/);
+      calls.push({ table: 'User', operation: 'lock' }); return [{ id: 'recipient', active: true, deletedAt: null }];
+    };
     return new Proxy({}, { get: (_delegate, operation: string) => async (query: Query) => {
       assert.ok(['findMany', 'findFirst'].includes(operation), `unexpected mutation: ${name}.${operation}`);
       calls.push({ table: name, operation, query });
@@ -70,7 +78,7 @@ test('no historical selection performs no unrelated resource enumeration', async
   const { db, calls } = database({});
   const scope = await loadSelectiveClientScope(db, 'recipient');
   assert.ok(Object.values(scope).every(value => value.length === 0));
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map(row => row.table), ['selectiveClientGrant', 'TechnicalAssignment']);
 });
 
 test('revoked, expired and invalid selections still exclude only the recipient client graph', async () => {

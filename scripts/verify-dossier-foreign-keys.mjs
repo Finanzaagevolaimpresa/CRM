@@ -54,3 +54,12 @@ assert.doesNotMatch(diff, /DROP TABLE "SelectiveCompanyGeneration"|ALTER TABLE "
 console.log(JSON.stringify({ dossierForeignKeySchemaParity: 'PASS', constraints: expected.length, clientReadGrantConstraints: grants.length,
   communicationConstraints: messageKeys.length, ordinaryEmailConstraints: ordinaryKeys.length, selectiveLeadConstraints: leadKeys.length,
   selectiveClientConstraints: clientKeys.length, selectivePracticeConstraints: practiceKeys.length }));
+
+const technical = readFileSync('prisma/migrations/20261022200000_technical_assignments_v1/migration.sql', 'utf8');
+const technicalKeys = [...technical.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)]
+  .flatMap(([,table,columns]) => [...columns.matchAll(/(?:^|\n)\s*(?:"([^"]+)"|([a-z][A-Za-z]*))[^\n]* REFERENCES /g)]
+    .map(([,quoted,plain]) => table+'_'+(quoted ?? plain)+'_fkey'));
+technicalKeys.push('TechnicalWorkCommand_assignmentId_assignmentRevision_fkey');
+assert.equal(technicalKeys.length, 10, 'Every technical assignment foreign key must be covered');
+assert.deepEqual(technicalKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove technical foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "(?:TechnicalAssignment|TechnicalWorkCommand)|ALTER TABLE "(?:TechnicalAssignment[^"]*|TechnicalWorkCommand)"[^;]*DROP COLUMN/);

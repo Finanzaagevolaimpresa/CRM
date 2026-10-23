@@ -25,7 +25,7 @@ test('R13 is dormant and the migration remains outside the automatic schema49 ch
   assert.equal(marketingWithdrawalRuntime(), null);
   assert.equal((await createWithdrawalPost()(new Request('https://r13.invalid/'))).status, 503);
   assert.equal(PROPOSED_POLICY.approvalReference, null);
-  assert.equal(readdirSync('prisma/migrations').filter(name => /^\d/u.test(name)).length, 63);
+  assert.equal(readdirSync('prisma/migrations').filter(name => /^\d/u.test(name)).length, 64);
   const sql = readFileSync('prisma/proposals/r13-marketing-preferences/migration.sql', 'utf8');
   assert.match(sql, /BEGIN;[\s\S]*COMMIT;/u);
   assert.doesNotMatch(sql, /(?:INSERT INTO|UPDATE|ALTER TABLE|DELETE FROM) "(?:Lead|PrivacyEvidenceReceipt|PrivacyNoticeVersion)"/u);

@@ -1,0 +1,39 @@
+import { randomUUID } from 'node:crypto';
+import { notFound } from 'next/navigation';
+import { z } from 'zod';
+import { Card, PageHeader } from '@/components/ui';
+import { SecondaryLink } from '@/components/actions';
+import { TechnicalWorkForm, TechnicalWorkRecovery } from '@/components/technical-work-form';
+import { requireSession } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
+import { readTechnicalWork } from '@/lib/technical-assignment-access';
+import { prepareTechnicalWork, saveTechnicalWork, checkTechnicalWork } from '@/lib/technical-work-actions';
+import { technicalResponsibilityLabels, technicalTargetReference, technicalWorkPath } from '@/lib/technical-assignment-display';
+export const dynamic = 'force-dynamic';
+export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
+  searchParams: Promise<{ workDecision?: string }> }) {
+  const session = await requireSession(), p = await params;
+  const target = technicalTargetReference.safeParse({ kind: p.kind === 'projects' ? 'Project' : p.kind === 'practices' ? 'TechnicalPractice' : null, targetId: p.id });
+  if (!target.success) notFound();
+  const recovery = (await searchParams).workDecision;
+  if (recovery) {
+    if (!z.string().uuid().safeParse(recovery).success) notFound();
+    return <div className="space-y-6"><PageHeader title="Verifica del salvataggio tecnico" description="Questa verifica non ripete la modifica e non rinnova l’incarico." />
+      <TechnicalWorkRecovery target={target.data} commandId={recovery} action={checkTechnicalWork} /></div>;
+  }
+  const data = await readTechnicalWork(prisma, session, target.data).catch(() => null);
+  if (!data) notFound();
+  return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
+    description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza ${new Date(data.expiresAt).toLocaleString('it-IT')}`} />
+    <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
+    <Card title="Informazioni disponibili"><dl className="grid min-w-0 gap-4 sm:grid-cols-2">{data.fields.map(field => <div key={field.key} className="min-w-0">
+      <dt className="font-semibold">{field.label}</dt><dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></Card>
+    <Card title="Documenti tecnici assegnati">{!data.documents.length ? <p>Nessuna versione documentale assegnata.</p>
+      : <ul className="space-y-4">{data.documents.map(doc => <li className="min-w-0 space-y-2" key={doc.fileId}>
+        <p className="break-words font-semibold">{doc.title} · versione {doc.version}</p><div className="flex flex-wrap gap-3">
+          <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}`} target="_blank" rel="noopener noreferrer">Visualizza {doc.fileName}</a>
+          {doc.allowDownload && <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}?download=1`}>Scarica versione</a>}</div></li>)}</ul>}</Card>
+    {!!data.actions.length && <Card title="Operazioni assegnate"><TechnicalWorkForm data={data} commandId={randomUUID()}
+      previewAction={prepareTechnicalWork} confirmAction={saveTechnicalWork} receiptAction={checkTechnicalWork} /></Card>}
+  </div>;
+}

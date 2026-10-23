@@ -88,15 +88,28 @@ test('mobile registration without payment and explicit later payment link', asyn
   await expect(page.getByRole('heading', { name: 'Pagamento collegato al servizio' })).toBeVisible();
   expect((await db.clientService.findUniqueOrThrow({ where: { id: service.id } })).paymentId).toBe(f.payment.id);
 });
-test('lost response survives reload and reconciliation never creates another service', async ({ page }) => {
-  await login(page); await prepare(page);
-  const route = `**/clients/${f.client.id}/services/new`;
+async function loseCommittedResponse(page: Page, route: string, button: string) {
+  let forwarded = 0, completed!: () => void, failed!: (error: unknown) => void;
+  const finished = new Promise<void>((resolve, reject) => { completed = resolve; failed = reject; });
   await page.route(route, async intercepted => {
     if (intercepted.request().method() === 'POST' && intercepted.request().headers()['next-action']) {
-      await intercepted.fetch(); await intercepted.abort('failed'); await page.unroute(route);
+      forwarded++;
+      try {
+        const response = await intercepted.fetch(); expect(response.status()).toBeLessThan(400);
+        await intercepted.abort('failed'); completed();
+      } catch (error) { failed(error); }
     } else await intercepted.continue();
   });
-  await page.getByRole('button', { name: 'Registra servizio acquistato', exact: true }).click();
+  await page.getByRole('button', { name: button, exact: true }).click();
+  // The recovery button appears as soon as the command is retained. Reload only
+  // after the intercepted action completed and its response was actually lost.
+  await finished; await page.unroute(route); expect(forwarded).toBe(1);
+}
+
+test('lost response survives reload and reconciliation never creates another service', async ({ page }) => {
+  await login(page); await prepare(page);
+  await loseCommittedResponse(page, `**/clients/${f.client.id}/services/new`, 'Registra servizio acquistato');
+  await expect.poll(() => db.clientService.count({ where: { clientId: f.client.id } })).toBe(1);
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
@@ -115,13 +128,8 @@ test('lost payment-link response survives reload into a read-only reconciliation
   await page.getByRole('button', { name: 'Controlla riepilogo', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Riepilogo prima della registrazione' })).toBeVisible();
   await page.getByRole('checkbox').check();
-  const route = `**/clients/${f.client.id}/services/new?serviceId=${service.id}`;
-  await page.route(route, async intercepted => {
-    if (intercepted.request().method() === 'POST' && intercepted.request().headers()['next-action']) {
-      await intercepted.fetch(); await intercepted.abort('failed'); await page.unroute(route);
-    } else await intercepted.continue();
-  });
-  await page.getByRole('button', { name: 'Collega pagamento', exact: true }).click();
+  await loseCommittedResponse(page, `**/clients/${f.client.id}/services/new?serviceId=${service.id}`, 'Collega pagamento');
+  await expect.poll(async () => (await db.clientService.findUniqueOrThrow({ where: { id: service.id } })).paymentId).toBe(f.payment.id);
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Verifica esito', exact: true })).toBeVisible();

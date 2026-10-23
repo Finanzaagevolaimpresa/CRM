@@ -56,7 +56,7 @@ jobs:
           evidence="$RUNNER_TEMP/lead-edit-preparation"
           mkdir -p "$evidence"
           echo "LEAD_EDIT_EVIDENCE=$evidence" >> "$GITHUB_ENV"
-          node scripts/m4/verify-schema.mjs > "$evidence/schema63-binding.json"
+          node scripts/m4/verify-schema.mjs > "$evidence/current-schema64-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           historical="$RUNNER_TEMP/lead-edit-schema62"
           mkdir -p "$historical"
@@ -77,6 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          npx prisma migrate deploy
           node --import tsx --test --test-reporter=tap tests/selective-lead-edit-access-db.test.ts | tee "$LEAD_EDIT_EVIDENCE/postgresql.tap"
           grep -Fx '# tests 16' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
           grep -Fx '# pass 16' "$LEAD_EDIT_EVIDENCE/postgresql.tap"
@@ -85,6 +86,7 @@ jobs:
       - name: Prepare the isolated native browser
         if: matrix.target == 'browser'
         run: |
+          npx prisma migrate deploy
           npx playwright install --with-deps chromium
           node --import tsx tests/selective-lead-edit/provision-browser.ts
       - name: Native personal decision, restricted edit, uncertain result and session revocation

@@ -1,0 +1,73 @@
+'use server';
+
+import { headers, cookies } from 'next/headers';
+import { revalidatePath } from 'next/cache';
+import { z, ZodError } from 'zod';
+import type { TechnicalAssignmentManagementState } from '@/components/technical-assignment-management';
+import { requireSession } from './auth';
+import { prisma } from './prisma';
+import { isAllowedMutationOrigin } from './application-security-policy';
+import { loadActivePrivilegedStepUpKey } from './application-key-registry';
+import { privilegedStepUpCookieName, requireEnforcedPrivilegedMutation } from './privileged-access';
+import { technicalAssignmentReference } from './technical-assignment-decision';
+import { confirmTechnicalAssignment, previewTechnicalAssignment, readTechnicalAssignmentOutcome } from './technical-assignment-service';
+import { TechnicalAssignmentError } from './technical-assignment-transaction';
+import { technicalManagementPath } from './technical-assignment-display';
+
+function failure(error: unknown): TechnicalAssignmentManagementState {
+  if (error instanceof ZodError || error instanceof SyntaxError) return { ok: false,
+    message: 'Dati non validi. Ricarica e prepara un nuovo riepilogo.' };
+  if (error instanceof TechnicalAssignmentError) return { ok: false, message: error.code === 'STALE'
+    ? 'Stato o permessi cambiati. Ricarica e prepara un nuovo riepilogo.'
+    : 'Operazione non consentita con la sessione e l’abilitazione correnti.' };
+  return { ok: false, uncertain: true, message: 'Esito non confermato. Verifica la decisione prima di ripetere un’operazione.' };
+}
+function json(form: FormData, name: string) {
+  const raw = form.get(name);
+  if (typeof raw !== 'string' || raw.length > 24_000) throw new TechnicalAssignmentError('DENIED');
+  return JSON.parse(raw) as unknown;
+}
+async function origin() {
+  const h = await headers();
+  if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
+    configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new TechnicalAssignmentError('DENIED');
+}
+export async function prepareTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  const session = await requireSession();
+  try {
+    await origin();
+    const ref = technicalAssignmentReference.parse(json(form, 'reference'));
+    const operation = z.enum(['ASSIGN', 'REVOKE']).parse(form.get('operation'));
+    const preview = await previewTechnicalAssignment(prisma, session, ref, operation, json(form, 'command'));
+    return { ok: true, message: 'Riepilogo pronto. Nessun incarico è stato modificato.', preview };
+  } catch (error) { return failure(error); }
+}
+export async function saveTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  const session = await requireSession();
+  await requireEnforcedPrivilegedMutation(session, 'TECHNICAL_ASSIGNMENT_MANAGE');
+  try {
+    await origin();
+    const ref = technicalAssignmentReference.parse(json(form, 'reference'));
+    const operation = z.enum(['ASSIGN', 'REVOKE']).parse(form.get('operation'));
+    const store = await cookies(), key = await loadActivePrivilegedStepUpKey(prisma);
+    if (!key) throw new TechnicalAssignmentError('UNAVAILABLE');
+    const receipt = await confirmTechnicalAssignment(prisma, session, { key,
+      sessionToken: store.get(process.env.AUTH_COOKIE_NAME ?? 'fai_crm_session')?.value ?? '',
+      stepUpToken: store.get(privilegedStepUpCookieName)?.value ?? '' }, ref, operation, json(form, 'command'),
+      String(form.get('token') ?? ''), form.get('confirmed') === 'on');
+    revalidatePath(technicalManagementPath(ref));
+    for (const path of ['/projects', '/technical-office/practices', '/technical-work', '/dashboard', '/search', '/notifications']) revalidatePath(path);
+    return { ok: true, message: operation === 'ASSIGN' ? 'Incarico registrato con il solo perimetro confermato.'
+      : 'Revoca registrata. Lo storico è conservato.', outcome: { status: 'RECORDED', receipt } };
+  } catch (error) { return failure(error); }
+}
+export async function checkTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
+  const session = await requireSession();
+  try {
+    await origin();
+    const outcome = await readTechnicalAssignmentOutcome(prisma, session,
+      technicalAssignmentReference.parse(json(form, 'reference')), String(form.get('commandId') ?? ''));
+    return outcome.status === 'RECORDED' ? { ok: true, message: 'Decisione registrata. Ricarica per consultare gli incarichi correnti.', outcome }
+      : { ok: false, uncertain: true, message: 'Decisione non osservata. Non ripetere l’operazione finché l’esito non è riconciliato.', outcome };
+  } catch (error) { return { ...failure(error), uncertain: true }; }
+}

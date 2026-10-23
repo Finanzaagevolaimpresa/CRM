@@ -76,6 +76,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Ufficio Tecnico", href: "/technical-office", requiredPermission: "technical.read" },
       { label: "Pratiche tecniche", href: "/technical-office/practices", requiredPermission: "technical.read" },
+      { label: "I miei incarichi tecnici", href: "/technical-work", roles: ["consulente", "backoffice"], requiredAnyPermissions: ["technical.read", "project.read"] },
       { label: "Enti / Portali", href: "/technical-office/portals", requiredPermission: "technical.read" },
       { label: "Integrazioni", href: "/technical-office/integrations", requiredPermission: "technical.read" },
       { label: "Rendicontazioni", href: "/technical-office/reporting", requiredPermission: "technical.read" },
