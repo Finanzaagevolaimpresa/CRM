@@ -6,7 +6,7 @@ import type { TechnicalAssignmentSelection } from './technical-assignment-contra
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const epoch = z.number().int().positive().max(2_147_483_647);
 const base = { id, recordUpdateEpoch: epoch, deletedAt: z.date().nullable() };
-const client = z.object({ ...base, salesOwnerId: id.nullable(), consultantId: id.nullable() }).strict();
+const client = z.object({ ...base, salesOwnerId: id.nullable(), consultantId: id.nullable(), status:z.string().min(1) }).strict();
 const project = z.object({ ...base, clientId: id, consultantId: id.nullable(), status: z.string().min(1) }).strict();
 const service = z.object({ ...base, clientId: id, projectId: id.nullable(), assignedToId: id.nullable(), status: z.string().min(1) }).strict();
 const practice = z.object({ ...base, clientId: id, projectId: id.nullable(), clientServiceId: id.nullable(),
@@ -17,23 +17,26 @@ export type TechnicalContextSnapshot = z.infer<typeof snapshot>;
 
 /** Internal context fingerprint, not a route DTO or access grant. Domain row
  * epochs preserve A→B→A changes; ordinary work fields do not change this scope. */
-export function technicalAssignmentContext(raw: unknown) {
+export function technicalAssignmentContext(raw: unknown, allowInactive = false) {
   const parsed = snapshot.safeParse(raw);
   if (!parsed.success) return null;
   const s = parsed.data, c = s.client, p = s.project, v = s.service, t = s.practice;
-  if (!c || c.deletedAt) return null;
-  if (p && (p.clientId !== c.id || p.deletedAt || p.status === 'archiviato')) return null;
-  if (v && (v.clientId !== c.id || v.deletedAt || ['archiviato','sospeso'].includes(v.status)
-      || (v.projectId !== null && v.projectId !== p?.id))) return null;
+  if (!c) return null;
+  if (p && p.clientId !== c.id) return null;
+  if (v && (v.clientId !== c.id || (v.projectId !== null && v.projectId !== p?.id))) return null;
   if (s.kind === 'Project') {
     if (!p || p.id !== s.targetId || v || t) return null;
   } else {
-    if (!t || t.id !== s.targetId || t.clientId !== c.id || t.deletedAt || t.status === 'archiviata'
+    if (!t || t.id !== s.targetId || t.clientId !== c.id
         || (t.clientServiceId !== null && t.clientServiceId !== v?.id)
         || (t.clientServiceId === null && v !== null)
         || (t.projectId !== null && t.projectId !== p?.id)
         || ((t.projectId ?? v?.projectId ?? null) === null && p !== null)) return null;
   }
+  const unavailable = (row: { deletedAt:Date|null;status:string }) => row.deletedAt !== null
+    || ['archiviato','archiviata','sospeso'].includes(row.status);
+  const operational = [c,p,v,t].filter((row):row is NonNullable<typeof row>=>row!==null).every(row=>!unavailable(row));
+  if (!operational && !allowInactive) return null;
   const root = s.kind === 'Project' ? p! : t!;
   // No current status/title/text values in the fingerprint. Operational statuses
   // are validated separately; lifecycle/owner changes increment the DB epochs.
@@ -43,10 +46,10 @@ export function technicalAssignmentContext(raw: unknown) {
     service:v ? [v.id,v.recordUpdateEpoch,v.clientId,v.projectId,v.assignedToId] : null,
     practice:t ? [t.id,t.recordUpdateEpoch,t.clientId,t.projectId,t.clientServiceId,t.commercialOwnerId,t.technicalOwnerId] : null };
   return { kind:s.kind, targetId:s.targetId, clientId:c.id, projectId:p?.id ?? null,
-    clientServiceId:v?.id ?? null, contextSha256:canonicalSha256(context) };
+    clientServiceId:v?.id ?? null, contextSha256:canonicalSha256(context), operational };
 }
 
-const clientSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,salesOwnerId:true,consultantId:true } as const;
+const clientSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,salesOwnerId:true,consultantId:true,status:true } as const;
 const projectSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,clientId:true,consultantId:true,status:true } as const;
 const serviceSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,clientId:true,projectId:true,assignedToId:true,status:true } as const;
 const practiceSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,clientId:true,projectId:true,clientServiceId:true,
@@ -56,7 +59,9 @@ const practiceSelect = { id:true,recordUpdateEpoch:true,deletedAt:true,clientId:
  * and sorted-user/session locks. A changed row before a lock yields serialization
  * failure rather than an old scope. This helper neither writes nor grants access. */
 export async function lockTechnicalAssignmentContext(tx: Prisma.TransactionClient,
-  target: { kind:TechnicalAssignmentSelection['kind']; targetId:string }, writeTarget = false) {
+  target: { kind:TechnicalAssignmentSelection['kind']; targetId:string },
+  options:{writeTarget?:boolean;allowInactive?:boolean}={}) {
+  const writeTarget=options.writeTarget===true;
   id.parse(target.targetId);
   if (target.kind !== 'Project' && target.kind !== 'TechnicalPractice') return null;
   const projectRef = target.kind === 'Project'
@@ -83,6 +88,6 @@ export async function lockTechnicalAssignmentContext(tx: Prisma.TransactionClien
   const p = projectId ? await tx.project.findUnique({ where:{id:projectId},select:projectSelect }) : null;
   if (projectId && !projectIds.includes(projectId)) return null;
   if (t && (t.clientId !== clientId || t.clientServiceId !== practiceRef?.clientServiceId)) return null;
-  const result = technicalAssignmentContext({ ...target,client:c,project:p,service:v,practice:t });
+  const result = technicalAssignmentContext({ ...target,client:c,project:p,service:v,practice:t },options.allowInactive===true);
   return result ? { ...result, rootEpoch:(target.kind === 'Project' ? p! : t!).recordUpdateEpoch } : null;
 }

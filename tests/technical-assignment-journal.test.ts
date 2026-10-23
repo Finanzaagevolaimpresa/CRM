@@ -19,7 +19,8 @@ const current:CurrentTechnicalAssignmentProof={userId:'tech_a',role:'consulente'
     actorActive:true,actorRole:'admin',assignmentWriteAllowed:true}};
 const revisionId='a4b9afec-2f1c-4e5b-875b-f502bb598e67';
 const receipt={protocol:'TECHNICAL_ASSIGNMENT_RECEIPT_V1',commandId:p.commandId,assignmentId:p.id,revisionId,
-  revision:1,operation:'ASSIGN',fieldCount:1,actionCount:1,documentCount:0,keyVersion:1};
+  revision:1,operation:'ASSIGN',fieldCount:1,actionCount:1,documentCount:0,keyVersion:1,
+  actorId:p.approvedById,sessionId:'82bb4a48-3608-45a1-9a3e-fb9893863b06',requestDigest:'b'.repeat(64)};
 const assignment={payload:p,proof:technicalAssignmentProof(key,'assignment',p),revokedAt:null};
 const journal={assignment,decision:{id:p.commandId,actorId:p.approvedById,
   sessionId:'82bb4a48-3608-45a1-9a3e-fb9893863b06',kind:p.selection.kind,targetId:p.targetId,recipientId:p.selection.userId,

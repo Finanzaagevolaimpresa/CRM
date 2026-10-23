@@ -139,6 +139,9 @@ BEGIN
   OR c.receipt->>'actionCount' IS DISTINCT FROM action_count::text
   OR c.receipt->>'documentCount' IS DISTINCT FROM document_count::text
   OR c.receipt->>'keyVersion' IS DISTINCT FROM g.payload->>'keyVersion'
+  OR c.receipt->>'actorId' IS DISTINCT FROM c."actorId"
+  OR c.receipt->>'sessionId' IS DISTINCT FROM c."sessionId"::text
+  OR c.receipt->>'requestDigest' IS DISTINCT FROM c."requestDigest"
   OR NOT EXISTS(SELECT 1 FROM "AuditLog" x WHERE x.id=h.id::text AND x.xmin::text::bigint=(txid_current()%4294967296))
   OR a."actorId" IS DISTINCT FROM c."actorId" OR a.event<>'technical_assignment_changed'
   OR a."entityType"<>'TechnicalAssignmentRevision' OR a."entityId"<>h.id::text

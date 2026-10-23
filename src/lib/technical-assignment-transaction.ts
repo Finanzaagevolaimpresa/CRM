@@ -9,7 +9,7 @@ import { lockAuthoritativeInternalSession, lockInternalUser, tokenDigestFromCook
 import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { internalSessionMode } from './session';
 import { withSerializableTransaction } from './serializable';
-import { loadSelectiveProjectScope } from './selective-project-scope';
+import { loadPersonalSelectiveProjectScope, loadSelectiveProjectScope } from './selective-project-scope';
 import { admitsTechnicalAssignmentManager, admitsTechnicalRolePermission } from './technical-assignment-permissions';
 import type { TechnicalAssignmentSelection } from './technical-assignment-contract';
 
@@ -68,7 +68,7 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   if(recipientId) identifier.parse(recipientId);
   if(!['Project','TechnicalPractice'].includes(kind)) deny();
   if(mode==='PERSONAL_DECISION' && !proof) deny();
-  if(inactiveRecipientForRevocation && mode!=='PERSONAL_DECISION') deny();
+  if(inactiveRecipientForRevocation && mode==='RECIPIENT') deny();
   return withSerializableTransaction(db,async tx=>{
     if(internalSessionMode()!=='registry' || !z.string().uuid().safeParse(claimed.sessionId).success) deny();
     const key=proof?.key ?? await loadActivePrivilegedStepUpKey(tx);
@@ -86,7 +86,7 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(!live || !live.active || live.deletedAt || live.revokedAt || !live.live) deny();
     const current:CurrentSession={...claimed,role:live.role,active:live.active,
       permissionOverrides:[...live.permissionOverrides],registryExpiresAt:live.expiresAt,
-      ...await loadSelectiveProjectScope(tx,claimed.userId)};
+      ...await (inactiveRecipientForRevocation ? loadPersonalSelectiveProjectScope : loadSelectiveProjectScope)(tx,claimed.userId)};
     const author=await user(tx,authority.userId),actor=await user(tx,claimed.userId);
     const recipient=recipientId ? await user(tx,recipientId) : null;
     if(!author.active || author.deletedAt || !admitsTechnicalAssignmentManager(author,kind)) deny();
@@ -106,8 +106,9 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
 
 /** Read-only management loaders must keep their callbacks free of writes. */
 export function withTechnicalAssignmentManagementRead<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
-  recipientId:string|null,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
-  return withTransaction(db,claimed,kind,recipientId,'MANAGEMENT_READ',null,work);
+  recipientId:string|null,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,
+  options:{inactiveRecipientForRevocation?:true}={}) {
+  return withTransaction(db,claimed,kind,recipientId,'MANAGEMENT_READ',null,work,options.inactiveRecipientForRevocation);
 }
 export function withTechnicalAssignmentDecision<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   recipientId:string,proof:TechnicalAssignmentPersonalProof,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>,

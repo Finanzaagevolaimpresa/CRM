@@ -6,7 +6,7 @@ import type { PermissionSession } from '../src/lib/permission-evaluator';
 
 const base:TechnicalContextSnapshot = {
   kind:'TechnicalPractice',targetId:'practice_a',
-  client:{id:'client_a',recordUpdateEpoch:2,deletedAt:null,salesOwnerId:'sales_a',consultantId:null},
+  client:{id:'client_a',recordUpdateEpoch:2,deletedAt:null,salesOwnerId:'sales_a',consultantId:null,status:'attivo'},
   project:{id:'project_a',recordUpdateEpoch:3,deletedAt:null,clientId:'client_a',consultantId:'tech_a',status:'in_lavorazione'},
   service:{id:'service_a',recordUpdateEpoch:4,deletedAt:null,clientId:'client_a',projectId:'project_a',assignedToId:'tech_a',status:'attivo'},
   practice:{id:'practice_a',recordUpdateEpoch:5,deletedAt:null,clientId:'client_a',projectId:'project_a',clientServiceId:'service_a',commercialOwnerId:'sales_a',technicalOwnerId:'tech_a',status:'da_progettare'},
@@ -16,7 +16,7 @@ const actor:PermissionSession = {role:'consulente',active:true,permissionOverrid
 test('technical work has exact canonical parents but exposes no dossier or owner data in its context result', () => {
   const context=technicalAssignmentContext(base);
   assert.ok(context);
-  assert.deepEqual(Object.keys(context).sort(),['clientId','clientServiceId','contextSha256','kind','projectId','targetId']);
+  assert.deepEqual(Object.keys(context).sort(),['clientId','clientServiceId','contextSha256','kind','operational','projectId','targetId']);
   assert.equal(context.targetId,'practice_a');
   const project=technicalAssignmentContext({...base,kind:'Project',targetId:'project_a',service:null,practice:null});
   assert.ok(project);
@@ -31,12 +31,21 @@ test('missing, mismatched, retired and unexpected parents fail closed', () => {
     {...base,practice:{...base.practice!,clientServiceId:null}},
     {...base,practice:{...base.practice!,id:'practice_b'}},
     {...base,client:{...base.client!,deletedAt:new Date()}},
+    {...base,client:{...base.client!,status:'sospeso'}},
     {...base,project:{...base.project!,status:'archiviato'}},
     {...base,service:{...base.service!,status:'sospeso'}},
     {...base,practice:{...base.practice!,status:'archiviata'}},
     {...base,kind:'Project',targetId:'project_a'},
   ];
   for(const row of changes) assert.equal(technicalAssignmentContext(row),null,JSON.stringify(row));
+});
+
+test('management revocation may inspect an inactive identity without admitting work or mismatched parents',()=>{
+  const archived={...base,practice:{...base.practice!,status:'archiviata',recordUpdateEpoch:6}};
+  assert.equal(technicalAssignmentContext(archived),null);
+  assert.equal(technicalAssignmentContext(archived,true)?.operational,false);
+  assert.equal(technicalAssignmentContext({...archived,client:{...base.client!,id:'client-b'}},true),null);
+  assert.equal(technicalAssignmentContext({...base,client:{...base.client!,status:'sospeso'}},true)?.operational,false);
 });
 test('service-only project relation is reconciled without admitting a sibling practice', () => {
   const linked={...base,practice:{...base.practice!,projectId:null}};
