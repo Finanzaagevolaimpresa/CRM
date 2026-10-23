@@ -39,7 +39,7 @@ test('commercial request, internal clarification, explicit Admin draft and priva
   await submit(page); expect(await count(id)).toBe(1);
   expect((await foreign.request.get('/admin-requests/' + id)).status()).toBe(404);
   expect((await foreign.request.get('/admin-requests/new?kind=Lead&id=' + r.leadId)).status()).toBe(404);
-  await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: path.join(evidence, 'request-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: path.join(evidence, 'request-mobile.png'), fullPage: true, caret: 'initial' });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await decision.goto('/admin-requests/' + id);
   await decision.getByLabel('Risposta visibile all’autore', { exact: true }).fill('Chiarisci il documento necessario prima della bozza.');
@@ -51,7 +51,8 @@ test('commercial request, internal clarification, explicit Admin draft and priva
   await page.getByRole('button', { name: 'Salva integrazione interna', exact: true }).click(); await expect.poll(() => count(id)).toBe(3);
   await expect(page.getByRole('status')).toHaveText('Operazione registrata nello storico. Nessuna email inviata.');
   await decision.goto('/admin-requests/' + id);
-  await decision.setViewportSize({ width: 1440, height: 1000 }); await decision.screenshot({ path: path.join(evidence, 'review-desktop.png'), fullPage: true });
+  await expect(decision.locator('section').filter({ has: decision.getByRole('heading', { name: 'Indicazioni interne', exact: true }) }).locator('p')).toHaveText('Occorre il documento tecnico aggiornato, senza dati economici.');
+  await decision.setViewportSize({ width: 1440, height: 1000 }); await decision.screenshot({ path: path.join(evidence, 'review-desktop.png'), fullPage: true, caret: 'initial' });
   await decision.getByRole('link', { name: 'Prepara bozza email da approvare', exact: true }).click();
   const form = decision.locator('form').filter({ has: decision.locator('input[name="adminRequestId"]') }).first();
   await expect(form.locator('input[name="to"]')).toHaveValue(''); await expect(form.locator('textarea[name="body"]')).toHaveValue('');
@@ -62,7 +63,7 @@ test('commercial request, internal clarification, explicit Admin draft and priva
   await form.locator('input[name="to"]').fill('synthetic-recipient@invalid.test');
   await form.getByLabel('Oggetto', { exact: true }).fill('Documentazione necessaria');
   await form.getByLabel('Testo esatto', { exact: true }).fill('Testo personale verificato, ancora da approvare.');
-  await decision.screenshot({ path: path.join(evidence, 'draft-desktop.png'), fullPage: true });
+  await decision.screenshot({ path: path.join(evidence, 'draft-desktop.png'), fullPage: true, caret: 'initial' });
   await form.getByRole('button', { name: 'Salva bozza', exact: true }).click();
   await expect.poll(() => count(id)).toBe(4);
   const saved = await db.approvedCommunication.findUniqueOrThrow({ where: { id } });
@@ -96,7 +97,7 @@ test('two explicitly assigned technicians keep separate requests; current revoca
   await expect.poll(() => count(pending)).toBe(0);
   expect((await admin.request.get('/admin-requests/' + first)).status()).toBe(404);
   await review.goto('/admin-requests/' + second); await review.setViewportSize({ width: 390, height: 844 });
-  await review.screenshot({ path: path.join(evidence, 'review-mobile.png'), fullPage: true });
+  await review.screenshot({ path: path.join(evidence, 'review-mobile.png'), fullPage: true, caret: 'initial' });
   expect(await review.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   for (const value of r.excluded) expect(await review.content()).not.toContain(value);
   await a.close(); await b.close(); await admin.close();

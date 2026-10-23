@@ -345,12 +345,13 @@ test('migration 43 source is one forward-only F1+F2 transaction with exact fail-
   assert.doesNotMatch(executableSql, /\b(?:backfill|seed|activation)\b/iu);
 });
 
-test('fresh61 preserves exact N13/N14 provenance types, validated CHECK, corrected guard and zero business rows', {
+test('fresh65 preserves exact N13/N14 provenance types, validated CHECK, corrected guard and zero business rows', {
   skip: !runDbTests,
   timeout: 360_000,
 }, async () => {
   const names = migrationNames();
   assert.equal(names.length, 65);
+  assert.equal(names[64], '20261023160000_admin_request_queue_v1');
   assert.equal(names[45], '20260914130000_practice_engagement_readiness_v1');
   assert.equal(names[47], '20260924100000_admin_client_read_perimeters_v1');
   assert.equal(names[41], migration42Name);
@@ -366,7 +367,7 @@ test('fresh61 preserves exact N13/N14 provenance types, validated CHECK, correct
       readMigrationRecord(client, migration43Name),
       readBusinessRows(client),
     ]);
-    assert.equal(await readFinishedMigrationCount(client), 64);
+    assert.equal(await readFinishedMigrationCount(client), 65);
     assert.deepEqual(physical.columns, [
       { name: 'formCode', type: 'character varying(120)', notNull: true },
       { name: 'formVersion', type: 'character varying(80)', notNull: true },

@@ -1,14 +1,18 @@
 'use client';
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { mutateAdminRequest } from '@/lib/admin-request-actions';
+const subscribeReady = () => () => {};
+const browserReady = () => true;
+const serverReady = () => false;
 export function AdminRequestForm({ children, className }: { children: ReactNode; className?: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const sent = useRef(false), [pending, setPending] = useState(false);
-  return <form action={mutateAdminRequest} className={className} aria-busy={pending} onSubmit={event => {
+  return <form action={mutateAdminRequest} className={className} data-interactive-ready={ready} aria-busy={pending} onSubmit={event => {
     if (sent.current) { event.preventDefault(); return; }
     const command = new FormData(event.currentTarget).get('commandId');
     if (typeof command === 'string') window.history.replaceState(window.history.state, '', `/admin-requests?recover=${encodeURIComponent(command)}`);
     sent.current = true; setPending(true);
-  }}>{children}{pending && <p role="status">Registrazione in corso. Se la risposta si interrompe, ricarica per verificare l’esito prima di ripetere.</p>}</form>;
+  }}><fieldset disabled={!ready} className="contents">{children}</fieldset>{pending && <p role="status">Registrazione in corso. Se la risposta si interrompe, ricarica per verificare l’esito prima di ripetere.</p>}</form>;
 }
 export function AdminRequestRecovery({ commandId }: { commandId: string }) {
   const [state, setState] = useState('Verifica l’esito prima di ripetere la richiesta.'), [href, setHref] = useState<string | null>(null), [pending, setPending] = useState(false);
