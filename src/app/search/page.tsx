@@ -12,6 +12,8 @@ import { listAccessibleAiOutputs, listAccessibleTasks } from '@/lib/read-access'
 import { getVisibleEngagementDossierIds } from '@/lib/engagement-dossier';
 import { clientVisibilityWhere, leadVisibilityWhere } from '@/lib/core-query-policy';
 import { practiceOutsideSelection } from '@/lib/selective-practice-policy';
+import { listTechnicalWork } from '@/lib/technical-assignment-access';
+import { technicalResponsibilityLabels, technicalWorkPath } from '@/lib/technical-assignment-display';
 
 type SearchResult = {
   id: string;
@@ -173,6 +175,16 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
       { title: 'Dossier', permission: 'dossier.read', items: visibleDossiers.map((dossier) => ({ id: dossier.id, title: dossier.title, subtitle: snippet(dossier.content), category: 'Dossier', status: dossier.status, date: dossier.updatedAt, href: `/client-dossiers/${dossier.id}` })) },
     ] satisfies ResultGroup[];
     groups = groups.filter((group) => hasPermission(session, group.permission));
+    if (['consulente', 'backoffice'].includes(session.role) && q.length <= 200) {
+      for (const kind of ['Project', 'TechnicalPractice'] as const) {
+        const permission = kind === 'Project' ? 'project.read' : 'technical.read';
+        if (!hasPermission(session, permission)) continue;
+        const selected = await listTechnicalWork(prisma, session, kind, 1, q).catch(() => null);
+        if (selected) groups.push({ title: kind === 'Project' ? 'Progetti con incarico personale' : 'Pratiche con incarico personale', permission,
+          items: selected.records.map(row => ({ id: row.target.targetId, title: row.title,
+            subtitle: technicalResponsibilityLabels[row.responsibility], category: 'Incarico tecnico', href: technicalWorkPath(row.target) })) });
+      }
+    }
   }
 
   const resultCount = groups.reduce((sum, group) => sum + group.items.length, 0);

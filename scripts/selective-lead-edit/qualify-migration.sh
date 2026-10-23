@@ -36,7 +36,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname LIKE 'fai_selective_lead_edit_%'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$RUNNER_TEMP/selective-lead-edit-schema63"
+mkdir -p "$historical"
+git archive 3a43977b585a9af43e4ef0c489841ce9a699a2c3 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 63
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL AND migration_name<'20261022110000_selective_lead_edit_v1' ORDER BY migration_name" > "$evidence/prefix62-after.txt"
 cmp "$evidence/prefix62-before.txt" "$evidence/prefix62-after.txt"
@@ -66,7 +69,7 @@ SQL
 psql "$db" -v ON_ERROR_STOP=1 -At -f scripts/selective-lead-edit/structure.sql > "$evidence/structure63.json"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq SELECTIVE_LEAD_EDIT_SCHEMA62_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 printf '{"synthetic":true,"before":62,"after":63,"prefix62Unchanged":true,"allPriorRowsPreserved":true,"newTablesEmpty":true,"personalAuthorityEnrolled":false,"restrictiveForeignKeys":12,"atomicTriggers":4,"historyTruncateDenied":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/migration63-proof.json"

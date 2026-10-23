@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
-// Domain preparation only: persistence, fresh admission and routes must be
-// integrated before this contract can authorize any operational action.
+// Closed domain selections; the contract alone never grants access. Runtime
+// admission also requires the retained journal and current personal authority.
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const revision = z.number().int().nonnegative().safe();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const instant = z.string().datetime({ offset: true });
 
 export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document'] as const;
+// Only these actions belong to the first operational increment. The broader
+// contract prepares later work; issuing a grant must not authorize dormant code.
+export const technicalImplementedActions = ['update_fields', 'update_status'] as const;
 export const projectTechnicalFields = ['title', 'description', 'status'] as const;
 export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;
@@ -70,7 +73,7 @@ export function boundedAssignmentExpiry(value: string, now: Date, maximumDays = 
   return expires > current && expires <= current + maximumDays * 86_400_000;
 }
 
-// Called only with snapshots freshly locked/read by the future persistence layer.
+// Called only with snapshots freshly locked/read by the persistence layer.
 // A cookie, submitted form or cached row is not evidence of these facts.
 export type CurrentTechnicalAssignmentAdmission = {
   userId: string; role: string; active: boolean; sessionLive: boolean;

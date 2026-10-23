@@ -9,7 +9,7 @@ import { lockAuthoritativeInternalSession, lockInternalUser, tokenDigestFromCook
 import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
 import { internalSessionMode } from './session';
 import { withSerializableTransaction } from './serializable';
-import { loadPersonalSelectiveProjectScope, loadSelectiveProjectScope } from './selective-project-scope';
+import { loadPersonalSelectiveProjectScope, loadSelectiveProjectScope, loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
 import { admitsTechnicalAssignmentManager, admitsTechnicalRolePermission } from './technical-assignment-permissions';
 import type { TechnicalAssignmentSelection } from './technical-assignment-contract';
 
@@ -56,8 +56,8 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
       nowSeconds:Math.floor(now.getTime()/1000) })) deny();
 }
 
-/** Foundation for the future persisted assignment service. No route imports this
- * module yet. The distinct authority table/binding is not created by this code.
+/** Shared current admission for management and assigned work routes.
+ * The distinct personal authority is never created by this code.
  * Missing/disabled authority fails closed; no fallback to sharing/email bindings.
  * The callback must still lock and verify the target, assignment journal,
  * document scope and exact command before any projection or mutation. */
@@ -86,7 +86,8 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(!live || !live.active || live.deletedAt || live.revokedAt || !live.live) deny();
     const current:CurrentSession={...claimed,role:live.role,active:live.active,
       permissionOverrides:[...live.permissionOverrides],registryExpiresAt:live.expiresAt,
-      ...await (inactiveRecipientForRevocation ? loadPersonalSelectiveProjectScope : loadSelectiveProjectScope)(tx,claimed.userId)};
+      ...await (mode==='RECIPIENT' ? loadTechnicalAssignmentIndependentScope
+        : inactiveRecipientForRevocation ? loadPersonalSelectiveProjectScope : loadSelectiveProjectScope)(tx,claimed.userId)};
     const author=await user(tx,authority.userId),actor=await user(tx,claimed.userId);
     const recipient=recipientId ? await user(tx,recipientId) : null;
     if(!author.active || author.deletedAt || !admitsTechnicalAssignmentManager(author,kind)) deny();

@@ -63,6 +63,7 @@ export default async function Page() {
 
   return <div className="crm-space-y-6">
     <PageHeader title="Ufficio Tecnico" description="Dashboard operativa per progettare, preparare e monitorare pratiche verso enti e portali. Nessun invio automatico: ogni aggiornamento cliente va verificato prima dell’invio." />
+    {['consulente', 'backoffice'].includes(session.role) && <SecondaryLink href="/technical-work">I miei incarichi tecnici</SecondaryLink>}
     <div className="flex flex-wrap gap-2"><SecondaryLink href="/technical-office/practices">Lista pratiche</SecondaryLink><SecondaryLink href="/technical-office/practices?new=1">Nuova pratica</SecondaryLink></div>
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{buckets.map(([status, label]) => <Stat key={status} label={label} value={count(status)} description={status.replaceAll('_', ' ')} tone={status.includes('approv') ? 'green' : status.includes('resp') || status.includes('integrazione') ? 'orange' : 'blue'} />)}</section>
     <Card title="Scadenze urgenti e prossime azioni">

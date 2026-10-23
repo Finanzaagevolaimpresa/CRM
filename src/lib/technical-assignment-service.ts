@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { hasSelectiveClientContext } from './selective-client-policy';
 import { hasSelectiveContext } from './selective-project-policy';
-import { loadSelectiveProjectScope } from './selective-project-scope';
+import { loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
 import { isSelectivePractice } from './selective-practice-policy';
 import { lockTechnicalAssignmentContext } from './technical-assignment-context';
 import { assertTechnicalAssignmentDocuments } from './technical-assignment-documents';
@@ -19,6 +19,9 @@ import { loadTechnicalAssignmentDecisionJournal, loadTechnicalAssignmentJournal,
 import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssignmentDecision,
   withTechnicalAssignmentManagementRead, type TechnicalAssignmentPersonalProof,
   type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
+import { technicalFieldPreview } from './technical-assignment-display';
+import { technicalAssignmentTargetFields } from './technical-assignment-target';
+import { technicalImplementedActions } from './technical-assignment-contract';
 
 type Tx = Prisma.TransactionClient;
 type Input = ReturnType<typeof parseTechnicalAssignmentDecision>;
@@ -47,10 +50,11 @@ async function currentAdmission(tx: Tx, state: TechnicalAssignmentTransaction, l
   if (operation === 'ASSIGN') {
     if (!('selection' in input) || !locked.context.operational || input.targetId !== reference.targetId
       || input.selection.kind !== reference.kind || input.selection.userId !== reference.recipientId
+      || input.selection.actions.some(action => !technicalImplementedActions.some(implemented => implemented === action))
       || input.selection.actions.some(action => !admitsTechnicalRolePermission(state.recipient!, reference.kind, action))) deny();
     // Existing read-only selections are independent ceilings. An assignment must
     // not silently replace a narrower client/project/practice choice.
-    const scope = await loadSelectiveProjectScope(tx, reference.recipientId);
+    const scope = await loadTechnicalAssignmentIndependentScope(tx, reference.recipientId);
     if (hasSelectiveClientContext(scope, locked.context) || hasSelectiveContext(scope, locked.context)
       || (reference.kind === 'TechnicalPractice' && isSelectivePractice(scope, reference.targetId))) deny();
     const documents = await assertTechnicalAssignmentDocuments(tx, state, locked.context, input.selection.documents);
@@ -74,7 +78,7 @@ async function previousOutcome(tx: Tx, state: TechnicalAssignmentTransaction, re
   return receipt;
 }
 
-/** POST preview with current locks, no DB writes. No HTTP route is wired yet.
+/** POST preview with current locks, no DB writes.
  * A recipient catalogue and management UI must never supply admission facts. */
 export async function previewTechnicalAssignment(db: PrismaClient, claimed: AuthSession,
   rawReference: TechnicalAssignmentReference, operation: TechnicalAssignmentPreviewOperation, raw: unknown) {
@@ -82,8 +86,14 @@ export async function previewTechnicalAssignment(db: PrismaClient, claimed: Auth
   return withTechnicalAssignmentManagementRead(db, claimed, reference.kind, reference.recipientId, async (tx, state) => {
     const locked = await lockedState(tx, state, reference, false, operation === 'REVOKE');
     const admission = await currentAdmission(tx, state, locked, reference, operation, input);
-    return { input, token: createTechnicalAssignmentPreview(operation, state.key, input, admission,
-      (await technicalAssignmentClock(tx)).getTime()) };
+    const documents = 'selection' in input
+      ? await assertTechnicalAssignmentDocuments(tx, state, locked.context, input.selection.documents) : null;
+    const fields = 'selection' in input ? technicalFieldPreview(reference.kind, input.selection.readableFields,
+      await technicalAssignmentTargetFields(tx, reference)) : [];
+    return { input, reference, operation, token: createTechnicalAssignmentPreview(operation, state.key, input, admission,
+      (await technicalAssignmentClock(tx)).getTime()), fields, documents: documents?.metadata ?? [],
+      recipient: { id: state.recipient!.id, name: state.recipient!.name, email: state.recipient!.email },
+      replacesAssignment: locked.previous !== null };
   }, operation === 'REVOKE' ? inactive : {});
 }
 

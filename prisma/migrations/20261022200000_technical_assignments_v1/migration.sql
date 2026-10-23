@@ -157,4 +157,57 @@ CREATE CONSTRAINT TRIGGER technical_assignment_revision_atomic AFTER INSERT ON "
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_atomic();
 CREATE CONSTRAINT TRIGGER technical_assignment_decision_atomic AFTER INSERT ON "TechnicalAssignmentDecision"
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_atomic();
+
+-- One retained command for an explicit technical mutation; no client/owner or
+-- communication payload, no assignment renewal, no implicit personal binding.
+CREATE TABLE "TechnicalWorkCommand" (
+ id UUID PRIMARY KEY,
+ "assignmentId" UUID NOT NULL, "assignmentRevision" INTEGER NOT NULL CHECK("assignmentRevision">0),
+ "actorId" TEXT NOT NULL REFERENCES "User"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "sessionId" UUID NOT NULL, kind VARCHAR(17) NOT NULL CHECK(kind IN ('Project','TechnicalPractice')),
+ "targetId" TEXT NOT NULL, action VARCHAR(16) NOT NULL CHECK(action IN ('update_fields','update_status')),
+ "requestDigest" TEXT NOT NULL CHECK("requestDigest" ~ '^[a-f0-9]{64}$'),
+ receipt JSONB NOT NULL CHECK(jsonb_typeof(receipt)='object'), proof TEXT NOT NULL CHECK(proof ~ '^[a-f0-9]{64}$'),
+ "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "transactionId" BIGINT NOT NULL DEFAULT txid_current(),
+ FOREIGN KEY("assignmentId","assignmentRevision") REFERENCES "TechnicalAssignmentRevision"("assignmentId",revision)
+  ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+CREATE INDEX "TechnicalWorkCommand_actorId_createdAt_idx" ON "TechnicalWorkCommand"("actorId","createdAt");
+CREATE TRIGGER technical_work_command_immutable BEFORE UPDATE OR DELETE ON "TechnicalWorkCommand"
+ FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_retained();
+CREATE TRIGGER technical_work_command_no_truncate BEFORE TRUNCATE ON "TechnicalWorkCommand"
+ FOR EACH STATEMENT EXECUTE FUNCTION fai_technical_assignment_retained();
+CREATE FUNCTION fai_technical_work_atomic() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE g "TechnicalAssignment"%ROWTYPE; a "AuditLog"%ROWTYPE;
+ target_version timestamp(3); target_tx bigint; field_count integer;
+BEGIN
+ SELECT * INTO g FROM "TechnicalAssignment" WHERE id=NEW."assignmentId";
+ SELECT * INTO a FROM "AuditLog" WHERE id=NEW.id::text;
+ IF NEW.kind='Project' THEN
+  SELECT "updatedAt",xmin::text::bigint INTO target_version,target_tx FROM "Project" WHERE id=NEW."targetId";
+ ELSE
+  SELECT "updatedAt",xmin::text::bigint INTO target_version,target_tx FROM "TechnicalPractice" WHERE id=NEW."targetId";
+ END IF;
+ field_count:=(NEW.receipt->>'fieldCount')::integer;
+ IF g.id IS NULL OR a.id IS NULL OR target_version IS NULL OR field_count IS NULL
+  OR field_count NOT BETWEEN 1 AND 11 OR (NEW.action='update_status' AND field_count<>1)
+  OR NEW."transactionId"<>txid_current() OR target_tx IS DISTINCT FROM (txid_current()%4294967296)
+  OR g.revision<>NEW."assignmentRevision" OR g."revokedAt" IS NOT NULL OR g."recipientId"<>NEW."actorId"
+  OR g.kind<>NEW.kind OR COALESCE(g."projectId",g."practiceId")<>NEW."targetId"
+  OR NOT (g.payload->'selection'->'actions' ? NEW.action)
+  OR target_version IS DISTINCT FROM ((NEW.receipt->>'targetVersion')::timestamptz AT TIME ZONE 'UTC')
+  OR NEW.receipt IS DISTINCT FROM jsonb_build_object('protocol','TECHNICAL_WORK_RECEIPT_V1',
+    'commandId',NEW.id::text,'assignmentId',NEW."assignmentId"::text,'assignmentRevision',NEW."assignmentRevision",
+    'actorId',NEW."actorId",'sessionId',NEW."sessionId"::text,'target',jsonb_build_object('kind',NEW.kind,'targetId',NEW."targetId"),
+    'action',NEW.action,'fieldCount',field_count,'requestDigest',NEW."requestDigest",'targetVersion',NEW.receipt->>'targetVersion',
+    'recordedAt',NEW.receipt->>'recordedAt','keyVersion',(g.payload->>'keyVersion')::integer)
+  OR NOT EXISTS(SELECT 1 FROM "AuditLog" x WHERE x.id=NEW.id::text AND x.xmin::text::bigint=(txid_current()%4294967296))
+  OR a."actorId" IS DISTINCT FROM NEW."actorId" OR a.event<>'technical_work_recorded'
+  OR a."entityType"<>'TechnicalWorkCommand' OR a."entityId"<>NEW.id::text OR a."before" IS DISTINCT FROM '{}'::jsonb
+  OR a."after" IS DISTINCT FROM jsonb_build_object('action',NEW.action,'fieldCount',field_count)
+ THEN RAISE EXCEPTION 'TECHNICAL_WORK_ATOMIC_COMMAND'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER technical_work_command_atomic AFTER INSERT ON "TechnicalWorkCommand"
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_work_atomic();
 COMMIT;

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { lockInternalUser } from './internal-session-registry';
 import type { SelectivePracticeScope } from './selective-practice-policy';
+import { loadTechnicalAssignmentExclusions } from './technical-assignment-exclusions';
 
 type Tx = Prisma.TransactionClient;
 const idOnly = { id: true } as const;
@@ -9,11 +10,12 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id);
 /** Exclusions, not authorizations. Do not expand them to independently allowed
  * parent records or sibling practices. Related audit identifiers are domain-free
  * only at the final audit boundary, where both JSON snapshots are inspected. */
-export async function loadSelectivePracticeScope(tx: Tx, recipientId: string): Promise<Required<SelectivePracticeScope>> {
+export async function loadSelectivePracticeScope(tx: Tx, recipientId: string, technicalPracticeIds?: readonly string[]): Promise<Required<SelectivePracticeScope>> {
   const grants = await tx.selectivePracticeGrant.findMany({ where: { recipientId }, select: {
     id: true, practiceId: true, revisions: { select: { id: true, commandId: true } },
   } });
-  const selectivePracticeIds = [...new Set(grants.map(row => row.practiceId))];
+  const technical = technicalPracticeIds ?? (await loadTechnicalAssignmentExclusions(tx, recipientId)).practiceIds;
+  const selectivePracticeIds = [...new Set([...grants.map(row => row.practiceId), ...technical])];
   if (!selectivePracticeIds.length) return { selectivePracticeIds, selectivePracticeAuditEntityIds: [] };
   const context = { technicalPracticeId: { in: selectivePracticeIds } };
   const [legacy, messages, files, events, rules, commands] = await Promise.all([
@@ -41,5 +43,8 @@ export async function assertNoSelectivePracticeMutation(tx: Tx, recipientId: str
   await lockInternalUser(tx, recipientId);
   if (await tx.selectivePracticeGrant.findFirst({ where: { recipientId, practiceId }, select: idOnly })) {
     throw new Error('SELECTIVE_PRACTICE_READ_ONLY');
+  }
+  if ((await loadTechnicalAssignmentExclusions(tx, recipientId)).practiceIds.includes(practiceId)) {
+    throw new Error('TECHNICAL_ASSIGNMENT_EXPLICIT_OPERATION_REQUIRED');
   }
 }

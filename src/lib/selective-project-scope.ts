@@ -7,11 +7,19 @@ import { assertProjectOperational } from './project-lifecycle-lock';
 import { loadSelectiveLeadScope } from './selective-lead-scope';
 import type { SelectiveLeadScope } from './selective-lead-policy';
 import { loadSelectiveClientScope, type LoadedSelectiveClientScope } from './selective-client-scope';
+import { loadTechnicalAssignmentExclusions } from './technical-assignment-exclusions';
 
 type Db = Prisma.TransactionClient;
 /** Used by a separately signed client-document projection. Only the client
  * exclusion is handled by that projection; project restrictions still apply. */
 export async function loadIndependentProjectExclusions(db: Db, recipientId: string) {
+  const technical = await loadTechnicalAssignmentExclusions(db, recipientId);
+  return loadExclusions(db, recipientId, true, technical.projectIds);
+}
+/** Only for the independently admitted technical-assignment document loader.
+ * All existing personal sharing/lifecycle ceilings remain; its own historical
+ * assignment restriction is enforced by the signed technical projection. */
+export async function loadTechnicalDocumentProjectCeilings(db: Db, recipientId: string) {
   return loadExclusions(db, recipientId, true);
 }
 export async function loadSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope & SelectivePracticeScope> {
@@ -21,28 +29,35 @@ export async function loadSelectiveProjectScope(db: Db, recipientId: string): Pr
 export async function loadPersonalSelectiveProjectScope(db: Db, recipientId: string): Promise<SelectiveProjectScope & SelectiveLeadScope & LoadedSelectiveClientScope & SelectivePracticeScope> {
   return loadCurrentExclusions(db, recipientId, false);
 }
-async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean) {
-  const project = await loadExclusions(db, recipientId, includeLifecycle);
-  const client = await loadSelectiveClientScope(db, recipientId);
+/** Internal admission for a technical capability: never pass this scope to a
+ * legacy route. No independent read-sharing choice is removed or weakened. */
+export async function loadTechnicalAssignmentIndependentScope(db: Db, recipientId: string) {
+  return loadCurrentExclusions(db, recipientId, true, false);
+}
+async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean, includeTechnical = true) {
+  const technical = includeTechnical ? await loadTechnicalAssignmentExclusions(db, recipientId)
+    : { projectIds: [], practiceIds: [], clientIds: [], auditIds: [] };
+  const project = await loadExclusions(db, recipientId, includeLifecycle, technical.projectIds);
+  const client = await loadSelectiveClientScope(db, recipientId, technical.clientIds);
   const lead = await loadSelectiveLeadScope(db, recipientId, client.selectiveClientLeadIds);
-  const practice = await loadSelectivePracticeScope(db, recipientId);
+  const practice = await loadSelectivePracticeScope(db, recipientId, technical.practiceIds);
   return { ...project, ...lead, ...client, ...practice,
     selectiveProjectIds: [...new Set([...(project.selectiveProjectIds ?? []), ...client.selectiveClientProjectIds])],
     selectiveServiceIds: [...new Set([...(project.selectiveServiceIds ?? []), ...client.selectiveClientServiceIds])],
     selectiveContractIds: [...new Set([...(project.selectiveContractIds ?? []), ...client.selectiveClientContractIds])],
     selectiveDocumentIds: [...new Set([...(project.selectiveDocumentIds ?? []), ...client.selectiveClientDocumentIds])],
     selectiveOfferIds: [...new Set([...(project.selectiveOfferIds ?? []), ...lead.selectiveLeadOfferIds, ...client.selectiveClientOfferIds])],
-    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? []), ...client.selectiveClientAuditEntityIds, ...practice.selectivePracticeAuditEntityIds])],
+    selectiveAuditEntityIds: [...new Set([...(project.selectiveAuditEntityIds ?? []), ...(lead.selectiveLeadAuditEntityIds ?? []), ...client.selectiveClientAuditEntityIds, ...practice.selectivePracticeAuditEntityIds, ...technical.auditIds])],
   };
 }
-async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean): Promise<SelectiveProjectScope> {
+async function loadExclusions(db: Db, recipientId: string, includeLifecycle: boolean, technicalProjectIds: readonly string[] = []): Promise<SelectiveProjectScope> {
   // Deliberately includes revoked, expired and invalid grants. A missing proof
   // denies the projection; it must never restore an older, broader permission.
   const grants = await db.selectiveProjectGrant.findMany({ where: { recipientId }, select: { id: true, projectId: true } });
   // Reuse the complete indirect-resource exclusion graph for suspended projects.
   // These are exclusions only: no grant is created, changed or removed.
   const inactive = includeLifecycle ? await db.project.findMany({ where: { OR: [{ deletedAt: { not: null } }, { status: 'archiviato' }] }, select: { id: true } }) : [];
-  const selectiveProjectIds = [...new Set([...grants.map(row => row.projectId), ...inactive.map(row => row.id)])];
+  const selectiveProjectIds = [...new Set([...grants.map(row => row.projectId), ...inactive.map(row => row.id), ...technicalProjectIds])];
   if (!selectiveProjectIds.length) return { selectiveProjectIds: [], selectiveServiceIds: [], selectiveDocumentIds: [], selectiveContractIds: [], selectiveOfferIds: [], selectiveAuditEntityIds: [] };
   // A shared financial contract is restricted, but must not pull another
   // project's operational services into this project/recipient perimeter.

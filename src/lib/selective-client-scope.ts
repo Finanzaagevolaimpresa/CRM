@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { lockInternalUser } from './internal-session-registry';
 import type { SelectiveClientScope } from './selective-client-policy';
+import { loadTechnicalAssignmentExclusions } from './technical-assignment-exclusions';
 
 type Db = Prisma.TransactionClient;
 const idOnly = { id: true } as const;
@@ -24,11 +25,12 @@ export type LoadedSelectiveClientScope = Required<SelectiveClientScope> & {
 /** Current server-side exclusions, including revoked, expired or invalid grants.
  * This loader neither validates a projection nor creates permissions. It reads
  * identifiers only; routes must still apply their own authorization checks. */
-export async function loadSelectiveClientScope(db: Db, recipientId: string): Promise<LoadedSelectiveClientScope> {
+export async function loadSelectiveClientScope(db: Db, recipientId: string, technicalClientIds?: readonly string[]): Promise<LoadedSelectiveClientScope> {
   const grants = await db.selectiveClientGrant.findMany({ where: { recipientId }, select: {
     id: true, clientId: true, revisions: { select: { id: true, commandId: true } },
   } });
-  const selectiveClientIds = unique(grants.map(row => row.clientId));
+  const technicalClients = technicalClientIds ?? (await loadTechnicalAssignmentExclusions(db, recipientId)).clientIds;
+  const selectiveClientIds = unique([...grants.map(row => row.clientId), ...technicalClients]);
   const empty: LoadedSelectiveClientScope = {
     selectiveClientIds, selectiveClientAuditEntityIds: [], selectiveClientCompanyIds: [],
     selectiveClientPersonIds: [], selectiveClientLeadIds: [], selectiveClientProjectIds: [],
@@ -183,4 +185,6 @@ export async function assertNoSelectiveClientMutation(db: Db, recipientId: strin
   if (await db.selectiveClientGrant.findFirst({ where: { recipientId, clientId: { in: selected } }, select: idOnly })) {
     throw new Error('SELECTIVE_CLIENT_READ_ONLY');
   }
+  const technical = await loadTechnicalAssignmentExclusions(db, recipientId);
+  if (technical.clientIds.some(id => selected.includes(id))) throw new Error('TECHNICAL_ASSIGNMENT_EXPLICIT_OPERATION_REQUIRED');
 }

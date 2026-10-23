@@ -9,7 +9,8 @@ const unique = (values: Array<string | null>) => [...new Set(values.filter((id):
 /** Read the same canonical financial/material paths as the resource guard.
  * This is practice compatibility only; it never replaces financial/lifecycle
  * authorization. The caller rereads it after the existing resource locks. */
-export async function practiceDocumentContexts(tx: Prisma.TransactionClient, context: PracticeDocumentContext, documentIds: string[]) {
+export async function practiceDocumentContexts(tx: Prisma.TransactionClient, context: PracticeDocumentContext, documentIds: string[],
+  fingerprint: 'sharing' | 'technical-assignment' = 'sharing') {
   const ids = unique(documentIds);
   if (!ids.length) return new Map<string, { eligible: boolean; hash: string }>();
   const [documents, signed, payments, formalizations, materials] = await Promise.all([
@@ -64,7 +65,13 @@ export async function practiceDocumentContexts(tx: Prisma.TransactionClient, con
       && selectedServices.every(row => !row.deletedAt && documentEligibleForPractice(context, { ...row, clientServiceId: row.id }))
       && selectedProjects.length === selectedProjectIds.length
       && selectedProjects.every(row => !row.deletedAt && row.status !== 'archiviato' && row.clientId === context.clientId);
-    const hash = canonicalSha256(JSON.parse(JSON.stringify({ references: references.get(id) ?? [], services: selectedServices, projects: selectedProjects })) as Prisma.InputJsonValue);
+    // A technical task may change ordinary progress without discarding the
+    // independently selected document version. Lifecycle/owner changes retain
+    // their DB epoch and every current eligibility check still applies above.
+    const hashedProjects = fingerprint === 'technical-assignment' ? selectedProjects.map(row => ({
+      id: row.id, clientId: row.clientId, recordUpdateEpoch: row.recordUpdateEpoch, deletedAt: row.deletedAt,
+    })) : selectedProjects;
+    const hash = canonicalSha256(JSON.parse(JSON.stringify({ references: references.get(id) ?? [], services: selectedServices, projects: hashedProjects })) as Prisma.InputJsonValue);
     return [id, { eligible, hash }];
   }));
 }

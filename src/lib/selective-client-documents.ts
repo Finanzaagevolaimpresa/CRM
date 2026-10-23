@@ -5,7 +5,7 @@ import { canonicalSha256 } from './canonical-json';
 import { canAccessFinancialDocument, filterFinancialDocuments } from './financial-document-access';
 import { hasPermission } from './permission-evaluator';
 import { guardProjectResources } from './project-resource-guard';
-import { loadIndependentProjectExclusions } from './selective-project-scope';
+import { loadIndependentProjectExclusions, loadTechnicalDocumentProjectCeilings } from './selective-project-scope';
 import { clientDocumentSnapshotSchema, maxClientDocumentBytes, type ClientDocumentChoice, type ClientDocumentSnapshot } from './selective-client-document-policy';
 
 type Tx = Prisma.TransactionClient;
@@ -55,10 +55,24 @@ export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clie
  * only exact versions, preserving independent project ceilings and lifecycle. */
 export async function selectClientDocuments(tx: Tx, authorityId: string, target: Recipient, clientId: string,
   choices: readonly ClientDocumentChoice[]): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
+  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadIndependentProjectExclusions);
+}
+
+/** Internal technical capability path only. The caller holds the distinct
+ * authority, recipient/session, canonical target and signed-assignment locks.
+ * Its own legacy exclusion is replaced by that narrower projection; existing
+ * personal project/document selections remain independent ceilings. */
+export async function selectClientDocumentsForTechnicalAssignment(tx: Tx, authorityId: string, target: Recipient, clientId: string,
+  choices: readonly ClientDocumentChoice[]) {
+  return selectDocumentVersions(tx, authorityId, target, clientId, choices, loadTechnicalDocumentProjectCeilings);
+}
+
+async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recipient, clientId: string,
+  choices: readonly ClientDocumentChoice[], ceilings: typeof loadIndependentProjectExclusions): Promise<{ snapshots: ClientDocumentSnapshot[]; paths: Map<string, string> }> {
   const snapshots: ClientDocumentSnapshot[] = [], paths = new Map<string, string>();
   if (!choices.length) return { snapshots, paths };
   if (!target.active || target.permissionOverrides.some(p => p.permission === 'document.download' && !p.allowed)) unavailable();
-  const scope = await loadIndependentProjectExclusions(tx, target.id);
+  const scope = await ceilings(tx, target.id);
   const ordered = [...choices].sort((a, b) => a.versionId.localeCompare(b.versionId));
   const identities = await tx.documentVersion.findMany({ where: { id: { in: ordered.map(row => row.versionId) } },
     select: { id: true, documentId: true } });

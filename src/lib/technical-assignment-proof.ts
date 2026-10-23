@@ -16,13 +16,13 @@ export const technicalAssignmentPayload = z.object({
   contextSha256: hash, keyVersion: generation,
 }).strict();
 export type TechnicalAssignmentPayload = z.infer<typeof technicalAssignmentPayload>;
-type Purpose = 'assignment' | 'preview' | 'receipt';
+type Purpose = 'assignment' | 'preview' | 'receipt' | 'work-preview' | 'work-receipt';
 
 /** Separate domain from sharing, email approval and the legacy responsibility
  * history. A valid signature from another function cannot authorize an action. */
 export function technicalAssignmentProof(key: PrivilegedStepUpKey, purpose: Purpose, value: unknown) {
   if (!Number.isSafeInteger(key.version) || key.version < 1 || key.secret.length < 32
-      || !['assignment', 'preview', 'receipt'].includes(purpose)) throw new Error('TECHNICAL_ASSIGNMENT_PROOF_INVALID');
+      || !['assignment', 'preview', 'receipt', 'work-preview', 'work-receipt'].includes(purpose)) throw new Error('TECHNICAL_ASSIGNMENT_PROOF_INVALID');
   return createHmac('sha256', key.secret).update(`FAI_TECHNICAL_ASSIGNMENT_V1:${purpose}:${key.version}:`)
     .update(canonicalJson(value)).digest('hex');
 }
