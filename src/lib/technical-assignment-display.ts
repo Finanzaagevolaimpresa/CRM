@@ -43,11 +43,11 @@ export function technicalFieldPreview(kind: TechnicalAssignmentSelection['kind']
   });
 }
 export function technicalManagementPath(target: TechnicalTargetReference) {
-  const ref = technicalTargetReference.parse(target);
+  const ref = technicalTargetReference.parse({ kind: target.kind, targetId: target.targetId });
   return ref.kind === 'Project' ? `/projects/${ref.targetId}/assignments`
     : `/technical-office/practices/${ref.targetId}/assignments`;
 }
 export function technicalWorkPath(target: TechnicalTargetReference) {
-  const ref = technicalTargetReference.parse(target);
+  const ref = technicalTargetReference.parse({ kind: target.kind, targetId: target.targetId });
   return `/technical-work/${ref.kind === 'Project' ? 'projects' : 'practices'}/${ref.targetId}`;
 }

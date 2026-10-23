@@ -18,7 +18,9 @@ async function login(page: Page, role: 'admin' | 'operator' | 'client-owner' | '
 test.afterAll(async () => { await db.$disconnect(); });
 async function submit(page: Page, button: Locator) {
   const [response] = await Promise.all([page.waitForResponse(response => response.request().method() === 'POST' && Boolean(response.request().headers()['next-action'])), button.click()]);
-  await response.finished(); expect(response.status()).toBeLessThan(400);
+  // A streamed development response may remain open after its action completed.
+  // Each caller verifies the resulting URL/UI and exact persisted state below.
+  expect(response.status()).toBeLessThan(400);
 }
 test('M4 real browser qualifies a manual mailbox, exact approval, actual bundle, uncertain reconciliation and received reply', async ({ browser }) => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); expect(process.env.M4_BROWSER_CONFIRMED).toBe('1');
@@ -154,7 +156,7 @@ test('M4 readiness direct URLs and draft submissions follow the current originat
   await ap.getByText('Modifica e invalida l’approvazione precedente', { exact: true }).click();
   await submit(ap, ap.getByRole('button', { name: 'Salva nuova versione da approvare', exact: true }));
   await expect(ap).toHaveURL(/result=RECORDED/);
-  expect((await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).currentRevision).toBe(2);
+  await expect.poll(async () => (await db.approvedCommunication.findUniqueOrThrow({ where: { id: message.id } })).currentRevision).toBe(2);
   writeFileSync(join(root, 'readiness-isolation-proof.json'), JSON.stringify({ synthetic: true, directUrlClientOwnerDenied: true,
     crossContextSaveDeniedWithoutMutation: true, leadOwnerReadAndSaveAllowed: true, reassignmentRevokesStaleForm: true,
     revokedDirectUrlContainsNoMessage: true, newLeadOwnerReadAndSaveAllowed: true, realEmailSent: false }));
