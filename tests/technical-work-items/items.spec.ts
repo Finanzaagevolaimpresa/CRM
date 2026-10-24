@@ -76,9 +76,14 @@ test('personal Admin selects different items for two technicians; native edits p
   for (const person of [row.salesA, row.salesB]) { const sc = await browser.newContext(), s = await sc.newPage(); await login(s, person.email);
     for (const url of [item(row), item(row, true)]) expect((await sc.request.get(url)).status()).toBe(404);
     await sc.close(); }
-  for (const url of ['/search?q=DESCRIZIONE_TASK_NON_SCELTA', '/tasks', '/documents', '/notifications']) {
+  // Use a matching prefix: the search page legitimately echoes the user's query.
+  // Keep the complete excluded value out of that input so the response assertion
+  // still detects any disclosure from a result or its serialized payload.
+  for (const url of ['/search?q=DESCRIZIONE_TASK', '/tasks', '/documents', '/notifications']) {
     const response = await tc.request.get(url); expect(response.status()).toBeLessThan(500);
-    for (const value of row.excluded) expect(await response.text()).not.toContain(value);
+    const body = await response.text();
+    if (url.startsWith('/search?')) expect(body).toContain('Nessun risultato trovato');
+    for (const value of row.excluded) expect(body).not.toContain(value);
   }
   await ac.close(); await tc.close(); await bc.close();
 });

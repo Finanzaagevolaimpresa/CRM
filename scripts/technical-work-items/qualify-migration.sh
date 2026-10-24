@@ -35,6 +35,8 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fai_te
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 npx prisma migrate deploy
+psql "$db" -At -v ON_ERROR_STOP=1 -f scripts/technical-work-items/structure.sql > "$evidence/structure66.json"
+node -e 'const fs=require("node:fs"),a=require("node:assert/strict"),v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));a.deepEqual(v.tables.map(x=>x.name),["TechnicalWorkItemCommand","TechnicalWorkItemGeneration"]);a.equal(v.columns.length,18);a.equal(v.functions.length,3);a.equal(v.triggers.length,9);a.equal(v.triggers.filter(x=>x.deferrable&&x.initiallyDeferred).length,1);a.equal(v.constraints.filter(x=>x.type==="f").length,2)' "$evidence/structure66.json"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 66
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261024090000_technical_work_items_v1' ORDER BY migration_name" > "$evidence/prefix65-after.txt"
 cmp "$evidence/prefix65-before.txt" "$evidence/prefix65-after.txt"
