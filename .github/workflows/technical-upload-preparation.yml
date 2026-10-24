@@ -66,8 +66,8 @@ jobs:
           export LOCAL_DOCUMENT_STORAGE_ROOT="$(mktemp -d "$RUNNER_TEMP/fai-upload-db-only-XXXXXX")"
           export STORAGE_PROVIDER=local DOCUMENT_MAX_BYTES=1024
           node --import tsx --test tests/technical-upload-persistence-db.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 10' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 10' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 11' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 11' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
       - name: Exact file and decision contracts, including Linux hard links

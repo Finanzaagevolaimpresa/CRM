@@ -20,7 +20,7 @@ CREATE TABLE "TechnicalUploadSubmission" (
  "targetId" TEXT NOT NULL CHECK(length("targetId") BETWEEN 1 AND 128),
  "requestDigest" TEXT NOT NULL CHECK("requestDigest" ~ '^[a-f0-9]{64}$'),
  command JSONB NOT NULL CHECK(jsonb_typeof(command)='object'),
- "storageKey" TEXT NOT NULL UNIQUE CHECK("storageKey" ~ '^technical-submissions/v1/[a-f0-9]{64}$'),
+ "storageKey" TEXT NOT NULL UNIQUE CHECK("storageKey" ~ '^technical-submissions/v1/[a-f0-9]{64}/[a-f0-9]{64}$'),
  "sizeBytes" INTEGER NOT NULL CHECK("sizeBytes" BETWEEN 1 AND 26214400),
  "contentSha256" TEXT NOT NULL CHECK("contentSha256" ~ '^[a-f0-9]{64}$'),
  receipt JSONB NOT NULL CHECK(jsonb_typeof(receipt)='object'),
@@ -47,6 +47,12 @@ BEGIN
  -- this insert. This also serializes raw competing inserts against one quota.
  SELECT * INTO g FROM "TechnicalAssignment" WHERE id=NEW."assignmentId" FOR UPDATE;
  SELECT * INTO a FROM "AuditLog" WHERE id=NEW."commandId"::text;
+ IF a.id IS NULL OR a."actorId" IS DISTINCT FROM NEW."actorId"
+  OR a.event IS DISTINCT FROM 'technical_upload_deposited'
+  OR a."entityType" IS DISTINCT FROM 'TechnicalUploadSubmission' OR a."entityId" IS DISTINCT FROM NEW.id::text
+  OR a."before" IS DISTINCT FROM '{}'::jsonb
+  OR a."after" IS DISTINCT FROM jsonb_build_object('action','deposit_private_document','fileCount',1)
+ THEN RAISE EXCEPTION 'TECHNICAL_UPLOAD_ATOMIC_SUBMISSION'; END IF;
  p:=g.payload->'selection'->'uploadProfile';
  max_file:=(p->>'maxFileBytes')::integer;
  max_files:=(p->>'maxFilesPerRevision')::integer;
@@ -88,10 +94,6 @@ BEGIN
   OR NEW."transactionId"<>txid_current()
   OR NOT EXISTS(SELECT 1 FROM "AuditLog" x WHERE x.id=NEW."commandId"::text
      AND x.xmin::text::bigint=(txid_current()%4294967296))
-  OR a."actorId" IS DISTINCT FROM NEW."actorId" OR a.event<>'technical_upload_deposited'
-  OR a."entityType"<>'TechnicalUploadSubmission' OR a."entityId"<>NEW.id::text
-  OR a."before" IS DISTINCT FROM '{}'::jsonb
-  OR a."after" IS DISTINCT FROM jsonb_build_object('action','deposit_private_document','fileCount',1)
  THEN RAISE EXCEPTION 'TECHNICAL_UPLOAD_ATOMIC_SUBMISSION'; END IF;
  RETURN NULL;
 END $$;

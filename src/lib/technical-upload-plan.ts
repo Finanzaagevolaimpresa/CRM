@@ -26,15 +26,21 @@ export function previewTechnicalUploadDeposit(key: PrivilegedStepUpKey, raw: unk
 export type TechnicalUploadWriteIntent = {
   command: TechnicalUploadCommand;
   requestDigest: string;
-  privateFile: { storageKey: string; bytes: Uint8Array; sha256: string; sizeBytes: number };
+  privateFile: { storageKey: string; bytes: Uint8Array; sha256: string; sizeBytes: number;
+    storageBudget: { maxFileBytes: number; maxFilesPerRevision: number; maxBytesPerRevision: number } };
   quota: { assignmentId: string; revision: number; filesBefore: number; bytesBefore: number;
     filesAfter: number; bytesAfter: number };
   audit: { action: 'deposit_private_document'; fileCount: 1 };
 };
 
-export function technicalUploadStorageKey(current: Pick<TechnicalUploadAdmission, 'actorId' | 'sessionId' | 'target'>,
+export function technicalUploadStorageKey(current: Pick<TechnicalUploadAdmission,
+  'actorId' | 'sessionId' | 'target' | 'assignmentId' | 'assignmentRevision'>,
   commandId: string) {
-  return `technical-submissions/v1/${canonicalSha256({ protocol: 'TECHNICAL_UPLOAD_STORAGE_V1',
+  // One physical bucket per approved revision, shared across sessions. Files
+  // retained after rollback must consume the same quota as committed files.
+  const bucket = canonicalSha256({ protocol: 'TECHNICAL_UPLOAD_BUCKET_V1', actorId: current.actorId,
+    target: current.target, assignmentId: current.assignmentId, assignmentRevision: current.assignmentRevision });
+  return `technical-submissions/v1/${bucket}/${canonicalSha256({ protocol: 'TECHNICAL_UPLOAD_STORAGE_V1',
     actorId: current.actorId, sessionId: current.sessionId, target: current.target, commandId })}`;
 }
 
@@ -56,7 +62,9 @@ export function confirmTechnicalUploadDeposit(key: PrivilegedStepUpKey, raw: unk
     if (canonicalJson(actual) !== canonicalJson(command.file)) return null;
     return { command, requestDigest: technicalUploadRequestDigest(current.target, command),
       privateFile: { storageKey: technicalUploadStorageKey(current, command.commandId),
-        bytes: stableBytes, sha256: actual.contentSha256, sizeBytes: actual.sizeBytes },
+        bytes: stableBytes, sha256: actual.contentSha256, sizeBytes: actual.sizeBytes,
+        storageBudget: { maxFileBytes: current.profile.maxFileBytes,
+          maxFilesPerRevision: current.profile.maxFilesPerRevision, maxBytesPerRevision: current.profile.maxBytesPerRevision } },
       quota: { assignmentId: current.assignmentId, revision: current.assignmentRevision,
         filesBefore: current.consumedFiles, bytesBefore: current.consumedBytes,
         filesAfter: current.consumedFiles + 1, bytesAfter: current.consumedBytes + actual.sizeBytes },

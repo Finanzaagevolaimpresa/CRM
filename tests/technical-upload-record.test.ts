@@ -69,6 +69,8 @@ test('failed or inconsistent storage acknowledgement cannot become a prepared re
     assert.throws(() => prepareTechnicalUploadRecord(key, plan, current, { ...stored, ...delta }, submissionId, now));
   const changed = structuredClone(plan); changed.privateFile.bytes[0] ^= 1;
   assert.throws(() => prepareTechnicalUploadRecord(key, changed, current, stored, submissionId, now));
+  const enlarged = structuredClone(plan); enlarged.privateFile.storageBudget.maxFilesPerRevision++;
+  assert.throws(() => prepareTechnicalUploadRecord(key, enlarged, current, stored, submissionId, now));
 });
 
 test('quota, current revision, session and time changes before commit deny prepared rows', () => {

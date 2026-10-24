@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, opendir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { documentUploadMaxBytes } from './document-upload-contract';
+import { documentUploadMaxBytes, documentUploadMaxFiles } from './document-upload-contract';
 import { localPathFromStoragePath } from './storage';
 import type { TechnicalUploadWriteIntent } from './technical-upload-plan';
 
@@ -11,14 +11,14 @@ function validateReference(input: PrivateReference) {
   const configured = Number(process.env.DOCUMENT_MAX_BYTES ?? documentUploadMaxBytes);
   const limit = Number.isSafeInteger(configured) && configured > 0
     ? Math.min(configured, documentUploadMaxBytes) : documentUploadMaxBytes;
-  if (!/^technical-submissions\/v1\/[a-f0-9]{64}$/.test(input.storageKey)
+  if (!/^technical-submissions\/v1\/[a-f0-9]{64}\/[a-f0-9]{64}$/.test(input.storageKey)
     || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > limit
     || !/^[a-f0-9]{64}$/.test(input.sha256)) throw new Error('TECHNICAL_UPLOAD_STORAGE_INVALID');
 }
 async function privateParents(target: string, create: boolean) {
-  let directory = path.dirname(path.dirname(path.dirname(target)));
+  let directory = path.dirname(path.dirname(path.dirname(path.dirname(target))));
   if (await realpath(directory) !== directory) throw new Error('TECHNICAL_UPLOAD_STORAGE_PATH');
-  for (const segment of ['technical-submissions', 'v1']) {
+  for (const segment of ['technical-submissions', 'v1', path.basename(path.dirname(target))]) {
     directory = path.join(directory, segment);
     if (create) {
       try { await mkdir(directory, { mode: 0o700 }); }
@@ -28,6 +28,40 @@ async function privateParents(target: string, create: boolean) {
     if (!metadata.isDirectory() || metadata.isSymbolicLink() || await realpath(directory) !== directory)
       throw new Error('TECHNICAL_UPLOAD_STORAGE_PATH');
   }
+}
+
+function validateBudget(input: TechnicalUploadWriteIntent['privateFile']) {
+  const b = input.storageBudget;
+  if (!b || !Number.isSafeInteger(b.maxFileBytes) || b.maxFileBytes < 1 || b.maxFileBytes > documentUploadMaxBytes
+    || !Number.isSafeInteger(b.maxFilesPerRevision) || b.maxFilesPerRevision < 1 || b.maxFilesPerRevision > documentUploadMaxFiles
+    || !Number.isSafeInteger(b.maxBytesPerRevision) || b.maxBytesPerRevision < b.maxFileBytes
+    || b.maxBytesPerRevision > b.maxFileBytes * b.maxFilesPerRevision || input.sizeBytes > b.maxFileBytes)
+    throw new Error('TECHNICAL_UPLOAD_STORAGE_INVALID');
+}
+
+/** Caller holds the assignment FOR UPDATE across this check and file creation.
+ * Include every retained file, even after DB rollback. Empty files reserve one
+ * maximum file; partial bytes and strange entries are never removed or repaired.
+ * Stop enumeration at the approved count so a corrupt bucket is bounded too. */
+async function enforcePhysicalBudget(target: string, input: TechnicalUploadWriteIntent['privateFile']) {
+  const b = input.storageBudget, bucket = path.dirname(target);
+  let files = 0, bytes = 0, existing = false;
+  for await (const entry of await opendir(bucket)) {
+    files++;
+    if (files > b.maxFilesPerRevision || !/^[a-f0-9]{64}$/.test(entry.name)
+      || !entry.isFile() || entry.isSymbolicLink()) throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
+    const s = await lstat(path.join(bucket, entry.name));
+    if (!s.isFile() || s.isSymbolicLink() || s.nlink !== 1 || s.size > b.maxFileBytes)
+      throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
+    // Even an empty failed creation occupies a slot and a maximum reservation.
+    // Partial nonempty files retain their actual bytes; replay refuses them.
+    bytes += s.size === 0 ? b.maxFileBytes : s.size;
+    if (entry.name === path.basename(target)) existing = true;
+    if (bytes > b.maxBytesPerRevision) throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
+  }
+  if (!existing && (files + 1 > b.maxFilesPerRevision || bytes + input.sizeBytes > b.maxBytesPerRevision))
+    throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
+  await privateParents(target, false);
 }
 
 /** Exact-byte read only; the future caller must first authorize the current
@@ -69,6 +103,7 @@ export async function readTechnicalUploadPrivateFile(input: PrivateReference) {
  * private; it is never overwritten, deleted or automatically cleaned up here. */
 export async function storeTechnicalUploadPrivateFile(input: TechnicalUploadWriteIntent['privateFile']) {
   validateReference(input);
+  validateBudget(input);
   if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength !== input.sizeBytes)
     throw new Error('TECHNICAL_UPLOAD_STORAGE_INVALID');
   const bytes = Buffer.from(input.bytes);
@@ -77,6 +112,7 @@ export async function storeTechnicalUploadPrivateFile(input: TechnicalUploadWrit
   // Check each existing parent before creating its child. A substituted
   // namespace must never cause even a directory write outside the private root.
   await privateParents(target, true);
+  await enforcePhysicalBudget(target, input);
   let handle;
   try { handle = await open(target, 'wx', 0o600); }
   catch (error) {

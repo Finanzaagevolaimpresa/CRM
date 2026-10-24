@@ -21,7 +21,7 @@ export const technicalUploadRecord = z.object({
   id: uuid, commandId: uuid, assignmentId: uuid, assignmentRevision: revision,
   actorId: id, sessionId: uuid, target: technicalTargetReference,
   requestDigest: hash, command: technicalUploadCommand,
-  storageKey: z.string().regex(/^technical-submissions\/v1\/[a-f0-9]{64}$/),
+  storageKey: z.string().regex(/^technical-submissions\/v1\/[a-f0-9]{64}\/[a-f0-9]{64}$/),
   contentSha256: hash, sizeBytes: z.number().int().min(1).max(documentUploadMaxBytes),
   receipt: technicalUploadReceipt, proof: hash, createdAt: z.string().datetime(),
 }).strict();
@@ -51,6 +51,8 @@ export function prepareTechnicalUploadRecord(key: PrivilegedStepUpKey, intent: T
     || !current.profile.formats.includes(command.file.extension) || command.file.sizeBytes > current.profile.maxFileBytes
     || quota.filesAfter > current.profile.maxFilesPerRevision || quota.bytesAfter > current.profile.maxBytesPerRevision
     || canonicalJson(intent.quota) !== canonicalJson(quota)
+    || canonicalJson(intent.privateFile.storageBudget) !== canonicalJson({ maxFileBytes: current.profile.maxFileBytes,
+      maxFilesPerRevision: current.profile.maxFilesPerRevision, maxBytesPerRevision: current.profile.maxBytesPerRevision })
     || stored.storageKey !== expectedKey || intent.privateFile.storageKey !== expectedKey
     || stored.sizeBytes !== command.file.sizeBytes || intent.privateFile.sizeBytes !== command.file.sizeBytes
     || stored.sha256 !== command.file.contentSha256 || intent.privateFile.sha256 !== command.file.contentSha256

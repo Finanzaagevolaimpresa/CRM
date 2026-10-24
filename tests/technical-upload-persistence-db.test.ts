@@ -158,7 +158,10 @@ test('missing or enriched audit rejects before a receipt escapes and rolls back 
   await assert.rejects(withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
-    await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } } });
+    const changed = await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } } });
+    assert.deepEqual(changed.after, { action: 'deposit_private_document', fileCount: 1, title: 'Leak' });
+    const observed = await tx.$queryRaw<Array<{ after: unknown }>>`SELECT "after" FROM "AuditLog" WHERE id=${p.command.commandId}`;
+    assert.deepEqual(observed, [{ after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } }]);
   }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
 });
@@ -184,7 +187,8 @@ test('a rolled-back private file stays outside the journal and normal document i
   assert.deepEqual(await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId), { status: 'NOT_OBSERVED' });
   // Retained orphan is not exposed by an application read and has no automatic cleanup.
   const { technicalUploadStorageKey } = await import('../src/lib/technical-upload-plan');
-  const key = technicalUploadStorageKey({ actorId: f.techA.user.id, sessionId: f.techA.session.sessionId!, target: f.target }, p.command.commandId);
+  const key = technicalUploadStorageKey({ actorId: f.techA.user.id, sessionId: f.techA.session.sessionId!, target: f.target,
+    assignmentId: p.command.assignmentId, assignmentRevision: p.command.assignmentRevision }, p.command.commandId);
   assert.deepEqual(await readFile(path.join(root, ...key.split('/'))), bytes);
   await assert.rejects(readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId));
 });
@@ -202,7 +206,7 @@ test('a read-committed raw copy cannot bypass quota serialization even with a ma
       "actorId","sessionId","targetKind","targetId","requestDigest",command,"storageKey","contentSha256","sizeBytes",receipt,proof,"createdAt")
       SELECT ${id}::uuid,${commandId}::uuid,"assignmentId","assignmentRevision","actorId","sessionId","targetKind","targetId","requestDigest",
       jsonb_set(command,'{commandId}',to_jsonb(${commandId}::text)),
-      'technical-submissions/v1/'||repeat('f',64),"contentSha256","sizeBytes",
+      regexp_replace("storageKey",'[a-f0-9]{64}$',repeat('f',64)),"contentSha256","sizeBytes",
       jsonb_set(jsonb_set(receipt,'{commandId}',to_jsonb(${commandId}::text)),'{submissionId}',to_jsonb(${id}::text)),proof,"createdAt"
       FROM "TechnicalUploadSubmission" WHERE "commandId"=${p.command.commandId}::uuid`;
     await tx.auditLog.create({ data: { id: commandId, actorId: f.techA.user.id, event: 'technical_upload_deposited',
@@ -213,11 +217,13 @@ test('a read-committed raw copy cannot bypass quota serialization even with a ma
   assert.deepEqual(await counts(), n);
 });
 
-test('native COMMIT independently rejects missing audit and leaves no submission', options, async () => {
+test('native COMMIT independently rejects missing or altered audit and leaves no submission', options, async () => {
   const f = await fixture(), p = await preview(f); await save(f, p);
-  const n = await counts(), id = randomUUID(), commandId = randomUUID();
+  const n = await counts();
   const url = new URL(process.env.DATABASE_URL!); url.search = '';
   assert.equal(url.hostname, '127.0.0.1'); assert.equal(url.port, '5432'); assert.equal(url.pathname, '/fai_crm_test');
+  for (const altered of [false, true]) {
+  const id = randomUUID(), commandId = randomUUID();
   // Only generated UUIDs enter this native SQL. The ephemeral DB guard and
   // sentinel above are mandatory; no production URL or data is accepted.
   for (const value of [id, commandId, p.command.commandId]) assert.match(value, /^[a-f0-9-]{36}$/);
@@ -228,13 +234,30 @@ INSERT INTO "TechnicalUploadSubmission"(id,"commandId","assignmentId","assignmen
  "actorId","sessionId","targetKind","targetId","requestDigest",command,"storageKey","contentSha256","sizeBytes",receipt,proof,"createdAt")
  SELECT '${id}'::uuid,'${commandId}'::uuid,"assignmentId","assignmentRevision","actorId","sessionId","targetKind","targetId","requestDigest",
  jsonb_set(command,'{commandId}',to_jsonb('${commandId}'::text)),
- 'technical-submissions/v1/'||repeat('e',64),"contentSha256","sizeBytes",
+ regexp_replace("storageKey",'[a-f0-9]{64}$',repeat('e',64)),"contentSha256","sizeBytes",
  jsonb_set(jsonb_set(receipt,'{commandId}',to_jsonb('${commandId}'::text)),'{submissionId}',to_jsonb('${id}'::text)),proof,"createdAt"
  FROM "TechnicalUploadSubmission" WHERE "commandId"='${p.command.commandId}'::uuid;
+${altered ? `INSERT INTO "AuditLog"(id,"actorId",event,"entityType","entityId","before","after","createdAt")
+ SELECT '${commandId}',"actorId",'technical_upload_deposited','TechnicalUploadSubmission','${id}',
+ '{}'::jsonb,'{"action":"deposit_private_document","fileCount":1}'::jsonb,CURRENT_TIMESTAMP
+ FROM "TechnicalUploadSubmission" WHERE id='${id}'::uuid;
+UPDATE "AuditLog" SET "after"="after"||'{"title":"Leak"}'::jsonb WHERE id='${commandId}';` : ''}
 COMMIT;`,
   });
   assert.equal(result.error, undefined); assert.equal(result.status, 3);
   assert.match(result.stdout, /INSERT 0 1/);
   assert.match(result.stderr, /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
+  }
+});
+
+test('rollback retains the physical quota slot across new command IDs, but permits exact recovery', options, async () => {
+  const f = await fixture(1), p = await preview(f), q = await preview(f), n = await counts();
+  await assert.rejects(save(f, p, true), /SYNTHETIC_AFTER_INSERT_ROLLBACK/);
+  assert.deepEqual(await counts(), n);
+  await assert.rejects(save(f, q), /TECHNICAL_UPLOAD_STORAGE_QUOTA/);
+  assert.deepEqual(await counts(), n);
+  const receipt = await save(f, p);
+  assert.deepEqual(await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId), { status: 'RECORDED', receipt });
+  assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
 });

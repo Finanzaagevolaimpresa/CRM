@@ -31,7 +31,7 @@ test('preview describes server-observed bytes, remaining quota and private purpo
 test('confirmation yields only a private write intent, not a persisted receipt or publication', () => {
   const plan = confirm(); assert.ok(plan);
   assert.deepEqual(Buffer.from(plan.privateFile.bytes), bytes);
-  assert.match(plan.privateFile.storageKey, /^technical-submissions\/v1\/[a-f0-9]{64}$/);
+  assert.match(plan.privateFile.storageKey, /^technical-submissions\/v1\/[a-f0-9]{64}\/[a-f0-9]{64}$/);
   assert.deepEqual(plan.quota, { assignmentId: input.assignmentId, revision: 2,
     filesBefore: 0, bytesBefore: 0, filesAfter: 1, bytesAfter: bytes.length });
   assert.deepEqual(plan.audit, { action: 'deposit_private_document', fileCount: 1 });
@@ -93,4 +93,17 @@ test('untrusted paths and financial metadata cannot enter the private plan', () 
     assert.throws(() => previewTechnicalUploadDeposit(key, input, fileName, bytes, current, now));
   }
   assert.throws(() => previewTechnicalUploadDeposit(key, { ...input, title: 'Contratto' }, 'Relazione.pdf', bytes, current, now));
+});
+
+test('one approved revision shares a physical quota bucket across sessions and commands', () => {
+  const first = confirm(); assert.ok(first);
+  const state = { ...current, sessionId: 'b9b67686-f16e-49ad-8320-078a78adb6b2' };
+  const p = previewTechnicalUploadDeposit(key, input, 'Relazione.pdf', bytes, state, now);
+  const next = confirmTechnicalUploadDeposit(key, p.command, p.token, bytes, true, state, now + 1); assert.ok(next);
+  assert.equal(next.privateFile.storageKey.split('/')[2], first.privateFile.storageKey.split('/')[2]);
+  assert.notEqual(next.privateFile.storageKey, first.privateFile.storageKey);
+  const revision = { ...current, assignmentRevision: current.assignmentRevision + 1 };
+  const q = previewTechnicalUploadDeposit(key, { ...input, assignmentRevision: revision.assignmentRevision }, 'Relazione.pdf', bytes, revision, now);
+  const other = confirmTechnicalUploadDeposit(key, q.command, q.token, bytes, true, revision, now + 1); assert.ok(other);
+  assert.notEqual(other.privateFile.storageKey.split('/')[2], first.privateFile.storageKey.split('/')[2]);
 });
