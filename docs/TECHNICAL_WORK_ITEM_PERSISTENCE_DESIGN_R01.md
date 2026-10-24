@@ -33,4 +33,12 @@ Le transizioni di stato hanno un comando distinto dalle modifiche di testo o sca
 5. URL/API, ricerca, conteggi, notifiche, report/esportazioni, metadati, anteprima e download: campi e documenti estranei assenti, documenti tecnici selezionati realmente utilizzabili.
 6. Browser nativo desktop/mobile con valori e stati persistiti, non soltanto liste vuote. Regressioni degli incarichi, delle richieste Admin, delle email e delle condivisioni correnti.
 
-Restano da implementare persistenza, nuove decisioni personali, servizi, chiusura delle vie ordinarie e UI. Le 18 prove pure della preparazione verificano solo contratti di selezione e contesto.
+Restano da integrare la persistenza, nuove decisioni personali, servizi, chiusura delle vie ordinarie e UI. Le prove pure della preparazione non sono prove delle transazioni PostgreSQL.
+
+## Versioni dei record canonici: candidato isolato del 24/10
+
+`scripts/technical-work-items/generation-draft.sql` prepara una generazione monotona separata per `Task` e `DocumentChecklistItem`, senza modificare i loro byte, creare legami o concedere accesso. Un aggiornamento di campo, relazione, documento o lifecycle incrementa la generazione; cancellazione e reinserimento non riutilizzano la versione precedente. Il nome e l'ID dei due tipi rimangono distinti anche quando gli ID coincidono. Le scritture dirette e il troncamento del registro sono negati secondo il meccanismo di versioni già usato per aziende e referenti.
+
+Il frammento non appartiene a `prisma/migrations` e rifiuta ogni database privo del nome e del marcatore sintetici esatti. Non è SQL produttiva approvata. `qualify-generation.sql` prepara una prova PostgreSQL con conservazione dei byte iniziali, aggiornamento ordinario, no-op, rinomina, riutilizzo di identità, cambi di relazione/lifecycle, diniego di scritture dirette ed errore tardivo con rollback. Termina con ROLLBACK. La prova SQL non è stata eseguita: le nuove prove DB sono ammesse soltanto nella CI autorizzata. Concorrenza tra connessioni e interazione con il futuro giornale richiedono ulteriori test DB.
+
+`technical-work-item-generation.ts` prepara la lettura bloccante dopo i lock canonici: una generazione assente, ambigua, di altro tipo o non valida non viene creata o riparata. Il lettore non concede accesso e non è importato dal runtime. La futura transazione dovrà mantenere il lock della riga canonica fino a modifica, ricevuta e audit atomici. Un nuovo numero schema e il piano SQL completo verranno definiti soltanto dopo la riconciliazione della baseline e dell'intero incremento.
