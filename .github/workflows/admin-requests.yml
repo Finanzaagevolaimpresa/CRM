@@ -1,7 +1,7 @@
 name: Admin request queue
 on:
   pull_request:
-    paths: ['package.json', 'package-lock.json', 'prisma/**', 'src/lib/admin-request*', 'src/lib/approved-communication*', 'src/lib/technical-assignment*', 'src/lib/record-update*', 'src/app/admin-requests/**', 'src/app/api/admin-requests/**', 'src/app/communications/**', 'src/app/leads/**', 'src/app/clients/**', 'src/app/technical-work/**', 'src/components/admin-request*', 'tests/admin-request*', 'tests/admin-requests/**', 'scripts/admin-requests/**', '.github/workflows/admin-requests.yml']
+    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'src/lib/admin-request*', 'src/lib/approved-communication*', 'src/lib/technical-assignment*', 'src/lib/record-update*', 'src/app/admin-requests/**', 'src/app/api/admin-requests/**', 'src/app/communications/**', 'src/app/leads/**', 'src/app/clients/**', 'src/app/technical-work/**', 'src/components/admin-request*', 'tests/admin-request*', 'tests/admin-requests/**', 'scripts/admin-requests/**', '.github/workflows/admin-requests.yml']
 permissions: { contents: read }
 concurrency:
   group: admin-requests-${{ github.event.pull_request.number }}

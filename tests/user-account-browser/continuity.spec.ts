@@ -1,6 +1,8 @@
 import { test, expect, type Page, type Request } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
@@ -98,6 +100,35 @@ async function replay(page: Page, captured: Request, fromId = ownerId, toId = ow
   });
 }
 
+test('removal stays disabled in initial server HTML and respects self-removal denial after hydration', async ({ browser }) => {
+  const authenticated = await browser.newContext({ baseURL: origin });
+  const admin = await authenticated.newPage();
+  await login(admin, 'admin');
+  const cold = await browser.newContext({ baseURL: origin, javaScriptEnabled: false,
+    storageState: await authenticated.storageState() });
+  const page = await cold.newPage();
+  await page.goto('/settings/users/' + ownerId);
+  const form = page.getByRole('form', { name: 'Rimozione account' });
+  await expect(form).toHaveAttribute('data-interactive-ready', 'false');
+  await expect(form.getByRole('checkbox')).toBeDisabled();
+  await expect(form.getByRole('button', { name: 'Rimuovi account' })).toBeDisabled();
+  if (process.env.R23_MANUAL_EVIDENCE) {
+    await mkdir(process.env.R23_MANUAL_EVIDENCE, { recursive: true });
+    await form.screenshot({ path: path.join(process.env.R23_MANUAL_EVIDENCE, 'removal-readiness-cold-desktop.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(form.getByRole('button', { name: 'Rimuovi account' })).toBeDisabled();
+    await form.screenshot({ path: path.join(process.env.R23_MANUAL_EVIDENCE, 'removal-readiness-cold-mobile.png') });
+  }
+  expect((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).deletedAt).toBeNull();
+  expect(await db.auditLog.count({ where: { entityId: ownerId, event: 'user_removed' } })).toBe(0);
+  await admin.goto('/settings/users/' + adminId);
+  const own = admin.getByRole('form', { name: 'Rimozione account' });
+  await expect(own).toHaveAttribute('data-interactive-ready', 'true');
+  await expect(own.getByRole('checkbox')).toBeDisabled();
+  await expect(own.getByRole('button', { name: 'Rimuovi account' })).toBeDisabled();
+  await cold.close(); await authenticated.close();
+});
+
 test('removal requires admin step-up and preserves work, archive and immediate revocation through real HTTP', async ({ browser }) => {
   const adminContext = await browser.newContext({ baseURL: origin }), ownerContext = await browser.newContext({ baseURL: origin }), otherContext = await browser.newContext({ baseURL: origin });
   const admin = await adminContext.newPage(), owner = await ownerContext.newPage(), other = await otherContext.newPage();
@@ -106,6 +137,7 @@ test('removal requires admin step-up and preserves work, archive and immediate r
   await expect(owner.getByText('Continuity browser client', { exact: true }).first()).toBeVisible();
   await admin.goto('/settings/users/' + ownerId);
   const removal = admin.getByRole('form', { name: 'Rimozione account' });
+  await expect(removal).toHaveAttribute('data-interactive-ready', 'true');
   await removal.getByRole('checkbox').check();
   const pending = admin.waitForRequest(request => Boolean(request.headers()['next-action']));
   await removal.getByRole('button', { name: 'Rimuovi account' }).click();
@@ -124,6 +156,7 @@ test('removal requires admin step-up and preserves work, archive and immediate r
   await admin.getByRole('button', { name: 'Conferma per cinque minuti' }).click();
   await expect(admin).toHaveURL(/status=active/);
   await admin.goto('/settings/users/' + ownerId);
+  await expect(removal).toHaveAttribute('data-interactive-ready', 'true');
   await removal.getByRole('checkbox').check();
   await removal.getByRole('button', { name: 'Rimuovi account' }).click();
   await expect(admin.getByRole('heading', { name: 'Account rimosso', exact: true })).toBeVisible();
