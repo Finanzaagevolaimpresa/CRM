@@ -32,6 +32,12 @@ export type TechnicalUploadWriteIntent = {
   audit: { action: 'deposit_private_document'; fileCount: 1 };
 };
 
+export function technicalUploadStorageKey(current: Pick<TechnicalUploadAdmission, 'actorId' | 'sessionId' | 'target'>,
+  commandId: string) {
+  return `technical-submissions/v1/${canonicalSha256({ protocol: 'TECHNICAL_UPLOAD_STORAGE_V1',
+    actorId: current.actorId, sessionId: current.sessionId, target: current.target, commandId })}`;
+}
+
 /** Recheck exact supplied bytes after the user confirms, before any file/DB
  * write. Storage identity does not change with content, preventing an altered
  * retry from creating a second file for the same actor/session/command. */
@@ -48,10 +54,8 @@ export function confirmTechnicalUploadDeposit(key: PrivilegedStepUpKey, raw: unk
     const stableBytes = Uint8Array.from(bytes);
     const actual = describeTechnicalUpload(command.file.fileName, stableBytes, current.profile);
     if (canonicalJson(actual) !== canonicalJson(command.file)) return null;
-    const storageIdentity = canonicalSha256({ protocol: 'TECHNICAL_UPLOAD_STORAGE_V1',
-      actorId: current.actorId, sessionId: current.sessionId, target: current.target, commandId: command.commandId });
     return { command, requestDigest: technicalUploadRequestDigest(current.target, command),
-      privateFile: { storageKey: `technical-submissions/v1/${storageIdentity}`,
+      privateFile: { storageKey: technicalUploadStorageKey(current, command.commandId),
         bytes: stableBytes, sha256: actual.contentSha256, sizeBytes: actual.sizeBytes },
       quota: { assignmentId: current.assignmentId, revision: current.assignmentRevision,
         filesBefore: current.consumedFiles, bytesBefore: current.consumedBytes,

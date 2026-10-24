@@ -1,0 +1,89 @@
+name: Technical upload preparation
+on:
+  pull_request:
+    paths: ['src/lib/technical-*', 'src/lib/storage.ts', 'src/lib/financial-privacy-policy.ts', 'tests/technical-upload*', 'scripts/technical-upload/**', '.github/workflows/technical-upload-preparation.yml', 'package.json', 'package-lock.json', 'prisma/**']
+permissions: { contents: read }
+concurrency:
+  group: technical-upload-preparation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  isolated:
+    name: Dormant private upload persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-upload-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-upload-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      TECHNICAL_UPLOAD_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-upload-auth-only-000000000000
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-upload-step-up-0000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Verify immutable schema66 and isolated draft guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/technical-upload-preparation"
+          mkdir -p "$evidence"
+          export TECHNICAL_UPLOAD_EVIDENCE="$evidence"
+          echo "TECHNICAL_UPLOAD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/upload-schema65"
+          mkdir -p "$historical"
+          git archive eb5511fb6c82e15263d6cddf18e7ed36e5100442 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/technical-upload/schema67-draft.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq TECHNICAL_UPLOAD_SCHEMA66_REQUIRED "$evidence/wrong-base.log"
+          npx prisma migrate deploy
+          bash scripts/technical-upload/qualify-draft.sh
+      - name: Isolated SQL, atomic audit, quota concurrency and lost response
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/technical-upload-persistence-db.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 9' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 9' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+      - name: Exact file and decision contracts, including Linux hard links
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/technical-upload-admission.test.ts tests/technical-upload-assignment.test.ts tests/technical-upload-contract.test.ts tests/technical-upload-plan.test.ts tests/technical-upload-record.test.ts tests/technical-upload-storage.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+          grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+          grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+      - name: Bind exact source and preserve production gate
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_UPLOAD_EVIDENCE/source.txt"
+          git diff --exit-code
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technical-upload-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: '${{ runner.temp }}/technical-upload-preparation'
+          if-no-files-found: error
+          retention-days: 14

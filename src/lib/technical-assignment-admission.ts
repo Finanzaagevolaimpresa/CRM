@@ -17,13 +17,13 @@ function deny(): never { throw new TechnicalAssignmentError('DENIED'); }
  * ownership/client relationship or unverified JSON can substitute for the full
  * immutable decision journal and current personal authority. */
 export async function lockAuthorizedTechnicalAssignment(tx: Tx, state: TechnicalAssignmentTransaction,
-  target: TechnicalTargetReference, write = false) {
+  target: TechnicalTargetReference, write = false, options: { lockAssignmentForWrite?: true } = {}) {
   const context = await lockTechnicalAssignmentContext(tx, target, { writeTarget: write });
   if (!context || !state.recipient || hasSelectiveClientContext(state.current, context)
     || hasSelectiveContext(state.current, context)
     || (target.kind === 'TechnicalPractice' && isSelectivePractice(state.current, target.targetId))) deny();
   const ref = { ...target, recipientId: state.current.userId };
-  const record = await lockTechnicalAssignmentRecord(tx, ref, 'read');
+  const record = await lockTechnicalAssignmentRecord(tx, ref, options.lockAssignmentForWrite ? 'decision' : 'read');
   if (!record) deny();
   const current: CurrentTechnicalAssignmentProof = {
     userId: state.current.userId, role: state.current.role, active: state.current.active,
