@@ -5,6 +5,7 @@ import { hasClientReadGrant, type ClientReadScope } from './client-read-perimete
 import { hasGlobalReadAccess } from './read-supervision';
 import type { FinancialDocumentMetadata } from './financial-privacy-policy';
 import { canAccessFinancialDocumentMetadata, type FinancialActor } from './financial-access';
+import { ordinaryDocumentVisibilityAllows } from './technical-document-visibility';
 import { hasSelectiveContext, isSelectiveProject, type SelectiveProjectScope } from './selective-project-policy';
 import { isSelectiveLead, type SelectiveLeadScope } from './selective-lead-policy';
 import { hasSelectiveClientContext, isSelectiveClient, type SelectiveClientContext, type SelectiveClientScope } from './selective-client-policy';
@@ -158,7 +159,8 @@ export function canViewClientContext(user: Actor, context: ClientScopedContext) 
   if (context.project) return projectAllowed;
   return clientAllowed;
 }
-export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+export function canViewDocument(user: Actor, document: Pick<Document, 'clientId' | 'projectId' | 'clientServiceId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type' | 'visibilityLevel'> & FinancialDocumentMetadata & { client?: ClientAccessContext | null; project?: ProjectAccessContext | null; clientService?: ServiceAccessContext | null }, canReadSensitive = false) {
+  if (!ordinaryDocumentVisibilityAllows(document.visibilityLevel)) return false;
   if (hasSelectiveClientContext(user, document)) return false;
   if (hasSelectiveContext(user, document) || ('id' in document && user.selectiveDocumentIds?.includes(String(document.id)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, document)) return false;
@@ -348,11 +350,12 @@ export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
   return (!item.createdById || item.createdById === getActorId(user)) && !!item.client && hasClientResponsibility(user, item.client);
 }
 
-export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type'> & FinancialDocumentMetadata & {
+export function canEditDocument(user: Actor, document: Pick<Document, 'clientId' | 'uploadedById' | 'containsSensitiveData' | 'documentCategory' | 'type' | 'visibilityLevel'> & FinancialDocumentMetadata & {
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }, canReadSensitive = false) {
+  if (!ordinaryDocumentVisibilityAllows(document.visibilityLevel)) return false;
   if (hasSelectiveClientContext(user, document)) return false;
   if (hasSelectiveContext(user, document) || ('id' in document && user.selectiveDocumentIds?.includes(String(document.id)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, document)) return false;

@@ -5,6 +5,7 @@ import { Card, MetaCell, Table } from '@/components/ui';
 import { PaginationNav } from '@/components/pagination-nav';
 import { prisma } from '@/lib/prisma';
 import { requirePermission } from '@/lib/auth';
+import { ordinaryDocumentCountsByClient } from '@/lib/technical-document-visibility';
 import { documentOutsideSelection, serviceOutsideSelection } from '@/lib/selective-project-policy';
 import {
   clientVisibilityWhere,
@@ -31,7 +32,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
   const [users, serviceCounts, documentCounts, latestServices] = clientIds.length ? await Promise.all([
     ownerIds.length ? prisma.user.findMany({ where: { id: { in: ownerIds }, active: true }, select: { id: true, name: true } }) : Promise.resolve([]),
     prisma.clientService.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null, ...serviceOutsideSelection(session) }, _count: { _all: true } }),
-    prisma.document.groupBy({ by: ['clientId'], where: { clientId: { in: clientIds }, deletedAt: null, ...documentOutsideSelection(session) }, _count: { _all: true } }),
+    prisma.document.groupBy({ by: ['clientId', 'visibilityLevel'], where: { clientId: { in: clientIds }, deletedAt: null, ...documentOutsideSelection(session) }, _count: { _all: true } }),
     prisma.clientService.findMany({
       where: { clientId: { in: clientIds }, deletedAt: null, operationalStatus: { notIn: ['chiusa','archiviata'] }, ...serviceOutsideSelection(session) },
       orderBy: [{ clientId: 'asc' }, { statusUpdatedAt: 'desc' }, { id: 'desc' }],
@@ -41,7 +42,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<Re
   ]) : [[], [], [], []];
   const userById = new Map(users.map((user) => [user.id, user.name]));
   const serviceCountByClient = new Map(serviceCounts.map((row) => [row.clientId, row._count._all]));
-  const documentCountByClient = new Map(documentCounts.map((row) => [row.clientId, row._count._all]));
+  const documentCountByClient = ordinaryDocumentCountsByClient(documentCounts);
   const mainStatusByClient = new Map(latestServices.map((service) => [service.clientId, service.operationalStatus]));
   const userName = (id?: string | null) => id ? userById.get(id) : undefined;
   const serviceCount = (clientId: string) => serviceCountByClient.get(clientId) ?? 0;

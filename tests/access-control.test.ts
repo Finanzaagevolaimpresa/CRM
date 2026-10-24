@@ -51,6 +51,7 @@ const document = (overrides: Record<string, unknown> = {}) => ({
   projectId: null,
   clientServiceId: null,
   uploadedById: 'uploader',
+  visibilityLevel: 'interno',
   containsSensitiveData: false,
   documentCategory: 'altro',
   type: 'documento',

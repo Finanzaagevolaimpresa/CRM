@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { canonicalJson, canonicalSha256 } from './canonical-json';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { technicalUploadReviewAdmission, readTechnicalUploadReviewRecord } from './technical-upload-review-contract';
+import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
+export { technicalDocumentPrivateVisibility } from './technical-document-visibility';
 
 const uuid = z.string().uuid(), hash = z.string().regex(/^[a-f0-9]{64}$/);
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const instant = z.number().int().positive().safe();
-export const technicalDocumentPrivateVisibility = 'technical_admin_private_v1' as const;
 
 /** Preparation only: no route or writer consumes this contract yet. PRIVATE
  * must be enforced on every canonical reader before it can create a Document. */

@@ -16,7 +16,7 @@ test('selection limits Admin, assignments, client grants and permission override
     assert.equal(canViewService(actor, service), false);
     assert.equal(canAssignService(actor, service), false);
     assert.equal(canViewDocument(actor, { id: 'document', projectId: project.id, clientServiceId: service.id, clientId: client.id, uploadedById: actor.userId,
-      containsSensitiveData: false, documentCategory: 'altro', type: 'text/plain', project, client, clientService: service } as Parameters<typeof canViewDocument>[1]), false);
+      containsSensitiveData: false, visibilityLevel: 'interno', documentCategory: 'altro', type: 'text/plain', project, client, clientService: service } as Parameters<typeof canViewDocument>[1]), false);
     assert.equal(canViewTask(actor, { assignedToId: actor.userId, createdById: actor.userId, clientId: client.id, project, client }), false);
     assert.equal(canViewTechnicalPractice(actor, { clientId: client.id, client, project, technicalOwnerId: actor.userId }), false);
     assert.equal(canEditTechnicalPractice(actor, { projectId: project.id, technicalOwnerId: actor.userId }), false);

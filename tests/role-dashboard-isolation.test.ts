@@ -9,7 +9,7 @@ const client = { id: 'shared-client', salesOwnerId: 'alice', consultantId: 'alic
 const project = { id: 'project', clientId: client.id, consultantId: 'bob', client };
 const service = { id: 'service', clientId: client.id, projectId: project.id, assignedToId: 'bob', client, project };
 const task = { clientId: client.id, projectId: project.id, clientServiceId: service.id, assignedToId: 'bob', createdById: 'alice', client, project, clientService: service };
-const document = { ...task, uploadedById: 'alice', containsSensitiveData: false, documentCategory: 'altro', type: 'text/plain' };
+const document = { ...task, uploadedById: 'alice', visibilityLevel: 'interno', containsSensitiveData: false, documentCategory: 'altro', type: 'text/plain' };
 const checklist = { ...task, updatedById: 'alice' };
 const practice = { client, technicalOwnerId: 'bob', commercialOwnerId: null };
 

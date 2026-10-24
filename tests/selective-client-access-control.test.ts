@@ -32,7 +32,7 @@ test('client selection overrides global supervision, ownership and an existing f
 test('client restriction closes linked ordinary operations even for an assigned Admin recipient', () => {
   const ctx = context();
   const task = { ...ctx, assignedToId: admin.userId, createdById: admin.userId };
-  const document = { ...ctx, uploadedById: admin.userId, containsSensitiveData: false, documentCategory: 'altro', type: 'documento' };
+  const document = { ...ctx, uploadedById: admin.userId, visibilityLevel: 'interno', containsSensitiveData: false, documentCategory: 'altro', type: 'documento' };
   const checklist = { ...ctx, createdById: admin.userId, updatedById: admin.userId };
   const practice = { ...ctx, technicalOwnerId: admin.userId, commercialOwnerId: admin.userId };
   const checks: Array<[string, (actor: Actor) => boolean]> = [

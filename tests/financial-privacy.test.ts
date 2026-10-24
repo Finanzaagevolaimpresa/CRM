@@ -11,7 +11,7 @@ import { canViewPaymentListRecord } from '../src/lib/business-list-access';
 const allowed = ['admin', 'amministrazione'] as const;
 const excluded = ['direzione', 'commerciale', 'consulente', 'revisore', 'backoffice', 'collaboratore_limitato'] as const;
 const client = { id: 'c', salesOwnerId: 'owner', consultantId: 'owner' };
-const document = { id: 'doc', clientId: 'c', projectId: null, clientServiceId: null, client, uploadedById: 'owner', containsSensitiveData: false, documentCategory: 'altro', type: 'application/pdf', title: 'Documento tecnico', fileName: 'tecnico.pdf' };
+const document = { id: 'doc', clientId: 'c', projectId: null, clientServiceId: null, client, uploadedById: 'owner', visibilityLevel: 'interno', containsSensitiveData: false, documentCategory: 'altro', type: 'application/pdf', title: 'Documento tecnico', fileName: 'tecnico.pdf' };
 
 for (const role of excluded) test(`${role}: financial access denied despite explicit allow, ownership, sharing and sensitive access`, () => {
   const actor = { role, active: true, userId: 'owner', clientReadScope: ['c'], permissionOverrides: financialPermissions.map(permission => ({ permission, allowed: true })) };

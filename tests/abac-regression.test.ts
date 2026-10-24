@@ -33,6 +33,7 @@ const service = (clientId: string, assignedToId: string | null = null) => ({
 const document = (overrides: Record<string, unknown> = {}) => ({
   clientId: 'client-1',
   uploadedById: 'user-1',
+  visibilityLevel: 'interno',
   containsSensitiveData: false,
   documentCategory: 'altro',
   type: 'application/pdf',
