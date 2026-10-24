@@ -107,7 +107,7 @@ export function assessInitialServiceReviews(rawPlan: unknown, rawReviews: unknow
 const text = z.string().trim().min(1).max(6000);
 export const initialServiceTemplateSchema = z.object({
   clientName: z.string().trim().min(1).max(300), date: z.string().date(), revision: z.number().int().positive(),
-  sections: z.record(text), sources: z.array(z.object({ title: z.string().trim().min(1).max(300), reference: text,
+  sections: z.record(z.string(), text), sources: z.array(z.object({ title: z.string().trim().min(1).max(300), reference: text,
     verifiedAt: z.string().date(), limitation: text }).strict()).min(1).max(50),
   limits: text, nextStep: text,
 }).strict();

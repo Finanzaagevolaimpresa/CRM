@@ -1,7 +1,7 @@
 name: Technical assignments
 on:
   pull_request:
-    paths: ['prisma/**', 'ops/technical-assignment-authority-enrollment.sql', 'scripts/technical-assignments/**', 'src/lib/technical-*', 'src/lib/selective-*.ts', 'src/lib/privileged-access.ts', 'src/components/technical-*', 'src/app/technical-work/**', 'src/app/technical-office/**', 'src/app/projects/**', 'src/app/search/**', 'tests/technical-assignment*', 'tests/technical-assignments/**', 'tests/technical-work*', 'docs/TECHNICAL_ASSIGNMENTS*', '.github/workflows/technical-assignments.yml']
+    paths: ['package.json', 'package-lock.json', 'prisma/**', 'ops/technical-assignment-authority-enrollment.sql', 'scripts/technical-assignments/**', 'src/lib/technical-*', 'src/lib/selective-*.ts', 'src/lib/privileged-access.ts', 'src/components/technical-*', 'src/app/technical-work/**', 'src/app/technical-office/**', 'src/app/projects/**', 'src/app/search/**', 'tests/technical-assignment*', 'tests/technical-assignments/**', 'tests/technical-work*', 'docs/TECHNICAL_ASSIGNMENTS*', '.github/workflows/technical-assignments.yml']
 permissions: { contents: read }
 concurrency:
   group: technical-assignments-${{ github.event.pull_request.number }}

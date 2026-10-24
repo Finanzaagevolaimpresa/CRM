@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import test, { after, afterEach, before, beforeEach } from "node:test";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { bindHistoricalPostcssToolchain } from './historical-postcss-toolchain';
+import { bindHistoricalZodToolchain } from './historical-zod-toolchain';
 import {
   assertRegistryActivationReady,
   assertRegistryStartupReady,
@@ -1039,6 +1040,7 @@ test(
     rmSync(archive);
     symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
     bindHistoricalPostcssToolchain(root);
+    bindHistoricalZodToolchain(root, '77828266853c935cf6805cc546ceafdab43d310d');
     const runtimeEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
       AUTH_SECRET: "synthetic-pr88-only",
