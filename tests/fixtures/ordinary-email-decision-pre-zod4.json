@@ -1,0 +1,97 @@
+{
+  "snapshot": {
+    "schema": "fai.approved-email.v1",
+    "channel": "EMAIL_MANUAL",
+    "messageId": "f406af82-3a4a-4318-9534-e34720428c86",
+    "revision": 1,
+    "context": {
+      "kind": "TECHNICAL",
+      "id": "synthetic-practice"
+    },
+    "clientId": "synthetic-client",
+    "mailboxId": "ad030df5-2264-4ce1-8f75-ddf188679c65",
+    "mailboxRevision": 1,
+    "from": "comunicazioni@finanzaagevolaimpresa.it",
+    "replyTo": "comunicazioni@finanzaagevolaimpresa.it",
+    "to": [
+      "recipient@invalid.test"
+    ],
+    "cc": [
+      "visible@invalid.test"
+    ],
+    "bcc": [
+      "hidden@invalid.test"
+    ],
+    "subject": "Decisione sintetica",
+    "body": "Contenuto esterno non autorevole.",
+    "classification": "ORDINARY",
+    "attachments": [
+      {
+        "documentId": "doc-one",
+        "versionId": "version-one",
+        "sha256": "42da2882caf4a2b5ac1c0741f10e7307a21dd58a65dcce22fd81d21de6bd20fc",
+        "bytes": 22,
+        "filename": "synthetic.txt",
+        "mimeType": "text/plain"
+      }
+    ]
+  },
+  "channel": {
+    "purpose": "ORDINARY_SMTP",
+    "mailboxId": "ad030df5-2264-4ce1-8f75-ddf188679c65",
+    "mailboxRevision": 1,
+    "address": "comunicazioni@finanzaagevolaimpresa.it",
+    "providerReference": "register_it",
+    "configurationReference": "M4_COMUNICAZIONI_REGISTER_IT",
+    "channelRevision": 1,
+    "qualificationReference": "SYNTHETIC_ONLY"
+  },
+  "current": {
+    "actor": {
+      "userId": "synthetic-personal-authority",
+      "sessionId": "ecf5e0c2-5924-4739-9ad4-9e077c9995b8",
+      "role": "admin",
+      "active": true,
+      "expiresAt": "2026-10-16T12:10:00.000Z",
+      "registryExpiresAt": "2026-10-16T12:10:00.000Z"
+    },
+    "authority": {
+      "id": "ordinary-email",
+      "purpose": "ORDINARY_EMAIL",
+      "userId": "synthetic-personal-authority",
+      "mailboxId": "ad030df5-2264-4ce1-8f75-ddf188679c65",
+      "revision": 1,
+      "enabled": true
+    },
+    "contextHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "key": {
+    "version": 1,
+    "secret": "synthetic-ordinary-decision-test-key-000000000000000"
+  },
+  "bytes": "U1lOVEhFVElDIFZFUlNJT04gT05FCg==",
+  "decision": {
+    "protocol": "FAI_ORDINARY_EMAIL_PERSONAL_DECISION_V1",
+    "decisionId": "2ad84f5f-c24f-465b-a597-b5fe92e3d7d8",
+    "intentHash": "163bf0f2159e120a57c102b3d48e10f5579395923470e007ed3f72219a070236",
+    "mimeHash": "37ba1bfa1971420b01e651410bb10d609db2a9222433925ec0b06ea22adc28ae",
+    "messageId": "f406af82-3a4a-4318-9534-e34720428c86",
+    "draftRevision": 1,
+    "draftHash": "a58d036b7c80ae6a9c5ae4ca613dae4ac54def95b57800b76a0d24282a445e61",
+    "preparedAt": "2026-10-16T12:00:00.000Z",
+    "validUntil": "2026-10-16T12:05:00.000Z",
+    "previewHash": "c3ac95062f1bbdf8d24d2c1309aa566a97b1d5a7d1849a599072fa44d5d59c3b",
+    "contextHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authorityId": "ordinary-email",
+    "authorityRevision": 1,
+    "actorId": "synthetic-personal-authority",
+    "sessionId": "ecf5e0c2-5924-4739-9ad4-9e077c9995b8",
+    "mailboxId": "ad030df5-2264-4ce1-8f75-ddf188679c65",
+    "mailboxRevision": 1,
+    "channelRevision": 1,
+    "keyVersion": 1,
+    "approvedAt": "2026-10-16T12:00:00.000Z"
+  },
+  "proof": "9dfd5cac7e2e138c0b54648448fd3a46a8943f804c22fbf5083ec9a9649e926e",
+  "expectedMimeHash": "37ba1bfa1971420b01e651410bb10d609db2a9222433925ec0b06ea22adc28ae"
+}

@@ -57,6 +57,23 @@ test('HTML-only messages retain private originals without creating a text projec
   assert.deepEqual(Buffer.from(message.mime!.rawBase64, 'base64'), raw);
 });
 
+test('bounded adjacent encoded words decode exactly and preserve original evidence', async () => {
+  const raw = plain(['Subject: ' + Array(30).fill(Array(30).fill('=?UTF-8?Q?a?=').join(' ')).join('\r\n ')], 'SYNTHETIC');
+  const message = (await fixture(raw).read()).items[0].message;
+  assert.equal(message.subject, 'a'.repeat(900));
+  assert.equal(message.body, 'SYNTHETIC\n');
+  assert.equal(message.mime!.sha256, sha(raw));
+  assert.deepEqual(Buffer.from(message.mime!.rawBase64, 'base64'), raw);
+});
+
+test('oversized encoded-word headers reject the complete inbound page without truncating evidence', async () => {
+  const raw = plain(['Subject: ' + Array(100).fill(Array(30).fill('=?UTF-8?Q?a?=').join(' ')).join('\r\n ')]);
+  const f = fixture();
+  f.set({ ...f.batch, items: [f.item, { ...f.item, providerId: 'uid-2', raw, expectedBytes: raw.length }] });
+  await assert.rejects(f.read(), /^Error: ORDINARY_EMAIL_INBOUND_MIME_DENIED$/);
+  assert.equal(f.calls(), 1);
+});
+
 test('forwarded messages remain opaque attachments and cannot supply a target reference or body', async () => {
   const inner = plain(['In-Reply-To: <forged@invalid.test>'], 'INNER_PRIVATE').toString('base64');
   const raw = plain(['Content-Type: multipart/mixed; boundary="outer"'], [
