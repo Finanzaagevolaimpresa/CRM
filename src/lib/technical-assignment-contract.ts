@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { technicalWorkItemGrants } from './technical-work-item-grant';
 
 // Closed domain selections; the contract alone never grants access. Runtime
 // admission also requires the retained journal and current personal authority.
@@ -8,9 +9,9 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const instant = z.string().datetime({ offset: true });
 
 export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document'] as const;
-// Only these actions belong to the first operational increment. The broader
-// contract prepares later work; issuing a grant must not authorize dormant code.
-export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin'] as const;
+// Upload remains outside this increment; checklist/deadline operations require
+// separate, explicit item selections in the same retained personal decision.
+export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines'] as const;
 export const projectTechnicalFields = ['title', 'description', 'status'] as const;
 export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;
@@ -29,6 +30,7 @@ const selectionBase = {
   actions: distinct(z.enum(technicalAssignmentActions), technicalAssignmentActions.length, 1),
   expiresAt: instant,
   documents: z.array(documentVersion).max(20),
+  workItems: technicalWorkItemGrants.optional(),
 };
 const projectScope = z.object({
   ...selectionBase, kind: z.literal('Project'),
@@ -49,6 +51,11 @@ export const technicalAssignmentSelection = z.discriminatedUnion('kind', [projec
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'An editable field or status must also be readable', path: ['readableFields'] });
   }
   const versions = value.documents.map(d => `${d.documentId}:${d.version}`);
+  for (const [kind, action] of [['Task', 'manage_deadlines'], ['ChecklistItem', 'manage_checklist']] as const) {
+    if (value.actions.includes(action) !== !!value.workItems?.some(item => item.kind === kind)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Each item action requires an explicit item selection', path: ['workItems'] });
+    }
+  }
   if (new Set(versions).size !== versions.length || new Set(value.documents.map(d => d.fileId)).size !== value.documents.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A document version may be selected once', path: ['documents'] });
   }

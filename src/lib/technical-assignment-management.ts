@@ -15,6 +15,7 @@ import { hasSelectiveContext } from './selective-project-policy';
 import { isSelectivePractice } from './selective-practice-policy';
 import { loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
 import { listClientDocumentOptions } from './selective-client-documents';
+import { listTechnicalWorkItemOptions } from './technical-work-item-source';
 
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 function deny(): never { throw new TechnicalAssignmentError('DENIED'); }
@@ -80,11 +81,14 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
       }
     }
     const selected = recipientId ? await lockTechnicalAssignmentRecord(tx, { ...target, recipientId }, 'read') : null;
+    const workItems = eligible ? await listTechnicalWorkItemOptions(tx, state, context, documentOptions)
+      : { options: [], limited: false };
     return { target, contextSha256: context.contextSha256, operational: context.operational, fields,
       fieldCatalogue: technicalFieldCatalogue(target.kind),
       people: people.slice(0, 200).filter(row => admitsTechnicalRolePermission(row, target.kind))
         .map(row => ({ id: row.id, name: row.name, email: row.email })), peopleLimited: people.length > 200,
       assignments, assignmentsLimited: refs.length > 200, documentOptions, documentsLimited,
+      workItemOptions: workItems.options, workItemsLimited: workItems.limited,
       recipient: person ? { id: person.id, name: person.name, email: person.email, epoch: person.recordUpdateEpoch } : null,
       recipientEligible: eligible, allowedActions, revision: selected?.revision ?? 0,
       currentAssignmentId: selected?.id ?? null, currentRevokedAt: selected?.revokedAt ?? null,

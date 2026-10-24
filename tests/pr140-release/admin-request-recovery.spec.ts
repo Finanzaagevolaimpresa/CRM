@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-test('schema65 restart preserves internal requests, exact unapproved drafts and current origin denial', async ({ browser }) => {
+test('schema66 restart preserves internal requests, exact unapproved drafts and current origin denial', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_ADMIN_REQUEST_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; ownerEmail: string; salesEmail: string; otherEmail: string; requests: Record<string, { id: string; leadId: string }> };
   expect(f.synthetic).toBe(true); const origin = process.env.PRACTICE_READINESS_BROWSER_ORIGIN!;

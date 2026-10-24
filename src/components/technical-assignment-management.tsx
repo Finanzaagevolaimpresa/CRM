@@ -6,6 +6,8 @@ import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from 
 import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
 import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import { technicalAssignmentCommand, type TechnicalAssignmentSelection } from '@/lib/technical-assignment-contract';
+import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
+import { TechnicalWorkItemChoices, type ItemChoices } from './technical-work-item-choices';
 
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
@@ -57,6 +59,11 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
       <h3 className="font-bold">Versioni documentali incluse</h3>
       {!preview.documents.length ? <p>Nessun documento selezionato.</p> : <ul className="space-y-2">{preview.documents.map(doc =>
         <li key={doc.fileId} className="break-words">{doc.title} · {doc.fileName} · versione {doc.version} · {doc.allowDownload ? 'anteprima e download' : 'solo anteprima'}</li>)}</ul>}
+      <h3 className="font-bold">Checklist, attività e scadenze incluse</h3>
+      {!preview.workItems.length ? <p>Nessun elemento selezionato.</p> : preview.workItems.map(item => <div key={`${item.kind}:${item.itemId}`} className="space-y-2 rounded-xl bg-white p-3">
+        <strong>{item.kind === 'Task' ? 'Attività' : 'Elemento checklist'}</strong>
+        <dl>{item.fields.map(field => <div key={field.key} className="min-w-0"><dt className="font-semibold">{technicalItemFieldLabels[field.key]} · {field.editable ? 'modificabile' : 'lettura'}</dt>
+          <dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></div>)}
       <p>Il referente commerciale resta invariato. Altri clienti, progetti, pratiche e versioni future dei documenti non sono inclusi.</p>
       <p>Per questa persona, il fascicolo generale del cliente e i percorsi ordinari collegati restano esclusi: il lavoro tecnico passa dagli incarichi espliciti. Questo limite resta anche dopo revoca o scadenza e non rinnova accessi precedenti.</p>
     </> : <p>Il lavoro e lo storico sono conservati. La revoca interrompe questo incarico e non rinnova altri accessi.</p>}
@@ -83,6 +90,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [readable, setReadable] = useState<string[]>([]), [editable, setEditable] = useState<string[]>([]);
   const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>([]);
   const [chosenDocuments, setDocuments] = useState<Record<string, boolean>>({});
+  const [chosenItems, setItems] = useState<ItemChoices>({});
   const [expires, setExpires] = useState(''), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
   const [commandId, setCommand] = useState(initialCommandId), [generation, setGeneration] = useState(0);
   const [previewGeneration, setPreviewGeneration] = useState(-1), [submitted, setSubmitted] = useState(false);
@@ -97,7 +105,11 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       readableFields: readable, editableFields: editable, expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : '',
       documents: data.documentOptions.filter(doc => Object.hasOwn(chosenDocuments, doc.fileId)).map(doc => ({
         documentId: doc.documentId, fileId: doc.fileId, version: doc.version, contentSha256: doc.contentSha256,
-        contextSha256: doc.contextSha256, allowDownload: chosenDocuments[doc.fileId] })) }, reason } : null;
+        contextSha256: doc.contextSha256, allowDownload: chosenDocuments[doc.fileId] })),
+      workItems: data.workItemOptions.filter(item => chosenItems[`${item.kind}:${item.itemId}`]
+        && chosenActions.includes(item.kind === 'Task' ? 'manage_deadlines' : 'manage_checklist')).map(item => ({
+        kind: item.kind, itemId: item.itemId, generation: item.generation, scopeGeneration: item.scopeGeneration, scopeSha256: item.scopeSha256,
+        readableFields: chosenItems[`${item.kind}:${item.itemId}`].readable, editableFields: chosenItems[`${item.kind}:${item.itemId}`].editable })) }, reason } : null;
   const valid = data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
@@ -139,6 +151,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
               <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" disabled={!Object.hasOwn(chosenDocuments, doc.fileId)} checked={chosenDocuments[doc.fileId] === true} onChange={event => setDocuments(old => ({ ...old, [doc.fileId]: event.target.checked }))} />Consenti anche il download</label>
             </div>)}</div>{data.documentsLimited && <p>Catalogo limitato. Sono mostrate soltanto le versioni qui disponibili; le altre non verranno incluse.</p>}
           </fieldset>
+          <TechnicalWorkItemChoices data={data} actions={chosenActions} choices={chosenItems} onChange={setItems} />
           <label className="block font-semibold">Scadenza, entro 90 giorni<input className={control} type="datetime-local" required value={expires} onChange={event => setExpires(event.target.value)} /></label>
           <label className="block font-semibold">Motivo dell’incarico<textarea className={control} value={reason} minLength={3} maxLength={500} required onChange={event => setReason(event.target.value)} /></label>
           <input type="hidden" name="operation" value="ASSIGN" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />

@@ -27,7 +27,10 @@ grep -Fq 'division by zero' "$evidence/fault.log"
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('AdminRequest','AdminRequestEvent','AdminRequestDraft')")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical="$evidence/historical65"
+mkdir -p "$historical"
+git archive eb5511fb6c82e15263d6cddf18e7ed36e5100442 prisma | tar -x -C "$historical"
+npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 65
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261023160000_admin_request_queue_v1' ORDER BY migration_name" > "$evidence/prefix64-after.txt"
 cmp "$evidence/prefix64-before.txt" "$evidence/prefix64-after.txt"
@@ -38,7 +41,7 @@ psql "$db" -v ON_ERROR_STOP=1 -At -f scripts/admin-requests/structure.sql > "$ev
 node -e 'const a=require("node:assert/strict"),s=require(process.argv[1]); a.deepEqual(s.tables.map(t=>t.name),["AdminRequest","AdminRequestDraft","AdminRequestEvent"]); a.equal(s.functions.length,3); a.equal(s.triggers.length,9); a.equal(s.constraints.filter(c=>c.type==="f").length,11); a.equal(s.triggers.filter(t=>t.deferrable&&t.initiallyDeferred).length,3); a(s.tables.every(t=>t.kind==="r"&&t.persistence==="p"&&t.ownerMatches)); a(s.constraints.every(c=>c.validated));' "$evidence/structure65.json"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq ADMIN_REQUEST_SCHEMA64_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 printf '{"synthetic":true,"before":64,"after":65,"prefix64Unchanged":true,"allPriorRowsPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/migration65-proof.json"

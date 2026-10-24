@@ -1,3 +1,5 @@
+const TECHNICAL_WORK_ITEM_MIGRATION = '20261024090000_technical_work_items_v1';
+const TECHNICAL_WORK_ITEM_MIGRATION_SHA256 = '7facd68cdc4c943554fdf3b68f2e773b9609aa02bee1b427f29b9b177c130636';
 const ADMIN_REQUEST_MIGRATION = '20261023160000_admin_request_queue_v1';
 const ADMIN_REQUEST_MIGRATION_SHA256 = 'f25dd5563bcfc8ecf165bf0c4929ad70c6023dff8e35a5292ce2f1dd94833f06';
 import type { PrismaClient } from '@prisma/client';
@@ -76,7 +78,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
   return db.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('FAI_ORDINARY_EMAIL_ACTIVATION_V1'))`;
     if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) denied();
-    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; selectivePracticeDocumentChecksum: string | null; selectiveCompanyChecksum: string | null; selectivePersonChecksum: string | null; selectiveLeadEditChecksum: string | null; adminRequestChecksum: string; technicalAssignmentChecksum: string | null; now: Date }>>`
+    const [state] = await tx.$queryRaw<Array<{ database: string; count: number; complete: boolean; checksum: string | null; contextChecksum: string | null; updatesChecksum: string | null; videosChecksum: string | null; updateEmailChecksum: string | null; selectiveLeadChecksum: string | null; selectiveClientChecksum: string | null; selectivePracticeChecksum: string | null; selectiveDocumentChecksum: string | null; selectivePracticeDocumentChecksum: string | null; selectiveCompanyChecksum: string | null; selectivePersonChecksum: string | null; selectiveLeadEditChecksum: string | null; adminRequestChecksum: string; technicalWorkItemChecksum: string; technicalAssignmentChecksum: string | null; now: Date }>>`
       SELECT current_database() AS database, clock_timestamp() AS now,
         (SELECT count(*)::integer FROM "_prisma_migrations") AS count,
         (SELECT bool_and(finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count=1) FROM "_prisma_migrations") AS complete,
@@ -94,9 +96,10 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_PERSON_MIGRATION}) AS "selectivePersonChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${SELECTIVE_LEAD_EDIT_MIGRATION}) AS "selectiveLeadEditChecksum",
         (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${TECHNICAL_ASSIGNMENT_MIGRATION}) AS "technicalAssignmentChecksum",
-        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${ADMIN_REQUEST_MIGRATION}) AS "adminRequestChecksum"`;
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${ADMIN_REQUEST_MIGRATION}) AS "adminRequestChecksum",
+        (SELECT checksum FROM "_prisma_migrations" WHERE migration_name=${TECHNICAL_WORK_ITEM_MIGRATION}) AS "technicalWorkItemChecksum"`;
     const observed = Date.parse(plan.observedAt), expiry = Date.parse(plan.validUntil);
-    if (state.database !== plan.targetDatabase || state.count !== 65 || !state.complete || state.checksum !== MIGRATION_SHA256
+    if (state.database !== plan.targetDatabase || state.count !== 66 || !state.complete || state.checksum !== MIGRATION_SHA256
       || state.contextChecksum !== CONTEXT_MIGRATION_SHA256
       || state.updatesChecksum !== UPDATES_MIGRATION_SHA256
       || state.videosChecksum !== VIDEOS_MIGRATION_SHA256
@@ -111,6 +114,7 @@ export async function activateOrdinaryEmail(db: Pick<PrismaClient, '$transaction
       || state.selectiveLeadEditChecksum !== SELECTIVE_LEAD_EDIT_MIGRATION_SHA256
       || state.technicalAssignmentChecksum !== TECHNICAL_ASSIGNMENT_MIGRATION_SHA256
       || state.adminRequestChecksum !== ADMIN_REQUEST_MIGRATION_SHA256
+      || state.technicalWorkItemChecksum !== TECHNICAL_WORK_ITEM_MIGRATION_SHA256
       || observed > state.now.getTime() || state.now.getTime() - observed > 300_000
       || expiry <= state.now.getTime() || expiry - observed > 31 * 86_400_000) denied();
     // Lock both people before the mailbox, following native admission ordering.

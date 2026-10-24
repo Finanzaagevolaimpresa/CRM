@@ -36,12 +36,13 @@ export async function loadTechnicalAssignmentIndependentScope(db: Db, recipientI
 }
 async function loadCurrentExclusions(db: Db, recipientId: string, includeLifecycle: boolean, includeTechnical = true) {
   const technical = includeTechnical ? await loadTechnicalAssignmentExclusions(db, recipientId)
-    : { projectIds: [], practiceIds: [], clientIds: [], auditIds: [] };
+    : { projectIds: [], practiceIds: [], clientIds: [], auditIds: [], taskIds: [], checklistIds: [] };
   const project = await loadExclusions(db, recipientId, includeLifecycle, technical.projectIds);
   const client = await loadSelectiveClientScope(db, recipientId, technical.clientIds);
   const lead = await loadSelectiveLeadScope(db, recipientId, client.selectiveClientLeadIds);
   const practice = await loadSelectivePracticeScope(db, recipientId, technical.practiceIds);
   return { ...project, ...lead, ...client, ...practice,
+    technicalTaskIds: technical.taskIds, technicalChecklistIds: technical.checklistIds,
     selectiveProjectIds: [...new Set([...(project.selectiveProjectIds ?? []), ...client.selectiveClientProjectIds])],
     selectiveServiceIds: [...new Set([...(project.selectiveServiceIds ?? []), ...client.selectiveClientServiceIds])],
     selectiveContractIds: [...new Set([...(project.selectiveContractIds ?? []), ...client.selectiveClientContractIds])],

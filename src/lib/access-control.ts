@@ -259,6 +259,7 @@ export function canAssignService(user: Actor, service: ServiceAccessContext) {
 }
 
 export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {
+  id?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
@@ -276,12 +277,14 @@ export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
 }
 
 export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {
+  id?: string;
   projectId?: string | null;
   clientServiceId?: string | null;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (user.technicalTaskIds?.length && (!task.id || user.technicalTaskIds.includes(task.id))) return false;
   if (hasSelectiveClientContext(user, task)) return false;
   if (hasSelectiveContext(user, task)) return false;
   if (!hasConsistentClientContext(task)) return false;
@@ -304,6 +307,7 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
 }
 
 export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
+  id?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
@@ -318,12 +322,14 @@ export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistIt
 }
 
 export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
+  id?: string;
   projectId?: string | null;
   clientServiceId?: string | null;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
 }) {
+  if (user.technicalChecklistIds?.length && (!item.id || user.technicalChecklistIds.includes(item.id))) return false;
   if (hasSelectiveClientContext(user, item)) return false;
   if (hasSelectiveContext(user, item) || ('documentId' in item && user.selectiveDocumentIds?.includes(String(item.documentId)))) return false;
   if (!canAccessFinancialDocumentMetadata(user, item)) return false;

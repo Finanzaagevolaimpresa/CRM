@@ -1,0 +1,840 @@
+{
+  "protocol": "TECHNICAL_WORK_ITEM_SOURCE_INVENTORY_V1",
+  "createdUtc": "2026-10-23T16:28:47.051304+00:00",
+  "head": "f09174c3c0c246d22f2609de032cbb038b46757e",
+  "scope": "Tracked source references only; mechanical inventory is not a complete enforcement proof. No production data or database access.",
+  "fileCount": 24,
+  "referenceCount": 98,
+  "files": [
+    {
+      "file": "src/app/clients/[id]/page.tsx",
+      "sha256": "ea6899556753efac69c74c76d5decc8c2db1738ab60a5a354af3ed09199b814a",
+      "matches": [
+        {
+          "line": 20,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canEditClient, canEditProject, canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewProject, canViewService, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';"
+        },
+        {
+          "line": 130,
+          "categories": [
+            "persistence"
+          ],
+          "source": "canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : Promise.resolve([]),"
+        },
+        {
+          "line": 248,
+          "categories": [
+            "authorization"
+          ],
+          "source": ").filter((item) => canViewChecklistItem(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/app/documents/page.tsx",
+      "sha256": "7328bb5d871cf09aff3e16f9754f909cbad5cf7cf552ba3879edd5087b341a18",
+      "matches": [
+        {
+          "line": 10,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canEditClient, canEditProject, canEditService, canViewChecklistItem, canViewClient, canViewDocument, isSensitiveDocument } from '@/lib/access-control';"
+        },
+        {
+          "line": 27,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.documentChecklistItem.findMany({ where: { deletedAt: null, active: true }, orderBy: { updatedAt: 'desc' } }),"
+        },
+        {
+          "line": 46,
+          "categories": [
+            "authorization"
+          ],
+          "source": "&& canViewChecklistItem(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/app/practice-readiness/page.tsx",
+      "sha256": "5d5faa143e9f5586291f1b7322765aff8a41209b96cd570881baa151e7934d2e",
+      "matches": [
+        {
+          "line": 6,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canViewChecklistItem,"
+        },
+        {
+          "line": 106,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.documentChecklistItem.findMany({"
+        },
+        {
+          "line": 187,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canViewChecklistItem(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/app/progress/page.tsx",
+      "sha256": "113313e6de11e09c896e10dacec871e6bf817dbcb770c96570dcf9b5094b1c78",
+      "matches": [
+        {
+          "line": 5,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canViewClient, canViewClientContext, canViewTask } from '@/lib/access-control';"
+        },
+        {
+          "line": 34,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const tasks = hasPermission(session, 'service.read') ? (await prisma.task.findMany({ where: { clientId: { in: clientIds }, deletedAt: null, type: { startsWith: 'percorso:' } } }))"
+        },
+        {
+          "line": 35,
+          "categories": [
+            "authorization"
+          ],
+          "source": ".filter(row => canViewTask(session, { ...row, client: row.clientId ? clientById.get(row.clientId) ?? null : null,"
+        }
+      ]
+    },
+    {
+      "file": "src/app/search/page.tsx",
+      "sha256": "54e98a2c740b3b24e9047f455ab54036b9498a40df55f56d5536b709a23bd756",
+      "matches": [
+        {
+          "line": 170,
+          "categories": [
+            "persistence"
+          ],
+          "source": "{ title: 'Task', permission: 'service.read', items: visibleTasks.map((task) => ({ id: task.id, title: task.title, subtitle: snippet(task.description ?? task.type ?? 'Task operativo'), category: 'Task', status: task.status, date: task.dueAt ?? task.updatedAt, href: '/tasks' })) },"
+        }
+      ]
+    },
+    {
+      "file": "src/app/services/[id]/handoff/page.tsx",
+      "sha256": "2a533931b196a453b4e6125a3f8f1b39c36433d9f6c28c201ef89112ac6ab6f7",
+      "matches": [
+        {
+          "line": 45,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.task.findMany({ where: { id: { in: receipt.paths }, clientId: client.id, clientServiceId: id, deletedAt: null }, orderBy: { id: 'asc' } }),"
+        }
+      ]
+    },
+    {
+      "file": "src/app/settings/assignment-exceptions/tasks/[id]/page.tsx",
+      "sha256": "d35a9176d072232c1ad0201c0dc2e4be10cd2bf6d1fbf1ffc4994c636697f4db",
+      "matches": [
+        {
+          "line": 22,
+          "categories": [
+            "persistence"
+          ],
+          "source": "<ExceptionTaskForm id={task.id} updatedAt={task.updatedAt.toISOString()} assignedToId={task.assignedToId} users={users} />"
+        }
+      ]
+    },
+    {
+      "file": "src/app/tasks/page.tsx",
+      "sha256": "e4128e2c64507e55937272f35594fb908b2ca1fa70f10e3c3aa650b0aafdbe81",
+      "matches": [
+        {
+          "line": 17,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canEditTask, canViewTask } from \"@/lib/access-control\";"
+        },
+        {
+          "line": 34,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const visibleItems = items.filter((task) => canViewTask(session, {"
+        },
+        {
+          "line": 79,
+          "categories": [
+            "authorization"
+          ],
+          "source": ") : hasPermission(session, \"service.write\") && canEditTask(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/app/technical-office/practices/[id]/page.tsx",
+      "sha256": "2a81cfe91a04b9618a0262f32b65b05f42b3aa1075235c7a8967e75a299d2be9",
+      "matches": [
+        {
+          "line": 9,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canViewChecklistItem, canViewDocument, canViewTask, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';"
+        },
+        {
+          "line": 60,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.task.findMany({ where: { deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { dueAt: 'asc' } }),"
+        },
+        {
+          "line": 61,
+          "categories": [
+            "persistence"
+          ],
+          "source": "canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { active: true, deletedAt: null, OR: [{ clientId: practice.clientId }, ...(practice.projectId ? [{ projectId: practice.projectId }] : []), ...(practice.clientServiceId ? [{ clientServiceId: practice.clientServiceId }] : [])] }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),"
+        },
+        {
+          "line": 79,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const tasks = taskRows.filter((task) => canViewTask(session, {"
+        },
+        {
+          "line": 89,
+          "categories": [
+            "authorization"
+          ],
+          "source": "return canViewChecklistItem(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/access-control.ts",
+      "sha256": "9f33ba373e5a700b4d17881bc34ee28c09bb75396fa85acf9c79048898aea626",
+      "matches": [
+        {
+          "line": 261,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {"
+        },
+        {
+          "line": 266,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canViewTask(user, task)) return false;"
+        },
+        {
+          "line": 272,
+          "categories": [
+            "persistence"
+          ],
+          "source": "if (!task.clientId && !task.project && !task.clientService && !task.assignedToId && task.createdById === id) return true;"
+        },
+        {
+          "line": 278,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {"
+        },
+        {
+          "line": 300,
+          "categories": [
+            "persistence"
+          ],
+          "source": "if (!task.clientId) return task.createdById === id;"
+        },
+        {
+          "line": 303,
+          "categories": [
+            "persistence"
+          ],
+          "source": "return (!task.createdById || task.createdById === id) && !!task.client && hasClientResponsibility(user, task.client);"
+        },
+        {
+          "line": 306,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;"
+        },
+        {
+          "line": 311,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canViewChecklistItem(user, item)) return false;"
+        },
+        {
+          "line": 320,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export function canViewChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/actions.ts",
+      "sha256": "c330aec7fd7955c2c4cecafb3bf92a332289c79b0a1d33f897da6b363056b9e1",
+      "matches": [
+        {
+          "line": 30,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canApproveAiOutput, canReviewAiOutput, canViewChecklistItem, canViewClient, canViewDocument, canViewProject, canViewService, isSensitiveDocument, hasGlobalAccess } from './access-control';"
+        },
+        {
+          "line": 53,
+          "categories": [
+            "authorization"
+          ],
+          "source": "requireChecklistEditAccess,"
+        },
+        {
+          "line": 62,
+          "categories": [
+            "authorization"
+          ],
+          "source": "requireTaskEditAccess,"
+        },
+        {
+          "line": 920,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.create({ data: { ...data, createdById: s.userId, updatedById: s.userId } as never });"
+        },
+        {
+          "line": 932,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const existing = await prisma.documentChecklistItem.findMany({ where: { clientId, clientServiceId: clientServiceId ?? null, deletedAt: null }, select: { title: true } });"
+        },
+        {
+          "line": 937,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const created = await Promise.all(toCreate.map((title) => tx.documentChecklistItem.create({ data: { clientId, clientServiceId, projectId, title, createdById: s.userId, updatedById: s.userId } as never })));"
+        },
+        {
+          "line": 946,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireChecklistEditAccess(s, data.id);"
+        },
+        {
+          "line": 948,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.update({ where: { id: data.id }, data: { status: data.status, updatedById: s.userId } });"
+        },
+        {
+          "line": 957,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireChecklistEditAccess(s, data.id);"
+        },
+        {
+          "line": 960,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.update({ where: { id: data.id }, data: { documentId: data.documentId, updatedById: s.userId } });"
+        },
+        {
+          "line": 969,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireChecklistEditAccess(s, data.id);"
+        },
+        {
+          "line": 971,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.update({ where: { id: data.id }, data: { documentId: null, updatedById: s.userId } });"
+        },
+        {
+          "line": 980,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireChecklistEditAccess(s, data.id);"
+        },
+        {
+          "line": 982,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.update({ where: { id: data.id }, data: { active: false, deletedAt: new Date(), updatedById: s.userId } });"
+        },
+        {
+          "line": 1005,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const task = await tx.task.create({ data: { ...data, createdById: s.userId } as never });"
+        },
+        {
+          "line": 1014,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireTaskEditAccess(s, data.id);"
+        },
+        {
+          "line": 1021,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const task = await tx.task.update({ where: { id: data.id, ...(assignment !== undefined ? { assignedToId: before.assignedToId } : {}) }, data: { status: data.status, priority: data.priority, assignedToId: assignment, dueAt: data.dueAt ?? null, completedAt: nextCompletedAt } });"
+        },
+        {
+          "line": 1034,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const before = await requireTaskEditAccess(s, data.id);"
+        },
+        {
+          "line": 1037,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const task = await tx.task.update({ where: { id: data.id }, data: { status: 'completata', completedAt: new Date() } });"
+        },
+        {
+          "line": 1063,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),"
+        },
+        {
+          "line": 1085,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canViewChecklistItem(session, {"
+        },
+        {
+          "line": 1646,
+          "categories": [
+            "persistence"
+          ],
+          "source": "prisma.documentChecklistItem.findMany({"
+        },
+        {
+          "line": 1685,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canViewChecklistItem(s, {"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/assignment-exceptions.ts",
+      "sha256": "a4f92e1c3f9f19bb1658e6a29469be9270f29444c32577d60d548d37a43ff51b",
+      "matches": [
+        {
+          "line": 38,
+          "categories": [
+            "persistence"
+          ],
+          "source": "tx.project.count({ where: projectWhere }), tx.task.count({ where: taskWhere }),"
+        },
+        {
+          "line": 56,
+          "categories": [
+            "persistence"
+          ],
+          "source": "case 'tasks': rows = (await tx.task.findMany({ where: { ...taskWhere, ...page }, ...window,"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/dashboard-detail.ts",
+      "sha256": "2acc5007a9f79b571f470d7e38bb483d29202c84edda1f565ad5f7a765f9d3ac",
+      "matches": [
+        {
+          "line": 7,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { filterAccessibleTasks } from './read-access';"
+        },
+        {
+          "line": 32,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const rows = await tx.task.findMany({ where: { ...dashboardTodayFilter(now), ...(afterId ? { id: { gt: afterId } } : {}) },"
+        },
+        {
+          "line": 35,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const visible = await filterAccessibleTasks(session, rows, tx);"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/engagement-dossier.ts",
+      "sha256": "3accc9886d582c2c49e0999c2b1155809a7f7604e0dccb65f22c40545d693958",
+      "matches": [
+        {
+          "line": 9,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canViewChecklistItem, canViewClientContext, canViewDocument, isSensitiveDocument } from './access-control';"
+        },
+        {
+          "line": 97,
+          "categories": [
+            "persistence"
+          ],
+          "source": "tx.documentChecklistItem.findFirst({ where: { id: row.checklistItemId, deletedAt: null } }),"
+        },
+        {
+          "line": 105,
+          "categories": [
+            "authorization"
+          ],
+          "source": "|| (!assignedReviewer && !canViewChecklistItem(current, { ...item, client, project: hydratedProject, clientService: item.clientServiceId === service.id ? hydratedService : null }))"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/exception-task-assignment.ts",
+      "sha256": "80211b1bee6b1d694456be572cf6c9d75270995b6bf3d9408a3956b593ab3b9f",
+      "matches": [
+        {
+          "line": 11,
+          "categories": [
+            "persistence"
+          ],
+          "source": "return tx.task.findFirst({ where: { id, deletedAt: null, AND: [contextOutsideSelection(scope), companyClientContextOutsideSelection(scope)] }, select: {"
+        },
+        {
+          "line": 22,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const before = await tx.task.findFirst({ where: { id: input.id, deletedAt: null, updatedAt: input.updatedAt, AND: [contextOutsideSelection(scope), companyClientContextOutsideSelection(scope)] } });"
+        },
+        {
+          "line": 25,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const after = await tx.task.update({ where: { id: before.id, updatedAt: before.updatedAt, deletedAt: null },"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/internal-notification-policy.ts",
+      "sha256": "28de4b84984584153c2ecd742d6f8d2f807f170ea3785c82147e81f6c9505921",
+      "matches": [
+        {
+          "line": 2,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canViewClient, canViewCommercialOffer, canViewLead, canViewProject, canViewService, canViewTask, getActorId, type Actor } from './access-control';"
+        },
+        {
+          "line": 41,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canViewTask: (row: Pick<Task, 'clientId' | 'projectId' | 'clientServiceId' | 'assignedToId' | 'createdById'>) => canViewTask(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/internal-notifications.ts",
+      "sha256": "e8d5c4168c6ebb18e3fd7e91e992807d8294b126ba227f468fba96044adaabb4",
+      "matches": [
+        {
+          "line": 78,
+          "categories": [
+            "persistence"
+          ],
+          "source": "? prisma.task.findMany({"
+        },
+        {
+          "line": 126,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const visibleTasks = tasks.filter(access.canViewTask);"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/operational-report.ts",
+      "sha256": "d13d23185f7f7cca6354f3615d0ddc883254eb6c7a7aff009c9c6f6af08e17b5",
+      "matches": [
+        {
+          "line": 6,
+          "categories": [
+            "authorization"
+          ],
+          "source": "import { canViewChecklistItem, canViewClient, canViewClientContext, canViewDocument, canViewService, canViewTechnicalPractice, isSensitiveDocument } from \"./access-control\";"
+        },
+        {
+          "line": 134,
+          "categories": [
+            "persistence"
+          ],
+          "source": "hasPermission(session, \"document.download\") ? prisma.documentChecklistItem.findMany({"
+        },
+        {
+          "line": 226,
+          "categories": [
+            "authorization"
+          ],
+          "source": ").filter((item) => canViewChecklistItem(session, {"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/practice-readiness.ts",
+      "sha256": "68b9e261ea534440c3e662a699957c0c3b9b97bfdbd788b85d1eb98a315624c7",
+      "matches": [
+        {
+          "line": 13,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canViewChecklistItem,"
+        },
+        {
+          "line": 269,
+          "categories": [
+            "authorization"
+          ],
+          "source": "!canViewChecklistItem(a, {"
+        },
+        {
+          "line": 809,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.findUnique({"
+        },
+        {
+          "line": 970,
+          "categories": [
+            "persistence"
+          ],
+          "source": "tx.documentChecklistItem.findMany({"
+        },
+        {
+          "line": 1535,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await tx.documentChecklistItem.findUnique({"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/purchased-service-handoff.ts",
+      "sha256": "bd65e0c7b6e5740cd511eeaa38a23849d9eeb18f5b02a04f654df6fc65d9a4b7",
+      "matches": [
+        {
+          "line": 129,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const task = await tx.task.create({ data: { title, type: 'M1_SERVICE_HANDOFF', clientId: preview.client.id, companyId: preview.service.companyId,"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/read-access.ts",
+      "sha256": "5256e58533a2f01e0f8d5224f4e0b7d3603a855a712198f9d1dfd8a764c28da0",
+      "matches": [
+        {
+          "line": 10,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canViewTask,"
+        },
+        {
+          "line": 351,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export async function filterAccessibleTasks<TTask extends TaskAccessRecord>("
+        },
+        {
+          "line": 388,
+          "categories": [
+            "authorization"
+          ],
+          "source": "return tasks.filter((task) => canViewTask(session, {"
+        },
+        {
+          "line": 403,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const tasks = await prisma.task.findMany({ ...candidateArgs, take: candidateLimit });"
+        },
+        {
+          "line": 404,
+          "categories": [
+            "authorization"
+          ],
+          "source": "return (await filterAccessibleTasks(session, tasks)).slice(0, limit);"
+        },
+        {
+          "line": 439,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const candidates = await tx.task.findMany({"
+        },
+        {
+          "line": 458,
+          "categories": [
+            "authorization"
+          ],
+          "source": "const visible = await filterAccessibleTasks(session, candidates, tx);"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/selective-client-scope.ts",
+      "sha256": "b801e4ee44216f1c584357e6e13b00878ebf21882dc6d9e0cdcd00a37899ac3f",
+      "matches": [
+        {
+          "line": 140,
+          "categories": [
+            "persistence"
+          ],
+          "source": "db.task.findMany({ where: companyContextWhere, select: idOnly }),"
+        },
+        {
+          "line": 141,
+          "categories": [
+            "persistence"
+          ],
+          "source": "db.documentChecklistItem.findMany({ where: { OR: [...contextWhere.OR,"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/selective-project-scope.ts",
+      "sha256": "1216268eff7413220f486f5718835c5381ff9afd3c71b6c80365d2a147c3809a",
+      "matches": [
+        {
+          "line": 98,
+          "categories": [
+            "persistence"
+          ],
+          "source": "db.task.findMany({ where: contextWhere, select: idOnly }),"
+        },
+        {
+          "line": 99,
+          "categories": [
+            "persistence"
+          ],
+          "source": "db.documentChecklistItem.findMany({ where: contextWhere, select: idOnly }),"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/write-access.ts",
+      "sha256": "1cd30be2d606f2a774e87b967d14fe231408a2dcffe70837e5be712339cbf097",
+      "matches": [
+        {
+          "line": 6,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canEditChecklistItem,"
+        },
+        {
+          "line": 13,
+          "categories": [
+            "authorization"
+          ],
+          "source": "canEditTask,"
+        },
+        {
+          "line": 200,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export async function requireChecklistEditAccess(session: AuthSession, itemId: string) {"
+        },
+        {
+          "line": 201,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const item = await prisma.documentChecklistItem.findFirst({"
+        },
+        {
+          "line": 217,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canEditChecklistItem(session, context)) denyWriteAccess();"
+        },
+        {
+          "line": 221,
+          "categories": [
+            "authorization"
+          ],
+          "source": "export async function requireTaskEditAccess(session: AuthSession, taskId: string) {"
+        },
+        {
+          "line": 222,
+          "categories": [
+            "persistence"
+          ],
+          "source": "const task = await prisma.task.findFirst({ where: { id: taskId, deletedAt: null } });"
+        },
+        {
+          "line": 240,
+          "categories": [
+            "authorization"
+          ],
+          "source": "if (!canEditTask(session, context)) denyWriteAccess();"
+        }
+      ]
+    }
+  ]
+}

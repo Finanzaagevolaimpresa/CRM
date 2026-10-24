@@ -9,7 +9,8 @@ const admission: CurrentTechnicalAssignmentAdmission = { userId:'tech_a',role:'c
 const requested = { targetId:'practice_a',kind:'TechnicalPractice' as const,action:'request_admin' as const };
 
 test('multiple named technicians retain independent rights on the same target without commercial owner fields', () => {
-  const second = { ...selection,userId:'tech_b',actions:['manage_checklist'] as const,editableFields:[] };
+  const second = { ...selection,userId:'tech_b',actions:['manage_checklist'] as const,editableFields:[],
+    workItems: [{ kind:'ChecklistItem',itemId:'synthetic-item',generation:1,scopeGeneration:1,scopeSha256:'b'.repeat(64),readableFields:['notes'],editableFields:['notes'] }] };
   assert.equal(admitsTechnicalAssignmentAction(admission,selection,requested,now),true);
   const b = technicalAssignmentSelection.parse(second);
   assert.equal(admitsTechnicalAssignmentAction({...admission,userId:'tech_b',role:'backoffice'},b,{...requested,action:'manage_checklist'},now),true);

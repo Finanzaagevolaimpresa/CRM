@@ -73,6 +73,7 @@ jobs:
           bash scripts/selective-lead-edit/qualify-migration.sh
           bash scripts/technical-assignments/qualify-migration.sh
           bash scripts/admin-requests/qualify-migration.sh
+          npx prisma migrate deploy
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash

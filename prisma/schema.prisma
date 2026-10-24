@@ -379,6 +379,7 @@ model User {
   technicalAssignmentDecisions TechnicalAssignmentDecision[] @relation("TechnicalAssignmentDecisionActor")
   technicalAssignmentReceivedDecisions TechnicalAssignmentDecision[] @relation("TechnicalAssignmentDecisionRecipient")
   technicalWorkCommands TechnicalWorkCommand[]
+  technicalWorkItemCommands TechnicalWorkItemCommand[]
   selectivePracticeEpoch Int @default(1)
   selectivePracticeAuthority SelectivePracticeAuthority?
   selectivePracticeGrants SelectivePracticeGrant[]
@@ -3810,6 +3811,7 @@ model TechnicalAssignmentRevision {
   assignment TechnicalAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   command TechnicalAssignmentDecision @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   workCommands TechnicalWorkCommand[]
+  itemCommands TechnicalWorkItemCommand[]
   @@unique([assignmentId, revision])
 }
 
@@ -3886,4 +3888,32 @@ model AdminRequestDraft {
   message ApprovedCommunication @relation(fields:[messageId],references:[id],onDelete:Restrict,onUpdate:Restrict)
   creator User @relation("AdminRequestDraftActor",fields:[createdById],references:[id],onDelete:Restrict,onUpdate:Restrict)
   event AdminRequestEvent @relation(fields:[eventId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+}
+
+model TechnicalWorkItemGeneration {
+  kind String
+  itemId String
+  generation Int @default(1)
+  scopeGeneration Int @default(1)
+  @@id([kind, itemId])
+}
+
+model TechnicalWorkItemCommand {
+  id String @id @db.Uuid
+  assignmentId String @db.Uuid
+  assignmentRevision Int
+  actorId String
+  sessionId String @db.Uuid
+  targetKind String
+  targetId String
+  kind String
+  itemId String
+  requestDigest String
+  receipt Json
+  proof String
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignmentVersion TechnicalAssignmentRevision @relation(fields: [assignmentId, assignmentRevision], references: [assignmentId, revision], onDelete: Restrict, onUpdate: Restrict)
+  @@index([actorId, createdAt])
 }

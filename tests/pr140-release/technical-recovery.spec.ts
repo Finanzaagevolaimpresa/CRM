@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-test('schema65 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
+test('schema66 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; clientId: string; projectId: string; practiceId: string; otherProjectId: string;
-    liveEmail: string; revokedEmail: string; salesEmail: string; receiptId: string; title: string; progress: string;
+    liveEmail: string; revokedEmail: string; salesEmail: string; receiptId: string; itemReceiptId: string; taskId: string; title: string; progress: string;
     documents: { fileId: string; bytes: string }[]; excluded: string[];
   };
   expect(f.synthetic).toBe(true);
@@ -33,6 +33,15 @@ test('schema65 restart retains technical work, exact documents, revoked assignme
   }
   expect((await revoked.request.get(url)).status()).toBe(404);
   expect((await sales.request.get(url)).status()).toBe(404);
+  const itemUrl = url + '/items/Task/' + f.taskId;
+  await page.goto(itemUrl); await expect(page.getByRole('heading', { name: 'Recovery selected technical task', exact: true })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Priorità', exact: true })).toHaveValue('urgente');
+  for (const value of f.excluded) expect(await page.content()).not.toContain(value);
+  expect((await revoked.request.get(itemUrl)).status()).toBe(404); expect((await sales.request.get(itemUrl)).status()).toBe(404);
+  await page.goto(itemUrl + '?itemDecision=' + f.itemReceiptId);
+  await page.getByRole('button', { name: 'Verifica esito del salvataggio', exact: true }).click();
+  await expect(page.getByText('Modifica già registrata. Non ripetere il salvataggio.', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: 'La modifica non è stata registrata:' })).toBeVisible();
   for (const path of ['/clients/' + f.clientId, '/projects/' + f.otherProjectId]) {
     for (const context of [live, revoked]) {
       const response = await context.request.get(origin + path); expect(response.status()).toBeLessThan(500);
