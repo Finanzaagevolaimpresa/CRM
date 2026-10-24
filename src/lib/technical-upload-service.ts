@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
@@ -100,6 +100,10 @@ export async function confirmTechnicalUpload(db: PrismaClient, claimed: AuthSess
   rawTarget: TechnicalTargetReference, raw: unknown, token: string, bytes: Uint8Array, confirmed: boolean) {
   if (confirmed !== true || typeof token !== 'string' || token.length > 32_000) denied();
   const target = technicalTargetReference.parse(rawTarget), command = technicalUploadCommand.parse(raw);
+  // A repeated command is still an exact byte submission. Receipt-only recovery
+  // uses readTechnicalUploadOutcome and never asks the user to resubmit a file.
+  if (bytes.byteLength !== command.file.sizeBytes
+    || createHash('sha256').update(bytes).digest('hex') !== command.file.contentSha256) stale();
   return withTechnicalUploadDecision(db, claimed, target.kind, async (tx, state) => {
     const digest = technicalUploadRequestDigest(target, command);
     const prior = await outcome(tx, state, target, command.commandId, digest);

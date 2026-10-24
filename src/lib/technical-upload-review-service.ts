@@ -26,7 +26,7 @@ function stale(): never { throw new TechnicalAssignmentError('STALE'); }
  * independently checked under directory/user/context/assignment locks. */
 async function source(tx: Tx, state: TechnicalAssignmentTransaction, ref: TechnicalAssignmentReference, write = false) {
   if (!state.recipient || !admitsTechnicalRolePermission(state.recipient, ref.kind, 'upload_document')) denied();
-  const context = await lockTechnicalAssignmentContext(tx, ref);
+  const context = await lockTechnicalAssignmentContext(tx, { kind: ref.kind, targetId: ref.targetId });
   if (!context || !context.operational) denied();
   const scope = await loadTechnicalAssignmentIndependentScope(tx, ref.recipientId);
   for (const candidate of [state.current, scope]) {

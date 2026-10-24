@@ -213,6 +213,9 @@ test('public upload consumes one exact command and returns the same original rec
     assignmentRevision: data.assignmentRevision, expectedContextSha256: data.contextSha256, title: 'Documento tecnico', action: 'deposit_private_document' }, 'Relazione.txt', bytes);
   const receipt = await confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, bytes, true);
   assert.deepEqual(await confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, bytes, true), receipt);
+  const differentBytes = Buffer.from(bytes); differentBytes[0] ^= 1;
+  await assert.rejects(confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, differentBytes, true));
+  assert.deepEqual(await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId), { status: 'RECORDED', receipt });
   assert.deepEqual((await readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId)).bytes, bytes);
   assert.equal((await readOwnTechnicalUploads(db, f.techA.session, f.target)).deposits.length, 1);
   assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
