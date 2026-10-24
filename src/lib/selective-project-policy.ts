@@ -26,6 +26,8 @@ export type SelectiveSelection = z.infer<typeof selectiveSelectionSchema>;
 
 /** A restriction remains after revocation/expiry; legacy access must not return. */
 export type SelectiveProjectScope = {
+  technicalTaskIds?: readonly string[];
+  technicalChecklistIds?: readonly string[];
   selectiveProjectIds?: readonly string[];
   selectiveServiceIds?: readonly string[];
   selectiveDocumentIds?: readonly string[];

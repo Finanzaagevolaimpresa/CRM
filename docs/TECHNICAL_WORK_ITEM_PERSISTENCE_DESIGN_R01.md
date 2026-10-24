@@ -1,5 +1,7 @@
 # Collegamenti e lavoro tecnico su checklist e attività
 
+Disegno storico, seguito dall'implementazione candidata descritta in [TECHNICAL_WORK_ITEMS_R01.md](TECHNICAL_WORK_ITEMS_R01.md). Il legame esplicito viene conservato nella revisione firmata dell'incarico esistente, senza una seconda tabella di concessioni. I riferimenti sotto al «servizio futuro» appartengono alla preparazione.
+
 Disegno locale sulla dipendenza PR216, non SQL eseguibile o implementazione attiva. L'inventario `technical-work-item-source-inventory-r01.json` elenca i riferimenti del sorgente verificato; non dimostra da solo la chiusura di tutti gli accessi.
 
 ## Persistenza proposta

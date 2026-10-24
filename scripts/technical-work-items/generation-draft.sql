@@ -61,6 +61,12 @@ BEGIN
   ELSE ARRAY['title','notes','updatedAt','updatedById'] END;
  scope_changed:=TG_OP<>'UPDATE' OR
   (to_jsonb(OLD)-ordinary_fields) IS DISTINCT FROM (to_jsonb(NEW)-ordinary_fields);
+ -- Moving into or out of a financially classified title invalidates retained
+ -- selections permanently, including a later restoration of the old title.
+ IF TG_OP='UPDATE' AND OLD.title IS DISTINCT FROM NEW.title AND
+   regexp_replace(normalize(concat_ws(' ',OLD.title,NEW.title),NFKD),'[̀-ͯ]','','g')
+    ~* 'contratt|contract|incaric|pagament|payment|bonific|incass|fattur[ae]|invoice'
+ THEN scope_changed:=true; END IF;
  IF TG_OP<>'INSERT' THEN affected:=array_append(affected,OLD.id); END IF;
  IF TG_OP<>'DELETE' THEN affected:=array_append(affected,NEW.id); END IF;
  FOR item_id IN SELECT DISTINCT id FROM unnest(affected) AS ids(id) ORDER BY id LOOP
@@ -72,7 +78,7 @@ BEGIN
  RETURN NULL;
 END $$;
 -- Canonical row -> generation -> any later consumer. Parent/item rows must be
--- locked before these generation rows in the future application service.
+-- locked before these generation rows in the application service.
 CREATE TRIGGER task_technical_work_epoch AFTER INSERT OR UPDATE OR DELETE ON "Task"
  FOR EACH ROW EXECUTE FUNCTION fai_technical_work_item_generation();
 CREATE TRIGGER checklist_technical_work_epoch AFTER INSERT OR UPDATE OR DELETE ON "DocumentChecklistItem"

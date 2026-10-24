@@ -24,6 +24,7 @@ const snapshot: LockedTechnicalWorkItemSnapshot = { parent, item, link, selectio
     assignmentContextSha256: parent.contextSha256, currentRecipientEpoch: 2, assignmentRecipientEpoch: 2,
     currentRevision: 3, assignmentRevision: 3, revoked: false },
   assignment: { kind: target.kind, userId: selection.recipientId, responsibility: 'supporto', actions: ['manage_deadlines'],
+    workItems: [{ kind:'Task',itemId:item.id,generation:5,scopeGeneration:1,scopeSha256:'c'.repeat(64),readableFields:['title','dueAt'],editableFields:['dueAt'] }],
     readableFields: ['title'], editableFields: [], documents: [], expiresAt: '2026-10-25T06:00:00Z' },
   admission: { target, actorId: selection.recipientId, sessionId: 'b971b452-5c29-4e06-8934-2a72af6ec2e6',
     assignmentId: 'af10c5e3-a8f9-4bc7-a10a-8211c6891cc2', assignmentRevision: 3,

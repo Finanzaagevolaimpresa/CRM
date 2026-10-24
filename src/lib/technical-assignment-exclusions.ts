@@ -20,6 +20,12 @@ export async function loadTechnicalAssignmentExclusions(tx: Prisma.TransactionCl
     SELECT h.id,h."commandId" FROM "TechnicalAssignmentRevision" h
     JOIN "TechnicalAssignment" a ON a.id=h."assignmentId" WHERE a."recipientId"=${recipientId}` : [];
   const work = rows.length ? await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "TechnicalWorkCommand" WHERE "actorId"=${recipientId}` : [];
+  const items = rows.length ? await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "TechnicalWorkItemCommand" WHERE "actorId"=${recipientId}` : [];
+  const retainedItems = rows.length ? await tx.$queryRaw<Array<{ choice: unknown }>>`
+    SELECT s AS choice FROM "TechnicalAssignmentRevision" h JOIN "TechnicalAssignment" a ON a.id=h."assignmentId",
+    LATERAL jsonb_array_elements(COALESCE(h.payload->'selection'->'workItems','[]'::jsonb)) s
+    WHERE a."recipientId"=${recipientId}` : [];
+  const choices = retainedItems.map(row => z.object({ kind: z.enum(['Task', 'ChecklistItem']), itemId: id }).parse(row.choice));
   // A technical responsibility never permits the general customer dossier.
   // Reuse its entire indirect-resource ceiling, including unselected documents,
   // instead of allowing an old consultant relationship to bypass the new scope.
@@ -29,7 +35,9 @@ export async function loadTechnicalAssignmentExclusions(tx: Prisma.TransactionCl
     WHERE a."recipientId"=${recipientId}` : [];
   for (const client of clients) id.parse(client.clientId);
   return { projectIds: rows.flatMap(row => row.projectId ? [row.projectId] : []),
+    taskIds: [...new Set(choices.filter(row => row.kind === 'Task').map(row => row.itemId))],
+    checklistIds: [...new Set(choices.filter(row => row.kind === 'ChecklistItem').map(row => row.itemId))],
     clientIds: clients.map(row => row.clientId),
     practiceIds: rows.flatMap(row => row.practiceId ? [row.practiceId] : []),
-    auditIds: [...rows.map(row => row.id), ...history.flatMap(row => [row.id, row.commandId]), ...work.map(row => row.id)] };
+    auditIds: [...rows.map(row => row.id), ...history.flatMap(row => [row.id, row.commandId]), ...work.map(row => row.id), ...items.map(row => row.id), ...choices.map(row => row.itemId)] };
 }

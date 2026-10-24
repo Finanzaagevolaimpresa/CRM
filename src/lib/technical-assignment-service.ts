@@ -22,6 +22,7 @@ import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssign
 import { technicalFieldPreview } from './technical-assignment-display';
 import { technicalAssignmentTargetFields } from './technical-assignment-target';
 import { technicalImplementedActions } from './technical-assignment-contract';
+import { assertTechnicalWorkItemChoices } from './technical-work-item-source';
 
 type Tx = Prisma.TransactionClient;
 type Input = ReturnType<typeof parseTechnicalAssignmentDecision>;
@@ -57,6 +58,7 @@ async function currentAdmission(tx: Tx, state: TechnicalAssignmentTransaction, l
     const scope = await loadTechnicalAssignmentIndependentScope(tx, reference.recipientId);
     if (hasSelectiveClientContext(scope, locked.context) || hasSelectiveContext(scope, locked.context)
       || (reference.kind === 'TechnicalPractice' && isSelectivePractice(scope, reference.targetId))) deny();
+    await assertTechnicalWorkItemChoices(tx, state, locked.context, input.selection);
     const documents = await assertTechnicalAssignmentDocuments(tx, state, locked.context, input.selection.documents);
     validUntil = Math.min(validUntil, documents.validUntil);
   } else if ('selection' in input || !locked.previous || locked.previous.revokedAt !== null
@@ -90,8 +92,9 @@ export async function previewTechnicalAssignment(db: PrismaClient, claimed: Auth
       ? await assertTechnicalAssignmentDocuments(tx, state, locked.context, input.selection.documents) : null;
     const fields = 'selection' in input ? technicalFieldPreview(reference.kind, input.selection.readableFields,
       await technicalAssignmentTargetFields(tx, reference)) : [];
+    const workItems = 'selection' in input ? await assertTechnicalWorkItemChoices(tx, state, locked.context, input.selection) : [];
     return { input, reference, operation, token: createTechnicalAssignmentPreview(operation, state.key, input, admission,
-      (await technicalAssignmentClock(tx)).getTime()), fields, documents: documents?.metadata ?? [],
+      (await technicalAssignmentClock(tx)).getTime()), fields, workItems, documents: documents?.metadata ?? [],
       recipient: { id: state.recipient!.id, name: state.recipient!.name, email: state.recipient!.email },
       replacesAssignment: locked.previous !== null };
   }, operation === 'REVOKE' ? inactive : {});

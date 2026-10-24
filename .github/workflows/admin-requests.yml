@@ -68,6 +68,7 @@ jobs:
           git archive 4c2fe838e9c557d59802a71aa4f42fbae5c74327 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/admin-requests/qualify-migration.sh
+          npx prisma migrate deploy
       - name: PostgreSQL request admission, concurrency, exact draft provenance and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash

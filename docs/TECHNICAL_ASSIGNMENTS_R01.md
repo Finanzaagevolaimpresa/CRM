@@ -1,5 +1,7 @@
 # Incarichi tecnici multipli — primo incremento operativo
 
+Questo documento conserva il perimetro del primo incremento PR215/schema64. Le richieste Admin sono state integrate con PR217/schema65; la successiva estensione candidata su elementi e scadenze è descritta in [TECHNICAL_WORK_ITEMS_R01.md](TECHNICAL_WORK_ITEMS_R01.md). Le limitazioni storiche sotto non rappresentano lo stato delle PR successive.
+
 ## Comportamento
 
 L'autorità personale `technical-assignment` assegna responsabilità, operazioni, campi e versioni documentali a singoli tecnici. Più tecnici possono lavorare sullo stesso progetto o sulla stessa pratica. L'incarico non modifica il referente commerciale né il precedente responsabile principale e non si estende ad altri record.

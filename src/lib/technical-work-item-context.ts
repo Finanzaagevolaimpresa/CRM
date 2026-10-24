@@ -17,13 +17,22 @@ export type TechnicalWorkItemParent = z.infer<typeof parentSchema>;
 export type TechnicalWorkItemRowContext = z.infer<typeof itemSchema>;
 export type TechnicalWorkItemContextLink = z.infer<typeof linkSchema>;
 
-/** Preparation for a retained explicit link, not a parent-based grant.
- * The future transaction must load and verify the personal decision and lock all
+export function technicalItemMatchesParent(parent: TechnicalWorkItemParent, item: TechnicalWorkItemRowContext) {
+  return parentSchema.safeParse(parent).success && itemSchema.safeParse(item).success
+    && parent.operational && item.active && !item.financialRestricted && item.clientId === parent.clientId
+    && (parent.target.kind !== 'Project' || parent.projectId === parent.target.targetId)
+    && (item.projectId === null || item.projectId === parent.projectId)
+    && (item.serviceId === null || item.serviceId === parent.serviceId)
+    && (item.companyId === null || item.companyId === parent.companyId);
+}
+
+/** A retained explicit link, not a parent-based grant.
+ * The transaction must load and verify the personal decision and lock all
  * parent/item rows before constructing these inputs. Never parse form JSON into
  * trusted retainedPersonalDecision/operational/financialRestricted facts. */
 export function technicalWorkItemContext(parent: TechnicalWorkItemParent, item: TechnicalWorkItemRowContext,
   link: TechnicalWorkItemContextLink) {
-  if (!parentSchema.safeParse(parent).success || !itemSchema.safeParse(item).success
+  if (!technicalItemMatchesParent(parent, item)
     || !linkSchema.safeParse(link).success || !link.retainedPersonalDecision || !parent.operational
     || !item.active || item.financialRestricted || item.id !== link.itemId || item.kind !== link.kind
     || item.scopeGeneration !== link.itemScopeGeneration

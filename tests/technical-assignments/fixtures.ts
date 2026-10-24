@@ -9,6 +9,7 @@ import { technicalAssignmentSelection, type TechnicalAssignmentSelection } from 
 import { technicalWorkCommand } from '../../src/lib/technical-work-contract';
 import type { TechnicalTargetReference } from '../../src/lib/technical-assignment-display';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import type { TechnicalWorkItemGrant } from '../../src/lib/technical-work-item-grant';
 
 export async function technicalFixture(db: PrismaClient, admin: Person, passwordHash?: string, secondTechnicalRole: 'consulente' | 'backoffice' = 'backoffice') {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -55,7 +56,7 @@ export function technicalTarget(f: TechnicalFixture, kind: TechnicalTargetRefere
   return { kind, targetId: kind === 'Project' ? f.project.id : f.practice.id };
 }
 export async function assignmentInput(db: PrismaClient, admin: Person, target: TechnicalTargetReference, person: Person,
-  options: { documents?: { fileId: string; allowDownload: boolean }[]; expiresAt?: string; statusOnly?: boolean } = {}) {
+  options: { documents?: { fileId: string; allowDownload: boolean }[]; expiresAt?: string; statusOnly?: boolean; workItems?: TechnicalWorkItemGrant[] } = {}) {
   const setup = await readTechnicalAssignmentManagement(db, admin.session, target, person.user.id);
   const documents = (options.documents ?? []).map(choice => {
     const item = setup.documentOptions.find(row => row.fileId === choice.fileId);
@@ -64,11 +65,14 @@ export async function assignmentInput(db: PrismaClient, admin: Person, target: T
       contentSha256: item.contentSha256, contextSha256: item.contextSha256, allowDownload: choice.allowDownload };
   });
   const selection: TechnicalAssignmentSelection = technicalAssignmentSelection.parse({ kind: target.kind,
-    userId: person.user.id, responsibility: 'co_responsabile', actions: options.statusOnly ? ['update_status'] : ['update_fields', 'update_status'],
+    userId: person.user.id, responsibility: 'co_responsabile', actions: [...(options.statusOnly ? ['update_status'] : ['update_fields', 'update_status']),
+      ...(options.workItems?.some(item => item.kind === 'Task') ? ['manage_deadlines'] : []),
+      ...(options.workItems?.some(item => item.kind === 'ChecklistItem') ? ['manage_checklist'] : [])],
     readableFields: options.statusOnly ? ['status'] : target.kind === 'Project' ? ['title', 'description', 'status']
       : ['title', 'status', 'priority', 'clientVisibleStatus', 'targetEntity', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
     editableFields: options.statusOnly ? [] : target.kind === 'Project' ? ['description'] : ['clientVisibleStatus', 'priority', 'targetPortal', 'protocolNumber', 'nextClientUpdateAt'],
-    expiresAt: options.expiresAt ?? new Date(Date.now() + 3600_000).toISOString(), documents });
+    expiresAt: options.expiresAt ?? new Date(Date.now() + 3600_000).toISOString(), documents,
+    ...(options.workItems ? { workItems: options.workItems } : {}) });
   return { commandId: randomUUID(), targetId: target.targetId, expectedRevision: setup.revision,
     expectedContextSha256: setup.contextSha256, expectedRecipientEpoch: setup.recipient!.epoch, selection, reason: 'Decisione sintetica isolata' };
 }

@@ -4,7 +4,7 @@ import { canonicalJson, canonicalSha256 } from './canonical-json';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { technicalTargetReference } from './technical-assignment-display';
 
-// Preparation only. The future persistence service must build admission from
+// The persistence service builds admission from
 // locked, journal-verified rows and validate the patch against the selected
 // readable/editable fields. A signed preview is not a new assignment or grant.
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);

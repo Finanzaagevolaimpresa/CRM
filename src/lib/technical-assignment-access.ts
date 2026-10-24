@@ -1,56 +1,22 @@
+import { lockAuthorizedTechnicalAssignment } from './technical-assignment-admission';
+export { lockAuthorizedTechnicalAssignment } from './technical-assignment-admission';
+import { listTechnicalWorkItemsInTransaction } from './technical-work-item-service';
 import { createHash } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AuthSession } from './auth';
-import { hasSelectiveClientContext } from './selective-client-policy';
-import { hasSelectiveContext } from './selective-project-policy';
-import { isSelectivePractice } from './selective-practice-policy';
 import { maxClientDocumentBytes } from './selective-client-document-policy';
-import { lockTechnicalAssignmentContext } from './technical-assignment-context';
 import { assertTechnicalAssignmentDocuments } from './technical-assignment-documents';
 import { technicalFieldPreview, technicalTargetReference, type TechnicalTargetReference } from './technical-assignment-display';
 import { readTechnicalAssignmentJournal } from './technical-assignment-journal';
-import { admitsTechnicalAssignmentManager, admitsTechnicalRolePermission } from './technical-assignment-permissions';
+import { admitsTechnicalRolePermission } from './technical-assignment-permissions';
 import { projectTechnicalFields } from './technical-assignment-projection';
-import type { CurrentTechnicalAssignmentProof } from './technical-assignment-proof';
-import { loadTechnicalAssignmentJournal, lockTechnicalAssignmentRecord } from './technical-assignment-storage';
 import { technicalAssignmentTargetFields, technicalWorkTargetDigest } from './technical-assignment-target';
 import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssignmentRecipient,
   type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
-import { technicalImplementedActions } from './technical-assignment-contract';
 
 function deny(): never { throw new TechnicalAssignmentError('DENIED'); }
 type Tx = Prisma.TransactionClient;
-
-/** This is the only recipient admission to the new operational path. No legacy
- * ownership/client relationship or unverified JSON can substitute for the full
- * immutable decision journal and current personal authority. */
-export async function lockAuthorizedTechnicalAssignment(tx: Tx, state: TechnicalAssignmentTransaction,
-  target: TechnicalTargetReference, write = false) {
-  const context = await lockTechnicalAssignmentContext(tx, target, { writeTarget: write });
-  if (!context || !state.recipient || hasSelectiveClientContext(state.current, context)
-    || hasSelectiveContext(state.current, context)
-    || (target.kind === 'TechnicalPractice' && isSelectivePractice(state.current, target.targetId))) deny();
-  const ref = { ...target, recipientId: state.current.userId };
-  const record = await lockTechnicalAssignmentRecord(tx, ref, 'read');
-  if (!record) deny();
-  const current: CurrentTechnicalAssignmentProof = {
-    userId: state.current.userId, role: state.current.role, active: state.current.active,
-    sessionLive: true, ...target, targetWorkable: context.operational, parentContextValid: true, selectiveCeilingAllows: true,
-    currentContextSha256: context.contextSha256, currentRecipientEpoch: state.recipient.recordUpdateEpoch,
-    currentRevision: record.revision, assignmentRevision: record.payload.revision,
-    assignmentContextSha256: record.payload.contextSha256, assignmentRecipientEpoch: record.payload.recipientEpoch,
-    revoked: record.revokedAt !== null, assignmentId: record.id,
-    recordReadAllowed: admitsTechnicalRolePermission(state.current, target.kind),
-    authority: { purpose: 'technical-assignment', userId: state.authority.userId, enabled: state.authority.enabled,
-      revision: state.authority.revision, actorEpoch: state.author.recordUpdateEpoch, actorActive: state.author.active && !state.author.deletedAt,
-      actorRole: state.author.role, assignmentWriteAllowed: admitsTechnicalAssignmentManager(state.author, target.kind) },
-  };
-  const journal = await loadTechnicalAssignmentJournal(tx, record);
-  const payload = readTechnicalAssignmentJournal(journal, state.key, current, await technicalAssignmentClock(tx));
-  if (!payload || payload.selection.actions.some(action => !technicalImplementedActions.some(item => item === action))) deny();
-  return { context, record, journal, current, payload };
-}
 
 async function projection(tx: Tx, state: TechnicalAssignmentTransaction, target: TechnicalTargetReference) {
   const found = await lockAuthorizedTechnicalAssignment(tx, state, target);
@@ -58,6 +24,7 @@ async function projection(tx: Tx, state: TechnicalAssignmentTransaction, target:
   const projected = projectTechnicalFields(found.current, found.payload.selection, target, row, now);
   if (!projected) deny();
   const documents = await assertTechnicalAssignmentDocuments(tx, state, found.context, found.payload.selection.documents);
+  const workItems = await listTechnicalWorkItemsInTransaction(tx, state, target);
   if (!readTechnicalAssignmentJournal(found.journal, state.key, found.current, await technicalAssignmentClock(tx))) deny();
   return { target, assignmentId: found.payload.id, assignmentRevision: found.payload.revision,
     contextSha256: found.context.contextSha256, targetSha256: technicalWorkTargetDigest(target, row.updatedAt),
@@ -65,7 +32,7 @@ async function projection(tx: Tx, state: TechnicalAssignmentTransaction, target:
     fields: technicalFieldPreview(target.kind, found.payload.selection.readableFields, projected.fields),
     editableFields: found.payload.selection.editableFields,
     actions: found.payload.selection.actions.filter(action => admitsTechnicalRolePermission(state.current, target.kind, action)),
-    documents: documents.metadata };
+    documents: documents.metadata, workItems };
 }
 
 export async function readTechnicalWork(db: PrismaClient, claimed: AuthSession, raw: TechnicalTargetReference) {

@@ -116,7 +116,10 @@ async function main() {
       technicalDecisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentDecision" ORDER BY id`,
       technicalRevisions: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalAssignmentRevision" ORDER BY id`,
       technicalWorkCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkCommand" ORDER BY id`,
-      technicalAudit: await db.auditLog.findMany({ where: { event: { in: ['technical_assignment_changed','technical_work_recorded'] } }, orderBy: { id: 'asc' } }),
+      technicalItemGenerations: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemGeneration" ORDER BY kind,"itemId"`,
+      technicalItemCommands: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "TechnicalWorkItemCommand" ORDER BY id`,
+      technicalChecklist: await db.documentChecklistItem.findMany({ orderBy: { id: 'asc' } }),
+      technicalAudit: await db.auditLog.findMany({ where: { event: { in: ['technical_assignment_changed','technical_work_recorded','technical_work_item_recorded'] } }, orderBy: { id: 'asc' } }),
       technicalUsers: await db.user.findMany({ where: { id: { in: technicalAssignments.map(row => row.recipientId) } }, orderBy: { id: 'asc' },
         select: { id: true, recordUpdateEpoch: true, role: true, active: true, deletedAt: true } }),
       selectivePracticeAuthority: await db.selectivePracticeAuthority.findMany({ orderBy: { id: 'asc' } }),
@@ -224,14 +227,15 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 65);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261023160000_admin_request_queue_v1');
+    assert.equal(data.ledger.length, 66);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261024090000_technical_work_items_v1');
     assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
     assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
     assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 3);
     assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 1);
     assert.equal(data.technicalDecisions.length, 4); assert.equal(data.technicalRevisions.length, 4);
-    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 5);
+    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 6);
+    assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
     assert.equal(data.technicalFiles.length, 3); assert.equal(data.technicalUsers.length, 2);
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);

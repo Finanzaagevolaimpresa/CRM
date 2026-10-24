@@ -9,6 +9,8 @@ const now = new Date('2026-10-23T16:00:00Z');
 const target = { kind: 'TechnicalPractice' as const, targetId: 'synthetic-practice-a' };
 const assignment: TechnicalAssignmentSelection = { kind: target.kind, userId: 'synthetic-tech-a', responsibility: 'co_responsabile',
   actions: ['manage_checklist', 'manage_deadlines'], readableFields: ['title'], editableFields: [], documents: [],
+  workItems: [{ kind:'ChecklistItem',itemId:'synthetic-checklist-a',generation:1,scopeGeneration:1,scopeSha256:'c'.repeat(64),readableFields:['title','status'],editableFields:['title'] },
+    { kind:'Task',itemId:'synthetic-task-a',generation:1,scopeGeneration:1,scopeSha256:'c'.repeat(64),readableFields:['title','dueAt','priority'],editableFields:['dueAt','priority'] }],
   expiresAt: '2026-10-24T16:00:00Z' };
 const current: CurrentTechnicalAssignmentAdmission = { userId: assignment.userId, role: 'consulente', active: true,
   sessionLive: true, ...target, targetWorkable: true, parentContextValid: true, selectiveCeilingAllows: true,
@@ -88,6 +90,6 @@ test('deadline fields require separate explicit selection, normalize instants an
     assert.equal(technicalWorkItemPatch(current, assignment, picked, linked, raw, now), null);
   }
 });
-test('preparation does not silently activate new technical actions in the existing runtime', () => {
-  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin']);
+test('the item increment enables its two explicit actions without upload or dispatch', () => {
+  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines']);
 });

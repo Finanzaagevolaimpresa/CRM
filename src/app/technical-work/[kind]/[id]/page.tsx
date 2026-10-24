@@ -23,6 +23,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   }
   const data = await readTechnicalWork(prisma, session, target.data).catch(() => null);
   if (!data) notFound();
+  const items = data.workItems;
   return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
     description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza ${new Date(data.expiresAt).toLocaleString('it-IT')}`} />
     <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
@@ -34,6 +35,11 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <p className="break-words font-semibold">{doc.title} · versione {doc.version}</p><div className="flex flex-wrap gap-3">
           <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}`} target="_blank" rel="noopener noreferrer">Visualizza {doc.fileName}</a>
           {doc.allowDownload && <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}?download=1`}>Scarica versione</a>}</div></li>)}</ul>}</Card>
+    {data.actions.some(action => action === 'manage_checklist' || action === 'manage_deadlines') && <Card title="Checklist, attività e scadenze assegnate">
+      {!items.length ? <p>Nessun elemento attualmente disponibile nel tuo perimetro.</p> : <ul className="space-y-3">{items.map(item => <li key={`${item.kind}:${item.itemId}`}>
+        <a className="break-words font-semibold underline" href={`${technicalWorkPath(target.data)}/items/${item.kind}/${item.itemId}`}>
+          {item.fields.title ?? (item.kind === 'Task' ? 'Attività assegnata' : 'Elemento checklist assegnato')}</a>
+        {Object.hasOwn(item.fields, 'dueAt') && <p>Scadenza: {item.fields.dueAt ? new Date(item.fields.dueAt).toLocaleString('it-IT') : 'Non indicata'}</p>}</li>)}</ul>}</Card>}
     {data.actions.some(action => action === 'update_fields' || action === 'update_status') && <Card title="Operazioni assegnate"><TechnicalWorkForm data={data} commandId={randomUUID()}
       previewAction={prepareTechnicalWork} confirmAction={saveTechnicalWork} receiptAction={checkTechnicalWork} /></Card>}
   </div>;

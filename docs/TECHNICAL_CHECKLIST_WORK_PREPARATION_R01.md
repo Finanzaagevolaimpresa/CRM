@@ -1,5 +1,7 @@
 # Checklist e scadenze nell’incarico tecnico
 
+Documento storico della preparazione. Lo stato corrente dell'integrazione su PR217/schema65 è in [TECHNICAL_WORK_ITEMS_R01.md](TECHNICAL_WORK_ITEMS_R01.md); le affermazioni «non attivo» qui sotto descrivono la fase precedente.
+
 Preparazione locale successiva a PR216, sulla dipendenza esatta `81a7f8a960f71f20383098042de7728b1d8857df`. Nessun nuovo comportamento attivo, migration o concessione. La PR della coda Admin rimane congelata.
 
 ## Riutilizzo e lacune osservate
