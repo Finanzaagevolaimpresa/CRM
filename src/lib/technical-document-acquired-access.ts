@@ -35,7 +35,8 @@ export async function selectedTechnicalAcquisition(tx: Tx, authorityId: string, 
   if (!saved || saved.record.receipt.documentId !== document.id || saved.record.receipt.actorId !== authorityId
     || !admitsTechnicalAssignmentManager(author, saved.record.receipt.reference.kind)
     || saved.record.admission.authorityRevision !== authority.revision) return deny();
-  const context = await lockTechnicalAssignmentContext(tx, saved.record.receipt.reference);
+  const reference = saved.record.receipt.reference;
+  const context = await lockTechnicalAssignmentContext(tx, { kind: reference.kind, targetId: reference.targetId });
   const now = await technicalAssignmentClock(tx);
   if (!context?.operational || context.clientId !== document.clientId || context.projectId !== document.projectId
     || context.clientServiceId !== document.clientServiceId || (document.validUntil && document.validUntil <= now)) return deny();
