@@ -1,5 +1,7 @@
 'use client';
 
+import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
+
 import { startTransition, useActionState, useState, useSyncExternalStore } from 'react';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from '@/lib/technical-assignment-service';
@@ -64,7 +66,7 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
         <dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl>
       <h3 className="font-bold">Versioni documentali incluse</h3>
       {!preview.documents.length ? <p>Nessun documento selezionato.</p> : <ul className="space-y-2">{preview.documents.map(doc =>
-        <li key={doc.fileId} className="break-words">{doc.title} · {doc.fileName} · versione {doc.version} · {doc.allowDownload ? 'anteprima e download' : 'solo anteprima'}</li>)}</ul>}
+        <li key={doc.fileId} className="break-words">{doc.title} · {doc.fileName} · versione {doc.version} · {selectedDocumentAccessLabel(doc, doc.allowDownload)}</li>)}</ul>}
       <h3 className="font-bold">Checklist, attività e scadenze incluse</h3>
       {!preview.workItems.length ? <p>Nessun elemento selezionato.</p> : preview.workItems.map(item => <div key={`${item.kind}:${item.itemId}`} className="space-y-2 rounded-xl bg-white p-3">
         <strong>{item.kind === 'Task' ? 'Attività' : 'Elemento checklist'}</strong>
@@ -156,7 +158,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
             {!data.documentOptions.length && <p>Nessuna versione disponibile per questa persona e questo record.</p>}
             <div className="space-y-3">{data.documentOptions.map(doc => <div key={doc.fileId} className="min-w-0 rounded-xl border p-3">
               <label className="flex items-start gap-2 break-words"><input type="checkbox" checked={Object.hasOwn(chosenDocuments, doc.fileId)} onChange={event => setDocuments(old => { const next = { ...old }; if (event.target.checked) next[doc.fileId] = false; else delete next[doc.fileId]; return next; })} />{doc.title} · {doc.fileName} · versione {doc.version}</label>
-              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" disabled={!Object.hasOwn(chosenDocuments, doc.fileId)} checked={chosenDocuments[doc.fileId] === true} onChange={event => setDocuments(old => ({ ...old, [doc.fileId]: event.target.checked }))} />Consenti anche il download</label>
+              <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" disabled={!Object.hasOwn(chosenDocuments, doc.fileId)} checked={chosenDocuments[doc.fileId] === true} onChange={event => setDocuments(old => ({ ...old, [doc.fileId]: event.target.checked }))} /> {canPreviewSelectedDocument(doc) ? 'Consenti anche il download' : 'Consenti il download (necessario per aprire il file)'}</label>
             </div>)}</div>{data.documentsLimited && <p>Catalogo limitato. Sono mostrate soltanto le versioni qui disponibili; le altre non verranno incluse.</p>}
           </fieldset>
           <TechnicalWorkItemChoices data={data} actions={chosenActions} choices={chosenItems} onChange={setItems} />

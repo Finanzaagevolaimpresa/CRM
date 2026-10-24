@@ -58,7 +58,7 @@ export async function listPersonalAcquiredDocuments(db: PrismaClient, claimed: A
           || (saved.record.receipt.reference.kind === 'TechnicalPractice' && isSelectivePractice(state.current, saved.record.receipt.reference.targetId))
           || !await canAccessFinancialDocument(tx, state.current, document)
           || (document.containsSensitiveData && !hasPermission(state.current, 'document.sensitive.read'))) continue;
-        result.push({ id: document.id, title: document.title, fileName: document.fileName, versionId: saved.version.id,
+        result.push({ id: document.id, title: document.title, fileName: document.fileName, mimeType: document.mimeType, versionId: saved.version.id,
           classification: saved.record.command.classification, acquiredAt: saved.record.receipt.recordedAt });
       } catch { /* A stale private record does not become an ordinary document. */ }
     }

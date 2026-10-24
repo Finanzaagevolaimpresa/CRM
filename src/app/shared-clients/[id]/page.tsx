@@ -1,4 +1,5 @@
 export const dynamic = 'force-dynamic';
+import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { SecondaryLink } from '@/components/actions';
 import { Card, EmptyState, PageHeader } from '@/components/ui';
 import { requirePermission } from '@/lib/auth';
@@ -24,7 +25,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     {projection && !!projection.documents.length && <Card title="Documenti condivisi"><div className="space-y-4">{projection.documents.map(document => <article key={document.versionId} className="min-w-0 rounded-xl border p-4">
       <h2 className="break-words font-semibold">{document.title} · versione {document.version}</h2><p className="break-words text-sm">{document.fileName}</p>
       <div className="mt-3 flex flex-wrap gap-3 font-semibold text-fai-blue">
-        <a href={`/shared-clients/${id}/documents/${document.versionId}`} target="_blank" rel="noopener noreferrer" className="underline">Consulta versione</a>
+        {canPreviewSelectedDocument(document) ? <a href={`/shared-clients/${id}/documents/${document.versionId}`} target="_blank" rel="noopener noreferrer" className="underline">Consulta versione</a> : <span className="text-slate-600">Anteprima non disponibile per questo formato.</span>}
+        {!document.download && !canPreviewSelectedDocument(document) && <span className="text-slate-600">Download non consentito.</span>}
         {document.download && <a href={`/shared-clients/${id}/documents/${document.versionId}?download=1`} className="underline">Scarica versione</a>}</div>
     </article>)}</div></Card>}
   </div>;

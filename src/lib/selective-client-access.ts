@@ -1,3 +1,5 @@
+import { selectedDocumentMode } from './selected-document-formats';
+import { selectedDocumentResponseMime } from './selected-document-content';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { z } from 'zod';
@@ -310,14 +312,15 @@ export async function readSharedClientDocument(db: PrismaClient, claimed: AuthSe
     const selected = await authorizedClientSharing(tx, state, clientId);
     const document = selected.documents.snapshots.find(row => row.versionId === versionId);
     const path = selected.documents.paths.get(versionId);
-    if (!document || !path || (download && !document.download)) deny();
+    if (!document || !path || (download && !document.download) || (!download && selectedDocumentMode(document) !== 'preview')) deny();
     const bytes = await readBytes(path, maxClientDocumentBytes);
     if (bytes.length > maxClientDocumentBytes || createHash('sha256').update(bytes).digest('hex') !== document.checksum) deny();
+    const contentType = selectedDocumentResponseMime(document, bytes, download);
     await tx.auditLog.create({ data: { actorId: state.current.userId, entityType: 'Document', entityId: document.documentId,
       event: download ? 'selective_client_document_download' : 'selective_client_document_view',
       after: { versionId, grantId: selected.grant.id, revision: selected.grant.revision } } });
     if (!readSelectiveClientGrant(selected.raw, state.key, selected.current, (await clock(tx)).getTime())) deny();
-    return { bytes, document };
+    return { bytes, document, contentType };
   });
 }
 

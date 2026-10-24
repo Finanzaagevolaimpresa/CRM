@@ -1,5 +1,7 @@
 'use client';
 
+import { canPreviewSelectedDocument, selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
+
 import { useActionState, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { prepareClientSharing, confirmClientSharingAction, revokeClientSharingAction, checkClientSharingReceipt, type ClientSharingState } from '@/lib/selective-client-actions';
@@ -15,7 +17,7 @@ const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabl
 const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 type Grant = { id: string; recipientId: string; recipientName: string; recipientEmail: string; revision: number;
   revoked: boolean; expiresAt: string | null; fields: SelectiveClientField[]; commandId: string; documentCount: number; companyCount: number; companyFieldCount: number; personCount: number; personFieldCount: number };
-type DocumentOption = { documentId: string; versionId: string; version: number; title: string; fileName: string; category: string; area: string };
+type DocumentOption = { documentId: string; versionId: string; version: number; title: string; fileName: string; mimeType: string; category: string; area: string };
 function rememberCommand(id: string) {
   // A lost response can be reconciled after reload without creating a command.
   const url = new URL(window.location.href); url.searchParams.set('commandId', id);
@@ -98,10 +100,10 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
                 onChange={event => setDocuments(old => event.target.checked ? [...old, { versionId: document.versionId, download: false }] : old.filter(row => row.versionId !== document.versionId))} />
                 <span className="min-w-0 break-words"><strong>{document.title}</strong> · versione {document.version}<br />{document.fileName} · {document.category}</span></label>
               <label className="mt-2 flex items-center gap-2"><input type="checkbox" disabled={!choice} checked={choice?.download ?? false}
-                onChange={event => setDocuments(old => old.map(row => row.versionId === document.versionId ? { ...row, download: event.target.checked } : row))} />Consenti anche il download di questa versione</label>
+                onChange={event => setDocuments(old => old.map(row => row.versionId === document.versionId ? { ...row, download: event.target.checked } : row))} /> {canPreviewSelectedDocument(document) ? 'Consenti anche il download di questa versione' : 'Consenti il download di questa versione (necessario per aprire il file)'}</label>
             </div>;
           })}</div>
-          <p className="text-sm text-slate-600">La consultazione mostra il contenuto nel browser: non può impedire copie o schermate già acquisite. La revoca blocca le aperture successive.</p>
+          <p className="text-sm text-slate-600">Per i formati senza anteprima, senza download condividi soltanto nome e versione. Le copie già acquisite non possono essere ritirate; la revoca blocca le aperture successive.</p>
         </fieldset>
         <label className="block font-semibold">Scadenza facoltativa<input className={control} type="datetime-local" value={expires} onChange={event => setExpires(event.target.value)} /></label>
         <p className="text-sm text-slate-600">Solo le informazioni e le versioni scelte. Altri referenti, progetti, pratiche, note private, altri documenti e comunicazioni restano esclusi. Nessuna modifica o caricamento. Per gli altri clienti valgono i propri permessi.</p>
@@ -124,7 +126,7 @@ export function SelectiveClientSharing({ clientId, recipients, grants, initialCo
       {!!prepared.people.length && <div className="space-y-3 rounded-xl bg-white p-4"><h3 className="font-semibold">Referenti visibili al destinatario</h3>{prepared.people.map((person, index) => <section key={person.membershipId} className="min-w-0 space-y-2 rounded-xl border p-3">
         <h4 className="font-semibold">Referente {index + 1}</h4><dl className="grid min-w-0 gap-3 sm:grid-cols-2">{person.fields.map(field => <div key={field.key} className="min-w-0"><dt>{field.label}</dt><dd className="break-words whitespace-pre-wrap">{field.value}</dd></div>)}</dl>
       </section>)}</div>}
-      {!!prepared.documents.length && <div className="space-y-2 rounded-xl bg-white p-4"><h3 className="font-semibold">Versioni visibili al destinatario</h3>{prepared.documents.map(document => <p key={document.versionId} className="break-words">{document.title} · versione {document.version} · {document.fileName} · {document.download ? 'Consultazione e download' : 'Consultazione'}</p>)}</div>}
+      {!!prepared.documents.length && <div className="space-y-2 rounded-xl bg-white p-4"><h3 className="font-semibold">Versioni visibili al destinatario</h3>{prepared.documents.map(document => <p key={document.versionId} className="break-words">{document.title} · versione {document.version} · {document.fileName} · {selectedDocumentAccessLabel(document, document.download)}</p>)}</div>}
       <form action={confirm} onSubmit={() => rememberCommand(prepared.input.commandId)} className="space-y-3">
         <input type="hidden" name="selection" value={JSON.stringify(prepared.input)} /><input type="hidden" name="token" value={prepared.token} />
         <label className="flex items-start gap-2"><input required type="checkbox" name="confirmed" disabled={locked} />Confermo personalmente i campi del cliente, delle aziende e dei referenti, le versioni dei documenti, il destinatario e l’effetto sui permessi.</label>
