@@ -165,8 +165,14 @@ test('native private acquisition, exact technical version selection, positive by
   await screenshot(a, 'acquired-dossier'); await privateFile(ac, privateUrl);
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
   await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
+  await expect(a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
+  await a.getByLabel('Responsabilità', { exact: true }).selectOption('supporto');
+  await a.getByLabel('Titolo', { exact: true }).check();
+  await a.getByLabel('Chiedere un intervento all’Admin', { exact: true }).check();
   await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
+  await a.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0, 16));
   await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Mostra soltanto la versione acquisita');
+  await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).not.toBeChecked();
   await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
   await a.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
