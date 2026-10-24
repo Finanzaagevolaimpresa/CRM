@@ -53,7 +53,7 @@ export function describeTechnicalUpload(rawName: string, bytes: Uint8Array, rawP
     contentSha256: createHash('sha256').update(bytes).digest('hex'), previewMime });
 }
 
-const admissionSchema = z.object({ target: technicalTargetReference, actorId: id, sessionId: z.string().uuid(),
+export const technicalUploadAdmission = z.object({ target: technicalTargetReference, actorId: id, sessionId: z.string().uuid(),
   assignmentId: z.string().uuid(), assignmentRevision: generation, assignmentStateSha256: hash,
   authorityRevision: generation, actorEpoch: generation, authorEpoch: generation, keyVersion: generation,
   contextSha256: hash, scopeGeneration: generation, profile: technicalUploadProfile,
@@ -64,9 +64,9 @@ const admissionSchema = z.object({ target: technicalTargetReference, actorId: id
   && value.consumedBytes >= value.consumedFiles
   && value.consumedBytes <= value.consumedFiles * value.profile.maxFileBytes,
   'Current quota must correspond to bounded nonempty submissions');
-export type TechnicalUploadAdmission = z.infer<typeof admissionSchema>;
+export type TechnicalUploadAdmission = z.infer<typeof technicalUploadAdmission>;
 const preview = z.object({ protocol: z.literal('TECHNICAL_UPLOAD_PREVIEW_V1'), command: technicalUploadCommand,
-  admission: admissionSchema, issuedAt: instant, expiresAt: instant }).strict();
+  admission: technicalUploadAdmission, issuedAt: instant, expiresAt: instant }).strict();
 const envelope = z.object({ payload: preview, proof: hash }).strict();
 const lifetime = 300_000;
 const maximumTokenLength = 32_000;
@@ -95,7 +95,7 @@ export function technicalUploadRequestDigest(target: TechnicalUploadAdmission['t
 /** The preview creates neither a stored file nor a right to publish/read one. */
 export function createTechnicalUploadPreview(key: PrivilegedStepUpKey, raw: TechnicalUploadCommand,
   state: TechnicalUploadAdmission, now: number) {
-  const command = technicalUploadCommand.parse(raw), admission = admissionSchema.parse(state);
+  const command = technicalUploadCommand.parse(raw), admission = technicalUploadAdmission.parse(state);
   if (!instant.safeParse(now).success || admission.validUntil <= now || key.version !== admission.keyVersion
     || !admitted(command, admission)) throw new Error('TECHNICAL_UPLOAD_STALE');
   const payload = preview.parse({ protocol: 'TECHNICAL_UPLOAD_PREVIEW_V1', command, admission, issuedAt: now,
@@ -106,7 +106,7 @@ export function createTechnicalUploadPreview(key: PrivilegedStepUpKey, raw: Tech
 }
 export function readTechnicalUploadPreview(key: PrivilegedStepUpKey, token: string, state: TechnicalUploadAdmission, now: number) {
   try {
-    const current = admissionSchema.parse(state);
+    const current = technicalUploadAdmission.parse(state);
     if (!instant.safeParse(now).success || typeof token !== 'string' || token.length > maximumTokenLength
       || !/^[A-Za-z0-9_-]+$/.test(token)) return null;
     const text = Buffer.from(token, 'base64url').toString('utf8'), signed = envelope.parse(JSON.parse(text)), p = signed.payload;
