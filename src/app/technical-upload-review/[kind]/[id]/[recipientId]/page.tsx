@@ -42,7 +42,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <p>{new Date(d.review.recordedAt).toLocaleString('it-IT')}</p></div>
         : <TechnicalUploadReviewForm reference={ref.data} submissionCommandId={d.commandId} sourceSha256={d.sourceSha256} initialCommandId={randomUUID()}
           previewAction={prepareTechnicalUploadReview} confirmAction={saveTechnicalUploadReview} receiptAction={checkTechnicalUploadReview} />}
-      {d.acquiredDocumentId ? <p>Documento acquisito nel fascicolo privato. <a className="font-semibold underline" href={`/clients/${encodeURIComponent(d.clientId)}/acquired-documents`}>Apri il fascicolo e scegli chi può vederlo</a></p>
+      {d.acquiredDocumentId ? <p>Documento acquisito nel fascicolo privato. <a className="font-semibold underline" href={`/clients/${encodeURIComponent(d.clientId)}/acquired-documents`}>Apri documenti acquisiti e scegli la visibilità</a></p>
         : d.review?.verdict === 'APPROVE_PRIVATE' && <TechnicalDocumentAcquisitionForm reference={ref.data} submissionCommandId={d.commandId}
           sourceSha256={d.sourceSha256} reviewCommandId={d.review.commandId} reviewSha256={d.review.sha256} title={d.title} initialCommandId={randomUUID()}
           previewAction={prepareTechnicalAcquisition} confirmAction={saveTechnicalAcquisition} receiptAction={checkTechnicalAcquisition} />}

@@ -158,6 +158,9 @@ test('native private acquisition, exact technical version selection, positive by
   await expect(a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true })).toBeVisible();
   expect(await db.document.count()).toBe(documents + 1); expect(await db.documentVersion.count()).toBe(versions + 1);
   const saved = await canonical(r), privateUrl = '/acquired-documents/' + saved.documentId;
+  await a.reload();
+  await expect(a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true })).toBeVisible();
+  await expect(a.getByRole('button', { name: 'Prepara acquisizione privata', exact: true })).toHaveCount(0);
   await a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true }).click();
   await screenshot(a, 'acquired-dossier'); await privateFile(ac, privateUrl);
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
