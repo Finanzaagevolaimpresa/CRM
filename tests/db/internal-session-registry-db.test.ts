@@ -1080,12 +1080,22 @@ test(
         stdio: "ignore",
       },
     );
+    // Observe termination before the first await: an early startup exit must
+    // fail the health assertion, not strand cleanup waiting for a past event.
+    let spawnError: Error | undefined;
+    const closed = new Promise<void>((resolveClose) => {
+      app.once("error", (error) => { spawnError = error; });
+      app.once("close", () => resolveClose());
+    });
     try {
       let payload: { ok?: boolean } | null = null;
       for (let attempt = 0; attempt < 40 && !payload; attempt += 1) {
         await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+        assert.equal(spawnError, undefined, "isolated PR88 process could not start");
+        assert.equal(app.exitCode, null, "isolated PR88 exited before health was ready");
+        assert.equal(app.signalCode, null, "isolated PR88 was signalled before health was ready");
         try {
-          const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+          const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1_000) });
           if (response.ok)
             payload = (await response.json()) as { ok?: boolean };
         } catch {
@@ -1100,10 +1110,13 @@ test(
         enabledFeatureGates: await db.applicationFeatureGate.count({ where: { enabled: true } }),
       }, n03Before);
     } finally {
-      app.kill("SIGTERM");
-      await new Promise<void>((resolveExit) => {
-        app.once("exit", () => resolveExit());
-      });
+      if (app.exitCode === null && app.signalCode === null) app.kill("SIGTERM");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([closed, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("isolated PR88 process did not close")), 10_000);
+        })]);
+      } finally { if (timer) clearTimeout(timer); }
       rmSync(root, { recursive: true, force: true });
     }
   },
