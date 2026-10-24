@@ -22,6 +22,10 @@ Il limite massimo riusa quello approvato: 25 MiB per file, fino a 20 file per re
 
 La ricevuta storica contiene solo identificativi, impronte e dimensione: `PRIVATE_STORED` non è `PUBLISHED`. La riconciliazione di risposta persa non restituisce titolo, percorso o token di lettura. Nessun ramo runtime importa questo nuovo modulo; `technicalImplementedActions`, parser storico degli incarichi, UI, DB e storage restano invariati.
 
+`technical-upload-plan.ts` collega ora il contratto all'anteprima e alla conferma pura dei byte: l'anteprima costruisce il descrittore sul contenuto ricevuto e mostra finalità privata e quota residua. La conferma confronta comando, firma e byte effettivi, copia il buffer verificato e produce soltanto un intento di scrittura. File sostituito, comando alterato, quota consumata o perimetro cambiato sono respinti prima della persistenza.
+
+La chiave del deposito usa un namespace privato e l'impronta di attore/sessione/target/comando; non include nomi, titoli o percorsi del cliente. Contenuti differenti con lo stesso comando mantengono la stessa chiave, per consentire al futuro storage esclusivo e al vincolo DB di rifiutare il conflitto invece di creare un secondo file. L'intento contiene quote prima/dopo e audit minimo, non una ricevuta di salvataggio o una concessione. Sono verificate anche l'indipendenza del buffer dopo la conferma e la separazione delle chiavi fra persone/sessioni/target.
+
 ## Persistenza e integrazione ancora da implementare
 
 1. Estensione opzionale del payload firmato, senza cambiare la serializzazione delle decisioni storiche; gestione Admin con anteprima personale.
