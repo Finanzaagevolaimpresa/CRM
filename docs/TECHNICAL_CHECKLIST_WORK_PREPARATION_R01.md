@@ -25,3 +25,11 @@ Le pagine `technical-office/portals`, `integrations` e `reporting` contengono an
 `technical-work-item-context.ts` prepara il legame al preciso target: una decisione personale conservata deve essere verificata prima di chiamarlo; collegamenti azienda/progetto/servizio già presenti impongono ulteriori limiti. Nessun riferimento viene riempito automaticamente. L’impronta cambia con revisione del legame e contesto corrente. Le due componenti superano 18 prove pure, lint mirato e typecheck; non sono ancora prova della persistenza o del percorso browser.
 
 Prima di dichiarare l’incremento implementato servono persistenza e vincoli, chiusura delle vie ordinarie, UI di scelta/anteprima/lavoro, prove DB/browser con due tecnici e due commerciali, regressioni, migration concreta se necessaria e stesso riesame. Prima della produzione servono autorità precise sul nuovo piano. Nessun dato reale viene creato per collaudare le pagine.
+
+## Anteprima e ricevuta del singolo elemento
+
+`technical-work-item-command.ts` aggiunge il contratto preparatorio del comando: la firma distingue questa operazione dalle altre firme di incarico/email. L’anteprima dura al massimo cinque minuti ed è vincolata alla sessione, ai registri correnti, alla selezione personale, al legame elemento/target e alla versione dell’elemento. Qualsiasi cambio invalida la conferma precedente. Il digest distingue anche un UUID riutilizzato con contenuto differente; la ricevuta minimizzata permette la futura riconciliazione di una risposta persa senza mostrare i valori modificati.
+
+Il comando ammette solo la modifica dei campi già selezionati. Stati, assegnatari, collegamenti ai documenti e notifiche non sono scritture rappresentabili da questo contratto. Il servizio futuro dovrà rileggere tutti i fatti sotto lock, verificare il giornale e persistere modifica/ricevuta/audit insieme. Non esiste ancora una route che lo esegua.
+
+Il 24/10 la prosecuzione runtime è subordinata alla correzione separata delle dipendenze: PR216 è integrata nel merge `73e3043d68c19353931e8f628ad3140259b87caf`, ma la CI del merge ha bloccato il rilascio per gli avvisi postal-mime/Zod. SQL65 e produzione non sono stati modificati. Questa preparazione resta nel proprio branch; non altera il candidato PR216 congelato.
