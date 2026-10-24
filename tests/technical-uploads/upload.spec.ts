@@ -163,6 +163,10 @@ test('native private acquisition, exact technical version selection, positive by
   await expect(a.getByRole('button', { name: 'Prepara acquisizione privata', exact: true })).toHaveCount(0);
   await a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true }).click();
   await screenshot(a, 'acquired-dossier'); await privateFile(ac, privateUrl);
+  for (const intent of ['view', 'download']) {
+    const ordinary = await ac.request.get('/documents/' + saved.documentId + '/' + intent, { maxRedirects: 0 });
+    expect(ordinary.status()).toBe(403); expect(await ordinary.text()).not.toContain(content.toString());
+  }
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
   await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
   await expect(a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
@@ -184,7 +188,9 @@ test('native private acquisition, exact technical version selection, positive by
   expect((await bc.request.get(selectedUrl)).status()).toBe(404);
   for (const person of [r.salesA, r.salesB]) { const sc = await browser.newContext(), page = await sc.newPage(); await login(page, person.email);
     for (const url of [privateUrl, selectedUrl]) expect((await sc.request.get(url)).status()).toBe(404);
-    expect((await sc.request.get('/documents/' + saved.documentId + '/download')).status()).toBe(403);
+    const ordinary = await sc.request.get('/documents/' + saved.documentId + '/download', { maxRedirects: 0 });
+    expect(ordinary.status()).toBe(307); expect(ordinary.headers().location).toBe('/dashboard');
+    expect(await ordinary.text()).not.toContain(content.toString());
     for (const url of ['/search?q=Documento%20acquisito', '/documents', '/notifications']) {
       const response = await sc.request.get(url); expect(response.status()).toBeLessThan(500); expect(await response.text()).not.toContain('Documento acquisito sintetico'); }
     await sc.close(); }
