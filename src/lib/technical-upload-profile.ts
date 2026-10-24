@@ -16,4 +16,3 @@ export const technicalUploadProfile = z.object({
 }).strict().refine(value => value.maxBytesPerRevision >= value.maxFileBytes
   && value.maxBytesPerRevision <= value.maxFileBytes * value.maxFilesPerRevision, 'Bounded revision quota required');
 export type TechnicalUploadProfile = z.infer<typeof technicalUploadProfile>;
-

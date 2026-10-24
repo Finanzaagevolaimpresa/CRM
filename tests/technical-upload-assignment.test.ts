@@ -89,4 +89,3 @@ test('an explicitly profiled action still obeys current recipient, role, lifecyc
   assert.equal(admitsTechnicalAssignmentAction(current, selection, { ...requested, targetId: 'practice_b' }, new Date(now)), false);
   assert.equal(admitsTechnicalAssignmentAction(current, selection, requested, new Date(selection.expiresAt)), false);
 });
-
