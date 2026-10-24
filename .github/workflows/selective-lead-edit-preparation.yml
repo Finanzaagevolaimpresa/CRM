@@ -1,7 +1,7 @@
 name: Selective lead edit
 on:
   pull_request:
-    paths: ['package.json', 'package-lock.json', 'prisma/**', 'ops/selective-lead-edit-authority-enrollment.sql', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
+    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'ops/selective-lead-edit-authority-enrollment.sql', 'scripts/selective-lead-edit/**', 'src/lib/selective-lead-edit*', 'src/lib/privileged-access.ts', 'src/components/selective-lead-edit*', 'src/app/leads/**', 'src/app/shared-leads/**', 'tests/selective-lead-edit*', 'tests/selective-lead-edit/**', 'docs/SELECTIVE_LEAD_EDIT*', '.github/workflows/selective-lead-edit-preparation.yml']
 permissions: { contents: read }
 concurrency:
   group: selective-lead-edit-preparation-${{ github.event.pull_request.number }}

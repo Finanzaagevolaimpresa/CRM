@@ -1,7 +1,7 @@
 name: Technical work items
 on:
   pull_request:
-    paths: ['package.json', 'package-lock.json', 'prisma/**', 'src/lib/technical-*', 'src/lib/selective-project-scope.ts', 'src/lib/access-control.ts', 'src/app/technical-work/**', 'src/components/technical-*', 'tests/technical*', 'tests/technical-work-items/**', 'scripts/technical-work-items/**', '.github/workflows/technical-work-items.yml']
+    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'src/lib/technical-*', 'src/lib/selective-project-scope.ts', 'src/lib/access-control.ts', 'src/app/technical-work/**', 'src/components/technical-*', 'tests/technical*', 'tests/technical-work-items/**', 'scripts/technical-work-items/**', '.github/workflows/technical-work-items.yml']
 permissions: { contents: read }
 concurrency:
   group: technical-work-items-${{ github.event.pull_request.number }}
