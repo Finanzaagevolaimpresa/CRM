@@ -1,0 +1,131 @@
+name: Technical upload and Admin review
+on:
+  pull_request:
+    paths: ['src/lib/technical-*', 'src/lib/storage.ts', 'src/lib/financial-privacy-policy.ts', 'src/components/technical-*', 'src/app/technical-uploads/**', 'src/app/technical-upload-review/**', 'src/app/technical-work/**', 'tests/technical-upload*', 'tests/technical-uploads/**', 'scripts/technical-upload/**', '.github/workflows/technical-upload-preparation.yml', 'package.json', 'package-lock.json', 'prisma/**']
+permissions: { contents: read }
+concurrency:
+  group: technical-upload-preparation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  isolated:
+    name: Private upload and review (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-upload-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-upload-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      TECHNICAL_UPLOAD_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-upload-auth-only-000000000000
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-upload-step-up-0000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      APP_ORIGIN: http://127.0.0.1:3055
+      TECHNICAL_UPLOAD_BROWSER_CONFIRMED: '1'
+      TECHNICAL_UPLOAD_BROWSER_PASSWORD: synthetic-upload-browser-only-0000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify SQL67 on immutable schema66 with atomic failure and wrong-base checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/technical-upload-preparation"
+          mkdir -p "$evidence"
+          export TECHNICAL_UPLOAD_EVIDENCE="$evidence"
+          echo "TECHNICAL_UPLOAD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/upload-schema65"
+          mkdir -p "$historical"
+          git archive eb5511fb6c82e15263d6cddf18e7ed36e5100442 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261024160000_technical_document_upload_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq TECHNICAL_UPLOAD_SCHEMA66_REQUIRED "$evidence/wrong-base.log"
+          git archive aa30d5c8ca4f483ae6cd0e77ec9fade8794646b4 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/technical-upload/qualify-migration.sh
+      - name: Isolated SQL, atomic audit, quota concurrency and lost response
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$(mktemp -d "$RUNNER_TEMP/fai-upload-db-only-XXXXXX")"
+          export STORAGE_PROVIDER=local DOCUMENT_MAX_BYTES=1024
+          node --import tsx --test tests/technical-upload-persistence-db.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 19' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 19' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
+      - name: Exact file and decision contracts, including Linux hard links
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/technical-upload-admission.test.ts tests/technical-upload-assignment.test.ts tests/technical-upload-contract.test.ts tests/technical-upload-plan.test.ts tests/technical-upload-record.test.ts tests/technical-upload-review-contract.test.ts tests/technical-upload-storage.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+          grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+          grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+      - name: Prepare isolated native browser
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d "$RUNNER_TEMP/fai-upload-browser-only-XXXXXX")"
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$root" STORAGE_PROVIDER=local DOCUMENT_MAX_BYTES=1048576
+          echo "LOCAL_DOCUMENT_STORAGE_ROOT=$root" >> "$GITHUB_ENV"
+          echo "STORAGE_PROVIDER=local" >> "$GITHUB_ENV"
+          echo "DOCUMENT_MAX_BYTES=1048576" >> "$GITHUB_ENV"
+          npx playwright install --with-deps chromium
+          node --import tsx tests/technical-uploads/provision-browser.ts
+      - name: Native deposit, personal review, denial, revocation and lost responses
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3055 > "$TECHNICAL_UPLOAD_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3055/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_UPLOAD_EVIDENCE/playwright.json" npx playwright test --config tests/technical-uploads/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_UPLOAD_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.TECHNICAL_UPLOAD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind exact source and preserve production gate
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_UPLOAD_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technical-upload-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/technical-upload-preparation
+            test-results
+          if-no-files-found: error
+          retention-days: 14

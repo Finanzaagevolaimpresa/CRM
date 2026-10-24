@@ -90,6 +90,6 @@ test('deadline fields require separate explicit selection, normalize instants an
     assert.equal(technicalWorkItemPatch(current, assignment, picked, linked, raw, now), null);
   }
 });
-test('the item increment enables its two explicit actions without upload or dispatch', () => {
-  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines']);
+test('implemented operations remain a closed set with separately profiled upload and no dispatch', () => {
+  assert.deepEqual(technicalImplementedActions, ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document']);
 });
