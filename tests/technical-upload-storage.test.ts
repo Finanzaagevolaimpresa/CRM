@@ -9,12 +9,13 @@ import test, { before } from 'node:test';
 // test directory for inspection; no cleanup, provider or database is invoked.
 let root: string;
 let store: typeof import('../src/lib/technical-upload-storage').storeTechnicalUploadPrivateFile;
+let read: typeof import('../src/lib/technical-upload-storage').readTechnicalUploadPrivateFile;
 before(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'fai-technical-upload-test-'));
   process.env.LOCAL_DOCUMENT_STORAGE_ROOT = root;
   process.env.STORAGE_PROVIDER = 'local';
   process.env.DOCUMENT_MAX_BYTES = '1024';
-  ({ storeTechnicalUploadPrivateFile: store } = await import('../src/lib/technical-upload-storage'));
+  ({ storeTechnicalUploadPrivateFile: store, readTechnicalUploadPrivateFile: read } = await import('../src/lib/technical-upload-storage'));
   await mkdir(path.join(root, 'technical-submissions', 'v1'), { recursive: true });
 });
 const bytes = Buffer.from('Synthetic technical file only');
@@ -57,6 +58,7 @@ test('hard-linked existing file is refused, even when its bytes match', {
   const first = file('f'); await store(first);
   const second = file('0'); await link(target(first.storageKey), target(second.storageKey));
   await assert.rejects(store(second));
+  await assert.rejects(read(second));
   assert.deepEqual(await readFile(target(first.storageKey)), bytes);
 });
 test('concurrent different content has one winner and never two stored files', async () => {
@@ -66,4 +68,36 @@ test('concurrent different content has one winner and never two stored files', a
   assert.equal(results.filter(r => r.status === 'rejected').length, 1);
   const saved = await readFile(target(a.storageKey));
   assert.ok(saved.equals(a.bytes) || saved.equals(b.bytes));
+});
+
+test('private read returns only the exact committed descriptor bytes without rewriting', async () => {
+  const input = file('2'); await store(input);
+  const before = await readdir(path.dirname(target(input.storageKey)));
+  assert.deepEqual(await read(input), bytes);
+  assert.deepEqual(await readdir(path.dirname(target(input.storageKey))), before);
+});
+
+test('private read rejects substituted hash and size, including same-length changed content', async () => {
+  const input = file('3'); await store(input);
+  await assert.rejects(read({ ...input, sha256: '0'.repeat(64) }));
+  await assert.rejects(read({ ...input, sizeBytes: input.sizeBytes + 1 }));
+  await writeFile(target(input.storageKey), Buffer.alloc(bytes.length, 'X'));
+  await assert.rejects(read(input));
+  assert.deepEqual(await readFile(target(input.storageKey)), Buffer.alloc(bytes.length, 'X'));
+});
+
+test('private read cannot alias ordinary documents or create a missing submission', async () => {
+  const input = file('4'), before = await readdir(path.dirname(target(input.storageKey)));
+  for (const key of [input.storageKey, '../outside/file.pdf', 'client/service/file.pdf', 'communications/client/id/file',
+    'technical-submissions/v1/' + '4'.repeat(64) + '/file.pdf']) await assert.rejects(read({ ...input, storageKey: key }));
+  assert.deepEqual(await readdir(path.dirname(target(input.storageKey))), before);
+});
+
+test('private read respects the current lower size limit and refuses a directory', async () => {
+  const input = file('5'); await store(input);
+  process.env.DOCUMENT_MAX_BYTES = String(bytes.length - 1);
+  try { await assert.rejects(read(input)); }
+  finally { process.env.DOCUMENT_MAX_BYTES = '1024'; }
+  const directory = file('6'); await mkdir(target(directory.storageKey));
+  await assert.rejects(read(directory));
 });

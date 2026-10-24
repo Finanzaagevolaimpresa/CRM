@@ -30,6 +30,8 @@ La chiave del deposito usa un namespace privato e l'impronta di attore/sessione/
 
 ## Persistenza e integrazione ancora da implementare
 
+La lettura privata ora verifica namespace, dimensione e hash esatti sul descrittore, identità del file aperto, assenza di collegamenti e variazioni durante la lettura. Legge al massimo la dimensione attesa più un byte e non crea directory, audit o ricevute. Il replay dello storage usa questa stessa verifica. Il servizio futuro dovrà ancora autorizzare la lettura sullo stato corrente: il descrittore o una ricevuta non costituiscono un permesso. Nessuna route importa queste funzioni.
+
 1. Estensione opzionale del payload firmato, senza cambiare la serializzazione delle decisioni storiche; gestione Admin con anteprima personale.
 2. Registro proposte/ricevute e quota, con immutabilità, FK restrittive e audit atomico. Prima di scrivere una migration: schema e SQL esatti, compatibilità, riesame e autorità produttiva pertinente.
 3. Integrare la persistenza privata già preparata nella transazione corrente, con hash e scrittura `wx`; nessun override di storage/credenziali. Il filesystem non è transazionale con PostgreSQL: un file orfano dopo rollback non diventa leggibile né viene ritentato con byte diversi. Nessun nuovo cleanup/cron o cancellazione automatica è incluso.
