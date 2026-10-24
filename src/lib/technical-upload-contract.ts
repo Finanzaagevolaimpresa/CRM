@@ -6,6 +6,8 @@ import { documentPreviewMime } from './document-preview';
 import { financialDocumentRequirements } from './financial-privacy-policy';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { technicalTargetReference } from './technical-assignment-display';
+import { technicalUploadProfile, type TechnicalUploadProfile } from './technical-upload-profile';
+export { technicalUploadProfile, type TechnicalUploadProfile } from './technical-upload-profile';
 
 // Pure preparation only. No existing assignment parser/action, route, storage or
 // database imports this module. A future service must construct admission from
@@ -17,16 +19,6 @@ const instant = z.number().int().nonnegative().safe();
 const formats = documentUploadExtensions.filter(value => value !== '.zip');
 const format = z.enum(formats);
 const maximumBytes = documentUploadMaxFiles * documentUploadMaxBytes;
-export const technicalUploadProfile = z.object({
-  purpose: z.string().trim().min(3).max(160),
-  formats: z.array(format).min(1).max(formats.length).refine(value => new Set(value).size === value.length),
-  maxFileBytes: z.number().int().min(1).max(documentUploadMaxBytes),
-  maxFilesPerRevision: z.number().int().min(1).max(documentUploadMaxFiles),
-  maxBytesPerRevision: z.number().int().min(1).max(maximumBytes),
-  visibility: z.literal('PRIVATE_PENDING_ADMIN_REVIEW'),
-}).strict().refine(value => value.maxBytesPerRevision >= value.maxFileBytes
-  && value.maxBytesPerRevision <= value.maxFileBytes * value.maxFilesPerRevision, 'Bounded revision quota required');
-export type TechnicalUploadProfile = z.infer<typeof technicalUploadProfile>;
 
 const fileName = z.string().min(1).max(255).refine(value => value.normalize('NFC') === value
   && value.trim() === value && !/[\p{Cc}\p{Cf}<>:"/\\|?*]/u.test(value)
