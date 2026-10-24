@@ -147,7 +147,7 @@ test('lost-response recovery is read-only, original actor/session bound and cont
   await assert.rejects(readTechnicalUploadOutcome(db, f.techA.session, { kind: 'TechnicalPractice', targetId: f.otherPractice.id }, p.command.commandId));
   assert.deepEqual(await counts(), n);
 });
-test('missing or enriched audit rejects before a receipt escapes and rolls back the whole submission', options, async () => {
+test('missing or changed canonical audit rejects before a receipt escapes and rolls back the whole submission', options, async () => {
   const f = await fixture(), p = await preview(f), n = await counts();
   await assert.rejects(withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
@@ -158,10 +158,10 @@ test('missing or enriched audit rejects before a receipt escapes and rolls back 
   await assert.rejects(withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
-    const changed = await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } } });
-    assert.deepEqual(changed.after, { action: 'deposit_private_document', fileCount: 1, title: 'Leak' });
+    const changed = await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 2 } } });
+    assert.deepEqual(changed.after, { action: 'deposit_private_document', fileCount: 2 });
     const observed = await tx.$queryRaw<Array<{ after: unknown }>>`SELECT "after" FROM "AuditLog" WHERE id=${p.command.commandId}`;
-    assert.deepEqual(observed, [{ after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } }]);
+    assert.deepEqual(observed, [{ after: { action: 'deposit_private_document', fileCount: 2 } }]);
   }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
 });
@@ -241,7 +241,7 @@ ${altered ? `INSERT INTO "AuditLog"(id,"actorId",event,"entityType","entityId","
  SELECT '${commandId}',"actorId",'technical_upload_deposited','TechnicalUploadSubmission','${id}',
  '{}'::jsonb,'{"action":"deposit_private_document","fileCount":1}'::jsonb,CURRENT_TIMESTAMP
  FROM "TechnicalUploadSubmission" WHERE id='${id}'::uuid;
-UPDATE "AuditLog" SET "after"="after"||'{"title":"Leak"}'::jsonb WHERE id='${commandId}';` : ''}
+UPDATE "AuditLog" SET "after"="after"||'{"fileCount":2}'::jsonb WHERE id='${commandId}';` : ''}
 COMMIT;`,
   });
   assert.equal(result.error, undefined); assert.equal(result.status, 3);
@@ -258,6 +258,20 @@ test('rollback retains the physical quota slot across new command IDs, but permi
   await assert.rejects(save(f, q), /TECHNICAL_UPLOAD_STORAGE_QUOTA/);
   assert.deepEqual(await counts(), n);
   const receipt = await save(f, p);
+  assert.deepEqual(await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId), { status: 'RECORDED', receipt });
+  assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
+});
+
+test('existing audit minimization removes free text while preserving the exact private event', options, async () => {
+  const f = await fixture(), p = await preview(f), n = await counts();
+  const receipt = await withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
+    const value = await proposed(tx, state, f, p);
+    const saved = await persistTechnicalUploadRecord(tx, state, value);
+    const updated = await tx.auditLog.update({ where: { id: p.command.commandId },
+      data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Synthetic private title' } } });
+    assert.deepEqual(updated.after, { action: 'deposit_private_document', fileCount: 1 });
+    return saved;
+  });
   assert.deepEqual(await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId), { status: 'RECORDED', receipt });
   assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
 });
