@@ -14,6 +14,7 @@ CREATE TABLE "TechnicalWorkItemGeneration" (
  kind TEXT NOT NULL CHECK (kind IN ('ChecklistItem','Task')),
  "itemId" TEXT NOT NULL CHECK (length("itemId") BETWEEN 1 AND 128),
  generation INTEGER NOT NULL DEFAULT 1 CHECK (generation>0),
+ "scopeGeneration" INTEGER NOT NULL DEFAULT 1 CHECK ("scopeGeneration">0 AND "scopeGeneration"<=generation),
  PRIMARY KEY(kind,"itemId")
 );
 -- Retain generations across deletion/re-insertion. No cascading FK and no
@@ -28,11 +29,12 @@ BEGIN
  IF TG_OP IN ('DELETE','TRUNCATE') OR pg_trigger_depth()<>2 THEN
   RAISE EXCEPTION 'TECHNICAL_WORK_ITEM_GENERATION_PROTECTED';
  END IF;
- IF TG_OP='INSERT' AND NEW.generation<>1 THEN
+ IF TG_OP='INSERT' AND (NEW.generation<>1 OR NEW."scopeGeneration"<>1) THEN
   RAISE EXCEPTION 'TECHNICAL_WORK_ITEM_GENERATION_INITIAL';
  END IF;
  IF TG_OP='UPDATE' AND (NEW.kind<>OLD.kind OR NEW."itemId"<>OLD."itemId"
-   OR NEW.generation::bigint<>OLD.generation::bigint+1) THEN
+   OR NEW.generation::bigint<>OLD.generation::bigint+1
+   OR NEW."scopeGeneration"::bigint NOT IN (OLD."scopeGeneration"::bigint,OLD."scopeGeneration"::bigint+1)) THEN
   RAISE EXCEPTION 'TECHNICAL_WORK_ITEM_GENERATION_MONOTONIC';
  END IF;
  RETURN NEW;
@@ -45,18 +47,27 @@ CREATE TRIGGER technical_work_item_generation_no_truncate
  FOR EACH STATEMENT EXECUTE FUNCTION fai_technical_work_item_generation_guard();
 
 CREATE FUNCTION fai_technical_work_item_generation() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE affected text[]; item_id text; item_kind text;
+DECLARE affected text[]; item_id text; item_kind text; scope_changed boolean; ordinary_fields text[];
 BEGIN
  item_kind:=CASE TG_TABLE_NAME WHEN 'Task' THEN 'Task'
    WHEN 'DocumentChecklistItem' THEN 'ChecklistItem' ELSE NULL END;
  IF item_kind IS NULL THEN RAISE EXCEPTION 'TECHNICAL_WORK_ITEM_GENERATION_SOURCE'; END IF;
  IF TG_OP='UPDATE' AND to_jsonb(OLD)=to_jsonb(NEW) THEN RETURN NULL; END IF;
+ -- Editable content updates invalidate the command preview. Association,
+ -- identity, ownership, status, lifecycle and document changes also invalidate
+ -- the retained binding, even if those values are later restored.
+ ordinary_fields:=CASE item_kind WHEN 'Task'
+  THEN ARRAY['title','description','priority','dueAt','updatedAt']
+  ELSE ARRAY['title','notes','updatedAt','updatedById'] END;
+ scope_changed:=TG_OP<>'UPDATE' OR
+  (to_jsonb(OLD)-ordinary_fields) IS DISTINCT FROM (to_jsonb(NEW)-ordinary_fields);
  IF TG_OP<>'INSERT' THEN affected:=array_append(affected,OLD.id); END IF;
  IF TG_OP<>'DELETE' THEN affected:=array_append(affected,NEW.id); END IF;
  FOR item_id IN SELECT DISTINCT id FROM unnest(affected) AS ids(id) ORDER BY id LOOP
   INSERT INTO "TechnicalWorkItemGeneration"(kind,"itemId") VALUES(item_kind,item_id)
    ON CONFLICT(kind,"itemId") DO UPDATE
-    SET generation="TechnicalWorkItemGeneration".generation+1;
+    SET generation="TechnicalWorkItemGeneration".generation+1,
+     "scopeGeneration"="TechnicalWorkItemGeneration"."scopeGeneration"+CASE WHEN scope_changed THEN 1 ELSE 0 END;
  END LOOP;
  RETURN NULL;
 END $$;

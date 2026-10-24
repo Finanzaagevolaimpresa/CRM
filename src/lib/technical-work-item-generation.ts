@@ -7,7 +7,9 @@ import { TechnicalAssignmentError } from './technical-assignment-transaction';
 // A generation is an optimistic concurrency boundary, never an access grant.
 const identity = z.object({ kind: z.enum(['ChecklistItem', 'Task']),
   itemId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/) }).strict();
-const generation = identity.extend({ generation: z.number().int().positive().max(2_147_483_647) }).strict();
+const epoch = z.number().int().positive().max(2_147_483_647);
+const generation = identity.extend({ generation: epoch, scopeGeneration: epoch }).strict()
+  .refine(row => row.scopeGeneration <= row.generation);
 export type TechnicalWorkItemIdentity = z.infer<typeof identity>;
 
 export function decodeTechnicalWorkItemGeneration(rows: unknown, expected: TechnicalWorkItemIdentity) {
@@ -26,7 +28,7 @@ export async function lockTechnicalWorkItemGeneration(tx: Prisma.TransactionClie
   const reference = identity.parse(expected);
   if (intent !== 'read' && intent !== 'write') throw new TechnicalAssignmentError('DENIED');
   const rows = await tx.$queryRaw<unknown[]>(Prisma.sql`
-    SELECT kind,"itemId",generation FROM "TechnicalWorkItemGeneration"
+    SELECT kind,"itemId",generation,"scopeGeneration" FROM "TechnicalWorkItemGeneration"
     WHERE kind=${reference.kind} AND "itemId"=${reference.itemId}
     ${Prisma.raw(intent === 'write' ? 'FOR UPDATE' : 'FOR SHARE')}`);
   const row = decodeTechnicalWorkItemGeneration(rows, reference);

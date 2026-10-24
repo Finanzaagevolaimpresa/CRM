@@ -3,15 +3,16 @@ import { canonicalSha256 } from './canonical-json';
 import { technicalTargetReference } from './technical-assignment-display';
 
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
+const epoch = z.number().int().positive().max(2_147_483_647);
 const parentSchema = z.object({ target: technicalTargetReference, clientId: id,
   projectId: id.nullable(), serviceId: id.nullable(), companyId: id.nullable(),
   contextSha256: z.string().regex(/^[a-f0-9]{64}$/), operational: z.boolean() }).strict();
 const itemSchema = z.object({ id, kind: z.enum(['ChecklistItem', 'Task']), clientId: id,
   projectId: id.nullable(), serviceId: id.nullable(), companyId: id.nullable(),
-  financialRestricted: z.boolean(), active: z.boolean() }).strict();
+  financialRestricted: z.boolean(), active: z.boolean(), scopeGeneration: epoch }).strict();
 const linkSchema = z.object({ bindingId: z.string().uuid(), target: technicalTargetReference,
   itemId: id, kind: z.enum(['ChecklistItem', 'Task']), revision: z.number().int().positive().max(2_147_483_647),
-  retainedPersonalDecision: z.boolean() }).strict();
+  retainedPersonalDecision: z.boolean(), itemScopeGeneration: epoch }).strict();
 export type TechnicalWorkItemParent = z.infer<typeof parentSchema>;
 export type TechnicalWorkItemRowContext = z.infer<typeof itemSchema>;
 export type TechnicalWorkItemContextLink = z.infer<typeof linkSchema>;
@@ -25,6 +26,7 @@ export function technicalWorkItemContext(parent: TechnicalWorkItemParent, item: 
   if (!parentSchema.safeParse(parent).success || !itemSchema.safeParse(item).success
     || !linkSchema.safeParse(link).success || !link.retainedPersonalDecision || !parent.operational
     || !item.active || item.financialRestricted || item.id !== link.itemId || item.kind !== link.kind
+    || item.scopeGeneration !== link.itemScopeGeneration
     || parent.target.kind !== link.target.kind || parent.target.targetId !== link.target.targetId
     || item.clientId !== parent.clientId) return null;
   if (parent.target.kind === 'Project' && parent.projectId !== parent.target.targetId) return null;
@@ -37,6 +39,7 @@ export function technicalWorkItemContext(parent: TechnicalWorkItemParent, item: 
   return { bindingId: link.bindingId, kind: item.kind, itemId: item.id, target: parent.target,
     contextSha256: canonicalSha256({ protocol: 'TECHNICAL_WORK_ITEM_CONTEXT_V1',
       bindingId: link.bindingId, bindingRevision: link.revision, kind: item.kind, itemId: item.id,
+      itemScopeGeneration: item.scopeGeneration,
       target: parent.target, parentContextSha256: parent.contextSha256, clientId: item.clientId,
       projectId: item.projectId, serviceId: item.serviceId, companyId: item.companyId }) };
 }

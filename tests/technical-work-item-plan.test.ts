@@ -11,9 +11,9 @@ const target = { kind: 'TechnicalPractice' as const, targetId: 'synthetic-practi
 const parent = { target, clientId: 'synthetic-client', projectId: null, serviceId: 'synthetic-service',
   companyId: null, contextSha256: 'a'.repeat(64), operational: true };
 const item = { id: 'synthetic-task', kind: 'Task' as const, clientId: parent.clientId, projectId: null,
-  serviceId: parent.serviceId, companyId: null, financialRestricted: false, active: true };
+  serviceId: parent.serviceId, companyId: null, financialRestricted: false, active: true, scopeGeneration: 1 };
 const link = { bindingId: 'b5884229-e5d1-4eab-83bf-762d047cc154', target, itemId: item.id,
-  kind: item.kind, revision: 1, retainedPersonalDecision: true };
+  kind: item.kind, revision: 1, retainedPersonalDecision: true, itemScopeGeneration: 1 };
 const context = technicalWorkItemContext(parent, item, link)!;
 const selection = { itemId: item.id, target, contextSha256: context.contextSha256,
   recipientId: 'synthetic-tech-a', kind: 'Task' as const,
@@ -71,7 +71,7 @@ test('a different parent, row, version or retained item link is denied after pre
     s => { s.parent.target.targetId = 'another-practice'; },
     s => { s.item.clientId = 'another-client'; },
     s => { s.row.id = 'another-task'; },
-    s => { s.row.version++; },
+    s => { s.row.version++; }, s => { s.item.scopeGeneration++; },
     s => { s.link.revision++; },
     s => { s.link.retainedPersonalDecision = false; },
     s => { s.admission.contextSha256 = 'd'.repeat(64); },

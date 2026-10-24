@@ -19,7 +19,7 @@ CREATE TEMP TABLE work_item_before AS
 \ir generation-draft.sql
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM work_item_before x LEFT JOIN "TechnicalWorkItemGeneration" g
-   ON g.kind=x.kind AND g."itemId"=x.id WHERE g.generation IS DISTINCT FROM 1)
+   ON g.kind=x.kind AND g."itemId"=x.id WHERE g.generation IS DISTINCT FROM 1 OR g."scopeGeneration" IS DISTINCT FROM 1)
  OR (SELECT count(*) FROM "TechnicalWorkItemGeneration")<>(SELECT count(*) FROM work_item_before)
  OR EXISTS(SELECT 1 FROM work_item_before x JOIN "Task" t ON x.kind='Task' AND t.id=x.id WHERE x.bytes<>to_jsonb(t))
  OR EXISTS(SELECT 1 FROM work_item_before x JOIN "DocumentChecklistItem" c
@@ -33,6 +33,7 @@ UPDATE "Task" SET title='Changed' WHERE id='synthetic-work-item-generation-fixtu
 UPDATE "Task" SET title=title WHERE id='synthetic-work-item-generation-fixture';
 DO $$ BEGIN
  IF (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>2
+ OR (SELECT "scopeGeneration" FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>1
  OR (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='ChecklistItem' AND "itemId"='synthetic-work-item-generation-fixture')<>1
  THEN RAISE EXCEPTION 'GENERATION_KIND_ISOLATION_OR_NOOP'; END IF;
 END $$;
@@ -41,11 +42,13 @@ DELETE FROM "Task" WHERE id='synthetic-work-item-generation-fixture';
 INSERT INTO "Task"(id,title,"updatedAt") VALUES('synthetic-work-item-generation-fixture','Reinserted',now());
 DO $$ BEGIN
  IF (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>5
+ OR (SELECT "scopeGeneration" FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>3
  THEN RAISE EXCEPTION 'GENERATION_IDENTITY_REUSE_RESET'; END IF;
 END $$;
 UPDATE "Task" SET id='synthetic-work-item-generation-renamed' WHERE id='synthetic-work-item-generation-fixture';
 DO $$ BEGIN
  IF (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>6
+ OR (SELECT "scopeGeneration" FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-fixture')<>4
  OR (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='Task' AND "itemId"='synthetic-work-item-generation-renamed')<>1
  THEN RAISE EXCEPTION 'GENERATION_RENAME_RESET'; END IF;
 END $$;
@@ -56,7 +59,15 @@ UPDATE "DocumentChecklistItem" SET active=false WHERE id='synthetic-work-item-ge
 UPDATE "DocumentChecklistItem" SET "deletedAt"=now() WHERE id='synthetic-work-item-generation-fixture';
 DO $$ BEGIN
  IF (SELECT generation FROM "TechnicalWorkItemGeneration" WHERE kind='ChecklistItem' AND "itemId"='synthetic-work-item-generation-fixture')<>6
+ OR (SELECT "scopeGeneration" FROM "TechnicalWorkItemGeneration" WHERE kind='ChecklistItem' AND "itemId"='synthetic-work-item-generation-fixture')<>6
  THEN RAISE EXCEPTION 'GENERATION_RELATION_LIFECYCLE_NOT_TRACKED'; END IF;
+END $$;
+UPDATE "DocumentChecklistItem" SET status='da_richiedere',"documentId"=NULL,"clientId"='synthetic-client',
+ active=true,"deletedAt"=NULL WHERE id='synthetic-work-item-generation-fixture';
+DO $$ BEGIN
+ IF (SELECT "scopeGeneration" FROM "TechnicalWorkItemGeneration"
+  WHERE kind='ChecklistItem' AND "itemId"='synthetic-work-item-generation-fixture')<>7
+ THEN RAISE EXCEPTION 'GENERATION_RESTORED_CONTEXT_RESURRECTED_SCOPE'; END IF;
 END $$;
 DO $$
 DECLARE op text; rejected boolean;
@@ -89,5 +100,6 @@ DO $$ BEGIN
 END $$;
 SELECT json_build_object('synthetic',true,'canonicalBytesPreserved',true,
  'kindIsolation',true,'identityReuseMonotone',true,'renameTracked',true,'relationsAndLifecycleTracked',true,
+ 'retainedScopeCannotResurrect',true,
  'directWritesDenied',true,'lateFailureAtomic',true,'productionContact',false) AS qualification;
 ROLLBACK;

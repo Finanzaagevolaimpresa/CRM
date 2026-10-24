@@ -6,17 +6,19 @@ import { decodeTechnicalWorkItemGeneration, lockTechnicalWorkItemGeneration } fr
 
 const expected = { kind: 'Task' as const, itemId: 'synthetic-shared-id' };
 test('a generation distinguishes task and checklist even when canonical IDs coincide', () => {
-  const task = { ...expected, generation: 4 };
-  const checklist = { kind: 'ChecklistItem', itemId: expected.itemId, generation: 9 };
+  const task = { ...expected, generation: 4, scopeGeneration: 1 };
+  const checklist = { kind: 'ChecklistItem', itemId: expected.itemId, generation: 9, scopeGeneration: 1 };
   assert.deepEqual(decodeTechnicalWorkItemGeneration([task], expected), task);
   assert.equal(decodeTechnicalWorkItemGeneration([checklist], expected), null);
   assert.equal(decodeTechnicalWorkItemGeneration([task], { ...expected, itemId: 'another-task' }), null);
   assert.equal(decodeTechnicalWorkItemGeneration([task, task], expected), null);
 });
 test('missing, reset, non-integer, overflow and extra-value rows fail closed', () => {
-  for (const rows of [null, [], [{ ...expected, generation: 0 }], [{ ...expected, generation: -1 }],
-    [{ ...expected, generation: 1.1 }], [{ ...expected, generation: 2147483648 }],
-    [{ ...expected, generation: '4' }], [{ ...expected, generation: 4, notes: 'private' }]]) {
+  const row = { ...expected, generation: 4, scopeGeneration: 1 };
+  for (const rows of [null, [], [{ ...row, generation: 0 }], [{ ...row, generation: -1 }],
+    [{ ...row, generation: 1.1 }], [{ ...row, generation: 2147483648 }],
+    [{ ...row, generation: '4' }], [{ ...row, notes: 'private' }],
+    [{ ...row, scopeGeneration: 0 }], [{ ...row, scopeGeneration: 5 }], [{ ...row, scopeGeneration: '1' }]]) {
     assert.equal(decodeTechnicalWorkItemGeneration(rows, expected), null);
   }
 });

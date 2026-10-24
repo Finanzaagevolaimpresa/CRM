@@ -7,9 +7,9 @@ const parent: TechnicalWorkItemParent = { target: { kind: 'TechnicalPractice', t
   clientId: 'synthetic-client', projectId: 'synthetic-project', serviceId: 'synthetic-service', companyId: 'synthetic-company',
   contextSha256: 'a'.repeat(64), operational: true };
 const item: TechnicalWorkItemRowContext = { id: 'synthetic-task', kind: 'Task', clientId: parent.clientId,
-  projectId: parent.projectId, serviceId: null, companyId: null, financialRestricted: false, active: true };
+  projectId: parent.projectId, serviceId: null, companyId: null, financialRestricted: false, active: true, scopeGeneration: 1 };
 const link: TechnicalWorkItemContextLink = { bindingId: '0b848791-bf2b-4ec8-9220-d887c79e0f28', target: parent.target,
-  itemId: item.id, kind: item.kind, revision: 1, retainedPersonalDecision: true };
+  itemId: item.id, kind: item.kind, revision: 1, retainedPersonalDecision: true, itemScopeGeneration: 1 };
 
 test('explicit binding permits an exact technical item without inventing source links or returning parent metadata', () => {
   const before = JSON.stringify(item), result = technicalWorkItemContext(parent, item, link);
@@ -40,4 +40,12 @@ test('project binding must name the same project and cannot use a practice link 
   assert.ok(technicalWorkItemContext(project, item, { ...link, target: project.target }));
   assert.equal(technicalWorkItemContext({ ...project, projectId: 'foreign' }, item, { ...link, target: project.target }), null);
   assert.equal(technicalWorkItemContext(project, item, { ...link, target: { ...project.target, kind: 'TechnicalPractice' } }), null);
+});
+
+test('restored relationships or a reused identity cannot resurrect a prior retained link', () => {
+  const restored = { ...item, scopeGeneration: 3 };
+  assert.equal(technicalWorkItemContext(parent, restored, link), null);
+  const renewed = technicalWorkItemContext(parent, restored, { ...link, revision: 2, itemScopeGeneration: 3 });
+  assert.ok(renewed);
+  assert.notEqual(renewed.contextSha256, technicalWorkItemContext(parent, item, link)!.contextSha256);
 });
