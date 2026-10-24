@@ -380,6 +380,8 @@ model User {
   technicalAssignmentReceivedDecisions TechnicalAssignmentDecision[] @relation("TechnicalAssignmentDecisionRecipient")
   technicalWorkCommands TechnicalWorkCommand[]
   technicalWorkItemCommands TechnicalWorkItemCommand[]
+  technicalUploadSubmissions TechnicalUploadSubmission[]
+  technicalUploadReviews TechnicalUploadReview[]
   selectivePracticeEpoch Int @default(1)
   selectivePracticeAuthority SelectivePracticeAuthority?
   selectivePracticeGrants SelectivePracticeGrant[]
@@ -3812,6 +3814,7 @@ model TechnicalAssignmentRevision {
   command TechnicalAssignmentDecision @relation(fields: [commandId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   workCommands TechnicalWorkCommand[]
   itemCommands TechnicalWorkItemCommand[]
+  uploadSubmissions TechnicalUploadSubmission[]
   @@unique([assignmentId, revision])
 }
 
@@ -3916,4 +3919,43 @@ model TechnicalWorkItemCommand {
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   assignmentVersion TechnicalAssignmentRevision @relation(fields: [assignmentId, assignmentRevision], references: [assignmentId, revision], onDelete: Restrict, onUpdate: Restrict)
   @@index([actorId, createdAt])
+}
+
+model TechnicalUploadSubmission {
+  id String @id @db.Uuid
+  commandId String @unique @db.Uuid
+  assignmentId String @db.Uuid
+  assignmentRevision Int
+  actorId String
+  sessionId String @db.Uuid
+  targetKind String
+  targetId String
+  requestDigest String
+  command Json
+  storageKey String @unique
+  sizeBytes Int
+  contentSha256 String
+  receipt Json
+  proof String
+  createdAt DateTime @db.Timestamp(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignmentVersion TechnicalAssignmentRevision @relation(fields: [assignmentId, assignmentRevision], references: [assignmentId, revision], onDelete: Restrict, onUpdate: Restrict)
+  review TechnicalUploadReview?
+  @@index([assignmentId, assignmentRevision, id], map: "TechnicalUploadSubmission_assignment_revision_idx")
+  @@index([actorId, createdAt], map: "TechnicalUploadSubmission_actor_created_idx")
+}
+
+model TechnicalUploadReview {
+  commandId String @id @db.Uuid
+  submissionCommandId String @unique @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  command Json
+  receipt Json
+  proof String
+  createdAt DateTime @db.Timestamp(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  submission TechnicalUploadSubmission @relation(fields: [submissionCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }

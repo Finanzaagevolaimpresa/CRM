@@ -14,15 +14,20 @@ async function login(page: Page, email: string, stepUp = false) {
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Login interno' }).click(); await expect(page).toHaveURL(/\/dashboard$/);
   if (stepUp) {
-    await page.goto('/settings/security'); await page.getByLabel('Password corrente', { exact: true }).fill(password);
+    await page.goto('/settings/security'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
+    await page.getByLabel('Password corrente', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible();
   }
 }
 async function prepare(page: Page, row: typeof f.rows[number]) {
   await page.goto('/leads/' + row.leadId + '/sharing');
+  await page.locator('[data-testid="lead-sharing"][data-interactive-ready="true"]').waitFor();
   await page.getByLabel('Persona esistente').selectOption(row.readerId);
   await page.getByLabel('Azienda', { exact: true }).check(); await page.getByLabel('Stato', { exact: true }).check();
+  await expect(page.getByLabel('Persona esistente')).toHaveValue(row.readerId);
+  await expect(page.getByLabel('Azienda', { exact: true })).toBeChecked();
+  await expect(page.getByLabel('Stato', { exact: true })).toBeChecked();
   await page.getByRole('button', { name: 'Anteprima come destinatario' }).click();
   await expect(page.getByRole('heading', { name: 'Riepilogo e anteprima' })).toBeVisible();
   const preview = page.getByRole('region', { name: 'Riepilogo e anteprima', exact: true });
@@ -38,6 +43,15 @@ test('native two-field selection, direct/indirect denials, open-session revocati
   const row = f.rows[0], ac = await browser.newContext(), rc = await browser.newContext();
   const admin = await ac.newPage(), reader = await rc.newPage();
   await login(admin, f.adminEmail, true); await login(reader, row.readerEmail);
+  // Controls must not accept selections before React owns their state.
+  const serverOnly = await browser.newContext({ javaScriptEnabled: false });
+  await serverOnly.addCookies(await ac.cookies());
+  const initial = await serverOnly.newPage(); await initial.goto('/leads/' + row.leadId + '/sharing');
+  await expect(initial.getByTestId('lead-sharing')).toHaveAttribute('data-interactive-ready', 'false');
+  await expect(initial.getByLabel('Persona esistente')).toBeDisabled();
+  await expect(initial.getByLabel('Azienda', { exact: true })).toBeDisabled();
+  await expect(initial.getByRole('button', { name: 'Anteprima come destinatario' })).toBeDisabled();
+  await serverOnly.close();
   await reader.goto('/leads/' + row.leadId); await expect(reader.getByText(row.label, { exact: true }).first()).toBeVisible();
   await prepare(admin, row);
   await admin.screenshot({ path: path.join(evidence, 'selective-lead-preview-desktop.png'), fullPage: true });

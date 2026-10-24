@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { prepareLeadSharing, confirmLeadSharingAction, revokeLeadSharingAction, checkLeadSharingReceipt, type LeadSharingState } from '@/lib/selective-lead-actions';
 import { selectiveLeadFields, type SelectiveLeadField } from '@/lib/selective-lead-policy';
@@ -8,6 +8,7 @@ import { selectiveLeadFields, type SelectiveLeadField } from '@/lib/selective-le
 const initial: LeadSharingState = { ok: false, message: '' };
 const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
+const subscribeReady = () => () => {}, browserReady = () => true, serverReady = () => false;
 type Grant = { id: string; recipientId: string; recipientName: string; recipientEmail: string; revision: number;
   revoked: boolean; expiresAt: string | null; fields: SelectiveLeadField[]; commandId: string };
 function rememberCommand(id: string) {
@@ -16,10 +17,11 @@ function rememberCommand(id: string) {
   window.history.replaceState(window.history.state, '', url);
 }
 function Receipt({ commandId }: { commandId: string }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(checkLeadSharingReceipt, initial);
   return <form action={action} className="space-y-2 rounded-xl bg-slate-50 p-3">
     <input type="hidden" name="commandId" value={commandId} />
-    <button disabled={pending} className="font-semibold underline">Verifica ricevuta dell’operazione</button>
+    <button disabled={!ready || pending} className="font-semibold underline">Verifica ricevuta dell’operazione</button>
     <p role="status">{state.message}</p>
   </form>;
 }
@@ -28,6 +30,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
   grants: Grant[]; initialCommandId: string;
 }) {
   const router = useRouter();
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [recipientId, setRecipient] = useState(''), [fields, setFields] = useState<SelectiveLeadField[]>([]);
   const [expires, setExpires] = useState(''), [commandId, setCommand] = useState(initialCommandId);
   const [generation, setGeneration] = useState(0), [previewGeneration, setPreviewGeneration] = useState(-1);
@@ -38,11 +41,11 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
   const validExpiry = expiresTime === null || Number.isFinite(expiresTime);
   const selection = { leadId, recipientId, revision: grant?.revision ?? 0, commandId, fields,
     expiresAt: expiresTime !== null && validExpiry ? new Date(expiresTime).toISOString() : null };
-  const locked = confirming || confirmation.ok || !!confirmation.uncertain;
+  const locked = !ready || confirming || confirmation.ok || !!confirmation.uncertain;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   const prepared = previewGeneration === generation && preview.preview;
-  return <div className="min-w-0 space-y-6">
-    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onChange={changed} className="space-y-4">
+  return <div className="min-w-0 space-y-6" data-testid="lead-sharing" data-interactive-ready={ready}>
+    <form action={prepare} onSubmit={() => setPreviewGeneration(generation)} onReset={event => event.preventDefault()} onChange={changed} className="space-y-4">
       <fieldset disabled={locked || preparing} className="min-w-0 space-y-4">
         <label className="block font-semibold">Persona esistente<select required className={control} value={recipientId} onChange={event => setRecipient(event.target.value)}>
           <option value="">Seleziona una persona</option>{recipients.map(person => <option key={person.id} value={person.id}>{person.name} · {person.email} · {person.role}</option>)}
@@ -83,6 +86,7 @@ export function SelectiveLeadSharing({ leadId, recipients, grants, initialComman
   </div>;
 }
 function Revoke({ grant }: { grant: Grant }) {
+  const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, action, pending] = useActionState(revokeLeadSharingAction, initial);
   return <div className="min-w-0 space-y-3 rounded-xl border p-4">
     <p className="break-words font-semibold">{grant.recipientName} · {grant.recipientEmail}</p>
@@ -91,8 +95,8 @@ function Revoke({ grant }: { grant: Grant }) {
     <p>{grant.expiresAt ? `Scadenza: ${new Date(grant.expiresAt).toLocaleString('it-IT')}` : 'Senza scadenza indicata'}</p>
     {!grant.revoked && !state.ok && <form action={action} onSubmit={() => rememberCommand(grant.commandId)} className="space-y-3">
       <input type="hidden" name="grantId" value={grant.id} /><input type="hidden" name="revision" value={grant.revision} /><input type="hidden" name="commandId" value={grant.commandId} />
-      <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
-      <button disabled={pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
+      <label className="flex items-start gap-2"><input name="confirmed" type="checkbox" required disabled={!ready || pending || state.uncertain} />Confermo la revoca. Le copie già acquisite non possono essere recuperate.</label>
+      <button disabled={!ready || pending || state.uncertain} className="font-semibold text-red-800 underline">Revoca accesso</button>
     </form>}
     <p role="status">{state.message}</p>{!grant.revoked && <Receipt commandId={grant.commandId} />}
   </div>;

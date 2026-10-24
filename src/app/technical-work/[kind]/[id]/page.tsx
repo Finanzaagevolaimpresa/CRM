@@ -9,6 +9,7 @@ import { prisma } from '@/lib/prisma';
 import { readTechnicalWork } from '@/lib/technical-assignment-access';
 import { prepareTechnicalWork, saveTechnicalWork, checkTechnicalWork } from '@/lib/technical-work-actions';
 import { technicalResponsibilityLabels, technicalTargetReference, technicalWorkPath } from '@/lib/technical-assignment-display';
+import { technicalUploadPath } from '@/lib/technical-upload-display';
 export const dynamic = 'force-dynamic';
 export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
   searchParams: Promise<{ workDecision?: string }> }) {
@@ -27,6 +28,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
     description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza ${new Date(data.expiresAt).toLocaleString('it-IT')}`} />
     <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
+    {data.actions.includes('upload_document') && <SecondaryLink href={technicalUploadPath(target.data)}>Deposita un documento per l’Admin</SecondaryLink>}
     {data.actions.includes('request_admin') && <SecondaryLink href={`/admin-requests/new?kind=${target.data.kind}&id=${encodeURIComponent(target.data.targetId)}`}>Richiedi documento o integrazione all’Admin</SecondaryLink>}
     <Card title="Informazioni disponibili"><dl className="grid min-w-0 gap-4 sm:grid-cols-2">{data.fields.map(field => <div key={field.key} className="min-w-0">
       <dt className="font-semibold">{field.label}</dt><dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></Card>

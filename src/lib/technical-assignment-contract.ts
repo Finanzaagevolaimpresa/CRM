@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { technicalWorkItemGrants } from './technical-work-item-grant';
+import { technicalUploadProfile } from './technical-upload-profile';
 
 // Closed domain selections; the contract alone never grants access. Runtime
 // admission also requires the retained journal and current personal authority.
@@ -9,9 +10,9 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const instant = z.string().datetime({ offset: true });
 
 export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document'] as const;
-// Upload remains outside this increment; checklist/deadline operations require
-// separate, explicit item selections in the same retained personal decision.
-export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines'] as const;
+// Each operation also needs its explicit item selection or bounded upload
+// profile in the retained personal decision and fresh runtime admission.
+export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin', 'manage_checklist', 'manage_deadlines', 'upload_document'] as const;
 export const projectTechnicalFields = ['title', 'description', 'status'] as const;
 export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;
@@ -31,6 +32,9 @@ const selectionBase = {
   expiresAt: instant,
   documents: z.array(documentVersion).max(20),
   workItems: technicalWorkItemGrants.optional(),
+  // Omitted profiles retain historical canonical payloads byte-for-byte.
+  // A historical missing profile grants no upload operation.
+  uploadProfile: technicalUploadProfile.optional(),
 };
 const projectScope = z.object({
   ...selectionBase, kind: z.literal('Project'),
@@ -50,6 +54,9 @@ export const technicalAssignmentSelection = z.discriminatedUnion('kind', [projec
   if (value.editableFields.some(field => !readable.has(field)) || (value.actions.includes('update_status') && !readable.has('status'))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'An editable field or status must also be readable', path: ['readableFields'] });
   }
+  if (value.uploadProfile && !value.actions.includes('upload_document')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'An upload profile requires its separate action', path: ['uploadProfile'] });
+  }
   const versions = value.documents.map(d => `${d.documentId}:${d.version}`);
   for (const [kind, action] of [['Task', 'manage_deadlines'], ['ChecklistItem', 'manage_checklist']] as const) {
     if (value.actions.includes(action) !== !!value.workItems?.some(item => item.kind === kind)) {
@@ -67,7 +74,13 @@ export const technicalAssignmentCommand = z.object({
   expectedContextSha256: hash, expectedRecipientEpoch: revision,
   selection: technicalAssignmentSelection,
   reason: z.string().trim().min(3).max(500),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  // Retained historical selections can still be parsed, but a newly proposed
+  // upload permission cannot omit the exact personally chosen profile.
+  if (value.selection.actions.includes('upload_document') && !value.selection.uploadProfile) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Upload requires an explicit bounded profile', path: ['selection', 'uploadProfile'] });
+  }
+});
 export const technicalAssignmentRevocation = z.object({
   commandId: z.string().uuid(), assignmentId: id, expectedRevision: revision,
   expectedContextSha256: hash, reason: z.string().trim().min(3).max(500),
@@ -119,7 +132,8 @@ export function admitsTechnicalAssignmentAction(
   now: Date,
 ) {
   return admitsTechnicalAssignmentRead(current, selection, requested, now)
-    && selection.actions.includes(requested.action);
+    && selection.actions.includes(requested.action)
+    && (requested.action !== 'upload_document' || !!selection.uploadProfile);
 }
 
 export function technicalFieldPatch(selection: TechnicalAssignmentSelection, input: unknown) {
