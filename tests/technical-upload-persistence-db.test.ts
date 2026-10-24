@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import test, { before, after } from 'node:test';
 import { PrismaClient, type Prisma } from '@prisma/client';
@@ -33,9 +32,14 @@ before(async () => { if (!enabled) return;
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
   assert.equal((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count, 66n);
-  root = await mkdtemp(path.join(tmpdir(), 'fai-upload-db-only-'));
-  process.env.LOCAL_DOCUMENT_STORAGE_ROOT = root;
-  process.env.STORAGE_PROVIDER = 'local'; process.env.DOCUMENT_MAX_BYTES = '1024';
+  // Storage configuration is captured by imported modules. The workflow must
+  // provision this isolated root before Node starts, never after module import.
+  assert.equal(process.env.STORAGE_PROVIDER, 'local');
+  assert.equal(process.env.DOCUMENT_MAX_BYTES, '1024');
+  root = await realpath(process.env.LOCAL_DOCUMENT_STORAGE_ROOT!);
+  const runner = await realpath(process.env.RUNNER_TEMP!);
+  assert(root.startsWith(runner + path.sep));
+  assert(path.basename(root).startsWith('fai-upload-db-only-'));
   admin = await syntheticAuthority(db);
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
@@ -147,13 +151,13 @@ test('missing or enriched audit rolls back the whole submission transaction', op
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
     await tx.auditLog.delete({ where: { id: p.command.commandId } });
-  }));
+  }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
   await assert.rejects(withTechnicalAssignmentRecipient(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
     await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } } });
-  }));
+  }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
 });
 test('immutable retained submissions refuse update, deletion, truncation and duplicate command consumption', options, async () => {

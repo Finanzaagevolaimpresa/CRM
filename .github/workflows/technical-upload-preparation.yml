@@ -63,6 +63,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export LOCAL_DOCUMENT_STORAGE_ROOT="$(mktemp -d "$RUNNER_TEMP/fai-upload-db-only-XXXXXX")"
+          export STORAGE_PROVIDER=local DOCUMENT_MAX_BYTES=1024
           node --import tsx --test tests/technical-upload-persistence-db.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           grep -Fx '# tests 9' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           grep -Fx '# pass 9' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
