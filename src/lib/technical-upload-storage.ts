@@ -43,7 +43,7 @@ function validateBudget(input: TechnicalUploadWriteIntent['privateFile']) {
  * Include every retained file, even after DB rollback. Empty files reserve one
  * maximum file; partial bytes and strange entries are never removed or repaired.
  * Stop enumeration at the approved count so a corrupt bucket is bounded too. */
-async function enforcePhysicalBudget(target: string, input: TechnicalUploadWriteIntent['privateFile']) {
+async function physicalBudget(target: string, input: TechnicalUploadWriteIntent['privateFile']) {
   const b = input.storageBudget, bucket = path.dirname(target);
   let files = 0, bytes = 0, existing = false;
   for await (const entry of await opendir(bucket)) {
@@ -59,9 +59,26 @@ async function enforcePhysicalBudget(target: string, input: TechnicalUploadWrite
     if (entry.name === path.basename(target)) existing = true;
     if (bytes > b.maxBytesPerRevision) throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
   }
+  await privateParents(target, false);
+  return { files, bytes, existing };
+}
+
+/** Read-only accounting includes files retained by rolled-back commands. It
+ * never creates a missing bucket, repairs a file or assumes DB quota is space. */
+export async function readTechnicalUploadPhysicalQuota(storageKey: string,
+  budget: TechnicalUploadWriteIntent['privateFile']['storageBudget']) {
+  const probe = { storageKey, storageBudget: budget, sizeBytes: 1, sha256: '0'.repeat(64), bytes: new Uint8Array(1) };
+  validateReference(probe); validateBudget(probe);
+  const target = localPathFromStoragePath(storageKey);
+  try { await privateParents(target, false); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { files: 0, bytes: 0 }; throw error; }
+  const { files, bytes } = await physicalBudget(target, probe);
+  return { files, bytes };
+}
+async function enforcePhysicalBudget(target: string, input: TechnicalUploadWriteIntent['privateFile']) {
+  const { files, bytes, existing } = await physicalBudget(target, input), b = input.storageBudget;
   if (!existing && (files + 1 > b.maxFilesPerRevision || bytes + input.sizeBytes > b.maxBytesPerRevision))
     throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
-  await privateParents(target, false);
 }
 
 /** Exact-byte read only; the future caller must first authorize the current

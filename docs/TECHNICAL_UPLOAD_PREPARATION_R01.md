@@ -1,5 +1,7 @@
 # Deposito documentale dall'incarico tecnico — preparazione
 
+Documento storico della fase dormiente. L’integrazione corrente e i suoi limiti sono descritti in `TECHNICAL_UPLOAD_REVIEW_R02.md`; i PASS precedenti non qualificano il nuovo runtime.
+
 Base di preparazione riconciliata: merge PR219 `aa30d5c8ca4f483ae6cd0e77ec9fade8794646b4`, comprensivo di PR218. La preparazione conserva i commit precedenti e non modifica i pacchetti congelati. Non attesta integrazione o distribuzione del caricamento documentale.
 
 ## Lacuna verificata e riuso

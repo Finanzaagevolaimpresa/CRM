@@ -8,6 +8,8 @@ import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-de
 import { technicalAssignmentCommand, type TechnicalAssignmentSelection } from '@/lib/technical-assignment-contract';
 import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
 import { TechnicalWorkItemChoices, type ItemChoices } from './technical-work-item-choices';
+import { TechnicalUploadProfileFields, emptyUploadProfile, uploadProfileFromChoices } from './technical-upload-profile-fields';
+import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
 
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
@@ -53,6 +55,10 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
       <p>{technicalResponsibilityLabels[assign.responsibility]} · scadenza {when(assign.expiresAt)}</p>
       <p>{preview.replacesAssignment ? 'Questa decisione sostituisce l’incarico precedente della stessa persona su questo record.' : 'Questa decisione aggiunge una persona al solo record selezionato.'}</p>
       <p>Operazioni consentite: {assign.actions.map(action => technicalActionLabels[action]).join(', ')}.</p>
+      {assign.uploadProfile && <div className="space-y-2 rounded-xl bg-white p-3"><h3 className="font-bold">Deposito privato da revisionare</h3>
+        <p className="break-words">Scopo: {assign.uploadProfile.purpose}</p><p>Formati: {assign.uploadProfile.formats.join(', ')}</p>
+        <p>Massimo {assign.uploadProfile.maxFilesPerRevision} file · {assign.uploadProfile.maxFileBytes / 1048576} MiB per file · {assign.uploadProfile.maxBytesPerRevision / 1048576} MiB totali.</p>
+        <p>Approvazione o rifiuto personale dell’Admin. Nessuna pubblicazione o condivisione automatica.</p></div>}
       <dl className="grid min-w-0 gap-3 rounded-xl bg-white p-4 sm:grid-cols-2">{preview.fields.map(field => <div key={field.key} className="min-w-0">
         <dt className="font-semibold">{field.label}{assign.editableFields.some(key => key === field.key) ? ' · modificabile' : ' · lettura'}</dt>
         <dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl>
@@ -91,6 +97,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>([]);
   const [chosenDocuments, setDocuments] = useState<Record<string, boolean>>({});
   const [chosenItems, setItems] = useState<ItemChoices>({});
+  const [uploadChoices, setUploadChoices] = useState(emptyUploadProfile);
   const [expires, setExpires] = useState(''), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
   const [commandId, setCommand] = useState(initialCommandId), [generation, setGeneration] = useState(0);
   const [previewGeneration, setPreviewGeneration] = useState(-1), [submitted, setSubmitted] = useState(false);
@@ -102,6 +109,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
   const command = data.recipient ? { commandId, targetId: data.target.targetId, expectedRevision: data.revision,
     expectedContextSha256: data.contextSha256, expectedRecipientEpoch: data.recipient.epoch,
     selection: { kind: data.target.kind, userId: data.recipient.id, responsibility, actions: chosenActions,
+      ...(chosenActions.includes('upload_document') ? { uploadProfile: uploadProfileFromChoices(uploadChoices) } : {}),
       readableFields: readable, editableFields: editable, expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : '',
       documents: data.documentOptions.filter(doc => Object.hasOwn(chosenDocuments, doc.fileId)).map(doc => ({
         documentId: doc.documentId, fileId: doc.fileId, version: doc.version, contentSha256: doc.contentSha256,
@@ -152,6 +160,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
             </div>)}</div>{data.documentsLimited && <p>Catalogo limitato. Sono mostrate soltanto le versioni qui disponibili; le altre non verranno incluse.</p>}
           </fieldset>
           <TechnicalWorkItemChoices data={data} actions={chosenActions} choices={chosenItems} onChange={setItems} />
+          {chosenActions.includes('upload_document') && <TechnicalUploadProfileFields value={uploadChoices} onChange={setUploadChoices} />}
           <label className="block font-semibold">Scadenza, entro 90 giorni<input className={control} type="datetime-local" required value={expires} onChange={event => setExpires(event.target.value)} /></label>
           <label className="block font-semibold">Motivo dell’incarico<textarea className={control} value={reason} minLength={3} maxLength={500} required onChange={event => setReason(event.target.value)} /></label>
           <input type="hidden" name="operation" value="ASSIGN" /><input type="hidden" name="reference" value={JSON.stringify(reference)} />
@@ -187,6 +196,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
         <p>Campi: {assignment.selection.readableFields.map(field => technicalFieldLabels[field]).join(', ')}</p>
         <p>Operazioni: {assignment.selection.actions.map(action => technicalActionLabels[action]).join(', ')}</p>
         <a className="font-semibold underline" aria-disabled={blocked} href={blocked ? undefined : `${technicalManagementPath(data.target)}?recipient=${encodeURIComponent(assignment.recipientId)}`}>Gestisci l’incarico di questa persona</a>
+        {!assignment.revokedAt && assignment.selection.uploadProfile && <p><a className="font-semibold underline" href={technicalUploadReviewPath({ ...data.target, recipientId: assignment.recipientId })}>Revisiona i documenti depositati</a></p>}
       </article>)}
       {data.assignmentsLimited && <p>Sono mostrati i primi 200 incarichi registrati.</p>}
     </section>

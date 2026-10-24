@@ -10,11 +10,9 @@ import { syntheticAuthority, syntheticSession } from './selective-sharing/fixtur
 import { leadProof, type Person } from './selective-leads/fixtures';
 import { technicalFixture, technicalTarget, revokeTechnical } from './technical-assignments/fixtures';
 import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
-import { previewTechnicalAssignment } from '../src/lib/technical-assignment-service';
-import { createTechnicalAssignmentPreview } from '../src/lib/technical-assignment-preview';
-import { prepareTechnicalAssignmentDecision } from '../src/lib/technical-assignment-decision';
+import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../src/lib/technical-assignment-service';
 import { lockTechnicalAssignmentContext } from '../src/lib/technical-assignment-context';
-import { lockTechnicalAssignmentRecord, persistTechnicalAssignmentDecision } from '../src/lib/technical-assignment-storage';
+import { lockTechnicalAssignmentRecord } from '../src/lib/technical-assignment-storage';
 import { withTechnicalAssignmentDecision, withTechnicalAssignmentRecipient, technicalAssignmentClock,
   type TechnicalAssignmentTransaction } from '../src/lib/technical-assignment-transaction';
 import { previewTechnicalUploadDeposit, confirmTechnicalUploadDeposit } from '../src/lib/technical-upload-plan';
@@ -23,11 +21,13 @@ import { readTechnicalUploadQuota, loadTechnicalUploadRecord, persistTechnicalUp
   withTechnicalUploadDecision } from '../src/lib/technical-upload-persistence';
 import { technicalUploadAdmission } from '../src/lib/technical-upload-contract';
 import { storeTechnicalUploadPrivateFile, readTechnicalUploadPrivateFile } from '../src/lib/technical-upload-storage';
-import { previewTechnicalUpload, readTechnicalUploadOutcome, readOwnTechnicalUpload } from '../src/lib/technical-upload-service';
+import { previewTechnicalUpload, confirmTechnicalUpload, readTechnicalUploadOutcome, readOwnTechnicalUpload, readOwnTechnicalUploads } from '../src/lib/technical-upload-service';
+import { readTechnicalUploadReviewQueue, readTechnicalUploadForAdmin, previewTechnicalUploadReview, confirmTechnicalUploadReview, readTechnicalUploadReviewOutcome } from '../src/lib/technical-upload-review-service';
+import { prepareTechnicalUploadReview } from '../src/lib/technical-upload-review-contract';
+import { persistTechnicalUploadReview } from '../src/lib/technical-upload-review-persistence';
 
-// Qualification of the dormant persistence components, not a runtime upload
-// acceptance test. The synthetic fixture installs a signed decision through the
-// lower journal writer while the public management/service gate stays closed.
+// Real application services against an isolated database and private volume.
+// Lower writers are used only for targeted atomicity/fault-injection tests.
 const enabled = process.env.TECHNICAL_UPLOAD_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person, root: string;
 before(async () => { if (!enabled) return;
@@ -47,6 +47,105 @@ before(async () => { if (!enabled) return;
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
 });
 after(async () => db.$disconnect());
+
+async function publicDeposit(f: Fixture) {
+  const data = await readOwnTechnicalUploads(db, f.techA.session, f.target);
+  const p = await previewTechnicalUpload(db, f.techA.session, f.target, { commandId: randomUUID(), assignmentId: data.assignmentId,
+    assignmentRevision: data.assignmentRevision, expectedContextSha256: data.contextSha256, title: 'Elaborato da revisionare', action: 'deposit_private_document' }, 'Relazione.txt', bytes);
+  await confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, bytes, true);
+  return p;
+}
+async function reviewPreview(f: Fixture, verdict: 'APPROVE_PRIVATE' | 'REJECT_PRIVATE' = 'APPROVE_PRIVATE') {
+  const ref = { ...f.target, recipientId: f.techA.user.id }, queue = await readTechnicalUploadReviewQueue(db, admin.session, ref);
+  assert.equal(queue.deposits.length, 1);
+  return previewTechnicalUploadReview(db, admin.session, ref, { commandId: randomUUID(), submissionCommandId: queue.deposits[0].commandId,
+    sourceSha256: queue.deposits[0].sourceSha256, verdict, reason: 'Verifica sintetica del file esatto' });
+}
+
+test('personal Admin reads exact bytes and approves privately; no Document, notification or outgoing email is created', options, async () => {
+  const f = await fixture(), p = await publicDeposit(f), ref = { ...f.target, recipientId: f.techA.user.id };
+  const n = await counts(), notifications = await db.recordUpdateDelivery.count(), communications = await db.approvedCommunication.count();
+  assert.deepEqual((await readTechnicalUploadForAdmin(db, admin.session, ref, p.command.commandId)).bytes, bytes);
+  const review = await reviewPreview(f);
+  const receipt = await confirmTechnicalUploadReview(db, admin.session, leadProof(admin), ref, review.command, review.token, true);
+  assert.equal(receipt.verdict, 'APPROVE_PRIVATE');
+  assert.deepEqual(await confirmTechnicalUploadReview(db, admin.session, leadProof(admin), ref, review.command, review.token, true), receipt);
+  assert.deepEqual(await readTechnicalUploadReviewOutcome(db, admin.session, ref, review.command.commandId), { status: 'RECORDED', receipt });
+  assert.equal((await readOwnTechnicalUploads(db, f.techA.session, f.target)).deposits[0].review?.verdict, 'APPROVE_PRIVATE');
+  assert.deepEqual(await counts(), { ...n, audits: n.audits + 1n });
+  assert.equal(await db.recordUpdateDelivery.count(), notifications); assert.equal(await db.approvedCommunication.count(), communications);
+});
+
+test('rejection retains exact bytes and quota; no second final review can overwrite the decision', options, async () => {
+  const f = await fixture(1), p = await publicDeposit(f), ref = { ...f.target, recipientId: f.techA.user.id }, review = await reviewPreview(f, 'REJECT_PRIVATE');
+  await confirmTechnicalUploadReview(db, admin.session, leadProof(admin), ref, review.command, review.token, true);
+  const data = await readOwnTechnicalUploads(db, f.techA.session, f.target);
+  assert.equal(data.consumedFiles, 1); assert.equal(data.deposits[0].review?.verdict, 'REJECT_PRIVATE');
+  assert.deepEqual((await readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId)).bytes, bytes);
+  await assert.rejects(previewTechnicalUploadReview(db, admin.session, ref, { ...review.command, commandId: randomUUID(), verdict: 'APPROVE_PRIVATE' }));
+  await assert.rejects(db.$executeRaw`UPDATE "TechnicalUploadReview" SET command=command WHERE "commandId"=${review.command.commandId}::uuid`);
+  await assert.rejects(db.$executeRaw`DELETE FROM "TechnicalUploadReview" WHERE "commandId"=${review.command.commandId}::uuid`);
+});
+
+test('two technicians, two sales and an unbound Admin cannot read another private upload, review queue or receipt', options, async () => {
+  const f = await fixture(), p = await publicDeposit(f), ref = { ...f.target, recipientId: f.techA.user.id }, n = await counts();
+  for (const person of [f.techB, f.salesA, f.salesB, admin]) await assert.rejects(readOwnTechnicalUpload(db, person.session, f.target, p.command.commandId));
+  for (const person of [f.techA, f.techB, f.salesA, f.salesB]) {
+    await assert.rejects(readTechnicalUploadReviewQueue(db, person.session, ref));
+    await assert.rejects(readTechnicalUploadForAdmin(db, person.session, ref, p.command.commandId));
+  }
+  await db.user.update({ where: { id: f.salesA.user.id }, data: { role: 'admin' } });
+  await assert.rejects(readTechnicalUploadReviewQueue(db, f.salesA.session, ref));
+  await assert.rejects(readTechnicalUploadForAdmin(db, admin.session, { ...ref, targetId: f.otherPractice.id }, p.command.commandId));
+  await assert.rejects(readTechnicalUploadForAdmin(db, admin.session, { ...ref, recipientId: f.techB.user.id }, p.command.commandId));
+  assert.deepEqual(await counts(), n);
+});
+
+test('revocation with both pages open denies bytes, lists and pending review while preserving a minimal receipt', options, async () => {
+  const f = await fixture(), p = await publicDeposit(f), ref = { ...f.target, recipientId: f.techA.user.id }, review = await reviewPreview(f), n = await counts();
+  await revokeTechnical(db, admin, f.target, f.techA);
+  await assert.rejects(confirmTechnicalUploadReview(db, admin.session, leadProof(admin), ref, review.command, review.token, true));
+  await assert.rejects(readTechnicalUploadReviewQueue(db, admin.session, ref));
+  await assert.rejects(readTechnicalUploadForAdmin(db, admin.session, ref, p.command.commandId));
+  await assert.rejects(readOwnTechnicalUploads(db, f.techA.session, f.target));
+  await assert.rejects(readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId));
+  assert.equal((await readTechnicalUploadOutcome(db, f.techA.session, f.target, p.command.commandId)).status, 'RECORDED');
+  assert.deepEqual(await counts(), n);
+});
+
+test('concurrent opposite reviews consume one submission once and retain one minimal audit', options, async () => {
+  const f = await fixture(); await publicDeposit(f); const a = await reviewPreview(f), b = await reviewPreview(f, 'REJECT_PRIVATE'), n = await counts();
+  const values = await Promise.allSettled([a, b].map(p => confirmTechnicalUploadReview(db, admin.session, leadProof(admin), p.reference, p.command, p.token, true)));
+  assert.equal(values.filter(v => v.status === 'fulfilled').length, 1); assert.equal(values.filter(v => v.status === 'rejected').length, 1);
+  assert.deepEqual(await counts(), { ...n, audits: n.audits + 1n });
+});
+
+test('changed review, session or current recipient epoch invalidates the exact preview', options, async () => {
+  const f = await fixture(), p = await publicDeposit(f), review = await reviewPreview(f), n = await counts();
+  await assert.rejects(confirmTechnicalUploadReview(db, admin.session, leadProof(admin), review.reference, { ...review.command, reason: 'Motivo sostituito' }, review.token, true));
+  const otherSession = await syntheticSession(db, admin.user);
+  await assert.rejects(confirmTechnicalUploadReview(db, otherSession.session, leadProof({ ...otherSession, user: admin.user }), review.reference, review.command, review.token, true));
+  await db.user.update({ where: { id: f.techA.user.id }, data: { recordUpdateEpoch: { increment: 1 } } });
+  await assert.rejects(confirmTechnicalUploadReview(db, admin.session, leadProof(admin), review.reference, review.command, review.token, true));
+  await assert.rejects(readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId));
+  assert.deepEqual(await counts(), n);
+});
+
+test('review audit stripping rolls the whole decision back before any success receipt escapes', options, async () => {
+  const f = await fixture(); await publicDeposit(f); const p = await reviewPreview(f), n = await counts();
+  // Fault injection uses the genuine service preview admission, not a fabricated authorization.
+  const admission = JSON.parse(Buffer.from(p.token, 'base64url').toString('utf8')).payload.current;
+  await assert.rejects(withTechnicalAssignmentDecision(db, admin.session, f.target.kind, f.techA.user.id, leadProof(admin), async (tx, state) => {
+    await lockTechnicalAssignmentContext(tx, f.target);
+    await lockTechnicalAssignmentRecord(tx, p.reference, 'decision');
+    const record = prepareTechnicalUploadReview(state.key, p.command, admission, await technicalAssignmentClock(tx));
+    await persistTechnicalUploadReview(tx, state, record);
+    await tx.auditLog.delete({ where: { id: p.command.commandId } });
+    await tx.$executeRaw`SET CONSTRAINTS technical_upload_review_atomic IMMEDIATE`;
+  }), /TECHNICAL_UPLOAD_ATOMIC_REVIEW/);
+  assert.deepEqual(await counts(), n);
+  assert.deepEqual(await readTechnicalUploadReviewOutcome(db, admin.session, p.reference, p.command.commandId), { status: 'NOT_OBSERVED' });
+});
 const bytes = Buffer.from('Elaborato sintetico riservato');
 const profile = { purpose: 'Elaborati da esaminare', formats: ['.txt'] as ['.txt'],
   maxFileBytes: 1024, maxFilesPerRevision: 2, maxBytesPerRevision: 2048, visibility: 'PRIVATE_PENDING_ADMIN_REVIEW' as const };
@@ -59,21 +158,10 @@ async function fixture(maxFiles = 2) {
       actions: ['upload_document'], readableFields: ['title'], editableFields: [], documents: [],
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       uploadProfile: { ...profile, maxFilesPerRevision: maxFiles, maxBytesPerRevision: maxFiles * 1024 } },
-    reason: 'Fixture isolata del registro, non concessione runtime' };
-  // This proves the production entry point cannot issue this dormant action.
-  await assert.rejects(previewTechnicalAssignment(db, admin.session, { ...target, recipientId: f.techA.user.id }, 'ASSIGN', input));
-  const receipt = await withTechnicalAssignmentDecision(db, admin.session, target.kind, f.techA.user.id, leadProof(admin), async (tx, state) => {
-    const context = await lockTechnicalAssignmentContext(tx, target); assert(context);
-    const admission = { actorId: admin.user.id, sessionId: admin.session.sessionId!, authorityRevision: state.authority.revision,
-      actorEpoch: state.actor.recordUpdateEpoch, recipientEpoch: state.recipient!.recordUpdateEpoch,
-      ...target, recipientId: f.techA.user.id, assignmentId: null, assignmentRevision: 0, assignmentStateSha256: null,
-      contextSha256: context.contextSha256, validUntil: Math.min(state.current.expiresAt * 1000, state.current.registryExpiresAt.getTime()) };
-    const now = await technicalAssignmentClock(tx);
-    const token = createTechnicalAssignmentPreview('ASSIGN', state.key, input, admission, now.getTime());
-    const change = prepareTechnicalAssignmentDecision({ operation: 'ASSIGN', key: state.key, raw: input, token, admission,
-      previous: null, journal: null, assignmentId: randomUUID(), revisionId: randomUUID(), now });
-    return persistTechnicalAssignmentDecision(tx, state, change, null);
-  });
+    reason: 'Incarico sintetico esplicito con profilo di deposito' };
+  const ref = { ...target, recipientId: f.techA.user.id };
+  const p = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  const receipt = await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, p.token, true);
   return { ...f, target, receipt };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -119,10 +207,15 @@ async function counts() {
     (SELECT count(*) FROM "AuditLog" WHERE "entityType"='TechnicalUploadSubmission') AS audits,
     (SELECT count(*) FROM "Document") AS documents, (SELECT count(*) FROM "DocumentVersion") AS versions`)[0];
 }
-test('public runtime remains disabled even with a correctly signed isolated upload fixture', options, async () => {
-  const f = await fixture(), p = await preview(f), n = await counts();
-  await assert.rejects(previewTechnicalUpload(db, f.techA.session, f.target, p.command, 'Relazione.txt', bytes));
-  assert.deepEqual(await counts(), n);
+test('public upload consumes one exact command and returns the same original receipt after lost response', options, async () => {
+  const f = await fixture(), n = await counts(), data = await readOwnTechnicalUploads(db, f.techA.session, f.target);
+  const p = await previewTechnicalUpload(db, f.techA.session, f.target, { commandId: randomUUID(), assignmentId: data.assignmentId,
+    assignmentRevision: data.assignmentRevision, expectedContextSha256: data.contextSha256, title: 'Documento tecnico', action: 'deposit_private_document' }, 'Relazione.txt', bytes);
+  const receipt = await confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, bytes, true);
+  assert.deepEqual(await confirmTechnicalUpload(db, f.techA.session, f.target, p.command, p.token, bytes, true), receipt);
+  assert.deepEqual((await readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId)).bytes, bytes);
+  assert.equal((await readOwnTechnicalUploads(db, f.techA.session, f.target)).deposits.length, 1);
+  assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
 });
 test('exact storage, immutable row, minimal audit and original decision agree after COMMIT', options, async () => {
   const f = await fixture(), p = await preview(f), n = await counts(), receipt = await save(f, p);
@@ -134,7 +227,7 @@ test('exact storage, immutable row, minimal audit and original decision agree af
   assert.deepEqual(saved.audit.after, { action: 'deposit_private_document', fileCount: 1 });
   assert(!JSON.stringify(saved.audit).includes('Relazione'));
   assert.deepEqual(await counts(), { ...n, submissions: n.submissions + 1n, audits: n.audits + 1n });
-  await assert.rejects(readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId));
+  assert.deepEqual((await readOwnTechnicalUpload(db, f.techA.session, f.target, p.command.commandId)).bytes, bytes);
 });
 test('lost-response recovery is read-only, original actor/session bound and contains no document metadata', options, async () => {
   const f = await fixture(), p = await preview(f), receipt = await save(f, p), n = await counts();

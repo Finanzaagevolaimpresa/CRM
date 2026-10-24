@@ -10,12 +10,13 @@ import test, { before } from 'node:test';
 let root: string;
 let store: typeof import('../src/lib/technical-upload-storage').storeTechnicalUploadPrivateFile;
 let read: typeof import('../src/lib/technical-upload-storage').readTechnicalUploadPrivateFile;
+let quota: typeof import('../src/lib/technical-upload-storage').readTechnicalUploadPhysicalQuota;
 before(async () => {
   root = await mkdtemp(path.join(tmpdir(), 'fai-technical-upload-test-'));
   process.env.LOCAL_DOCUMENT_STORAGE_ROOT = root;
   process.env.STORAGE_PROVIDER = 'local';
   process.env.DOCUMENT_MAX_BYTES = '1024';
-  ({ storeTechnicalUploadPrivateFile: store, readTechnicalUploadPrivateFile: read } = await import('../src/lib/technical-upload-storage'));
+  ({ storeTechnicalUploadPrivateFile: store, readTechnicalUploadPrivateFile: read, readTechnicalUploadPhysicalQuota: quota } = await import('../src/lib/technical-upload-storage'));
   await mkdir(path.join(root, 'technical-submissions', 'v1'), { recursive: true });
 });
 const bytes = Buffer.from('Synthetic technical file only');
@@ -25,6 +26,17 @@ const file = (letter: string, content = bytes, bucket = letter) => ({
   bytes: content, sha256: createHash('sha256').update(content).digest('hex'), sizeBytes: content.length,
   storageBudget: { maxFileBytes: 1024, maxFilesPerRevision: 2, maxBytesPerRevision: 2048 } });
 const target = (key: string) => path.join(root, ...key.split('/'));
+
+test('quota inspection is read-only for a missing bucket and charges a retained zero-byte reservation', async () => {
+  const input = { ...file('a'), storageKey: `technical-submissions/v1/${'ab'.repeat(32)}/${'ac'.repeat(32)}` };
+  const before = await readdir(path.join(root, 'technical-submissions', 'v1'));
+  assert.deepEqual(await quota(input.storageKey, input.storageBudget), { files: 0, bytes: 0 });
+  assert.deepEqual(await readdir(path.join(root, 'technical-submissions', 'v1')), before);
+  await mkdir(path.dirname(target(input.storageKey)));
+  await writeFile(target(input.storageKey), '', { flag: 'wx' });
+  assert.deepEqual(await quota(input.storageKey, input.storageBudget), { files: 1, bytes: 1024 });
+  assert.equal((await readFile(target(input.storageKey))).length, 0);
+});
 
 test('actual private storage preserves exact bytes and reuses only the same content', async () => {
   const input = file('a'), first = await store(input), second = await store(input);

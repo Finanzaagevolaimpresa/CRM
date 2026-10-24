@@ -23,6 +23,8 @@ if psql "$db" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log
 grep -Fq 'division by zero' "$evidence/fault.log"
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename='TechnicalUploadSubmission'")" = 0
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname='fai_technical_upload_atomic'")" = 0
+test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename='TechnicalUploadReview'")" = 0
+test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname='fai_technical_upload_review_atomic'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/applied.log"
@@ -30,7 +32,8 @@ footprint "$evidence/after.txt"
 cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "TechnicalUploadSubmission"')" = 0
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 66
-test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'technical_upload_%' AND NOT tgisinternal")" = 3
+test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'technical_upload_%' AND NOT tgisinternal")" = 6
+test "$(psql "$db" -Atc 'SELECT count(*) FROM "TechnicalUploadReview"')" = 0
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE tgname='technical_upload_atomic' AND tgdeferrable AND tginitdeferred")" = 1
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_constraint WHERE conrelid='\"TechnicalUploadSubmission\"'::regclass AND contype='f'")" = 2
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"

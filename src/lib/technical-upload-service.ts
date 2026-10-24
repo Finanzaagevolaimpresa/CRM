@@ -11,20 +11,19 @@ import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssign
 import { admitTechnicalUploadSource } from './technical-upload-admission';
 import { technicalUploadCommand, readTechnicalUploadPreview, readTechnicalUploadReceipt,
   technicalUploadRequestDigest } from './technical-upload-contract';
-import { previewTechnicalUploadDeposit, confirmTechnicalUploadDeposit } from './technical-upload-plan';
+import { previewTechnicalUploadDeposit, confirmTechnicalUploadDeposit, technicalUploadStorageKey } from './technical-upload-plan';
 import { loadTechnicalUploadRecord, persistTechnicalUploadRecord, readTechnicalUploadQuota,
   withTechnicalUploadDecision } from './technical-upload-persistence';
 import { prepareTechnicalUploadRecord } from './technical-upload-record';
-import { readTechnicalUploadPrivateFile, storeTechnicalUploadPrivateFile } from './technical-upload-storage';
+import { readTechnicalUploadPhysicalQuota, readTechnicalUploadPrivateFile, storeTechnicalUploadPrivateFile } from './technical-upload-storage';
+import { loadTechnicalUploadReviewForSubmission } from './technical-upload-review-persistence';
 
 type Tx = Prisma.TransactionClient;
 function denied(): never { throw new TechnicalAssignmentError('DENIED'); }
 function stale(): never { throw new TechnicalAssignmentError('STALE'); }
 function unavailable(): never { throw new TechnicalAssignmentError('UNAVAILABLE'); }
 
-/** Internal service preparation only: no route imports this module and upload
- * remains excluded from technicalImplementedActions until the full UI/DB flow
- * is qualified. Existing admission therefore continues to reject that action. */
+/** Admission is derived only from current locked assignment and quota rows. */
 async function lockedUpload(tx: Tx, state: TechnicalAssignmentTransaction, target: TechnicalTargetReference, write = false) {
   const found = await lockAuthorizedTechnicalAssignment(tx, state, target, false, write ? { lockAssignmentForWrite: true } : {});
   if (!found.payload.selection.actions.includes('upload_document') || !found.payload.selection.uploadProfile
@@ -65,6 +64,33 @@ export async function previewTechnicalUpload(db: PrismaClient, claimed: AuthSess
     const locked = await lockedUpload(tx, state, target);
     return { target, ...previewTechnicalUploadDeposit(state.key, raw, fileName, bytes,
       locked.admission, (await technicalAssignmentClock(tx)).getTime()) };
+  });
+}
+
+/** Metadata for the current author and exact assignment revision only. Reads
+ * never create a bucket or quota row. Physical orphans remain charged separately. */
+export async function readOwnTechnicalUploads(db: PrismaClient, claimed: AuthSession, rawTarget: TechnicalTargetReference) {
+  const target = technicalTargetReference.parse(rawTarget);
+  return withTechnicalAssignmentRecipient(db, claimed, target.kind, async (tx, state) => {
+    const { admission: a } = await lockedUpload(tx, state, target);
+    const rows = await tx.$queryRaw<Array<{ commandId: string }>>`SELECT "commandId" FROM "TechnicalUploadSubmission"
+      WHERE "assignmentId"=${a.assignmentId}::uuid AND "assignmentRevision"=${a.assignmentRevision} ORDER BY "createdAt",id LIMIT 21`;
+    if (rows.length > 20) unavailable();
+    const deposits = [];
+    for (const row of rows) {
+      const saved = await loadTechnicalUploadRecord(tx, state, row.commandId), r = saved?.record;
+      if (!r || r.actorId !== a.actorId || r.assignmentId !== a.assignmentId || r.assignmentRevision !== a.assignmentRevision
+        || canonicalJson(r.target) !== canonicalJson(target)) denied();
+      const review = await loadTechnicalUploadReviewForSubmission(tx, state, row.commandId);
+      deposits.push({ commandId: r.commandId, title: r.command.title, fileName: r.command.file.fileName,
+        sizeBytes: r.sizeBytes, createdAt: r.createdAt, previewMime: r.command.file.previewMime,
+        review: review ? { verdict: review.command.verdict, reason: review.command.reason, recordedAt: review.receipt.recordedAt } : null });
+    }
+    const physical = await readTechnicalUploadPhysicalQuota(technicalUploadStorageKey(a, '00000000-0000-4000-8000-000000000000'), a.profile);
+    if (physical.files < a.consumedFiles || physical.bytes < a.consumedBytes) unavailable();
+    return { target, assignmentId: a.assignmentId, assignmentRevision: a.assignmentRevision, contextSha256: a.contextSha256,
+      profile: a.profile, consumedFiles: physical.files, consumedBytes: physical.bytes,
+      retainedWithoutReceipt: physical.files - a.consumedFiles, deposits };
   });
 }
 

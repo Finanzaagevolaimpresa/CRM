@@ -99,4 +99,55 @@ BEGIN
 END $$;
 CREATE CONSTRAINT TRIGGER technical_upload_atomic AFTER INSERT ON "TechnicalUploadSubmission"
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_upload_atomic();
+CREATE TABLE "TechnicalUploadReview" (
+ "commandId" UUID PRIMARY KEY,
+ "submissionCommandId" UUID NOT NULL UNIQUE REFERENCES "TechnicalUploadSubmission"("commandId") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "actorId" TEXT NOT NULL REFERENCES "User"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "sessionId" UUID NOT NULL, command JSONB NOT NULL, receipt JSONB NOT NULL,
+ proof TEXT NOT NULL CHECK(proof ~ '^[a-f0-9]{64}$'), "createdAt" TIMESTAMP(3) NOT NULL,
+ "transactionId" BIGINT NOT NULL DEFAULT txid_current()
+);
+CREATE TRIGGER technical_upload_review_immutable BEFORE UPDATE OR DELETE ON "TechnicalUploadReview"
+ FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_retained();
+CREATE TRIGGER technical_upload_review_no_truncate BEFORE TRUNCATE ON "TechnicalUploadReview"
+ FOR EACH STATEMENT EXECUTE FUNCTION fai_technical_assignment_retained();
+CREATE FUNCTION fai_technical_upload_review_atomic() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE s "TechnicalUploadSubmission"%ROWTYPE; g "TechnicalAssignment"%ROWTYPE; a "AuditLog"%ROWTYPE;
+ authority "TechnicalAssignmentAuthority"%ROWTYPE;
+BEGIN
+ SELECT * INTO s FROM "TechnicalUploadSubmission" WHERE "commandId"=NEW."submissionCommandId";
+ SELECT * INTO g FROM "TechnicalAssignment" WHERE id=s."assignmentId" FOR UPDATE;
+ SELECT * INTO a FROM "AuditLog" WHERE id=NEW."commandId"::text;
+ SELECT * INTO authority FROM "TechnicalAssignmentAuthority" WHERE id='technical-assignment';
+ IF current_setting('transaction_isolation') IS DISTINCT FROM 'serializable'
+ OR s.id IS NULL OR g.id IS NULL OR g.revision<>s."assignmentRevision" OR g."revokedAt" IS NOT NULL
+ OR clock_timestamp()>=(g.payload->'selection'->>'expiresAt')::timestamptz
+ OR authority.id IS NULL OR NOT authority.enabled OR authority."userId"<>NEW."actorId"
+ OR authority.revision<>(g.payload->>'authorityRevision')::integer
+ OR NEW."actorId" IS DISTINCT FROM (g.payload->>'approvedById')
+ OR a.id IS NULL OR a."actorId" IS DISTINCT FROM NEW."actorId" OR a.event IS DISTINCT FROM 'technical_upload_reviewed'
+ OR a."entityType" IS DISTINCT FROM 'TechnicalUploadSubmission' OR a."entityId" IS DISTINCT FROM NEW."submissionCommandId"::text
+ OR a."before" IS DISTINCT FROM '{}'::jsonb
+ OR a."after" IS DISTINCT FROM jsonb_build_object('status',NEW.command->>'verdict')
+ OR NEW.command->>'verdict' IS NULL OR NEW.command->>'verdict' NOT IN ('APPROVE_PRIVATE','REJECT_PRIVATE')
+ OR COALESCE(length(NEW.command->>'reason'),0) NOT BETWEEN 3 AND 500
+ OR COALESCE(NEW.command->>'sourceSha256','') !~ '^[a-f0-9]{64}$'
+ OR NEW.command IS DISTINCT FROM jsonb_build_object('commandId',NEW."commandId"::text,
+   'submissionCommandId',NEW."submissionCommandId"::text,'sourceSha256',NEW.command->>'sourceSha256',
+   'verdict',NEW.command->>'verdict','reason',NEW.command->>'reason')
+ OR NEW.receipt IS DISTINCT FROM jsonb_build_object('protocol','TECHNICAL_UPLOAD_REVIEW_RECEIPT_V1',
+   'commandId',NEW."commandId"::text,'submissionCommandId',NEW."submissionCommandId"::text,
+   'actorId',NEW."actorId",'sessionId',NEW."sessionId"::text,
+   'reference',jsonb_build_object('kind',s."targetKind",'targetId',s."targetId",'recipientId',s."actorId"),
+   'requestDigest',NEW.receipt->>'requestDigest','verdict',NEW.command->>'verdict',
+   'recordedAt',NEW.receipt->>'recordedAt','keyVersion',(g.payload->>'keyVersion')::integer)
+ OR COALESCE(NEW.receipt->>'requestDigest','') !~ '^[a-f0-9]{64}$'
+ OR (NEW.receipt->>'recordedAt')::timestamptz IS DISTINCT FROM (NEW."createdAt" AT TIME ZONE 'UTC')
+ OR NEW."transactionId"<>txid_current()
+ OR NOT EXISTS(SELECT 1 FROM "AuditLog" x WHERE x.id=NEW."commandId"::text AND x.xmin::text::bigint=(txid_current()%4294967296))
+ THEN RAISE EXCEPTION 'TECHNICAL_UPLOAD_ATOMIC_REVIEW'; END IF;
+ RETURN NULL;
+END $$;
+CREATE CONSTRAINT TRIGGER technical_upload_review_atomic AFTER INSERT ON "TechnicalUploadReview"
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_upload_review_atomic();
 COMMIT;
