@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { TechnicalAssignmentError } from './technical-assignment-transaction';
 
-// Preparation only. The caller must first lock the canonical parent/item and
+// The caller must first lock the canonical parent/item and
 // authorize the current person through the retained personal decision.
 // A generation is an optimistic concurrency boundary, never an access grant.
 const identity = z.object({ kind: z.enum(['ChecklistItem', 'Task']),

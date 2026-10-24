@@ -259,6 +259,7 @@ export function canAssignService(user: Actor, service: ServiceAccessContext) {
 }
 
 export function canEditTask(user: Actor, task: Pick<Task, 'clientId' | 'assignedToId' | 'createdById'> & {
+  id?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;
@@ -306,6 +307,7 @@ export function canViewTask(user: Actor, task: Pick<Task, 'clientId' | 'assigned
 }
 
 export function canEditChecklistItem(user: Actor, item: Pick<DocumentChecklistItem, 'clientId' | 'createdById' | 'updatedById'> & { title?: string;
+  id?: string;
   client?: ClientAccessContext | null;
   project?: ProjectAccessContext | null;
   clientService?: ServiceAccessContext | null;

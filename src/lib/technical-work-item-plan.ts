@@ -7,7 +7,7 @@ import { projectTechnicalWorkItem, technicalWorkItemPatch, type TechnicalWorkIte
 import { createTechnicalWorkItemPreview, readTechnicalWorkItemPreview, technicalWorkItemCommand,
   technicalWorkItemRequestDigest, type TechnicalWorkItemAdmission } from './technical-work-item-command';
 
-// Preparation only. The persistence service must load these facts under ordered
+// The persistence service must load these facts under ordered
 // locks and verify retained decisions/journals. Never construct them from a form.
 export interface LockedTechnicalWorkItemSnapshot {
   current: CurrentTechnicalAssignmentAdmission;

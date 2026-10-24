@@ -73,3 +73,6 @@ bash scripts/selective-lead-edit/qualify-migration.sh
 bash scripts/technical-assignments/qualify-migration.sh
 
 bash scripts/admin-requests/qualify-migration.sh
+# Historical migrations above remain qualified separately; runtime tests use the
+# complete current candidate, whose SQL66 is qualified in Technical work items.
+npx prisma migrate deploy

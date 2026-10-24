@@ -29,8 +29,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
   await page.getByLabel('Titolo', { exact: true }).check();
   const selected = page.getByLabel(checklist ? 'Checklist · Checklist scelta' : 'Attività · Attività tecnica scelta', { exact: true });
   await selected.check(); const card = selected.locator('..').locator('..');
-  for (const name of checklist ? ['Titolo', 'Note', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
-  await card.getByLabel(checklist ? 'Consenti modifica note' : 'Consenti modifica priorità', { exact: true }).check();
+  for (const name of checklist ? ['Titolo', 'Note tecniche', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
+  await card.getByLabel(checklist ? 'Consenti modifica note tecniche' : 'Consenti modifica priorità', { exact: true }).check();
   await expect(page.getByText('Checklist finanziaria esclusa', { exact: false })).toHaveCount(0);
   await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0,16));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Selezione sintetica di elementi e campi');
@@ -43,8 +43,8 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
 async function prepare(page: Page, row: Row, checklist = false) {
   await page.goto(item(row, checklist)); await page.locator('[data-technical-item-ready="true"]').waitFor();
   for (const value of row.excluded) expect(await page.content()).not.toContain(value);
-  await page.getByLabel(checklist ? 'Modifica note' : 'Modifica priorità', { exact: true }).check();
-  if (checklist) await page.getByRole('textbox', { name: 'Note', exact: true }).fill('Nota tecnica aggiornata');
+  await page.getByLabel(checklist ? 'Modifica note tecniche' : 'Modifica priorità', { exact: true }).check();
+  if (checklist) await page.getByRole('textbox', { name: 'Note tecniche', exact: true }).fill('Nota tecnica aggiornata');
   else await page.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('urgente');
   await page.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma le modifiche', exact: true })).toBeVisible();

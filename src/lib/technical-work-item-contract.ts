@@ -3,7 +3,7 @@ import { admitsTechnicalAssignmentAction, type CurrentTechnicalAssignmentAdmissi
   type TechnicalAssignmentSelection } from './technical-assignment-contract';
 import { technicalTargetReference } from './technical-assignment-display';
 
-// Preparation only: no runtime import or new implemented assignment action.
+// Pure authorization and projection rules used by the item persistence service.
 // These pure checks consume freshly locked, journal-verified server snapshots;
 // form values cannot establish an assignment, item binding or financial scope.
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
