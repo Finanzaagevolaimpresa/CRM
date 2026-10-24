@@ -47,7 +47,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Qualify SQL67 on immutable schema66 with atomic failure and wrong-base checks
+      - name: Qualify SQL67 and SQL68 on immutable baselines with atomic failure and wrong-base checks
         shell: bash
         run: |
           set -euo pipefail

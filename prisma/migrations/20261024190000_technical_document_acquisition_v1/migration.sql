@@ -51,7 +51,12 @@ BEGIN
  OR clock_timestamp()>=to_timestamp((a->>'validUntil')::double precision/1000)
  OR a->>'assignmentId' IS DISTINCT FROM s."assignmentId"::text
  OR (a->>'assignmentRevision')::integer IS DISTINCT FROM s."assignmentRevision"
- OR a->>'assignmentStateSha256' IS DISTINCT FROM g."stateSha256"
+ -- Match decodeTechnicalAssignmentRecord: stateSha256 is derived, not stored.
+ -- Revoked assignments are rejected above; the admitted record has null revokedAt.
+ OR a->>'assignmentStateSha256' IS DISTINCT FROM encode(sha256(convert_to(canonicalize_ai_execution_jsonb_v2(
+  jsonb_build_object('id',g.id,'kind',g.kind,'targetId',CASE WHEN g.kind='Project' THEN g."projectId" ELSE g."practiceId" END,
+   'recipientId',g."recipientId",'revision',g.revision,'payload',g.payload,'proof',g.proof,'revokedAt',NULL)
+  ),'UTF8')),'hex')
  OR a->>'contextSha256' IS DISTINCT FROM g.payload->>'contextSha256'
  OR a->'existingAcquisitionId' IS DISTINCT FROM 'null'::jsonb
  OR a->>'actorId' IS DISTINCT FROM NEW."actorId" OR a->>'sessionId' IS DISTINCT FROM NEW."sessionId"::text

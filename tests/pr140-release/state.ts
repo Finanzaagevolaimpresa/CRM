@@ -252,7 +252,7 @@ async function main() {
     assert.equal(data.technicalDecisions.length, 7); assert.equal(data.technicalRevisions.length, 7);
     assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 9);
     assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
-    assert.equal(data.technicalFiles.length, 6); assert.equal(data.technicalUsers.length, 4);
+    assert.equal(data.technicalFiles.length, 7); assert.equal(data.technicalUsers.length, 4);
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
