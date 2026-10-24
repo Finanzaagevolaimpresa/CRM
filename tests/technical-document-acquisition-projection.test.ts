@@ -62,7 +62,8 @@ test('canonical rows retain exact private bytes, explicit classification and one
     assert.equal(rows.version.documentId, rows.document.id); assert.equal(rows.version.version, 1);
     assert.equal(rows.document.storagePath, f.source.storageKey); assert.equal(rows.version.storagePath, f.source.storageKey);
     assert.equal(rows.document.checksum, f.source.contentSha256);
-    assert.equal(rows.document.mimeType, 'text/plain; charset=utf-8');
+    assert.equal(rows.document.mimeType, 'text/plain');
+    assert.equal(rows.document.containsSensitiveData, classification !== 'TECHNICAL_DOCUMENT');
     assert.equal(rows.document.clientId, 'client_a'); assert.equal(rows.document.clientServiceId, 'service_a');
     assert.equal(rows.document.uploadedById, 'personal_admin'); assert.equal(rows.document.status, 'caricato');
     assert.equal(rows.document.validUntil!.toISOString(), f.record.command.expiresAt);
@@ -100,5 +101,5 @@ test('historical projection after expiry preserves evidence but never turns priv
   assert.deepEqual(after, before);
   assert.equal(ordinaryDocumentVisibilityAllows(after.document.visibilityLevel), false);
   assert.equal(after.document.visibilityLevel, 'technical_admin_private_v1');
-  assert.equal(after.document.containsSensitiveData, true);
+  assert.equal(after.document.containsSensitiveData, false);
 });

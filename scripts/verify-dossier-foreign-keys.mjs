@@ -69,3 +69,7 @@ const uploadKeys = ['TechnicalUploadSubmission_actorId_fkey',
   'TechnicalUploadReview_submissionCommandId_fkey', 'TechnicalUploadReview_actorId_fkey'];
 assert.deepEqual(uploadKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove private upload foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "TechnicalUpload|ALTER TABLE "TechnicalUpload[^"]*"[^;]*DROP COLUMN/);
+const acquisitionKeys = ['submissionCommandId', 'reviewCommandId', 'documentId', 'versionId', 'actorId']
+  .map(column => `TechnicalDocumentAcquisition_${column}_fkey`);
+assert.deepEqual(acquisitionKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove canonical acquisition foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "TechnicalDocumentAcquisition"|ALTER TABLE "TechnicalDocumentAcquisition"[^;]*DROP COLUMN/);

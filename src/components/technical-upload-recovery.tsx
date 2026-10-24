@@ -8,7 +8,7 @@ export const uploadButton = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text
 export const uploadControl = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-3';
 const subscribe = () => () => {}, client = () => true, server = () => false;
 export function useUploadReady() { return useSyncExternalStore(subscribe, client, server); }
-export function rememberUpload(name: 'uploadDecision' | 'reviewDecision', commandId: string) {
+export function rememberUpload(name: 'uploadDecision' | 'reviewDecision' | 'acquisitionDecision', commandId: string) {
   const url = new URL(window.location.href); url.searchParams.set(name, commandId); window.history.replaceState(window.history.state, '', url);
 }
 export function TechnicalUploadRecovery({ target, reference, commandId, action, returnPath }: { target?: TechnicalTargetReference;

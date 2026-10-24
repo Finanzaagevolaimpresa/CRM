@@ -5,7 +5,7 @@ import { readTechnicalUploadReviewRecord, technicalUploadReviewCommand, type Tec
 
 type Tx = Prisma.TransactionClient;
 function unavailable(): never { throw new TechnicalAssignmentError('UNAVAILABLE'); }
-export async function loadTechnicalUploadReview(tx: Tx, state: TechnicalAssignmentTransaction, commandId: string) {
+export async function loadTechnicalUploadReview(tx: Tx, state: Pick<TechnicalAssignmentTransaction, 'key'>, commandId: string) {
   technicalUploadReviewCommand.shape.commandId.parse(commandId);
   const rows = await tx.$queryRaw<Array<{ command: unknown; receipt: unknown; proof: string }>>`
     SELECT command,receipt,proof FROM "TechnicalUploadReview" WHERE "commandId"=${commandId}::uuid FOR SHARE`;

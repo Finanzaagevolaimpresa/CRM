@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
-test('schema67 restart preserves private upload bytes, pending and final reviews and current denials', async ({ browser }) => {
+test('schema68 restart preserves private upload bytes, pending and final reviews and current denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_UPLOAD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; practiceId: string; adminEmail: string; liveEmail: string; revokedEmail: string;
     liveId: string; revokedId: string; salesEmails: string[];
+    clientId: string; acquisition: { commandId: string; documentId: string; versionId: string; title: string; bytes: string };
     uploads: Array<{ commandId: string; reviewId: string | null; status: string; title: string; bytes: string; sha256: string; authorId: string }>;
   };
   expect(f.synthetic).toBe(true);
@@ -37,6 +38,17 @@ test('schema67 restart preserves private upload bytes, pending and final reviews
     }
   }
   const allUrls: string[] = [own, review(f.liveId), review(f.revokedId)];
+  const acquiredUrl = origin + '/acquired-documents/' + f.acquisition.documentId;
+  allUrls.push(acquiredUrl, acquiredUrl + '?download=1', origin + '/clients/' + f.clientId + '/acquired-documents');
+  for (const suffix of ['', '?download=1']) {
+    const response = await admin.request.get(acquiredUrl + suffix); expect(response.status()).toBe(200);
+    expect((await response.body()).toString()).toBe(f.acquisition.bytes);
+    expect(response.headers()['cache-control']).toContain('private, no-store');
+    expect(response.headers()['content-disposition']).toMatch(suffix ? /^attachment;/ : /^inline;/);
+    for (const context of [live, revoked]) expect((await context.request.get(acquiredUrl + suffix)).status()).toBe(404);
+  }
+  const dossier = await admin.newPage(); await dossier.goto(origin + '/clients/' + f.clientId + '/acquired-documents');
+  await expect(dossier.getByRole('heading', { name: f.acquisition.title, exact: true })).toBeVisible();
   for (const row of f.uploads) {
     const ownFile = own + '/files/' + row.commandId, adminFile = review(row.authorId) + '/files/' + row.commandId;
     allUrls.push(ownFile, ownFile + '?download=1', adminFile, adminFile + '?download=1');

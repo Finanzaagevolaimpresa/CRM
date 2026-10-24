@@ -17,6 +17,7 @@ import { readTechnicalUploadPrivateFile } from './technical-upload-storage';
 import { createTechnicalUploadReviewPreview, readTechnicalUploadReviewPreview, prepareTechnicalUploadReview,
   technicalUploadReviewCommand, technicalUploadReviewDigest, type TechnicalUploadReviewAdmission } from './technical-upload-review-contract';
 import { loadTechnicalUploadReview, loadTechnicalUploadReviewForSubmission, persistTechnicalUploadReview } from './technical-upload-review-persistence';
+import { technicalAcquisitionForSubmission, loadTechnicalDocumentAcquisition } from './technical-document-acquisition-persistence';
 
 type Tx = Prisma.TransactionClient;
 function denied(): never { throw new TechnicalAssignmentError('DENIED'); }
@@ -47,7 +48,7 @@ async function source(tx: Tx, state: TechnicalAssignmentTransaction, ref: Techni
     || Date.parse(p.selection.expiresAt) <= now.getTime() || p.keyVersion !== state.key.version) denied();
   return { record, payload: p, context };
 }
-async function submission(tx: Tx, state: TechnicalAssignmentTransaction, ref: TechnicalAssignmentReference, commandId: string, write = false) {
+export async function lockedTechnicalUploadSubmission(tx: Tx, state: TechnicalAssignmentTransaction, ref: TechnicalAssignmentReference, commandId: string, write = false) {
   const found = await source(tx, state, ref, write), saved = await loadTechnicalUploadRecord(tx, state, commandId);
   const r = saved?.record;
   if (!r || r.assignmentId !== found.record.id || r.assignmentRevision !== found.record.revision
@@ -58,8 +59,9 @@ async function submission(tx: Tx, state: TechnicalAssignmentTransaction, ref: Te
     actorId: state.current.userId, sessionId: state.current.sessionId!, authorityRevision: state.authority.revision,
     actorEpoch: state.actor.recordUpdateEpoch, recipientEpoch: state.recipient!.recordUpdateEpoch, keyVersion: state.key.version,
     validUntil: Math.min(state.current.expiresAt * 1000, state.current.registryExpiresAt.getTime(), Date.parse(found.payload.selection.expiresAt)) };
-  return { record: r, admission };
+  return { record: r, admission, context: found.context };
 }
+const submission = lockedTechnicalUploadSubmission;
 function descriptor(r: Awaited<ReturnType<typeof submission>>['record']) {
   return { commandId: r.commandId, title: r.command.title, fileName: r.command.file.fileName,
     sizeBytes: r.sizeBytes, contentSha256: r.contentSha256, previewMime: r.command.file.previewMime, createdAt: r.createdAt };
@@ -82,8 +84,12 @@ export async function readTechnicalUploadReviewQueue(db: PrismaClient, claimed: 
     for (const row of rows) {
       const item = await submission(tx, state, ref, row.commandId), review = await loadTechnicalUploadReviewForSubmission(tx, state, row.commandId);
       if (review && review.command.sourceSha256 !== item.admission.sourceSha256) denied();
+      const acquisitionId = await technicalAcquisitionForSubmission(tx, row.commandId);
+      const acquisition = acquisitionId ? await loadTechnicalDocumentAcquisition(tx, state, acquisitionId) : null;
       deposits.push({ ...descriptor(item.record), sourceSha256: item.admission.sourceSha256,
-        review: review ? { verdict: review.command.verdict, reason: review.command.reason, recordedAt: review.receipt.recordedAt } : null });
+        clientId: item.context.clientId, acquiredDocumentId: acquisition?.document.id ?? null,
+        review: review ? { commandId: review.command.commandId, sha256: canonicalSha256(review),
+          verdict: review.command.verdict, reason: review.command.reason, recordedAt: review.receipt.recordedAt } : null });
     }
     return { reference: ref, recipient: { name: state.recipient!.name, email: state.recipient!.email }, deposits };
   });

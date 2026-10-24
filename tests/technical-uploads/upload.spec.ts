@@ -129,3 +129,79 @@ test('revocation with author and Admin pages open blocks pending review and dire
   expect((await tc.request.get(ownUrl)).status()).toBe(404); expect((await ac.request.get(adminUrl)).status()).toBe(404); expect((await tc.request.get(upload(r))).status()).toBe(404);
   expect(await counts(r)).toEqual({ uploads: 1, reviews: 0 }); await ac.close(); await tc.close();
 });
+
+async function approved(page: Page, technician: Page, r: Row) {
+  await assign(page, r); await prepare(technician, r); await deposit(technician); await prepareReview(page, r);
+  await page.getByRole('button', { name: 'Conferma revisione', exact: true }).click();
+  await expect(page.getByText('Revisione registrata. Il file resta nel deposito privato; nessun documento è stato pubblicato o inviato.', { exact: true })).toBeVisible();
+  await page.goto(review(r)); await page.locator('[data-acquisition-ready="true"]').waitFor();
+}
+async function prepareAcquisition(page: Page, classification = 'TECHNICAL_DOCUMENT') {
+  await page.getByLabel('Titolo nel fascicolo', { exact: true }).fill('Documento acquisito sintetico');
+  await page.getByLabel('Classificazione del documento', { exact: true }).selectOption(classification);
+  await page.getByRole('button', { name: 'Prepara acquisizione privata', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Riepilogo acquisizione nel fascicolo' })).toBeVisible();
+  await page.getByLabel('Confermo personalmente l’acquisizione privata e la classificazione di questo file esatto.', { exact: true }).check();
+}
+async function canonical(r: Row) {
+  const rows = await db.$queryRaw<Array<{ commandId: string; documentId: string; versionId: string }>>`SELECT a."commandId",a."documentId",a."versionId"
+    FROM "TechnicalDocumentAcquisition" a JOIN "TechnicalUploadSubmission" s ON s."commandId"=a."submissionCommandId" WHERE s."targetId"=${r.practiceId}`;
+  expect(rows).toHaveLength(1); return rows[0];
+}
+test('native private acquisition, exact technical version selection, positive bytes and omitted recipient denial', async ({ browser }) => {
+  const r = f.rows[4], ac = await browser.newContext(), tc = await browser.newContext(), bc = await browser.newContext();
+  const a = await ac.newPage(), t = await tc.newPage(), b = await bc.newPage();
+  await login(a, f.adminEmail, true); await login(t, r.techA.email); await login(b, r.techB.email);
+  await approved(a, t, r); await prepareAcquisition(a); await screenshot(a, 'acquisition-preview');
+  const documents = await db.document.count(), versions = await db.documentVersion.count();
+  await a.getByRole('button', { name: 'Acquisisci nel fascicolo privato', exact: true }).click();
+  await expect(a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true })).toBeVisible();
+  expect(await db.document.count()).toBe(documents + 1); expect(await db.documentVersion.count()).toBe(versions + 1);
+  const saved = await canonical(r), privateUrl = '/acquired-documents/' + saved.documentId;
+  await a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true }).click();
+  await screenshot(a, 'acquired-dossier'); await privateFile(ac, privateUrl);
+  for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
+  await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
+  await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
+  await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Mostra soltanto la versione acquisita');
+  await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
+  await a.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(a.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  const work = '/technical-work/practices/' + r.practiceId, selectedUrl = work + '/documents/' + saved.versionId;
+  await t.goto(work); await expect(t.getByRole('link', { name: 'Visualizza Relazione.txt', exact: true })).toBeVisible();
+  await screenshot(t, 'acquired-recipient'); await privateFile(tc, selectedUrl);
+  expect((await tc.request.get(selectedUrl + '?download=1')).status()).toBe(404);
+  expect((await bc.request.get(selectedUrl)).status()).toBe(404);
+  for (const person of [r.salesA, r.salesB]) { const sc = await browser.newContext(), page = await sc.newPage(); await login(page, person.email);
+    for (const url of [privateUrl, selectedUrl]) expect((await sc.request.get(url)).status()).toBe(404);
+    expect((await sc.request.get('/documents/' + saved.documentId + '/download')).status()).toBe(403);
+    for (const url of ['/search?q=Documento%20acquisito', '/documents', '/notifications']) {
+      const response = await sc.request.get(url); expect(response.status()).toBeLessThan(500); expect(await response.text()).not.toContain('Documento acquisito sintetico'); }
+    await sc.close(); }
+  await ac.close(); await tc.close(); await bc.close();
+});
+test('lost acquisition response reconciles the original command and creates no duplicate document', async ({ browser }) => {
+  const r = f.rows[5], ac = await browser.newContext(), tc = await browser.newContext(), a = await ac.newPage(), t = await tc.newPage();
+  await login(a, f.adminEmail, true); await login(t, r.techA.email); await approved(a, t, r); await prepareAcquisition(a);
+  const documents = await db.document.count(), versions = await db.documentVersion.count();
+  await loseResponse(a, '**/technical-upload-review/**', 'Acquisisci nel fascicolo privato');
+  await expect(a.getByText('Acquisizione già registrata. Non ripeterla; la visibilità resta una scelta separata.', { exact: true })).toBeVisible();
+  await canonical(r); expect(await db.document.count()).toBe(documents + 1); expect(await db.documentVersion.count()).toBe(versions + 1);
+  await a.getByRole('button', { name: 'Verifica ricevuta', exact: true }).click();
+  expect(await db.document.count()).toBe(documents + 1); await ac.close(); await tc.close();
+});
+test('native contract classification preserves the financial ceiling before choosing a technician', async ({ browser }) => {
+  const r = f.rows[6], ac = await browser.newContext(), tc = await browser.newContext(), a = await ac.newPage(), t = await tc.newPage();
+  await login(a, f.adminEmail, true); await login(t, r.techA.email); await approved(a, t, r); await prepareAcquisition(a, 'CONTRACT');
+  await a.getByRole('button', { name: 'Acquisisci nel fascicolo privato', exact: true }).click();
+  await expect(a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true })).toBeVisible();
+  const saved = await canonical(r); await privateFile(ac, '/acquired-documents/' + saved.documentId);
+  for (const person of [r.techA, r.techB]) {
+    await a.goto(management(r) + '?recipient=' + person.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
+    await expect(a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true })).toHaveCount(0);
+  }
+  expect((await tc.request.get('/technical-work/practices/' + r.practiceId + '/documents/' + saved.versionId)).status()).toBe(404);
+  expect((await tc.request.get('/acquired-documents/' + saved.documentId)).status()).toBe(404);
+  await ac.close(); await tc.close();
+});

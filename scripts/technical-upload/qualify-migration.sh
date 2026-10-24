@@ -33,7 +33,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname IN ('fai_technical_upload_atomic','fai_technical_upload_review_atomic')")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+frozen="$RUNNER_TEMP/upload-schema67-frozen"
+mkdir -p "$frozen"
+git archive 5acb9e9e0f87d14fa3075b2f6dfe307352f9ffa7 prisma | tar -x -C "$frozen"
+npx prisma migrate deploy --schema "$frozen/prisma/schema.prisma"
 psql "$db" -At -v ON_ERROR_STOP=1 -f scripts/technical-upload/structure.sql > "$evidence/structure67.json"
 node -e 'const fs=require("node:fs"),a=require("node:assert/strict"),v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));a.deepEqual(v.tables.map(x=>x.name),["TechnicalUploadReview","TechnicalUploadSubmission"]);a.equal(v.columns.length,26);a.equal(v.functions.length,2);a.equal(v.triggers.length,6);a.equal(v.triggers.filter(x=>x.deferrable&&x.initiallyDeferred).length,2);a.equal(v.constraints.filter(x=>x.type==="f").length,4)' "$evidence/structure67.json"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 67
@@ -44,7 +47,7 @@ cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT (SELECT count(*) FROM "TechnicalUploadSubmission")+(SELECT count(*) FROM "TechnicalUploadReview")')" = 0
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq TECHNICAL_UPLOAD_SCHEMA66_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$frozen/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"

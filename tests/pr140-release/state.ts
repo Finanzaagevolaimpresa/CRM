@@ -224,6 +224,9 @@ async function main() {
       technicalPractices: await db.technicalPractice.findMany({ orderBy: { id: 'asc' } }),
       tasks: await db.task.findMany({ orderBy: { id: 'asc' } }),
       documentVersions: await db.documentVersion.findMany({ orderBy: { id: 'asc' } }),
+      acquiredDocuments: await db.document.findMany({ where: { visibilityLevel: 'technical_admin_private_v1' }, orderBy: { id: 'asc' } }),
+      documentAcquisitions: await db.technicalDocumentAcquisition.findMany({ orderBy: { commandId: 'asc' } }),
+      acquisitionAudit: await db.auditLog.findMany({ where: { event: 'technical_document_acquired_private' }, orderBy: { id: 'asc' } }),
       dossiers: await db.clientDossier.findMany({ where: { practiceReadinessId: { not: null } }, orderBy: { id: 'asc' } }),
       versions: await db.engagementDossierVersion.findMany({ orderBy: { id: 'asc' } }),
       reviews: await db.engagementDossierReview.findMany({ orderBy: { id: 'asc' } }),
@@ -237,10 +240,11 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 67);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261024160000_technical_document_upload_v1');
+    assert.equal(data.ledger.length, 68);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261024190000_technical_document_acquisition_v1');
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
     assert.equal(data.uploadFiles.length, 4); assert.equal(data.uploadAudit.length, 6);
+    assert.equal(data.acquiredDocuments.length, 1); assert.equal(data.documentAcquisitions.length, 1); assert.equal(data.acquisitionAudit.length, 1);
     assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
     assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
     assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 5);

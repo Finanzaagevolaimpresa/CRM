@@ -7,6 +7,8 @@ import { hasPermission } from './permission-evaluator';
 import { guardProjectResources } from './project-resource-guard';
 import { loadIndependentProjectExclusions, loadTechnicalDocumentProjectCeilings } from './selective-project-scope';
 import { clientDocumentSnapshotSchema, maxClientDocumentBytes, type ClientDocumentChoice, type ClientDocumentSnapshot } from './selective-client-document-policy';
+import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
+import { selectedTechnicalAcquisition } from './technical-document-acquired-access';
 
 type Tx = Prisma.TransactionClient;
 type Recipient = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'> & { id: string };
@@ -18,7 +20,7 @@ const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringif
 export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clientId: string) {
   if (manager.role !== 'admin' || !manager.active || manager.permissionOverrides.some(p => p.permission === 'document.download' && !p.allowed)) return unavailable();
   const [rows, scope, clock] = await Promise.all([
-    tx.document.findMany({ where: { clientId, deletedAt: null, visibilityLevel: 'interno',
+    tx.document.findMany({ where: { clientId, deletedAt: null, visibilityLevel: { in: ['interno', technicalDocumentPrivateVisibility] },
       status: { notIn: ['archiviato', 'respinto', 'scaduto'] } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 101 }),
     loadIndependentProjectExclusions(tx, manager.id),
     tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`,
@@ -30,7 +32,12 @@ export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clie
     tx.project.findMany({ where: { id: { in: ids(rows.map(r => r.projectId)) }, clientId, deletedAt: null, status: { not: 'archiviato' } }, select: { id: true } }),
     tx.clientService.findMany({ where: { id: { in: ids(rows.map(r => r.clientServiceId)) }, clientId, deletedAt: null }, select: { id: true, projectId: true } }),
   ]);
-  const eligible = (await filterFinancialDocuments(tx, manager, rows.slice(0, 100))).filter(d =>
+  const provenanceAllowed = [];
+  for (const d of rows.slice(0, 100)) {
+    if (d.visibilityLevel === 'interno') provenanceAllowed.push(d);
+    else { try { if (await selectedTechnicalAcquisition(tx, manager.id, d)) provenanceAllowed.push(d); } catch { /* deny this private candidate */ } }
+  }
+  const eligible = (await filterFinancialDocuments(tx, manager, provenanceAllowed)).filter(d =>
     (!d.validUntil || d.validUntil > clock[0].now) && d.sizeBytes >= 0 && d.sizeBytes <= maxClientDocumentBytes
     && clientDocumentSnapshotSchema.shape.mimeType.safeParse(d.mimeType).success
     && !scope.selectiveDocumentIds?.includes(d.id)
@@ -89,9 +96,12 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
     if (!identity) return unavailable();
     const version = await tx.documentVersion.findUnique({ where: { id: choice.versionId } });
     const document = await tx.document.findUnique({ where: { id: identity.documentId } });
+    const acquired = document?.visibilityLevel === technicalDocumentPrivateVisibility
+      ? await selectedTechnicalAcquisition(tx, authorityId, document) : null;
     const [clock] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (!clock || !version || version.documentId !== identity.documentId || !document || document.deletedAt
-      || document.clientId !== clientId || document.visibilityLevel !== 'interno' || ['archiviato', 'respinto', 'scaduto'].includes(document.status)
+      || document.clientId !== clientId || (document.visibilityLevel !== 'interno' && !acquired)
+      || (acquired && acquired.version.id !== choice.versionId) || ['archiviato', 'respinto', 'scaduto'].includes(document.status)
       || document.sizeBytes < 0 || document.sizeBytes > maxClientDocumentBytes
       || (document.validUntil && document.validUntil <= clock.now)
       || (isSensitiveDocument(document) && !hasPermission(target, 'document.sensitive.read'))
@@ -120,7 +130,8 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
     const snapshot = clientDocumentSnapshotSchema.parse({ documentId: document.id, versionId: version.id,
       version: version.version, checksum: version.checksum, title: document.title, fileName: document.fileName,
       mimeType: document.mimeType, download: choice.download,
-      stateHash: canonicalSha256(json({ document, version, company, project, service, contracts, payments, formalizations, materials, boundContracts })),
+      stateHash: canonicalSha256(json({ document, version, company, project, service, contracts, payments, formalizations, materials, boundContracts,
+        ...(acquired ? { acquisition: { record: acquired.record, contextSha256: acquired.contextSha256 } } : {}) })),
     });
     snapshots.push(snapshot); paths.set(version.id, version.storagePath);
   }

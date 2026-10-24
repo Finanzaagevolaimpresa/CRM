@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { PageHeader, Card } from '@/components/ui';
 import { SecondaryLink } from '@/components/actions';
 import { TechnicalUploadReviewForm } from '@/components/technical-upload-review-form';
+import { TechnicalDocumentAcquisitionForm } from '@/components/technical-document-acquisition-form';
+import { prepareTechnicalAcquisition, saveTechnicalAcquisition, checkTechnicalAcquisition } from '@/lib/technical-document-acquisition-actions';
 import { TechnicalUploadRecovery } from '@/components/technical-upload-recovery';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -14,16 +16,16 @@ import { technicalAssignmentReference } from '@/lib/technical-assignment-decisio
 import { technicalManagementPath } from '@/lib/technical-assignment-display';
 export const dynamic = 'force-dynamic';
 export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string; recipientId: string }>;
-  searchParams: Promise<{ reviewDecision?: string }> }) {
+  searchParams: Promise<{ reviewDecision?: string; acquisitionDecision?: string }> }) {
   const session = await requireSession(), p = await params, target = parseTechnicalUploadTarget(p);
   if (!target.success) notFound();
   const ref = technicalAssignmentReference.safeParse({ ...target.data, recipientId: p.recipientId });
   if (!ref.success) notFound();
-  const recovery = (await searchParams).reviewDecision, path = technicalUploadReviewPath(ref.data);
+  const query = await searchParams, recovery = query.acquisitionDecision ?? query.reviewDecision, path = technicalUploadReviewPath(ref.data);
   if (recovery) {
     if (!z.string().uuid().safeParse(recovery).success) notFound();
     return <div className="space-y-6"><PageHeader title="Verifica della revisione" description="Consulta la ricevuta della decisione personale." />
-      <TechnicalUploadRecovery reference={ref.data} commandId={recovery} action={checkTechnicalUploadReview} returnPath={path} /></div>;
+      <TechnicalUploadRecovery reference={ref.data} commandId={recovery} action={query.acquisitionDecision ? checkTechnicalAcquisition : checkTechnicalUploadReview} returnPath={path} /></div>;
   }
   const data = await readTechnicalUploadReviewQueue(prisma, session, ref.data).catch(() => null);
   if (!data) notFound();
@@ -40,6 +42,10 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <p>{new Date(d.review.recordedAt).toLocaleString('it-IT')}</p></div>
         : <TechnicalUploadReviewForm reference={ref.data} submissionCommandId={d.commandId} sourceSha256={d.sourceSha256} initialCommandId={randomUUID()}
           previewAction={prepareTechnicalUploadReview} confirmAction={saveTechnicalUploadReview} receiptAction={checkTechnicalUploadReview} />}
+      {d.acquiredDocumentId ? <p>Documento acquisito nel fascicolo privato. <a className="font-semibold underline" href={`/clients/${encodeURIComponent(d.clientId)}/acquired-documents`}>Apri il fascicolo e scegli chi può vederlo</a></p>
+        : d.review?.verdict === 'APPROVE_PRIVATE' && <TechnicalDocumentAcquisitionForm reference={ref.data} submissionCommandId={d.commandId}
+          sourceSha256={d.sourceSha256} reviewCommandId={d.review.commandId} reviewSha256={d.review.sha256} title={d.title} initialCommandId={randomUUID()}
+          previewAction={prepareTechnicalAcquisition} confirmAction={saveTechnicalAcquisition} receiptAction={checkTechnicalAcquisition} />}
     </div></Card>)}
   </div>;
 }

@@ -382,6 +382,7 @@ model User {
   technicalWorkItemCommands TechnicalWorkItemCommand[]
   technicalUploadSubmissions TechnicalUploadSubmission[]
   technicalUploadReviews TechnicalUploadReview[]
+  technicalDocumentAcquisitions TechnicalDocumentAcquisition[]
   selectivePracticeEpoch Int @default(1)
   selectivePracticeAuthority SelectivePracticeAuthority?
   selectivePracticeGrants SelectivePracticeGrant[]
@@ -1188,6 +1189,7 @@ model CumulabilityAssessment {
 }
 
 model Document {
+  technicalAcquisition TechnicalDocumentAcquisition?
   id                    String         @id @default(cuid())
   selectiveEpoch        Int            @default(1)
   clientId              String?
@@ -1238,6 +1240,7 @@ model DocumentChecklistItem {
 }
 
 model DocumentVersion {
+  technicalAcquisition TechnicalDocumentAcquisition?
   id          String   @id @default(cuid())
   documentId  String
   version     Int
@@ -3942,11 +3945,31 @@ model TechnicalUploadSubmission {
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   assignmentVersion TechnicalAssignmentRevision @relation(fields: [assignmentId, assignmentRevision], references: [assignmentId, revision], onDelete: Restrict, onUpdate: Restrict)
   review TechnicalUploadReview?
+  acquisition TechnicalDocumentAcquisition?
   @@index([assignmentId, assignmentRevision, id], map: "TechnicalUploadSubmission_assignment_revision_idx")
   @@index([actorId, createdAt], map: "TechnicalUploadSubmission_actor_created_idx")
 }
 
+model TechnicalDocumentAcquisition {
+  commandId           String   @id @db.Uuid
+  submissionCommandId String   @unique @db.Uuid
+  reviewCommandId     String   @unique @db.Uuid
+  documentId          String   @unique
+  versionId           String   @unique
+  actorId             String
+  sessionId           String   @db.Uuid
+  record              Json
+  createdAt           DateTime @db.Timestamp(3)
+  transactionId       BigInt   @default(dbgenerated("txid_current()"))
+  submission TechnicalUploadSubmission @relation(fields: [submissionCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  review TechnicalUploadReview @relation(fields: [reviewCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  version DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
 model TechnicalUploadReview {
+  acquisition TechnicalDocumentAcquisition?
   commandId String @id @db.Uuid
   submissionCommandId String @unique @db.Uuid
   actorId String

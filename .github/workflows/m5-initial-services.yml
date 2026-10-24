@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci && npx playwright install --with-deps chromium
-      - name: Exact candidate schema67 and unchanged historical prefix
+      - name: Exact candidate schema68 and unchanged historical prefix
         shell: bash
         run: |
           set -euo pipefail
@@ -62,7 +62,7 @@ jobs:
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test' -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 67
+          test "$(psql 'postgresql://postgres:synthetic-m5-only@127.0.0.1:5432/fai_crm_test' -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 68
       - name: Five complete PostgreSQL cases and negative gates
         shell: bash
         run: |
