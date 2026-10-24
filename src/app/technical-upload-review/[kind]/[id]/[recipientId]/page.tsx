@@ -35,7 +35,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       <p className="break-words">{d.fileName} · {d.sizeBytes} byte</p><p className="break-all text-sm">Impronta: {d.contentSha256}</p>
       <div className="flex flex-wrap gap-4">{d.previewMime && <a className="font-semibold underline" href={`${path}/files/${d.commandId}`} target="_blank" rel="noopener noreferrer">Visualizza file da revisionare</a>}
         <a className="font-semibold underline" href={`${path}/files/${d.commandId}?download=1`}>Scarica file da revisionare</a></div>
-      {d.review ? <div><p className="font-bold">{technicalUploadVerdictLabels[d.review.verdict]}</p><p className="whitespace-pre-wrap break-words">{d.review.reason}</p>
+      {d.review ? <div><p role="status">Revisione registrata. Il file resta nel deposito privato; nessun documento è stato pubblicato o inviato.</p>
+        <p className="font-bold">{technicalUploadVerdictLabels[d.review.verdict]}</p><p className="whitespace-pre-wrap break-words">{d.review.reason}</p>
         <p>{new Date(d.review.recordedAt).toLocaleString('it-IT')}</p></div>
         : <TechnicalUploadReviewForm reference={ref.data} submissionCommandId={d.commandId} sourceSha256={d.sourceSha256} initialCommandId={randomUUID()}
           previewAction={prepareTechnicalUploadReview} confirmAction={saveTechnicalUploadReview} receiptAction={checkTechnicalUploadReview} />}
