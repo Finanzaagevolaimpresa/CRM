@@ -18,6 +18,12 @@ const current: CurrentTechnicalAssignmentProof = {userId:'tech_a',role:'consulen
     actorActive:true,actorRole:'admin',assignmentWriteAllowed:true} };
 const row = {payload,proof:technicalAssignmentProof(key,'assignment',payload),revokedAt:null};
 
+test('a synthetic assignment signature from before the Zod update retains its exact scope', () => {
+  const legacyProof = '0e7122272ee1581ca3891f8d36419a5331b90897ad9837c0f7c4e613e3f15a97';
+  assert.equal(row.proof, legacyProof);
+  assert.deepEqual(readTechnicalAssignmentProof({ ...row, proof: legacyProof }, key, current, now), payload);
+});
+
 test('exact personal decision verifies, but changed fields, actions, recipient or target cannot reuse its proof', () => {
   assert.deepEqual(readTechnicalAssignmentProof(row,key,current,now),payload);
   for (const changed of [

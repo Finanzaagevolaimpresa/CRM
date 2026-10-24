@@ -419,7 +419,10 @@ test('the authorized package-lock inventory is complete and deterministic', () =
   const inventory = parseNpmLockInventory(readFileSync('package-lock.json'));
   assert.equal(inventory.entryCount, 471);
   assert.equal(inventory.coordinates.size, 463);
-  assert.ok(inventory.coordinates.has(JSON.stringify(['postal-mime', '4.0.7'])));
+  assert.ok(inventory.coordinates.has(JSON.stringify(['postal-mime', '4.0.8'])));
+  assert.ok(inventory.coordinates.has(JSON.stringify(['zod', '4.6.7'])));
+  assert.ok(!inventory.coordinates.has(JSON.stringify(['postal-mime', '4.0.7'])));
+  assert.ok(!inventory.coordinates.has(JSON.stringify(['zod', '3.25.76'])));
   assert.ok(inventory.coordinates.has(JSON.stringify(['tinyglobby', '0.2.17'])));
   assert.ok(!inventory.coordinates.has(JSON.stringify(['fast-glob', '0.2.17'])));
   assert.ok(inventory.coordinates.has(JSON.stringify(['@napi-rs/wasm-runtime', '1.1.4'])));

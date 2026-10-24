@@ -96,7 +96,7 @@ const persistedJobIntentSchema = z.object({
   slotKey: z.string().min(1), bundleCode: z.custom<FaiAuditJobBundleCode>((value) => typeof value === 'string'), bundleKey: z.string().regex(/^[0-9a-f]{64}$/),
   dedupeKey: z.string().regex(/^[0-9a-f]{64}$/), provider: z.literal('mock'), dataMode: z.literal('synthetic'),
   automaticDispatchAllowed: z.literal(false), availableAt: z.string().datetime({ offset: true }),
-  payload: z.record(z.unknown()), payloadHash: z.string().regex(/^[0-9a-f]{64}$/),
+  payload: z.record(z.string(), z.unknown()), payloadHash: z.string().regex(/^[0-9a-f]{64}$/),
 }).strict();
 
 /** Strictly validates a persisted row and recomputes all canonical v2 planning identities. */
