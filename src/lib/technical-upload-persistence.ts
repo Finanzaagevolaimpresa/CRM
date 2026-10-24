@@ -1,13 +1,28 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, PrismaClient } from '@prisma/client';
+import type { AuthSession } from './auth';
+import type { TechnicalTargetReference } from './technical-assignment-display';
 import { technicalUploadRecord, readTechnicalUploadRecord, type TechnicalUploadRecord } from './technical-upload-record';
 import { loadTechnicalAssignmentDecisionJournal } from './technical-assignment-storage';
-import { TechnicalAssignmentError, technicalAssignmentClock, type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
+import { TechnicalAssignmentError, technicalAssignmentClock, withTechnicalAssignmentRecipient,
+  type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
 
 type Tx = Prisma.TransactionClient;
 type RawRow = Omit<TechnicalUploadRecord, 'target' | 'createdAt'> & {
   targetKind: string; targetId: string; createdAt: Date;
 };
 function unavailable(): never { throw new TechnicalAssignmentError('UNAVAILABLE'); }
+
+/** The ORM callback result is not proof that a deferred COMMIT check passed.
+ * Flush the complete submission after all callback writes, while errors still
+ * propagate through the transaction callback. No receipt escapes on failure. */
+export function withTechnicalUploadDecision<T>(db: PrismaClient, claimed: AuthSession,
+  kind: TechnicalTargetReference['kind'], work: (tx: Tx, state: TechnicalAssignmentTransaction) => Promise<T>) {
+  return withTechnicalAssignmentRecipient(db, claimed, kind, async (tx, state) => {
+    const result = await work(tx, state);
+    await tx.$executeRaw`SET CONSTRAINTS technical_upload_atomic IMMEDIATE`;
+    return result;
+  });
+}
 
 /** Internal preparation against the isolated SQL draft only. No runtime route
  * imports this module. Current caller must hold the assignment FOR UPDATE for

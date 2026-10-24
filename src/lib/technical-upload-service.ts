@@ -12,7 +12,8 @@ import { admitTechnicalUploadSource } from './technical-upload-admission';
 import { technicalUploadCommand, readTechnicalUploadPreview, readTechnicalUploadReceipt,
   technicalUploadRequestDigest } from './technical-upload-contract';
 import { previewTechnicalUploadDeposit, confirmTechnicalUploadDeposit } from './technical-upload-plan';
-import { loadTechnicalUploadRecord, persistTechnicalUploadRecord, readTechnicalUploadQuota } from './technical-upload-persistence';
+import { loadTechnicalUploadRecord, persistTechnicalUploadRecord, readTechnicalUploadQuota,
+  withTechnicalUploadDecision } from './technical-upload-persistence';
 import { prepareTechnicalUploadRecord } from './technical-upload-record';
 import { readTechnicalUploadPrivateFile, storeTechnicalUploadPrivateFile } from './technical-upload-storage';
 
@@ -73,7 +74,7 @@ export async function confirmTechnicalUpload(db: PrismaClient, claimed: AuthSess
   rawTarget: TechnicalTargetReference, raw: unknown, token: string, bytes: Uint8Array, confirmed: boolean) {
   if (confirmed !== true || typeof token !== 'string' || token.length > 32_000) denied();
   const target = technicalTargetReference.parse(rawTarget), command = technicalUploadCommand.parse(raw);
-  return withTechnicalAssignmentRecipient(db, claimed, target.kind, async (tx, state) => {
+  return withTechnicalUploadDecision(db, claimed, target.kind, async (tx, state) => {
     const digest = technicalUploadRequestDigest(target, command);
     const prior = await outcome(tx, state, target, command.commandId, digest);
     if (prior) return prior;

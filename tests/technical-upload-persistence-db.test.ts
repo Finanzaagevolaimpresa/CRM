@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import test, { before, after } from 'node:test';
@@ -18,7 +19,8 @@ import { withTechnicalAssignmentDecision, withTechnicalAssignmentRecipient, tech
   type TechnicalAssignmentTransaction } from '../src/lib/technical-assignment-transaction';
 import { previewTechnicalUploadDeposit, confirmTechnicalUploadDeposit } from '../src/lib/technical-upload-plan';
 import { prepareTechnicalUploadRecord } from '../src/lib/technical-upload-record';
-import { readTechnicalUploadQuota, loadTechnicalUploadRecord, persistTechnicalUploadRecord } from '../src/lib/technical-upload-persistence';
+import { readTechnicalUploadQuota, loadTechnicalUploadRecord, persistTechnicalUploadRecord,
+  withTechnicalUploadDecision } from '../src/lib/technical-upload-persistence';
 import { technicalUploadAdmission } from '../src/lib/technical-upload-contract';
 import { storeTechnicalUploadPrivateFile, readTechnicalUploadPrivateFile } from '../src/lib/technical-upload-storage';
 import { previewTechnicalUpload, readTechnicalUploadOutcome, readOwnTechnicalUpload } from '../src/lib/technical-upload-service';
@@ -104,7 +106,7 @@ async function proposed(tx: Prisma.TransactionClient, state: TechnicalAssignment
   return prepareTechnicalUploadRecord(state.key, intent, admission, stored, randomUUID(), now);
 }
 async function save(f: Fixture, p: Awaited<ReturnType<typeof preview>>, fail = false) {
-  return withTechnicalAssignmentRecipient(db, f.techA.session, f.target.kind, async (tx, state) => {
+  return withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     const receipt = await persistTechnicalUploadRecord(tx, state, value);
     if (fail) throw new Error('SYNTHETIC_AFTER_INSERT_ROLLBACK');
@@ -145,15 +147,15 @@ test('lost-response recovery is read-only, original actor/session bound and cont
   await assert.rejects(readTechnicalUploadOutcome(db, f.techA.session, { kind: 'TechnicalPractice', targetId: f.otherPractice.id }, p.command.commandId));
   assert.deepEqual(await counts(), n);
 });
-test('missing or enriched audit rolls back the whole submission transaction', options, async () => {
+test('missing or enriched audit rejects before a receipt escapes and rolls back the whole submission', options, async () => {
   const f = await fixture(), p = await preview(f), n = await counts();
-  await assert.rejects(withTechnicalAssignmentRecipient(db, f.techA.session, f.target.kind, async (tx, state) => {
+  await assert.rejects(withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
     await tx.auditLog.delete({ where: { id: p.command.commandId } });
   }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
-  await assert.rejects(withTechnicalAssignmentRecipient(db, f.techA.session, f.target.kind, async (tx, state) => {
+  await assert.rejects(withTechnicalUploadDecision(db, f.techA.session, f.target.kind, async (tx, state) => {
     const value = await proposed(tx, state, f, p);
     await persistTechnicalUploadRecord(tx, state, value);
     await tx.auditLog.update({ where: { id: p.command.commandId }, data: { after: { action: 'deposit_private_document', fileCount: 1, title: 'Leak' } } });
@@ -205,6 +207,34 @@ test('a read-committed raw copy cannot bypass quota serialization even with a ma
       FROM "TechnicalUploadSubmission" WHERE "commandId"=${p.command.commandId}::uuid`;
     await tx.auditLog.create({ data: { id: commandId, actorId: f.techA.user.id, event: 'technical_upload_deposited',
       entityType: 'TechnicalUploadSubmission', entityId: id, before: {}, after: { action: 'deposit_private_document', fileCount: 1 } } });
-  }, { isolationLevel: 'ReadCommitted' }));
+    // Observe the SQL refusal inside the ORM callback as in the real writer.
+    await tx.$executeRaw`SET CONSTRAINTS technical_upload_atomic IMMEDIATE`;
+  }, { isolationLevel: 'ReadCommitted' }), /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
+  assert.deepEqual(await counts(), n);
+});
+
+test('native COMMIT independently rejects missing audit and leaves no submission', options, async () => {
+  const f = await fixture(), p = await preview(f); await save(f, p);
+  const n = await counts(), id = randomUUID(), commandId = randomUUID();
+  const url = new URL(process.env.DATABASE_URL!); url.search = '';
+  assert.equal(url.hostname, '127.0.0.1'); assert.equal(url.port, '5432'); assert.equal(url.pathname, '/fai_crm_test');
+  // Only generated UUIDs enter this native SQL. The ephemeral DB guard and
+  // sentinel above are mandatory; no production URL or data is accepted.
+  for (const value of [id, commandId, p.command.commandId]) assert.match(value, /^[a-f0-9-]{36}$/);
+  const result = spawnSync('psql', [url.toString(), '--no-psqlrc', '-v', 'ON_ERROR_STOP=1'], {
+    encoding: 'utf8', timeout: 10_000,
+    input: `BEGIN ISOLATION LEVEL SERIALIZABLE;
+INSERT INTO "TechnicalUploadSubmission"(id,"commandId","assignmentId","assignmentRevision",
+ "actorId","sessionId","targetKind","targetId","requestDigest",command,"storageKey","contentSha256","sizeBytes",receipt,proof,"createdAt")
+ SELECT '${id}'::uuid,'${commandId}'::uuid,"assignmentId","assignmentRevision","actorId","sessionId","targetKind","targetId","requestDigest",
+ jsonb_set(command,'{commandId}',to_jsonb('${commandId}'::text)),
+ 'technical-submissions/v1/'||repeat('e',64),"contentSha256","sizeBytes",
+ jsonb_set(jsonb_set(receipt,'{commandId}',to_jsonb('${commandId}'::text)),'{submissionId}',to_jsonb('${id}'::text)),proof,"createdAt"
+ FROM "TechnicalUploadSubmission" WHERE "commandId"='${p.command.commandId}'::uuid;
+COMMIT;`,
+  });
+  assert.equal(result.error, undefined); assert.equal(result.status, 3);
+  assert.match(result.stdout, /INSERT 0 1/);
+  assert.match(result.stderr, /TECHNICAL_UPLOAD_ATOMIC_SUBMISSION/);
   assert.deepEqual(await counts(), n);
 });
