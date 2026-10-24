@@ -166,7 +166,7 @@ test('native private acquisition, exact technical version selection, positive by
   for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl)).status()).toBe(404);
   await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
   await expect(a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
-  await a.getByLabel('Responsabilità', { exact: true }).selectOption('supporto');
+  await a.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('supporto');
   await a.getByLabel('Titolo', { exact: true }).check();
   await a.getByLabel('Chiedere un intervento all’Admin', { exact: true }).check();
   await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
