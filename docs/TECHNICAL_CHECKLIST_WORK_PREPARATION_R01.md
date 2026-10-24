@@ -33,3 +33,9 @@ Prima di dichiarare l’incremento implementato servono persistenza e vincoli, c
 Il comando ammette solo la modifica dei campi già selezionati. Stati, assegnatari, collegamenti ai documenti e notifiche non sono scritture rappresentabili da questo contratto. Il servizio futuro dovrà rileggere tutti i fatti sotto lock, verificare il giornale e persistere modifica/ricevuta/audit insieme. Non esiste ancora una route che lo esegua.
 
 Il 24/10 la prosecuzione runtime è subordinata alla correzione separata delle dipendenze: PR216 è integrata nel merge `73e3043d68c19353931e8f628ad3140259b87caf`, ma la CI del merge ha bloccato il rilascio per gli avvisi postal-mime/Zod. SQL65 e produzione non sono stati modificati. Questa preparazione resta nel proprio branch; non altera il candidato PR216 congelato.
+
+## Raccordo tra perimetro e proposta
+
+`technical-work-item-plan.ts` collega i controlli già preparati: ricostruisce il contesto del singolo elemento, confronta identità/versione della riga, decisione personale, destinatario, incarico e scelta dei campi. L'anteprima mostra soltanto i valori effettivamente proposti; una scadenza viene normalizzata prima della firma. La conferma richiede la stessa proposta normalizzata e tutti i fatti correnti, e nega un elemento già modificato, una revoca, un altro tecnico, i commerciali, un contesto finanziario o una scelta cambiata. Non registra un esito di esecuzione: restituisce soltanto il piano che il futuro servizio dovrà persistere insieme a ricevuta e audit, dopo l'ultimo controllo temporale sotto lock.
+
+Le quattro componenti preparatorie superano 38 prove pure, typecheck e lint mirato. Restano necessari migration candidata, transazioni reali, chiusura delle vie ordinarie e UI; non è stata attivata alcuna operazione o assegnazione.
