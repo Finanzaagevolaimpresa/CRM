@@ -1,5 +1,5 @@
 'use client';
-import { startTransition, useActionState, useState } from 'react';
+import { startTransition, useActionState, useId, useState } from 'react';
 import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import type { TechnicalUploadAction, TechnicalUploadState } from '@/lib/technical-upload-ui-state';
 import { technicalUploadReviewPath, technicalUploadVerdictLabels } from '@/lib/technical-upload-display';
@@ -25,17 +25,19 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
 export function TechnicalUploadReviewForm({ reference, submissionCommandId, sourceSha256, initialCommandId, previewAction, confirmAction, receiptAction }: {
   reference: TechnicalAssignmentReference; submissionCommandId: string; sourceSha256: string; initialCommandId: string;
   previewAction: TechnicalUploadAction; confirmAction: TechnicalUploadAction; receiptAction: TechnicalUploadAction }) {
-  const ready = useUploadReady(), [state, submit, pending] = useActionState(previewAction, technicalUploadInitial);
+  const ready = useUploadReady(), [state, submit, pending] = useActionState(previewAction, technicalUploadInitial), fieldId = useId();
   const [commandId, setCommand] = useState(initialCommandId), [verdict, setVerdict] = useState(''), [reason, setReason] = useState('');
   const preview = state.reviewPreview?.command.commandId === commandId ? state.reviewPreview : null, locked = !ready || pending || !!preview;
   const changed = () => setCommand(crypto.randomUUID());
   return <div className="min-w-0 space-y-3" data-upload-review-ready={ready ? 'true' : 'false'}>
     <form action={submit} className="space-y-3" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); startTransition(() => submit(form)); }}>
       <input type="hidden" name="reference" value={JSON.stringify(reference)} /><input type="hidden" name="command" value={JSON.stringify({ commandId, submissionCommandId, sourceSha256, verdict, reason })} />
-      <label className="block font-semibold">Esito della revisione<select className={uploadControl} value={verdict} required disabled={locked} onChange={event => { setVerdict(event.target.value); changed(); }}>
-        <option value="">Seleziona un esito</option><option value="APPROVE_PRIVATE">Approva il documento nel deposito privato</option><option value="REJECT_PRIVATE">Rifiuta il documento conservando lo storico</option></select></label>
-      <label className="block font-semibold">Motivo della revisione<textarea className={uploadControl} value={reason} minLength={3} maxLength={500} required disabled={locked}
-        onChange={event => { setReason(event.target.value); changed(); }} /></label>
+      <label className="block font-semibold" htmlFor={fieldId + '-verdict'}>Esito della revisione</label>
+      <select id={fieldId + '-verdict'} className={uploadControl} value={verdict} required disabled={locked} onChange={event => { setVerdict(event.target.value); changed(); }}>
+        <option value="">Seleziona un esito</option><option value="APPROVE_PRIVATE">Approva il documento nel deposito privato</option><option value="REJECT_PRIVATE">Rifiuta il documento conservando lo storico</option></select>
+      <label className="block font-semibold" htmlFor={fieldId + '-reason'}>Motivo della revisione</label>
+      <textarea id={fieldId + '-reason'} className={uploadControl} value={reason} minLength={3} maxLength={500} required disabled={locked}
+        onChange={event => { setReason(event.target.value); changed(); }} />
       <p>Il motivo sarà leggibile anche dall’autore del deposito finché il suo incarico resta valido.</p>
       <button className={uploadButton} disabled={locked || !verdict || reason.trim().length < 3}>Prepara riepilogo della revisione</button><p role="status">{state.message}</p>
     </form>{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction} edit={changed} />}

@@ -81,7 +81,7 @@ async function enforcePhysicalBudget(target: string, input: TechnicalUploadWrite
     throw new Error('TECHNICAL_UPLOAD_STORAGE_QUOTA');
 }
 
-/** Exact-byte read only; the future caller must first authorize the current
+/** Exact-byte read only; the caller must first authorize the current
  * private submission under the current assignment. A receipt/reference is not
  * a permission. No directory/file, audit or acknowledgement is created here. */
 export async function readTechnicalUploadPrivateFile(input: PrivateReference) {
@@ -113,8 +113,8 @@ export async function readTechnicalUploadPrivateFile(input: PrivateReference) {
   } finally { await handle.close(); }
 }
 
-/** Private file persistence only, currently disconnected from all routes.
- * The future service must hold current assignment/quota locks, then recheck
+/** Private file persistence only. The service holds current assignment/quota
+ * locks across this write, then rechecks
  * admission and commit quota, audit and receipt atomically. This result neither
  * publishes a Document nor authorizes any read. An orphan after rollback stays
  * private; it is never overwritten, deleted or automatically cleaned up here. */

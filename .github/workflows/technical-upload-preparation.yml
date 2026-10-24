@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Verify immutable schema66 and isolated draft guard
+      - name: Qualify SQL67 on immutable schema66 with atomic failure and wrong-base checks
         shell: bash
         run: |
           set -euo pipefail
@@ -61,10 +61,11 @@ jobs:
           mkdir -p "$historical"
           git archive eb5511fb6c82e15263d6cddf18e7ed36e5100442 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
-          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f scripts/technical-upload/schema67-draft.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261024160000_technical_document_upload_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
           grep -Fq TECHNICAL_UPLOAD_SCHEMA66_REQUIRED "$evidence/wrong-base.log"
-          npx prisma migrate deploy
-          bash scripts/technical-upload/qualify-draft.sh
+          git archive aa30d5c8ca4f483ae6cd0e77ec9fade8794646b4 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/technical-upload/qualify-migration.sh
       - name: Isolated SQL, atomic audit, quota concurrency and lost response
         if: matrix.target == 'postgresql'
         shell: bash

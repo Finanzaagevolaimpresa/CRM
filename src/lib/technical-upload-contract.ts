@@ -9,9 +9,9 @@ import { technicalTargetReference } from './technical-assignment-display';
 import { technicalUploadProfile, type TechnicalUploadProfile } from './technical-upload-profile';
 export { technicalUploadProfile, type TechnicalUploadProfile } from './technical-upload-profile';
 
-// Pure preparation only. No existing assignment parser/action, route, storage or
-// database imports this module. A future service must construct admission from
-// locked registry, personal authority and immutable assignment journal rows.
+// Pure exact-byte contract. Runtime services construct admission from locked
+// registry, personal authority, assignment journal and current quota rows.
+// This module itself grants no access and persists no data.
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const generation = z.number().int().positive().max(2_147_483_647);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);

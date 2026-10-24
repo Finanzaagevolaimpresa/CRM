@@ -63,3 +63,9 @@ technicalKeys.push('TechnicalWorkCommand_assignmentId_assignmentRevision_fkey');
 assert.equal(technicalKeys.length, 10, 'Every technical assignment foreign key must be covered');
 assert.deepEqual(technicalKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove technical foreign keys');
 assert.doesNotMatch(diff, /DROP TABLE "(?:TechnicalAssignment|TechnicalWorkCommand)|ALTER TABLE "(?:TechnicalAssignment[^"]*|TechnicalWorkCommand)"[^;]*DROP COLUMN/);
+
+const uploadKeys = ['TechnicalUploadSubmission_actorId_fkey',
+  'TechnicalUploadSubmission_assignmentId_assignmentRevision_fkey',
+  'TechnicalUploadReview_submissionCommandId_fkey', 'TechnicalUploadReview_actorId_fkey'];
+assert.deepEqual(uploadKeys.filter(name => dropped.has(name)), [], 'Prisma datamodel would remove private upload foreign keys');
+assert.doesNotMatch(diff, /DROP TABLE "TechnicalUpload|ALTER TABLE "TechnicalUpload[^"]*"[^;]*DROP COLUMN/);

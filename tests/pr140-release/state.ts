@@ -12,6 +12,7 @@ import { acceptResponsibility } from '../../src/lib/responsibility';
 import { recordCommercialOrigin } from '../../src/lib/commercial-origin';
 import { readPrivateVideoFile } from '../../src/lib/video-storage';
 import { readPrivateDocumentBounded } from '../../src/lib/storage';
+import { readTechnicalUploadPrivateFile } from '../../src/lib/technical-upload-storage';
 
 const db = new PrismaClient();
 const mode = process.argv[2];
@@ -106,7 +107,16 @@ async function main() {
       const sha256 = createHash('sha256').update(bytes).digest('hex');
       assert.equal(sha256, doc.checksum); technicalFiles.push({ id: doc.id, sizeBytes: bytes.length, sha256 });
     }
+    const uploadSubmissions = await db.technicalUploadSubmission.findMany({ orderBy: { id: 'asc' } });
+    const uploadReviews = await db.technicalUploadReview.findMany({ orderBy: { commandId: 'asc' } });
+    const uploadFiles = [];
+    for (const row of uploadSubmissions) {
+      const bytes = await readTechnicalUploadPrivateFile({ storageKey: row.storageKey, sizeBytes: row.sizeBytes, sha256: row.contentSha256 });
+      uploadFiles.push({ commandId: row.commandId, sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+    }
     const data = {
+      uploadSubmissions, uploadReviews, uploadFiles,
+      uploadAudit: await db.auditLog.findMany({ where: { entityType: 'TechnicalUploadSubmission' }, orderBy: { id: 'asc' } }),
       adminRequests: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequest" ORDER BY id`,
       adminRequestEvents: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestEvent" ORDER BY id`,
       adminRequestDrafts: await db.$queryRaw<Array<Record<string, unknown>>>`SELECT * FROM "AdminRequestDraft" ORDER BY "requestId"`,
@@ -227,16 +237,18 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 66);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261024090000_technical_work_items_v1');
+    assert.equal(data.ledger.length, 67);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261024160000_technical_document_upload_v1');
+    assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
+    assert.equal(data.uploadFiles.length, 4); assert.equal(data.uploadAudit.length, 6);
     assert.equal(data.adminRequests.length, 4); assert.equal(data.adminRequestEvents.length, 7);
     assert.equal(data.adminRequestDrafts.length, 2); assert.equal(data.adminRequestAudit.length, 7);
-    assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 3);
-    assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 1);
-    assert.equal(data.technicalDecisions.length, 4); assert.equal(data.technicalRevisions.length, 4);
-    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 6);
+    assert.equal(data.technicalAuthority.length, 1); assert.equal(data.technicalAssignments.length, 5);
+    assert.equal(data.technicalAssignments.filter(row => row.revokedAt).length, 2);
+    assert.equal(data.technicalDecisions.length, 7); assert.equal(data.technicalRevisions.length, 7);
+    assert.equal(data.technicalWorkCommands.length, 1); assert.equal(data.technicalAudit.length, 9);
     assert.equal(data.technicalItemCommands.length, 1); assert(data.technicalItemGenerations.length > 0);
-    assert.equal(data.technicalFiles.length, 3); assert.equal(data.technicalUsers.length, 2);
+    assert.equal(data.technicalFiles.length, 6); assert.equal(data.technicalUsers.length, 4);
     assert.equal(data.selectivePracticeAuthority.length, 1); assert.equal(data.selectivePracticeGrants.length, 3);
     assert.equal(data.selectivePracticeGrants.filter(row => row.revokedAt).length, 1);
     assert.equal(data.selectivePracticeRevisions.length, 4); assert.equal(data.selectivePracticeCommands.length, 4);
