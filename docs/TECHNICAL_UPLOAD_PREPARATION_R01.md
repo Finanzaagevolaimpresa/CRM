@@ -1,6 +1,6 @@
 # Deposito documentale dall'incarico tecnico — preparazione
 
-Base di preparazione: PR218, `917c911107228227117f331411e4c9d88ecfa411`. La PR218 è in riesame; questa preparazione non ne modifica i file congelati e non attesta integrazione o distribuzione.
+Base di preparazione: PR218, `917c911107228227117f331411e4c9d88ecfa411`. Il candidato PR218 è stato integrato nel merge `6f351864d122a000aff4e6ca4078c11a3327f4d1`; questa preparazione non ne modifica i file congelati e non attesta integrazione o distribuzione del caricamento documentale.
 
 ## Lacuna verificata e riuso
 
@@ -24,13 +24,15 @@ La ricevuta storica contiene solo identificativi, impronte e dimensione: `PRIVAT
 
 `technical-upload-plan.ts` collega ora il contratto all'anteprima e alla conferma pura dei byte: l'anteprima costruisce il descrittore sul contenuto ricevuto e mostra finalità privata e quota residua. La conferma confronta comando, firma e byte effettivi, copia il buffer verificato e produce soltanto un intento di scrittura. File sostituito, comando alterato, quota consumata o perimetro cambiato sono respinti prima della persistenza.
 
-La chiave del deposito usa un namespace privato e l'impronta di attore/sessione/target/comando; non include nomi, titoli o percorsi del cliente. Contenuti differenti con lo stesso comando mantengono la stessa chiave, per consentire al futuro storage esclusivo e al vincolo DB di rifiutare il conflitto invece di creare un secondo file. L'intento contiene quote prima/dopo e audit minimo, non una ricevuta di salvataggio o una concessione. Sono verificate anche l'indipendenza del buffer dopo la conferma e la separazione delle chiavi fra persone/sessioni/target.
+La chiave del deposito usa un namespace privato e l'impronta di attore/sessione/target/comando; non include nomi, titoli o percorsi del cliente. Contenuti differenti con lo stesso comando mantengono la stessa chiave, per consentire allo storage esclusivo e al futuro vincolo DB di rifiutare il conflitto invece di creare un secondo file. L'intento contiene quote prima/dopo e audit minimo, non una ricevuta di salvataggio o una concessione. Sono verificate anche l'indipendenza del buffer dopo la conferma e la separazione delle chiavi fra persone/sessioni/target.
+
+`technical-upload-storage.ts` persiste ora l'intento nel solo namespace privato dello storage locale già configurato, con limite corrente, hash e dimensione ricontrollati, creazione esclusiva e sincronizzazione del file. Un replay riusa soltanto byte identici; contenuto diverso, file parziale, directory o collegamenti sono respinti senza sovrascrittura/cancellazione. Nessun percorso applicativo importa il modulo: le sole scritture eseguite per qualificarlo sono file sintetici in una directory temporanea isolata. Il test degli hard link non può eseguire la creazione nel sandbox Windows (EPERM) e resta obbligatorio nella futura qualifica Linux, senza attribuirgli un PASS locale.
 
 ## Persistenza e integrazione ancora da implementare
 
 1. Estensione opzionale del payload firmato, senza cambiare la serializzazione delle decisioni storiche; gestione Admin con anteprima personale.
 2. Registro proposte/ricevute e quota, con immutabilità, FK restrittive e audit atomico. Prima di scrivere una migration: schema e SQL esatti, compatibilità, riesame e autorità produttiva pertinente.
-3. File privato con namespace separato, UUID del comando, hash e scrittura `wx`; nessun override di storage/credenziali. Il filesystem non è transazionale con PostgreSQL: un file orfano dopo rollback non diventa leggibile né viene ritentato con byte diversi. Nessun nuovo cleanup/cron o cancellazione automatica è incluso.
+3. Integrare la persistenza privata già preparata nella transazione corrente, con hash e scrittura `wx`; nessun override di storage/credenziali. Il filesystem non è transazionale con PostgreSQL: un file orfano dopo rollback non diventa leggibile né viene ritentato con byte diversi. Nessun nuovo cleanup/cron o cancellazione automatica è incluso.
 4. Lock corrente di sessione, autorità, target, decisione e quota; quota e ricevuta commit insieme. Revoca/archivio a finestra aperta impediscono nuovi depositi e letture. Il servizio ricostruisce il descrittore dai byte alla conferma; il browser non può dichiarare checksum o dimensione autorevoli.
 5. Lettura autenticata dei soli depositi correnti dell'autore e dell'Admin competente, distinta dall'esito storico. Rilettura dei permessi prima di esporre metadati/byte; nessun GET che scrive. Admin decide acquisizione, classificazione e versioni da condividere mediante flussi personali esistenti o una loro estensione esatta.
 6. UI desktop/mobile, recupero dell'esito incerto, test DB concorrenti e browser con contenuti sintetici reali. Due tecnici e due commerciali: positivo dell'autore ammesso, dinieghi reciproci, URL/API/ricerca/contatori/report/anteprime/download e nessuna visibilità da relazioni ordinarie.
