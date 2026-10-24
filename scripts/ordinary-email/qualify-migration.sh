@@ -71,3 +71,5 @@ bash scripts/selective-client-companies/qualify-migration.sh
 bash scripts/selective-client-people/qualify-migration.sh
 bash scripts/selective-lead-edit/qualify-migration.sh
 bash scripts/technical-assignments/qualify-migration.sh
+
+bash scripts/admin-requests/qualify-migration.sh

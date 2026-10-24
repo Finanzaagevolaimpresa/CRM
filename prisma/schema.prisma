@@ -371,6 +371,9 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  adminRequests AdminRequest[] @relation("AdminRequestAuthor")
+  adminRequestEvents AdminRequestEvent[] @relation("AdminRequestEventActor")
+  adminRequestDrafts AdminRequestDraft[] @relation("AdminRequestDraftActor")
   technicalAssignmentAuthority TechnicalAssignmentAuthority?
   technicalAssignments TechnicalAssignment[]
   technicalAssignmentDecisions TechnicalAssignmentDecision[] @relation("TechnicalAssignmentDecisionActor")
@@ -545,6 +548,7 @@ model ClientReadGrant {
 }
 
 model Lead {
+  adminRequests AdminRequest[]
   selectiveEditGrants SelectiveLeadEditGrant[]
   selectiveEditDecisions SelectiveLeadEditDecision[]
   selectiveEdits SelectiveLeadEditCommand[]
@@ -674,6 +678,7 @@ model CommercialOffer {
 }
 
 model Client {
+  adminRequests AdminRequest[]
   selectiveGrants SelectiveClientGrant[]
   selectiveCommands SelectiveClientCommand[]
   recordUpdateEpoch Int @default(1)
@@ -765,6 +770,7 @@ model IncorporationSubject {
 }
 
 model Project {
+  adminRequests AdminRequest[]
   technicalAssignments TechnicalAssignment[]
   recordUpdateEpoch Int @default(1)
   selectiveGrants SelectiveProjectGrant[]
@@ -2416,6 +2422,7 @@ model CorporateFinancingAssessment {
 }
 
 model TechnicalPractice {
+  adminRequests AdminRequest[]
   technicalAssignments TechnicalAssignment[]
   selectivePracticeGrants SelectivePracticeGrant[]
   selectivePracticeCommands SelectivePracticeCommand[]
@@ -3271,6 +3278,7 @@ model CommunicationMailboxHistory {
   @@index([mailboxId, createdAt])
 }
 model ApprovedCommunication {
+  adminRequestDraft AdminRequestDraft?
   updateDeliveryId String? @unique @db.Uuid
   updateDelivery RecordUpdateDelivery? @relation(fields: [updateDeliveryId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   lead Lead? @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -3822,4 +3830,60 @@ model TechnicalWorkCommand {
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   assignmentVersion TechnicalAssignmentRevision @relation(fields: [assignmentId, assignmentRevision], references: [assignmentId, revision], onDelete: Restrict, onUpdate: Restrict)
   @@index([actorId, createdAt])
+}
+
+// Private requests: exact origin, immutable event/audit and separate draft link.
+model AdminRequest {
+  id String @id @db.Uuid
+  authorId String
+  sessionId String @db.Uuid
+  kind String @db.VarChar(17)
+  leadId String?
+  clientId String?
+  projectId String?
+  practiceId String?
+  revision Int
+  state Json
+  stateHash String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+  author User @relation("AdminRequestAuthor",fields:[authorId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  lead Lead? @relation(fields:[leadId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  client Client? @relation(fields:[clientId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  project Project? @relation(fields:[projectId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  practice TechnicalPractice? @relation(fields:[practiceId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  events AdminRequestEvent[]
+  draft AdminRequestDraft?
+  @@index([authorId,createdAt,id], map: "AdminRequest_authorId_createdAt_idx")
+}
+model AdminRequestEvent {
+  id String @id @db.Uuid
+  requestId String @db.Uuid
+  revision Int
+  commandId String @unique @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  operation String @db.VarChar(24)
+  commandHash String
+  state Json
+  stateHash String
+  createdAt DateTime @default(now())
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  request AdminRequest @relation(fields:[requestId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  actor User @relation("AdminRequestEventActor",fields:[actorId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  draft AdminRequestDraft?
+  @@unique([requestId,revision])
+}
+model AdminRequestDraft {
+  requestId String @id @db.Uuid
+  messageId String @unique @db.Uuid
+  sourceHash String
+  authorityRevision Int
+  createdById String
+  eventId String @unique @db.Uuid
+  createdAt DateTime @default(now())
+  request AdminRequest @relation(fields:[requestId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  message ApprovedCommunication @relation(fields:[messageId],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  creator User @relation("AdminRequestDraftActor",fields:[createdById],references:[id],onDelete:Restrict,onUpdate:Restrict)
+  event AdminRequestEvent @relation(fields:[eventId],references:[id],onDelete:Restrict,onUpdate:Restrict)
 }

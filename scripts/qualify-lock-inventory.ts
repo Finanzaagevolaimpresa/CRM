@@ -19,29 +19,31 @@ async function main() {
 
     // This deliberately vulnerable lock exists only in the temporary CI fixture.
     // npm generates its real metadata; no vulnerable code is installed or run.
+    // GHSA-grv7-fg5c-xmjg affects <3.0.3; 3.0.3 is the patched control,
+    // not a valid negative fixture: https://github.com/advisories/GHSA-grv7-fg5c-xmjg
     const root = process.cwd();
     // Keep it outside node_modules, which OSV's source extractor excludes.
     const fixture = mkdtempSync(resolve(tmpdir(), 'crm-audit-alias-counterproof-'));
     writeFileSync(resolve(fixture, 'package.json'), JSON.stringify({
       name: 'crm-audit-alias-counterproof', version: '1.0.0', private: true,
-      devDependencies: { 'innocent-alias': 'npm:braces@3.0.3' },
+      devDependencies: { 'innocent-alias': 'npm:braces@3.0.2' },
     }) + '\n');
     execFileSync('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--fund=false', `--registry=${NPM_AUDIT_POLICY.registryUrl}`], {
       cwd: fixture, timeout: 120_000, stdio: 'pipe',
     });
     const lockfilePath = resolve(fixture, 'package-lock.json');
     const counterproof = parseNpmLockInventory(readFileSync(lockfilePath));
-    assert.ok(counterproof.coordinates.has(JSON.stringify(['braces', '3.0.3'])));
-    assert.ok(!counterproof.coordinates.has(JSON.stringify(['innocent-alias', '3.0.3'])));
+    assert.ok(counterproof.coordinates.has(JSON.stringify(['braces', '3.0.2'])));
+    assert.ok(!counterproof.coordinates.has(JSON.stringify(['innocent-alias', '3.0.2'])));
     try {
       process.chdir(fixture);
       await assert.rejects(runDependencyAuditGate(), error => error instanceof DependencyAuditGateError
         && error.code === 'VULNERABILITIES_AT_OR_ABOVE_LOW' && error.scope === 'complete');
     } finally { process.chdir(root); }
-    console.log(JSON.stringify({ status: 'REAL_NPM_ALIAS_BLOCK_CONFIRMED', actualPackage: 'braces@3.0.3', scope: 'complete' }));
+    console.log(JSON.stringify({ status: 'REAL_NPM_ALIAS_BLOCK_CONFIRMED', actualPackage: 'braces@3.0.2', scope: 'complete' }));
     await assert.rejects(runOsvFallback({ ...scannerOptions, lockfilePath }), error => error instanceof DependencyAuditGateError
       && error.code === 'OSV_FINDINGS_DETECTED');
-    console.log(JSON.stringify({ status: 'REAL_ALIAS_COUNTERPROOF_PASS', actualPackage: 'braces@3.0.3', alias: 'innocent-alias', npmBlocked: true, osvBlocked: true }));
+    console.log(JSON.stringify({ status: 'REAL_ALIAS_COUNTERPROOF_PASS', actualPackage: 'braces@3.0.2', alias: 'innocent-alias', npmBlocked: true, osvBlocked: true }));
   } finally {
     await scanner.cleanup();
   }

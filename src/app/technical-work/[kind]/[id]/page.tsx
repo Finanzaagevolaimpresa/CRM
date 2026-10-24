@@ -26,6 +26,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
     description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza ${new Date(data.expiresAt).toLocaleString('it-IT')}`} />
     <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
+    {data.actions.includes('request_admin') && <SecondaryLink href={`/admin-requests/new?kind=${target.data.kind}&id=${encodeURIComponent(target.data.targetId)}`}>Richiedi documento o integrazione all’Admin</SecondaryLink>}
     <Card title="Informazioni disponibili"><dl className="grid min-w-0 gap-4 sm:grid-cols-2">{data.fields.map(field => <div key={field.key} className="min-w-0">
       <dt className="font-semibold">{field.label}</dt><dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></Card>
     <Card title="Documenti tecnici assegnati">{!data.documents.length ? <p>Nessuna versione documentale assegnata.</p>
@@ -33,7 +34,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
         <p className="break-words font-semibold">{doc.title} · versione {doc.version}</p><div className="flex flex-wrap gap-3">
           <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}`} target="_blank" rel="noopener noreferrer">Visualizza {doc.fileName}</a>
           {doc.allowDownload && <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}?download=1`}>Scarica versione</a>}</div></li>)}</ul>}</Card>
-    {!!data.actions.length && <Card title="Operazioni assegnate"><TechnicalWorkForm data={data} commandId={randomUUID()}
+    {data.actions.some(action => action === 'update_fields' || action === 'update_status') && <Card title="Operazioni assegnate"><TechnicalWorkForm data={data} commandId={randomUUID()}
       previewAction={prepareTechnicalWork} confirmAction={saveTechnicalWork} receiptAction={checkTechnicalWork} /></Card>}
   </div>;
 }

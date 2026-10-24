@@ -10,7 +10,7 @@ const instant = z.string().datetime({ offset: true });
 export const technicalAssignmentActions = ['update_fields', 'update_status', 'manage_checklist', 'manage_deadlines', 'request_admin', 'upload_document'] as const;
 // Only these actions belong to the first operational increment. The broader
 // contract prepares later work; issuing a grant must not authorize dormant code.
-export const technicalImplementedActions = ['update_fields', 'update_status'] as const;
+export const technicalImplementedActions = ['update_fields', 'update_status', 'request_admin'] as const;
 export const projectTechnicalFields = ['title', 'description', 'status'] as const;
 export const practiceTechnicalFields = ['title', 'practiceType', 'status', 'priority', 'dueDate', 'targetEntity', 'targetPortal', 'protocolNumber', 'submittedAt', 'nextClientUpdateAt', 'clientVisibleStatus', 'integrationRequestNote'] as const;
 export const projectEditableTechnicalFields = ['title', 'description'] as const;

@@ -32,6 +32,9 @@ import {
 
 type Db = Pick<PrismaClient, '$transaction'>;
 type Tx = Prisma.TransactionClient;
+import { adminRequestDraftSource, admitAdminRequestDraft, linkAdminRequestDraft } from './admin-request-draft-source';
+import { requestDraftOrigin } from './admin-request-storage';
+import { isRequestUnavailable } from './admin-request-service';
 type Runtime = { readDocument?: typeof readPrivateDocumentBounded; failAudit?: boolean };
 const uuid = z.string().uuid(), identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const revision = z.number().int().positive();
@@ -253,6 +256,7 @@ type MessageScopeDetail = {
   version: Prisma.CommunicationVersionGetPayload<{ include: { approval: true } }>;
   snapshot: ApprovedMessageSnapshot; scope: Awaited<ReturnType<typeof contextScope>>;
   box: CommunicationMailbox; updateAdmission: UpdateEmailAdmission | null; updateUntil: number;
+  requestSource: { requestId: string; sourceHash: string; mailboxId: string } | null;
 };
 function expiryDate(until: number) { return Number.isFinite(until) ? new Date(until) : undefined; }
 async function updateRecipientAdmission(tx: Tx, admitted: UpdateEmailAdmission, snapshot: ApprovedMessageSnapshot) {
@@ -296,7 +300,18 @@ async function messageScope(tx: Tx, current: CommunicationPrincipal, id: string,
     const [time] = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`;
     if (updateUntil <= time.now.getTime()) denied();
   } else if (version.updateSource !== null || version.updateSourceHash !== null) denied();
-  return { row, version, snapshot, scope, box, updateAdmission, updateUntil };
+  let requestSource: MessageScopeDetail['requestSource'] = null;
+  const requestLink = await requestDraftOrigin(tx, id);
+  if (requestLink) {
+    let admitted: Awaited<ReturnType<typeof admitAdminRequestDraft>>;
+    try { admitted = await admitAdminRequestDraft(tx, current, requestLink.requestId); }
+    catch (error) { if (isRequestUnavailable(error)) denied(); throw error; }
+    if (!admitted.linked || row.updateDeliveryId || canonicalSha256(admitted.origin.communicationContext) !== canonicalSha256(rowContext(row))
+      || row.mailboxId !== admitted.authority.mailboxId) denied();
+    updateUntil = Math.min(updateUntil, admitted.accessUntil);
+    requestSource = { requestId: admitted.state.requestId, sourceHash: admitted.sourceHash, mailboxId: admitted.authority.mailboxId };
+  }
+  return { row, version, snapshot, scope, box, updateAdmission, updateUntil, requestSource };
 }
 
 // Consultation and notification metadata share the same attachment admission.
@@ -360,6 +375,7 @@ const editSchema = z.object({
   contextFileIds: z.array(uuid).max(20).default([]),
   replySource: z.object({ id: uuid, contentHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
   updateSource: z.object({ deliveryId: uuid, sourceHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().optional(),
+  requestSource: adminRequestDraftSource.optional(),
 }).strict();
 
 /** Server-only building block for the isolated ordinary-mail persistence
@@ -379,6 +395,7 @@ export async function loadOrdinaryMessageCandidateContext(tx: Tx, claimed: AuthS
   if (!registry || registry.revokedAt || registry.deletedAt || !registry.active) denied();
   const contextHash = canonicalSha256(JSON.parse(JSON.stringify({ scope: loaded.scope,
     ...(loaded.row.updateDeliveryId ? { updateSourceHash: loaded.version.updateSourceHash } : {}),
+    ...(loaded.requestSource ? { requestSourceHash: loaded.requestSource.sourceHash } : {}),
     actorId: current.userId, role: current.role, overrides: current.permissionOverrides,
     clientReadScope: [...(current.clientReadScope ?? [])].sort(),
     selectiveProjectIds: [...(current.selectiveProjectIds ?? [])].sort(),
@@ -412,6 +429,17 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
     const existing = await tx.approvedCommunication.findUnique({ where: { id: input.messageId } });
     let replyAccessUntil = Infinity;
     let updateAdmission: UpdateEmailAdmission | null = null;
+    let requestAdmission: Awaited<ReturnType<typeof admitAdminRequestDraft>> | null = null;
+    const requestLink = await requestDraftOrigin(tx, input.messageId);
+    if (input.requestSource) {
+      if (input.replySource || input.updateSource || input.messageId !== input.requestSource.requestId) denied();
+      try { requestAdmission = await admitAdminRequestDraft(tx, current, input.requestSource.requestId); }
+      catch (error) { if (isRequestUnavailable(error)) denied(); throw error; }
+      if (requestAdmission.sourceHash !== input.requestSource.sourceHash || requestAdmission.authority.mailboxId !== input.mailboxId
+        || canonicalSha256(requestAdmission.origin.communicationContext) !== canonicalSha256(input.context)
+        || !!existing !== !!requestAdmission.linked) conflict();
+      replyAccessUntil = requestAdmission.accessUntil;
+    } else if (requestLink) denied();
     if (input.updateSource) {
       if (input.replySource || input.messageId !== input.updateSource.deliveryId
         || (existing && existing.updateDeliveryId !== input.updateSource.deliveryId)) denied();
@@ -470,6 +498,7 @@ export async function saveApprovedMessageDraft(db: Db, claimed: AuthSession, raw
       snapshot: json(snapshot), snapshotHash: approvedMessageHash(snapshot), createdById: current.userId,
       updateSource: updateAdmission ? json(updateAdmission.proposal.source) : Prisma.DbNull,
       updateSourceHash: updateAdmission?.proposal.sourceHash ?? null } });
+    if (requestAdmission) await linkAdminRequestDraft(tx, current, requestAdmission, input.messageId);
     await event(tx, current, input.messageId, 'DRAFT_SAVED', { revision: snapshot.revision, snapshotHash: saved.snapshotHash, priorApprovalInvalidated: !!existing,
       ...(input.updateSource ? { updateSourceHash: input.updateSource.sourceHash } : {}),
       ...(input.replySource ? { sourceHash: input.replySource.contentHash } : {}) }, runtime, input.replySource?.id ?? null);
@@ -596,7 +625,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       if (candidate.data.classification === 'SENSITIVE' && !hasPermission(current, 'document.sensitive.read')) continue;
       let detail: MessageScopeDetail;
       try { detail = await messageScope(tx, current, row.id); }
-      catch (error) { if (row.updateDeliveryId && error instanceof ApprovedCommunicationError) continue; throw error; }
+      catch (error) { if (error instanceof ApprovedCommunicationError && (row.updateDeliveryId || await requestDraftOrigin(tx, row.id))) continue; throw error; }
       const [events, attempts, storedReplies] = await Promise.all([
         tx.communicationEvent.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'asc' }, take: 200 }),
         tx.communicationAttempt.findMany({ where: { messageId: row.id }, orderBy: { createdAt: 'desc' }, take: 50 }),
@@ -611,7 +640,7 @@ export async function readPracticeCommunications(db: Db, claimed: AuthSession, r
       const ordinaryReceipts = await readAdmittedOrdinaryEmailReceipts(tx, row.id);
       accessUntil = Math.min(accessUntil, messageUntil, detail.updateUntil);
       messages.push({ ...detail.row, versions: detail.row.versions.map(v => ({ id: v.id, revision: v.revision, snapshotHash: v.snapshotHash, createdAt: v.createdAt })),
-        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts,
+        snapshot: detail.snapshot, snapshotHash: detail.version.snapshotHash, events, attempts, requestSource: detail.requestSource,
         updateDraft: detail.updateAdmission && current.userId === detail.updateAdmission.author.id ? {
           deliveryId: detail.row.updateDeliveryId!, sourceHash: detail.updateAdmission.proposal.sourceHash,
           recipientId: detail.updateAdmission.recipient.id, recipientName: detail.updateAdmission.recipient.name,

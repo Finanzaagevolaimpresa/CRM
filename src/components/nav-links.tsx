@@ -68,6 +68,7 @@ const sections: NavSection[] = [
       { label: "Catalogo servizi", href: "/service-catalog", requiredPermission: "service.read" },
       { label: "Pratiche da avviare", href: "/practice-readiness", requiredPermission: "service.read" },
       { label: "Comunicazioni", href: "/communications", requiredAnyPermissions: ["practice_communications.read", "communications.internal.read"] },
+      { label: "Richieste all’Admin", href: "/admin-requests", roles: ["admin", "commerciale", "consulente", "backoffice"] },
       { label: "Caselle e risposte", href: "/settings/communications", adminOnly: true },
     ],
   },

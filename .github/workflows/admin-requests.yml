@@ -1,0 +1,118 @@
+name: Admin request queue
+on:
+  pull_request:
+    paths: ['prisma/**', 'src/lib/admin-request*', 'src/lib/approved-communication*', 'src/lib/technical-assignment*', 'src/lib/record-update*', 'src/app/admin-requests/**', 'src/app/api/admin-requests/**', 'src/app/communications/**', 'src/app/leads/**', 'src/app/clients/**', 'src/app/technical-work/**', 'src/components/admin-request*', 'tests/admin-request*', 'tests/admin-requests/**', 'scripts/admin-requests/**', '.github/workflows/admin-requests.yml']
+permissions: { contents: read }
+concurrency:
+  group: admin-requests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  isolated:
+    name: Admin requests ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-admin-requests-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-admin-requests-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      ADMIN_REQUEST_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-request-auth-only-00000000000
+      AUTH_COOKIE_NAME: fai_request_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-request-step-up-0000000000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3053
+      ADMIN_REQUEST_BROWSER_CONFIRMED: '1'
+      ADMIN_REQUEST_BROWSER_PASSWORD: synthetic-request-password-00000000000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify migration65 on isolated schema64, wrong base and transaction failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/admin-requests"
+          mkdir -p "$evidence"
+          echo "ADMIN_REQUEST_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/admin-requests-schema64"
+          mkdir -p "$historical"
+          git archive 3a43977b585a9af43e4ef0c489841ce9a699a2c3 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261023160000_admin_request_queue_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq ADMIN_REQUEST_SCHEMA64_REQUIRED "$evidence/wrong-base.log"
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename IN ('AdminRequest','AdminRequestEvent','AdminRequestDraft')")" = 0
+          git archive 4c2fe838e9c557d59802a71aa4f42fbae5c74327 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/admin-requests/qualify-migration.sh
+      - name: PostgreSQL request admission, concurrency, exact draft provenance and atomic audit
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/admin-request-queue-db.test.ts | tee "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 21' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 21' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+      - name: Prepare isolated native browser
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/admin-requests/provision-browser.ts
+      - name: Native request, clarification, exact draft, denial and lost response
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3053 > "$ADMIN_REQUEST_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3053/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_REQUEST_EVIDENCE/playwright.json" npx playwright test --config tests/admin-requests/playwright.config.ts --reporter=line,json | tee "$ADMIN_REQUEST_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.ADMIN_REQUEST_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind final source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$ADMIN_REQUEST_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admin-requests-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/admin-requests
+            ${{ runner.temp }}/admin-request-migration
+            test-results
+          if-no-files-found: error
+          retention-days: 14
