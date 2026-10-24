@@ -235,6 +235,12 @@ test('client Office sharing requires its own download decision and rechecks phys
   const storage = async (key: string, limit: number) => { reads++; return readPrivateDocumentBounded(key, limit); };
   for (const download of [false, true]) await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, download, storage));
   assert.equal(reads, 0);
+  // The commercial role does not carry document.download. A per-version
+  // selection must not manufacture that independent permission.
+  await assert.rejects(grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 1, documents: [{ versionId: receipt.versionId, download: true }] }));
+  const permission = await db.userPermissionOverride.create({ data: { userId: f.salesA.user.id, permission: 'document.download', allowed: true } });
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
+  assert.equal(reads, 0);
   await grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 1, documents: [{ versionId: receipt.versionId, download: true }] });
   const result = await readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage);
   assert.deepEqual(result.bytes, officeBytes); assert.equal(result.contentType, 'application/octet-stream');
@@ -247,6 +253,11 @@ test('client Office sharing requires its own download decision and rechecks phys
   await writeFile(file, Buffer.from('ALTERED_OFFICE_BYTES'));
   try { await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage)); }
   finally { await writeFile(file, officeBytes); }
+  await db.userPermissionOverride.update({ where: { id: permission.id }, data: { allowed: false } });
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
+  await db.userPermissionOverride.update({ where: { id: permission.id }, data: { allowed: true } });
+  await grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 2, documents: [{ versionId: receipt.versionId, download: true }] });
+  assert.deepEqual((await readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage)).bytes, officeBytes);
   await db.project.update({ where: { id: f.project.id }, data: { status: 'archiviato' } });
   await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
 });
