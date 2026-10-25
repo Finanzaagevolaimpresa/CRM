@@ -106,9 +106,11 @@ async function lostResponse(page: Page, button: string, pattern: string) {
   return forwarded;
 }
 async function screenshot(page: Page, name: string) {
-  await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(evidence, name + '-desktop.png'), fullPage: true });
+  // Keep the DOM unchanged while React hydrates: Playwright's default hidden
+  // caret writes inline styles onto the newly rendered form fields.
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(evidence, name + '-desktop.png'), fullPage: true, caret: 'initial' });
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true });
+  await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true, caret: 'initial' });
 }
 async function ordinaryPageDenied(page: Page, url: string, heading: string, row: Row) {
   // The legacy client dossier renders an explicit denial with HTTP 200.
@@ -194,7 +196,13 @@ test('native revocation stops an open preview, direct documents and ordinary fal
 
 test('project operation has its own exact grant and native status changes do not grant the linked practice', async ({ browser }) => {
   const row = f.rows[3], ac = await browser.newContext(), tc = await browser.newContext();
-  const admin = await ac.newPage(), tech = await tc.newPage(); await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
+  const admin = await ac.newPage(), tech = await tc.newPage();
+  const renderingErrors: string[] = [];
+  tech.on('pageerror', error => renderingErrors.push(error.message));
+  tech.on('console', message => {
+    if (/hydrat|server rendered HTML/i.test(message.text())) renderingErrors.push(message.text());
+  });
+  await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
   await assign(admin, row, row.techB, true); await prepareWork(tech, row, 'Descrizione progetto aggiornata', true);
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(1);
   await tech.goto(work(row, true)); await tech.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('update_status');
@@ -240,5 +248,6 @@ test('project operation has its own exact grant and native status changes do not
     const invalid = await tc.request.get('/technical-work?kind=Project&q=' + (q.includes('&') ? q : encodeURIComponent(q)));
     expect(invalid.status()).toBe(404); expect(await invalid.text()).not.toContain('Progetto tecnico multiplo sintetico');
   }
+  expect(renderingErrors).toEqual([]);
   await ac.close(); await tc.close();
 });

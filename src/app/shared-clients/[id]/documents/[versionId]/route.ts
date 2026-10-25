@@ -9,9 +9,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const session = await requireSession(), { id, versionId } = await params;
   const download = new URL(request.url).searchParams.get('download') === '1';
   try {
-    const { bytes, document } = await readSharedClientDocument(prisma, session, id, versionId, download, readPrivateDocumentBounded);
+    const { bytes, document, contentType } = await readSharedClientDocument(prisma, session, id, versionId, download, readPrivateDocumentBounded);
     return new NextResponse(new Uint8Array(bytes), { headers: {
-      'Content-Type': document.mimeType,
+      'Content-Type': contentType,
       'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
       'Cache-Control': 'private, no-store, max-age=0', 'Pragma': 'no-cache',
       'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'; frame-ancestors 'self'",

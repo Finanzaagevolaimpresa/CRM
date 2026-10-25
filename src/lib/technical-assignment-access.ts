@@ -1,4 +1,6 @@
 import { lockAuthorizedTechnicalAssignment } from './technical-assignment-admission';
+import { selectedDocumentMode } from './selected-document-formats';
+import { selectedDocumentResponseMime } from './selected-document-content';
 export { lockAuthorizedTechnicalAssignment } from './technical-assignment-admission';
 import { listTechnicalWorkItemsInTransaction } from './technical-work-item-service';
 import { createHash } from 'node:crypto';
@@ -84,11 +86,12 @@ export async function readTechnicalWorkDocument(db: PrismaClient, claimed: AuthS
     if (!selected || (download && !selected.allowDownload)) deny();
     const snapshot = await assertTechnicalAssignmentDocuments(tx, state, found.context, [selected]);
     const document = snapshot.metadata[0], path = snapshot.paths.get(fileId);
-    if (!document || !path) deny();
+    if (!document || !path || (!download && selectedDocumentMode(document) !== 'preview')) deny();
     const bytes = await readBytes(path, maxClientDocumentBytes);
     if (!bytes.length || bytes.length > maxClientDocumentBytes || createHash('sha256').update(bytes).digest('hex') !== selected.contentSha256) deny();
+    const contentType = selectedDocumentResponseMime(document, bytes, download);
     await assertTechnicalAssignmentDocuments(tx, state, found.context, [selected]);
     if (!readTechnicalAssignmentJournal(found.journal, state.key, found.current, await technicalAssignmentClock(tx))) deny();
-    return { bytes, document };
+    return { bytes, document, contentType };
   });
 }

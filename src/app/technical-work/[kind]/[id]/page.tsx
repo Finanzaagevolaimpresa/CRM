@@ -1,3 +1,4 @@
+import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { randomUUID } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
@@ -35,7 +36,8 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     <Card title="Documenti tecnici assegnati">{!data.documents.length ? <p>Nessuna versione documentale assegnata.</p>
       : <ul className="space-y-4">{data.documents.map(doc => <li className="min-w-0 space-y-2" key={doc.fileId}>
         <p className="break-words font-semibold">{doc.title} · versione {doc.version}</p><div className="flex flex-wrap gap-3">
-          <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}`} target="_blank" rel="noopener noreferrer">Visualizza {doc.fileName}</a>
+          {canPreviewSelectedDocument(doc) ? <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}`} target="_blank" rel="noopener noreferrer">Visualizza {doc.fileName}</a> : <p className="break-words">{doc.fileName} · Anteprima non disponibile per questo formato.</p>}
+          {!doc.allowDownload && !canPreviewSelectedDocument(doc) && <span>Download non consentito.</span>}
           {doc.allowDownload && <a className="font-semibold underline" href={`${technicalWorkPath(target.data)}/documents/${doc.fileId}?download=1`}>Scarica versione</a>}</div></li>)}</ul>}</Card>
     {data.actions.some(action => action === 'manage_checklist' || action === 'manage_deadlines') && <Card title="Checklist, attività e scadenze assegnate">
       {!items.length ? <p>Nessun elemento attualmente disponibile nel tuo perimetro.</p> : <ul className="space-y-3">{items.map(item => <li key={`${item.kind}:${item.itemId}`}>
