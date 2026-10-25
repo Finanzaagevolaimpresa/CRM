@@ -3,6 +3,8 @@ import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { syntheticSession } from '../selective-sharing/fixtures';
+import { assignTechnical, revokeTechnical } from './fixtures';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_EVIDENCE!, password = process.env.TECHNICAL_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminId: string; adminEmail: string;
   rows: Array<{ clientId: string; projectId: string; practiceId: string; otherProjectId: string;
@@ -250,4 +252,53 @@ test('project operation has its own exact grant and native status changes do not
   }
   expect(renderingErrors).toEqual([]);
   await ac.close(); await tc.close();
+});
+
+test('native search continuation uses admitted rows after bulk revocation and expiry with the same open session', async ({ browser }) => {
+  const row = f.rows[4], tc = await browser.newContext(), other = await browser.newContext();
+  const tech = await tc.newPage(), second = await other.newPage(), term = 'Paginazione privata 100%_';
+  const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.adminId } });
+  const techUser = await db.user.findUniqueOrThrow({ where: { id: row.techA.id } });
+  const actor = { user: adminUser, ...await syntheticSession(db, adminUser) };
+  const recipient = { user: techUser, ...await syntheticSession(db, techUser) };
+  const targets = [];
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: row.clientId, title: `${term} ${index}` } });
+    const target = { kind: 'Project' as const, targetId: project.id }; targets.push(target);
+    await assignTechnical(db, actor, target, recipient);
+  }
+  await login(tech, row.techA.email); await login(second, row.techB.email);
+  const search = (q: string) => '/technical-work?kind=Project&q=' + encodeURIComponent(q);
+  await tech.goto(search(term));
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(20);
+  await tech.getByRole('link', { name: 'Successivi', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  for (const target of targets) {
+    await revokeTechnical(db, actor, target, recipient);
+    await db.project.update({ where: { id: target.targetId }, data: { title: `${term} MODIFICATO_DOPO_REVOCA` } });
+  }
+  const auditBefore = await db.auditLog.count();
+  for (const q of [term, 'MODIFICATO_DOPO_REVOCA', 'inesistente', '']) {
+    await tech.goto(search(q));
+    await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+    await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+    expect(await tech.content()).not.toContain(`${term} MODIFICATO_DOPO_REVOCA`);
+  }
+  await second.goto(search(term));
+  await expect(second.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  await expect(second.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  await screenshot(tech, 'search-revoked');
+  expect(await db.auditLog.count()).toBe(auditBefore);
+  const project = await db.project.create({ data: { clientId: row.clientId, title: 'Titolo a scadenza breve' } });
+  await assignTechnical(db, actor, { kind: 'Project', targetId: project.id }, recipient,
+    { expiresAt: new Date(Date.now() + 10000).toISOString() });
+  await tech.goto(search('scadenza breve'));
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await expect.poll(async () => {
+    await tech.reload(); return tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true }).count();
+  }, { timeout: 20000, intervals: [1000] }).toBe(0);
+  await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  expect((await tc.request.get('/technical-work/projects/' + project.id)).status()).toBe(404);
+  await tc.close(); await other.close();
 });
