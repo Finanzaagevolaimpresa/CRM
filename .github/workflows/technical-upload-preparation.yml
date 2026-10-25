@@ -1,7 +1,7 @@
 name: Technical upload and Admin review
 on:
   pull_request:
-    paths: ['src/lib/technical-*', 'src/lib/storage.ts', 'src/lib/selective-client-documents.ts', 'src/app/acquired-documents/**', 'src/app/clients/**', 'src/lib/financial-privacy-policy.ts', 'src/components/technical-*', 'src/app/technical-uploads/**', 'src/app/technical-upload-review/**', 'src/app/technical-work/**', 'tests/technical-upload*', 'tests/technical-document-acquisition*', 'tests/technical-document-private-visibility.test.ts', 'scripts/technical-document-acquisition/**', 'tests/technical-uploads/**', 'scripts/technical-upload/**', '.github/workflows/technical-upload-preparation.yml', 'package.json', 'package-lock.json', 'prisma/**']
+    paths: ['src/lib/selected-document-*', 'tests/selected-document-*', 'src/lib/technical-*', 'src/lib/storage.ts', 'src/lib/selective-client-documents.ts', 'src/app/acquired-documents/**', 'src/app/clients/**', 'src/lib/financial-privacy-policy.ts', 'src/components/technical-*', 'src/app/technical-uploads/**', 'src/app/technical-upload-review/**', 'src/app/technical-work/**', 'tests/technical-upload*', 'tests/technical-document-acquisition*', 'tests/technical-document-private-visibility.test.ts', 'scripts/technical-document-acquisition/**', 'tests/technical-uploads/**', 'scripts/technical-upload/**', '.github/workflows/technical-upload-preparation.yml', 'package.json', 'package-lock.json', 'prisma/**']
 permissions: { contents: read }
 concurrency:
   group: technical-upload-preparation-${{ github.event.pull_request.number }}
@@ -83,15 +83,15 @@ jobs:
           grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/postgresql.tap"
           node --import tsx --test tests/technical-document-acquisition-db.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
-          grep -Fx '# tests 11' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
-          grep -Fx '# pass 11' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
+          grep -Fx '# tests 15' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
+          grep -Fx '# pass 15' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/acquisition-postgresql.tap"
       - name: Exact file and decision contracts, including Linux hard links
         shell: bash
         run: |
           set -euo pipefail
-          node --import tsx --test tests/technical-upload-admission.test.ts tests/technical-upload-assignment.test.ts tests/technical-upload-contract.test.ts tests/technical-upload-plan.test.ts tests/technical-upload-record.test.ts tests/technical-upload-review-contract.test.ts tests/technical-upload-storage.test.ts tests/technical-document-acquisition-contract.test.ts tests/technical-document-acquisition-journal.test.ts tests/technical-document-acquisition-projection.test.ts tests/technical-document-private-visibility.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
+          node --import tsx --test tests/technical-upload-admission.test.ts tests/technical-upload-assignment.test.ts tests/technical-upload-contract.test.ts tests/technical-upload-plan.test.ts tests/technical-upload-record.test.ts tests/technical-upload-review-contract.test.ts tests/technical-upload-storage.test.ts tests/technical-document-acquisition-contract.test.ts tests/technical-document-acquisition-journal.test.ts tests/technical-document-acquisition-projection.test.ts tests/technical-document-private-visibility.test.ts tests/selected-document-content.test.ts | tee "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
           grep -Fx '# fail 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_UPLOAD_EVIDENCE/contracts-storage.tap"
       - name: Prepare isolated native browser
@@ -122,7 +122,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_UPLOAD_EVIDENCE/playwright.json" npx playwright test --config tests/technical-uploads/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_UPLOAD_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.TECHNICAL_UPLOAD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==7 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.TECHNICAL_UPLOAD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind exact source and preserve production gate
         run: |
           git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_UPLOAD_EVIDENCE/source.txt"

@@ -9,6 +9,7 @@ import { loadIndependentProjectExclusions, loadTechnicalDocumentProjectCeilings 
 import { clientDocumentSnapshotSchema, maxClientDocumentBytes, type ClientDocumentChoice, type ClientDocumentSnapshot } from './selective-client-document-policy';
 import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
 import { selectedTechnicalAcquisition } from './technical-document-acquired-access';
+import { selectedDocumentMode } from './selected-document-formats';
 
 type Tx = Prisma.TransactionClient;
 type Recipient = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'> & { id: string };
@@ -40,6 +41,7 @@ export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clie
   const eligible = (await filterFinancialDocuments(tx, manager, provenanceAllowed)).filter(d =>
     (!d.validUntil || d.validUntil > clock[0].now) && d.sizeBytes >= 0 && d.sizeBytes <= maxClientDocumentBytes
     && clientDocumentSnapshotSchema.shape.mimeType.safeParse(d.mimeType).success
+    && selectedDocumentMode(d) !== null
     && !scope.selectiveDocumentIds?.includes(d.id)
     && (!d.projectId || (!scope.selectiveProjectIds?.includes(d.projectId) && projects.some(p => p.id === d.projectId)))
     && (!d.companyId || companies.some(c => c.id === d.companyId))
@@ -103,6 +105,7 @@ async function selectDocumentVersions(tx: Tx, authorityId: string, target: Recip
       || document.clientId !== clientId || (document.visibilityLevel !== 'interno' && !acquired)
       || (acquired && acquired.version.id !== choice.versionId) || ['archiviato', 'respinto', 'scaduto'].includes(document.status)
       || document.sizeBytes < 0 || document.sizeBytes > maxClientDocumentBytes
+      || selectedDocumentMode(document) === null
       || (document.validUntil && document.validUntil <= clock.now)
       || (isSensitiveDocument(document) && !hasPermission(target, 'document.sensitive.read'))
       || (choice.download && !hasPermission(target, 'document.download'))

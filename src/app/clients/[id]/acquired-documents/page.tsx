@@ -1,3 +1,4 @@
+import { canPreviewSelectedDocument } from '@/lib/selected-document-formats';
 import { notFound } from 'next/navigation';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -17,7 +18,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     {!documents.length && <p>Nessun documento acquisito disponibile con i permessi correnti.</p>}
     {documents.map(d => <Card key={d.id} title={d.title}><div className="min-w-0 space-y-3">
       <p className="break-words">{d.fileName} · versione 1</p><p>Acquisito il {new Date(d.acquiredAt).toLocaleString('it-IT')} · visibilità amministrata personalmente</p>
-      <div className="flex flex-wrap gap-4"><a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer">Visualizza documento acquisito</a>
+      <div className="flex flex-wrap gap-4">{canPreviewSelectedDocument(d) ? <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}`} target="_blank" rel="noopener noreferrer">Visualizza documento acquisito</a> : <span>Anteprima non disponibile per questo formato.</span>}
         <a className="font-semibold underline" href={`/acquired-documents/${encodeURIComponent(d.id)}?download=1`}>Scarica documento acquisito</a></div>
     </div></Card>)}
   </div>;

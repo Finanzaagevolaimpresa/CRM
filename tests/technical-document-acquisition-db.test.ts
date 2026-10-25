@@ -21,6 +21,9 @@ import { grantClient } from './selective-clients/fixtures';
 import { readPrivateDocumentBounded } from '../src/lib/storage';
 import { withTechnicalAssignmentManagementRead } from '../src/lib/technical-assignment-transaction';
 import { loadTechnicalDocumentAcquisition } from '../src/lib/technical-document-acquisition-persistence';
+import { grantPractice } from './selective-practices/fixtures';
+import { readPracticeSharing, readSharedPracticeDocument } from '../src/lib/selective-practice-access';
+import { officeBytes } from './technical-uploads/office-fixture';
 
 const enabled = process.env.TECHNICAL_ACQUISITION_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person, root: string;
@@ -37,23 +40,24 @@ before(async () => {
   if (binding) { const user = await db.user.findUniqueOrThrow({ where: { id: binding.userId } }); admin = { user, ...await syntheticSession(db, user) }; }
   else { admin = await syntheticAuthority(db); await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`; }
   await db.selectiveClientAuthority.create({ data: { id: 'client-sharing', userId: admin.user.id, enabled: true } });
+  await db.selectivePracticeAuthority.create({ data: { id: 'practice-sharing', userId: admin.user.id, enabled: true } });
 });
 after(async () => db.$disconnect());
-async function fixture(verdict: 'APPROVE_PRIVATE' | 'REJECT_PRIVATE' = 'APPROVE_PRIVATE') {
+async function fixture(verdict: 'APPROVE_PRIVATE' | 'REJECT_PRIVATE' = 'APPROVE_PRIVATE', file = { name: 'Elaborato.txt', bytes }) {
   const f = await technicalFixture(db, admin), target = technicalTarget(f), ref = { ...target, recipientId: f.techA.user.id };
   const setup = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id);
   const input = { commandId: randomUUID(), targetId: target.targetId, expectedRevision: 0,
     expectedContextSha256: setup.contextSha256, expectedRecipientEpoch: setup.recipient!.epoch,
     selection: { kind: target.kind, userId: f.techA.user.id, responsibility: 'supporto', actions: ['upload_document'],
       readableFields: ['title'], editableFields: [], documents: [], expiresAt: new Date(Date.now() + 3600000).toISOString(),
-      uploadProfile: { purpose: 'Deposito sintetico', formats: ['.txt'], maxFileBytes: 1024, maxFilesPerRevision: 2,
+      uploadProfile: { purpose: 'Deposito sintetico', formats: ['.' + file.name.split('.').at(-1)], maxFileBytes: 1024, maxFilesPerRevision: 2,
         maxBytesPerRevision: 2048, visibility: 'PRIVATE_PENDING_ADMIN_REVIEW' } }, reason: 'Decisione sintetica' };
   const assignment = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
   await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, assignment.token, true);
   const state = await readOwnTechnicalUploads(db, f.techA.session, target);
   const upload = await previewTechnicalUpload(db, f.techA.session, target, { commandId: randomUUID(), assignmentId: state.assignmentId,
-    assignmentRevision: state.assignmentRevision, expectedContextSha256: state.contextSha256, title: 'Elaborato da acquisire', action: 'deposit_private_document' }, 'Elaborato.txt', bytes);
-  await confirmTechnicalUpload(db, f.techA.session, target, upload.command, upload.token, bytes, true);
+    assignmentRevision: state.assignmentRevision, expectedContextSha256: state.contextSha256, title: 'Elaborato da acquisire', action: 'deposit_private_document' }, file.name, file.bytes);
+  await confirmTechnicalUpload(db, f.techA.session, target, upload.command, upload.token, file.bytes, true);
   const queue = await readTechnicalUploadReviewQueue(db, admin.session, ref), d = queue.deposits[0];
   const review = await previewTechnicalUploadReview(db, admin.session, ref, { commandId: randomUUID(), submissionCommandId: d.commandId,
     sourceSha256: d.sourceSha256, verdict, reason: 'Esame sintetico della versione esatta' });
@@ -198,4 +202,92 @@ test('current lifecycle and personal authority revocation close acquired views w
   await assert.rejects(readPersonalAcquiredDocument(db, admin.session, receipt.documentId));
   assert.deepEqual(await listPersonalAcquiredDocuments(db, admin.session, f.client.id), []);
   await withTechnicalAssignmentManagementRead(db, admin.session, f.target.kind, null, async (tx, state) => assert(await loadTechnicalDocumentAcquisition(tx, state, receipt.commandId)));
+});
+
+test('Office metadata alone grants no bytes; explicit technical download works and revocation closes it', options, async () => {
+  const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f);
+  const fileId = receipt.versionId;
+  await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId, allowDownload: false }] });
+  assert.equal((await readTechnicalWork(db, f.techA.session, f.target)).documents[0].fileName, 'Relazione.docx');
+  let reads = 0;
+  const storage = async (key: string, limit: number) => { reads++; return readPrivateDocumentBounded(key, limit); };
+  for (const download of [false, true]) await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, fileId, download, storage));
+  assert.equal(reads, 0);
+  await assignTechnical(db, admin, f.target, f.techA, { documents: [{ fileId, allowDownload: true }] });
+  const result = await readTechnicalWorkDocument(db, f.techA.session, f.target, fileId, true, storage);
+  assert.deepEqual(result.bytes, officeBytes); assert.equal(result.contentType, 'application/octet-stream');
+  await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, fileId, false, storage));
+  for (const person of [f.techB, f.salesA, f.salesB])
+    await assert.rejects(readTechnicalWorkDocument(db, person.session, f.target, fileId, true, storage));
+  assert.equal(reads, 1);
+  await revokeTechnical(db, admin, f.target, f.techA);
+  await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, f.target, fileId, true, storage));
+  assert.equal(reads, 1); assert.equal((await readPersonalAcquiredDocument(db, admin.session, receipt.documentId)).previewMime, null);
+});
+
+test('client Office sharing requires its own download decision and rechecks physical bytes and current lifecycle', options, async () => {
+  const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f);
+  const input = { version: 4, clientId: f.client.id, recipientId: f.salesA.user.id, commandId: randomUUID(), revision: 0,
+    fields: [], companies: [], people: [], documents: [{ versionId: receipt.versionId, download: false }], expiresAt: null };
+  await grantClient(db, admin, input);
+  assert.equal((await readClientSharing(db, f.salesA.session, f.client.id)).documents[0].fileName, 'Relazione.docx');
+  let reads = 0;
+  const storage = async (key: string, limit: number) => { reads++; return readPrivateDocumentBounded(key, limit); };
+  for (const download of [false, true]) await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, download, storage));
+  assert.equal(reads, 0);
+  // The commercial role does not carry document.download. A per-version
+  // selection must not manufacture that independent permission.
+  await assert.rejects(grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 1, documents: [{ versionId: receipt.versionId, download: true }] }));
+  const permission = await db.userPermissionOverride.create({ data: { userId: f.salesA.user.id, permission: 'document.download', allowed: true } });
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
+  assert.equal(reads, 0);
+  await grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 1, documents: [{ versionId: receipt.versionId, download: true }] });
+  const result = await readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage);
+  assert.deepEqual(result.bytes, officeBytes); assert.equal(result.contentType, 'application/octet-stream');
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, false, storage));
+  await assert.rejects(readSharedClientDocument(db, f.salesB.session, f.client.id, receipt.versionId, true, storage));
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.otherClient.id, receipt.versionId, true, storage));
+  assert.equal(reads, 1);
+  const doc = await db.document.findUniqueOrThrow({ where: { id: receipt.documentId } }), file = path.resolve(root, doc.storagePath);
+  assert(file.startsWith(root + path.sep));
+  await writeFile(file, Buffer.from('ALTERED_OFFICE_BYTES'));
+  try { await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage)); }
+  finally { await writeFile(file, officeBytes); }
+  await db.userPermissionOverride.update({ where: { id: permission.id }, data: { allowed: false } });
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
+  await db.userPermissionOverride.update({ where: { id: permission.id }, data: { allowed: true } });
+  await grantClient(db, admin, { ...input, commandId: randomUUID(), revision: 2, documents: [{ versionId: receipt.versionId, download: true }] });
+  assert.deepEqual((await readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage)).bytes, officeBytes);
+  await db.project.update({ where: { id: f.project.id }, data: { status: 'archiviato' } });
+  await assert.rejects(readSharedClientDocument(db, f.salesA.session, f.client.id, receipt.versionId, true, storage));
+});
+
+test('practice download selects an exact Office version without opening the client or a sibling practice', options, async () => {
+  const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f);
+  const input = { version: 2, practiceId: f.practice.id, recipientId: f.techB.user.id, commandId: randomUUID(), revision: 0,
+    fields: [], documents: [{ versionId: receipt.versionId, download: false }], expiresAt: new Date(Date.now() + 3600000).toISOString() };
+  await grantPractice(db, admin, input);
+  assert.equal((await readPracticeSharing(db, f.techB.session, f.practice.id)).documents.length, 1);
+  for (const download of [false, true]) await assert.rejects(readSharedPracticeDocument(db, f.techB.session, f.practice.id, receipt.versionId, download, readPrivateDocumentBounded));
+  await grantPractice(db, admin, { ...input, commandId: randomUUID(), revision: 1, documents: [{ versionId: receipt.versionId, download: true }] });
+  const result = await readSharedPracticeDocument(db, f.techB.session, f.practice.id, receipt.versionId, true, readPrivateDocumentBounded);
+  assert.deepEqual(result.bytes, officeBytes); assert.equal(result.contentType, 'application/octet-stream');
+  await assert.rejects(readSharedPracticeDocument(db, f.techB.session, f.practice.id, receipt.versionId, false, readPrivateDocumentBounded));
+  await assert.rejects(readSharedPracticeDocument(db, f.techA.session, f.practice.id, receipt.versionId, true, readPrivateDocumentBounded));
+  await assert.rejects(readSharedPracticeDocument(db, f.techB.session, f.otherPractice.id, receipt.versionId, true, readPrivateDocumentBounded));
+  await assert.rejects(readSharedClientDocument(db, f.techB.session, f.client.id, receipt.versionId, true, readPrivateDocumentBounded));
+  await db.user.update({ where: { id: f.techB.user.id }, data: { active: false } });
+  await assert.rejects(readSharedPracticeDocument(db, f.techB.session, f.practice.id, receipt.versionId, true, readPrivateDocumentBounded));
+});
+
+test('Office contract download retains the financial ceiling despite its generic stored media type', options, async () => {
+  const f = await fixture('APPROVE_PRIVATE', { name: 'Relazione.docx', bytes: officeBytes }), { receipt } = await acquire(f, 'CONTRACT');
+  for (const person of [f.techA, f.techB]) assert(!(await readTechnicalAssignmentManagement(db, admin.session, f.target, person.user.id)).documentOptions.some(d => d.fileId === receipt.versionId));
+  const input = { version: 4, clientId: f.client.id, recipientId: f.salesA.user.id, commandId: randomUUID(), revision: 0,
+    fields: [], companies: [], people: [], documents: [{ versionId: receipt.versionId, download: true }], expiresAt: null };
+  await assert.rejects(previewClientSharing(db, admin.session, input));
+  const accounting = await syntheticPerson(db, 'Amministrazione formato Office sintetico', 'amministrazione');
+  await grantClient(db, admin, { ...input, commandId: randomUUID(), recipientId: accounting.user.id });
+  assert.deepEqual((await readSharedClientDocument(db, accounting.session, f.client.id, receipt.versionId, true, readPrivateDocumentBounded)).bytes, officeBytes);
+  await assert.rejects(readSharedClientDocument(db, accounting.session, f.client.id, receipt.versionId, false, readPrivateDocumentBounded));
 });

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { officeBytes } from './office-fixture';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_UPLOAD_EVIDENCE!, password = process.env.TECHNICAL_UPLOAD_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminEmail: string;
   rows: Array<{ clientId: string; projectId: string; practiceId: string; otherPracticeId: string;
@@ -20,12 +21,12 @@ async function login(page: Page, email: string, stepUp = false) {
     await page.getByLabel('Password corrente', { exact: true }).fill(password); await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Rimuovi conferma', exact: true })).toBeVisible(); }
 }
-async function assign(page: Page, r: Row, person = r.techA) {
+async function assign(page: Page, r: Row, person = r.techA, extension = '.txt') {
   await page.goto(management(r)); await page.locator('[data-technical-editor-ready="true"]').waitFor();
   await page.getByRole('combobox', { name: 'Persona da incaricare', exact: true }).selectOption(person.id);
   await page.getByRole('button', { name: 'Apri scelte per la persona', exact: true }).click(); await page.locator('[data-technical-editor-ready="true"]').waitFor();
   await page.getByLabel('Caricare documenti tecnici', { exact: true }).check(); await page.getByLabel('Titolo', { exact: true }).check();
-  await page.getByLabel('Scopo del caricamento', { exact: true }).fill('Elaborati da revisionare'); await page.getByLabel('.txt', { exact: true }).check();
+  await page.getByLabel('Scopo del caricamento', { exact: true }).fill('Elaborati da revisionare'); await page.getByLabel(extension, { exact: true }).check();
   await page.getByLabel('Dimensione massima per file (MiB)', { exact: true }).fill('1'); await page.getByLabel('Numero massimo di file', { exact: true }).fill('2');
   await page.getByLabel('Spazio totale massimo (MiB)', { exact: true }).fill('2');
   await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0, 16));
@@ -36,10 +37,10 @@ async function assign(page: Page, r: Row, person = r.techA) {
   await page.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
   await expect(page.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
 }
-async function prepare(page: Page, r: Row) {
+async function prepare(page: Page, r: Row, file = { name: 'Relazione.txt', mimeType: 'text/plain', buffer: content }) {
   await page.goto(upload(r)); await page.locator('[data-upload-ready="true"]').waitFor();
   await page.getByLabel('Titolo del documento', { exact: true }).fill('Elaborato privato PR220');
-  await page.getByLabel('File da depositare', { exact: true }).setInputFiles({ name: 'Relazione.txt', mimeType: 'text/plain', buffer: content });
+  await page.getByLabel('File da depositare', { exact: true }).setInputFiles(file);
   await page.getByRole('button', { name: 'Prepara riepilogo del deposito', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma il deposito privato', exact: true })).toBeVisible();
   await page.getByLabel('Confermo questo file e il deposito privato riepilogato.', { exact: true }).check();
@@ -219,4 +220,65 @@ test('native contract classification preserves the financial ceiling before choo
   expect((await tc.request.get('/technical-work/practices/' + r.practiceId + '/documents/' + saved.versionId)).status()).toBe(404);
   expect((await tc.request.get('/acquired-documents/' + saved.documentId)).status()).toBe(404);
   await ac.close(); await tc.close();
+});
+
+test('native Office acquisition stays private; metadata-only, explicit download and revocation are distinct', async ({ browser }) => {
+  const r = f.rows[7], ac = await browser.newContext(), tc = await browser.newContext(), bc = await browser.newContext();
+  const a = await ac.newPage(), t = await tc.newPage(), b = await bc.newPage();
+  await login(a, f.adminEmail, true); await login(t, r.techA.email); await login(b, r.techB.email);
+  await assign(a, r, r.techA, '.docx');
+  await prepare(t, r, { name: 'Relazione.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: officeBytes });
+  await deposit(t); await prepareReview(a, r);
+  await a.getByRole('button', { name: 'Conferma revisione', exact: true }).click();
+  await expect(a.getByText('Revisione registrata. Il file resta nel deposito privato; nessun documento è stato pubblicato o inviato.', { exact: true })).toBeVisible();
+  await a.goto(review(r)); await a.locator('[data-acquisition-ready="true"]').waitFor(); await prepareAcquisition(a);
+  await a.getByRole('button', { name: 'Acquisisci nel fascicolo privato', exact: true }).click();
+  await a.getByRole('link', { name: 'Apri documenti acquisiti e scegli la visibilità', exact: true }).click();
+  await expect(a.getByText('Anteprima non disponibile per questo formato.', { exact: true })).toBeVisible();
+  await expect(a.getByRole('link', { name: 'Visualizza documento acquisito', exact: true })).toHaveCount(0);
+  const saved = await canonical(r), selectedUrl = '/technical-work/practices/' + r.practiceId + '/documents/' + saved.versionId;
+  const privateUrl = '/acquired-documents/' + saved.documentId;
+  const personal = await ac.request.get(privateUrl);
+  expect(personal.status()).toBe(200); expect(personal.headers()['content-disposition']).toMatch(/^attachment;/);
+  expect(personal.headers()['content-type']).toBe('application/octet-stream');
+  expect(await (await ac.request.get(privateUrl + '?download=1')).body()).toEqual(officeBytes);
+  for (const ctx of [tc, bc]) expect((await ctx.request.get(privateUrl + '?download=1')).status()).toBe(404);
+  for (const allowDownload of [false, true]) {
+    await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
+    await a.getByRole('combobox', { name: 'Responsabilità', exact: true }).selectOption('supporto');
+    await a.getByLabel('Titolo', { exact: true }).check(); await a.getByLabel('Chiedere un intervento all’Admin', { exact: true }).check();
+    await a.getByLabel('Documento acquisito sintetico · Relazione.docx · versione 1', { exact: true }).check();
+    const permission = a.getByLabel('Consenti il download (necessario per aprire il file)', { exact: true });
+    await expect(permission).not.toBeChecked(); if (allowDownload) await permission.check();
+    await a.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0, 16));
+    await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Decisione esplicita sul file Office sintetico');
+    await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+    await expect(a.getByRole('region', { name: 'Riepilogo incarico' })).toContainText(allowDownload
+      ? 'Download consentito · anteprima non disponibile' : 'Solo nome e versione · download non consentito');
+    if (allowDownload) await screenshot(a, 'office-download-decision');
+    await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
+    await a.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+    await expect(a.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+    await t.goto('/technical-work/practices/' + r.practiceId);
+    await expect(t.getByText('Relazione.docx · Anteprima non disponibile per questo formato.', { exact: true })).toBeVisible();
+    await expect(t.getByRole('link', { name: 'Visualizza Relazione.docx', exact: true })).toHaveCount(0);
+    await expect(t.getByRole('link', { name: 'Scarica versione', exact: true })).toHaveCount(allowDownload ? 1 : 0);
+    expect((await tc.request.get(selectedUrl)).status()).toBe(404);
+    const response = await tc.request.get(selectedUrl + '?download=1'); expect(response.status()).toBe(allowDownload ? 200 : 404);
+    if (allowDownload) {
+      expect(response.headers()['content-type']).toBe('application/octet-stream');
+      expect(response.headers()['content-disposition']).toMatch(/^attachment;/);
+      expect(response.headers()['x-content-type-options']).toBe('nosniff'); expect(await response.body()).toEqual(officeBytes);
+      await screenshot(t, 'office-download-recipient');
+    } else expect(await response.text()).not.toContain('DOCUMENTO OFFICE SINTETICO');
+    for (const url of [selectedUrl, selectedUrl + '?download=1']) expect((await bc.request.get(url)).status()).toBe(404);
+  }
+  await a.goto(management(r) + '?recipient=' + r.techA.id); await a.locator('[data-technical-editor-ready="true"]').waitFor();
+  await a.getByLabel('Motivo della revoca', { exact: true }).fill('Revoca sintetica con pagina già aperta');
+  await a.getByRole('button', { name: 'Anteprima della revoca', exact: true }).click();
+  await a.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.', { exact: true }).check();
+  await a.getByRole('button', { name: 'Revoca incarico tecnico', exact: true }).click();
+  await expect(a.getByText('Revoca registrata. Lo storico è conservato.', { exact: true })).toBeVisible();
+  expect((await tc.request.get(selectedUrl + '?download=1')).status()).toBe(404);
+  await ac.close(); await tc.close(); await bc.close();
 });

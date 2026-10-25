@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { selectedDocumentMimeTypes } from './selected-document-formats';
 
 const identifier = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 export const clientDocumentChoiceSchema = z.object({ versionId: identifier, download: z.boolean() }).strict();
@@ -6,7 +7,7 @@ export const clientDocumentSnapshotSchema = z.object({
   documentId: identifier, versionId: identifier, version: z.number().int().positive(),
   checksum: z.string().regex(/^[a-f0-9]{64}$/), stateHash: z.string().regex(/^[a-f0-9]{64}$/),
   title: z.string().max(500), fileName: z.string().max(500),
-  mimeType: z.enum(['application/pdf', 'text/plain', 'image/png', 'image/jpeg']),
+  mimeType: z.enum(selectedDocumentMimeTypes),
   download: z.boolean(),
 }).strict();
 export type ClientDocumentChoice = z.infer<typeof clientDocumentChoiceSchema>;
