@@ -133,3 +133,61 @@ test('stale commercial owner form and invalid/foreign API identifiers cannot dis
   expect((await page.request.get('/admin-requests/not-a-uuid')).status()).toBe(404);
   expect(await db.communicationAttempt.count()).toBe(0);
 });
+
+test('filtered integrations reuse the private queue for two sales and two technicians, with current revocation', async ({ browser }) => {
+  const r = f.rows[4], term = 'Integrazione mirata %_', renderingErrors: string[] = [];
+  const people = [r.salesA, r.salesB, r.techA, r.techB];
+  const subjects = [['Lead', r.leadId], ['Client', r.otherClientId], ['Project', r.projectId], ['TechnicalPractice', r.practiceId]];
+  const contexts = await Promise.all(people.map(() => browser.newContext()));
+  const pages = await Promise.all(contexts.map(context => context.newPage()));
+  const requestIds: string[] = [], titles: string[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    page.on('pageerror', error => renderingErrors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error' && /hydrat|server rendered HTML/i.test(message.text())) renderingErrors.push(message.text()); });
+    await login(page, people[i].email);
+    const title = `${term} persona ${i}`; titles.push(title);
+    requestIds.push(await prepare(page, subjects[i][0], subjects[i][1], title));
+    await page.getByLabel('Tipo', { exact: true }).selectOption('INTEGRATION'); await submit(page);
+    await prepare(page, subjects[i][0], subjects[i][1], `${term} documento ${i}`); await submit(page);
+  }
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    await page.goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent(term));
+    await expect(page.getByRole('heading', { name: titles[i], exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(1);
+    for (let j = 0; j < titles.length; j++) if (j !== i) expect(await page.content()).not.toContain(titles[j]);
+    expect(await page.content()).not.toContain(`${term} documento`);
+    await page.getByLabel('Tipo di richiesta', { exact: true }).selectOption('DOCUMENT');
+    await page.getByRole('button', { name: 'Cerca', exact: true }).click();
+    await expect(page.getByRole('heading', { name: `${term} documento ${i}`, exact: true })).toBeVisible();
+    expect((await contexts[i].request.get('/admin-requests/' + requestIds[(i + 1) % pages.length])).status()).toBe(404);
+    expect((await contexts[i].request.get('/admin-requests?kind=INTEGRATION&kind=DOCUMENT')).status()).toBe(404);
+  }
+  const technical = pages[2];
+  await technical.goto('/technical-office/integrations?q=' + encodeURIComponent(term));
+  await expect(technical.getByRole('link', { name: 'Integrazioni', exact: true })).toBeVisible();
+  await expect(technical.getByRole('heading', { name: 'Integrazioni tecniche', exact: true })).toBeVisible();
+  await expect(technical.getByRole('heading', { name: titles[2], exact: true })).toBeVisible();
+  expect((await contexts[2].request.get('/technical-office/integrations?kind=DOCUMENT')).status()).toBe(404);
+  for (const value of r.excluded) expect(await technical.content()).not.toContain(value);
+  for (const [width, height, name] of [[1440, 1000, 'integrations-desktop.png'], [390, 844, 'integrations-mobile.png']] as const) {
+    await technical.setViewportSize({ width, height });
+    await technical.screenshot({ path: path.join(evidence, name), fullPage: true, caret: 'initial' });
+    expect(await technical.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  }
+  await technical.getByRole('link', { name: 'Apri richiesta', exact: true }).click();
+  await expect(technical.getByRole('heading', { name: titles[2], exact: true })).toBeVisible();
+  const admin = await browser.newContext(), review = await admin.newPage(); await login(review, f.adminEmail);
+  await review.goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent(term));
+  await expect(review.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(4);
+  await db.user.update({ where: { id: r.techA.id }, data: { active: false } });
+  await db.lead.update({ where: { id: r.leadId }, data: { assignedToId: r.salesB.id } });
+  await review.reload(); await expect(review.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(2);
+  expect(await review.content()).not.toContain(titles[0]); expect(await review.content()).not.toContain(titles[2]);
+  expect((await admin.request.get('/admin-requests/' + requestIds[2])).status()).toBe(404);
+  await pages[0].goto('/admin-requests?kind=INTEGRATION&q=' + encodeURIComponent(term));
+  await expect(pages[0].getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(0);
+  expect(await db.communicationAttempt.count()).toBe(0); expect(renderingErrors).toEqual([]);
+  await Promise.all([...contexts, admin].map(context => context.close()));
+});

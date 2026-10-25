@@ -10,6 +10,7 @@ import { admitAdminRequestOrigin, exactRequestOrigin, requestSubject, requestDen
 import { AdminRequestContextUnavailable } from './admin-request-commercial-loader';
 import { appendAdminRequest, lockAdminRequest, requestCommandReceipt, requestCommandHash, requestDraftOrigin, type RequestEvent } from './admin-request-storage';
 import { admitAdminRequestDraft } from './admin-request-draft-source';
+import { adminRequestQueueKind, type AdminRequestQueueKind } from './admin-request-queue-query';
 
 type Tx = Prisma.TransactionClient;
 async function readRequestTransaction<T>(db: PrismaClient, read: (tx: Tx) => Promise<T>): Promise<T> {
@@ -123,9 +124,10 @@ export function isRequestUnavailable(error: unknown) {
 export class AdminRequestQueueLimitError extends Error {
   constructor(readonly isAdmin: boolean) { super('Restringi la ricerca per consultare le richieste disponibili.'); }
 }
-export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '') {
+export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '', kind?: AdminRequestQueueKind) {
   const skip = (z.number().int().min(1).max(200).parse(page) - 1) * 30;
   const term = z.string().trim().max(160).parse(query).toLocaleLowerCase('it-IT');
+  const selectedKind = adminRequestQueueKind.optional().parse(kind) ?? '';
   return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
     // Paginate admitted rows, never the unfiltered window: revoked origins
@@ -135,11 +137,13 @@ export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSessi
       const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest"
         WHERE (${auth.isAdmin} OR "authorId"=${auth.actor.id})
         AND (${term}='' OR position(${term} in lower(state->'submitted'->>'title'))>0)
+        AND (${selectedKind}='' OR state->'submitted'->>'kind'=${selectedKind})
         ORDER BY "createdAt" DESC,id OFFSET ${offset} LIMIT 60`;
       for (const candidate of candidates) {
         try {
           const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
           if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
+          if (selectedKind && s.submitted.kind !== selectedKind) continue;
           until = Math.min(until, row.origin.accessUntil);
           if (admitted++ < skip) continue;
           items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });

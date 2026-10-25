@@ -1,7 +1,7 @@
 name: Admin request queue
 on:
   pull_request:
-    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'src/lib/admin-request*', 'src/lib/approved-communication*', 'src/lib/technical-assignment*', 'src/lib/record-update*', 'src/app/admin-requests/**', 'src/app/api/admin-requests/**', 'src/app/communications/**', 'src/app/leads/**', 'src/app/clients/**', 'src/app/technical-work/**', 'src/components/admin-request*', 'tests/admin-request*', 'tests/admin-requests/**', 'scripts/admin-requests/**', '.github/workflows/admin-requests.yml']
+    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'src/lib/admin-request*', 'src/lib/approved-communication*', 'src/lib/technical-assignment*', 'src/lib/record-update*', 'src/app/admin-requests/**', 'src/app/technical-office/integrations/**', 'src/lib/operational-role-view.ts', 'tests/operational-role-view.test.ts', 'src/app/api/admin-requests/**', 'src/app/communications/**', 'src/app/leads/**', 'src/app/clients/**', 'src/app/technical-work/**', 'src/components/admin-request*', 'tests/admin-request*', 'tests/admin-requests/**', 'scripts/admin-requests/**', '.github/workflows/admin-requests.yml']
 permissions: { contents: read }
 concurrency:
   group: admin-requests-${{ github.event.pull_request.number }}
@@ -75,8 +75,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-request-queue-db.test.ts | tee "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 21' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 21' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 23' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 23' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser
@@ -100,7 +100,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_REQUEST_EVIDENCE/playwright.json" npx playwright test --config tests/admin-requests/playwright.config.ts --reporter=line,json | tee "$ADMIN_REQUEST_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.ADMIN_REQUEST_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.ADMIN_REQUEST_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$ADMIN_REQUEST_EVIDENCE/source.txt"
