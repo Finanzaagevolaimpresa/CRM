@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-test('schema67 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
+test('schema68 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; clientId: string; projectId: string; practiceId: string; otherProjectId: string;
     liveEmail: string; revokedEmail: string; salesEmail: string; receiptId: string; itemReceiptId: string; taskId: string; title: string; progress: string;

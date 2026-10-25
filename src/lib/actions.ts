@@ -1061,7 +1061,7 @@ async function buildClientDossierContent(session: AuthSession, clientId: string,
     prisma.serviceCatalog.findMany(),
     prisma.project.findMany({ where: { clientId, ...(projectId ? { id: projectId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
-    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, title: true, documentCategory: true, type: true, status: true, containsSensitiveData: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
+    prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, title: true, documentCategory: true, type: true, status: true, containsSensitiveData: true, visibilityLevel: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
     listAccessibleTasks(session, { where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
   ]);
   if (!agentConfig.active) throw new UserFacingActionError(`Agente ${AI_AGENT_CODES.dossierCliente} disattivato: riattivarlo da Impostazioni > Agenti AI per generare il dossier.`);
@@ -1656,7 +1656,7 @@ export async function runClientAiAgent(form: FormData) {
     }),
     prisma.document.findMany({
       where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null },
-      select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, containsSensitiveData: true, documentCategory: true, type: true, status: true, serviceArea: true },
+      select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, containsSensitiveData: true, visibilityLevel: true, documentCategory: true, type: true, status: true, serviceArea: true },
       orderBy: { createdAt: 'desc' },
       take: 50,
     }),

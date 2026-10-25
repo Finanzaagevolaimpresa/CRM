@@ -8,7 +8,7 @@ const client = { id: 'client', salesOwnerId: 'owner', consultantId: 'owner', del
 const project = { id: 'project', clientId: 'client', consultantId: 'owner', deletedAt: null } as Project;
 const contract = { id: 'contract', clientId: 'client', projectId: null } as Contract;
 const document = { id: 'document', clientId: 'client', projectId: null, clientServiceId: null, serviceArea: 'contratti', deletedAt: null,
-  status: 'caricato', storagePath: 'private-synthetic-path', checksum: 'a'.repeat(64), containsSensitiveData: true, type: 'contratti', documentCategory: 'contratti', uploadedById: 'owner' } as Document;
+  status: 'caricato', visibilityLevel: 'interno', storagePath: 'private-synthetic-path', checksum: 'a'.repeat(64), containsSensitiveData: true, type: 'contratti', documentCategory: 'contratti', uploadedById: 'owner' } as Document;
 const version = { id: 'version', documentId: 'document', storagePath: document.storagePath, checksum: document.checksum, version: 1 } as DocumentVersion;
 const command = { contractId: 'contract', expectedVersion: '2026-09-01T12:00:00.000Z', signedDocumentVersionId: 'version', signedOn: '2026-09-01', confirmed: true };
 
@@ -38,7 +38,7 @@ test('administration retains contract authority; read-only direction and client 
 test('signed evidence must be a current contract document in the exact client/project context', () => {
   assert.equal(isSignatureDocument(actor('admin'), contract, client, null, document, version), true);
   for (const change of [{ clientId: 'other' }, { projectId: 'other' }, { clientServiceId: 'other' }, { serviceArea: 'altro' as const },
-    { checksum: null }, { checksum: 'wrong' }, { deletedAt: new Date() }, { status: 'respinto' as const }, { status: 'scaduto' as const }, { status: 'archiviato' as const }]) {
+    { visibilityLevel: 'technical_admin_private_v1' }, { visibilityLevel: '' }, { checksum: null }, { checksum: 'wrong' }, { deletedAt: new Date() }, { status: 'respinto' as const }, { status: 'scaduto' as const }, { status: 'archiviato' as const }]) {
     assert.equal(isSignatureDocument(actor('admin'), contract, client, null, { ...document, ...change }, version), false);
   }
   for (const change of [{ documentId: 'other' }, { checksum: 'b'.repeat(64) }, { storagePath: 'changed-path' }]) {

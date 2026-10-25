@@ -27,7 +27,7 @@ export function withTechnicalUploadDecision<T>(db: PrismaClient, claimed: AuthSe
 /** Internal preparation against the isolated SQL draft only. No runtime route
  * imports this module. Current caller must hold the assignment FOR UPDATE for
  * inserts/quota and FOR SHARE for read-only lookups after normal registry locks. */
-export async function loadTechnicalUploadRecord(tx: Tx, state: TechnicalAssignmentTransaction, commandId: string) {
+export async function loadTechnicalUploadRecord(tx: Tx, state: Pick<TechnicalAssignmentTransaction, 'key'>, commandId: string) {
   technicalUploadRecord.shape.commandId.parse(commandId);
   const rows = await tx.$queryRaw<RawRow[]>`SELECT id,"commandId","assignmentId","assignmentRevision",
     "actorId","sessionId","targetKind","targetId","requestDigest",command,"storageKey","contentSha256",

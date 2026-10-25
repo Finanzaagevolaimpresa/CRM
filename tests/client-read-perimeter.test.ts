@@ -8,7 +8,7 @@ import { clientVisibilityWhere } from '../src/lib/core-query-policy';
 const client = { id: 'shared', salesOwnerId: 'sales', consultantId: 'technical' };
 const project = { id: 'project', clientId: client.id, consultantId: null, client };
 const service = { id: 'service', clientId: client.id, projectId: project.id, assignedToId: null, client, project };
-const document = { clientId: client.id, projectId: project.id, clientServiceId: service.id, uploadedById: 'uploader', containsSensitiveData: true, type: 'text/plain', documentCategory: 'altro', client, project, clientService: service };
+const document = { clientId: client.id, projectId: project.id, clientServiceId: service.id, uploadedById: 'uploader', visibilityLevel: 'interno', containsSensitiveData: true, type: 'text/plain', documentCategory: 'altro', client, project, clientService: service };
 const practice = { client, commercialOwnerId: null, technicalOwnerId: null };
 
 for (const role of perimeterRoles) test(`${role}: client profile scope does not expose other assignments or grant writes`, () => {

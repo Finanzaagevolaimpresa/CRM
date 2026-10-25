@@ -11,6 +11,8 @@ import { readOwnTechnicalUploads, previewTechnicalUpload, confirmTechnicalUpload
 import { readTechnicalUploadReviewQueue, previewTechnicalUploadReview, confirmTechnicalUploadReview, readTechnicalUploadForAdmin } from '../../src/lib/technical-upload-review-service';
 import { localPathFromStoragePath } from '../../src/lib/storage';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { previewTechnicalDocumentAcquisition, confirmTechnicalDocumentAcquisition } from '../../src/lib/technical-document-acquisition-service';
+import { readPersonalAcquiredDocument } from '../../src/lib/technical-document-acquired-access';
 const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.CI, 'true'); await assertAiOrchestratorEphemeralDatabaseIdentity(db);
@@ -28,6 +30,7 @@ async function main() {
   try {
     const documentsBefore = await db.document.count(), versionsBefore = await db.documentVersion.count();
     const uploads = [];
+    let acquisition: { commandId: string; documentId: string; versionId: string; title: string; bytes: string } | null = null;
     for (const person of [f.techA, f.techB]) {
       const original = await assignmentInput(db, admin, target, person);
       const input = { ...original, selection: { ...original.selection, actions: ['upload_document'], readableFields: ['title'],
@@ -53,6 +56,16 @@ async function main() {
             submissionCommandId: row.commandId, sourceSha256: row.sourceSha256, verdict: status, reason: 'Verifica sintetica prima del riavvio' });
           const receipt = await confirmTechnicalUploadReview(db, admin.session, leadProof(admin), ref, review.command, review.token, true);
           reviewId = receipt.commandId;
+          if (status === 'APPROVE_PRIVATE') {
+            const reviewed = (await readTechnicalUploadReviewQueue(db, admin.session, ref)).deposits.find(d => d.commandId === row.commandId)!;
+            const command = { commandId: randomUUID(), submissionCommandId: row.commandId, sourceSha256: row.sourceSha256,
+              reviewCommandId: reviewed.review!.commandId, reviewSha256: reviewed.review!.sha256,
+              classification: 'TECHNICAL_DOCUMENT', title: 'RECOVERY_ACQUIRED_PRIVATE', expiresAt: null, visibility: 'ADMIN_PRIVATE' };
+            const prepared = await previewTechnicalDocumentAcquisition(db, admin.session, ref, command);
+            const acquired = await confirmTechnicalDocumentAcquisition(db, admin.session, leadProof(admin), ref, prepared.command, prepared.token, true);
+            assert.deepEqual((await readPersonalAcquiredDocument(db, admin.session, acquired.documentId)).bytes, bytes);
+            acquisition = { commandId: acquired.commandId, documentId: acquired.documentId, versionId: acquired.versionId, title: command.title, bytes: bytes.toString() };
+          }
         }
         uploads.push({ commandId: preview.command.commandId, reviewId, status, title, bytes: bytes.toString(),
           sha256: createHash('sha256').update(bytes).digest('hex'), authorId: person.user.id });
@@ -62,10 +75,10 @@ async function main() {
     const revoked = uploads.find(row => row.status === 'REVOKED')!;
     await assert.rejects(readOwnTechnicalUpload(db, f.techB.session, target, revoked.commandId));
     await assert.rejects(readTechnicalUploadForAdmin(db, admin.session, { ...target, recipientId: f.techB.user.id }, revoked.commandId));
-    assert.equal(await db.document.count(), documentsBefore); assert.equal(await db.documentVersion.count(), versionsBefore);
+    assert(acquisition); assert.equal(await db.document.count(), documentsBefore + 1); assert.equal(await db.documentVersion.count(), versionsBefore + 1);
     await writeFile(process.env.R05_UPLOAD_RECOVERY_FIXTURE, JSON.stringify({ synthetic: true, practiceId: f.practice.id,
       adminEmail: user.email, liveEmail: f.techA.user.email, revokedEmail: f.techB.user.email,
-      liveId: f.techA.user.id, revokedId: f.techB.user.id, salesEmails: [f.salesA.user.email, f.salesB.user.email], uploads }));
+      liveId: f.techA.user.id, revokedId: f.techB.user.id, salesEmails: [f.salesA.user.email, f.salesB.user.email], uploads, acquisition, clientId: f.client.id }));
   } finally { if (previous === undefined) delete process.env.PRIVILEGED_ACCESS_MODE; else process.env.PRIVILEGED_ACCESS_MODE = previous; }
 }
 main().finally(() => db.$disconnect()).catch(error => { console.error(error); process.exitCode = 1; });

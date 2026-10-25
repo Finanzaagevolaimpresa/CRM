@@ -16,7 +16,7 @@ function context(owner: string) {
   const parents = { clientId: client.id, projectId: project.id, clientServiceId: service.id, client, project, clientService: service };
   const task = { ...parents, assignedToId: null, createdById: 'previous' };
   const checklist = { ...parents, createdById: 'previous', updatedById: 'previous' };
-  const document = { ...parents, uploadedById: 'previous', containsSensitiveData: true, documentCategory: 'altro', type: 'documento' };
+  const document = { ...parents, uploadedById: 'previous', visibilityLevel: 'interno', containsSensitiveData: true, documentCategory: 'altro', type: 'documento' };
   const offer = { clientId: client.id, leadId: null, client, createdById: 'previous' };
   const practice = { id: 'practice', ...parents, commercialOwnerId: null, technicalOwnerId: null, deletedAt: null };
   return { client, project, service, task, checklist, document, offer, practice };

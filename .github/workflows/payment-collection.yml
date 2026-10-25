@@ -48,12 +48,12 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Exact source, preserved prefix65 and bound schema67
+      - name: Exact source, preserved prefix67 and bound schema68
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
-          git diff --exit-code aa30d5c8ca4f483ae6cd0e77ec9fade8794646b4 HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261024160000_technical_document_upload_v1"
+          git diff --exit-code 5acb9e9e0f87d14fa3075b2f6dfe307352f9ffa7 HEAD -- prisma/migrations ":(exclude)prisma/migrations/20261024190000_technical_document_acquisition_v1"
           evidence="$RUNNER_TEMP/payment-collection-evidence"
           mkdir -p "$evidence"
           echo "PAYMENT_COLLECTION_EVIDENCE=$evidence" >> "$GITHUB_ENV"

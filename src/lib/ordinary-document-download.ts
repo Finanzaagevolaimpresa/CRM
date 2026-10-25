@@ -11,6 +11,7 @@ import { getEngagementMaterialDownloadAccessTx } from './engagement-dossier';
 import { loadClientReadScope } from './client-read-perimeter';
 import { privateDocumentExists, readPrivateDocument, readPrivateDocumentBounded } from './storage';
 import { documentPreviewMaxBytes, documentPreviewMime } from './document-preview';
+import { ordinaryDocumentVisibilityAllows } from './technical-document-visibility';
 
 export class DocumentDownloadError extends Error {
   constructor(readonly status: 403 | 404 | 409 | 415) { super('DOCUMENT_UNAVAILABLE'); }
@@ -33,6 +34,7 @@ export async function readOrdinaryDocument(db: PrismaClient, claimed: AuthSessio
     if (!hasPermission(session, 'document.download')) throw new DocumentDownloadError(403);
     const document = await tx.document.findFirst({ where: { id, deletedAt: null } });
     if (!document) throw new DocumentDownloadError(404);
+    if (!ordinaryDocumentVisibilityAllows(document.visibilityLevel)) throw new DocumentDownloadError(403);
     if (!await canAccessFinancialDocument(tx, session, document)) throw new DocumentDownloadError(403);
     const [client, project, clientService] = await Promise.all([
       document.clientId ? tx.client.findFirst({ where: { id: document.clientId, deletedAt: null }, select: { id: true, salesOwnerId: true, consultantId: true } }) : null,

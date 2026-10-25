@@ -56,7 +56,7 @@ jobs:
           evidence="$RUNNER_TEMP/lead-edit-preparation"
           mkdir -p "$evidence"
           echo "LEAD_EDIT_EVIDENCE=$evidence" >> "$GITHUB_ENV"
-          node scripts/m4/verify-schema.mjs > "$evidence/current-schema67-binding.json"
+          node scripts/m4/verify-schema.mjs > "$evidence/current-schema68-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           historical="$RUNNER_TEMP/lead-edit-schema62"
           mkdir -p "$historical"

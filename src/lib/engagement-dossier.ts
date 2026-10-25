@@ -1,5 +1,6 @@
 import { assertProjectOperational as lockOperationalProject, ProjectUnavailableError } from './project-lifecycle-lock';
 import { canAccessFinancialDocument } from './financial-document-access';
+import { ordinaryDocumentVisibilityAllows } from './technical-document-visibility';
 import { createHash } from 'node:crypto';
 import { Prisma, type PrismaClient, type Client, type Project, type ClientService, type EngagementDossierDeliveryAuthorization, type EngagementDossierDeliveryReceipt } from '@prisma/client';
 import { z } from 'zod';
@@ -108,7 +109,7 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
     const documentIds = [...new Set([item.documentId, row.documentId, version?.documentId].filter((id): id is string => Boolean(id)))];
     for (const documentId of documentIds) {
       const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-      if (!document || !await canAccessFinancialDocument(tx, current, document) || document.clientId !== client.id
+      if (!document || !ordinaryDocumentVisibilityAllows(document.visibilityLevel) || !await canAccessFinancialDocument(tx, current, document) || document.clientId !== client.id
         || (document.projectId && document.projectId !== project.id)
         || (document.clientServiceId && document.clientServiceId !== service.id)
         || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))
@@ -368,7 +369,7 @@ export async function getEngagementMaterialDownloadAccessTx(tx: Prisma.Transacti
   }
   if (!hasPermission(current, 'document.download')) return null;
   const document = await tx.document.findFirst({ where: { id: documentId, deletedAt: null } });
-  if (!document?.clientId || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
+  if (!document?.clientId || !ordinaryDocumentVisibilityAllows(document.visibilityLevel) || !await canAccessFinancialDocument(tx, current, document) || (isSensitiveDocument(document) && !hasPermission(current, 'document.sensitive.read'))) return null;
   const dossiers = await tx.clientDossier.findMany({ where: {
     clientId: document.clientId, archivedAt: null, status: { not: 'archiviata' }, practiceReadinessId: { not: null },
     ...(document.projectId ? { projectId: document.projectId } : {}),

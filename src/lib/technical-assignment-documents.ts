@@ -5,6 +5,7 @@ import { practiceDocumentContexts } from './selective-practice-document-context'
 import type { lockTechnicalAssignmentContext } from './technical-assignment-context';
 import type { TechnicalAssignmentSelection } from './technical-assignment-contract';
 import { TechnicalAssignmentError, type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
+import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
 
 type Context = NonNullable<Awaited<ReturnType<typeof lockTechnicalAssignmentContext>>>;
 type Choices = TechnicalAssignmentSelection['documents'];
@@ -44,7 +45,8 @@ export async function snapshotTechnicalAssignmentDocuments(tx: Prisma.Transactio
       if (document.projectId !== context.projectId && service?.projectId !== context.projectId) return denied();
     }
     const contextSha256 = canonicalSha256(JSON.parse(JSON.stringify({ protocol: 'TECHNICAL_DOCUMENT_CONTEXT_V1',
-      targetContext: context.contextSha256, document, version, company, references: current.hash })));
+      targetContext: context.contextSha256, document, version, company, references: current.hash,
+      ...(document.visibilityLevel === technicalDocumentPrivateVisibility ? { acquisitionState: snapshot.stateHash } : {}) })));
     documents.push({ documentId: snapshot.documentId, fileId: snapshot.versionId, version: snapshot.version,
       contentSha256: snapshot.checksum, contextSha256, allowDownload: snapshot.download });
   }
