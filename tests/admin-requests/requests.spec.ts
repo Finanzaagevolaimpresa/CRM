@@ -148,7 +148,7 @@ test('filtered integrations reuse the private queue for two sales and two techni
     await login(page, people[i].email);
     const title = `${term} persona ${i}`; titles.push(title);
     requestIds.push(await prepare(page, subjects[i][0], subjects[i][1], title));
-    await page.getByLabel('Tipo', { exact: true }).selectOption('INTEGRATION'); await submit(page);
+    await page.locator('form').filter({ has: page.locator('input[name="commandId"]') }).locator('select[name="kind"]').selectOption('INTEGRATION'); await submit(page);
     await prepare(page, subjects[i][0], subjects[i][1], `${term} documento ${i}`); await submit(page);
   }
   for (let i = 0; i < pages.length; i++) {
@@ -158,7 +158,7 @@ test('filtered integrations reuse the private queue for two sales and two techni
     await expect(page.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(1);
     for (let j = 0; j < titles.length; j++) if (j !== i) expect(await page.content()).not.toContain(titles[j]);
     expect(await page.content()).not.toContain(`${term} documento`);
-    await page.getByLabel('Tipo di richiesta', { exact: true }).selectOption('DOCUMENT');
+    await page.locator('form[action="/admin-requests"] select[name="kind"]').selectOption('DOCUMENT');
     await page.getByRole('button', { name: 'Cerca', exact: true }).click();
     await expect(page.getByRole('heading', { name: `${term} documento ${i}`, exact: true })).toBeVisible();
     expect((await contexts[i].request.get('/admin-requests/' + requestIds[(i + 1) % pages.length])).status()).toBe(404);
