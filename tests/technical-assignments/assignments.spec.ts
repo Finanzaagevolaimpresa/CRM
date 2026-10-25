@@ -220,20 +220,20 @@ test('project operation has its own exact grant and native status changes do not
   await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue(term);
   await screenshot(tech, 'assigned-work-search');
   await tech.getByRole('link', { name: 'Pratiche assegnate', exact: true }).click();
-  expect(new URL(tech.url()).searchParams.get('q')).toBe(term);
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'TechnicalPractice' && url.searchParams.get('q') === term && !url.searchParams.has('page'));
   await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
   await tech.getByRole('link', { name: 'Progetti assegnati', exact: true }).click();
   await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
   await tech.goto('/technical-work?kind=Project&page=2&q=' + encodeURIComponent(term));
   await tech.getByRole('link', { name: 'Precedenti', exact: true }).click();
-  expect(new URL(tech.url()).searchParams.get('q')).toBe(term);
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'Project' && url.searchParams.get('q') === term && !url.searchParams.has('page'));
   await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
   await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('PROGETTO_ESTRANEO_NON_ASSEGNATO');
   await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
   await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
   await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
   await tech.getByRole('link', { name: 'Azzera ricerca', exact: true }).click();
-  expect(new URL(tech.url()).searchParams.has('q')).toBe(false);
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'Project' && !url.searchParams.has('q') && !url.searchParams.has('page'));
   await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue('');
   await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
   for (const q of ['x'.repeat(201), 'uno&q=due']) {
