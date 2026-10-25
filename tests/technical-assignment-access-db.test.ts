@@ -295,3 +295,31 @@ test('inactive recipient can be revoked, and reactivation does not restore assig
   await assert.rejects(readTechnicalWork(db, f.techA.session, target));
   assert.equal(canViewClient({ ...f.techA.session, ...await loadSelectiveProjectScope(db, f.techA.user.id) }, f.client), false);
 });
+
+test('title search paginates only current personal assignments and performs no audit or work writes', options, async () => {
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), term = 'Ricerca & controllo 100%_';
+  const ids = [];
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: f.client.id, consultantId: f.techA.user.id,
+      title: `${term} ${String(index).padStart(2, '0')}` } });
+    ids.push(project.id);
+    await assignTechnical(db, admin, { kind: 'Project', targetId: project.id }, f.techA);
+  }
+  const auditBefore = await db.auditLog.count(), commandsBefore = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalWorkCommand"`;
+  const first = await listTechnicalWork(db, f.techA.session, 'Project', 1, '  RICERCA & CONTROLLO 100%_  ');
+  const second = await listTechnicalWork(db, f.techA.session, 'Project', 2, term);
+  assert.equal(first.records.length, 20); assert.equal(first.hasNext, true);
+  assert.equal(second.records.length, 1); assert.equal(second.hasNext, false);
+  assert.deepEqual([...first.records, ...second.records].map(row => row.target.targetId).sort(), ids.sort());
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 3, term)).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 1, '100x_')).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techB.session, 'Project', 1, term)).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'TechnicalPractice', 1, term)).records.length, 0);
+  for (const person of [f.salesA, f.salesB]) await assert.rejects(listTechnicalWork(db, person.session, 'Project', 1, term));
+  await assert.rejects(listTechnicalWork(db, f.techA.session, 'Project', 1, 'x'.repeat(201)));
+  assert.equal(await db.auditLog.count(), auditBefore);
+  assert.deepEqual(await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalWorkCommand"`, commandsBefore);
+  const revoked = first.records[0];
+  await revokeTechnical(db, admin, revoked.target, f.techA);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 1, revoked.title)).records.length, 0);
+});

@@ -184,6 +184,10 @@ test('native revocation stops an open preview, direct documents and ordinary fal
   await expect(tech.getByText('La modifica non è stata registrata: dati, incarico o permessi non più validi. Ricarica prima di riprovare.', { exact: true })).toBeVisible();
   expect(await count(row)).toBe(0); expect(await assignments(row)).toBe(1);
   for (const url of [work(row), work(row) + '/documents/' + row.documents[0].fileId]) expect((await tc.request.get(url)).status(), url).toBe(404);
+  await tech.goto('/technical-work?kind=TechnicalPractice&q=' + encodeURIComponent('Pratica tecnica multipla'));
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  expect(await tech.content()).not.toContain('Pratica tecnica multipla sintetica');
   await ordinaryPageDenied(tech, '/clients/' + row.clientId, 'Cliente non trovato o non accessibile', row);
   await ac.close(); await tc.close();
 });
@@ -207,5 +211,34 @@ test('project operation has its own exact grant and native status changes do not
   await expect(result).toHaveCount(1); expect(await tech.content()).not.toContain(row.excluded[1]);
   await result.click(); await expect(tech).toHaveURL(new RegExp(work(row, true) + '$'));
   await expect(tech.getByText('Descrizione progetto aggiornata', { exact: true }).first()).toBeVisible();
+  const term = 'PROGETTO tecnico multiplo';
+  await tech.goto('/technical-work?kind=Project&page=2&q=inesistente');
+  await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('  ' + term + '  ');
+  await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  expect(new URL(tech.url()).searchParams.has('page')).toBe(false);
+  await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue(term);
+  await screenshot(tech, 'assigned-work-search');
+  await tech.getByRole('link', { name: 'Pratiche assegnate', exact: true }).click();
+  expect(new URL(tech.url()).searchParams.get('q')).toBe(term);
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await tech.getByRole('link', { name: 'Progetti assegnati', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await tech.goto('/technical-work?kind=Project&page=2&q=' + encodeURIComponent(term));
+  await tech.getByRole('link', { name: 'Precedenti', exact: true }).click();
+  expect(new URL(tech.url()).searchParams.get('q')).toBe(term);
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('PROGETTO_ESTRANEO_NON_ASSEGNATO');
+  await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await tech.getByRole('link', { name: 'Azzera ricerca', exact: true }).click();
+  expect(new URL(tech.url()).searchParams.has('q')).toBe(false);
+  await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue('');
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  for (const q of ['x'.repeat(201), 'uno&q=due']) {
+    const invalid = await tc.request.get('/technical-work?kind=Project&q=' + (q.includes('&') ? q : encodeURIComponent(q)));
+    expect(invalid.status()).toBe(404); expect(await invalid.text()).not.toContain('Progetto tecnico multiplo sintetico');
+  }
   await ac.close(); await tc.close();
 });
