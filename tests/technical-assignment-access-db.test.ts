@@ -295,3 +295,80 @@ test('inactive recipient can be revoked, and reactivation does not restore assig
   await assert.rejects(readTechnicalWork(db, f.techA.session, target));
   assert.equal(canViewClient({ ...f.techA.session, ...await loadSelectiveProjectScope(db, f.techA.user.id) }, f.client), false);
 });
+
+test('title search paginates only current personal assignments and performs no audit or work writes', options, async () => {
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), term = 'Ricerca & controllo 100%_';
+  const ids = [];
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: f.client.id, consultantId: f.techA.user.id,
+      title: `${term} ${String(index).padStart(2, '0')}` } });
+    ids.push(project.id);
+    await assignTechnical(db, admin, { kind: 'Project', targetId: project.id }, f.techA);
+  }
+  const auditBefore = await db.auditLog.count(), commandsBefore = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalWorkCommand"`;
+  const first = await listTechnicalWork(db, f.techA.session, 'Project', 1, '  RICERCA & CONTROLLO 100%_  ');
+  const second = await listTechnicalWork(db, f.techA.session, 'Project', 2, term);
+  assert.equal(first.records.length, 20); assert.equal(first.hasNext, true);
+  assert.equal(second.records.length, 1); assert.equal(second.hasNext, false);
+  assert.deepEqual([...first.records, ...second.records].map(row => row.target.targetId).sort(), ids.sort());
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 3, term)).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 1, '100x_')).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techB.session, 'Project', 1, term)).records.length, 0);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'TechnicalPractice', 1, term)).records.length, 0);
+  for (const person of [f.salesA, f.salesB]) await assert.rejects(listTechnicalWork(db, person.session, 'Project', 1, term));
+  await assert.rejects(listTechnicalWork(db, f.techA.session, 'Project', 1, 'x'.repeat(201)));
+  assert.equal(await db.auditLog.count(), auditBefore);
+  assert.deepEqual(await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalWorkCommand"`, commandsBefore);
+  const revoked = first.records[0];
+  await revokeTechnical(db, admin, revoked.target, f.techA);
+  assert.equal((await listTechnicalWork(db, f.techA.session, 'Project', 1, revoked.title)).records.length, 0);
+});
+
+test('twenty-one revoked titles and later title changes cannot reveal search continuation', options, async () => {
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), term = 'Titolo cambiato dopo revoca 100%_';
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: f.client.id, title: `Titolo precedente ${index}` } });
+    const target = { kind: 'Project' as const, targetId: project.id };
+    await assignTechnical(db, admin, target, f.techA); await revokeTechnical(db, admin, target, f.techA);
+    await db.project.update({ where: { id: project.id }, data: { title: `${term} ${index}` } });
+  }
+  const auditBefore = await db.auditLog.count(), empty = { records: [], hasNext: false };
+  for (const query of ['', term, 'NESSUNA_CORRISPONDENZA', '100%_', '100x_']) {
+    assert.deepEqual(await listTechnicalWork(db, f.techA.session, 'Project', 1, query), empty);
+    assert.deepEqual(await listTechnicalWork(db, f.techA.session, 'Project', 2, query), empty);
+  }
+  assert.deepEqual(await listTechnicalWork(db, f.techB.session, 'Project', 1, term), empty);
+  assert.equal(await db.auditLog.count(), auditBefore);
+});
+
+test('admitted pagination crosses a full denied window without hiding valid rows or leaking revoked expired and stale titles', options, async () => {
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), term = 'Pagina ammessa 100%_', ids: string[] = [];
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: f.client.id, title: `${term} valido ${index}` } });
+    ids.push(project.id); await assignTechnical(db, admin, { kind: 'Project', targetId: project.id }, f.techA);
+  }
+  let lastExpiry = 0;
+  // These later assignments sort before all the valid rows.
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: f.client.id, title: `${term} negato ${index}` } });
+    const target = { kind: 'Project' as const, targetId: project.id };
+    const expiresAt = index % 3 === 2 ? new Date(Date.now() + 10000).toISOString() : undefined;
+    await assignTechnical(db, admin, target, f.techA, { expiresAt });
+    if (index % 3 === 0) await revokeTechnical(db, admin, target, f.techA);
+    else if (index % 3 === 1) await db.project.update({ where: { id: project.id }, data: { consultantId: f.techB.user.id } });
+    else lastExpiry = Math.max(lastExpiry, new Date(expiresAt!).getTime());
+  }
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, lastExpiry - Date.now()) + 50));
+  const auditBefore = await db.auditLog.count();
+  for (const query of [term, '']) {
+    const first = await listTechnicalWork(db, f.techA.session, 'Project', 1, query);
+    const second = await listTechnicalWork(db, f.techA.session, 'Project', 2, query);
+    assert.equal(first.records.length, 20); assert.equal(first.hasNext, true);
+    assert.equal(second.records.length, 1); assert.equal(second.hasNext, false);
+    assert.deepEqual([...first.records, ...second.records].map(row => row.target.targetId).sort(), [...ids].sort());
+    assert.deepEqual(await listTechnicalWork(db, f.techA.session, 'Project', 3, query), { records: [], hasNext: false });
+  }
+  assert.deepEqual(await listTechnicalWork(db, f.techA.session, 'Project', 1, 'negato'), { records: [], hasNext: false });
+  assert.deepEqual(await listTechnicalWork(db, f.techB.session, 'Project', 1, term), { records: [], hasNext: false });
+  assert.equal(await db.auditLog.count(), auditBefore);
+});
