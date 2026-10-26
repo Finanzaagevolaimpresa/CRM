@@ -164,7 +164,7 @@ test('catalogue search reaches the fourth page, retains exact choices across pag
   await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
   await login(tech, row.techA.email);
   const taskUrl = work(row) + '/items/Task/' + row.catalogTaskIds[64];
-  await tech.goto(taskUrl); await expect(tech.getByText('Catalogo sintetico 64', { exact: true })).toBeVisible();
+  await tech.goto(taskUrl); await expect(tech.getByRole('heading', { name: 'Catalogo sintetico 64', exact: true, level: 1 })).toBeVisible();
   await tech.getByLabel('Modifica priorità', { exact: true }).check();
   await tech.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('alta');
   await tech.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
