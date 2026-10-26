@@ -17,7 +17,7 @@ async function main() {
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  for (let index = 0; index < 8; index++) {
+  for (let index = 0; index < 9; index++) {
     const f = await technicalFixture(db, admin, hash, 'consulente');
     const task = await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id, assignedToId: f.techA.user.id,
       title: 'Attività tecnica scelta', description: 'DESCRIZIONE_TASK_NON_SCELTA', priority: 'alta', dueAt: new Date(Date.now() + 86400000) } });
@@ -34,7 +34,7 @@ async function main() {
         clientId: f.client.id, projectId: f.otherProject.id, title: `Catalogo sintetico ESCLUSO ${i}` })) });
     }
     if (index === 7) await assignTechnical(db, admin, technicalTarget(f), f.techA);
-    const catalogDocuments = index >= 5 ? await documentCatalogueFixture(db, f,
+    const catalogDocuments = index >= 5 && index < 8 ? await documentCatalogueFixture(db, f,
       index === 7 ? 1 : 65, index === 7 ? 254 : 2, index !== 7) : [];
     rows.push({ clientId: f.client.id, projectId: f.project.id, practiceId: f.practice.id,
       taskId: task.id, checklistId: check.id, catalogTaskIds, catalogDocuments, techA: { id: f.techA.user.id, email: f.techA.user.email },

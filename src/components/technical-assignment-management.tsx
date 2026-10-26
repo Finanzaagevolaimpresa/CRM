@@ -121,12 +121,15 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       readableFields: readable, editableFields: editable, expiresAt: Number.isFinite(expiry) ? new Date(expiry).toISOString() : '',
       documents: selectedTechnicalDocuments(chosenDocuments),
       workItems: selectedTechnicalWorkItemGrants(chosenItems, chosenActions) }, reason } : null;
-  const valid = catalogueReady && documentCatalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
+  const valid = !data.cataloguesUnavailable && catalogueReady && documentCatalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   const prepared = previewGeneration === generation ? preview.preview : undefined;
   const preparedRevoke = preparedRevokeGeneration === revokeGeneration ? revocation.preview : undefined;
   return <div className="min-w-0 space-y-6" data-technical-editor-ready={ready ? 'true' : 'false'}>
+    {data.cataloguesUnavailable && <p role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+      Catalogo non disponibile. Puoi consultare gli incarichi registrati e revocarli; ricarica per preparare un nuovo incarico.
+    </p>}
     <p>Scegli una persona e il lavoro che potrà svolgere su questo record. Gli incarichi di altri tecnici e il referente commerciale restano distinti.</p>
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
       <label className="block font-semibold">Persona da incaricare<select name="recipient" className={control} defaultValue={data.recipient?.id ?? ''} disabled={blocked} required>
@@ -138,7 +141,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     {data.recipient && <>
       <h2 className="break-words text-xl font-bold">{data.recipient.name} · {data.recipient.email}</h2>
       {!data.recipientEligible && <p role="status">Un nuovo incarico non è disponibile con lo stato, i permessi o le selezioni di lettura correnti. Gli accessi esistenti non vengono ampliati.</p>}
-      {data.recipientEligible && <form action={prepare} onSubmit={event => {
+      {data.recipientEligible && !data.cataloguesUnavailable && <form action={prepare} onSubmit={event => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         setPreviewGeneration(generation);

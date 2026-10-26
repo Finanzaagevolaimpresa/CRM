@@ -30,10 +30,10 @@ function restricted(scope: AuthSession | Awaited<ReturnType<typeof loadTechnical
 /** Read-only catalogue under the current personal authority. Selected recipient
  * and target are freshly locked; list entries are candidates, not grants. The
  * exact preview/confirmation independently rereads all admission facts. */
-export async function readTechnicalAssignmentManagement(db: PrismaClient, claimed: AuthSession,
+async function readManagementSnapshot(db: PrismaClient, claimed: AuthSession,
   raw: TechnicalTargetReference, recipientId: string | null = null,
   rawItemQuery: TechnicalWorkItemCatalogueQuery = technicalWorkItemCatalogueQuery.parse({}),
-  rawDocumentQuery: TechnicalDocumentCatalogueQuery = technicalDocumentCatalogueQuery.parse({})) {
+  rawDocumentQuery: TechnicalDocumentCatalogueQuery = technicalDocumentCatalogueQuery.parse({}), includeCatalogues = true) {
   const target = technicalTargetReference.parse(raw);
   const itemQuery = technicalWorkItemCatalogueQuery.parse(rawItemQuery);
   const documentQuery = technicalDocumentCatalogueQuery.parse(rawDocumentQuery);
@@ -71,8 +71,8 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
     const allowedActions = eligible ? technicalImplementedActions.filter(action => admitsTechnicalRolePermission(person!, target.kind, action)) : [];
     let admittedDocuments: TechnicalDocumentOption[] = [];
     let documentCatalogueValidUntil = Number.MAX_SAFE_INTEGER;
-    let documentCatalogueAvailable = true;
-    if (eligible && person) {
+    let documentCatalogueAvailable = includeCatalogues;
+    if (includeCatalogues && eligible && person) {
       try {
         const admitted = await readAdmittedTechnicalDocumentOptions(tx, state, context);
         admittedDocuments = admitted.options; documentCatalogueValidUntil = admitted.validUntil;
@@ -85,8 +85,8 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
     const documentCatalogue = pageTechnicalDocuments(admittedDocuments, documentQuery);
     const selected = recipientId ? await lockTechnicalAssignmentRecord(tx, { ...target, recipientId }, 'read') : null;
     let workItems = { options: [] as Awaited<ReturnType<typeof listTechnicalWorkItemOptions>>['options'], query: itemQuery, hasNext: false };
-    let workItemCatalogueAvailable = true;
-    if (eligible) {
+    let workItemCatalogueAvailable = includeCatalogues;
+    if (includeCatalogues && eligible) {
       try { workItems = await listTechnicalWorkItemOptions(tx, state, context, admittedDocuments, itemQuery); }
       catch (error) {
         if (!(error instanceof TechnicalAssignmentError && error.code === 'UNAVAILABLE')) throw error;
@@ -105,10 +105,28 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
         .map(row => ({ id: row.id, name: row.name, email: row.email })), peopleLimited: people.length > 200,
       assignments, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
       documentsLimited: !documentCatalogueAvailable, documentCatalogue, documentCatalogueAvailable,
+      cataloguesUnavailable: !includeCatalogues,
       workItemOptions: workItems.options, workItemCatalogue: workItems, workItemCatalogueAvailable,
       recipient: person ? { id: person.id, name: person.name, email: person.email, epoch: person.recordUpdateEpoch } : null,
       recipientEligible: eligible, allowedActions, revision: selected?.revision ?? 0,
       currentAssignmentId: selected?.id ?? null, currentRevokedAt: selected?.revokedAt ?? null,
       observedAt: observedAt.toISOString() };
   }, { inactiveRecipientForRevocation: true });
+}
+
+export function readTechnicalAssignmentManagement(db: PrismaClient, claimed: AuthSession,
+  target: TechnicalTargetReference, recipientId: string | null = null,
+  itemQuery: TechnicalWorkItemCatalogueQuery = technicalWorkItemCatalogueQuery.parse({}),
+  documentQuery: TechnicalDocumentCatalogueQuery = technicalDocumentCatalogueQuery.parse({})) {
+  return readManagementSnapshot(db, claimed, target, recipientId, itemQuery, documentQuery);
+}
+
+/** A failed catalogue transaction cannot carry history or revocation data.
+ * Start a separate, fully authenticated read without any catalogue queries.
+ * Invalid authority, session, context or retained journal still fails closed.
+ * This fallback performs no mutation and cannot prepare a new assignment. */
+export async function readTechnicalAssignmentManagementForPage(db: PrismaClient, claimed: AuthSession,
+  target: TechnicalTargetReference, recipientId: string | null = null) {
+  try { return await readManagementSnapshot(db, claimed, target, recipientId); }
+  catch { return readManagementSnapshot(db, claimed, target, recipientId, technicalWorkItemCatalogueQuery.parse({}), technicalDocumentCatalogueQuery.parse({}), false); }
 }
