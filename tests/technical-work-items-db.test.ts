@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import test, { before, after } from 'node:test';
 import { PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
-import { syntheticAuthority, syntheticSession } from './selective-sharing/fixtures';
+import { syntheticAuthority, syntheticSession, syntheticPerson } from './selective-sharing/fixtures';
 import { leadProof, type Person } from './selective-leads/fixtures';
 import { technicalFixture, technicalTarget, assignmentInput, revokeTechnical } from './technical-assignments/fixtures';
 import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
@@ -16,6 +16,7 @@ import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
 import { canViewTask, canViewChecklistItem } from '../src/lib/access-control';
 import { readCommercialProgress } from '../src/lib/commercial-progress';
 import type { TechnicalWorkItemGrant } from '../src/lib/technical-work-item-grant';
+import { technicalWorkItemCatalogueQuery } from '../src/lib/technical-work-item-catalog';
 
 const enabled = process.env.TECHNICAL_WORK_ITEM_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -67,6 +68,84 @@ async function counts() {
     (SELECT count(*) FROM "AuditLog" WHERE "entityType"='TechnicalWorkItemCommand') AS audits`;
   return row;
 }
+
+test('catalogue reaches admitted items beyond fifty and pages only after all current context exclusions', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), prefix = randomUUID();
+  await db.task.createMany({ data: Array.from({ length: 61 }, (_, i) => ({ id: `${prefix}-visible-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.project.id, title: `Catalogue literal %_[+] ${i}` })) });
+  await db.task.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ id: `${prefix}-hidden-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.otherProject.id, title: `Catalogue literal %_[+] DENIED ${i}` })) });
+  const before = await counts(), audits = await db.auditLog.count(), seen: string[] = [];
+  for (let page = 1; page <= 4; page++) {
+    const result = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+      technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'literal %_[+]', page }));
+    assert(result.workItemCatalogueAvailable); assert.equal(result.workItemCatalogue.hasNext, page < 4);
+    assert.equal(result.workItemOptions.length, page < 4 ? 20 : 1);
+    seen.push(...result.workItemOptions.map(x => x.itemId));
+    assert(!JSON.stringify(result.workItemOptions).includes('DENIED'));
+  }
+  assert.equal(new Set(seen).size, 61); assert(seen.some(id => id.endsWith('visible-060')));
+  const hidden = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'DENIED' }));
+  assert.deepEqual(hidden.workItemOptions, []); assert.equal(hidden.workItemCatalogue.hasNext, false);
+  const later = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'literal %_[+]', page: 5 }));
+  assert.deepEqual(later.workItemOptions, []); assert.equal(later.workItemCatalogue.hasNext, false);
+  assert.deepEqual(await counts(), before); assert.equal(await db.auditLog.count(), audits);
+});
+
+test('an item selected from a later catalogue page is usable but a changed snapshot cannot be silently refreshed', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), prefix = randomUUID();
+  await db.task.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ id: `${prefix}-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.project.id, title: `Deep catalogue ${i}` })) });
+  const view = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ query: 'Deep catalogue', page: 3 }));
+  const selected = view.workItemOptions.at(-1)!; assert(selected.itemId.endsWith('-054'));
+  const base = await assignmentInput(db, admin, target, f.techA);
+  const { title: _title, ...identity } = selected; void _title;
+  const input = { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection, actions: ['manage_deadlines'],
+    workItems: [{ ...identity, readableFields: ['title', 'priority'], editableFields: ['priority'] }] }) };
+  const ref = { ...target, recipientId: f.techA.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await db.task.update({ where: { id: selected.itemId }, data: { priority: 'alta' } });
+  await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true));
+  await assert.rejects(previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input));
+  const refreshed = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ query: 'Deep catalogue 54' }));
+  const { title: _newTitle, ...current } = refreshed.workItemOptions[0]; void _newTitle;
+  assert.equal(current.generation, selected.generation + 1);
+  const next = { ...input, commandId: randomUUID(), selection: technicalAssignmentSelection.parse({ ...input.selection,
+    workItems: [{ ...current, readableFields: ['title', 'priority'], editableFields: ['priority'] }] }) };
+  const accepted = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', next);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', next, accepted.token, true);
+  const admitted = await readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: selected.itemId });
+  assert.equal(admitted.fields.priority, 'alta');
+  await assert.rejects(readTechnicalWorkItem(db, f.techB.session, target, { kind: 'Task', itemId: selected.itemId }));
+});
+
+test('catalogue requires the current personal manager and eligible recipient, not a technician or another Admin role', options, async () => {
+  const f = await fixture(), target = technicalTarget(f);
+  const otherAdmin = await syntheticPerson(db, 'Admin senza autorità personale', 'admin');
+  for (const session of [f.techA.session, f.techB.session, f.salesA.session, f.salesB.session, otherAdmin.session])
+    await assert.rejects(readTechnicalAssignmentManagement(db, session, target, f.techA.user.id, technicalWorkItemCatalogueQuery.parse({ query: '%' })));
+  await db.user.update({ where: { id: f.techA.user.id }, data: { active: false } });
+  const unavailable = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id);
+  assert.equal(unavailable.recipientEligible, false); assert.deepEqual(unavailable.workItemOptions, []);
+});
+
+test('catalogue ceiling is query independent and leaves assignment history and revocation reachable', options, async () => {
+  const f = await fixture(), target = technicalTarget(f); await assign(f);
+  const before = await counts();
+  await db.task.createMany({ data: Array.from({ length: 6001 }, (_, i) => ({ clientId: f.client.id,
+    projectId: f.project.id, title: `Ceiling ${i}` })) });
+  for (const query of ['', 'not present', 'Ceiling 6000']) {
+    const view = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id, technicalWorkItemCatalogueQuery.parse({ query }));
+    assert.equal(view.workItemCatalogueAvailable, false); assert.deepEqual(view.workItemOptions, []);
+    assert.equal(view.workItemCatalogue.hasNext, false); assert(view.currentAssignmentId);
+    assert(view.assignments.some(a => a.recipientId === f.techA.user.id));
+  }
+  assert.deepEqual(await counts(), before);
+});
 test('explicit catalogue, preview and assignment are read-only for canonical tasks; financial links and unrelated targets excluded', options, async () => {
   const f = await fixture(), before = await db.task.findUniqueOrThrow({ where: { id: f.task.id } }), n = await counts();
   const setup = await readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f), f.techA.user.id);

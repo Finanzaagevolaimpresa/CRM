@@ -5,7 +5,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_ITEM_EVIDENCE!, password = process.env.TECHNICAL_ITEM_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminEmail: string;
-  rows: Array<{ clientId: string; projectId: string; practiceId: string; taskId: string; checklistId: string;
+  rows: Array<{ clientId: string; projectId: string; practiceId: string; taskId: string; checklistId: string; catalogTaskIds: string[];
     techA: { id: string; email: string }; techB: { id: string; email: string }; salesA: { id: string; email: string };
     salesB: { id: string; email: string }; excluded: string[] }> };
 type Row = typeof f.rows[number];
@@ -115,4 +115,83 @@ test('Admin revocation denies an already open item preview and subsequent URL re
   expect(await count(row)).toBe(0); expect((await tc.request.get(item(row))).status()).toBe(404);
   expect((await db.task.findUniqueOrThrow({ where: { id: row.taskId } })).priority).toBe('alta');
   await ac.close(); await tc.close();
+});
+
+async function openCatalogue(page: Page, row: Row) {
+  await page.goto(management(row) + '?recipient=' + row.techA.id);
+  await page.locator('[data-technical-editor-ready="true"]').waitFor();
+  await page.getByLabel('Gestire le attività e le scadenze', { exact: true }).check();
+  await page.getByLabel('Titolo', { exact: true }).check();
+  await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0, 16));
+  await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Scelte sintetiche conservate fra pagine');
+  await page.getByLabel('Cerca attività e checklist', { exact: true }).fill('Catalogo sintetico');
+  await page.getByLabel('Tipo di elemento', { exact: true }).selectOption('Task');
+  await page.getByRole('button', { name: 'Cerca nel catalogo', exact: true }).click();
+  await expect(page.getByText('Catalogo aggiornato. Le scelte già effettuate sono conservate.', { exact: true })).toBeVisible();
+}
+async function chooseCatalogueItem(page: Page, suffix: string) {
+  const check = page.getByLabel(`Attività · Catalogo sintetico ${suffix}`, { exact: true });
+  await check.check(); const card = check.locator('..').locator('..');
+  await card.getByLabel('Titolo', { exact: true }).check(); await card.getByLabel('Priorità', { exact: true }).check();
+  await card.getByLabel('Consenti modifica priorità', { exact: true }).check();
+}
+
+test('catalogue search reaches the fourth page, retains exact choices across pages and admits their actual technical use', async ({ browser }) => {
+  const row = f.rows[3], ac = await browser.newContext(), tc = await browser.newContext();
+  const admin = await ac.newPage(), tech = await tc.newPage(); await login(admin, f.adminEmail, true);
+  await openCatalogue(admin, row); await chooseCatalogueItem(admin, '00');
+  for (let page = 2; page <= 4; page++) {
+    await admin.getByRole('button', { name: 'Altri elementi', exact: true }).click();
+    await expect(admin.getByText(new RegExp(`^Pagina ${page} ·`))).toBeVisible();
+  }
+  await expect(admin.getByRole('button', { name: 'Altri elementi', exact: true })).toHaveCount(0);
+  await expect(admin.getByLabel('Attività · Catalogo sintetico 00', { exact: true })).toBeChecked();
+  await chooseCatalogueItem(admin, '64');
+  expect(await admin.content()).not.toContain('Catalogo sintetico ESCLUSO');
+  await screenshot(admin, 'catalogue-selection');
+  // A new search does not remove either choice, or turn an unseen row into one.
+  await admin.getByLabel('Cerca attività e checklist', { exact: true }).fill('nessun risultato sintetico');
+  await admin.getByRole('button', { name: 'Cerca nel catalogo', exact: true }).click();
+  await expect(admin.getByText('Nessun elemento pertinente per questa ricerca e pagina.', { exact: true })).toBeVisible();
+  await expect(admin.getByLabel('Attività · Catalogo sintetico 00', { exact: true })).toBeChecked();
+  await expect(admin.getByLabel('Attività · Catalogo sintetico 64', { exact: true })).toBeChecked();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  const preview = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true });
+  await expect(preview.getByText('Catalogo sintetico 00', { exact: true })).toBeVisible();
+  await expect(preview.getByText('Catalogo sintetico 64', { exact: true })).toBeVisible();
+  await preview.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await preview.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  await login(tech, row.techA.email);
+  const taskUrl = work(row) + '/items/Task/' + row.catalogTaskIds[64];
+  await tech.goto(taskUrl); await expect(tech.getByText('Catalogo sintetico 64', { exact: true })).toBeVisible();
+  await tech.getByLabel('Modifica priorità', { exact: true }).check();
+  await tech.getByRole('combobox', { name: 'Priorità', exact: true }).selectOption('alta');
+  await tech.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
+  await tech.getByLabel('Confermo soltanto le modifiche riepilogate.', { exact: true }).check(); await save(tech);
+  expect((await db.task.findUniqueOrThrow({ where: { id: row.catalogTaskIds[64] } })).priority).toBe('alta');
+  expect((await tc.request.get(work(row) + '/items/Task/' + row.catalogTaskIds[30])).status()).toBe(404);
+  for (const person of [row.techB, row.salesA, row.salesB]) {
+    const context = await browser.newContext(), p = await context.newPage(); await login(p, person.email);
+    expect((await context.request.get(taskUrl)).status()).toBe(404);
+    expect((await context.request.get(management(row) + '?recipient=' + row.techA.id)).status()).toBe(404);
+    await context.close();
+  }
+  await ac.close(); await tc.close();
+});
+
+test('catalogue refresh preserves a chosen stale generation and the renewed preview fails after concurrent content change', async ({ browser }) => {
+  const row = f.rows[4], ac = await browser.newContext({ viewport: { width: 390, height: 844 } }), admin = await ac.newPage();
+  await login(admin, f.adminEmail, true); await openCatalogue(admin, row);
+  await chooseCatalogueItem(admin, '00');
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
+  await db.task.update({ where: { id: row.catalogTaskIds[0] }, data: { priority: 'alta' } });
+  await admin.getByRole('button', { name: 'Cerca nel catalogo', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toHaveCount(0);
+  await expect(admin.getByLabel('Attività · Catalogo sintetico 00', { exact: true })).toBeChecked();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByText('Stato o permessi cambiati. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
+  expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
+  await screenshot(admin, 'catalogue-stale'); await ac.close();
 });

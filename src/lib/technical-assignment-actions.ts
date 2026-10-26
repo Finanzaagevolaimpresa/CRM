@@ -13,6 +13,8 @@ import { technicalAssignmentReference } from './technical-assignment-decision';
 import { confirmTechnicalAssignment, previewTechnicalAssignment, readTechnicalAssignmentOutcome } from './technical-assignment-service';
 import { TechnicalAssignmentError } from './technical-assignment-transaction';
 import { technicalManagementPath } from './technical-assignment-display';
+import { readTechnicalAssignmentManagement } from './technical-assignment-management';
+import { technicalWorkItemCatalogueQuery, type TechnicalWorkItemCatalogue } from './technical-work-item-catalog';
 
 function failure(error: unknown): TechnicalAssignmentManagementState {
   if (error instanceof ZodError || error instanceof SyntaxError) return { ok: false,
@@ -31,6 +33,25 @@ async function origin() {
   const h = await headers();
   if (!isAllowedMutationOrigin({ origin: h.get('origin'), secFetchSite: h.get('sec-fetch-site'),
     configuredOrigin: process.env.APP_ORIGIN ?? process.env.NEXT_PUBLIC_APP_URL })) throw new TechnicalAssignmentError('DENIED');
+}
+
+/** Read-only even though carried by a same-origin server action. It grants no
+ * item and returns only the current catalogue for the personal Admin. */
+export async function searchTechnicalWorkItemCatalogue(raw: unknown): Promise<{
+  ok: boolean; message: string; catalogue?: TechnicalWorkItemCatalogue }> {
+  try {
+    const session = await requireSession();
+    await origin();
+    const request = z.object({ reference: technicalAssignmentReference,
+      contextSha256: z.string().regex(/^[a-f0-9]{64}$/), recipientEpoch: z.number().int().positive(),
+      query: technicalWorkItemCatalogueQuery }).strict().parse(raw);
+    const data = await readTechnicalAssignmentManagement(prisma, session,
+      { kind: request.reference.kind, targetId: request.reference.targetId },
+      request.reference.recipientId, request.query);
+    if (!data.workItemCatalogueAvailable || !data.recipientEligible || data.contextSha256 !== request.contextSha256
+      || data.recipient?.epoch !== request.recipientEpoch) throw new TechnicalAssignmentError('STALE');
+    return { ok: true, message: 'Catalogo aggiornato. Le scelte già effettuate sono conservate.', catalogue: data.workItemCatalogue };
+  } catch { return { ok: false, message: 'Catalogo non disponibile con lo stato o i permessi correnti. Ricarica per verificare le scelte.' }; }
 }
 export async function prepareTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
   const session = await requireSession();
