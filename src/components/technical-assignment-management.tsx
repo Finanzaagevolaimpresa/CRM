@@ -9,7 +9,8 @@ import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, t
 import type { TechnicalAssignmentReference } from '@/lib/technical-assignment-decision';
 import { technicalAssignmentCommand, type TechnicalAssignmentSelection } from '@/lib/technical-assignment-contract';
 import { technicalItemFieldLabels } from '@/lib/technical-work-item-grant';
-import { TechnicalWorkItemChoices, type ItemChoices } from './technical-work-item-choices';
+import { TechnicalWorkItemChoices, type ItemChoices, type TechnicalItemCatalogueAction } from './technical-work-item-choices';
+import { selectedTechnicalWorkItemGrants } from '@/lib/technical-work-item-catalog';
 import { TechnicalUploadProfileFields, emptyUploadProfile, uploadProfileFromChoices } from './technical-upload-profile-fields';
 import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
 
@@ -91,14 +92,15 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
   </section>;
 }
 
-export function TechnicalAssignmentManagement({ data, initialCommandId, revocationCommandId, recoverCommandId, ...actions }: Actions & {
-  data: Data; initialCommandId: string; revocationCommandId: string; recoverCommandId?: string }) {
+export function TechnicalAssignmentManagement({ data, initialCommandId, revocationCommandId, recoverCommandId, catalogueAction, ...actions }: Actions & {
+  data: Data; initialCommandId: string; revocationCommandId: string; recoverCommandId?: string; catalogueAction: TechnicalItemCatalogueAction }) {
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [responsibility, setResponsibility] = useState<TechnicalAssignmentSelection['responsibility']>('supporto');
   const [readable, setReadable] = useState<string[]>([]), [editable, setEditable] = useState<string[]>([]);
   const [chosenActions, setActions] = useState<TechnicalAssignmentSelection['actions']>([]);
   const [chosenDocuments, setDocuments] = useState<Record<string, boolean>>({});
   const [chosenItems, setItems] = useState<ItemChoices>({});
+  const [catalogueReady, setCatalogueReady] = useState(data.workItemCatalogueAvailable);
   const [uploadChoices, setUploadChoices] = useState(emptyUploadProfile);
   const [expires, setExpires] = useState(''), [reason, setReason] = useState(''), [revokeReason, setRevokeReason] = useState('');
   const [commandId, setCommand] = useState(initialCommandId), [generation, setGeneration] = useState(0);
@@ -116,16 +118,16 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
       documents: data.documentOptions.filter(doc => Object.hasOwn(chosenDocuments, doc.fileId)).map(doc => ({
         documentId: doc.documentId, fileId: doc.fileId, version: doc.version, contentSha256: doc.contentSha256,
         contextSha256: doc.contextSha256, allowDownload: chosenDocuments[doc.fileId] })),
-      workItems: data.workItemOptions.filter(item => chosenItems[`${item.kind}:${item.itemId}`]
-        && chosenActions.includes(item.kind === 'Task' ? 'manage_deadlines' : 'manage_checklist')).map(item => ({
-        kind: item.kind, itemId: item.itemId, generation: item.generation, scopeGeneration: item.scopeGeneration, scopeSha256: item.scopeSha256,
-        readableFields: chosenItems[`${item.kind}:${item.itemId}`].readable, editableFields: chosenItems[`${item.kind}:${item.itemId}`].editable })) }, reason } : null;
-  const valid = data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
+      workItems: selectedTechnicalWorkItemGrants(chosenItems, chosenActions) }, reason } : null;
+  const valid = !data.cataloguesUnavailable && catalogueReady && data.recipientEligible && technicalAssignmentCommand.safeParse(command).success;
   const blocked = !ready || submitted || !!recoverCommandId;
   const changed = () => { setGeneration(value => value + 1); setCommand(crypto.randomUUID()); };
   const prepared = previewGeneration === generation ? preview.preview : undefined;
   const preparedRevoke = preparedRevokeGeneration === revokeGeneration ? revocation.preview : undefined;
   return <div className="min-w-0 space-y-6" data-technical-editor-ready={ready ? 'true' : 'false'}>
+    {data.cataloguesUnavailable && <p role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+      Catalogo non disponibile. Puoi consultare gli incarichi registrati e revocarli; ricarica per preparare un nuovo incarico.
+    </p>}
     <p>Scegli una persona e il lavoro che potrà svolgere su questo record. Gli incarichi di altri tecnici e il referente commerciale restano distinti.</p>
     <form method="get" action={technicalManagementPath(data.target)} className="space-y-3">
       <label className="block font-semibold">Persona da incaricare<select name="recipient" className={control} defaultValue={data.recipient?.id ?? ''} disabled={blocked} required>
@@ -137,7 +139,7 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
     {data.recipient && <>
       <h2 className="break-words text-xl font-bold">{data.recipient.name} · {data.recipient.email}</h2>
       {!data.recipientEligible && <p role="status">Un nuovo incarico non è disponibile con lo stato, i permessi o le selezioni di lettura correnti. Gli accessi esistenti non vengono ampliati.</p>}
-      {data.recipientEligible && <form action={prepare} onSubmit={event => {
+      {data.recipientEligible && !data.cataloguesUnavailable && <form action={prepare} onSubmit={event => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         setPreviewGeneration(generation);
@@ -161,7 +163,9 @@ export function TechnicalAssignmentManagement({ data, initialCommandId, revocati
               <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" disabled={!Object.hasOwn(chosenDocuments, doc.fileId)} checked={chosenDocuments[doc.fileId] === true} onChange={event => setDocuments(old => ({ ...old, [doc.fileId]: event.target.checked }))} /> {canPreviewSelectedDocument(doc) ? 'Consenti anche il download' : 'Consenti il download (necessario per aprire il file)'}</label>
             </div>)}</div>{data.documentsLimited && <p>Catalogo limitato. Sono mostrate soltanto le versioni qui disponibili; le altre non verranno incluse.</p>}
           </fieldset>
-          <TechnicalWorkItemChoices data={data} actions={chosenActions} choices={chosenItems} onChange={setItems} />
+          <TechnicalWorkItemChoices data={data} actions={chosenActions} choices={chosenItems}
+            onChange={value => { setItems(value); changed(); }} catalogueAction={catalogueAction}
+            onReady={value => { setCatalogueReady(value); if (!value) changed(); }} />
           {chosenActions.includes('upload_document') && <TechnicalUploadProfileFields value={uploadChoices} onChange={setUploadChoices} />}
           <label className="block font-semibold">Scadenza, entro 90 giorni<input className={control} type="datetime-local" required value={expires} onChange={event => setExpires(event.target.value)} /></label>
           <label className="block font-semibold">Motivo dell’incarico<textarea className={control} value={reason} minLength={3} maxLength={500} required onChange={event => setReason(event.target.value)} /></label>

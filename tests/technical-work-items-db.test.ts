@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test, { before, after } from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
-import { syntheticAuthority, syntheticSession } from './selective-sharing/fixtures';
+import { syntheticAuthority, syntheticSession, syntheticPerson } from './selective-sharing/fixtures';
 import { leadProof, type Person } from './selective-leads/fixtures';
 import { technicalFixture, technicalTarget, assignmentInput, revokeTechnical } from './technical-assignments/fixtures';
-import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
+import { readTechnicalAssignmentManagement, readTechnicalAssignmentManagementForPage } from '../src/lib/technical-assignment-management';
 import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../src/lib/technical-assignment-service';
 import { technicalAssignmentSelection } from '../src/lib/technical-assignment-contract';
 import { readTechnicalWork } from '../src/lib/technical-assignment-access';
@@ -16,6 +16,7 @@ import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
 import { canViewTask, canViewChecklistItem } from '../src/lib/access-control';
 import { readCommercialProgress } from '../src/lib/commercial-progress';
 import type { TechnicalWorkItemGrant } from '../src/lib/technical-work-item-grant';
+import { technicalWorkItemCatalogueQuery } from '../src/lib/technical-work-item-catalog';
 
 const enabled = process.env.TECHNICAL_WORK_ITEM_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -36,6 +37,75 @@ async function fixture() {
   return { ...f, task, check, financial };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+// Inject faults only in the isolated test client. SQL division by zero aborts
+// the real first transaction; the fallback must authenticate in a new one.
+function brokenCatalogue(mode: 'sql' | 'timeout', afterFailure?: () => Promise<void>) {
+  const observed = { transactions: 0, faults: 0 };
+  const client = new Proxy(db, { get(target, property, receiver) {
+    if (property !== '$transaction') return Reflect.get(target, property, receiver);
+    return async <T>(work: (tx: Prisma.TransactionClient) => Promise<T>, transactionOptions?: {
+      isolationLevel?: Prisma.TransactionIsolationLevel; maxWait?: number; timeout?: number }) => {
+      observed.transactions++;
+      try { return await target.$transaction(tx => work(new Proxy(tx, { get(current, key, currentReceiver) {
+        if (key !== 'task') return Reflect.get(current, key, currentReceiver);
+        return new Proxy(current.task, { get(tasks, operation, taskReceiver) {
+          if (operation !== 'findMany') return Reflect.get(tasks, operation, taskReceiver);
+          return async (args?: Prisma.TaskFindManyArgs) => {
+            // Admission may read ordinary task scopes before cataloguing. Only
+            // the bounded catalogue query is the fault injection boundary.
+            if (args?.take !== 6001 || args.select?.id !== true) return tasks.findMany(args);
+            observed.faults++;
+            if (mode === 'sql') await current.$queryRawUnsafe('SELECT 1 / 0');
+            throw new Prisma.PrismaClientKnownRequestError('Synthetic catalogue timeout', {
+              code: 'P2028', clientVersion: Prisma.prismaVersion.client });
+          };
+        } });
+      } })), transactionOptions); }
+      catch (error) { if (observed.transactions === 1 && observed.faults) await afterFailure?.(); throw error; }
+    };
+  } });
+  return { client, observed };
+}
+
+test('failed or aborted catalogue transaction leaves freshly authenticated history and exact revocation usable', options, async () => {
+  for (const mode of ['sql', 'timeout'] as const) {
+    const f = await fixture(), target = technicalTarget(f); await assign(f);
+    const before = await db.auditLog.count(), fault = brokenCatalogue(mode);
+    const view = await readTechnicalAssignmentManagementForPage(fault.client, admin.session, target, f.techA.user.id);
+    assert.deepEqual(fault.observed, { transactions: 2, faults: 1 });
+    assert.equal(view.cataloguesUnavailable, true); assert.equal(view.workItemCatalogueAvailable, false);
+    assert.deepEqual(view.workItemOptions, []); assert.deepEqual(view.documentOptions, []);
+    assert.equal(view.workItemCatalogue.hasNext, false); assert(view.currentAssignmentId);
+    assert(view.assignments.some(row => row.recipientId === f.techA.user.id));
+    assert.equal(await db.auditLog.count(), before);
+    const command = { commandId: randomUUID(), assignmentId: view.currentAssignmentId, expectedRevision: view.revision,
+      expectedContextSha256: view.contextSha256, reason: 'Revoca sintetica con catalogo guasto' };
+    const ref = { ...target, recipientId: f.techA.user.id };
+    const preview = await previewTechnicalAssignment(db, admin.session, ref, 'REVOKE', command);
+    await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'REVOKE', command, preview.token, true);
+    assert.equal(await db.auditLog.count(), before + 1);
+    await assert.rejects(readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: f.task.id }));
+  }
+});
+
+test('catalogue recovery does not bypass the personal manager or a session revoked between the two reads', options, async () => {
+  const f = await fixture(), target = technicalTarget(f); await assign(f);
+  const other = await syntheticPerson(db, 'Altro Admin senza binding', 'admin');
+  for (const session of [f.techA.session, f.salesA.session, other.session]) {
+    const fault = brokenCatalogue('sql');
+    await assert.rejects(readTechnicalAssignmentManagementForPage(fault.client, session, target, f.techA.user.id));
+    assert.equal(fault.observed.faults, 0);
+  }
+  const fresh = await syntheticSession(db, admin.user), before = await db.auditLog.count();
+  const fault = brokenCatalogue('sql', async () => {
+    await db.internalSession.update({ where: { id: fresh.session.sessionId! }, data: { revokedAt: new Date() } });
+  });
+  await assert.rejects(readTechnicalAssignmentManagementForPage(fault.client, fresh.session, target, f.techA.user.id));
+  assert.deepEqual(fault.observed, { transactions: 2, faults: 1 });
+  assert.equal(await db.auditLog.count(), before);
+  assert((await readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: f.task.id })).fields.title);
+});
+
 async function prepare(f: Fixture, person = f.techA, kind: TechnicalWorkItemGrant['kind'] = 'Task') {
   const target = technicalTarget(f), setup = await readTechnicalAssignmentManagement(db, admin.session, target, person.user.id);
   const option = setup.workItemOptions.find(item => item.kind === kind && item.itemId === (kind === 'Task' ? f.task.id : f.check.id)); assert(option);
@@ -67,6 +137,85 @@ async function counts() {
     (SELECT count(*) FROM "AuditLog" WHERE "entityType"='TechnicalWorkItemCommand') AS audits`;
   return row;
 }
+
+test('catalogue reaches admitted items beyond fifty and pages only after all current context exclusions', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), prefix = randomUUID();
+  await db.task.createMany({ data: Array.from({ length: 61 }, (_, i) => ({ id: `${prefix}-visible-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.project.id, title: `Catalogue literal %_[+] ${i}` })) });
+  await db.task.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ id: `${prefix}-hidden-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.otherProject.id, title: `Catalogue literal %_[+] DENIED ${i}` })) });
+  const before = await counts(), audits = await db.auditLog.count(), seen: string[] = [];
+  for (let page = 1; page <= 4; page++) {
+    const result = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+      technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'literal %_[+]', page }));
+    assert(result.workItemCatalogueAvailable); assert.equal(result.workItemCatalogue.hasNext, page < 4);
+    assert.equal(result.workItemOptions.length, page < 4 ? 20 : 1);
+    seen.push(...result.workItemOptions.map(x => x.itemId));
+    assert(!JSON.stringify(result.workItemOptions).includes('DENIED'));
+  }
+  assert.equal(new Set(seen).size, 61); assert(seen.some(id => id.endsWith('visible-060')));
+  const hidden = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'DENIED' }));
+  assert.deepEqual(hidden.workItemOptions, []); assert.equal(hidden.workItemCatalogue.hasNext, false);
+  const later = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ kind: 'Task', query: 'literal %_[+]', page: 5 }));
+  assert.deepEqual(later.workItemOptions, []); assert.equal(later.workItemCatalogue.hasNext, false);
+  assert.deepEqual(await counts(), before); assert.equal(await db.auditLog.count(), audits);
+});
+
+test('an item selected from a later catalogue page is usable but a changed snapshot cannot be silently refreshed', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), prefix = randomUUID();
+  await db.task.createMany({ data: Array.from({ length: 55 }, (_, i) => ({ id: `${prefix}-${String(i).padStart(3, '0')}`,
+    clientId: f.client.id, projectId: f.project.id, title: `Deep catalogue ${i}` })) });
+  const view = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ query: 'Deep catalogue', page: 3 }));
+  const selected = view.workItemOptions.at(-1)!; assert(selected.itemId.endsWith('-054'));
+  const base = await assignmentInput(db, admin, target, f.techA);
+  const { title: _title, ...identity } = selected; void _title;
+  const input = { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection, actions: ['manage_deadlines'],
+    readableFields: ['title'], editableFields: [],
+    workItems: [{ ...identity, readableFields: ['title', 'priority'], editableFields: ['priority'] }] }) };
+  const ref = { ...target, recipientId: f.techA.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await db.task.update({ where: { id: selected.itemId }, data: { priority: 'alta' } });
+  await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true));
+  await assert.rejects(previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input));
+  const refreshed = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id,
+    technicalWorkItemCatalogueQuery.parse({ query: 'Deep catalogue 54' }));
+  const { title: _newTitle, ...current } = refreshed.workItemOptions[0]; void _newTitle;
+  assert.equal(current.generation, selected.generation + 1);
+  const next = { ...input, commandId: randomUUID(), selection: technicalAssignmentSelection.parse({ ...input.selection,
+    workItems: [{ ...current, readableFields: ['title', 'priority'], editableFields: ['priority'] }] }) };
+  const accepted = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', next);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', next, accepted.token, true);
+  const admitted = await readTechnicalWorkItem(db, f.techA.session, target, { kind: 'Task', itemId: selected.itemId });
+  assert.equal(admitted.fields.priority, 'alta');
+  await assert.rejects(readTechnicalWorkItem(db, f.techB.session, target, { kind: 'Task', itemId: selected.itemId }));
+});
+
+test('catalogue requires the current personal manager and eligible recipient, not a technician or another Admin role', options, async () => {
+  const f = await fixture(), target = technicalTarget(f);
+  const otherAdmin = await syntheticPerson(db, 'Admin senza autorità personale', 'admin');
+  for (const session of [f.techA.session, f.techB.session, f.salesA.session, f.salesB.session, otherAdmin.session])
+    await assert.rejects(readTechnicalAssignmentManagement(db, session, target, f.techA.user.id, technicalWorkItemCatalogueQuery.parse({ query: '%' })));
+  await db.user.update({ where: { id: f.techA.user.id }, data: { active: false } });
+  const unavailable = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id);
+  assert.equal(unavailable.recipientEligible, false); assert.deepEqual(unavailable.workItemOptions, []);
+});
+
+test('catalogue ceiling is query independent and leaves assignment history and revocation reachable', options, async () => {
+  const f = await fixture(), target = technicalTarget(f); await assign(f);
+  const before = await counts();
+  await db.task.createMany({ data: Array.from({ length: 6001 }, (_, i) => ({ clientId: f.client.id,
+    projectId: f.project.id, title: `Ceiling ${i}` })) });
+  for (const query of ['', 'not present', 'Ceiling 6000']) {
+    const view = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id, technicalWorkItemCatalogueQuery.parse({ query }));
+    assert.equal(view.workItemCatalogueAvailable, false); assert.deepEqual(view.workItemOptions, []);
+    assert.equal(view.workItemCatalogue.hasNext, false); assert(view.currentAssignmentId);
+    assert(view.assignments.some(a => a.recipientId === f.techA.user.id));
+  }
+  assert.deepEqual(await counts(), before);
+});
 test('explicit catalogue, preview and assignment are read-only for canonical tasks; financial links and unrelated targets excluded', options, async () => {
   const f = await fixture(), before = await db.task.findUniqueOrThrow({ where: { id: f.task.id } }), n = await counts();
   const setup = await readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f), f.techA.user.id);

@@ -8,7 +8,9 @@ import type { TechnicalAssignmentSelection } from './technical-assignment-contra
 import { TechnicalAssignmentError, type TechnicalAssignmentTransaction } from './technical-assignment-transaction';
 import { lockTechnicalWorkItemGeneration, type TechnicalWorkItemIdentity } from './technical-work-item-generation';
 import { technicalItemMatchesParent, type TechnicalWorkItemParent } from './technical-work-item-context';
-import { technicalWorkItemGrants, type TechnicalWorkItemGrant } from './technical-work-item-grant';
+import { technicalWorkItemGrants } from './technical-work-item-grant';
+import { matchesTechnicalWorkItemOption, technicalWorkItemCatalogueQuery, technicalWorkItemCandidateLimit,
+  technicalWorkItemPageSize, type TechnicalWorkItemCatalogueQuery, type TechnicalWorkItemOption } from './technical-work-item-catalog';
 
 type Tx = Prisma.TransactionClient;
 type Context = NonNullable<Awaited<ReturnType<typeof lockTechnicalAssignmentContext>>>;
@@ -86,19 +88,27 @@ export async function assertTechnicalWorkItemChoices(tx: Tx, state: TechnicalAss
 /** Bounded current Admin catalogue, not a grant. Each actual choice is reread
  * under locks in preview and in the personal confirmation transaction. */
 export async function listTechnicalWorkItemOptions(tx: Tx, state: TechnicalAssignmentTransaction,
-  context: Context, documents: TechnicalAssignmentSelection['documents']) {
-  const tasks = await tx.task.findMany({ where: { clientId: context.clientId, deletedAt: null }, orderBy: { id: 'asc' }, take: 51, select: { id: true } });
-  const checks = await tx.documentChecklistItem.findMany({ where: { clientId: context.clientId, deletedAt: null, active: true }, orderBy: { id: 'asc' }, take: 51, select: { id: true } });
-  const options: Array<{ kind: TechnicalWorkItemGrant['kind']; itemId: string; generation: number;
-    scopeGeneration: number; scopeSha256: string; title: string }> = [];
-  const candidates: TechnicalWorkItemIdentity[] = [...checks.slice(0, 50).map(row => ({ kind: 'ChecklistItem' as const, itemId: row.id })),
-    ...tasks.slice(0, 50).map(row => ({ kind: 'Task' as const, itemId: row.id }))];
+  context: Context, documents: TechnicalAssignmentSelection['documents'], rawQuery: TechnicalWorkItemCatalogueQuery = technicalWorkItemCatalogueQuery.parse({})) {
+  const query = technicalWorkItemCatalogueQuery.parse(rawQuery);
+  // The safety ceiling covers the complete source set independently of query or
+  // page. No partial list or continuation is returned above the ceiling.
+  const tasks = await tx.task.findMany({ where: { clientId: context.clientId, deletedAt: null }, orderBy: { id: 'asc' }, take: technicalWorkItemCandidateLimit + 1, select: { id: true } });
+  const checks = await tx.documentChecklistItem.findMany({ where: { clientId: context.clientId, deletedAt: null, active: true }, orderBy: { id: 'asc' }, take: technicalWorkItemCandidateLimit + 1, select: { id: true } });
+  if (tasks.length + checks.length > technicalWorkItemCandidateLimit) throw new TechnicalAssignmentError('UNAVAILABLE');
+  const options: TechnicalWorkItemOption[] = [];
+  const candidates: TechnicalWorkItemIdentity[] = [...checks.map(row => ({ kind: 'ChecklistItem' as const, itemId: row.id })),
+    ...tasks.map(row => ({ kind: 'Task' as const, itemId: row.id }))];
+  let admitted = 0;
   for (const reference of candidates) {
     try {
       const source = await lockTechnicalWorkItemSource(tx, state, context, reference, documents);
-      options.push({ ...reference, generation: source.epoch.generation, scopeGeneration: source.epoch.scopeGeneration,
-        scopeSha256: source.scopeSha256, title: source.values.title! });
+      const option = { ...reference, generation: source.epoch.generation, scopeGeneration: source.epoch.scopeGeneration,
+        scopeSha256: source.scopeSha256, title: source.values.title! };
+      if (!matchesTechnicalWorkItemOption(option, query)) continue;
+      if (admitted++ < (query.page - 1) * technicalWorkItemPageSize) continue;
+      options.push(option);
+      if (options.length > technicalWorkItemPageSize) break;
     } catch (error) { if (!(error instanceof TechnicalAssignmentError && error.code === 'DENIED')) throw error; }
   }
-  return { options, limited: tasks.length > 50 || checks.length > 50 };
+  return { options: options.slice(0, technicalWorkItemPageSize), query, hasNext: options.length > technicalWorkItemPageSize };
 }

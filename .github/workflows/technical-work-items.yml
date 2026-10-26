@@ -74,8 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/technical-work-items-db.test.ts | tee "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 10' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 10' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 16' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 16' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$TECHNICAL_ITEM_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser
@@ -99,7 +99,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_ITEM_EVIDENCE/playwright.json" npx playwright test --config tests/technical-work-items/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_ITEM_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.TECHNICAL_ITEM_EVIDENCE+"/playwright.json"); if(r.stats.expected!==3 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.TECHNICAL_ITEM_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_ITEM_EVIDENCE/source.txt"
