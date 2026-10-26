@@ -50,7 +50,10 @@ function brokenCatalogue(mode: 'sql' | 'timeout', afterFailure?: () => Promise<v
         if (key !== 'task') return Reflect.get(current, key, currentReceiver);
         return new Proxy(current.task, { get(tasks, operation, taskReceiver) {
           if (operation !== 'findMany') return Reflect.get(tasks, operation, taskReceiver);
-          return async () => {
+          return async (args?: Prisma.TaskFindManyArgs) => {
+            // Admission may read ordinary task scopes before cataloguing. Only
+            // the bounded catalogue query is the fault injection boundary.
+            if (args?.take !== 6001 || args.select?.id !== true) return tasks.findMany(args);
             observed.faults++;
             if (mode === 'sql') await current.$queryRawUnsafe('SELECT 1 / 0');
             throw new Prisma.PrismaClientKnownRequestError('Synthetic catalogue timeout', {
