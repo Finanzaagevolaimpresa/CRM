@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { technicalItemFields } from '@/lib/technical-work-item-grant';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import { technicalWorkItemOptionKey, type TechnicalWorkItemCatalogue, type TechnicalWorkItemChoices as ItemChoices,
@@ -12,6 +12,7 @@ export type TechnicalItemCatalogueAction = (raw: unknown) => Promise<{ ok: boole
 export function TechnicalWorkItemChoices({ data, actions, choices, onChange, catalogueAction, onReady }: {
   data: Data; actions: string[]; choices: ItemChoices; onChange: (value: ItemChoices) => void;
   catalogueAction: TechnicalItemCatalogueAction; onReady: (ready: boolean) => void }) {
+  const kindId = useId();
   const [catalogue, setCatalogue] = useState<TechnicalWorkItemCatalogue | null>(data.workItemCatalogueAvailable ? data.workItemCatalogue : null);
   const [term, setTerm] = useState(''), [kind, setKind] = useState<'ALL' | 'Task' | 'ChecklistItem'>('ALL');
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(data.workItemCatalogueAvailable ? '' : 'Catalogo non disponibile. Ricarica per verificare le scelte. La revoca degli incarichi resta disponibile.');
@@ -55,8 +56,8 @@ export function TechnicalWorkItemChoices({ data, actions, choices, onChange, cat
     <div className="grid min-w-0 gap-3 sm:grid-cols-2">
       <label className="block font-semibold">Cerca attività e checklist<input className="block w-full min-w-0 rounded-xl border p-3" maxLength={200} value={term}
         onChange={event => setTerm(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(1, true); } }} /></label>
-      <label className="block font-semibold">Tipo di elemento<select className="block w-full rounded-xl border p-3" value={kind}
-        onChange={event => setKind(event.target.value as typeof kind)}><option value="ALL">Tutti</option><option value="Task">Attività e scadenze</option><option value="ChecklistItem">Checklist</option></select></label>
+      <div><label htmlFor={kindId} className="block font-semibold">Tipo di elemento</label><select id={kindId} className="block w-full rounded-xl border p-3" value={kind}
+        onChange={event => setKind(event.target.value as typeof kind)}><option value="ALL">Tutti</option><option value="Task">Attività e scadenze</option><option value="ChecklistItem">Checklist</option></select></div>
     </div>
     <button type="button" className="rounded-xl border px-4 py-3 font-semibold" onClick={() => void load(1, true)}>Cerca nel catalogo</button>
     <p role="status">{message}</p>

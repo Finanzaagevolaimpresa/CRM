@@ -104,6 +104,7 @@ test('an item selected from a later catalogue page is usable but a changed snaps
   const base = await assignmentInput(db, admin, target, f.techA);
   const { title: _title, ...identity } = selected; void _title;
   const input = { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection, actions: ['manage_deadlines'],
+    readableFields: ['title'], editableFields: [],
     workItems: [{ ...identity, readableFields: ['title', 'priority'], editableFields: ['priority'] }] }) };
   const ref = { ...target, recipientId: f.techA.user.id };
   const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
