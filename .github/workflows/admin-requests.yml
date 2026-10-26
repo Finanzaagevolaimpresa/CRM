@@ -75,8 +75,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/admin-request-queue-db.test.ts | tee "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# tests 23' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
-          grep -Fx '# pass 23' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 24' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 24' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# fail 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
           grep -Fx '# skipped 0' "$ADMIN_REQUEST_EVIDENCE/postgresql.tap"
       - name: Prepare isolated native browser
@@ -100,7 +100,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$ADMIN_REQUEST_EVIDENCE/playwright.json" npx playwright test --config tests/admin-requests/playwright.config.ts --reporter=line,json | tee "$ADMIN_REQUEST_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.ADMIN_REQUEST_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.ADMIN_REQUEST_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$ADMIN_REQUEST_EVIDENCE/source.txt"

@@ -3,6 +3,10 @@ import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { syntheticSession } from '../selective-sharing/fixtures';
+import { revokeTechnical } from '../technical-assignments/fixtures';
+import { requestInput } from './fixtures';
+import { seedRequestCapacity } from './capacity-fixture';
 const db = new PrismaClient(), evidence = process.env.ADMIN_REQUEST_EVIDENCE!, password = process.env.ADMIN_REQUEST_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as {
   synthetic: boolean; adminId: string; adminEmail: string; mailboxId: string; mailboxAddress: string;
@@ -190,4 +194,44 @@ test('filtered integrations reuse the private queue for two sales and two techni
   await expect(pages[0].getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(0);
   expect(await db.communicationAttempt.count()).toBe(0); expect(renderingErrors).toEqual([]);
   await Promise.all([...contexts, admin].map(context => context.close()));
+});
+
+test('capacity renders the same honest unavailable view, keeps direct admission and never suggests unreachable pages', async ({ browser }) => {
+  const r = f.rows[5], a = await browser.newContext(), b = await browser.newContext(), admin = await browser.newContext();
+  const page = await a.newPage(), other = await b.newPage(), review = await admin.newPage();
+  await login(page, r.techA.email); await login(other, r.techB.email); await login(review, f.adminEmail);
+  const user = await db.user.findUniqueOrThrow({ where: { id: r.techA.id } });
+  const person = { user, ...await syntheticSession(db, user) };
+  const target = { kind: 'Project' as const, targetId: r.projectId };
+  const input = { ...await requestInput(db, person, target), title: 'Private capacity alpha %_', kind: 'INTEGRATION' as const };
+  const ids = await seedRequestCapacity(db, person, input);
+  // Capacity limits the listing, not the existing per-request admission.
+  expect((await a.request.get('/admin-requests/' + ids[0])).status()).toBe(200);
+  const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.adminId } });
+  await revokeTechnical(db, { user: adminUser, ...await syntheticSession(db, adminUser) }, target, person);
+  expect((await a.request.get('/admin-requests/' + ids[0])).status()).toBe(404);
+  const before = await db.auditLog.count(), messages = await db.approvedCommunication.count();
+  const unavailable = 'La consultazione dell’elenco non è disponibile. Puoi continuare da un collegamento diretto a una richiesta autorizzata.';
+  for (const reader of [page, review]) {
+    for (const suffix of ['?q=alpha&kind=INTEGRATION', '?q=absent&kind=INTEGRATION', '?q=alpha&kind=DOCUMENT', '?page=200']) {
+      await reader.goto('/admin-requests' + suffix);
+      await expect(reader.getByRole('status')).toHaveText(unavailable);
+      await expect(reader.getByRole('link', { name: 'Apri richiesta', exact: true })).toHaveCount(0);
+      await expect(reader.getByRole('navigation', { name: 'Pagine delle richieste' })).toHaveCount(0);
+      await expect(reader.getByText(/Nessuna richiesta disponibile/)).toHaveCount(0);
+      await expect(reader.getByText(/Restringi la ricerca/)).toHaveCount(0);
+      expect(await reader.locator('main').textContent()).not.toContain(input.title);
+    }
+  }
+  await page.goto('/technical-office/integrations?q=absent');
+  await expect(page.getByRole('status')).toHaveText(unavailable);
+  for (const [width, height, name] of [[1440, 1000, 'capacity-desktop.png'], [390, 844, 'capacity-mobile.png']] as const) {
+    await page.setViewportSize({ width, height }); await page.screenshot({ path: path.join(evidence, name), fullPage: true, caret: 'initial' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  }
+  await other.goto('/technical-office/integrations?q=alpha');
+  await expect(other.getByText(/Nessuna richiesta disponibile/)).toBeVisible();
+  expect(await db.auditLog.count()).toBe(before); expect(await db.approvedCommunication.count()).toBe(messages);
+  expect(await db.communicationAttempt.count()).toBe(0);
+  await a.close(); await b.close(); await admin.close();
 });

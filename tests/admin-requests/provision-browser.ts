@@ -17,7 +17,7 @@ async function main() {
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash);
   const mailbox = await syntheticUpdateMailbox(db, admin.session), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 6; index++) {
     const f = await requestFixture(db, admin, hash);
     rows.push({ clientId: f.client.id, leadId: f.lead.id, projectId: f.project.id, practiceId: f.practice.id,
       otherClientId: f.otherClient.id, otherProjectId: f.otherProject.id,

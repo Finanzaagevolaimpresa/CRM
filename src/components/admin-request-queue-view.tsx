@@ -41,14 +41,14 @@ export async function AdminRequestQueueView({ searchParams, integrations = false
       <button className="rounded-xl border px-4 py-2" type="submit">Cerca</button>
       <Link className="p-2 underline" href={base}>Azzera ricerca</Link>
     </form>
-    {limited ? <p role="status">Restringi la ricerca per consultare le richieste disponibili.</p>
+    {limited ? <p role="status">La consultazione dell’elenco non è disponibile. Puoi continuare da un collegamento diretto a una richiesta autorizzata.</p>
       : !data.items.length && <p>Nessuna richiesta disponibile con questi filtri nel tuo perimetro. Per iniziare, apri un tuo lead o cliente oppure un incarico tecnico che consente richieste all’Admin.</p>}
     {data.items.map(item => <Card key={item.id} title={item.title}><p>{adminRequestStatusLabels[item.status]}</p>
       <p>{item.kind === 'DOCUMENT' ? 'Richiesta documento' : 'Richiesta integrazione'}</p>
       <Link className="font-bold underline" href={`/admin-requests/${item.id}`}>Apri richiesta</Link></Card>)}
-    <nav aria-label="Pagine delle richieste" className="flex gap-4">
+    {!limited && <nav aria-label="Pagine delle richieste" className="flex gap-4">
       {query.page > 1 && <Link href={adminRequestQueueHref(base, { ...query, page: query.page - 1 })}>Precedenti</Link>}
       {data.hasNext && <Link href={adminRequestQueueHref(base, { ...query, page: query.page + 1 })}>Successive</Link>}
-    </nav>
+    </nav>}
   </div>;
 }

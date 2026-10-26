@@ -7,8 +7,9 @@ import { syntheticUpdateMailbox } from './record-updates/email-fixtures';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { technicalFixture, revokeTechnical, technicalTarget } from './technical-assignments/fixtures';
 import { requestFixture, requestInput, requestDraft } from './admin-requests/fixtures';
+import { seedRequestCapacity } from './admin-requests/capacity-fixture';
 import { readAdminRequestEntry, submitAdminRequest, changeAdminRequest, readAdminRequest, readAdminRequestQueue,
-  readAdminRequestDraftPrefill, readAdminRequestOutcome } from '../src/lib/admin-request-service';
+  readAdminRequestDraftPrefill, readAdminRequestOutcome, AdminRequestQueueLimitError } from '../src/lib/admin-request-service';
 import { saveApprovedMessageDraft, loadOrdinaryMessageCandidateContext, readPracticeCommunications,
   submitApprovedMessage, approveExactMessage } from '../src/lib/approved-communications';
 import { revokeAllInternalSessions } from '../src/lib/internal-session-registry';
@@ -342,4 +343,26 @@ test('two commercial owners and two technicians retain separate filtered request
   assert.equal((await readAdminRequestQueue(db, f.techA.session, 1, term, 'INTEGRATION')).items.length, 0);
   assert.equal((await readAdminRequestQueue(db, f.salesB.session, 1, term, 'INTEGRATION')).items.length, 1);
   assert.equal(await db.communicationAttempt.count({ where: { messageId: { in: requests } } }), 0);
+});
+
+// Last: this intentionally exceeds the personal Admin's global candidate budget.
+test('capacity is uniformly unavailable across queries, kinds and pages even after every origin is revoked', options, async () => {
+  const f = await fixture(), input = { ...await requestInput(db, f.salesA, lead(f)),
+    title: 'Private capacity alpha %_', kind: 'INTEGRATION' as const };
+  const ids = await seedRequestCapacity(db, f.salesA, input);
+  assert.equal((await readAdminRequest(db, admin.session, ids[0])).status, 'OPEN');
+  assert.deepEqual(await counts(ids[0]), { events: 1, audits: 1 });
+  await db.lead.update({ where: { id: f.lead.id }, data: { assignedToId: f.salesB.user.id } });
+  for (const actor of [f.salesA.session, admin.session]) await assert.rejects(readAdminRequest(db, actor, ids[0]));
+  const before = await db.auditLog.count(), messages = await db.approvedCommunication.count();
+  for (const actor of [f.salesA.session, admin.session]) {
+    for (const [page, q, kind] of [[1, 'alpha', 'INTEGRATION'], [1, 'absent', 'INTEGRATION'],
+      [1, 'alpha', 'DOCUMENT'], [2, '', undefined], [200, '%_', 'DOCUMENT']] as const) {
+      await assert.rejects(readAdminRequestQueue(db, actor, page, q, kind), AdminRequestQueueLimitError);
+    }
+  }
+  const unaffected = await readAdminRequestQueue(db, f.salesB.session, 1, 'alpha');
+  assert.equal(unaffected.items.length, 0); assert.equal(unaffected.hasNext, false);
+  assert.equal(await db.auditLog.count(), before); assert.equal(await db.approvedCommunication.count(), messages);
+  assert.deepEqual(await counts(ids[ids.length - 1]), { events: 1, audits: 1 });
 });
