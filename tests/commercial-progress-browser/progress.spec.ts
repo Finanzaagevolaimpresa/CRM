@@ -126,8 +126,8 @@ for (const viewport of [{ name: 'desktop', width: 1365, height: 900 }, { name: '
         await expect(main.locator(`a[href="${foreignPath}"]`)).toHaveCount(0);
         for (const path of ['/contracts', '/payments', '/dossiers', '/preanalyses', '/ai']) await expect(main.locator(`a[href="${path}"]`)).toHaveCount(0);
         const nav = await openNavigation();
-        const allowed = sales ? ['/leads', '/commercial-offers', '/clients', '/progress'] : ['/projects', '/technical-office', '/technical-office/practices', '/documents'];
-        const forbidden = ['/contracts', '/payments', '/dossiers', '/ai', '/settings/users', '/technical-office/portals', '/technical-office/integrations', '/technical-office/reporting', ...(sales ? ['/projects', '/technical-office', '/documents'] : ['/leads', '/commercial-offers', '/clients', '/progress'])];
+        const allowed = sales ? ['/leads', '/commercial-offers', '/clients', '/progress'] : ['/projects', '/technical-office', '/technical-office/practices', '/technical-office/integrations', '/documents'];
+        const forbidden = ['/contracts', '/payments', '/dossiers', '/ai', '/settings/users', '/technical-office/portals', '/technical-office/reporting', ...(sales ? ['/projects', '/technical-office', '/technical-office/integrations', '/documents'] : ['/leads', '/commercial-offers', '/clients', '/progress'])];
         for (const path of allowed) await expect(nav.locator(`a[href="${path}"]`)).toHaveCount(1);
         for (const path of forbidden) await expect(nav.locator(`a[href="${path}"]`)).toHaveCount(0);
         if (side === 'a') await page.screenshot({ path: join(evidence, `${sales ? 'sales' : 'technical'}-navigation-${viewport.name}.png`), fullPage: true });
