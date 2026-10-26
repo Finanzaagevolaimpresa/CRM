@@ -9,6 +9,8 @@ import { TechnicalAssignmentError, type TechnicalAssignmentTransaction } from '.
 import { lockTechnicalWorkItemGeneration, type TechnicalWorkItemIdentity } from './technical-work-item-generation';
 import { technicalItemMatchesParent, type TechnicalWorkItemParent } from './technical-work-item-context';
 import { technicalWorkItemGrants } from './technical-work-item-grant';
+import { readTechnicalPrivateItemOrigin } from './technical-private-item-storage';
+import { admitsTechnicalPrivateItemOrigin } from './technical-private-item-contract';
 import { matchesTechnicalWorkItemOption, technicalWorkItemCatalogueQuery, technicalWorkItemCandidateLimit,
   technicalWorkItemPageSize, type TechnicalWorkItemCatalogueQuery, type TechnicalWorkItemOption } from './technical-work-item-catalog';
 
@@ -50,7 +52,9 @@ export async function lockTechnicalWorkItemSource(tx: Tx, state: TechnicalAssign
   const item = { id: row.id, kind: reference.kind, clientId: row.clientId, projectId: row.projectId,
     serviceId: row.clientServiceId, companyId: task?.companyId ?? null,
     active: true, financialRestricted: false, scopeGeneration: epoch.scopeGeneration };
-  if (!technicalItemMatchesParent(parent, item)) denied();
+  const origin = await readTechnicalPrivateItemOrigin(tx, state.key, reference);
+  if (row.technicalPrivate !== (origin !== null) || !admitsTechnicalPrivateItemOrigin(origin, reference, parent)
+    || !technicalItemMatchesParent(parent, item)) denied();
   let documentEpoch: number | null = null;
   if (checklist?.documentId) {
     // A checklist link does not grant document access. The same exact version

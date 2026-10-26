@@ -104,7 +104,7 @@ export default async function Page({
       where: { deletedAt: null, clientId: { in: clientIds } },
     }),
     prisma.documentChecklistItem.findMany({
-      where: { active: true, deletedAt: null, clientId: { in: clientIds } },
+      where: { technicalPrivate: false, active: true, deletedAt: null, clientId: { in: clientIds } },
     }),
     prisma.practiceOfferRevision.findMany({
       where: { clientId: { in: clientIds } },

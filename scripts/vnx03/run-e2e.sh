@@ -118,6 +118,10 @@ case "$VNX03_QUALIFICATION_PROFILE" in
     node scripts/vnx03/verify-candidate-communications-scope.mjs
     export VNX03_EXPECTED_MIGRATIONS=67
     ;;
+  candidate-schema69)
+    node scripts/vnx03/verify-candidate-communications-scope.mjs
+    export VNX03_EXPECTED_MIGRATIONS=69
+    ;;
   candidate-schema68)
     node scripts/vnx03/verify-candidate-communications-scope.mjs
     export VNX03_EXPECTED_MIGRATIONS=68

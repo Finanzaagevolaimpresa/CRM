@@ -107,3 +107,11 @@ export function verifyPrivilegedStepUpToken(input: {
   if (!Number.isSafeInteger(now) || payload.i > now + 5 || payload.e <= now) return false;
   return payload.e > payload.i && payload.e - payload.i <= PRIVILEGED_STEP_UP_TTL_SECONDS;
 }
+
+/** Returns the signed expiry only after the same subject/session verification.
+ * Decoding a cookie alone must never supply an admission deadline. */
+export function verifiedPrivilegedStepUpExpiry(input: Parameters<typeof verifyPrivilegedStepUpToken>[0]) {
+  if (!verifyPrivilegedStepUpToken(input)) return null;
+  const match = TOKEN_PATTERN.exec(input.token!);
+  return match ? (parsePayload(match[1])?.e ?? 0) * 1000 : null;
+}

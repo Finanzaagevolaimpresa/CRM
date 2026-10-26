@@ -42,7 +42,7 @@ export default async function Page({ params, searchParams }: {
     const sources = receipt.source.filter(source => source.kind === 'contract' ? canViewContracts : canViewPayments);
     const [contract, tasks, docs] = await Promise.all([
       canViewContracts ? prisma.contract.findUnique({ where: { id: receipt.contractId }, select: { serviceDescription: true, clientId: true } }) : null,
-      prisma.task.findMany({ where: { id: { in: receipt.paths }, clientId: client.id, clientServiceId: id, deletedAt: null }, orderBy: { id: 'asc' } }),
+      prisma.task.findMany({ where: { technicalPrivate: false, id: { in: receipt.paths }, clientId: client.id, clientServiceId: id, deletedAt: null }, orderBy: { id: 'asc' } }),
       prisma.document.findMany({ where: { id: { in: sources.map(item => item.id) }, deletedAt: null } }),
     ]);
     const visibleDocs = await filterFinancialDocuments(prisma, session, docs);

@@ -29,7 +29,7 @@ export async function listDashboardTodayTasks(session: AuthSession, now: Date, p
     const result: Task[] = [];
     let afterId: string | undefined;
     while (previewLimit === undefined || result.length < previewLimit) {
-      const rows = await tx.task.findMany({ where: { ...dashboardTodayFilter(now), ...(afterId ? { id: { gt: afterId } } : {}) },
+      const rows = await tx.task.findMany({ where: { technicalPrivate: false, ...dashboardTodayFilter(now), ...(afterId ? { id: { gt: afterId } } : {}) },
         orderBy: { id: 'asc' }, take: 100 });
       if (!rows.length) break;
       const visible = await filterAccessibleTasks(session, rows, tx);

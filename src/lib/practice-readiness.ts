@@ -807,7 +807,7 @@ export async function decidePracticeMaterial(
       if (practice.version !== input.expectedVersion)
         throw new PracticeReadinessError("CONFLICT");
       const item = await tx.documentChecklistItem.findUnique({
-        where: { id: input.checklistItemId },
+        where: { technicalPrivate: false, id: input.checklistItemId },
       });
       if (
         !item ||
@@ -968,7 +968,7 @@ async function resolvePrerequisites(
       where: { id: practice.serviceRevisionId },
     }),
     tx.documentChecklistItem.findMany({
-      where: {
+      where: { technicalPrivate: false,
         clientId: practice.clientId,
         projectId: practice.projectId,
         active: true,
@@ -1533,7 +1533,7 @@ export async function listAccessiblePracticeReadiness(
           const materials = [];
           for (const material of row.materials) {
             const item = await tx.documentChecklistItem.findUnique({
-              where: { id: material.checklistItemId },
+              where: { technicalPrivate: false, id: material.checklistItemId },
             });
             const references = item
               ? await resolveMaterialDocumentReferences(

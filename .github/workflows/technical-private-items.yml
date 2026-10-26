@@ -1,0 +1,119 @@
+name: Technical private item creation
+on:
+  pull_request:
+    paths: ['package.json', 'package-lock.json', 'prisma/**', 'src/lib/technical-*', 'src/lib/privileged-step-up-token.ts', 'src/lib/access-control.ts', 'src/lib/read-access.ts', 'src/lib/write-access.ts', 'src/lib/internal-notifications.ts', 'src/lib/operational-report.ts', 'src/lib/practice-readiness.ts', 'src/lib/actions.ts', 'src/lib/dashboard-detail.ts', 'src/lib/engagement-dossier.ts', 'src/lib/assignment-exceptions.ts', 'src/lib/exception-task-assignment.ts', 'src/components/technical-*', 'src/app/projects/**', 'src/app/technical-office/**', 'src/app/clients/**', 'src/app/documents/**', 'src/app/progress/**', 'src/app/practice-readiness/**', 'src/app/services/**', 'tests/technical-private*', 'tests/technical-private-items/**', 'scripts/technical-private-items/**', '.github/workflows/technical-private-items.yml']
+permissions: { contents: read }
+concurrency:
+  group: technical-private-items-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  isolated:
+    name: Private technical creation (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix: { target: [postgresql, browser] }
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: postgres, POSTGRES_PASSWORD: synthetic-private-item-only, POSTGRES_DB: fai_crm_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-private-item-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      TECHNICAL_PRIVATE_ITEM_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-private-item-auth-only-00000
+      AUTH_COOKIE_NAME: fai_private_item_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-private-item-step-up-000000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3056
+      TECHNICAL_PRIVATE_ITEM_BROWSER_CONFIRMED: '1'
+      TECHNICAL_PRIVATE_ITEM_BROWSER_PASSWORD: synthetic-private-item-password-00000
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Qualify SQL69 from immutable schema68 and reject wrong bases
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          evidence="$RUNNER_TEMP/technical-private-items"
+          mkdir -p "$evidence"
+          export TECHNICAL_PRIVATE_ITEM_EVIDENCE="$evidence"
+          echo "TECHNICAL_PRIVATE_ITEM_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          historical="$RUNNER_TEMP/private-items-schema68"
+          mkdir -p "$historical"
+          git archive 5acb9e9e0f87d14fa3075b2f6dfe307352f9ffa7 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          if psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f prisma/migrations/20261027010000_technical_private_items_v1/migration.sql > "$evidence/wrong-base.log" 2>&1; then exit 1; fi
+          grep -Fq TECHNICAL_PRIVATE_ITEM_SCHEMA68_REQUIRED "$evidence/wrong-base.log"
+          git archive 8dc6a994f0e0ccb8169b1d0b959ddb822b4dac09 prisma | tar -x -C "$historical"
+          npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
+          bash scripts/technical-private-items/qualify-migration.sh
+      - name: Pure admission and retained receipt contracts
+        run: node --import tsx --test tests/technical-private-item-contract.test.ts tests/technical-private-item-storage.test.ts tests/technical-private-item-journal.test.ts
+      - name: Isolated creation, private scopes, concurrency and atomic audit
+        if: matrix.target == 'postgresql'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/technical-private-items-db.test.ts | tee "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# tests 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# pass 13' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# fail 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+          grep -Fx '# skipped 0' "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/postgresql.tap"
+      - name: Prepare isolated native browser
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/technical-private-items/provision-browser.ts
+      - name: Native private creation, exact grants, revocation and lost response
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3056 > "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3056/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_PRIVATE_ITEM_EVIDENCE/playwright.json" npx playwright test --config tests/technical-private-items/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.TECHNICAL_PRIVATE_ITEM_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+      - name: Bind exact source and tree
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/source.txt"
+          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),cp=require("node:child_process");const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"});assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: technical-private-items-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/technical-private-items
+            test-results
+          if-no-files-found: error
+          retention-days: 14
