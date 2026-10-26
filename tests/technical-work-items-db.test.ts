@@ -116,11 +116,14 @@ test('all 256 raw versions are supported; the next version closes new selection 
   await assert.rejects(readTechnicalWork(db, f.techA.session, technicalTarget(f)));
 });
 
-test('document search omits another project, expired and private unacquired versions before pagination', options, async () => {
+test('document search omits another project, expired and nonordinary versions; invalid private relabelling stays forbidden', options, async () => {
   const f = await fixture(), rows = await documentCatalogueFixture(db, f, 65);
   await db.document.update({ where: { id: rows[0].id }, data: { projectId: f.otherProject.id } });
   await db.document.update({ where: { id: rows[1].id }, data: { validUntil: new Date(0) } });
-  await db.document.update({ where: { id: rows[2].id }, data: { visibilityLevel: technicalDocumentPrivateVisibility } });
+  // SQL68 deliberately prevents a private acquisition being forged by changing
+  // visibility. Keep that invariant, then use a valid nonordinary source row.
+  await assert.rejects(db.document.update({ where: { id: rows[2].id }, data: { visibilityLevel: technicalDocumentPrivateVisibility } }), /TECHNICAL_CANONICAL_RETAINED/);
+  await db.document.update({ where: { id: rows[2].id }, data: { visibilityLevel: 'riservato' } });
   await db.document.update({ where: { id: rows[3].id }, data: { deletedAt: new Date() } });
   const first = await documents(f, 'Catalogo documentale sintetico'), last = await documents(f, 'Catalogo documentale sintetico', 4);
   assert.equal(first.documentOptions[0].fileId, rows[4].versions[0].fileId);
