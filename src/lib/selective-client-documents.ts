@@ -10,6 +10,7 @@ import { clientDocumentSnapshotSchema, maxClientDocumentBytes, type ClientDocume
 import { technicalDocumentPrivateVisibility } from './technical-document-visibility';
 import { selectedTechnicalAcquisition } from './technical-document-acquired-access';
 import { selectedDocumentMode } from './selected-document-formats';
+import { TechnicalAssignmentError } from './technical-assignment-transaction';
 
 type Tx = Prisma.TransactionClient;
 type Recipient = Pick<AuthSession, 'role' | 'active' | 'permissionOverrides'> & { id: string };
@@ -19,14 +20,31 @@ const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringif
 /** Bounded management catalogue. This is not an authorization to grant or read
  * bytes; selectedState performs the complete locked check for the recipient. */
 export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clientId: string) {
+  return readClientDocumentOptions(tx, manager, clientId, { documents: 100, versions: 200, complete: false });
+}
+
+/** Technical management only: the ceiling is checked on the complete source
+ * set, before admission or user-controlled filters. The canonical locked
+ * recipient/target snapshots still run before any catalogue projection. */
+export async function listTechnicalDocumentCandidates(tx: Tx, manager: Recipient, clientId: string) {
+  return readClientDocumentOptions(tx, manager, clientId, { documents: 256, versions: 256, complete: true });
+}
+
+async function readClientDocumentOptions(tx: Tx, manager: Recipient, clientId: string,
+  limits: { documents: number; versions: number; complete: boolean }) {
   if (manager.role !== 'admin' || !manager.active || manager.permissionOverrides.some(p => p.permission === 'document.download' && !p.allowed)) return unavailable();
   const [rows, scope, clock] = await Promise.all([
     tx.document.findMany({ where: { clientId, deletedAt: null, visibilityLevel: { in: ['interno', technicalDocumentPrivateVisibility] },
-      status: { notIn: ['archiviato', 'respinto', 'scaduto'] } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 101 }),
+      status: { notIn: ['archiviato', 'respinto', 'scaduto'] } }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: limits.documents + 1 }),
     loadIndependentProjectExclusions(tx, manager.id),
     tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS now`,
   ]);
   if (!clock[0]) return unavailable();
+  const completeVersions = limits.complete ? await tx.documentVersion.findMany({
+    where: { documentId: { in: rows.map(row => row.id) } }, orderBy: { id: 'asc' }, take: limits.versions + 1 }) : null;
+  if (limits.complete && (rows.length > limits.documents || completeVersions!.length > limits.versions)) {
+    return { documentsLimited: true, documentOptions: [] };
+  }
   const ids = (values: Array<string | null>) => [...new Set(values.filter((v): v is string => !!v))];
   const [companies, projects, services] = await Promise.all([
     tx.company.findMany({ where: { id: { in: ids(rows.map(r => r.companyId)) }, clientId, deletedAt: null }, select: { id: true } }),
@@ -34,9 +52,16 @@ export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clie
     tx.clientService.findMany({ where: { id: { in: ids(rows.map(r => r.clientServiceId)) }, clientId, deletedAt: null }, select: { id: true, projectId: true } }),
   ]);
   const provenanceAllowed = [];
-  for (const d of rows.slice(0, 100)) {
+  for (const d of rows.slice(0, limits.documents)) {
     if (d.visibilityLevel === 'interno') provenanceAllowed.push(d);
-    else { try { if (await selectedTechnicalAcquisition(tx, manager.id, d)) provenanceAllowed.push(d); } catch { /* deny this private candidate */ } }
+    else {
+      try { if (await selectedTechnicalAcquisition(tx, manager.id, d)) provenanceAllowed.push(d); }
+      catch (error) {
+        // Preserve the existing sharing catalogue. A complete technical read
+        // may omit a denied private version, never a storage/serialization error.
+        if (limits.complete && !(error instanceof TechnicalAssignmentError && error.code === 'DENIED')) throw error;
+      }
+    }
   }
   const eligible = (await filterFinancialDocuments(tx, manager, provenanceAllowed)).filter(d =>
     (!d.validUntil || d.validUntil > clock[0].now) && d.sizeBytes >= 0 && d.sizeBytes <= maxClientDocumentBytes
@@ -49,10 +74,10 @@ export async function listClientDocumentOptions(tx: Tx, manager: Recipient, clie
       && (!d.projectId || !s.projectId || s.projectId === d.projectId))))
     && (!isSensitiveDocument(d) || hasPermission(manager, 'document.sensitive.read')));
   const byId = new Map(eligible.map(row => [row.id, row]));
-  const versions = await tx.documentVersion.findMany({ where: { documentId: { in: [...byId.keys()] } },
-    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 201 });
-  return { documentsLimited: rows.length > 100 || versions.length > 200,
-    documentOptions: versions.slice(0, 200).filter(v => v.checksum && /^[a-f0-9]{64}$/.test(v.checksum)).map(v => {
+  const versions = completeVersions ?? await tx.documentVersion.findMany({ where: { documentId: { in: [...byId.keys()] } },
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: limits.versions + 1 });
+  return { documentsLimited: rows.length > limits.documents || versions.length > limits.versions,
+    documentOptions: versions.slice(0, limits.versions).filter(v => byId.has(v.documentId) && v.checksum && /^[a-f0-9]{64}$/.test(v.checksum)).map(v => {
       const d = byId.get(v.documentId)!;
       return { documentId: d.id, versionId: v.id, version: v.version, title: d.title, fileName: d.fileName,
         mimeType: d.mimeType, category: d.documentCategory, area: d.serviceArea };

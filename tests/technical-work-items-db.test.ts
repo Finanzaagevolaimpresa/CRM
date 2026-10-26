@@ -9,7 +9,7 @@ import { technicalFixture, technicalTarget, assignmentInput, revokeTechnical } f
 import { readTechnicalAssignmentManagement } from '../src/lib/technical-assignment-management';
 import { previewTechnicalAssignment, confirmTechnicalAssignment } from '../src/lib/technical-assignment-service';
 import { technicalAssignmentSelection } from '../src/lib/technical-assignment-contract';
-import { readTechnicalWork } from '../src/lib/technical-assignment-access';
+import { readTechnicalWork, readTechnicalWorkDocument } from '../src/lib/technical-assignment-access';
 import { readTechnicalWorkItem, previewTechnicalWorkItem, confirmTechnicalWorkItem, readTechnicalWorkItemOutcome } from '../src/lib/technical-work-item-service';
 import { technicalWorkItemCommand } from '../src/lib/technical-work-item-command';
 import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
@@ -17,6 +17,10 @@ import { canViewTask, canViewChecklistItem } from '../src/lib/access-control';
 import { readCommercialProgress } from '../src/lib/commercial-progress';
 import type { TechnicalWorkItemGrant } from '../src/lib/technical-work-item-grant';
 import { technicalWorkItemCatalogueQuery } from '../src/lib/technical-work-item-catalog';
+import { documentCatalogueFixture } from './technical-work-items/document-catalog-fixture';
+import { technicalDocumentCatalogueQuery } from '../src/lib/technical-document-catalog';
+import { technicalDocumentPrivateVisibility } from '../src/lib/technical-document-visibility';
+import { SerializableConflictError } from '../src/lib/serializable';
 
 const enabled = process.env.TECHNICAL_WORK_ITEM_DB_TESTS === '1', options = { skip: !enabled }, db = new PrismaClient();
 let admin: Person;
@@ -68,6 +72,126 @@ async function counts() {
     (SELECT count(*) FROM "AuditLog" WHERE "entityType"='TechnicalWorkItemCommand') AS audits`;
   return row;
 }
+
+function documents(f: Fixture, query = '', page = 1, person = f.techA) {
+  return readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f), person.user.id,
+    technicalWorkItemCatalogueQuery.parse({}), technicalDocumentCatalogueQuery.parse({ query, page }));
+}
+async function documentChoice(f: Fixture, query: string) {
+  const catalogue = await documents(f, query), option = catalogue.documentOptions[0]; assert(option);
+  const base = await assignmentInput(db, admin, technicalTarget(f), f.techA);
+  return { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection,
+    documents: [{ documentId: option.documentId, fileId: option.fileId, version: option.version,
+      contentSha256: option.contentSha256, contextSha256: option.contextSha256, allowDownload: false }] }) };
+}
+
+test('document catalogue reaches beyond 100 documents and 200 versions without writes or hidden financial metadata', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f, 101, 2);
+  const audits = await db.auditLog.count(), decisions = await db.technicalAssignmentDecision.count();
+  const first = await documents(f, 'Catalogo documentale sintetico'), last = await documents(f, 'Catalogo documentale sintetico', 11);
+  assert(first.documentCatalogueAvailable); assert.equal(first.documentOptions.length, 20); assert(first.documentCatalogue.hasNext);
+  assert.equal(last.documentOptions.length, 2); assert(!last.documentCatalogue.hasNext);
+  assert.deepEqual(last.documentOptions.map(row => row.fileId), rows[100].versions.map(row => row.fileId));
+  const searched = await documents(f, rows[100].fileName);
+  assert.deepEqual(searched.documentOptions.map(row => row.fileId), rows[100].versions.map(row => row.fileId));
+  assert(!JSON.stringify(searched.documentCatalogue).includes('storagePath'));
+  assert.equal((await documents(f, f.documents[2].doc.fileName)).documentOptions.length, 0);
+  assert.equal(await db.auditLog.count(), audits); assert.equal(await db.technicalAssignmentDecision.count(), decisions);
+});
+
+test('all 256 raw versions are supported; the next version closes new selection while revocation stays available', options, async () => {
+  const f = await fixture(); await assign(f);
+  await documentCatalogueFixture(db, f, 1, 253); // plus the three original versions
+  const exact = await documents(f, 'Catalogo documentale sintetico', 13);
+  assert(exact.documentCatalogueAvailable); assert.equal(exact.documentOptions.length, 13); assert(!exact.documentCatalogue.hasNext);
+  await db.documentVersion.create({ data: { documentId: f.documents[0].doc.id, version: 2,
+    storagePath: f.documents[0].doc.storagePath, checksum: f.documents[0].doc.checksum } });
+  for (const query of ['', 'Catalogo documentale sintetico', 'absent']) {
+    const limited = await documents(f, query);
+    assert.equal(limited.documentCatalogueAvailable, false); assert.deepEqual(limited.documentOptions, []);
+    assert.equal(limited.currentAssignmentId, limited.assignments.find(row => row.recipientId === f.techA.user.id)?.id);
+    assert(limited.currentAssignmentId);
+  }
+  assert.equal((await revokeTechnical(db, admin, technicalTarget(f), f.techA)).operation, 'REVOKE');
+  await assert.rejects(readTechnicalWork(db, f.techA.session, technicalTarget(f)));
+});
+
+test('document search omits another project, expired and private unacquired versions before pagination', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f, 65);
+  await db.document.update({ where: { id: rows[0].id }, data: { projectId: f.otherProject.id } });
+  await db.document.update({ where: { id: rows[1].id }, data: { validUntil: new Date(0) } });
+  await db.document.update({ where: { id: rows[2].id }, data: { visibilityLevel: technicalDocumentPrivateVisibility } });
+  await db.document.update({ where: { id: rows[3].id }, data: { deletedAt: new Date() } });
+  const first = await documents(f, 'Catalogo documentale sintetico'), last = await documents(f, 'Catalogo documentale sintetico', 4);
+  assert.equal(first.documentOptions[0].fileId, rows[4].versions[0].fileId);
+  assert.equal(last.documentOptions.length, 1); assert.equal(last.documentOptions[0].fileId, rows[64].versions[0].fileId);
+  for (const row of rows.slice(0, 4)) assert.deepEqual((await documents(f, row.fileName)).documentOptions, []);
+});
+
+test('an off-page version grants only its bytes, never download or another version/person, then revocation closes it', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f, 65, 2), target = technicalTarget(f);
+  const input = await documentChoice(f, rows[64].fileName), ref = { ...target, recipientId: f.techA.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true);
+  const file = rows[64].versions[0], bytes = async () => Buffer.from(file.text);
+  assert.equal((await readTechnicalWorkDocument(db, f.techA.session, target, file.fileId, false, bytes)).bytes.toString(), file.text);
+  await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, target, file.fileId, true, bytes));
+  await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, target, rows[64].versions[1].fileId, false, bytes));
+  for (const person of [f.techB, f.salesA, f.salesB]) await assert.rejects(readTechnicalWorkDocument(db, person.session, target, file.fileId, false, bytes));
+  await revokeTechnical(db, admin, target, f.techA);
+  await assert.rejects(readTechnicalWorkDocument(db, f.techA.session, target, file.fileId, false, bytes));
+});
+
+test('refresh does not renew a chosen document snapshot; concurrent source changes invalidate the exact preview', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f), target = technicalTarget(f);
+  const input = await documentChoice(f, rows[64].fileName), ref = { ...target, recipientId: f.techA.user.id };
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  await db.document.update({ where: { id: rows[64].id }, data: { title: 'Relazione aggiornata sintetica' } });
+  const current = await documents(f, rows[64].fileName);
+  assert.notEqual(current.documentOptions[0].contextSha256, input.selection.documents[0].contextSha256);
+  await assert.rejects(previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input));
+  await assert.rejects(confirmTechnicalAssignment(db, admin.session, leadProof(admin), ref, 'ASSIGN', input, preview.token, true));
+  assert.equal(await db.technicalAssignment.count({ where: { recipientId: f.techA.user.id, practiceId: target.targetId } }), 0);
+});
+
+test('catalogue source changes under a held SQL lock cannot return the old authorized title', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f, 1), target = rows[0];
+  let locked!: () => void, release!: () => void;
+  const held = new Promise<void>(resolve => { locked = resolve; }), released = new Promise<void>(resolve => { release = resolve; });
+  const update = db.$transaction(async tx => {
+    await tx.document.update({ where: { id: target.id }, data: { projectId: f.otherProject.id } });
+    locked(); await released;
+  });
+  await held;
+  const read = documents(f, target.fileName).then(result => ({ result }), error => ({ error }));
+  release(); await update;
+  const observed = await read;
+  if ('result' in observed) assert.deepEqual(observed.result.documentOptions, []);
+  else assert(observed.error instanceof SerializableConflictError);
+});
+
+test('both technicians and both commercial actors cannot inspect the personal document catalogue', options, async () => {
+  const f = await fixture();
+  for (const person of [f.techA, f.techB, f.salesA, f.salesB])
+    await assert.rejects(readTechnicalAssignmentManagement(db, person.session, technicalTarget(f), f.techA.user.id));
+  await db.userPermissionOverride.create({ data: { userId: f.techA.user.id, permission: 'document.download', allowed: false } });
+  assert.deepEqual((await documents(f)).documentOptions, []);
+});
+
+test('a linked checklist remains discoverable when its allowed document is on another catalogue page', options, async () => {
+  const f = await fixture(), rows = await documentCatalogueFixture(db, f, 65);
+  await db.documentChecklistItem.update({ where: { id: f.check.id }, data: { documentId: rows[64].id } });
+  const result = await documents(f, rows[0].fileName);
+  assert.equal(result.documentOptions.length, 1);
+  assert(result.workItemOptions.some(row => row.itemId === f.check.id));
+  const base = await assignmentInput(db, admin, technicalTarget(f), f.techA);
+  const item = result.workItemOptions.find(row => row.itemId === f.check.id)!;
+  const bad = { ...base, selection: technicalAssignmentSelection.parse({ ...base.selection, actions: ['manage_checklist'],
+    readableFields: ['title'], editableFields: [],
+    workItems: [{ kind: item.kind, itemId: item.itemId, generation: item.generation,
+      scopeGeneration: item.scopeGeneration, scopeSha256: item.scopeSha256, readableFields: ['title'], editableFields: [] }] }) };
+  await assert.rejects(previewTechnicalAssignment(db, admin.session, { ...technicalTarget(f), recipientId: f.techA.user.id }, 'ASSIGN', bad));
+});
 
 test('catalogue reaches admitted items beyond fifty and pages only after all current context exclusions', options, async () => {
   const f = await fixture(), target = technicalTarget(f), prefix = randomUUID();

@@ -8,7 +8,7 @@ import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { technicalTargetReference, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
 import { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
-import { prepareTechnicalAssignment, saveTechnicalAssignment, checkTechnicalAssignment, searchTechnicalWorkItemCatalogue } from '@/lib/technical-assignment-actions';
+import { prepareTechnicalAssignment, saveTechnicalAssignment, checkTechnicalAssignment, searchTechnicalWorkItemCatalogue, searchTechnicalDocumentCatalogue } from '@/lib/technical-assignment-actions';
 
 export async function TechnicalAssignmentManagementPage({ target: raw, query }: { target: TechnicalTargetReference;
   query: { recipient?: string; assignmentDecision?: string } }) {
@@ -24,6 +24,7 @@ export async function TechnicalAssignmentManagementPage({ target: raw, query }: 
     <SecondaryLink href={target.data.kind === 'Project' ? `/projects/${target.data.targetId}` : `/technical-office/practices/${target.data.targetId}`}>Torna alla scheda</SecondaryLink>
     <TechnicalAssignmentManagement key={`${data.target.kind}:${data.target.targetId}:${data.recipient?.id}:${data.recipient?.epoch}:${data.contextSha256}`}
       data={data} initialCommandId={randomUUID()} revocationCommandId={randomUUID()} catalogueAction={searchTechnicalWorkItemCatalogue}
+      documentCatalogueAction={searchTechnicalDocumentCatalogue}
       recoverCommandId={recover?.success ? recover.data : undefined} previewAction={prepareTechnicalAssignment}
       confirmAction={saveTechnicalAssignment} receiptAction={checkTechnicalAssignment} />
   </div>;

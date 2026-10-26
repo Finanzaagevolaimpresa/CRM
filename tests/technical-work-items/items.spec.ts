@@ -6,6 +6,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestr
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_ITEM_EVIDENCE!, password = process.env.TECHNICAL_ITEM_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminEmail: string;
   rows: Array<{ clientId: string; projectId: string; practiceId: string; taskId: string; checklistId: string; catalogTaskIds: string[];
+    catalogDocuments: Array<{ id: string; title: string; fileName: string; versions: Array<{ fileId: string; version: number; text: string }> }>;
     techA: { id: string; email: string }; techB: { id: string; email: string }; salesA: { id: string; email: string };
     salesB: { id: string; email: string }; excluded: string[] }> };
 type Row = typeof f.rows[number];
@@ -194,4 +195,102 @@ test('catalogue refresh preserves a chosen stale generation and the renewed prev
   await expect(admin.getByText('Stato o permessi cambiati. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
   expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
   await screenshot(admin, 'catalogue-stale'); await ac.close();
+});
+
+async function openDocuments(page: Page, row: Row) {
+  await page.goto(management(row) + '?recipient=' + row.techA.id);
+  await page.locator('[data-technical-editor-ready="true"]').waitFor();
+  await page.getByLabel('Aggiornare lo stato', { exact: true }).check();
+  await page.getByLabel('Stato', { exact: true }).check(); await page.getByLabel('Titolo', { exact: true }).check();
+  await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600000).toISOString().slice(0, 16));
+  await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Scelta sintetica di versioni e download');
+  await searchDocuments(page, 'Catalogo documentale sintetico');
+}
+async function searchDocuments(page: Page, query: string) {
+  await page.getByLabel('Cerca documenti e versioni', { exact: true }).fill(query);
+  await page.getByRole('button', { name: 'Cerca nel catalogo documenti', exact: true }).click();
+  await expect(page.getByText('Catalogo aggiornato. Le versioni già scelte conservano la selezione originale.', { exact: true })).toBeVisible();
+}
+function documentLabel(row: Row['catalogDocuments'][number], version = 1) {
+  return `${row.title} · ${row.fileName} · versione ${version}`;
+}
+
+test('document pages preserve explicit old/off-page versions; one technician reads exact bytes and download remains separate', async ({ browser }) => {
+  const row = f.rows[5], ac = await browser.newContext({ viewport: { width: 1440, height: 1000 } }), admin = await ac.newPage();
+  const tc = await browser.newContext(), tech = await tc.newPage(), first = row.catalogDocuments[0], last = row.catalogDocuments[64];
+  await login(admin, f.adminEmail, true); await openDocuments(admin, row);
+  const selected = admin.getByLabel(documentLabel(first), { exact: true }); await selected.check();
+  await selected.locator('..').locator('..').getByLabel('Consenti anche il download', { exact: true }).check();
+  await admin.getByRole('button', { name: 'Altre versioni', exact: true }).click();
+  await expect(admin.getByRole('region', { name: 'Versioni conservate da altre pagine', exact: true }).getByLabel(documentLabel(first), { exact: true })).toBeChecked();
+  await searchDocuments(admin, last.fileName); await admin.getByLabel(documentLabel(last), { exact: true }).check();
+  await expect(admin.getByLabel(documentLabel(last, 2), { exact: true })).not.toBeChecked();
+  await screenshot(admin, 'document-catalogue-selections');
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  const preview = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true });
+  await expect(preview.getByRole('heading', { name: 'Versioni documentali incluse', exact: true })).toBeVisible();
+  await expect(preview.getByText(new RegExp(first.fileName.replace('.', '\\.')))).toBeVisible();
+  await expect(preview.getByText(new RegExp(last.fileName.replace('.', '\\.')))).toBeVisible();
+  await preview.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await preview.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Incarico registrato con il solo perimetro confermato.', { exact: true })).toBeVisible();
+  await login(tech, row.techA.email); await tech.goto(work(row));
+  const base = work(row) + '/documents/';
+  const allowed = await tc.request.get(base + first.versions[0].fileId + '?download=1');
+  expect(allowed.status()).toBe(200); expect(await allowed.text()).toBe(first.versions[0].text);
+  expect(allowed.headers()['content-disposition']).toContain('attachment');
+  const inline = await tc.request.get(base + last.versions[0].fileId);
+  expect(inline.status()).toBe(200); expect(await inline.text()).toBe(last.versions[0].text);
+  expect(inline.headers()['content-disposition']).toContain('inline');
+  for (const suffix of [last.versions[0].fileId + '?download=1', last.versions[1].fileId, row.catalogDocuments[30].versions[0].fileId])
+    expect((await tc.request.get(base + suffix)).status()).toBe(404);
+  await screenshot(tech, 'document-catalogue-recipient');
+  for (const person of [row.techB, row.salesA, row.salesB]) {
+    const c = await browser.newContext(), page = await c.newPage(); await login(page, person.email);
+    expect((await c.request.get(base + first.versions[0].fileId)).status()).toBe(404);
+    expect((await c.request.get(management(row) + '?recipient=' + row.techA.id)).status()).toBe(404); await c.close();
+  }
+  await ac.close(); await tc.close();
+});
+
+test('document search retains stale selected context until explicit removal and reselection', async ({ browser }) => {
+  const row = f.rows[6], ac = await browser.newContext({ viewport: { width: 390, height: 844 } }), admin = await ac.newPage();
+  const chosen = row.catalogDocuments[64];
+  await login(admin, f.adminEmail, true); await openDocuments(admin, row); await searchDocuments(admin, chosen.fileName);
+  await admin.getByLabel(documentLabel(chosen), { exact: true }).check();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
+  const title = 'Documento sintetico aggiornato dopo anteprima';
+  await db.document.update({ where: { id: chosen.id }, data: { title } });
+  await searchDocuments(admin, chosen.fileName);
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toHaveCount(0);
+  await expect(admin.getByLabel(documentLabel(chosen), { exact: true })).toBeChecked();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByText('Stato o permessi cambiati. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
+  expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
+  await screenshot(admin, 'document-catalogue-stale');
+  await admin.getByRole('button', { name: 'Rimuovi questa versione', exact: true }).click();
+  await admin.getByLabel(documentLabel({ ...chosen, title }), { exact: true }).check();
+  await admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
+  await expect(admin.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
+  expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
+  await ac.close();
+});
+
+test('exceeded document capacity is explicit and preserves independent personal revocation', async ({ browser }) => {
+  const row = f.rows[7], ac = await browser.newContext(), admin = await ac.newPage(), tc = await browser.newContext(), tech = await tc.newPage();
+  await login(tech, row.techA.email); expect((await tc.request.get(work(row))).status()).toBe(200);
+  await login(admin, f.adminEmail, true); await admin.goto(management(row) + '?recipient=' + row.techA.id);
+  await admin.locator('[data-technical-editor-ready="true"]').waitFor();
+  await expect(admin.getByText('Catalogo documenti non disponibile. La revoca degli incarichi resta disponibile.', { exact: true })).toBeVisible();
+  await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
+  await screenshot(admin, 'document-catalogue-capacity');
+  await admin.getByLabel('Motivo della revoca', { exact: true }).fill('Revoca sintetica indipendente dal catalogo');
+  await admin.getByRole('button', { name: 'Anteprima della revoca', exact: true }).click();
+  const preview = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true });
+  await expect(preview.getByRole('heading', { name: 'Conferma revoca dell’incarico', exact: true })).toBeVisible();
+  await preview.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await preview.getByRole('button', { name: 'Revoca incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Revoca registrata. Lo storico è conservato.', { exact: true })).toBeVisible();
+  expect((await tc.request.get(work(row))).status()).toBe(404); await ac.close(); await tc.close();
 });

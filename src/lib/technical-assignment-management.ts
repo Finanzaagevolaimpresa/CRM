@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { AuthSession } from './auth';
 import { technicalImplementedActions } from './technical-assignment-contract';
 import { lockTechnicalAssignmentContext } from './technical-assignment-context';
-import { snapshotTechnicalAssignmentDocuments } from './technical-assignment-documents';
 import { technicalFieldCatalogue, technicalFieldPreview, technicalTargetReference, type TechnicalTargetReference } from './technical-assignment-display';
 import { readRetainedTechnicalAssignmentJournal } from './technical-assignment-journal';
 import { admitsTechnicalRolePermission } from './technical-assignment-permissions';
@@ -14,7 +13,9 @@ import { hasSelectiveClientContext } from './selective-client-policy';
 import { hasSelectiveContext } from './selective-project-policy';
 import { isSelectivePractice } from './selective-practice-policy';
 import { loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
-import { listClientDocumentOptions } from './selective-client-documents';
+import { readAdmittedTechnicalDocumentOptions } from './technical-document-catalog-source';
+import { pageTechnicalDocuments, technicalDocumentCatalogueQuery, type TechnicalDocumentCatalogueQuery,
+  type TechnicalDocumentOption } from './technical-document-catalog';
 import { listTechnicalWorkItemOptions } from './technical-work-item-source';
 import { technicalWorkItemCatalogueQuery, type TechnicalWorkItemCatalogueQuery } from './technical-work-item-catalog';
 
@@ -31,9 +32,11 @@ function restricted(scope: AuthSession | Awaited<ReturnType<typeof loadTechnical
  * exact preview/confirmation independently rereads all admission facts. */
 export async function readTechnicalAssignmentManagement(db: PrismaClient, claimed: AuthSession,
   raw: TechnicalTargetReference, recipientId: string | null = null,
-  rawItemQuery: TechnicalWorkItemCatalogueQuery = technicalWorkItemCatalogueQuery.parse({})) {
+  rawItemQuery: TechnicalWorkItemCatalogueQuery = technicalWorkItemCatalogueQuery.parse({}),
+  rawDocumentQuery: TechnicalDocumentCatalogueQuery = technicalDocumentCatalogueQuery.parse({})) {
   const target = technicalTargetReference.parse(raw);
   const itemQuery = technicalWorkItemCatalogueQuery.parse(rawItemQuery);
+  const documentQuery = technicalDocumentCatalogueQuery.parse(rawDocumentQuery);
   if (recipientId !== null) identifier.parse(recipientId);
   return withTechnicalAssignmentManagementRead(db, claimed, target.kind, recipientId, async (tx, state) => {
     const context = await lockTechnicalAssignmentContext(tx, target, { allowInactive: true });
@@ -66,28 +69,25 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
       && person.id !== state.authority.userId && admitsTechnicalRolePermission(person, target.kind)
       && personScope !== null && !restricted(personScope, context);
     const allowedActions = eligible ? technicalImplementedActions.filter(action => admitsTechnicalRolePermission(person!, target.kind, action)) : [];
-    const documentOptions = [];
-    let documentsLimited = false;
+    let admittedDocuments: TechnicalDocumentOption[] = [];
+    let documentCatalogueValidUntil = Number.MAX_SAFE_INTEGER;
+    let documentCatalogueAvailable = true;
     if (eligible && person) {
-      const candidates = await listClientDocumentOptions(tx, state.actor, context.clientId);
-      documentsLimited = candidates.documentsLimited || candidates.documentOptions.length > 50;
-      // Lock in deterministic version order. Full checks may exclude documents
-      // visible to the Admin but outside this person's exact operational context.
-      for (const option of candidates.documentOptions.slice(0, 50).sort((a, b) => a.versionId.localeCompare(b.versionId))) {
-        try {
-          const chosen = await snapshotTechnicalAssignmentDocuments(tx, state, context, [{ fileId: option.versionId, allowDownload: false }]);
-          documentOptions.push({ ...chosen.documents[0], ...chosen.metadata[0] });
-        } catch (error) {
-          if (!(error instanceof TechnicalAssignmentError && error.code === 'DENIED')
-            && !(error instanceof Error && ['SELECTIVE_CLIENT_DOCUMENT_UNAVAILABLE', 'SELECTIVE_PRACTICE_DOCUMENT_UNAVAILABLE'].includes(error.message))) throw error;
-        }
+      try {
+        const admitted = await readAdmittedTechnicalDocumentOptions(tx, state, context);
+        admittedDocuments = admitted.options; documentCatalogueValidUntil = admitted.validUntil;
+      }
+      catch (error) {
+        if (!(error instanceof TechnicalAssignmentError && error.code === 'UNAVAILABLE')) throw error;
+        documentCatalogueAvailable = false;
       }
     }
+    const documentCatalogue = pageTechnicalDocuments(admittedDocuments, documentQuery);
     const selected = recipientId ? await lockTechnicalAssignmentRecord(tx, { ...target, recipientId }, 'read') : null;
     let workItems = { options: [] as Awaited<ReturnType<typeof listTechnicalWorkItemOptions>>['options'], query: itemQuery, hasNext: false };
     let workItemCatalogueAvailable = true;
     if (eligible) {
-      try { workItems = await listTechnicalWorkItemOptions(tx, state, context, documentOptions, itemQuery); }
+      try { workItems = await listTechnicalWorkItemOptions(tx, state, context, admittedDocuments, itemQuery); }
       catch (error) {
         if (!(error instanceof TechnicalAssignmentError && error.code === 'UNAVAILABLE')) throw error;
         // A bounded catalogue failure must not remove the independent revocation
@@ -95,15 +95,20 @@ export async function readTechnicalAssignmentManagement(db: PrismaClient, claime
         workItemCatalogueAvailable = false;
       }
     }
+    const observedAt = await technicalAssignmentClock(tx);
+    // Off-page admissions determine offsets and checklist availability too.
+    // If one expired during this read, publish neither metadata nor pagination.
+    if (documentCatalogueValidUntil <= observedAt.getTime()) throw new TechnicalAssignmentError('UNAVAILABLE');
     return { target, contextSha256: context.contextSha256, operational: context.operational, fields,
       fieldCatalogue: technicalFieldCatalogue(target.kind),
       people: people.slice(0, 200).filter(row => admitsTechnicalRolePermission(row, target.kind))
         .map(row => ({ id: row.id, name: row.name, email: row.email })), peopleLimited: people.length > 200,
-      assignments, assignmentsLimited: refs.length > 200, documentOptions, documentsLimited,
+      assignments, assignmentsLimited: refs.length > 200, documentOptions: documentCatalogue.options,
+      documentsLimited: !documentCatalogueAvailable, documentCatalogue, documentCatalogueAvailable,
       workItemOptions: workItems.options, workItemCatalogue: workItems, workItemCatalogueAvailable,
       recipient: person ? { id: person.id, name: person.name, email: person.email, epoch: person.recordUpdateEpoch } : null,
       recipientEligible: eligible, allowedActions, revision: selected?.revision ?? 0,
       currentAssignmentId: selected?.id ?? null, currentRevokedAt: selected?.revokedAt ?? null,
-      observedAt: (await technicalAssignmentClock(tx)).toISOString() };
+      observedAt: observedAt.toISOString() };
   }, { inactiveRecipientForRevocation: true });
 }
