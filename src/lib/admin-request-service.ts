@@ -10,6 +10,7 @@ import { admitAdminRequestOrigin, exactRequestOrigin, requestSubject, requestDen
 import { AdminRequestContextUnavailable } from './admin-request-commercial-loader';
 import { appendAdminRequest, lockAdminRequest, requestCommandReceipt, requestCommandHash, requestDraftOrigin, type RequestEvent } from './admin-request-storage';
 import { admitAdminRequestDraft } from './admin-request-draft-source';
+import { adminRequestQueueKind, type AdminRequestQueueKind } from './admin-request-queue-query';
 
 type Tx = Prisma.TransactionClient;
 async function readRequestTransaction<T>(db: PrismaClient, read: (tx: Tx) => Promise<T>): Promise<T> {
@@ -121,37 +122,38 @@ export function isRequestUnavailable(error: unknown) {
   return error instanceof AdminRequestContextUnavailable || error instanceof AdminRequestError && ['DENIED', 'STALE'].includes(error.code);
 }
 export class AdminRequestQueueLimitError extends Error {
-  constructor(readonly isAdmin: boolean) { super('Restringi la ricerca per consultare le richieste disponibili.'); }
+  constructor(readonly isAdmin: boolean) { super('La consultazione dell’elenco non è disponibile.'); }
 }
-export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '') {
+export async function readAdminRequestQueue(db: PrismaClient, claimed: AuthSession, page = 1, query = '', kind?: AdminRequestQueueKind) {
   const skip = (z.number().int().min(1).max(200).parse(page) - 1) * 30;
   const term = z.string().trim().max(160).parse(query).toLocaleLowerCase('it-IT');
+  const selectedKind = adminRequestQueueKind.optional().parse(kind) ?? '';
   return readRequestTransaction(db, async tx => {
     const auth = await session(tx, claimed);
-    // Paginate admitted rows, never the unfiltered window: revoked origins
-    // must not hide later requests or contribute to counts/next-page hints.
-    const items = []; let until = Infinity, admitted = 0, exhausted = false;
-    for (let offset = 0; offset < 6000; offset += 60) {
-      const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest"
-        WHERE (${auth.isAdmin} OR "authorId"=${auth.actor.id})
-        AND (${term}='' OR position(${term} in lower(state->'submitted'->>'title'))>0)
-        ORDER BY "createdAt" DESC,id OFFSET ${offset} LIMIT 60`;
-      for (const candidate of candidates) {
-        try {
-          const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
-          if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
-          until = Math.min(until, row.origin.accessUntil);
-          if (admitted++ < skip) continue;
-          items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
-          if (items.length === 31) break;
-        } catch (error) { if (!isRequestUnavailable(error)) throw error; }
-      }
-      exhausted = candidates.length < 60;
-      if (exhausted || items.length === 31) break;
+    // Decide capacity before title/type/page filtering. A denied origin must
+    // never make a matching query hit a limit while a nonmatching one is empty.
+    const candidates = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "AdminRequest"
+      WHERE (${auth.isAdmin} OR "authorId"=${auth.actor.id})
+      ORDER BY "createdAt" DESC,id LIMIT 6001`;
+    if (candidates.length > 6000) {
+      await finish(tx, auth);
+      throw new AdminRequestQueueLimitError(auth.isAdmin);
+    }
+    // The candidate set is complete. Only current admissions contribute to
+    // literal filtering, page offsets and the one-row lookahead.
+    const items = []; let until = Infinity, admitted = 0;
+    for (const candidate of candidates) {
+      try {
+        const row = await admittedRequest(tx, auth, candidate.id), s = row.state;
+        until = Math.min(until, row.origin.accessUntil);
+        if (term && !s.submitted.title.toLocaleLowerCase('it-IT').includes(term)) continue;
+        if (selectedKind && s.submitted.kind !== selectedKind) continue;
+        if (admitted++ < skip) continue;
+        items.push({ id: s.requestId, title: s.submitted.title, kind: s.submitted.kind, status: s.status, createdAt: row.createdAt });
+        if (items.length === 31) break;
+      } catch (error) { if (!isRequestUnavailable(error)) throw error; }
     }
     await finish(tx, auth, until);
-    // A bounded scan never reports a false empty queue or a false last page.
-    if (!exhausted && items.length < 31) throw new AdminRequestQueueLimitError(auth.isAdmin);
     return { isAdmin: auth.isAdmin, items: items.slice(0, 30), hasNext: items.length > 30 };
   });
 }

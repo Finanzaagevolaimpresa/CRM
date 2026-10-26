@@ -32,7 +32,7 @@ test('technical profiles retain operational projects, practices and tasks withou
     assert.deepEqual(groups[0].counters.map(c => c.value), [21, 22]);
     assert.equal(groups[1].title, 'Progetti');
     assert.deepEqual(groups[1].counters.map(c => c.value), [32]);
-    for (const path of ['/projects', '/technical-office/practices', '/documents', '/document-checklists', '/tasks']) assert.equal(operationalNavigationAllows(role, path), true);
+    for (const path of ['/projects', '/technical-office/practices', '/technical-office/integrations', '/documents', '/document-checklists', '/tasks']) assert.equal(operationalNavigationAllows(role, path), true);
     for (const path of ['/leads', '/clients', '/contracts', '/payments', '/commercial-offers', '/portals', '/reporting']) assert.equal(operationalNavigationAllows(role, path), false);
     assert.equal(view.showLegacyDetails, false);
   }
