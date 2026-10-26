@@ -195,3 +195,44 @@ test('catalogue refresh preserves a chosen stale generation and the renewed prev
   expect(await db.technicalAssignment.count({ where: { recipientId: row.techA.id, practiceId: row.practiceId } })).toBe(0);
   await screenshot(admin, 'catalogue-stale'); await ac.close();
 });
+
+test('a real catalogue lock timeout leaves native history and personal revocation available', async ({ browser }) => {
+  const row = f.rows[5], ac = await browser.newContext(), tc = await browser.newContext();
+  const admin = await ac.newPage(), tech = await tc.newPage();
+  await login(admin, f.adminEmail, true); await login(tech, row.techA.email);
+  await assign(admin, row, row.techA); await prepare(tech, row);
+  const url = management(row) + '?recipient=' + row.techA.id;
+  // Warm the actual page before holding the row, so compilation is not the
+  // timing condition. The real app keeps its unchanged 5s transaction timeout.
+  await admin.goto(url); await expect(admin.getByLabel('Motivo della revoca', { exact: true })).toBeVisible();
+  let locked!: () => void, release!: () => void;
+  const acquired = new Promise<void>(resolve => { locked = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const blocker = db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Task" WHERE id=${row.taskId} FOR UPDATE`;
+    locked(); await held;
+  }, { timeout: 30_000 });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([acquired, blocker]);
+    timer = setTimeout(release, 9_000);
+    await admin.goto(url);
+    await expect(admin.getByText('Catalogo non disponibile. Puoi consultare gli incarichi registrati e revocarli; ricarica per preparare un nuovo incarico.', { exact: true })).toBeVisible();
+    await expect(admin.getByRole('heading', { name: 'Incarichi registrati su questo record', exact: true })).toBeVisible();
+    await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toHaveCount(0);
+    await expect(admin.getByLabel('Cerca attività e checklist', { exact: true })).toHaveCount(0);
+    await expect(admin.getByRole('button', { name: 'Anteprima della revoca', exact: true })).toBeEnabled();
+    for (const value of row.excluded) expect(await admin.content()).not.toContain(value);
+    await screenshot(admin, 'catalogue-error-revocation');
+  } finally { if (timer) clearTimeout(timer); release(); await blocker; }
+  await admin.getByLabel('Motivo della revoca', { exact: true }).fill('Revoca sintetica dopo errore del catalogo');
+  await admin.getByRole('button', { name: 'Anteprima della revoca', exact: true }).click();
+  const revocation = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true });
+  await revocation.getByLabel('Confermo personalmente questa decisione, la persona e il perimetro riepilogati.').check();
+  await revocation.getByRole('button', { name: 'Revoca incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Revoca registrata. Lo storico è conservato.', { exact: true })).toBeVisible();
+  await tech.getByRole('button', { name: 'Conferma modifica dell’attività', exact: true }).click();
+  await expect(tech.getByText('La modifica non è stata registrata: attività, incarico o permessi non più validi. Ricarica prima di riprovare.', { exact: true })).toBeVisible();
+  expect((await tc.request.get(item(row))).status()).toBe(404); expect(await count(row)).toBe(0);
+  await ac.close(); await tc.close();
+});

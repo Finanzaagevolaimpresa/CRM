@@ -7,7 +7,7 @@ import { TechnicalAssignmentManagement } from '@/components/technical-assignment
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { technicalTargetReference, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
-import { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
+import { readTechnicalAssignmentManagementForPage } from '@/lib/technical-assignment-management';
 import { prepareTechnicalAssignment, saveTechnicalAssignment, checkTechnicalAssignment, searchTechnicalWorkItemCatalogue } from '@/lib/technical-assignment-actions';
 
 export async function TechnicalAssignmentManagementPage({ target: raw, query }: { target: TechnicalTargetReference;
@@ -17,7 +17,7 @@ export async function TechnicalAssignmentManagementPage({ target: raw, query }: 
   const recipient = query.recipient ? z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).safeParse(query.recipient) : null;
   const recover = query.assignmentDecision ? z.string().uuid().safeParse(query.assignmentDecision) : null;
   if ((recipient && !recipient.success) || (recover && !recover.success) || (recover && !recipient)) notFound();
-  const data = await readTechnicalAssignmentManagement(prisma, session, target.data, recipient?.success ? recipient.data : null).catch(() => null);
+  const data = await readTechnicalAssignmentManagementForPage(prisma, session, target.data, recipient?.success ? recipient.data : null).catch(() => null);
   if (!data) notFound();
   return <div className="space-y-6"><PageHeader title="Incarichi tecnici e perimetri personali"
     description="Più persone possono lavorare sullo stesso record, ciascuna con responsabilità, operazioni, campi e documenti esplicitamente scelti." />

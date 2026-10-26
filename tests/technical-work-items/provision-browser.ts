@@ -16,7 +16,7 @@ async function main() {
   assert.deepEqual(await db.$queryRaw`SELECT id FROM "TechnicalAssignmentAuthority"`, []);
   const hash = await bcrypt.hash(password, 10), admin = await syntheticAuthority(db, hash), rows = [];
   await db.$executeRaw`INSERT INTO "TechnicalAssignmentAuthority"(id,"userId",revision,enabled) VALUES('technical-assignment',${admin.user.id},1,true)`;
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 6; index++) {
     const f = await technicalFixture(db, admin, hash, 'consulente');
     const task = await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id, assignedToId: f.techA.user.id,
       title: 'Attività tecnica scelta', description: 'DESCRIZIONE_TASK_NON_SCELTA', priority: 'alta', dueAt: new Date(Date.now() + 86400000) } });
@@ -25,7 +25,7 @@ async function main() {
     await db.documentChecklistItem.create({ data: { clientId: f.client.id, projectId: f.project.id,
       title: 'Checklist finanziaria esclusa', documentId: f.documents[2].doc.id } });
     const catalogTaskIds: string[] = [];
-    if (index >= 3) {
+    if (index === 3 || index === 4) {
       for (let i = 0; i < 65; i++) catalogTaskIds.push(`catalog-${f.client.id}-${String(i).padStart(2, '0')}`);
       await db.task.createMany({ data: catalogTaskIds.map((id, i) => ({ id, clientId: f.client.id, projectId: f.project.id,
         title: `Catalogo sintetico ${String(i).padStart(2, '0')}`, priority: 'media' })) });
