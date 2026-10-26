@@ -3,6 +3,8 @@ import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { syntheticSession } from '../selective-sharing/fixtures';
+import { assignTechnical, revokeTechnical } from './fixtures';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_EVIDENCE!, password = process.env.TECHNICAL_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminId: string; adminEmail: string;
   rows: Array<{ clientId: string; projectId: string; practiceId: string; otherProjectId: string;
@@ -106,9 +108,11 @@ async function lostResponse(page: Page, button: string, pattern: string) {
   return forwarded;
 }
 async function screenshot(page: Page, name: string) {
-  await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(evidence, name + '-desktop.png'), fullPage: true });
+  // Keep the DOM unchanged while React hydrates: Playwright's default hidden
+  // caret writes inline styles onto the newly rendered form fields.
+  await page.setViewportSize({ width: 1440, height: 1000 }); await page.screenshot({ path: path.join(evidence, name + '-desktop.png'), fullPage: true, caret: 'initial' });
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true });
+  await page.screenshot({ path: path.join(evidence, name + '-mobile.png'), fullPage: true, caret: 'initial' });
 }
 async function ordinaryPageDenied(page: Page, url: string, heading: string, row: Row) {
   // The legacy client dossier renders an explicit denial with HTTP 200.
@@ -184,13 +188,23 @@ test('native revocation stops an open preview, direct documents and ordinary fal
   await expect(tech.getByText('La modifica non è stata registrata: dati, incarico o permessi non più validi. Ricarica prima di riprovare.', { exact: true })).toBeVisible();
   expect(await count(row)).toBe(0); expect(await assignments(row)).toBe(1);
   for (const url of [work(row), work(row) + '/documents/' + row.documents[0].fileId]) expect((await tc.request.get(url)).status(), url).toBe(404);
+  await tech.goto('/technical-work?kind=TechnicalPractice&q=' + encodeURIComponent('Pratica tecnica multipla'));
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  expect(await tech.content()).not.toContain('Pratica tecnica multipla sintetica');
   await ordinaryPageDenied(tech, '/clients/' + row.clientId, 'Cliente non trovato o non accessibile', row);
   await ac.close(); await tc.close();
 });
 
 test('project operation has its own exact grant and native status changes do not grant the linked practice', async ({ browser }) => {
   const row = f.rows[3], ac = await browser.newContext(), tc = await browser.newContext();
-  const admin = await ac.newPage(), tech = await tc.newPage(); await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
+  const admin = await ac.newPage(), tech = await tc.newPage();
+  const renderingErrors: string[] = [];
+  tech.on('pageerror', error => renderingErrors.push(error.message));
+  tech.on('console', message => {
+    if (/hydrat|server rendered HTML/i.test(message.text())) renderingErrors.push(message.text());
+  });
+  await login(admin, f.adminEmail, true); await login(tech, row.techB.email);
   await assign(admin, row, row.techB, true); await prepareWork(tech, row, 'Descrizione progetto aggiornata', true);
   await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click(); await expect.poll(() => count(row, true)).toBe(1);
   await tech.goto(work(row, true)); await tech.getByRole('combobox', { name: 'Operazione', exact: true }).selectOption('update_status');
@@ -207,5 +221,84 @@ test('project operation has its own exact grant and native status changes do not
   await expect(result).toHaveCount(1); expect(await tech.content()).not.toContain(row.excluded[1]);
   await result.click(); await expect(tech).toHaveURL(new RegExp(work(row, true) + '$'));
   await expect(tech.getByText('Descrizione progetto aggiornata', { exact: true }).first()).toBeVisible();
+  const term = 'PROGETTO tecnico multiplo';
+  await tech.goto('/technical-work?kind=Project&page=2&q=inesistente');
+  await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('  ' + term + '  ');
+  await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  expect(new URL(tech.url()).searchParams.has('page')).toBe(false);
+  await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue(term);
+  await screenshot(tech, 'assigned-work-search');
+  await tech.getByRole('link', { name: 'Pratiche assegnate', exact: true }).click();
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'TechnicalPractice' && url.searchParams.get('q') === term && !url.searchParams.has('page'));
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await tech.getByRole('link', { name: 'Progetti assegnati', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await tech.goto('/technical-work?kind=Project&page=2&q=' + encodeURIComponent(term));
+  await tech.getByRole('link', { name: 'Precedenti', exact: true }).click();
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'Project' && url.searchParams.get('q') === term && !url.searchParams.has('page'));
+  await expect(tech.getByRole('heading', { name: 'Progetto tecnico multiplo sintetico', exact: true })).toBeVisible();
+  await tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true }).fill('PROGETTO_ESTRANEO_NON_ASSEGNATO');
+  await tech.getByRole('button', { name: 'Cerca incarichi', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  await expect(tech.getByText('Nessun incarico corrisponde alla ricerca in questa pagina', { exact: true })).toBeVisible();
+  await tech.getByRole('link', { name: 'Azzera ricerca', exact: true }).click();
+  await expect(tech).toHaveURL(url => url.searchParams.get('kind') === 'Project' && !url.searchParams.has('q') && !url.searchParams.has('page'));
+  await expect(tech.getByRole('searchbox', { name: 'Cerca per titolo', exact: true })).toHaveValue('');
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  for (const q of ['x'.repeat(201), 'uno&q=due']) {
+    const invalid = await tc.request.get('/technical-work?kind=Project&q=' + (q.includes('&') ? q : encodeURIComponent(q)));
+    expect(invalid.status()).toBe(404); expect(await invalid.text()).not.toContain('Progetto tecnico multiplo sintetico');
+  }
+  expect(renderingErrors).toEqual([]);
   await ac.close(); await tc.close();
+});
+
+test('native search continuation uses admitted rows after bulk revocation and expiry with the same open session', async ({ browser }) => {
+  const row = f.rows[4], tc = await browser.newContext(), other = await browser.newContext();
+  const tech = await tc.newPage(), second = await other.newPage(), term = 'Paginazione privata 100%_';
+  const adminUser = await db.user.findUniqueOrThrow({ where: { id: f.adminId } });
+  const techUser = await db.user.findUniqueOrThrow({ where: { id: row.techA.id } });
+  const actor = { user: adminUser, ...await syntheticSession(db, adminUser) };
+  const recipient = { user: techUser, ...await syntheticSession(db, techUser) };
+  const targets = [];
+  for (let index = 0; index < 21; index++) {
+    const project = await db.project.create({ data: { clientId: row.clientId, title: `${term} ${index}` } });
+    const target = { kind: 'Project' as const, targetId: project.id }; targets.push(target);
+    await assignTechnical(db, actor, target, recipient);
+  }
+  await login(tech, row.techA.email); await login(second, row.techB.email);
+  const search = (q: string) => '/technical-work?kind=Project&q=' + encodeURIComponent(q);
+  await tech.goto(search(term));
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(20);
+  await tech.getByRole('link', { name: 'Successivi', exact: true }).click();
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  for (const target of targets) {
+    await revokeTechnical(db, actor, target, recipient);
+    await db.project.update({ where: { id: target.targetId }, data: { title: `${term} MODIFICATO_DOPO_REVOCA` } });
+  }
+  const auditBefore = await db.auditLog.count();
+  for (const q of [term, 'MODIFICATO_DOPO_REVOCA', 'inesistente', '']) {
+    await tech.goto(search(q));
+    await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+    await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+    expect(await tech.content()).not.toContain(`${term} MODIFICATO_DOPO_REVOCA`);
+  }
+  await second.goto(search(term));
+  await expect(second.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(0);
+  await expect(second.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  await screenshot(tech, 'search-revoked');
+  expect(await db.auditLog.count()).toBe(auditBefore);
+  const project = await db.project.create({ data: { clientId: row.clientId, title: 'Titolo a scadenza breve' } });
+  await assignTechnical(db, actor, { kind: 'Project', targetId: project.id }, recipient,
+    { expiresAt: new Date(Date.now() + 10000).toISOString() });
+  await tech.goto(search('scadenza breve'));
+  await expect(tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true })).toHaveCount(1);
+  await expect.poll(async () => {
+    await tech.reload(); return tech.getByRole('link', { name: 'Apri incarico tecnico', exact: true }).count();
+  }, { timeout: 20000, intervals: [1000] }).toBe(0);
+  await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
+  expect((await tc.request.get('/technical-work/projects/' + project.id)).status()).toBe(404);
+  await tc.close(); await other.close();
 });

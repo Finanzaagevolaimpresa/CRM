@@ -47,29 +47,34 @@ export async function listTechnicalWork(db: PrismaClient, claimed: AuthSession, 
   const term = z.string().trim().max(200).parse(query).toLocaleLowerCase('it-IT');
   const skip = (z.number().int().min(1).max(200).parse(page) - 1) * 20;
   return withTechnicalAssignmentRecipient(db, claimed, kind, async (tx, state) => {
-    const rows = term ? await tx.$queryRaw<Array<{ targetId: string }>>`
-      SELECT COALESCE(a."projectId",a."practiceId") AS "targetId" FROM "TechnicalAssignment" a
-      LEFT JOIN "Project" p ON p.id=a."projectId" LEFT JOIN "TechnicalPractice" t ON t.id=a."practiceId"
-      WHERE a."recipientId"=${state.current.userId} AND a.kind=${kind}
-      AND a.payload->'selection'->'readableFields' ? 'title' AND position(${term} IN lower(COALESCE(p.title,t.title)))>0
-      ORDER BY a."createdAt" DESC,a.id OFFSET ${skip} LIMIT 21`
-      : await tx.$queryRaw<Array<{ targetId: string }>>`SELECT COALESCE("projectId","practiceId") AS "targetId"
+    // Bound the recipient's complete candidate set independently of the query.
+    // A title or a raw row count must never decide an offset or continuation.
+    const rows = await tx.$queryRaw<Array<{ targetId: string }>>`SELECT COALESCE("projectId","practiceId") AS "targetId"
         FROM "TechnicalAssignment" WHERE "recipientId"=${state.current.userId} AND kind=${kind}
-        ORDER BY "createdAt" DESC,id OFFSET ${skip} LIMIT 21`;
+        ORDER BY "createdAt" DESC,id LIMIT 6001`;
+    if (rows.length > 6000) throw new TechnicalAssignmentError('UNAVAILABLE');
     const records = [];
-    for (const row of rows.slice(0, 20)) {
+    let matched = 0, validUntil = Infinity;
+    for (const row of rows) {
       try {
         const item = await projection(tx, state, { kind, targetId: row.targetId });
         const title = item.fields.find(field => field.key === 'title')?.value;
         if (term && (!title || !title.toLocaleLowerCase('it-IT').includes(term))) continue;
+        validUntil = Math.min(validUntil, new Date(item.expiresAt).getTime());
+        if (matched++ < skip) continue;
         records.push({ target: item.target, title: title ?? 'Incarico tecnico',
           responsibility: item.responsibility, expiresAt: item.expiresAt });
+        // The extra row has passed the same admission as every displayed row.
+        if (records.length === 21) break;
       } catch (error) {
         if (!(error instanceof TechnicalAssignmentError && ['DENIED', 'STALE'].includes(error.code))
           && !(error instanceof Error && ['SELECTIVE_CLIENT_DOCUMENT_UNAVAILABLE', 'SELECTIVE_PRACTICE_DOCUMENT_UNAVAILABLE'].includes(error.message))) throw error;
       }
     }
-    return { records, hasNext: rows.length > 20 };
+    // Earlier matches also determine the admitted offset. Do not publish stale
+    // rows or pagination if any of those grants expired during the scan.
+    if (validUntil <= (await technicalAssignmentClock(tx)).getTime()) deny();
+    return { records: records.slice(0, 20), hasNext: records.length > 20 };
   });
 }
 
