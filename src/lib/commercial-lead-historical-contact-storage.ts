@@ -9,7 +9,7 @@ import { hasPermission } from './permission-evaluator';
 import { readResponsibility } from './responsibility';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { internalSessionMode } from './session';
-import { withSerializableTransaction } from './serializable';
+import { SerializableConflictError, withSerializableTransaction } from './serializable';
 
 // Preparation only. No route/action imports this module. Its draft DDL is only
 // for an isolated database; no production schema or activation is implied.
@@ -130,7 +130,7 @@ async function verifyJournal(tx: Tx, row: HistoricalContactRecord, scope: Awaite
  * submit a fresh command. No SLA date/outcome or client is changed here. */
 export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor, requested: unknown) {
   const input = historicalContactInput(requested);
-  return withSerializableTransaction(db, async tx => {
+  try { return await withSerializableTransaction(db, async tx => {
     const scope = await lockContext(tx, actor, input.leadId);
     const existing = await loadRecord(tx, input.commandId);
     if (existing) {
@@ -155,13 +155,23 @@ export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor
       VALUES (${input.commandId}::uuid,${JSON.stringify(input)}::jsonb,${actor.userId},${actor.sessionId}::uuid,
        ${scope.item.id}::uuid,${scope.cycle.id}::uuid,${input.expectedAssignmentId},${new Date(prepared.recordedAt)},
        ${input.expectedInboxVersion},${versions[0].version},${prepared.payloadHash},${audit.id},txid_current())`;
+    // Surface deferred journal failures inside the transaction callback, before
+    // the ORM can return a result from a commit rejected by PostgreSQL.
+    await tx.$executeRaw`SET CONSTRAINTS "CommercialLeadHistoricalContact_journal" IMMEDIATE`;
     const row = await loadRecord(tx, input.commandId);
     if (!row) return unavailable();
     await authorize(tx, actor);
     const result = await verifyJournal(tx, row, { ...scope,
       context: { ...scope.context, inboxVersion: versions[0].version } });
     return { state: 'RECORDED' as const, replay: false, receipt: result };
-  });
+  }); } catch (error) {
+    if (!(error instanceof SerializableConflictError)) throw error;
+    // The failed transaction has rolled back. Reconcile once by a fresh,
+    // authorized read; never retry the write or accept another payload.
+    const outcome = await readHistoricalLeadContactOutcome(db, actor, { leadId: input.leadId, commandId: input.commandId });
+    if (outcome.state !== 'RECORDED' || JSON.stringify(outcome.receipt.input) !== JSON.stringify(input)) return unavailable();
+    return { state: 'RECORDED' as const, replay: true, receipt: outcome.receipt };
+  }
 }
 
 /** Read-only with row locks, suitable for a future explicit outcome query. An

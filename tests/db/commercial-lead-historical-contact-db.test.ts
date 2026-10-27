@@ -169,6 +169,21 @@ test('concurrent distinct commands against one version cannot both record the co
   assert.deepEqual(observed.cycle, f.cycle);
 });
 
+test('concurrent reuse of one command with different evidence cannot reconcile as an exact replay', options, async () => {
+  const f = await fixture();
+  const inputs = [f.input, { ...f.input, evidenceReference: 'Different synthetic contact evidence' }];
+  const results = await Promise.allSettled(inputs.map(input => recordHistoricalLeadContact(client(), f.owner, input)));
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  const winner = results.findIndex(r => r.status === 'fulfilled');
+  const outcome = await readHistoricalLeadContactOutcome(client(), f.owner, { leadId: f.lead.id, commandId: f.input.commandId });
+  assert.equal(outcome.state, 'RECORDED');
+  assert.equal(outcome.receipt?.input.evidenceReference, inputs[winner].evidenceReference);
+  const observed = await state(f);
+  assert.equal(observed.records.length, 1); assert.equal(observed.audits.length, 1);
+  assert.equal(observed.item.version, f.item.version + 1);
+  assert.deepEqual(observed.cycle, f.cycle);
+});
+
 test('failure while writing the audit rolls back the inbox version and entire command', options, async () => {
   const f = await fixture(), before = await state(f);
   await client().$executeRawUnsafe(`CREATE FUNCTION historical_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$
