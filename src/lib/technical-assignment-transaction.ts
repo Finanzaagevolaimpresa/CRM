@@ -13,6 +13,8 @@ import { withSerializableTransaction } from './serializable';
 import { loadPersonalSelectiveProjectScope, loadSelectiveProjectScope, loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
 import { admitsTechnicalAssignmentManager, admitsTechnicalRolePermission } from './technical-assignment-permissions';
 import type { TechnicalAssignmentSelection } from './technical-assignment-contract';
+import { TechnicalAssignmentError } from './technical-assignment-errors';
+export { TechnicalAssignmentError } from './technical-assignment-errors';
 
 type Tx = Prisma.TransactionClient;
 type Kind = TechnicalAssignmentSelection['kind'];
@@ -21,9 +23,6 @@ const authoritySchema = z.object({ id:z.literal('technical-assignment'),userId:i
   revision:z.number().int().positive().max(2_147_483_647),enabled:z.boolean() }).strict();
 type Authority = z.infer<typeof authoritySchema>;
 export type TechnicalAssignmentPersonalProof = { key:PrivilegedStepUpKey;sessionToken:string;stepUpToken:string };
-export class TechnicalAssignmentError extends Error {
-  constructor(readonly code:'DENIED'|'STALE'|'UNAVAILABLE') { super(`TECHNICAL_ASSIGNMENT_${code}`); }
-}
 function deny():never { throw new TechnicalAssignmentError('DENIED'); }
 export async function technicalAssignmentClock(tx:Tx) {
   const [row]=await tx.$queryRaw<Array<{now:Date}>>`SELECT clock_timestamp() AS now`;
