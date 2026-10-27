@@ -4,6 +4,7 @@ import { canonicalJson } from './canonical-json';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { boundedAssignmentExpiry, technicalAssignmentCommand, technicalAssignmentRevocation } from './technical-assignment-contract';
 import { technicalAssignmentProof } from './technical-assignment-proof';
+import { TechnicalAssignmentPreparationError } from './technical-assignment-errors';
 
 const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
 const generation = z.number().int().positive().max(2_147_483_647);
@@ -41,16 +42,16 @@ function matchedInput(operation: TechnicalAssignmentPreviewOperation, raw: unkno
   current: TechnicalAssignmentPreviewAdmission, now: number) {
   const input = operation === 'ASSIGN' ? technicalAssignmentCommand.parse(raw) : technicalAssignmentRevocation.parse(raw);
   if (input.expectedRevision !== current.assignmentRevision || input.expectedContextSha256 !== current.contextSha256) {
-    throw new Error('TECHNICAL_ASSIGNMENT_PREVIEW_STALE');
+    throw new TechnicalAssignmentPreparationError('STALE');
   }
   if ('selection' in input) {
     if (input.targetId !== current.targetId || input.selection.kind !== current.kind
       || input.selection.userId !== current.recipientId || input.expectedRecipientEpoch !== current.recipientEpoch
       || !boundedAssignmentExpiry(input.selection.expiresAt, new Date(now))) {
-      throw new Error('TECHNICAL_ASSIGNMENT_PREVIEW_SCOPE');
+      throw new TechnicalAssignmentPreparationError('SCOPE');
     }
   } else if (!current.assignmentId || input.assignmentId !== current.assignmentId) {
-    throw new Error('TECHNICAL_ASSIGNMENT_PREVIEW_SCOPE');
+    throw new TechnicalAssignmentPreparationError('SCOPE');
   }
   return input;
 }
@@ -60,7 +61,7 @@ function expiry(input: z.infer<typeof payloadSchema>['input'], issuedAt: number,
     'selection' in input ? Date.parse(input.selection.expiresAt) : Number.POSITIVE_INFINITY);
 }
 
-/** Pure preview preparation only; no route imports this yet. The caller must
+/** Pure preview preparation. The caller must
  * build admission from the locked session, personal authority, recipient,
  * canonical target, retained journal and current document/permission checks.
  * validUntil is their earliest applicable expiry, never submitted form data.
@@ -69,7 +70,7 @@ export function createTechnicalAssignmentPreview(operation: TechnicalAssignmentP
   key: PrivilegedStepUpKey, raw: unknown, current: TechnicalAssignmentPreviewAdmission, now: number) {
   const checkedOperation = operationSchema.parse(operation), admission = admissionSchema.parse(current);
   if (!Number.isSafeInteger(now) || now < 0 || admission.validUntil <= now) {
-    throw new Error('TECHNICAL_ASSIGNMENT_PREVIEW_EXPIRED');
+    throw new TechnicalAssignmentPreparationError('EXPIRED');
   }
   const input = matchedInput(checkedOperation, raw, admission, now);
   const payload = payloadSchema.parse({ protocol: 'TECHNICAL_ASSIGNMENT_PREVIEW_V1',
@@ -77,7 +78,7 @@ export function createTechnicalAssignmentPreview(operation: TechnicalAssignmentP
     expiresAt: expiry(input, now, admission.validUntil) });
   const token = Buffer.from(canonicalJson({ payload,
     proof: technicalAssignmentProof(key, 'preview', payload) })).toString('base64url');
-  if (token.length > maxTokenLength) throw new Error('TECHNICAL_ASSIGNMENT_PREVIEW_SIZE');
+  if (token.length > maxTokenLength) throw new TechnicalAssignmentPreparationError('SIZE');
   return token;
 }
 

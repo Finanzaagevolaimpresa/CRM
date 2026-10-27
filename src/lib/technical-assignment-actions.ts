@@ -2,7 +2,7 @@
 
 import { headers, cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { z, ZodError } from 'zod';
+import { z } from 'zod';
 import type { TechnicalAssignmentManagementState } from '@/components/technical-assignment-management';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
@@ -16,15 +16,8 @@ import { technicalManagementPath } from './technical-assignment-display';
 import { readTechnicalAssignmentManagement } from './technical-assignment-management';
 import { technicalWorkItemCatalogueQuery, type TechnicalWorkItemCatalogue } from './technical-work-item-catalog';
 import { technicalDocumentCatalogueQuery, type TechnicalDocumentCatalogue } from './technical-document-catalog';
+import { technicalAssignmentFailure as failure } from './technical-assignment-failure';
 
-function failure(error: unknown): TechnicalAssignmentManagementState {
-  if (error instanceof ZodError || error instanceof SyntaxError) return { ok: false,
-    message: 'Dati non validi. Ricarica e prepara un nuovo riepilogo.' };
-  if (error instanceof TechnicalAssignmentError) return { ok: false, message: error.code === 'STALE'
-    ? 'Stato o permessi cambiati. Ricarica e prepara un nuovo riepilogo.'
-    : 'Operazione non consentita con la sessione e l’abilitazione correnti.' };
-  return { ok: false, uncertain: true, message: 'Esito non confermato. Verifica la decisione prima di ripetere un’operazione.' };
-}
 function json(form: FormData, name: string) {
   const raw = form.get(name);
   if (typeof raw !== 'string' || raw.length > 24_000) throw new TechnicalAssignmentError('DENIED');
@@ -80,7 +73,7 @@ export async function prepareTechnicalAssignment(_state: TechnicalAssignmentMana
     const operation = z.enum(['ASSIGN', 'REVOKE']).parse(form.get('operation'));
     const preview = await previewTechnicalAssignment(prisma, session, ref, operation, json(form, 'command'));
     return { ok: true, message: 'Riepilogo pronto. Nessun incarico è stato modificato.', preview };
-  } catch (error) { return failure(error); }
+  } catch (error) { return failure(error, true); }
 }
 export async function saveTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
   const session = await requireSession();

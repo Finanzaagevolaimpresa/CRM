@@ -5,6 +5,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 import { syntheticSession } from '../selective-sharing/fixtures';
 import { assignTechnical, revokeTechnical } from './fixtures';
+import { createTechnicalAssignmentPreview } from '../../src/lib/technical-assignment-preview';
 const db = new PrismaClient(), evidence = process.env.TECHNICAL_EVIDENCE!, password = process.env.TECHNICAL_BROWSER_PASSWORD!;
 const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; adminId: string; adminEmail: string;
   rows: Array<{ clientId: string; projectId: string; practiceId: string; otherProjectId: string;
@@ -301,4 +302,57 @@ test('native search continuation uses admitted rows after bulk revocation and ex
   await expect(tech.getByRole('link', { name: 'Successivi', exact: true })).toHaveCount(0);
   expect((await tc.request.get('/technical-work/projects/' + project.id)).status()).toBe(404);
   await tc.close(); await other.close();
+});
+
+test('expired native assignment preview is rejected before writing and reload prepares a new explicit decision', async ({ browser }) => {
+  const row = f.rows[5], ac = await browser.newContext(), admin = await ac.newPage();
+  await login(admin, f.adminEmail, true); await prepareAssignment(admin, row, row.techA, true);
+  const form = admin.getByRole('region', { name: 'Riepilogo incarico', exact: true }).locator('form');
+  const original = await form.locator('input[name=token]').inputValue();
+  const { payload } = JSON.parse(Buffer.from(original, 'base64url').toString('utf8'));
+  const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret: process.env.PRIVILEGED_STEP_UP_SECRET! };
+  // Signed with the isolated CI key, without weakening production clock checks.
+  const expired = createTechnicalAssignmentPreview('ASSIGN', key, payload.input, payload.admission, Date.now() - 300_001);
+  await form.locator('input[name=token]').evaluate((node, value) => { (node as HTMLInputElement).value = value; }, expired);
+  const auditBefore = await db.auditLog.count();
+  await form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect(admin.getByText('Riepilogo scaduto o non più valido. Nessun incarico modificato da questo tentativo. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
+  await expect(form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true })).toBeDisabled();
+  await expect(admin.getByRole('button', { name: 'Verifica esito della decisione', exact: true })).toHaveCount(0);
+  await expect(admin).toHaveURL(url => !url.searchParams.has('assignmentDecision'));
+  expect(await assignments(row)).toBe(0); expect(await db.auditLog.count()).toBe(auditBefore);
+  const decisions = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalAssignmentDecision" WHERE id=${payload.input.commandId}`;
+  expect(decisions[0].n).toBe(0n);
+  await screenshot(admin, 'assignment-expired-preview');
+  await admin.getByRole('link', { name: 'Ricarica per preparare una nuova decisione', exact: true }).click();
+  await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeEnabled();
+  await assign(admin, row, row.techA, true);
+  expect(await assignments(row)).toBe(1);
+  await ac.close();
+});
+
+test('unobserved transport result keeps the original decision and blocks another submission after reload', async ({ browser }) => {
+  const row = f.rows[6], ac = await browser.newContext(), admin = await ac.newPage();
+  await login(admin, f.adminEmail, true); await prepareAssignment(admin, row, row.techA, true);
+  let intercepted = 0, complete!: () => void;
+  const received = new Promise<void>(resolve => { complete = resolve; });
+  const pattern = '**/projects/**/assignments*';
+  await admin.route(pattern, async route => {
+    if (route.request().method() !== 'POST' || !route.request().headers()['next-action']) return route.continue();
+    intercepted++; await route.abort('failed'); complete();
+  });
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await received; await admin.unroute(pattern);
+  expect(intercepted).toBe(1);
+  const decision = new URL(admin.url()).searchParams.get('assignmentDecision'); expect(decision).toBeTruthy();
+  await admin.reload();
+  await admin.getByRole('button', { name: 'Verifica esito della decisione', exact: true }).click();
+  await expect(admin.getByText('Decisione non osservata. Non ripetere l’operazione finché l’esito non è riconciliato.', { exact: true })).toBeVisible();
+  await expect(admin.getByRole('combobox', { name: 'Persona da incaricare', exact: true })).toBeDisabled();
+  await expect(admin.getByRole('button', { name: 'Anteprima dell’incarico', exact: true })).toBeDisabled();
+  await expect(admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true })).toHaveCount(0);
+  expect(new URL(admin.url()).searchParams.get('assignmentDecision')).toBe(decision);
+  expect(await assignments(row)).toBe(0);
+  await screenshot(admin, 'assignment-unobserved-transport');
+  await ac.close();
 });

@@ -7,6 +7,7 @@ import { readTechnicalAssignmentPreview, type TechnicalAssignmentPreviewAdmissio
   type TechnicalAssignmentPreviewOperation } from './technical-assignment-preview';
 import { technicalAssignmentPayload, technicalAssignmentProof } from './technical-assignment-proof';
 import type { StoredTechnicalAssignment } from './technical-assignment-record';
+import { TechnicalAssignmentPreparationError } from './technical-assignment-errors';
 
 const referenceSchema = z.object({ kind: z.enum(['Project', 'TechnicalPractice']),
   targetId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/),
@@ -42,18 +43,18 @@ export function prepareTechnicalAssignmentDecision(args: {
     || (previous?.id ?? null) !== admission.assignmentId
     || (previous?.revision ?? 0) !== admission.assignmentRevision
     || (previous?.stateSha256 ?? null) !== admission.assignmentStateSha256) {
-    throw new Error('TECHNICAL_ASSIGNMENT_DECISION_STALE');
+    throw new TechnicalAssignmentPreparationError('STALE');
   }
   if (previous) {
     const retained = readRetainedTechnicalAssignmentJournal(args.journal, key, now);
     if (!retained || canonicalSha256(retained.assignment) !== canonicalSha256({ payload: previous.payload,
       proof: previous.proof, revokedAt: previous.revokedAt }) || args.assignmentId !== previous.id
       || previous.kind !== admission.kind || previous.targetId !== admission.targetId
-      || previous.recipientId !== admission.recipientId) throw new Error('TECHNICAL_ASSIGNMENT_HISTORY_UNAVAILABLE');
+      || previous.recipientId !== admission.recipientId) throw new TechnicalAssignmentPreparationError('HISTORY_UNAVAILABLE');
   } else if (args.journal !== null || operation === 'REVOKE') {
-    throw new Error('TECHNICAL_ASSIGNMENT_HISTORY_UNAVAILABLE');
+    throw new TechnicalAssignmentPreparationError('HISTORY_UNAVAILABLE');
   }
-  if (operation === 'REVOKE' && previous?.revokedAt !== null) throw new Error('TECHNICAL_ASSIGNMENT_ALREADY_REVOKED');
+  if (operation === 'REVOKE' && previous?.revokedAt !== null) throw new TechnicalAssignmentPreparationError('ALREADY_REVOKED');
   const selection = 'selection' in exact ? exact.selection : previous!.payload.selection;
   const payload = technicalAssignmentPayload.parse({ protocol: 'TECHNICAL_ASSIGNMENT_V1',
     id: z.string().uuid().parse(args.assignmentId), revision: admission.assignmentRevision + 1,

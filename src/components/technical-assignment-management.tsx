@@ -2,7 +2,7 @@
 
 import { selectedDocumentAccessLabel } from '@/lib/selected-document-formats';
 
-import { startTransition, useActionState, useState, useSyncExternalStore } from 'react';
+import { startTransition, useActionState, useEffect, useState, useSyncExternalStore } from 'react';
 import type { readTechnicalAssignmentManagement } from '@/lib/technical-assignment-management';
 import type { previewTechnicalAssignment, readTechnicalAssignmentOutcome } from '@/lib/technical-assignment-service';
 import { technicalActionLabels, technicalFieldLabels, technicalManagementPath, technicalResponsibilityLabels } from '@/lib/technical-assignment-display';
@@ -19,6 +19,7 @@ import { technicalUploadReviewPath } from '@/lib/technical-upload-display';
 type Data = Awaited<ReturnType<typeof readTechnicalAssignmentManagement>>;
 type Outcome = Awaited<ReturnType<typeof readTechnicalAssignmentOutcome>>;
 export type TechnicalAssignmentManagementState = { ok: boolean; message: string; uncertain?: boolean;
+  rejectedBeforeWrite?: true;
   preview?: Awaited<ReturnType<typeof previewTechnicalAssignment>>; outcome?: Outcome };
 export type TechnicalAssignmentManagementAction = (previous: TechnicalAssignmentManagementState, form: FormData) => Promise<TechnicalAssignmentManagementState>;
 type Actions = { previewAction: TechnicalAssignmentManagementAction; confirmAction: TechnicalAssignmentManagementAction;
@@ -51,8 +52,18 @@ function Confirm({ preview, blocked, confirmAction, receiptAction }: Actions & {
   preview: NonNullable<TechnicalAssignmentManagementState['preview']>; blocked: boolean }) {
   const ready = useSyncExternalStore(subscribeReady, browserReady, serverReady);
   const [state, submit, pending] = useActionState(confirmAction, initial);
+  useEffect(() => {
+    if (!state.rejectedBeforeWrite || state.uncertain) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('assignmentDecision') !== preview.input.commandId
+      || url.searchParams.get('recipient') !== preview.reference.recipientId) return;
+    // Only the server's typed, pre-persistence refusal settles this attempt.
+    // A missing receipt or unknown error must keep recovery in place.
+    url.searchParams.delete('assignmentDecision');
+    window.history.replaceState(window.history.state, '', url);
+  }, [state.rejectedBeforeWrite, state.uncertain, preview.input.commandId, preview.reference.recipientId]);
   const assign = 'selection' in preview.input ? preview.input.selection : null;
-  const locked = !ready || blocked || pending || state.ok || !!state.uncertain;
+  const locked = !ready || blocked || pending || !!state.message;
   return <section className="min-w-0 space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo incarico">
     <h2 className="text-xl font-bold">{assign ? 'Conferma incarico e perimetro' : 'Conferma revoca dell’incarico'}</h2>
     <p className="break-words"><strong>{preview.recipient.name}</strong> · {preview.recipient.email}</p>
