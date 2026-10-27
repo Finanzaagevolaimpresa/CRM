@@ -46,7 +46,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
     prisma.lead.findMany({ where: { deletedAt: null, AND: [leadVisibilityWhere(session)] }, select: { id: true, assignedToId: true, clientId: true } }),
   ]);
   const access = buildNotificationAccess(session, { clients, projects, services, practices: practiceContexts, leads: leadContexts });
-  const openTaskWhere = { deletedAt: null, status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] }, AND: [access.taskWhere] };
+  const openTaskWhere = { technicalPrivate: false, deletedAt: null, status: { in: ["aperta", "in_lavorazione"] as TaskStatus[] }, AND: [access.taskWhere] };
 
   const [aiAuthorizationNotifications, tasks, communicationsToReview, approvedCommunications, practices, leads, offers] = await Promise.all([
     session.role === "admin"
