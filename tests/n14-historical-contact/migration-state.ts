@@ -41,4 +41,3 @@ async function main() {
   console.log('SQL70_SYNTHETIC_PRIOR_HISTORY_READY');
 }
 void main().finally(() => db.$disconnect()).catch(() => { console.error('SQL70_SYNTHETIC_HISTORY_FAILED'); process.exitCode = 1; });
-

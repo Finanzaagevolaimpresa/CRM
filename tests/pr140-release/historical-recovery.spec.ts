@@ -29,4 +29,3 @@ test('historical contact and conversion survive exact-image restart without SLA 
     await context.close();
   }
 });
-

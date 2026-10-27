@@ -62,4 +62,3 @@ console.log('SCHEMA70_STRUCTURE_JSON='+JSON.stringify(s));
 JS
 printf '{"synthetic":true,"before":69,"after":70,"prefix69Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousResponsesAndSlaPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousSlaConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
 cat "$evidence/proof.json"
-
