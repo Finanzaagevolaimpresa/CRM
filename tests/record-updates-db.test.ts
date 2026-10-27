@@ -103,7 +103,14 @@ test('project parameters, expense addition and current notices commit once and r
   const rows = await works(f.id); assert.equal(rows.length, 1); assert.deepEqual(rows[0].event.changed, ['profile']);
   assert.equal(rows[0].recipientId, f.reader.user.id); assert.equal((await listRecordUpdates(db, f.other.session)).length, 0);
   const audit = await db.auditLog.findMany({ where: { entityId: { in: [input.commandId, rows[0].eventId] } } });
-  assert.equal(audit.length, 2); assert.doesNotMatch(JSON.stringify({ audit, rows }), /PRIVATE-|2500|2000|300\.75|199\.99|PRESERVE-ELIGIBILITY/);
+  assert.equal(audit.length, 2);
+  assert.deepEqual(audit.map(row => ({ event: row.event, before: row.before, after: row.after })).sort((a, b) => a.event.localeCompare(b.event)), [
+    { event: 'record_update_confirmed', before: null, after: { kind: 'PROJECT', changed: [{ changed: ['profile'] }] } },
+    { event: 'record_update_event_recorded', before: {}, after: { kind: 'PROJECT', recipientCount: 1 } },
+  ]);
+  assert.deepEqual(Object.keys(rows[0].event).sort(), ['changed', 'event', 'id', 'kind', 'occurredAt', 'recordId', 'scope', 'sourceKey']);
+  // Numeric substrings can occur in random record IDs; check values, not ID fragments.
+  assert.doesNotMatch(JSON.stringify({ audit, rows }), /PRIVATE-|"(?:2500(?:\.50?)?|2000|300\.75|199\.99)"|PRESERVE-ELIGIBILITY/);
 });
 test('expense edits, additions and eligibility changes invalidate a project preview even without changing project updatedAt', options, async () => {
   for (const change of ['amount', 'new', 'eligibility']) {
