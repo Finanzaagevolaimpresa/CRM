@@ -33,7 +33,7 @@ async function main() {
   await db.$transaction(async tx => { for (const p of [admin, reader, technical, other, restricted]) await revokeAllInternalSessions(tx, p.user.id, 'INTERNAL_GLOBAL', admin.user.id); });
   await assertRegistryActivationReady(db); await mkdir(evidence, { recursive: true });
   await writeFile(path.join(evidence, 'fixture.json'), JSON.stringify({ synthetic: true, adminId: admin.user.id, readerId: reader.user.id, otherId: other.user.id, leadId: leads[0].id,
-    emails: { admin: admin.user.email, reader: reader.user.email, restricted: restricted.user.email }, clientId: client.id, projectId: project.id }));
+    emails: { admin: admin.user.email, reader: reader.user.email, restricted: restricted.user.email, technical: technical.user.email }, clientId: client.id, projectId: project.id }));
   console.log('DASHBOARD_SYNTHETIC_BROWSER_READY');
 }
 main().finally(() => db.$disconnect()).catch(error => { console.error(error); process.exitCode = 1; });

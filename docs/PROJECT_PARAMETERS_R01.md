@@ -22,7 +22,7 @@ Audit e avvisi contengono soltanto etichette dei campi, mai descrizioni, importi
 o dettagli delle spese. Se cambia il titolo, l'evento nativo `RECORD_CHANGED`
 copre il salvataggio; se cambiano solo i parametri viene richiamata la stessa
 funzione della coda esistente con etichetta `profile` e chiave del comando.
-Nessuna nuova coda, cron, tabella o migration. Schema 68 invariato.
+Nessuna nuova coda, cron, tabella o migration. Schema 69 invariato.
 
 Le vecchie richieste titolo/stato restano valide e non cancellano i parametri.
 Il modulo completo gestisce al massimo 100 spese; oltre il limite restano
