@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { test, expect, type Page } from '@playwright/test';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
 const db = new PrismaClient(), evidence = process.env.DASHBOARD_EVIDENCE!, password = process.env.DASHBOARD_BROWSER_PASSWORD!;
-const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; readerId: string; otherId: string; leadId: string; emails: { admin: string; reader: string; restricted: string } };
+const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) as { synthetic: boolean; readerId: string; otherId: string; leadId: string; emails: { admin: string; reader: string; restricted: string; technical: string } };
 async function login(page: Page, email: string) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(email); await page.getByLabel('Password', { exact: true }).fill(password);
@@ -184,10 +184,15 @@ test('invalid or repeated practice filters show no records, and current permissi
     await expect(page.getByText('Filtro non valido', { exact: true })).toBeVisible();
     await expect(page.getByRole('table')).toHaveCount(0);
   }
+  // Admin deliberately retains its permissions. Exercise a revocable role with
+  // existing authorized records, rather than inventing a denial for Admin.
+  await page.context().clearCookies();
+  await login(page, f.emails.technical);
   await page.goto('/technical-office/practices?dashboard=attive');
-  await expect(page.getByRole('table')).toBeVisible();
-  const admin = await db.user.findUniqueOrThrow({ where: { email: f.emails.admin } });
-  await db.userPermissionOverride.create({ data: { userId: admin.id, permission: 'technical.read', allowed: false } });
+  await expect(page.getByRole('table').getByRole('link', { name: /^Pratica sintetica/ })).toHaveCount(18);
+  const technical = await db.user.findUniqueOrThrow({ where: { email: f.emails.technical } });
+  expect(technical.role).toBe('consulente');
+  await db.userPermissionOverride.create({ data: { userId: technical.id, permission: 'technical.read', allowed: false } });
   try {
     await page.reload();
     await expect(page).toHaveURL(/\/dashboard$/);
@@ -196,6 +201,7 @@ test('invalid or repeated practice filters show no records, and current permissi
     const response = await page.request.get('/technical-office/practices?status=in_progettazione');
     expect(new URL(response.url()).pathname).toBe('/dashboard');
     expect(await response.text()).not.toContain('Pratica sintetica');
-    await page.goto('/dashboard'); await expect(kpi(page, 'pratiche')).toHaveCount(0);
-  } finally { await db.userPermissionOverride.deleteMany({ where: { userId: admin.id, permission: 'technical.read' } }); }
+    await page.goto('/technical-office'); await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByRole('region', { name: 'Pratiche per stato' })).toHaveCount(0);
+  } finally { await db.userPermissionOverride.deleteMany({ where: { userId: technical.id, permission: 'technical.read' } }); }
 });
