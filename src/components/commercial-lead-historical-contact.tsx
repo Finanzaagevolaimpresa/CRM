@@ -31,7 +31,7 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
   const busy = !ready || pending;
 
   async function prepare(form: FormData) {
-    if (flight.current || recover) return;
+    if (flight.current || recover || receipt) return;
     const occurredAt = historicalEventInstant(date, offset);
     if (!occurredAt || form.get('attested') !== 'on') { setMessage('Indica la data effettiva, il fuso e la tua attestazione.'); return; }
     flight.current = true; setPending(true); setMessage('');
@@ -45,7 +45,7 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
     finally { flight.current = false; setPending(false); }
   }
   async function confirm(form: FormData) {
-    if (flight.current || recover || !preview || form.get('confirmed') !== 'on') return;
+    if (flight.current || recover || receipt || !preview || form.get('confirmed') !== 'on') return;
     // Remember only the command reference before sending. Reloading the page
     // must open reconciliation, not generate a fresh write after a lost reply.
     try {
@@ -80,7 +80,7 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
     <p className="break-words">Lead: {context.leadLabel}</p>
     <p>Ingresso nel CRM: {when(context.initializedAt)}. Registra un evento già avvenuto, con la sua fonte.
       La registrazione non crea una nuova risposta, non riscrive i tempi SLA e non invia messaggi.</p>
-    {!preview && !recover && <form action={prepare} className="space-y-4">
+    {!preview && !recover && !receipt && <form action={prepare} className="space-y-4">
       <label className="block">Data e ora effettive dell’evento<input className={control} type="datetime-local" required
         value={date} onChange={e => setDate(e.target.value)} disabled={busy} /></label>
       <label className="block">Fuso orario dell’evento<select aria-label="Fuso orario dell’evento" className={control} required value={offset} onChange={e => setOffset(e.target.value)} disabled={busy}>
@@ -96,7 +96,7 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
         Attesto che l’evento indicato è avvenuto prima dell’ingresso nel CRM.</label>
       <button className={button} disabled={busy}>Prepara riepilogo</button>
     </form>}
-    {preview && !recover && <section aria-label="Riepilogo del contatto precedente" className="space-y-3 rounded-xl border border-blue-200 p-4">
+    {preview && !recover && !receipt && <section aria-label="Riepilogo del contatto precedente" className="space-y-3 rounded-xl border border-blue-200 p-4">
       <h3 className="font-bold">Verifica prima di registrare</h3>
       <p>Evento reale: {when(preview.input.occurredAt)}</p>
       <p>Fonte: {historicalSourceLabels[preview.input.source]}</p><p className="break-words">Riferimento: {preview.input.evidenceReference}</p>

@@ -110,6 +110,16 @@ test('native assignment and personal acceptance lead to an exact historical prev
   await screen(x.owner, 'historical-receipt', 390);
   await x.owner.reload(); await expect(x.owner.getByRole('heading', { name: 'Contatto registrato', exact: true })).toBeVisible();
   await expect(x.owner.getByRole('button', { name: 'Registra contatto precedente', exact: true })).toHaveCount(0);
+  // Reopening the canonical route without the recovery query must keep the
+  // existing receipt and next step, without offering a second registration.
+  await x.owner.goto(x.route);
+  await expect(x.owner.getByRole('heading', { name: 'Contatto registrato', exact: true })).toBeVisible();
+  await expect(x.owner.getByRole('button', { name: 'Prepara riepilogo', exact: true })).toHaveCount(0);
+  await expect(x.owner.getByRole('button', { name: 'Registra contatto precedente', exact: true })).toHaveCount(0);
+  await expect(x.owner.getByRole('link', { name: 'Prepara la conversione in cliente', exact: true })).toBeVisible();
+  expect(await rowCount(x.lead.id)).toBe(1);
+  expect(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: x.cycle.id } })).toEqual(x.cycle);
+  await screen(x.owner, 'historical-reopened-receipt', 1440); await screen(x.owner, 'historical-reopened-receipt', 390);
   checkHydration(); await x.ac.close(); await x.cc.close();
 });
 
