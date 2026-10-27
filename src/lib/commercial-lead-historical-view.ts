@@ -29,3 +29,19 @@ export type HistoricalContactViewResult =
   | { state: 'PREVIEW'; preview: HistoricalContactViewPreview }
   | { state: 'RECORDED'; receipt: HistoricalContactViewReceipt }
   | { state: 'NOT_OBSERVED' | 'DENIED'; message: string };
+
+export const historicalClientTypeLabels = { persona_fisica: 'Persona fisica', ditta_individuale: 'Ditta individuale',
+  societa: 'Società', professionista: 'Professionista', soggetto_da_costituire: 'Soggetto da costituire',
+  associazione: 'Associazione', altro: 'Altro' } as const;
+export type HistoricalConversionViewInput = Readonly<{ protocol: 'N14_HISTORICAL_CONVERSION_V1'; commandId: string;
+  leadId: string; expectedInboxVersion: number; expectedAssignmentId: string; contactId: string;
+  clientType: keyof typeof historicalClientTypeLabels }>;
+export type HistoricalConversionViewPreview = Readonly<{ token: string; input: HistoricalConversionViewInput;
+  leadLabel: string; notes: string | null; occurredAt: string; contactRecordedAt: string;
+  source: keyof typeof historicalSourceLabels; evidenceReference: string; expiresAt: string }>;
+export type HistoricalConversionViewReceipt = Readonly<{ commandId: string; clientId: string; recordedAt: string;
+  basis: 'HISTORICAL_CONTACT_BEFORE_CRM' }>;
+export type HistoricalConversionViewResult =
+  | { state: 'PREVIEW'; preview: HistoricalConversionViewPreview }
+  | { state: 'CONVERTED'; receipt: HistoricalConversionViewReceipt }
+  | { state: 'NOT_OBSERVED' | 'DENIED'; message: string };

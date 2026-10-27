@@ -18,8 +18,8 @@ const when = (value: string) => new Date(value).toLocaleString('it-IT', { timeZo
 
 /** Native candidate flow. Server callbacks recheck the locked session/scope and
  * signed preview at each operation; a receipt is never a new write permission. */
-export function CommercialLeadHistoricalContact({ context, initialReceipt = null, ...actions }:
-  { context: Context; initialReceipt?: HistoricalContactViewReceipt | null } & Actions) {
+export function CommercialLeadHistoricalContact({ context, initialReceipt = null, conversionHref, ...actions }:
+  { context: Context; initialReceipt?: HistoricalContactViewReceipt | null; conversionHref?: string } & Actions) {
   const ready = useSyncExternalStore(subscribe, browser, server);
   const [pending, setPending] = useState(false), flight = useRef(false);
   const [preview, setPreview] = useState<HistoricalContactViewPreview | null>(null);
@@ -114,6 +114,7 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
       <p>Registrazione nel CRM: {when(receipt.recordedAt)}</p><p>Fonte: {historicalSourceLabels[receipt.input.source]}</p>
       <p className="break-words">Riferimento: {receipt.input.evidenceReference}</p>
       <p>La conversione in cliente richiede una decisione distinta. Prima risposta e tempi SLA non sono stati modificati.</p>
+      {conversionHref && <a className="inline-block font-semibold underline" href={conversionHref}>Prepara la conversione in cliente</a>}
     </section>}
     <p role="status" aria-live="polite">{message}</p>
   </section>;

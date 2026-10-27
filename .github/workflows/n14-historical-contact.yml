@@ -64,12 +64,12 @@ jobs:
           echo "HISTORY_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           git rev-parse HEAD HEAD^{tree} > "$evidence/source.txt"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-      - name: Qualify candidate persistence without runtime integration
+      - name: Qualify historical contact and exact conversion persistence
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/db/commercial-lead-historical-contact-db.test.ts | tee "$HISTORY_EVIDENCE/postgresql.tap"
-          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),t=fs.readFileSync(process.env.HISTORY_EVIDENCE+"/postgresql.tap","utf8"); for(const [key,n] of Object.entries({tests:42,pass:42,fail:0,cancelled:0,skipped:0,todo:0})){assert.match(t,new RegExp("^# "+key+" "+n+"$","m"));}'
+          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),t=fs.readFileSync(process.env.HISTORY_EVIDENCE+"/postgresql.tap","utf8"); for(const [key,n] of Object.entries({tests:48,pass:48,fail:0,cancelled:0,skipped:0,todo:0})){assert.match(t,new RegExp("^# "+key+" "+n+"$","m"));}'
       - name: Preserve source identity
         run: |
           git diff --exit-code

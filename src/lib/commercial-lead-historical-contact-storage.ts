@@ -16,6 +16,7 @@ import { canonicalJson } from './canonical-json';
 import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { createHistoricalContactPreview, readHistoricalContactPreview } from './commercial-lead-historical-preview';
+import { createHistoricalConversionPreview, readHistoricalConversionPreview } from './commercial-lead-historical-conversion-preview';
 
 // Candidate flow. Draft DDL remains isolated; deploying this module requires a
 // separate production schema/activation plan. Missing tables deny the operation.
@@ -99,7 +100,7 @@ async function lockContext(tx: Tx, actor: Actor, leadId: string) {
     initializedAt: item.initializedAt.toISOString(), recordedAt: times[0].now.toISOString(),
   };
   return { context, item, cycle: cycles[0], sessionExpiresAt: session.expiresAt.getTime(),
-    canCreateClient: hasPermission(session, 'client.write') };
+    canCreateClient: hasPermission(session, 'client.write') && hasPermission(session, 'client.read') };
 }
 
 function previewAdmission(actor: Actor, scope: Awaited<ReturnType<typeof lockContext>>) {
@@ -263,7 +264,7 @@ export async function readHistoricalLeadContactManagement(db: PrismaClient, acto
     await authorize(tx, actor);
     return { leadId, leadLabel: lead.companyName || [lead.firstName, lead.lastName].filter(Boolean).join(' '),
       initializedAt: scope.context.initializedAt, expectedInboxVersion: scope.item.version,
-      expectedAssignmentId: identifier.parse(scope.context.assignmentId), receipt: currentReceipt };
+      expectedAssignmentId: identifier.parse(scope.context.assignmentId), receipt: currentReceipt, canCreateClient: scope.canCreateClient };
   });
 }
 
@@ -279,8 +280,34 @@ export async function prepareHistoricalLeadConversion(tx: Tx, actor: Actor, inpu
   const contact = await verifyJournal(tx, row, scope);
   const basis = prepareHistoricalConversion(contact, { ...scope.context, historicalContactExists: true,
     inboxItemId: scope.item.id, cycleId: scope.cycle.id, canCreateClient: scope.canCreateClient });
+  const lead = await tx.lead.findUniqueOrThrow({ where: { id: input.leadId }, select: {
+    companyName: true, firstName: true, lastName: true, notes: true, updatedAt: true,
+  } });
+  const clientProjection = { displayName: lead.companyName || `${lead.firstName} ${lead.lastName}`.trim(),
+    notes: lead.notes, leadUpdatedAt: lead.updatedAt.toISOString() };
   return { input, basis, contact, inboxItemId: scope.item.id, cycleId: scope.cycle.id,
+    admission: { ...previewAdmission(actor, scope), contact, canCreateClient: scope.canCreateClient, clientProjection },
     payloadHash: historicalConversionHash(input, actor.userId, row.payloadHash) };
+}
+
+/** Read-only exact preview; the same facts are reloaded inside N14 at save. */
+export async function previewHistoricalLeadConversion(db: PrismaClient, actor: Actor, raw: unknown, key: PrivilegedStepUpKey) {
+  const input = historicalConversionInput(raw);
+  return withSerializableTransaction(db, async tx => {
+    if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) return unavailable();
+    const prepared = await prepareHistoricalLeadConversion(tx, actor, input);
+    return createHistoricalConversionPreview(key, raw, prepared.admission);
+  });
+}
+
+export async function assertHistoricalConversionPreview(tx: Tx, actor: Actor,
+  prepared: Awaited<ReturnType<typeof prepareHistoricalLeadConversion>>, preview: { key: PrivilegedStepUpKey; token: string }) {
+  await authorize(tx, actor);
+  const times = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`;
+  if (!times[0]) return unavailable();
+  const admission = { ...prepared.admission, context: { ...prepared.admission.context, recordedAt: times[0].now.toISOString() } };
+  const exact = readHistoricalConversionPreview(preview.key, preview.token, admission);
+  if (!exact || canonicalJson(exact) !== canonicalJson(prepared.input)) return unavailable();
 }
 
 const conversionRow = z.object({

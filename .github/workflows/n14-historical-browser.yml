@@ -99,7 +99,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$UPDATES_EVIDENCE/playwright.json" npx playwright test --config tests/n14-historical-contact/playwright.config.ts --reporter=line,json | tee "$UPDATES_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==4 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.UPDATES_EVIDENCE+"/playwright.json"); if(r.stats.expected!==7 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$UPDATES_EVIDENCE/source.txt"

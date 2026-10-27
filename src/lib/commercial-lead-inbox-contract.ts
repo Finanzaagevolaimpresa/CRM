@@ -26,7 +26,19 @@ export const COMMERCIAL_LEAD_SLA_OUTCOMES = Object.freeze([
   'MET',
   'BREACHED',
   'CLOSED_WITHOUT_RESPONSE',
+  'HISTORICAL_CONTACT_BEFORE_CRM',
 ] as const);
+
+export function commercialLeadSlaLabel(cycle: { firstResponseAt: Date | null; closedAt: Date | null;
+  dueAt: Date; outcome: string | null } | null | undefined, now: Date) {
+  if (!cycle) return 'SLA non disponibile';
+  if (cycle.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM') return 'Contatto precedente al CRM · SLA non misurato';
+  if (cycle.outcome === 'MET') return 'Risposta entro SLA';
+  if (cycle.outcome === 'BREACHED') return 'Risposta oltre SLA';
+  if (cycle.outcome === 'CLOSED_WITHOUT_RESPONSE') return 'Chiuso senza risposta';
+  if (cycle.closedAt || cycle.outcome || cycle.firstResponseAt) return 'Esito SLA non disponibile';
+  return cycle.dueAt <= now ? 'Prima risposta in ritardo' : 'In attesa di prima risposta';
+}
 export const COMMERCIAL_LEAD_ACTIVITY_TYPES = Object.freeze([
   'INITIALIZED',
   'CLAIMED',

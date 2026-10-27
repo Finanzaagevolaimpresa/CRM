@@ -7,7 +7,8 @@ import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assignCommercialLeadInboxItem, initializeCommercialLeadInboxItem,
   recordCommercialLeadFirstResponse, convertCommercialLeadInboxItem, type CommercialLeadFaultPoint } from '../../src/lib/commercial-lead-inbox';
 import { recordHistoricalLeadContact, readHistoricalLeadContactOutcome,
-  readHistoricalLeadConversionOutcome, previewHistoricalLeadContact, confirmHistoricalLeadContact } from '../../src/lib/commercial-lead-historical-contact-storage';
+  readHistoricalLeadConversionOutcome, previewHistoricalLeadContact, confirmHistoricalLeadContact,
+  previewHistoricalLeadConversion } from '../../src/lib/commercial-lead-historical-contact-storage';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { canonicalJson } from '../../src/lib/canonical-json';
 import { redactTechnicalText } from '../../src/lib/data-classification';
@@ -287,6 +288,66 @@ async function conversionFixture() {
     } };
   return { ...f, contact, conversion };
 }
+
+async function conversionPreviewFixture() {
+  const f = await conversionFixture(), raw = { ...f.conversion.historicalContact, leadId: f.lead.id,
+    expectedInboxVersion: f.conversion.expectedInboxVersion, clientType: f.conversion.clientType };
+  const preview = await previewHistoricalLeadConversion(client(), f.owner, raw, previewKey);
+  return { ...f, preview, signed: { ...f.conversion, historicalPreview: { key: previewKey, token: preview.token } } };
+}
+
+test('signed conversion preview is read-only and confirms the exact source within N14', options, async () => {
+  const f = await conversionFixture(), before = await state(f);
+  const raw = { ...f.conversion.historicalContact, leadId: f.lead.id,
+    expectedInboxVersion: f.conversion.expectedInboxVersion, clientType: f.conversion.clientType };
+  const preview = await previewHistoricalLeadConversion(client(), f.owner, raw, previewKey);
+  assert.deepEqual(await state(f), before);
+  const result = await convertCommercialLeadInboxItem(client(), { ...f.conversion, historicalPreview: { key: previewKey, token: preview.token } });
+  const after = await state(f); assert.equal(after.clients.length, 1); assert.equal(after.clients[0].id, result.id);
+  assert.equal(after.conversions.length, 1); assert.equal(after.conversionAudits.length, 1);
+  assert.equal(after.cycle.firstResponseAt, null); assert.equal(after.cycle.outcome, 'HISTORICAL_CONTACT_BEFORE_CRM');
+});
+
+test('a changed lead projection invalidates a signed conversion without changing its type or copying stale notes', options, async () => {
+  const f = await conversionPreviewFixture();
+  await client().lead.update({ where: { id: f.lead.id }, data: { notes: 'Changed synthetic notes' } });
+  const before = await state(f);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), f.signed));
+  assert.deepEqual(await state(f), before);
+});
+
+test('client authority revoked after signed preview blocks conversion and preserves the historical contact', options, async () => {
+  const f = await conversionPreviewFixture();
+  await client().userPermissionOverride.create({ data: { userId: f.owner.userId, permission: 'client.write', allowed: false } });
+  const before = await state(f);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), f.signed));
+  assert.deepEqual(await state(f), before);
+});
+
+test('another live session of the same owner cannot use the conversion preview', options, async () => {
+  const f = await conversionPreviewFixture();
+  const session = await client().internalSession.create({ data: { userId: f.owner.userId,
+    tokenDigest: randomBytes(32), expiresAt: new Date('2099-01-01T00:00:00Z') } });
+  const before = await state(f);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.signed, actor: { ...f.owner, sessionId: session.id } }));
+  assert.deepEqual(await state(f), before);
+});
+
+test('duplicate signed confirmations produce one client and an exact read-only reconciliation', options, async () => {
+  const f = await conversionPreviewFixture();
+  const results = await Promise.allSettled([1, 2].map(() => convertCommercialLeadInboxItem(client(), f.signed)));
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  const after = await state(f); assert.equal(after.clients.length, 1); assert.equal(after.conversions.length, 1);
+  const outcome = await readHistoricalLeadConversionOutcome(client(), f.owner, { leadId: f.lead.id, commandId: f.conversion.historicalContact.commandId });
+  assert.equal(outcome.state, 'CONVERTED'); assert.deepEqual(await state(f), after);
+});
+
+test('retired preview key blocks historical conversion before all writes', options, async () => {
+  const f = await conversionPreviewFixture(), before = await state(f);
+  await client().applicationKeyVersion.updateMany({ where: { purpose: 'PRIVILEGED_STEP_UP', version: previewKey.version }, data: { status: 'RETIRED', retiredAt: new Date() } });
+  try { await assert.rejects(convertCommercialLeadInboxItem(client(), f.signed)); assert.deepEqual(await state(f), before); }
+  finally { await client().applicationKeyVersion.updateMany({ where: { purpose: 'PRIVILEGED_STEP_UP', version: previewKey.version }, data: { status: 'ACTIVE', retiredAt: null } }); }
+});
 
 test('historical conversion uses the existing N14 closure and records a distinct SLA basis without a fabricated response', options, async () => {
   const f = await conversionFixture(), before = await state(f);

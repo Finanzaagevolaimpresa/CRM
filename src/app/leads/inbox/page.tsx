@@ -3,7 +3,7 @@ import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PaginationNav } from '@/components/pagination-nav';
 import { Card, EmptyState, PageHeader, StatusBadge, formatDateTime } from '@/components/ui';
 import { hasPermission, requirePermission } from '@/lib/auth';
-import { commercialLeadInboxMode } from '@/lib/commercial-lead-inbox-contract';
+import { commercialLeadInboxMode, commercialLeadSlaLabel } from '@/lib/commercial-lead-inbox-contract';
 import {
   assignCommercialLeadInbox,
   closeCommercialLeadInbox,
@@ -107,7 +107,6 @@ export default async function Page({
       {page.items.length === 0 ? <EmptyState title="Nessun item">La coda selezionata è vuota.</EmptyState> : <div className="crm-space-y-4">
         {page.items.map((item) => {
           const cycle = item.slaCycles[0];
-          const overdue = Boolean(cycle && !cycle.closedAt && !cycle.firstResponseAt && cycle.dueAt <= now);
           const owned = item.lead.assignedToId === session.userId;
           return <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -115,10 +114,12 @@ export default async function Page({
                 <a className="font-extrabold text-fai-blue underline" href={`/leads/${item.lead.id}`}>{item.lead.companyName || `${item.lead.firstName} ${item.lead.lastName}`}</a>
                 <p className="mt-1 text-sm text-slate-600">Owner: {item.lead.assignedToId ? users.get(item.lead.assignedToId) ?? 'Assegnato' : 'Da assegnare'} · origine {item.originKind}</p>
               </div>
-              <div className="flex gap-2"><StatusBadge status={item.state} /><StatusBadge status={overdue ? 'OVERDUE' : cycle?.outcome ?? 'IN SLA'} /></div>
+              <div className="flex flex-wrap gap-2"><StatusBadge status={item.state} /><StatusBadge status={commercialLeadSlaLabel(cycle, now)} /></div>
             </div>
             <p className="mt-3 text-sm text-slate-600">Disponibile: {formatDateTime(cycle?.availableAt)} · Scadenza: {formatDateTime(cycle?.dueAt)} · Risposta: {formatDateTime(cycle?.firstResponseAt)}</p>
             <div className="mt-4 flex flex-wrap gap-2">
+              {item.originKind === 'MANUAL_CRM' && item.state === 'OPEN' && owned && canWork && !cycle?.firstResponseAt
+                && session.role === 'commerciale' && <SecondaryLink href={`/leads/${item.lead.id}/historical-contact`}>Contatto precedente al CRM</SecondaryLink>}
               {item.state === 'OPEN' && owned && canWork && !cycle?.firstResponseAt && <form action={recordCommercialLeadFirstResponse}><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><PrimaryButton type="submit">Registra prima risposta</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && cycle?.firstResponseAt && <form action={convertLeadToClientAndRedirect} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="type" defaultValue="societa" className="rounded-xl border p-2"><option value="societa">Società</option><option value="ditta_individuale">Ditta individuale</option><option value="persona_fisica">Persona fisica</option><option value="professionista">Professionista</option><option value="soggetto_da_costituire">Soggetto da costituire</option><option value="associazione">Associazione</option><option value="altro">Altro</option></select><PrimaryButton type="submit">Converti</PrimaryButton></form>}
               {item.state === 'OPEN' && owned && canWork && <form action={closeCommercialLeadInbox} className="flex gap-2"><input type="hidden" name="id" value={item.lead.id} /><input type="hidden" name="expectedInboxVersion" value={item.version} /><select name="reasonCode" className="rounded-xl border p-2" defaultValue="QUALIFIED_OUT"><option value="QUALIFIED_OUT">Non qualificato</option><option value="LOST">Perso</option><option value="ARCHIVED">Archiviato</option></select><PrimaryButton type="submit">Chiudi</PrimaryButton></form>}

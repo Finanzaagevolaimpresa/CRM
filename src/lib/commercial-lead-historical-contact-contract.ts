@@ -52,8 +52,8 @@ export function historicalContactInput(value: unknown) {
 
 export type HistoricalContactInput = ReturnType<typeof historicalContactInput>;
 
-// The future persistence service must build this context from locked, authoritative rows.
-// This pure contract is not an authorization API and is not wired to a route or action.
+// The persistence service builds this context from locked, authoritative rows.
+// This pure contract does not replace the transactional authorization checks.
 export type HistoricalContactContext = Readonly<{
   leadId: string;
   actorId: string;

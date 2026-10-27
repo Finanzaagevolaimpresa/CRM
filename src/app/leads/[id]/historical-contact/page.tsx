@@ -30,6 +30,7 @@ export default async function Page({ params, searchParams }: {
     <CommercialLeadHistoricalContact context={{ leadId: scope.leadId, leadLabel: scope.leadLabel,
       commandId: randomUUID(), expectedInboxVersion: scope.expectedInboxVersion, expectedAssignmentId: scope.expectedAssignmentId,
       initializedAt: scope.initializedAt, recoverCommandId }} initialReceipt={initialReceipt}
+      conversionHref={scope.canCreateClient ? `/leads/${id}/historical-conversion` : undefined}
       previewAction={prepareHistoricalContactAction} confirmAction={saveHistoricalContactAction} outcomeAction={checkHistoricalContactAction} />
   </div>;
 }

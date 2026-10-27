@@ -1,7 +1,9 @@
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { historicalConversionInput } from './commercial-lead-historical-contact-contract';
 import { appendHistoricalLeadConversion, prepareHistoricalLeadConversion,
-  readHistoricalConversionInTransaction } from './commercial-lead-historical-contact-storage';
+  readHistoricalConversionInTransaction, assertHistoricalConversionPreview } from './commercial-lead-historical-contact-storage';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { appendResponsibilityDecision } from './responsibility';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type ClientType, type PrismaClient } from '@prisma/client';
@@ -679,10 +681,10 @@ export async function convertCommercialLeadInboxItem(
     actor: CommercialLeadActor;
     expectedInboxVersion: number;
     clientType: ClientType;
-    // Candidate historical path: no action or route supplies this yet. The
-    // immutable contact is reloaded in this same N14 transaction, never trusted
-    // from the caller. The ordinary first-response gate remains unchanged.
+    // Historical UI supplies an exact preview. Isolated storage qualification
+    // may call the transaction directly; no public action accepts a raw basis.
     historicalContact?: Readonly<{ commandId: string; contactId: string; expectedAssignmentId: string }>;
+    historicalPreview?: Readonly<{ key: PrivilegedStepUpKey; token: string }>;
     faultAt?: CommercialLeadFaultPoint;
   }>,
 ) {
@@ -691,13 +693,20 @@ export async function convertCommercialLeadInboxItem(
     ...input.historicalContact, leadId: input.leadId, expectedInboxVersion: input.expectedInboxVersion,
     clientType: input.clientType,
   });
+  if (input.historicalPreview && !historical) fail('N14_VERSION_CONFLICT');
   return transaction(db, async (tx, commandNow) => {
+    if (input.historicalPreview && !await lockRegisteredPrivilegedStepUpKey(tx, input.historicalPreview.key)) fail('N14_PERMISSION_DENIED');
     await authorizeActor(tx, input.actor, 'WORK');
     await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
     if (historical) {
       const replay = await readHistoricalConversionInTransaction(tx, input.actor,
         { leadId: input.leadId, commandId: historical.commandId }, historical);
-      if (replay) return replay.client;
+      // An expired preview cannot cause another mutation. Explicit outcome
+      // reads reconcile committed UI commands without requiring a new save.
+      if (replay) {
+        if (input.historicalPreview) fail('N14_VERSION_CONFLICT');
+        return replay.client;
+      }
     }
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
@@ -709,6 +718,7 @@ export async function convertCommercialLeadInboxItem(
     const cycle = await lockOpenCycle(tx, item.id);
     if (!cycle) fail('N14_VERSION_CONFLICT');
     const historicalBasis = historical ? await prepareHistoricalLeadConversion(tx, input.actor, historical) : null;
+    if (historicalBasis && input.historicalPreview) await assertHistoricalConversionPreview(tx, input.actor, historicalBasis, input.historicalPreview);
     if (!historicalBasis && (!cycle.firstResponseAt || !cycle.outcome)) fail('N14_FIRST_RESPONSE_REQUIRED');
 
     const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
@@ -764,6 +774,7 @@ export async function convertCommercialLeadInboxItem(
     } });
     if (historicalBasis) await appendHistoricalLeadConversion(tx, input.actor, historicalBasis, client.id, commandNow);
     inject(input.faultAt, 'AFTER_AUDIT');
+    if (historicalBasis && input.historicalPreview) await assertHistoricalConversionPreview(tx, input.actor, historicalBasis, input.historicalPreview);
     return client;
   });
 }

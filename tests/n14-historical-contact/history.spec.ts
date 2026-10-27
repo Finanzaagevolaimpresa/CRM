@@ -70,6 +70,20 @@ function hydration(page: Page) {
   page.on('pageerror', e => record(e.message)); page.on('console', e => { if (e.type() === 'error') record(e.text()); });
   return () => expect(failures).toEqual([]);
 }
+
+async function conversionPreview(browser: Browser) {
+  const x = await ownedLead(browser); await x.owner.goto(x.route); await preview(x.owner);
+  await x.owner.getByRole('button', { name: 'Registra contatto precedente', exact: true }).click();
+  await expect(x.owner.getByRole('heading', { name: 'Contatto registrato', exact: true })).toBeVisible();
+  await x.owner.getByRole('link', { name: 'Prepara la conversione in cliente', exact: true }).click();
+  await x.owner.locator('section[aria-label="Conversione da contatto precedente"][data-interactive-ready="true"]').waitFor();
+  await x.owner.getByLabel('Tipo cliente', { exact: true }).selectOption('societa');
+  await x.owner.getByRole('button', { name: 'Prepara conversione', exact: true }).click();
+  await expect(x.owner.getByRole('heading', { name: 'Verifica il cliente da registrare', exact: true })).toBeVisible();
+  await x.owner.getByRole('checkbox', { name: 'Confermo il cliente e la base storica riepilogati.', exact: true }).check();
+  expect(await db.client.count({ where: { leadId: x.lead.id } })).toBe(0);
+  return x;
+}
 test.beforeAll(async () => {
   await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(process.env.CI).toBe('true'); expect(f.synthetic).toBe(true);
   await db.commercialLeadSlaPolicyVersion.upsert({ where: { policyCode_version: { policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: 1 } },
@@ -149,4 +163,61 @@ test('Admin cannot attest for the owner and another commercial or an owner witho
   expect(await rowCount(x.lead.id)).toBe(0);
   expect(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: x.cycle.id } })).toEqual(x.cycle);
   await oc.close(); await x.ac.close(); await x.cc.close();
+});
+
+test('native historical conversion survives a lost response and reload without a second client or a fabricated SLA response', async ({ browser }) => {
+  const x = await conversionPreview(browser), checkHydration = hydration(x.owner);
+  await screen(x.owner, 'conversion-preview', 1440); await screen(x.owner, 'conversion-preview', 390);
+  let command: Captured | undefined;
+  await x.owner.route('**/historical-conversion*', async route => {
+    const req = route.request(); if (req.method() !== 'POST') { await route.continue(); return; }
+    command = { url: req.url(), headers: await req.allHeaders(), body: req.postDataBuffer()! };
+    await route.fetch(); await route.abort('failed');
+  });
+  await x.owner.getByRole('button', { name: 'Registra cliente da contatto precedente', exact: true }).click();
+  await expect.poll(() => db.client.count({ where: { leadId: x.lead.id } })).toBe(1);
+  await x.owner.unrouteAll({ behavior: 'wait' });
+  await expect(x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true })).toBeVisible();
+  await expect(x.owner.getByRole('button', { name: 'Registra cliente da contatto precedente', exact: true })).toHaveCount(0);
+  expect(x.owner.url()).toContain('historicalConversionCommand='); const outcomeUrl = x.owner.url();
+  await screen(x.owner, 'conversion-uncertain', 390);
+  await x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true }).click();
+  await expect(x.owner.getByRole('heading', { name: 'Cliente registrato', exact: true })).toBeVisible();
+  await screen(x.owner, 'conversion-receipt', 390); await x.owner.reload();
+  await expect(x.owner.getByRole('heading', { name: 'Cliente registrato', exact: true })).toBeVisible();
+  const headers = { ...command!.headers }; delete headers.cookie; delete headers['content-length'];
+  await x.owner.request.post(command!.url, { headers, data: command!.body, maxRedirects: 0 });
+  expect(await db.client.count({ where: { leadId: x.lead.id } })).toBe(1);
+  const cycle = await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: x.cycle.id } });
+  expect(cycle.firstResponseAt).toBeNull(); expect(cycle.outcome).toBe('HISTORICAL_CONTACT_BEFORE_CRM');
+  expect(cycle.dueAt).toEqual(x.cycle.dueAt); expect(cycle.availableAt).toEqual(x.cycle.availableAt);
+  const client = await db.client.findFirstOrThrow({ where: { leadId: x.lead.id } });
+  expect(client.salesOwnerId).toBe(f.commercialId); expect(await db.technicalPractice.count({ where: { clientId: client.id } })).toBe(0);
+  await x.owner.goto(`/leads/inbox?queue=closed&lead=${x.lead.id}`);
+  await expect(x.owner.getByText('Contatto precedente al CRM · SLA non misurato', { exact: true })).toBeVisible();
+  await x.admin.goto(outcomeUrl);
+  await expect(x.admin.getByRole('heading', { name: 'Conversione storica non disponibile', exact: true })).toBeVisible();
+  checkHydration(); await x.ac.close(); await x.cc.close();
+});
+
+test('native conversion rejects a changed source after preview without copying stale data', async ({ browser }) => {
+  const x = await conversionPreview(browser);
+  await db.lead.update({ where: { id: x.lead.id }, data: { notes: 'Changed synthetic source after preview' } });
+  await x.owner.getByRole('button', { name: 'Registra cliente da contatto precedente', exact: true }).click();
+  await expect(x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true })).toBeVisible();
+  expect(await db.client.count({ where: { leadId: x.lead.id } })).toBe(0);
+  expect(await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: x.cycle.id } })).toEqual(x.cycle);
+  await screen(x.owner, 'conversion-stale', 390); await x.ac.close(); await x.cc.close();
+});
+
+test('native conversion rechecks client permission after preview in the open session', async ({ browser }) => {
+  const x = await conversionPreview(browser);
+  const override = await db.userPermissionOverride.create({ data: { userId: f.commercialId, permission: 'client.write', allowed: false } });
+  try {
+    await x.owner.getByRole('button', { name: 'Registra cliente da contatto precedente', exact: true }).click();
+    await expect(x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true })).toBeVisible();
+    expect(await db.client.count({ where: { leadId: x.lead.id } })).toBe(0);
+    await x.owner.reload(); await expect(x.owner.getByRole('heading', { name: 'Conversione storica non disponibile', exact: true })).toBeVisible();
+    await screen(x.owner, 'conversion-revoked', 390);
+  } finally { await db.userPermissionOverride.delete({ where: { id: override.id } }); await x.ac.close(); await x.cc.close(); }
 });
