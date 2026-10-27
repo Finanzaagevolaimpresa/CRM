@@ -38,6 +38,7 @@ async function stepUp(page: Page) {
   await page.getByLabel('Password corrente', { exact: true }).fill(password);
   await page.getByRole('button', { name: 'Conferma per cinque minuti', exact: true }).click();
   await expect(page).toHaveURL(/\/leads\/inbox$/);
+  await expect(page.getByText(/Conferma personale attiva\. Scegli il referente/)).toBeVisible();
 }
 async function screen(page: Page, name: string, width: number) {
   await page.setViewportSize({ width, height: 950 }); await page.evaluate(() => document.fonts.ready);
