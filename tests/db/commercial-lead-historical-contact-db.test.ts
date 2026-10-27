@@ -10,6 +10,7 @@ import { recordHistoricalLeadContact, readHistoricalLeadContactOutcome,
   readHistoricalLeadConversionOutcome, previewHistoricalLeadContact, confirmHistoricalLeadContact } from '../../src/lib/commercial-lead-historical-contact-storage';
 import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
 import { canonicalJson } from '../../src/lib/canonical-json';
+import { redactTechnicalText } from '../../src/lib/data-classification';
 import { acceptResponsibility, readResponsibility } from '../../src/lib/responsibility';
 import { withSerializableTransaction } from '../../src/lib/serializable';
 import { assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -136,7 +137,7 @@ test('historical occurrence and DB registration are distinct; SLA, lead and N14 
   assert.deepEqual(after.item, { ...before.item, version: before.item.version + 1, updatedAt: new Date(result.receipt.recordedAt) });
   assert.equal(after.records.length, 1); assert.equal(after.audits.length, 1);
   assert.deepEqual(after.audits[0].after, {
-    type: 'N14_HISTORICAL_CONTACT_V1', recordId: f.input.commandId,
+    type: 'N14_HISTORICAL_CONTACT_V1', recordId: redactTechnicalText(f.input.commandId),
     beforeVersion: f.item.version, afterVersion: f.item.version + 1, outcome: 'NO_REWRITE',
   });
   assert.equal(JSON.stringify(after.audits).includes(f.input.evidenceReference), false);
@@ -302,7 +303,7 @@ test('historical conversion uses the existing N14 closure and records a distinct
   assert.deepEqual(after.records, before.records); assert.deepEqual(after.audits, before.audits);
   assert.equal(after.conversions.length, 1); assert.equal(after.conversionAudits.length, 1);
   assert.deepEqual(after.conversionAudits[0].after, { type: 'N14_HISTORICAL_CONVERSION_V1',
-    recordId: f.conversion.historicalContact.commandId, beforeVersion: before.item.version,
+    recordId: redactTechnicalText(f.conversion.historicalContact.commandId), beforeVersion: before.item.version,
     afterVersion: after.item.version, outcome: 'HISTORICAL_CONTACT_BEFORE_CRM' });
   const activity = await client().commercialLeadActivity.findMany({ where: { inboxItemId: f.item.id, reasonCode: 'CONVERTED' } });
   assert.equal(activity.length, 1); assert.equal(activity[0].activityType, 'CLOSED');
@@ -502,4 +503,35 @@ test('the preview key must remain active in the registry at confirmation', optio
   try { await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true)); }
   finally { await client().applicationKeyVersion.update({ where, data: { status: 'ACTIVE', retiredAt: null } }); }
   assert.deepEqual(await state(f), before);
+});
+
+test('numeric contact command fragments retain privacy redaction and an exact journal link', options, async () => {
+  const f = await fixture();
+  const commandId = '03123456-1234-4123-8123-123456789012';
+  const preview = await previewHistoricalLeadContact(client(), f.owner, { ...f.input, commandId }, previewKey);
+  const result = await confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true);
+  const observed = await state(f);
+  assert.equal(result.receipt.id, commandId);
+  assert.equal((observed.audits[0].after as { recordId: string }).recordId, '[REDACTED:PERSONAL]-4123-8123-123456789012');
+  assert.equal(JSON.stringify(observed.audits[0].after).includes(commandId), false);
+  const linked = await client().$queryRaw<Array<{ auditId: string }>>`SELECT "auditId" FROM "CommercialLeadHistoricalContact" WHERE id=${commandId}::uuid`;
+  assert.equal(linked[0].auditId, observed.audits[0].id);
+  assert.deepEqual(observed.cycle, f.cycle);
+  assert.equal((await readHistoricalLeadContactOutcome(client(), f.owner, { leadId: f.lead.id, commandId })).state, 'RECORDED');
+});
+
+test('numeric conversion command fragments reconcile without weakening privacy or creating a second client', options, async () => {
+  const f = await conversionFixture();
+  const commandId = '03123456-1234-4123-8123-123456789013';
+  const conversion = { ...f.conversion, historicalContact: { ...f.conversion.historicalContact, commandId } };
+  const result = await convertCommercialLeadInboxItem(client(), conversion);
+  const observed = await state(f);
+  assert.equal((observed.conversionAudits[0].after as { recordId: string }).recordId, '[REDACTED:PERSONAL]-4123-8123-123456789013');
+  assert.equal(JSON.stringify(observed.conversionAudits[0].after).includes(commandId), false);
+  const linked = await client().$queryRaw<Array<{ auditId: string }>>`SELECT "auditId" FROM "CommercialLeadHistoricalConversion" WHERE id=${commandId}::uuid`;
+  assert.equal(linked[0].auditId, observed.conversionAudits[0].id);
+  assert.equal(observed.cycle.firstResponseAt, null);
+  assert.equal((await readHistoricalLeadConversionOutcome(client(), f.owner, { leadId: f.lead.id, commandId })).clientId, result.id);
+  assert.equal((await convertCommercialLeadInboxItem(client(), conversion)).id, result.id);
+  assert.deepEqual(await state(f), observed);
 });

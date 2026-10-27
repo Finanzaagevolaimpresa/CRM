@@ -94,6 +94,14 @@ test('audit omits the source reference, dates, contact details and raw payload',
   });
 });
 
+test('audit preserves the shared sanitizer when a synthetic command resembles a phone number', () => {
+  const prepared = prepareHistoricalContact(historicalContactInput(form()), context());
+  assert.deepEqual(historicalContactAudit('03123456-1234-4123-8123-123456789012', prepared), {
+    type: 'N14_HISTORICAL_CONTACT_V1', recordId: '[REDACTED:PERSONAL]-4123-8123-123456789012',
+    beforeVersion: 2, afterVersion: 3, outcome: 'NO_REWRITE',
+  });
+});
+
 test('a caller cannot skip normalization by passing an already typed object', () => {
   const valid = historicalContactInput(form());
   rejects(() => prepareHistoricalContact({ ...valid, attested: false } as unknown as typeof valid, context()), 'INVALID_INPUT');

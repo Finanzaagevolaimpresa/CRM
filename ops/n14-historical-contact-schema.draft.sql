@@ -61,8 +61,8 @@ BEGIN
       AND (NEW.input->>'occurredAt')::timestamptz < i."initializedAt"
       AND i."initializedAt" <= NEW."recordedAt" AND NEW."recordedAt" <= clock_timestamp()
   ) THEN RAISE EXCEPTION 'N14_HISTORICAL_CONTACT_SCOPE_INVALID'; END IF;
-  expected_audit := jsonb_build_object('type','N14_HISTORICAL_CONTACT_V1','recordId',NEW.id::text,
-    'beforeVersion',NEW."inboxVersionBefore",'afterVersion',NEW."inboxVersionAfter",'outcome','NO_REWRITE');
+  expected_audit := "audit_sanitize_json_n04_v1"(jsonb_build_object('type','N14_HISTORICAL_CONTACT_V1','recordId',NEW.id::text,
+    'beforeVersion',NEW."inboxVersionBefore",'afterVersion',NEW."inboxVersionAfter",'outcome','NO_REWRITE'));
   IF NOT EXISTS (
     SELECT 1 FROM "AuditLog" a WHERE a.id=NEW."auditId" AND a."actorId"=NEW."actorId"
       AND a."entityType"='CommercialLeadInboxItem' AND a."entityId"=NEW."inboxItemId"::text

@@ -75,8 +75,8 @@ BEGIN
       AND l.xmin::text::bigint=(txid_current()%4294967296)
       AND s.xmin::text::bigint=(txid_current()%4294967296)
   ) THEN RAISE EXCEPTION 'N14_HISTORICAL_CONVERSION_SCOPE_INVALID'; END IF;
-  expected_audit := jsonb_build_object('type','N14_HISTORICAL_CONVERSION_V1','recordId',NEW.id::text,
-    'beforeVersion',NEW."inboxVersionBefore",'afterVersion',NEW."inboxVersionAfter",'outcome','HISTORICAL_CONTACT_BEFORE_CRM');
+  expected_audit := "audit_sanitize_json_n04_v1"(jsonb_build_object('type','N14_HISTORICAL_CONVERSION_V1','recordId',NEW.id::text,
+    'beforeVersion',NEW."inboxVersionBefore",'afterVersion',NEW."inboxVersionAfter",'outcome','HISTORICAL_CONTACT_BEFORE_CRM'));
   IF NOT EXISTS (SELECT 1 FROM "AuditLog" a WHERE a.id=NEW."auditId" AND a."actorId"=NEW."actorId"
     AND a."entityType"='CommercialLeadInboxItem' AND a."entityId"=NEW."inboxItemId"::text
     AND a.event='commercial_lead_historical_conversion_recorded' AND a.after=expected_audit

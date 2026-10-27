@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { redactTechnicalText } from './data-classification';
 
 export const HISTORICAL_CONTACT_PROTOCOL = 'N14_HISTORICAL_CONTACT_V1' as const;
 export const historicalContactSources = ['EMAIL', 'PHONE', 'MEETING', 'EXISTING_DOCUMENT'] as const;
@@ -149,7 +150,9 @@ export function prepareHistoricalConversion(receipt: HistoricalContactReceipt, c
 
 export function historicalContactAudit(recordId: string, prepared: PreparedHistoricalContact) {
   return Object.freeze({
-    type: HISTORICAL_CONTACT_PROTOCOL, recordId: identifier(recordId),
+    // The shared privacy sanitizer may redact a numeric UUID fragment. Compare
+    // the minimized representation; the journal keeps its exact audit FK and tx.
+    type: HISTORICAL_CONTACT_PROTOCOL, recordId: redactTechnicalText(identifier(recordId)),
     beforeVersion: prepared.expectedInboxVersion,
     afterVersion: prepared.expectedInboxVersion + 1,
     outcome: 'NO_REWRITE' as const,
@@ -190,7 +193,7 @@ export function historicalConversionHash(input: HistoricalConversionInput, actor
 }
 
 export function historicalConversionAudit(input: HistoricalConversionInput) {
-  return { type: HISTORICAL_CONVERSION_PROTOCOL, recordId: input.commandId,
+  return { type: HISTORICAL_CONVERSION_PROTOCOL, recordId: redactTechnicalText(input.commandId),
     beforeVersion: input.expectedInboxVersion, afterVersion: input.expectedInboxVersion + 1,
     outcome: HISTORICAL_CONVERSION_OUTCOME };
 }
