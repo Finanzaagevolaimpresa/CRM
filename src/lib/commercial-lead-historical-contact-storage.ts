@@ -301,7 +301,10 @@ export async function appendHistoricalLeadConversion(tx: Tx, actor: Actor,
     VALUES (${input.commandId}::uuid,${JSON.stringify(input)}::jsonb,${actor.userId},${actor.sessionId}::uuid,
       ${prepared.inboxItemId}::uuid,${prepared.cycleId}::uuid,${input.contactId}::uuid,${clientId},${recordedAt},
       ${input.expectedInboxVersion},${input.expectedInboxVersion + 1},${prepared.payloadHash},${audit.id},txid_current())`;
-  await tx.$executeRaw`SET CONSTRAINTS "CommercialLeadHistoricalConversion_journal", "CommercialLeadSlaCycle_historical_basis" IMMEDIATE`;
+  // Validate the command first, then its SLA linkage. PostgreSQL processes
+  // queued events in occurrence order when both names share one SET statement.
+  await tx.$executeRaw`SET CONSTRAINTS "CommercialLeadHistoricalConversion_journal" IMMEDIATE`;
+  await tx.$executeRaw`SET CONSTRAINTS "CommercialLeadSlaCycle_historical_basis" IMMEDIATE`;
   const result = await readHistoricalConversionInTransaction(tx, actor, { leadId: input.leadId, commandId: input.commandId }, input);
   if (!result || result.client.id !== clientId) return unavailable();
 }
