@@ -155,3 +155,42 @@ export function historicalContactAudit(recordId: string, prepared: PreparedHisto
     outcome: 'NO_REWRITE' as const,
   });
 }
+
+export const HISTORICAL_CONVERSION_PROTOCOL = 'N14_HISTORICAL_CONVERSION_V1' as const;
+export const HISTORICAL_CONVERSION_OUTCOME = 'HISTORICAL_CONTACT_BEFORE_CRM' as const;
+export const historicalClientTypes = ['persona_fisica', 'ditta_individuale', 'societa', 'professionista',
+  'soggetto_da_costituire', 'associazione', 'altro'] as const;
+
+export function historicalConversionInput(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return deny('INVALID_INPUT');
+  const v = value as Record<string, unknown>;
+  const fields = ['commandId', 'leadId', 'expectedInboxVersion', 'expectedAssignmentId', 'contactId', 'clientType'];
+  if (Object.keys(v).some(key => !fields.includes(key)) || fields.some(key => !Object.hasOwn(v, key))) return deny('INVALID_INPUT');
+  for (const field of ['commandId', 'contactId']) {
+    if (typeof v[field] !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(v[field])) return deny('INVALID_INPUT');
+  }
+  if (!Number.isSafeInteger(v.expectedInboxVersion) || Number(v.expectedInboxVersion) < 2
+    || Number(v.expectedInboxVersion) > 2_147_483_646
+    || !historicalClientTypes.includes(v.clientType as typeof historicalClientTypes[number])) return deny('INVALID_INPUT');
+  return Object.freeze({
+    protocol: HISTORICAL_CONVERSION_PROTOCOL, commandId: v.commandId as string,
+    leadId: identifier(v.leadId), expectedInboxVersion: Number(v.expectedInboxVersion),
+    expectedAssignmentId: identifier(v.expectedAssignmentId), contactId: v.contactId as string,
+    clientType: v.clientType as typeof historicalClientTypes[number],
+  });
+}
+export type HistoricalConversionInput = ReturnType<typeof historicalConversionInput>;
+
+export function historicalConversionHash(input: HistoricalConversionInput, actorId: string, contactHash: string) {
+  if (!/^[0-9a-f]{64}$/u.test(contactHash)) return deny('INVALID_INPUT');
+  const { protocol, ...raw } = input;
+  if (protocol !== HISTORICAL_CONVERSION_PROTOCOL) return deny('INVALID_INPUT');
+  const normalized = historicalConversionInput(raw);
+  return createHash('sha256').update(JSON.stringify({ input: normalized, actorId: identifier(actorId), contactHash })).digest('hex');
+}
+
+export function historicalConversionAudit(input: HistoricalConversionInput) {
+  return { type: HISTORICAL_CONVERSION_PROTOCOL, recordId: input.commandId,
+    beforeVersion: input.expectedInboxVersion, afterVersion: input.expectedInboxVersion + 1,
+    outcome: HISTORICAL_CONVERSION_OUTCOME };
+}

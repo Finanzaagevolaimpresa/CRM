@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   historicalContactAudit, historicalContactInput, HistoricalContactError, prepareHistoricalContact, prepareHistoricalConversion,
+  historicalConversionInput, historicalConversionHash,
   type HistoricalContactContext,
 } from '../src/lib/commercial-lead-historical-contact-contract';
 
@@ -147,4 +148,25 @@ test('receipt integrity and monotonic versions must be preserved before conversi
 
 test('recorded live responses stay authoritative and cannot be reclassified as historical', () => {
   rejects(() => prepareHistoricalConversion(receipt(), { ...conversionContext(), firstResponseAt: context().recordedAt }), 'ALREADY_RECORDED');
+});
+
+const conversionForm = () => ({ commandId: '22222222-2222-4222-8222-222222222222',
+  leadId: form().leadId, expectedInboxVersion: 3, expectedAssignmentId: form().expectedAssignmentId,
+  contactId: form().commandId, clientType: 'persona_fisica' });
+
+test('conversion command rejects client-supplied SLA, result identifiers and malformed scope', () => {
+  for (const change of [{ firstResponseAt: form().occurredAt }, { clientId: 'claimed-client' }, { outcome: 'MET' },
+    { expectedInboxVersion: 1 }, { commandId: 'invalid' }, { contactId: 'invalid' }, { clientType: 'unknown' }]) {
+    rejects(() => historicalConversionInput({ ...conversionForm(), ...change }), 'INVALID_INPUT');
+  }
+});
+
+test('conversion identity binds the exact command, contact, type and current actor', () => {
+  const normalized = historicalConversionInput(conversionForm());
+  const hash = historicalConversionHash(normalized, 'synthetic-commercial-a', 'a'.repeat(64));
+  for (const [input, actor, contactHash] of [
+    [historicalConversionInput({ ...conversionForm(), clientType: 'societa' }), 'synthetic-commercial-a', 'a'.repeat(64)],
+    [normalized, 'synthetic-commercial-b', 'a'.repeat(64)],
+    [normalized, 'synthetic-commercial-a', 'b'.repeat(64)],
+  ] as const) assert.notEqual(historicalConversionHash(input, actor, contactHash), hash);
 });

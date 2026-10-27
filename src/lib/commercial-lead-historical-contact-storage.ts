@@ -2,11 +2,13 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import { historicalContactAudit, historicalContactInput, HistoricalContactError, prepareHistoricalContact,
   prepareHistoricalConversion, type HistoricalContactContext, type HistoricalContactReceipt,
-  type HistoricalContactInput } from './commercial-lead-historical-contact-contract';
+  type HistoricalContactInput, historicalConversionInput, historicalConversionHash, historicalConversionAudit,
+  HISTORICAL_CONVERSION_OUTCOME, type HistoricalConversionInput } from './commercial-lead-historical-contact-contract';
 import { commercialLeadInboxMode } from './commercial-lead-inbox-contract';
 import { lockAuthoritativeInternalSession } from './internal-session-registry';
 import { hasPermission } from './permission-evaluator';
-import { readResponsibility } from './responsibility';
+import { latestResponsibility, readResponsibility } from './responsibility';
+import { responsibilityAcceptance } from './responsibility-contract';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { internalSessionMode } from './session';
 import { SerializableConflictError, withSerializableTransaction } from './serializable';
@@ -185,5 +187,131 @@ export async function readHistoricalLeadContactOutcome(db: PrismaClient, actor: 
     const result = await verifyJournal(tx, row, scope);
     await authorize(tx, actor);
     return { state: 'RECORDED' as const, mayRepeat: false as const, receipt: result };
+  });
+}
+
+/** Called only inside the existing N14 conversion transaction. No browser input
+ * is accepted as proof: the contact and current responsibility are reloaded. */
+export async function prepareHistoricalLeadConversion(tx: Tx, actor: Actor, input: HistoricalConversionInput) {
+  const scope = await lockContext(tx, actor, input.leadId);
+  if (!scope.canCreateClient) throw new HistoricalContactError('NOT_AUTHORIZED');
+  if (scope.context.inboxVersion !== input.expectedInboxVersion
+    || scope.context.assignmentId !== input.expectedAssignmentId) return unavailable();
+  const row = await loadRecord(tx, input.contactId);
+  if (!row) return unavailable();
+  const contact = await verifyJournal(tx, row, scope);
+  const basis = prepareHistoricalConversion(contact, { ...scope.context, historicalContactExists: true,
+    inboxItemId: scope.item.id, cycleId: scope.cycle.id, canCreateClient: scope.canCreateClient });
+  return { input, basis, contact, inboxItemId: scope.item.id, cycleId: scope.cycle.id,
+    payloadHash: historicalConversionHash(input, actor.userId, row.payloadHash) };
+}
+
+const conversionRow = z.object({
+  id: uuid, input: z.unknown(), actorId: identifier, sessionId: uuid, inboxItemId: uuid,
+  cycleId: uuid, contactId: uuid, clientId: identifier, recordedAt: z.date(),
+  inboxVersionBefore: z.number().int().min(2), inboxVersionAfter: z.number().int().min(3),
+  payloadHash: z.string().regex(/^[0-9a-f]{64}$/u), auditId: identifier, transactionId: z.bigint().positive(),
+}).strict();
+
+/** Current authorization is checked before an exact replay or outcome is
+ * disclosed. Reconciliation never creates a client or repeats a conversion. */
+export async function readHistoricalConversionInTransaction(tx: Tx, actor: Actor,
+  lookup: { leadId: string; commandId: string }, expected?: HistoricalConversionInput) {
+  const session = await authorize(tx, actor);
+  if (!hasPermission(session, 'client.read') || !hasPermission(session, 'client.write')) {
+    throw new HistoricalContactError('NOT_AUTHORIZED');
+  }
+  await assertNoSelectiveLeadMutation(tx, actor.userId, lookup.leadId);
+  const leads = await tx.$queryRaw<Array<{ id: string; assignedToId: string | null; clientId: string | null; deletedAt: Date | null }>>`
+    SELECT id,"assignedToId","clientId","deletedAt" FROM "Lead" WHERE id=${lookup.leadId} FOR UPDATE`;
+  const lead = leads[0];
+  if (!lead || lead.deletedAt || lead.assignedToId !== actor.userId) return unavailable();
+  const items = await tx.$queryRaw<Array<{ id: string; state: string; version: number; originKind: string; initializedAt: Date; closedAt: Date | null }>>`
+    SELECT id,state,version,"originKind","initializedAt","closedAt" FROM "CommercialLeadInboxItem" WHERE "leadId"=${lead.id} FOR UPDATE`;
+  const item = items[0];
+  if (!item || item.originKind !== 'MANUAL_CRM') return unavailable();
+  // After conversion a lead is no longer workable. Verify the unchanged
+  // assignment and its explicit acceptance directly for reconciliation; this
+  // does not revive an assignment or authorize a new operation on a closed lead.
+  const assignment = await latestResponsibility(tx, 'Lead', lead.id);
+  if (!assignment || !assignment.decision.allowed || assignment.decision.state.commercialOwnerId !== actor.userId
+    || assignment.decision.state.clientId !== null || assignment.decision.state.projectId !== null
+    || assignment.decision.state.clientServiceId !== null || assignment.decision.state.technicalOwnerId !== null) return unavailable();
+  const acceptances = await tx.auditLog.findMany({ where: { entityType: 'Lead', entityId: lead.id,
+    event: 'responsibility_accepted', actorId: actor.userId, after: { path: ['decisionId'], equals: assignment.id } },
+    select: { after: true } });
+  if (!acceptances.some(row => {
+    const parsed = responsibilityAcceptance.safeParse(row.after);
+    return parsed.success && parsed.data.role === 'commerciale' && parsed.data.userId === actor.userId
+      && parsed.data.decisionId === assignment.id;
+  })) return unavailable();
+  const rows = await tx.$queryRaw<unknown[]>`
+    SELECT id,input,"actorId","sessionId","inboxItemId","cycleId","contactId","clientId","recordedAt",
+      "inboxVersionBefore","inboxVersionAfter","payloadHash","auditId","transactionId"
+    FROM "CommercialLeadHistoricalConversion" WHERE id=${lookup.commandId}::uuid FOR SHARE`;
+  if (!rows.length) return null;
+  const parsed = conversionRow.safeParse(rows[0]);
+  if (rows.length !== 1 || !parsed.success) return unavailable();
+  const row = parsed.data;
+  if (!row.input || typeof row.input !== 'object' || Array.isArray(row.input)) return unavailable();
+  const { protocol, ...raw } = row.input as Record<string, unknown>;
+  if (protocol !== 'N14_HISTORICAL_CONVERSION_V1') return unavailable();
+  const input = historicalConversionInput(raw);
+  if (input.commandId !== row.id || input.leadId !== lead.id || input.contactId !== row.contactId
+    || row.actorId !== actor.userId || input.expectedAssignmentId !== assignment.id
+    || row.inboxItemId !== item.id || item.state !== 'CLOSED' || lead.clientId !== row.clientId
+    || input.expectedInboxVersion !== row.inboxVersionBefore || row.inboxVersionAfter !== row.inboxVersionBefore + 1
+    || item.version !== row.inboxVersionAfter || item.closedAt?.getTime() !== row.recordedAt.getTime()
+    || (expected && JSON.stringify(expected) !== JSON.stringify(input))) return unavailable();
+  const contact = await loadRecord(tx, row.contactId);
+  if (!contact || contact.actorId !== actor.userId || contact.assignmentId !== assignment.id
+    || contact.input.leadId !== lead.id || contact.inboxItemId !== item.id || contact.cycleId !== row.cycleId
+    || contact.inboxVersionAfter > row.inboxVersionBefore || contact.recordedAt > row.recordedAt) return unavailable();
+  const cycles = await tx.$queryRaw<Array<{ sequence: number; firstResponseAt: Date | null; outcome: string | null; closedAt: Date | null }>>`
+    SELECT sequence,"firstResponseAt",outcome,"closedAt" FROM "CommercialLeadSlaCycle"
+    WHERE id=${row.cycleId}::uuid AND "inboxItemId"=${item.id}::uuid FOR SHARE`;
+  const cycle = cycles[0];
+  if (cycles.length !== 1 || !cycle || cycle.sequence !== 1 || cycle.firstResponseAt
+    || cycle.outcome !== HISTORICAL_CONVERSION_OUTCOME || cycle.closedAt?.getTime() !== row.recordedAt.getTime()
+    || row.payloadHash !== historicalConversionHash(input, actor.userId, contact.payloadHash)) return unavailable();
+  const audit = await tx.auditLog.findUnique({ where: { id: row.auditId }, select: {
+    actorId: true, entityType: true, entityId: true, event: true, after: true,
+  } });
+  const expectedAudit = historicalConversionAudit(input);
+  if (!audit || audit.actorId !== actor.userId || audit.entityType !== 'CommercialLeadInboxItem'
+    || audit.entityId !== item.id || audit.event !== 'commercial_lead_historical_conversion_recorded'
+    || !audit.after || typeof audit.after !== 'object' || Array.isArray(audit.after)
+    || Object.keys(audit.after).length !== Object.keys(expectedAudit).length
+    || Object.entries(expectedAudit).some(([key, value]) => (audit.after as Record<string, unknown>)[key] !== value)) return unavailable();
+  const result = await tx.client.findUnique({ where: { id: row.clientId } });
+  if (!result || result.deletedAt || result.leadId !== lead.id || result.salesOwnerId !== actor.userId || result.type !== input.clientType) return unavailable();
+  await authorize(tx, actor);
+  return { input, client: result, recordedAt: row.recordedAt.toISOString(), basis: HISTORICAL_CONVERSION_OUTCOME };
+}
+
+export async function appendHistoricalLeadConversion(tx: Tx, actor: Actor,
+  prepared: Awaited<ReturnType<typeof prepareHistoricalLeadConversion>>, clientId: string, recordedAt: Date) {
+  const { input } = prepared;
+  const audit = await tx.auditLog.create({ data: { actorId: actor.userId, entityType: 'CommercialLeadInboxItem',
+    entityId: prepared.inboxItemId, event: 'commercial_lead_historical_conversion_recorded', after: historicalConversionAudit(input) } });
+  await tx.$executeRaw`
+    INSERT INTO "CommercialLeadHistoricalConversion"
+    (id,input,"actorId","sessionId","inboxItemId","cycleId","contactId","clientId","recordedAt",
+      "inboxVersionBefore","inboxVersionAfter","payloadHash","auditId","transactionId")
+    VALUES (${input.commandId}::uuid,${JSON.stringify(input)}::jsonb,${actor.userId},${actor.sessionId}::uuid,
+      ${prepared.inboxItemId}::uuid,${prepared.cycleId}::uuid,${input.contactId}::uuid,${clientId},${recordedAt},
+      ${input.expectedInboxVersion},${input.expectedInboxVersion + 1},${prepared.payloadHash},${audit.id},txid_current())`;
+  await tx.$executeRaw`SET CONSTRAINTS "CommercialLeadHistoricalConversion_journal", "CommercialLeadSlaCycle_historical_basis" IMMEDIATE`;
+  const result = await readHistoricalConversionInTransaction(tx, actor, { leadId: input.leadId, commandId: input.commandId }, input);
+  if (!result || result.client.id !== clientId) return unavailable();
+}
+
+export async function readHistoricalLeadConversionOutcome(db: PrismaClient, actor: Actor, requested: unknown) {
+  const lookup = z.object({ leadId: identifier, commandId: uuid }).strict().parse(requested);
+  return withSerializableTransaction(db, async tx => {
+    const result = await readHistoricalConversionInTransaction(tx, actor, lookup);
+    return result ? { state: 'CONVERTED' as const, mayRepeat: false as const,
+      clientId: result.client.id, recordedAt: result.recordedAt, basis: result.basis }
+      : { state: 'NOT_OBSERVED' as const, mayRepeat: false as const };
   });
 }

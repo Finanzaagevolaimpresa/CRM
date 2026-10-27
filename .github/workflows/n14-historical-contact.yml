@@ -8,7 +8,7 @@ on:
       - 'src/lib/**'
       - 'tests/db/commercial-lead-historical-contact-db.test.ts'
       - 'tests/commercial-lead-historical-contact*.test.ts'
-      - 'ops/n14-historical-contact-schema.draft.sql'
+      - 'ops/n14-historical-*-schema.draft.sql'
       - 'prisma/**'
       - 'package*.json'
 permissions:
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/db/commercial-lead-historical-contact-db.test.ts | tee "$HISTORY_EVIDENCE/postgresql.tap"
-          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),t=fs.readFileSync(process.env.HISTORY_EVIDENCE+"/postgresql.tap","utf8"); for(const [key,n] of Object.entries({tests:14,pass:14,fail:0,cancelled:0,skipped:0,todo:0})){assert.match(t,new RegExp("^# "+key+" "+n+"$","m"));}'
+          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),t=fs.readFileSync(process.env.HISTORY_EVIDENCE+"/postgresql.tap","utf8"); for(const [key,n] of Object.entries({tests:34,pass:34,fail:0,cancelled:0,skipped:0,todo:0})){assert.match(t,new RegExp("^# "+key+" "+n+"$","m"));}'
       - name: Preserve source identity
         run: |
           git diff --exit-code

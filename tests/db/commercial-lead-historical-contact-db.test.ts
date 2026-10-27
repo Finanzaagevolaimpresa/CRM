@@ -5,8 +5,9 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assignCommercialLeadInboxItem, initializeCommercialLeadInboxItem,
-  recordCommercialLeadFirstResponse } from '../../src/lib/commercial-lead-inbox';
-import { recordHistoricalLeadContact, readHistoricalLeadContactOutcome } from '../../src/lib/commercial-lead-historical-contact-storage';
+  recordCommercialLeadFirstResponse, convertCommercialLeadInboxItem, type CommercialLeadFaultPoint } from '../../src/lib/commercial-lead-inbox';
+import { recordHistoricalLeadContact, readHistoricalLeadContactOutcome,
+  readHistoricalLeadConversionOutcome } from '../../src/lib/commercial-lead-historical-contact-storage';
 import { acceptResponsibility, readResponsibility } from '../../src/lib/responsibility';
 import { withSerializableTransaction } from '../../src/lib/serializable';
 import { assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -41,6 +42,7 @@ test.before(async () => {
   const prisma = resolve('node_modules/prisma/build/index.js');
   execFileSync(process.execPath, [prisma, 'migrate', 'deploy', '--schema', 'prisma/schema.prisma'], options);
   execFileSync(process.execPath, [prisma, 'db', 'execute', '--file', 'ops/n14-historical-contact-schema.draft.sql', '--schema', 'prisma/schema.prisma'], options);
+  execFileSync(process.execPath, [prisma, 'db', 'execute', '--file', 'ops/n14-historical-conversion-schema.draft.sql', '--schema', 'prisma/schema.prisma'], options);
   db = new PrismaClient({ datasources: { db: { url: url.toString() } } });
   process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
   process.env.INTERNAL_SESSION_MODE = 'registry';
@@ -111,6 +113,9 @@ async function state(f: Fixture) {
     cycle: await client().commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: f.cycle.id } }),
     records: await client().$queryRaw<Array<{ id: string }>>`SELECT id FROM "CommercialLeadHistoricalContact" WHERE "inboxItemId"=${f.item.id}::uuid`,
     audits: await client().auditLog.findMany({ where: { entityId: f.item.id, event: 'commercial_lead_historical_contact_recorded' } }),
+    clients: await client().client.findMany({ where: { leadId: f.lead.id } }),
+    conversions: await client().$queryRaw<unknown[]>`SELECT * FROM "CommercialLeadHistoricalConversion" WHERE "inboxItemId"=${f.item.id}::uuid`,
+    conversionAudits: await client().auditLog.findMany({ where: { entityId: f.item.id, event: 'commercial_lead_historical_conversion_recorded' } }),
   };
 }
 const options = { skip: !enabled, timeout: 30_000 };
@@ -263,6 +268,176 @@ test('deferred transaction linkage rejects a receipt even when its content and a
   finally {
     await client().$executeRawUnsafe('DROP TRIGGER historical_transaction_fault ON "CommercialLeadHistoricalContact"');
     await client().$executeRawUnsafe('DROP FUNCTION historical_transaction_fault()');
+  }
+  assert.deepEqual(await state(f), before);
+});
+
+async function conversionFixture() {
+  const f = await fixture();
+  const contact = await recordHistoricalLeadContact(client(), f.owner, f.input);
+  const conversion = { leadId: f.lead.id, actor: f.owner, expectedInboxVersion: contact.receipt.inboxVersionAfter,
+    clientType: 'persona_fisica' as const, historicalContact: {
+      commandId: randomUUID(), contactId: contact.receipt.id, expectedAssignmentId: f.decision.id,
+    } };
+  return { ...f, contact, conversion };
+}
+
+test('historical conversion uses the existing N14 closure and records a distinct SLA basis without a fabricated response', options, async () => {
+  const f = await conversionFixture(), before = await state(f);
+  const result = await convertCommercialLeadInboxItem(client(), f.conversion), after = await state(f);
+  assert.equal(after.clients.length, 1); assert.equal(result.id, after.clients[0].id);
+  assert.equal(result.salesOwnerId, f.owner.userId); assert.equal(after.lead.clientId, result.id);
+  assert.equal(after.lead.status, 'vinto'); assert.equal(after.item.state, 'CLOSED');
+  assert.equal(after.item.version, before.item.version + 1);
+  assert.equal(after.cycle.outcome, 'HISTORICAL_CONTACT_BEFORE_CRM'); assert.equal(after.cycle.firstResponseAt, null);
+  assert.deepEqual(after.cycle.availableAt, before.cycle.availableAt); assert.deepEqual(after.cycle.dueAt, before.cycle.dueAt);
+  assert.equal(after.cycle.policyVersionId, before.cycle.policyVersionId);
+  assert.ok(after.cycle.closedAt);
+  assert.ok(after.cycle.closedAt.getTime() >= Date.parse(f.contact.receipt.recordedAt));
+  assert.deepEqual(after.records, before.records); assert.deepEqual(after.audits, before.audits);
+  assert.equal(after.conversions.length, 1); assert.equal(after.conversionAudits.length, 1);
+  assert.deepEqual(after.conversionAudits[0].after, { type: 'N14_HISTORICAL_CONVERSION_V1',
+    recordId: f.conversion.historicalContact.commandId, beforeVersion: before.item.version,
+    afterVersion: after.item.version, outcome: 'HISTORICAL_CONTACT_BEFORE_CRM' });
+  const activity = await client().commercialLeadActivity.findMany({ where: { inboxItemId: f.item.id, reasonCode: 'CONVERTED' } });
+  assert.equal(activity.length, 1); assert.equal(activity[0].activityType, 'CLOSED');
+  assert.equal(await client().technicalPractice.count({ where: { clientId: result.id } }), 0);
+});
+
+test('conversion receipt reconciles a lost response and exact replay without creating another client', options, async () => {
+  const f = await conversionFixture();
+  const result = await convertCommercialLeadInboxItem(client(), f.conversion);
+  const lookup = { leadId: f.lead.id, commandId: f.conversion.historicalContact.commandId };
+  const outcome = await readHistoricalLeadConversionOutcome(client(), f.owner, lookup);
+  assert.equal(outcome.state, 'CONVERTED'); assert.equal(outcome.clientId, result.id); assert.equal(outcome.mayRepeat, false);
+  const before = await state(f);
+  assert.equal((await convertCommercialLeadInboxItem(client(), f.conversion)).id, result.id);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion, clientType: 'societa' }));
+  assert.deepEqual(await state(f), before);
+  assert.deepEqual(await readHistoricalLeadConversionOutcome(client(), f.owner, { ...lookup, commandId: randomUUID() }), {
+    state: 'NOT_OBSERVED', mayRepeat: false,
+  });
+});
+
+test('concurrent identical historical conversion commands return the same single client', options, async () => {
+  const f = await conversionFixture();
+  const results = await Promise.all([1, 2].map(() => convertCommercialLeadInboxItem(client(), f.conversion)));
+  assert.equal(results[0].id, results[1].id);
+  const observed = await state(f);
+  assert.equal(observed.clients.length, 1); assert.equal(observed.conversions.length, 1);
+  assert.equal(observed.conversionAudits.length, 1);
+});
+
+test('distinct conversion commands racing on one receipt cannot create duplicate clients', options, async () => {
+  const f = await conversionFixture();
+  const other = { ...f.conversion, historicalContact: { ...f.conversion.historicalContact, commandId: randomUUID() } };
+  const results = await Promise.allSettled([f.conversion, other].map(input => convertCommercialLeadInboxItem(client(), input)));
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  assert.equal((await state(f)).clients.length, 1); assert.equal((await state(f)).conversions.length, 1);
+});
+
+test('contact evidence alone does not remove the ordinary first-response gate; a current response keeps its normal SLA', options, async () => {
+  const f = await conversionFixture();
+  const ordinary = { leadId: f.lead.id, actor: f.owner, expectedInboxVersion: f.conversion.expectedInboxVersion, clientType: 'persona_fisica' as const };
+  await assert.rejects(convertCommercialLeadInboxItem(client(), ordinary), /N14_FIRST_RESPONSE_REQUIRED/u);
+  const updated = await recordCommercialLeadFirstResponse(client(), { leadId: f.lead.id, actor: f.owner,
+    expectedInboxVersion: f.conversion.expectedInboxVersion });
+  const before = await state(f);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion, expectedInboxVersion: updated.item.version }));
+  assert.deepEqual(await state(f), before);
+  const result = await convertCommercialLeadInboxItem(client(), { ...ordinary, expectedInboxVersion: updated.item.version });
+  const after = await state(f);
+  assert.equal(after.lead.clientId, result.id); assert.deepEqual(after.cycle.firstResponseAt, before.cycle.firstResponseAt);
+  assert.equal(after.cycle.outcome, before.cycle.outcome); assert.equal(after.conversions.length, 0);
+});
+
+test('current response and historical conversion racing cannot classify the same cycle both ways', options, async () => {
+  const f = await conversionFixture();
+  const results = await Promise.allSettled([
+    convertCommercialLeadInboxItem(client(), f.conversion),
+    recordCommercialLeadFirstResponse(client(), { leadId: f.lead.id, actor: f.owner, expectedInboxVersion: f.conversion.expectedInboxVersion }),
+  ]);
+  assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+  const after = await state(f);
+  if (after.cycle.firstResponseAt) {
+    assert.ok(['MET', 'BREACHED'].includes(after.cycle.outcome!)); assert.equal(after.clients.length, 0); assert.equal(after.conversions.length, 0);
+  } else {
+    assert.equal(after.cycle.outcome, 'HISTORICAL_CONTACT_BEFORE_CRM'); assert.equal(after.clients.length, 1); assert.equal(after.conversions.length, 1);
+  }
+});
+
+for (const faultAt of ['AFTER_CLIENT', 'AFTER_LEAD', 'AFTER_CYCLE', 'AFTER_ITEM', 'AFTER_ACTIVITY', 'AFTER_AUDIT'] satisfies CommercialLeadFaultPoint[]) {
+  test(`conversion failure ${faultAt} rolls back client, closure, contact consumption and audit`, options, async () => {
+    const f = await conversionFixture(), before = await state(f);
+    await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion, faultAt }), new RegExp(`N14_SYNTHETIC_FAULT_${faultAt}`, 'u'));
+    assert.deepEqual(await state(f), before);
+  });
+}
+
+for (const permission of ['lead.read', 'lead.write', 'client.read', 'client.write'] as const) {
+  test(`revoked ${permission} blocks historical conversion and disclosure of an existing conversion`, options, async () => {
+    const first = await conversionFixture(), second = await conversionFixture();
+    await convertCommercialLeadInboxItem(client(), second.conversion);
+    for (const f of [first, second]) {
+      await client().userPermissionOverride.create({ data: { userId: f.owner.userId, permission, allowed: false } });
+      const before = await state(f);
+      await assert.rejects(convertCommercialLeadInboxItem(client(), f.conversion));
+      await assert.rejects(readHistoricalLeadConversionOutcome(client(), f.owner, { leadId: f.lead.id, commandId: f.conversion.historicalContact.commandId }));
+      assert.deepEqual(await state(f), before);
+    }
+  });
+}
+
+test('conversion cannot consume a different lead contact, a stale version or a previous assignment after A to B to A', options, async () => {
+  const f = await conversionFixture(), other = await conversionFixture(), before = await state(f);
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion,
+    historicalContact: { ...f.conversion.historicalContact, contactId: other.input.commandId } }));
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion, expectedInboxVersion: f.conversion.expectedInboxVersion + 1 }));
+  assert.deepEqual(await state(f), before);
+  for (const target of [f.other, f.owner]) {
+    const item = await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { id: f.item.id } });
+    await assignCommercialLeadInboxItem(client(), { leadId: f.lead.id, actor: { ...f.admin, requireManualAdmin: true },
+      targetUserId: target.userId, expectedInboxVersion: item.version });
+  }
+  const current = (await readResponsibility(client(), 'Lead', f.lead.id)).current!;
+  await withSerializableTransaction(client(), tx => acceptResponsibility(tx, f.owner, {
+    kind: 'Lead', id: f.lead.id, decisionId: current.id, role: 'commerciale',
+  }));
+  const item = await client().commercialLeadInboxItem.findUniqueOrThrow({ where: { id: f.item.id } });
+  await assert.rejects(convertCommercialLeadInboxItem(client(), { ...f.conversion, expectedInboxVersion: item.version,
+    historicalContact: { ...f.conversion.historicalContact, expectedAssignmentId: current.id } }));
+  assert.equal((await state(f)).clients.length, 0);
+});
+
+test('reconciliation denies another actor, a revoked session, deleted client or changed commercial owner', options, async () => {
+  for (const change of ['actor', 'session', 'clientTrash', 'owner'] as const) {
+    const f = await conversionFixture();
+    const converted = await convertCommercialLeadInboxItem(client(), f.conversion);
+    if (change === 'session') await client().internalSession.update({ where: { id: f.owner.sessionId }, data: { revokedAt: new Date() } });
+    if (change === 'clientTrash') await client().client.update({ where: { id: converted.id }, data: { deletedAt: new Date() } });
+    if (change === 'owner') await client().client.update({ where: { id: converted.id }, data: { salesOwnerId: f.other.userId } });
+    await assert.rejects(readHistoricalLeadConversionOutcome(client(), change === 'actor' ? f.other : f.owner,
+      { leadId: f.lead.id, commandId: f.conversion.historicalContact.commandId }));
+    assert.equal((await state(f)).clients.length, 1);
+  }
+});
+
+test('SQL rejects a historical SLA closure without its same-transaction conversion receipt', options, async () => {
+  const f = await conversionFixture(), before = await state(f);
+  await assert.rejects(client().$executeRaw`UPDATE "CommercialLeadSlaCycle" SET version=version+1,
+    "closedAt"=clock_timestamp(),outcome='HISTORICAL_CONTACT_BEFORE_CRM' WHERE id=${f.cycle.id}::uuid`, /N14_HISTORICAL_CONVERSION_RECEIPT_REQUIRED/u);
+  assert.deepEqual(await state(f), before);
+});
+
+test('conversion journal transaction fault is surfaced before success and rolls back every linked row', options, async () => {
+  const f = await conversionFixture(), before = await state(f);
+  await client().$executeRawUnsafe(`CREATE FUNCTION historical_conversion_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN NEW."transactionId" := txid_current()+1; RETURN NEW; END $$`);
+  await client().$executeRawUnsafe('CREATE TRIGGER historical_conversion_fault BEFORE INSERT ON "CommercialLeadHistoricalConversion" FOR EACH ROW EXECUTE FUNCTION historical_conversion_fault()');
+  try { await assert.rejects(convertCommercialLeadInboxItem(client(), f.conversion), /N14_HISTORICAL_CONVERSION_CONTRACT_INVALID/u); }
+  finally {
+    await client().$executeRawUnsafe('DROP TRIGGER historical_conversion_fault ON "CommercialLeadHistoricalConversion"');
+    await client().$executeRawUnsafe('DROP FUNCTION historical_conversion_fault()');
   }
   assert.deepEqual(await state(f), before);
 });
