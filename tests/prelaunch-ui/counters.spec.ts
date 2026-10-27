@@ -34,8 +34,8 @@ for (const width of [320, 768, 1440]) for (const scenario of ['positive', 'zero'
     }
     await expect(page.getByRole('progressbar')).toHaveCount(0);
     await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-    await expect(page.locator('a.crm-counter-hero').first()).toBeFocused();
-    expect(await page.locator('a.crm-counter-hero').first().evaluate(node => getComputedStyle(node).outlineStyle)).toBe('solid');
+    await expect(page.locator('a.crm-kpi-list-link').first()).toBeFocused();
+    expect(await page.locator('a.crm-kpi-list-link').first().evaluate(node => getComputedStyle(node).outlineStyle)).toBe('solid');
     await page.screenshot({ path: join(output, `${width}-${scenario}.png`), fullPage: true });
     expect(errors).toEqual([]);
   });

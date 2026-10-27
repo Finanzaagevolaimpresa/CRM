@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { DashboardIcon } from "./dashboard-icon";
 import { DashboardSelectionFocus } from "./dashboard-selection-focus";
+import { DashboardPreviewLink } from "./dashboard-preview-link";
 import type { DashboardDetailItem } from "@/lib/dashboard-selection";
 import { AnimatedCounter } from './animated-counter';
 import type { DashboardCounterGroup } from "@/lib/dashboard-counter-groups";
@@ -123,7 +124,8 @@ export function DashboardOverview({
       <div className="crm-dashboard-kpis" aria-label="Contatori operativi">
         {kpis.map(kpi => {
           const active = selected === kpi;
-          return <Link key={kpi.id ?? kpi.label} href={kpi.selectionHref ?? kpi.href} prefetch={false} scroll={false} aria-current={active ? "true" : undefined} aria-controls={kpi.selectionHref ? "dashboard-detail" : undefined} data-kpi={kpi.id ?? kpi.tone} data-tone={kpi.tone} className="crm-counter-hero crm-dashboard-kpi">
+          return <article key={kpi.id ?? kpi.label} data-selected={active ? "true" : undefined} data-kpi={kpi.id ?? kpi.tone} data-tone={kpi.tone} className="crm-counter-hero crm-dashboard-kpi">
+            <Link href={kpi.href} prefetch={false} className="crm-kpi-list-link" aria-label={`${kpi.label}: ${formatCount(kpi.value)}. Apri elenco`}>
             <div className="crm-kpi-heading"><span className="crm-kpi-icon"><DashboardIcon name={icons[kpi.tone]}/></span><h2>{kpi.label}</h2><span aria-hidden="true" className="crm-kpi-chevron">›</span></div>
             {active && <span className="crm-kpi-selected" aria-hidden="true">✓</span>}
             <div className="crm-kpi-ring">
@@ -138,7 +140,9 @@ export function DashboardOverview({
             </div>
             <span className="sr-only">{kpi.description}{active ? " · Selezionato" : ""}</span>
             <span className="crm-kpi-footer">Apri elenco <span aria-hidden="true">→</span></span>
-          </Link>;
+            </Link>
+            {kpi.selectionHref && <DashboardPreviewLink href={kpi.selectionHref} label={kpi.label} active={active}>Anteprima</DashboardPreviewLink>}
+          </article>;
         })}
       </div>
 
