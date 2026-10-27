@@ -78,8 +78,8 @@ test('expired signed preview is a definite pre-write refusal, with no decision, 
     return true;
   });
   const [counts] = await db.$queryRaw<Array<{ decisions: bigint; revisions: bigint }>>`
-    SELECT (SELECT count(*) FROM "TechnicalAssignmentDecision" WHERE id=${input.commandId}) AS decisions,
-      (SELECT count(*) FROM "TechnicalAssignmentRevision" WHERE "commandId"=${input.commandId}) AS revisions`;
+    SELECT (SELECT count(*) FROM "TechnicalAssignmentDecision" WHERE id=${input.commandId}::uuid) AS decisions,
+      (SELECT count(*) FROM "TechnicalAssignmentRevision" WHERE "commandId"=${input.commandId}::uuid) AS revisions`;
   assert.deepEqual(counts, { decisions: 0n, revisions: 0n });
   assert.equal(await db.auditLog.count(), auditBefore);
   assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 0);

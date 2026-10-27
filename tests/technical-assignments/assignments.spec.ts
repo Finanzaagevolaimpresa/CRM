@@ -313,15 +313,25 @@ test('expired native assignment preview is rejected before writing and reload pr
   const key = { version: Number(process.env.PRIVILEGED_STEP_UP_KEY_VERSION), secret: process.env.PRIVILEGED_STEP_UP_SECRET! };
   // Signed with the isolated CI key, without weakening production clock checks.
   const expired = createTechnicalAssignmentPreview('ASSIGN', key, payload.input, payload.admission, Date.now() - 300_001);
-  await form.locator('input[name=token]').evaluate((node, value) => { (node as HTMLInputElement).value = value; }, expired);
+  // Mutating a controlled hidden input is reset by React's submit render.
+  // Replace only the signed token in the actual native action request instead.
+  const pattern = '**/projects/**/assignments*';
+  let substituted = 0;
+  await admin.route(pattern, async route => {
+    const request = route.request(), body = request.postData();
+    if (request.method() !== 'POST' || !request.headers()['next-action'] || !body?.includes(original)) return route.continue();
+    substituted++;
+    await route.continue({ postData: body.replace(original, expired) });
+  });
   const auditBefore = await db.auditLog.count();
   await form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
   await expect(admin.getByText('Riepilogo scaduto o non più valido. Nessun incarico modificato da questo tentativo. Ricarica e prepara un nuovo riepilogo.', { exact: true })).toBeVisible();
+  expect(substituted).toBe(1); await admin.unroute(pattern);
   await expect(form.getByRole('button', { name: 'Conferma incarico tecnico', exact: true })).toBeDisabled();
   await expect(admin.getByRole('button', { name: 'Verifica esito della decisione', exact: true })).toHaveCount(0);
   await expect(admin).toHaveURL(url => !url.searchParams.has('assignmentDecision'));
   expect(await assignments(row)).toBe(0); expect(await db.auditLog.count()).toBe(auditBefore);
-  const decisions = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalAssignmentDecision" WHERE id=${payload.input.commandId}`;
+  const decisions = await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM "TechnicalAssignmentDecision" WHERE id=${payload.input.commandId}::uuid`;
   expect(decisions[0].n).toBe(0n);
   await screenshot(admin, 'assignment-expired-preview');
   await admin.getByRole('link', { name: 'Ricarica per preparare una nuova decisione', exact: true }).click();
