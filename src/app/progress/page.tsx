@@ -31,7 +31,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ c
   const readinessEnabled = engagementFeatureEnabled(process.env.PRACTICE_READINESS_MODE);
   const practices = readinessEnabled && hasPermission(session, 'service.read')
     ? (await listAccessiblePracticeReadiness(prisma, session)).filter(row => clientById.has(row.clientId)) : [];
-  const tasks = hasPermission(session, 'service.read') ? (await prisma.task.findMany({ where: { clientId: { in: clientIds }, deletedAt: null, type: { startsWith: 'percorso:' } } }))
+  const tasks = hasPermission(session, 'service.read') ? (await prisma.task.findMany({ where: { technicalPrivate: false, clientId: { in: clientIds }, deletedAt: null, type: { startsWith: 'percorso:' } } }))
     .filter(row => canViewTask(session, { ...row, client: row.clientId ? clientById.get(row.clientId) ?? null : null,
       project: row.projectId ? projectById.get(row.projectId) ?? null : null, clientService: row.clientServiceId ? serviceById.get(row.clientServiceId) ?? null : null })) : [];
   const contracts = canReadContracts ? (await prisma.contract.findMany({ where: { clientId: { in: clientIds } }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }] }))

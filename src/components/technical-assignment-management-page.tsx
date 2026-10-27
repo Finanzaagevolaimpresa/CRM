@@ -6,7 +6,8 @@ import { SecondaryLink } from '@/components/actions';
 import { TechnicalAssignmentManagement } from '@/components/technical-assignment-management';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { technicalTargetReference, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
+import { technicalTargetReference, technicalManagementPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
+import { hasPermission } from '@/lib/permission-evaluator';
 import { readTechnicalAssignmentManagementForPage } from '@/lib/technical-assignment-management';
 import { prepareTechnicalAssignment, saveTechnicalAssignment, checkTechnicalAssignment, searchTechnicalWorkItemCatalogue, searchTechnicalDocumentCatalogue } from '@/lib/technical-assignment-actions';
 
@@ -22,6 +23,8 @@ export async function TechnicalAssignmentManagementPage({ target: raw, query }: 
   return <div className="space-y-6"><PageHeader title="Incarichi tecnici e perimetri personali"
     description="Più persone possono lavorare sullo stesso record, ciascuna con responsabilità, operazioni, campi e documenti esplicitamente scelti." />
     <SecondaryLink href={target.data.kind === 'Project' ? `/projects/${target.data.targetId}` : `/technical-office/practices/${target.data.targetId}`}>Torna alla scheda</SecondaryLink>
+    {hasPermission(session, 'service.write') && !session.permissionOverrides.some(p => p.permission === 'service.write' && !p.allowed)
+      && <SecondaryLink href={`${technicalManagementPath(data.target)}/create`}>Crea attività o checklist privata</SecondaryLink>}
     <TechnicalAssignmentManagement key={`${data.target.kind}:${data.target.targetId}:${data.recipient?.id}:${data.recipient?.epoch}:${data.contextSha256}`}
       data={data} initialCommandId={randomUUID()} revocationCommandId={randomUUID()} catalogueAction={searchTechnicalWorkItemCatalogue}
       documentCatalogueAction={searchTechnicalDocumentCatalogue}

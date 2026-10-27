@@ -223,6 +223,9 @@ async function main() {
       services: await db.clientService.findMany({ orderBy: { id: 'asc' } }),
       technicalPractices: await db.technicalPractice.findMany({ orderBy: { id: 'asc' } }),
       tasks: await db.task.findMany({ orderBy: { id: 'asc' } }),
+      privateItemOrigins: await db.technicalPrivateItemOrigin.findMany({ orderBy: { commandId: 'asc' } }),
+      privateChecklists: await db.documentChecklistItem.findMany({ where: { technicalPrivate: true }, orderBy: { id: 'asc' } }),
+      privateItemAudit: await db.auditLog.findMany({ where: { event: 'technical_item_created_private' }, orderBy: { id: 'asc' } }),
       documentVersions: await db.documentVersion.findMany({ orderBy: { id: 'asc' } }),
       acquiredDocuments: await db.document.findMany({ where: { visibilityLevel: 'technical_admin_private_v1' }, orderBy: { id: 'asc' } }),
       documentAcquisitions: await db.technicalDocumentAcquisition.findMany({ orderBy: { commandId: 'asc' } }),
@@ -240,8 +243,10 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 68);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261024190000_technical_document_acquisition_v1');
+    assert.equal(data.ledger.length, 69);
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261027010000_technical_private_items_v1');
+    assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
+    assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);
     assert.equal(data.uploadFiles.length, 4); assert.equal(data.uploadAudit.length, 6);
     assert.equal(data.acquiredDocuments.length, 1); assert.equal(data.documentAcquisitions.length, 1); assert.equal(data.acquisitionAudit.length, 1);

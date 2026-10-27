@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind exact candidate and preserved schema68
+      - name: Bind exact candidate and preserved schema69
         shell: bash
         run: |
           set -euo pipefail
@@ -60,7 +60,7 @@ jobs:
           echo "DASHBOARD_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 68
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
       - name: PostgreSQL complete counts and current preview permissions
         if: matrix.target == 'postgresql'
         shell: bash
