@@ -1,0 +1,357 @@
+{
+  "tables": [
+    {
+      "name": "TechnicalPrivateItemOrigin",
+      "kind": "r",
+      "persistence": "p",
+      "rowSecurity": false,
+      "forcedRowSecurity": false,
+      "ownerMatches": true
+    }
+  ],
+  "columns": [
+    {
+      "table": "DocumentChecklistItem",
+      "name": "technicalPrivate",
+      "type": "boolean",
+      "udt": "bool",
+      "nullable": "NO",
+      "default": "false"
+    },
+    {
+      "table": "Task",
+      "name": "technicalPrivate",
+      "type": "boolean",
+      "udt": "bool",
+      "nullable": "NO",
+      "default": "false"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "kind",
+      "type": "text",
+      "udt": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "itemId",
+      "type": "text",
+      "udt": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "commandId",
+      "type": "uuid",
+      "udt": "uuid",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "actorId",
+      "type": "text",
+      "udt": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "sessionId",
+      "type": "uuid",
+      "udt": "uuid",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "command",
+      "type": "jsonb",
+      "udt": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "admission",
+      "type": "jsonb",
+      "udt": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "origin",
+      "type": "jsonb",
+      "udt": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "originProof",
+      "type": "text",
+      "udt": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "receipt",
+      "type": "jsonb",
+      "udt": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "receiptProof",
+      "type": "text",
+      "udt": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "createdAt",
+      "type": "timestamp without time zone",
+      "udt": "timestamp",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "transactionId",
+      "type": "bigint",
+      "udt": "int8",
+      "nullable": "NO",
+      "default": "txid_current()"
+    }
+  ],
+  "triggers": [
+    {
+      "table": "DocumentChecklistItem",
+      "name": "checklist_private_marker_guard",
+      "enabled": "O",
+      "deferrable": false,
+      "initiallyDeferred": false,
+      "functionSchema": "public",
+      "functionName": "fai_technical_private_marker_guard",
+      "definition": "CREATE TRIGGER checklist_private_marker_guard BEFORE DELETE OR UPDATE ON public.\"DocumentChecklistItem\" FOR EACH ROW EXECUTE FUNCTION fai_technical_private_marker_guard()"
+    },
+    {
+      "table": "DocumentChecklistItem",
+      "name": "checklist_private_origin_required",
+      "enabled": "O",
+      "deferrable": true,
+      "initiallyDeferred": true,
+      "functionSchema": "public",
+      "functionName": "fai_technical_private_creation_required",
+      "definition": "CREATE CONSTRAINT TRIGGER checklist_private_origin_required AFTER INSERT ON public.\"DocumentChecklistItem\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_private_creation_required()"
+    },
+    {
+      "table": "Task",
+      "name": "task_private_marker_guard",
+      "enabled": "O",
+      "deferrable": false,
+      "initiallyDeferred": false,
+      "functionSchema": "public",
+      "functionName": "fai_technical_private_marker_guard",
+      "definition": "CREATE TRIGGER task_private_marker_guard BEFORE DELETE OR UPDATE ON public.\"Task\" FOR EACH ROW EXECUTE FUNCTION fai_technical_private_marker_guard()"
+    },
+    {
+      "table": "Task",
+      "name": "task_private_origin_required",
+      "enabled": "O",
+      "deferrable": true,
+      "initiallyDeferred": true,
+      "functionSchema": "public",
+      "functionName": "fai_technical_private_creation_required",
+      "definition": "CREATE CONSTRAINT TRIGGER task_private_origin_required AFTER INSERT ON public.\"Task\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_private_creation_required()"
+    },
+    {
+      "table": "AuditLog",
+      "name": "technical_private_audit_retained",
+      "enabled": "O",
+      "deferrable": false,
+      "initiallyDeferred": false,
+      "functionSchema": "public",
+      "functionName": "fai_technical_assignment_retained",
+      "definition": "CREATE TRIGGER technical_private_audit_retained BEFORE DELETE OR UPDATE ON public.\"AuditLog\" FOR EACH ROW WHEN ((old.event = 'technical_item_created_private'::text)) EXECUTE FUNCTION fai_technical_assignment_retained()"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "technical_private_creation_atomic",
+      "enabled": "O",
+      "deferrable": true,
+      "initiallyDeferred": true,
+      "functionSchema": "public",
+      "functionName": "fai_technical_private_creation_atomic",
+      "definition": "CREATE CONSTRAINT TRIGGER technical_private_creation_atomic AFTER INSERT ON public.\"TechnicalPrivateItemOrigin\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_technical_private_creation_atomic()"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "technical_private_origin_no_truncate",
+      "enabled": "O",
+      "deferrable": false,
+      "initiallyDeferred": false,
+      "functionSchema": "public",
+      "functionName": "fai_technical_assignment_retained",
+      "definition": "CREATE TRIGGER technical_private_origin_no_truncate BEFORE TRUNCATE ON public.\"TechnicalPrivateItemOrigin\" FOR EACH STATEMENT EXECUTE FUNCTION fai_technical_assignment_retained()"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "technical_private_origin_retained",
+      "enabled": "O",
+      "deferrable": false,
+      "initiallyDeferred": false,
+      "functionSchema": "public",
+      "functionName": "fai_technical_assignment_retained",
+      "definition": "CREATE TRIGGER technical_private_origin_retained BEFORE DELETE OR UPDATE ON public.\"TechnicalPrivateItemOrigin\" FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_retained()"
+    }
+  ],
+  "functions": [
+    {
+      "name": "fai_technical_private_creation_atomic",
+      "schema": "public",
+      "arguments": "",
+      "returns": "trigger",
+      "language": "plpgsql",
+      "volatility": "v",
+      "securityDefiner": false,
+      "configuration": null,
+      "ownerMatches": true,
+      "bodySha256": "cf799eaf91faf8fd534c2ebc7584e26f3726f811b666b2593e8c8476f7b10eda"
+    },
+    {
+      "name": "fai_technical_private_creation_required",
+      "schema": "public",
+      "arguments": "",
+      "returns": "trigger",
+      "language": "plpgsql",
+      "volatility": "v",
+      "securityDefiner": false,
+      "configuration": null,
+      "ownerMatches": true,
+      "bodySha256": "082e7d16a0ffa168d7149109761208c26d76bc8fce10822c2527727169e79f9f"
+    },
+    {
+      "name": "fai_technical_private_marker_guard",
+      "schema": "public",
+      "arguments": "",
+      "returns": "trigger",
+      "language": "plpgsql",
+      "volatility": "v",
+      "securityDefiner": false,
+      "configuration": null,
+      "ownerMatches": true,
+      "bodySha256": "0d4b8bbe69a17e1032db0e78df36ea44b866506d6ab2ebb913cfa8e3c753b589"
+    }
+  ],
+  "constraints": [
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_actorId_fkey",
+      "definition": "FOREIGN KEY (\"actorId\") REFERENCES \"User\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "validated": true,
+      "type": "f"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_admission_check",
+      "definition": "CHECK ((jsonb_typeof(admission) = 'object'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_commandId_key",
+      "definition": "UNIQUE (\"commandId\")",
+      "validated": true,
+      "type": "u"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_command_check",
+      "definition": "CHECK ((jsonb_typeof(command) = 'object'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_itemId_check",
+      "definition": "CHECK ((\"itemId\" ~ '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_kind_check",
+      "definition": "CHECK ((kind = ANY (ARRAY['Task'::text, 'ChecklistItem'::text])))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_originProof_check",
+      "definition": "CHECK ((\"originProof\" ~ '^[a-f0-9]{64}$'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_origin_check",
+      "definition": "CHECK ((jsonb_typeof(origin) = 'object'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_pkey",
+      "definition": "PRIMARY KEY (kind, \"itemId\")",
+      "validated": true,
+      "type": "p"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_receiptProof_check",
+      "definition": "CHECK ((\"receiptProof\" ~ '^[a-f0-9]{64}$'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "TechnicalPrivateItemOrigin_receipt_check",
+      "definition": "CHECK ((jsonb_typeof(receipt) = 'object'::text))",
+      "validated": true,
+      "type": "c"
+    },
+    {
+      "table": "\"TechnicalPrivateItemOrigin\"",
+      "name": "technical_private_creation_atomic",
+      "definition": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      "validated": true,
+      "type": "t"
+    }
+  ],
+  "indexes": [
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "TechnicalPrivateItemOrigin_actor_created_idx",
+      "definition": "CREATE INDEX \"TechnicalPrivateItemOrigin_actor_created_idx\" ON public.\"TechnicalPrivateItemOrigin\" USING btree (\"actorId\", \"createdAt\")"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "TechnicalPrivateItemOrigin_commandId_key",
+      "definition": "CREATE UNIQUE INDEX \"TechnicalPrivateItemOrigin_commandId_key\" ON public.\"TechnicalPrivateItemOrigin\" USING btree (\"commandId\")"
+    },
+    {
+      "table": "TechnicalPrivateItemOrigin",
+      "name": "TechnicalPrivateItemOrigin_pkey",
+      "definition": "CREATE UNIQUE INDEX \"TechnicalPrivateItemOrigin_pkey\" ON public.\"TechnicalPrivateItemOrigin\" USING btree (kind, \"itemId\")"
+    }
+  ]
+}

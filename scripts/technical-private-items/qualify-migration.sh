@@ -30,6 +30,7 @@ footprint() {
  done < "$evidence/prior-tables.txt"
 }
 footprint "$evidence/before.txt"
+python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py capture68
 sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$ddl" > "$evidence/fault.sql"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log" 2>&1; then exit 1; fi
 grep -Fq 'division by zero' "$evidence/fault.log"
@@ -39,6 +40,7 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fai_te
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
 npx prisma migrate deploy
+python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py initialization
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261027010000_technical_private_items_v1' ORDER BY migration_name" > "$evidence/prefix68-after.txt"
 cmp "$evidence/prefix68-before.txt" "$evidence/prefix68-after.txt"
