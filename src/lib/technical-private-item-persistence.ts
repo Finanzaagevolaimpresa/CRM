@@ -60,5 +60,8 @@ export async function persistTechnicalPrivateItem(tx: Tx, state: TechnicalAssign
     after: { action: 'create_private_item', type: c.kind }, createdAt: time } });
   const retained = await loadTechnicalPrivateItemRecord(tx, state, c.commandId);
   if (!retained || canonicalJson(retained) !== canonicalJson(saved)) unavailable();
+  // Surface deferred failures inside the transaction callback; do not depend
+  // on the adapter propagating a constraint error from COMMIT.
+  await tx.$executeRaw`SET CONSTRAINTS task_private_origin_required, checklist_private_origin_required, technical_private_creation_atomic IMMEDIATE`;
   return retained.receipt;
 }

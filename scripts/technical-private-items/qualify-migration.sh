@@ -46,7 +46,7 @@ footprint "$evidence/after.txt"
 cmp "$evidence/before.txt" "$evidence/after.txt"
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "TechnicalPrivateItemOrigin"')" = 0
 test "$(psql "$db" -Atc 'SELECT (SELECT count(*) FROM "Task" WHERE "technicalPrivate")+(SELECT count(*) FROM "DocumentChecklistItem" WHERE "technicalPrivate")')" = 0
-test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('technical_private_origin_retained','technical_private_origin_no_truncate','task_private_marker_guard','checklist_private_marker_guard','task_private_origin_required','checklist_private_origin_required','technical_private_creation_atomic')")" = 7
+test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('technical_private_origin_retained','technical_private_origin_no_truncate','task_private_marker_guard','checklist_private_marker_guard','task_private_origin_required','checklist_private_origin_required','technical_private_creation_atomic','technical_private_audit_retained')")" = 8
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgdeferrable AND tginitdeferred AND tgname IN ('task_private_origin_required','checklist_private_origin_required','technical_private_creation_atomic')")" = 3
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq TECHNICAL_PRIVATE_ITEM_SCHEMA68_REQUIRED "$evidence/replay.log"

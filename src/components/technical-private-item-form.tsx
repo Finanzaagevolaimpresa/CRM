@@ -56,11 +56,11 @@ export function TechnicalPrivateItemForm({ target, contextSha256, initialCommand
   return <section className="min-w-0 space-y-4" data-private-item-ready={ready ? 'true' : 'false'}>
     <form action={submit} className="space-y-4" onSubmit={event => { event.preventDefault(); const form = new FormData(event.currentTarget); startTransition(() => submit(form)); }}>
       <input type="hidden" name="command" value={JSON.stringify(command)} />
-      <label className="block space-y-2">Tipo di elemento<select className={control} disabled={locked} value={kind}
+      <label className="block space-y-2">Tipo di elemento<select aria-label="Tipo di elemento" className={control} disabled={locked} value={kind}
         onChange={e => setKind(e.target.value as typeof kind)}><option value="Task">Attività</option><option value="ChecklistItem">Voce checklist</option></select></label>
       <label className="block space-y-2">Titolo<input className={control} value={title} required maxLength={200} disabled={locked} onChange={e => setTitle(e.target.value)} /></label>
       <label className="block space-y-2">{kind === 'Task' ? 'Descrizione' : 'Note'}<textarea className={control} value={text} rows={4} maxLength={5000} disabled={locked} onChange={e => setText(e.target.value)} /></label>
-      {kind === 'Task' && <div className="grid min-w-0 gap-4 sm:grid-cols-2"><label className="block space-y-2">Priorità<select className={control} disabled={locked} value={priority}
+      {kind === 'Task' && <div className="grid min-w-0 gap-4 sm:grid-cols-2"><label className="block space-y-2">Priorità<select aria-label="Priorità" className={control} disabled={locked} value={priority}
         onChange={e => setPriority(e.target.value as typeof priority)}>{['bassa', 'media', 'alta', 'urgente'].map(p => <option key={p} value={p}>{p}</option>)}</select></label>
         <label className="block space-y-2">Scadenza facoltativa<input type="datetime-local" className={control} value={dueAt} disabled={locked} onChange={e => setDueAt(e.target.value)} /></label></div>}
       <button className={button} disabled={locked || !title.trim() || (kind === 'Task' && invalidDate)}>Prepara riepilogo</button><p role="status">{state.message}</p>

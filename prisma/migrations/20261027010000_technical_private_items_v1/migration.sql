@@ -37,6 +37,11 @@ CREATE TRIGGER technical_private_origin_retained BEFORE UPDATE OR DELETE ON "Tec
  FOR EACH ROW EXECUTE FUNCTION fai_technical_assignment_retained();
 CREATE TRIGGER technical_private_origin_no_truncate BEFORE TRUNCATE ON "TechnicalPrivateItemOrigin"
  FOR EACH STATEMENT EXECUTE FUNCTION fai_technical_assignment_retained();
+-- Retain the exact minimal creation audit even if another statement is issued
+-- later in the same transaction, after the immediate atomicity check.
+CREATE TRIGGER technical_private_audit_retained BEFORE UPDATE OR DELETE ON "AuditLog"
+ FOR EACH ROW WHEN (OLD.event='technical_item_created_private')
+ EXECUTE FUNCTION fai_technical_assignment_retained();
 
 CREATE FUNCTION fai_technical_private_marker_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

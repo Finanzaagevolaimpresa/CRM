@@ -118,7 +118,7 @@ test('same-client and same-project sibling practices cannot adopt the private or
   assert.equal((await db.client.findUniqueOrThrow({ where: { id: f.client.id } })).salesOwnerId, f.salesA.user.id);
 });
 test('project creation is private and cannot be inherited by a child practice sharing the same client', options, async () => {
-  const f = await technicalFixture(db, admin), p = await prepare(f, 'ChecklistItem', technicalTarget(f, 'Project')); await confirm(p);
+  const f = await technicalFixture(db, admin, undefined, 'consulente'), p = await prepare(f, 'ChecklistItem', technicalTarget(f, 'Project')); await confirm(p);
   await grant(p, f.techB);
   assert.equal((await readTechnicalWorkItem(db, f.techB.session, p.target, { kind: p.command.kind, itemId: p.command.itemId })).fields.title, p.command.values.title);
   const view = await readTechnicalAssignmentManagement(db, admin.session, technicalTarget(f), f.techB.user.id);
@@ -196,6 +196,8 @@ test('DB constraints reject an orphan private row and forbid adding or removing 
   await assert.rejects(db.task.update({ where: { id: p.command.itemId }, data: { projectId: f.otherProject.id } }));
   await assert.rejects(db.task.delete({ where: { id: p.command.itemId } }));
   await assert.rejects(db.technicalPrivateItemOrigin.delete({ where: { commandId: p.command.commandId } }));
+  await assert.rejects(db.auditLog.update({ where: { id: p.command.commandId }, data: { after: { text: 'EXTRA' } } }));
+  await assert.rejects(db.auditLog.delete({ where: { id: p.command.commandId } }));
 });
 test('an audit with extra content cannot commit a creation, despite a valid signed command', options, async () => {
   const f = await technicalFixture(db, admin), p = await prepare(f), before = await count();

@@ -52,7 +52,7 @@ export async function lockTechnicalWorkItemSource(tx: Tx, state: TechnicalAssign
   const item = { id: row.id, kind: reference.kind, clientId: row.clientId, projectId: row.projectId,
     serviceId: row.clientServiceId, companyId: task?.companyId ?? null,
     active: true, financialRestricted: false, scopeGeneration: epoch.scopeGeneration };
-  const origin = await readTechnicalPrivateItemOrigin(tx, state.key, reference);
+  const origin = await readTechnicalPrivateItemOrigin(tx, state.key, { kind: reference.kind, itemId: reference.itemId });
   if (row.technicalPrivate !== (origin !== null) || !admitsTechnicalPrivateItemOrigin(origin, reference, parent)
     || !technicalItemMatchesParent(parent, item)) denied();
   let documentEpoch: number | null = null;
