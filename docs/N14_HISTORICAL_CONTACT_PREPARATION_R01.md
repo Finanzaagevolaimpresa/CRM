@@ -1,0 +1,32 @@
+# Contatto antecedente all’ingresso nel CRM — preparazione
+
+Questo ramo dipende dal candidato PR232. Contiene il contratto puro, il modulo candidato di persistenza non collegato e prove locali. Non introduce route, action, migration della catena Prisma, attivazioni o invii; la persistenza resta da qualificare su PostgreSQL prima di qualsiasi integrazione.
+
+Il percorso corrente non può rappresentare correttamente un contatto anteriore alla creazione del lead: `CommercialLeadSlaCycle` richiede `firstResponseAt >= availableAt` e l’azione esistente registra l’ora del comando nel database. La conversione controlla una risposta corrente. Non modificare queste date o registrare un contatto fittizio.
+
+La registrazione storica proposta mantiene distinti l’evento reale (`occurredAt`), la fonte e il riferimento della prova, il referente che attesta e la data di registrazione determinata dal database. L’Admin assegna; il commerciale corrente accetta la decisione di responsabilità e attesta il contatto effettivo. Un cambio A→B→A richiede la nuova accettazione. La fonte è un riferimento dichiarato dall’operatore, non una prova verificata automaticamente e non un URL da aprire automaticamente.
+
+Il servizio candidato rilegge e blocca sessione, lead, inbox e ciclo e verifica la decisione di responsabilità e la sua accettazione sotto lo stesso lock del lead. Il contratto puro non sostituisce questi controlli. La prima versione riguarda il primo ciclo di un lead manuale, aperto, non convertito, non nel cestino e senza una risposta già registrata.
+
+La persistenza richiede una ricevuta immutabile separata, con comando univoco e hash del contenuto. Scrittura, avanzamento della versione inbox e audit minimo dovranno essere atomici. La risposta persa si riconcilia attraverso lo stesso comando; l’assenza di ricevuta non autorizza una ripetizione. Le prove dovranno coprire cambi di referente, revoche, concorrenza, doppio comando e rollback dell’audit.
+
+Il contratto puro prepara la conversione soltanto da una ricevuta persistita e ancora pertinente: ricontrolla referente, sessione, accettazione corrente, ciclo, hash e versione. Produce la base distinta `HISTORICAL_CONTACT_BEFORE_CRM`, lasciando `firstResponseAt` nullo. Questa funzione non è collegata alla conversione esistente. Il corrispondente esito SLA richiede una nuova SQL esplicita e prove database prima dell’integrazione: non sarà `MET` o `BREACHED` per un’attività mai avvenuta nel ciclo CRM. Le date e gli esiti esistenti rimangono immutati. Nessuna scorciatoia tramite note o audit generico.
+
+Restano da implementare modello/SQL, servizio transazionale, acquisizione e lettura della ricevuta, integrazione con conversione e indicatori, modulo con anteprima e data esplicita, prove PostgreSQL/browser e piano preciso di compatibilità. Una nuova SQL o un rilascio richiederanno riesame e autorità sul candidato/target esatti. Nessun dato del caso reale è usato come fixture.
+
+
+## Persistenza candidata, ancora non collegata
+
+Il modulo `commercial-lead-historical-contact-storage.ts` prepara una transazione serializzabile che blocca sessione, lead, inbox e ciclo e rilegge decisione e accettazione correnti. Registra ricevuta immutabile, versione inbox e audit minimo nello stesso commit; legge l'esito solo dopo una nuova autorizzazione corrente. Una ricevuta assente resta `NOT_OBSERVED`, senza autorizzare una ripetizione.
+
+`ops/n14-historical-contact-schema.draft.sql` è esclusivamente una DDL per il database isolato con sentinel: rifiuta l'esecuzione su un database diverso. È fuori dalla catena Prisma, che resta schema69. Nessuna tabella o riga produttiva viene creata. I trigger vietano modifica/cancellazione/truncate e vincolano la ricevuta alla stessa transazione dell'audit e dell'avanzamento di versione.
+
+La ricevuta è unica per inbox e decisione di responsabilità. Un cambio di assegnazione conserva il precedente evento e richiede una nuova accettazione ed attestazione pertinente; nessuna approvazione passa al nuovo referente. La persistenza non modifica il ciclo SLA: integrazione, esito storico esplicito, filtri e conversione devono essere completati e qualificati insieme prima di collegare un'azione o una pagina. Il modulo non è ancora qualificato su PostgreSQL; nessuna prova locale pura viene attribuita alla persistenza reale.
+
+## Prove PostgreSQL predisposte
+
+`tests/db/commercial-lead-historical-contact-db.test.ts` prepara tredici scenari: date e SLA preservati, riconciliazione dopo risposta persa, replay esatto, comandi concorrenti, rollback dell'audit, titolarità e accettazione personali, revoca di permessi/sessione e sospensione, riassegnazione A→B→A, risposta corrente già registrata, immutabilità e vincolo differito della transazione. Sono richiesti CI, database loopback `fai_crm_test` e sentinel verificato; le prove usano uno schema isolato e la DDL candidata, senza dati reali.
+
+La lettura locale del file di test mantiene disabilitata l'esecuzione PostgreSQL. La sua compilazione non è un PASS database: resta necessario pubblicare e verificare un job CI dedicato prima di integrare il servizio nel percorso operativo.
+
+Il workflow `n14-historical-contact.yml` prepara questa qualifica sul solo branch dedicato o sul diff pertinente della PR. Richiede tredici prove eseguite e superate, nessuno skip; conserva HEAD, tree e log TAP. Usa un servizio PostgreSQL effimero, senza secrets o accessi produttivi. La sola presenza del workflow non attesta ancora l'esecuzione o il PASS. La catena Prisma resta a schema69 e il modulo rimane privo di route/action.
