@@ -47,6 +47,9 @@ export default async function Page({params}:{params:Promise<{id:string}>}){
     : [];
   return <div className="lead-detail-page crm-space-y-6"><PageHeader title={`Lead — ${lead.companyName || `${lead.firstName} ${lead.lastName}`}`} description="Scheda commerciale con stato vendita, assegnazione, prossima azione, note, offerte e collegamento al cliente."/><SecondaryLink href="/leads">← Torna alla lista</SecondaryLink><SecondaryLink href={`/assignments/Lead/${lead.id}`}>Responsabilità e presa in carico</SecondaryLink><SecondaryLink href={`/leads/${lead.id}/requests`}>Richieste e provenienza</SecondaryLink>{canWrite && <SecondaryLink href={`/leads/${lead.id}/edit`}>Modifica anagrafica</SecondaryLink>}
     {inboxEnabled && inboxItem && <SecondaryLink href={`/leads/inbox?lead=${encodeURIComponent(lead.id)}`}>Apri coda e assegnazione del referente</SecondaryLink>}
+    {inboxEnabled && inboxItem?.originKind === 'MANUAL_CRM' && inboxItem.state === 'OPEN' && !inboxCycle?.firstResponseAt
+      && session.role === 'commerciale' && lead.assignedToId === session.userId && canWrite
+      && <SecondaryLink href={`/leads/${lead.id}/historical-contact`}>Registra contatto precedente al CRM</SecondaryLink>}
     {mayShare && <SecondaryLink href={`/leads/${id}/sharing`}>Condividi accesso selettivo</SecondaryLink>}
     {session.role === 'commerciale' && lead.assignedToId === session.userId && <SecondaryLink href={`/admin-requests/new?kind=Lead&id=${encodeURIComponent(id)}`}>Richiedi documento o integrazione all’Admin</SecondaryLink>}
     {session.role === 'admin' && hasPermission(session, 'practice_communications.write') ? <SecondaryLink href={`/communications?kind=LEAD&practice=${lead.id}`}>Scrivi email</SecondaryLink> : null}

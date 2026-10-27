@@ -16,13 +16,14 @@ const control = 'block w-full min-w-0 rounded-xl border border-slate-300 bg-whit
 const button = 'rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white disabled:opacity-50';
 const when = (value: string) => new Date(value).toLocaleString('it-IT', { timeZone: 'UTC' }) + ' UTC';
 
-/** Candidate component, not mounted in a production route. Server callbacks
- * must recheck the locked session/scope and signed preview at each operation. */
-export function CommercialLeadHistoricalContact({ context, ...actions }: { context: Context } & Actions) {
+/** Native candidate flow. Server callbacks recheck the locked session/scope and
+ * signed preview at each operation; a receipt is never a new write permission. */
+export function CommercialLeadHistoricalContact({ context, initialReceipt = null, ...actions }:
+  { context: Context; initialReceipt?: HistoricalContactViewReceipt | null } & Actions) {
   const ready = useSyncExternalStore(subscribe, browser, server);
   const [pending, setPending] = useState(false), flight = useRef(false);
   const [preview, setPreview] = useState<HistoricalContactViewPreview | null>(null);
-  const [receipt, setReceipt] = useState<HistoricalContactViewReceipt | null>(null);
+  const [receipt, setReceipt] = useState<HistoricalContactViewReceipt | null>(initialReceipt);
   const [recover, setRecover] = useState(context.recoverCommandId ?? '');
   const [message, setMessage] = useState('');
   const [date, setDate] = useState(''), [offset, setOffset] = useState('');
@@ -74,7 +75,7 @@ export function CommercialLeadHistoricalContact({ context, ...actions }: { conte
     finally { flight.current = false; setPending(false); }
   }
 
-  return <section aria-label="Contatto precedente al CRM" className="min-w-0 space-y-4 rounded-2xl border bg-white p-4 sm:p-6">
+  return <section aria-label="Contatto precedente al CRM" data-interactive-ready={ready} className="min-w-0 space-y-4 rounded-2xl border bg-white p-4 sm:p-6">
     <h2 className="text-xl font-bold">Contatto precedente al CRM</h2>
     <p className="break-words">Lead: {context.leadLabel}</p>
     <p>Ingresso nel CRM: {when(context.initializedAt)}. Registra un evento già avvenuto, con la sua fonte.

@@ -17,8 +17,8 @@ import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
 import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { createHistoricalContactPreview, readHistoricalContactPreview } from './commercial-lead-historical-preview';
 
-// Preparation only. No route/action imports this module. Its draft DDL is only
-// for an isolated database; no production schema or activation is implied.
+// Candidate flow. Draft DDL remains isolated; deploying this module requires a
+// separate production schema/activation plan. Missing tables deny the operation.
 type Tx = Prisma.TransactionClient;
 type Actor = Readonly<{ userId: string; sessionId: string }>;
 const unavailable = (): never => { throw new HistoricalContactError('STALE_CONTEXT'); };
@@ -215,7 +215,7 @@ export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor
   return writeHistoricalLeadContact(db, actor, requested);
 }
 
-/** No route supplies this yet. The untrusted body identifies the rows to lock;
+/** The untrusted body identifies the rows to lock;
  * only the fully verified token inside that transaction authorizes writing. */
 export async function confirmHistoricalLeadContact(db: PrismaClient, actor: Actor, key: PrivilegedStepUpKey,
   token: string, confirmed: boolean) {
@@ -234,7 +234,7 @@ export async function confirmHistoricalLeadContact(db: PrismaClient, actor: Acto
   return writeHistoricalLeadContact(db, actor, raw, { token, key });
 }
 
-/** Read-only with row locks, suitable for a future explicit outcome query. An
+/** Read-only with row locks for the explicit outcome query. An
  * absent record remains NOT_OBSERVED, never NOT_COMMITTED or safe-to-repeat. */
 export async function readHistoricalLeadContactOutcome(db: PrismaClient, actor: Actor, requested: unknown) {
   const lookup = z.object({ leadId: identifier, commandId: uuid }).strict().parse(requested);
@@ -245,6 +245,25 @@ export async function readHistoricalLeadContactOutcome(db: PrismaClient, actor: 
     const result = await verifyJournal(tx, row, scope);
     await authorize(tx, actor);
     return { state: 'RECORDED' as const, mayRepeat: false as const, receipt: result };
+  });
+}
+
+/** Current owner-only page context. GET reads no list outside this lead and
+ * never creates an intake, response, contact or command. */
+export async function readHistoricalLeadContactManagement(db: PrismaClient, actor: Actor, requestedLeadId: unknown) {
+  const leadId = identifier.parse(requestedLeadId);
+  return withSerializableTransaction(db, async tx => {
+    const scope = await lockContext(tx, actor, leadId);
+    const lead = await tx.lead.findUniqueOrThrow({ where: { id: leadId }, select: { companyName: true, firstName: true, lastName: true } });
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "CommercialLeadHistoricalContact"
+      WHERE "inboxItemId"=${scope.item.id}::uuid AND "assignmentId"=${scope.context.assignmentId} FOR SHARE`;
+    if (rows.length > 1) return unavailable();
+    const row = rows[0] ? await loadRecord(tx, rows[0].id) : null;
+    const currentReceipt = row ? await verifyJournal(tx, row, scope) : null;
+    await authorize(tx, actor);
+    return { leadId, leadLabel: lead.companyName || [lead.firstName, lead.lastName].filter(Boolean).join(' '),
+      initializedAt: scope.context.initializedAt, expectedInboxVersion: scope.item.version,
+      expectedAssignmentId: identifier.parse(scope.context.assignmentId), receipt: currentReceipt };
   });
 }
 
