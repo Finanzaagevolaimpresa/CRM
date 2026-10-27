@@ -72,6 +72,83 @@ async function notifyLead(id: string) {
   await db.lead.update({ where: { id }, data: { nextActionNote: 'Private native change ' + randomUUID() } });
 }
 
+async function parameterFixture() {
+  const f = await fixture('PROJECT');
+  const expense = await db.projectExpense.create({ data: { projectId: f.id, category: 'software', description: 'Original expense', amount: '150.25', estimated: true,
+    potentiallyEligible: true, eligibilityNotes: 'PRESERVE-ELIGIBILITY', priority: 'alta' } });
+  const input = await command(f);
+  assert(input.patch?.kind === 'PROJECT' && input.patch.parameters);
+  input.patch.status = 'idea';
+  input.patch.parameters.description = 'PRIVATE-PROJECT-DESCRIPTION';
+  input.patch.parameters.totalInvestment = '2500.50'; input.patch.parameters.requestedAmount = '2000';
+  input.patch.parameters.expenses[0].description = 'PRIVATE-EXPENSE';
+  input.patch.parameters.expenses[0].amount = '300.75';
+  input.patch.parameters.expenses.push({ id: null, category: 'formazione', description: 'PRIVATE-NEW-EXPENSE', amount: '199.99', estimated: false });
+  return { f, input, expense };
+}
+test('project parameters, expense addition and current notices commit once and reopen with exact decimals', options, async () => {
+  const { f, input, expense } = await parameterFixture(), preview = await previewRecordUpdate(db, admin.session, input);
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.id } }), 1, 'preview is read-only');
+  await confirmRecordUpdate(db, admin.session, input, preview.digest, proof());
+  await confirmRecordUpdate(db, admin.session, input, preview.digest, proof());
+  const reopened = await readRecordUpdateSetup(db, admin.session, 'PROJECT', f.id);
+  assert(reopened.patch.kind === 'PROJECT' && reopened.patch.parameters);
+  assert.equal(reopened.patch.parameters.totalInvestment, '2500.5');
+  assert.equal(reopened.patch.parameters.requestedAmount, '2000');
+  assert.equal(reopened.patch.parameters.description, 'PRIVATE-PROJECT-DESCRIPTION');
+  assert.equal(reopened.patch.parameters.expenses.length, 2);
+  const saved = await db.projectExpense.findUniqueOrThrow({ where: { id: expense.id } });
+  assert.equal(saved.amount.toString(), '300.75'); assert.equal(saved.eligibilityNotes, expense.eligibilityNotes);
+  assert.equal(saved.potentiallyEligible, true); assert.equal(saved.priority, 'alta');
+  const rows = await works(f.id); assert.equal(rows.length, 1); assert.deepEqual(rows[0].event.changed, ['profile']);
+  assert.equal(rows[0].recipientId, f.reader.user.id); assert.equal((await listRecordUpdates(db, f.other.session)).length, 0);
+  const audit = await db.auditLog.findMany({ where: { entityId: { in: [input.commandId, rows[0].eventId] } } });
+  assert.equal(audit.length, 2); assert.doesNotMatch(JSON.stringify({ audit, rows }), /PRIVATE-|2500|2000|300\.75|199\.99|PRESERVE-ELIGIBILITY/);
+});
+test('expense edits, additions and eligibility changes invalidate a project preview even without changing project updatedAt', options, async () => {
+  for (const change of ['amount', 'new', 'eligibility']) {
+    const { f, input, expense } = await parameterFixture(), before = await db.project.findUniqueOrThrow({ where: { id: f.id } });
+    const preview = await previewRecordUpdate(db, admin.session, input);
+    if (change === 'new') await db.projectExpense.create({ data: { projectId: f.id, category: 'altro', description: 'Concurrent new', amount: '1' } });
+    else await db.projectExpense.update({ where: { id: expense.id }, data: change === 'amount' ? { amount: '151' } : { eligibilityNotes: 'Concurrent assessment' } });
+    assert.equal((await db.project.findUniqueOrThrow({ where: { id: f.id } })).updatedAt.toISOString(), before.updatedAt.toISOString());
+    await assert.rejects(confirmRecordUpdate(db, admin.session, input, preview.digest, proof()));
+    assert.equal((await readRecordUpdateReceipt(db, admin.session, input.commandId)).confirmed, false);
+    assert.equal((await works(f.id)).length, 0);
+  }
+});
+test('two project parameter confirmations serialize and cannot append the same new expense twice', options, async () => {
+  const { f, input } = await parameterFixture(), second = { ...input, commandId: randomUUID() };
+  const a = await previewRecordUpdate(db, admin.session, input), b = await previewRecordUpdate(db, admin.session, second);
+  const result = await Promise.allSettled([confirmRecordUpdate(db, admin.session, input, a.digest, proof()), confirmRecordUpdate(db, admin.session, second, b.digest, proof())]);
+  assert.equal(result.filter(row => row.status === 'fulfilled').length, 1);
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.id } }), 2);
+  assert.equal((await works(f.id)).length, 1);
+});
+test('project parameters cannot be written by a non-Admin or after an open-preview permission revocation', options, async () => {
+  const { f, input } = await parameterFixture(), technician = await syntheticPerson(db, 'No project parameter authority', 'consulente');
+  await assert.rejects(readRecordUpdateSetup(db, technician.session, 'PROJECT', f.id));
+  await assert.rejects(previewRecordUpdate(db, technician.session, input));
+  const actor = await syntheticPerson(db, 'Synthetic project editor', 'admin');
+  const preview = await previewRecordUpdate(db, actor.session, input);
+  await db.userPermissionOverride.create({ data: { userId: actor.user.id, permission: 'project.write', allowed: false } });
+  await assert.rejects(confirmRecordUpdate(db, actor.session, input, preview.digest, proof(actor)));
+  assert.equal(await db.projectExpense.count({ where: { projectId: f.id } }), 1);
+  assert.equal((await works(f.id)).length, 0);
+});
+test('audit failure rolls back all project parameters, expense writes, command and notification work', options, async () => {
+  const { f, input, expense } = await parameterFixture(), before = await db.project.findUniqueOrThrow({ where: { id: f.id } });
+  const preview = await previewRecordUpdate(db, admin.session, input);
+  await db.$executeRawUnsafe("CREATE FUNCTION project_parameters_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='record_update_confirmed' THEN RAISE EXCEPTION 'synthetic fault'; END IF; RETURN NEW; END $$");
+  await db.$executeRawUnsafe('CREATE TRIGGER project_parameters_test_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION project_parameters_test_fault()');
+  try { await assert.rejects(confirmRecordUpdate(db, admin.session, input, preview.digest, proof())); }
+  finally { await db.$executeRawUnsafe('DROP TRIGGER project_parameters_test_fault ON "AuditLog"'); await db.$executeRawUnsafe('DROP FUNCTION project_parameters_test_fault()'); }
+  assert.deepEqual(await db.project.findUniqueOrThrow({ where: { id: f.id } }), before);
+  assert.deepEqual(await db.projectExpense.findMany({ where: { projectId: f.id } }), [expense]);
+  assert.equal((await readRecordUpdateReceipt(db, admin.session, input.commandId)).confirmed, false);
+  assert.equal((await works(f.id)).length, 0);
+});
+
 for (const kind of ['LEAD', 'CLIENT', 'PROJECT', 'PRACTICE'] as const) {
   test(kind + ': preview is read-only; one save records only selected work and minimal native audit', options, async () => {
     const f = await fixture(kind), input = await command(f);

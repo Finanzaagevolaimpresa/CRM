@@ -1,6 +1,7 @@
 'use client';
 import { useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
+import { ProjectParameterFields } from './project-parameter-fields';
 import { communicationRecipientGroups } from '@/lib/communication-recipient-groups';
 import { recordUpdateEvents, recordUpdateEventLabels, recordUpdateChangedLabels, type RecordUpdateEvent, type RecordUpdateMode } from '@/lib/record-update-labels';
 import { updateFieldLabels, updatePatchSchema, type UpdateCommand, type UpdatePatch } from '@/lib/record-update-input';
@@ -88,7 +89,8 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
       <label className="block text-sm font-bold">Operazione<select className={fieldClass} value={operation} onChange={e => setOperation(e.target.value as 'UPDATE' | 'RULE')}>
         <option value="UPDATE">Salva e aggiorna</option><option value="RULE">Configura una regola per gli aggiornamenti futuri</option>
       </select></label>
-      {operation === 'UPDATE' && <div className="grid min-w-0 gap-3 md:grid-cols-2">{Object.entries(patch).filter(([key]) => key !== 'kind').map(([key, value]) => {
+      {operation === 'UPDATE' && <div className="grid min-w-0 gap-3 md:grid-cols-2">{Object.entries(patch).filter(([key]) => key !== 'kind' && key !== 'parameters').map(([key, rawValue]) => {
+        const value = typeof rawValue === 'string' ? rawValue : '';
         const isDate = ['nextActionDate', 'dueDate', 'nextClientUpdateAt'].includes(key);
         const schema = shape[key as keyof typeof shape];
         const options = (key === 'status' || key === 'type') && schema && 'options' in schema ? schema.options as string[] : null;
@@ -99,6 +101,8 @@ export function RecordUpdateForm({ setup }: { setup: Setup }) {
               onChange={e => change(isDate ? isoDate(e.target.value) : e.target.value)} />}
         </label>;
       })}</div>}
+      {operation === 'UPDATE' && patch.kind === 'PROJECT' && patch.parameters && <ProjectParameterFields value={patch.parameters} onChange={parameters => setPatch({ ...patch, parameters })} />}
+      {operation === 'UPDATE' && patch.kind === 'PROJECT' && !patch.parameters && <p role="status">Il progetto supera il limite di 100 spese del modulo: qui puoi modificare soltanto titolo e stato.</p>}
       {originator && <p className="text-sm">Commerciale del contratto, da attribuzione verificata: <strong>{originator.name}</strong>. Puoi includerlo nella scelta qui sotto.</p>}
       <fieldset className="rounded-xl border p-3"><legend className="px-1 font-bold">Persone da aggiornare</legend>
         <div className="grid gap-3 md:grid-cols-2">{setup.people.map(person => <label key={person.id} className="flex min-w-0 items-start gap-2 text-sm">
