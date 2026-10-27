@@ -141,7 +141,7 @@ test('audit failure rolls back all project parameters, expense writes, command a
   const preview = await previewRecordUpdate(db, admin.session, input);
   await db.$executeRawUnsafe("CREATE FUNCTION project_parameters_test_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event='record_update_confirmed' THEN RAISE EXCEPTION 'synthetic fault'; END IF; RETURN NEW; END $$");
   await db.$executeRawUnsafe('CREATE TRIGGER project_parameters_test_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION project_parameters_test_fault()');
-  try { await assert.rejects(confirmRecordUpdate(db, admin.session, input, preview.digest, proof())); }
+  try { await assert.rejects(confirmRecordUpdate(db, admin.session, input, preview.digest, proof()), /synthetic fault/); }
   finally { await db.$executeRawUnsafe('DROP TRIGGER project_parameters_test_fault ON "AuditLog"'); await db.$executeRawUnsafe('DROP FUNCTION project_parameters_test_fault()'); }
   assert.deepEqual(await db.project.findUniqueOrThrow({ where: { id: f.id } }), before);
   assert.deepEqual(await db.projectExpense.findMany({ where: { projectId: f.id } }), [expense]);

@@ -17,7 +17,7 @@ export function ProjectParameterFields({ value, onChange }: { value: ProjectPara
     {!value.expenses.length && <p>Nessuna spesa registrata.</p>}
     {value.expenses.map((row, index) => <fieldset key={row.id ?? `new-${index}`} className="crm-space-y-3 min-w-0 rounded-xl border p-3">
       <legend className="px-1 font-bold">Spesa {index + 1}{row.id ? '' : ' · nuova'}</legend>
-      <label className="block text-sm font-bold">Categoria<select className={inputClass} value={row.category} onChange={e => expense(index, { category: e.target.value as typeof row.category })}>{projectExpenseCategories.map(category => <option key={category} value={category}>{category.replaceAll('_', ' ')}</option>)}</select></label>
+      <label className="block text-sm font-bold">Categoria<select aria-label="Categoria" className={inputClass} value={row.category} onChange={e => expense(index, { category: e.target.value as typeof row.category })}>{projectExpenseCategories.map(category => <option key={category} value={category}>{category.replaceAll('_', ' ')}</option>)}</select></label>
       <label className="block text-sm font-bold">Descrizione spesa<input className={inputClass} maxLength={500} value={row.description} onChange={e => expense(index, { description: e.target.value })} /></label>
       <label className="block text-sm font-bold">Importo spesa (€)<input className={inputClass} inputMode="decimal" value={row.amount} onChange={e => expense(index, { amount: e.target.value.replace(',', '.') })} /></label>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={row.estimated} onChange={e => expense(index, { estimated: e.target.checked })} />Importo stimato</label>

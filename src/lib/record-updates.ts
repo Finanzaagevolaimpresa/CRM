@@ -184,7 +184,7 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
           // change uses the same queue/function, without financial values or free text.
           if (parameters && p.context.patch.kind === 'PROJECT' && patch.title === p.context.patch.title
             && p.summaries.some(summary => summary.event === 'RECORD_CHANGED' && summary.changed.includes('profile')))
-            await tx.$queryRaw`SELECT fai_record_update_record('PROJECT',${input.recordId},'RECORD_CHANGED','["profile"]'::jsonb,${'project-parameters:' + input.commandId})`;
+            await tx.$executeRaw`SELECT fai_record_update_record('PROJECT',${input.recordId},'RECORD_CHANGED','["profile"]'::jsonb,${'project-parameters:' + input.commandId})`;
           break;
         }
         case 'PRACTICE':
