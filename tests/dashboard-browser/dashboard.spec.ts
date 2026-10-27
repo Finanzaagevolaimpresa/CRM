@@ -170,7 +170,7 @@ test('every technical status card opens its exact list by keyboard, including ex
     await expect(page.getByLabel('Stato della pratica')).toHaveValue(state);
     await expect(page.getByRole('status')).toContainText(`${expected} pratiche nel tuo perimetro`);
     if (expected) await expect(page.getByRole('table').getByRole('link')).toHaveCount(expected);
-    else await expect(page.getByRole('heading', { name: 'Nessuna pratica tecnica nel filtro selezionato' })).toBeVisible();
+    else await expect(page.getByText('Nessuna pratica tecnica nel filtro selezionato', { exact: true })).toBeVisible();
   }
   expect(await db.technicalPractice.count()).toBe(before);
   await shot(page, 'technical-status-empty-desktop-1672', 1672);
@@ -181,7 +181,7 @@ test('invalid or repeated practice filters show no records, and current permissi
   await login(page, f.emails.admin);
   for (const query of ['status=unknown', 'status=in_progettazione&status=approvata', 'dashboard=unknown', 'priority=unknown']) {
     await page.goto('/technical-office/practices?' + query);
-    await expect(page.getByRole('heading', { name: 'Filtro non valido' })).toBeVisible();
+    await expect(page.getByText('Filtro non valido', { exact: true })).toBeVisible();
     await expect(page.getByRole('table')).toHaveCount(0);
   }
   await page.goto('/technical-office/practices?dashboard=attive');
