@@ -13,6 +13,9 @@ import { previewTechnicalWork, confirmTechnicalWork, readTechnicalWorkOutcome } 
 import { loadSelectiveProjectScope } from '../src/lib/selective-project-scope';
 import { canViewClient, canViewProject, canViewTechnicalPractice, canViewLead, canViewDocument } from '../src/lib/access-control';
 import { readCommercialProgress } from '../src/lib/commercial-progress';
+import { createTechnicalAssignmentPreview } from '../src/lib/technical-assignment-preview';
+import { TechnicalAssignmentPreparationError } from '../src/lib/technical-assignment-errors';
+import { technicalAssignmentFailure } from '../src/lib/technical-assignment-failure';
 
 // New PostgreSQL execution is confined to the approved ephemeral CI job.
 const enabled = process.env.RUN_TECHNICAL_ASSIGNMENT_DB_TESTS === '1';
@@ -59,6 +62,34 @@ test('preview is read-only; two personal assignments coexist without changing sa
   assert.deepEqual(audit.before, { version: 0 });
   assert.deepEqual(audit.after, { version: 1, action: 'ASSIGN', fieldCount: input.selection.readableFields.length, actionCount: 2, documentCount: 0 });
   assert.equal(JSON.stringify(audit).includes('NOTA_INTERNA_NON_SELEZIONATA'), false);
+});
+
+test('expired signed preview is a definite pre-write refusal, with no decision, revision or audit, and requires a fresh preview', options, async () => {
+  const f = await fixture(), target = technicalTarget(f), input = await assignmentInput(db, admin, target, f.techA);
+  const ref = { ...target, recipientId: f.techA.user.id }, proof = leadProof(admin);
+  const preview = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', input);
+  const { payload } = JSON.parse(Buffer.from(preview.token, 'base64url').toString('utf8'));
+  const expired = createTechnicalAssignmentPreview('ASSIGN', proof.key, input, payload.admission, Date.now() - 300_001);
+  const auditBefore = await db.auditLog.count();
+  await assert.rejects(confirmTechnicalAssignment(db, admin.session, proof, ref, 'ASSIGN', input, expired, true), error => {
+    assert(error instanceof TechnicalAssignmentPreparationError);
+    assert.equal(error.code, 'STALE');
+    assert.equal(technicalAssignmentFailure(error).rejectedBeforeWrite, true);
+    return true;
+  });
+  const [counts] = await db.$queryRaw<Array<{ decisions: bigint; revisions: bigint }>>`
+    SELECT (SELECT count(*) FROM "TechnicalAssignmentDecision" WHERE id=${input.commandId}::uuid) AS decisions,
+      (SELECT count(*) FROM "TechnicalAssignmentRevision" WHERE "commandId"=${input.commandId}::uuid) AS revisions`;
+  assert.deepEqual(counts, { decisions: 0n, revisions: 0n });
+  assert.equal(await db.auditLog.count(), auditBefore);
+  assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 0);
+  // Absence alone still does not authorize a retry of an uncertain operation.
+  assert.deepEqual(await readTechnicalAssignmentOutcome(db, admin.session, ref, input.commandId), { status: 'NOT_OBSERVED' });
+  const next = { ...input, commandId: randomUUID() };
+  const fresh = await previewTechnicalAssignment(db, admin.session, ref, 'ASSIGN', next);
+  const receipt = await confirmTechnicalAssignment(db, admin.session, proof, ref, 'ASSIGN', next, fresh.token, true);
+  assert.equal(receipt.commandId, next.commandId);
+  assert.equal((await readTechnicalAssignmentManagement(db, admin.session, target)).assignments.length, 1);
 });
 
 test('exact assignment replay and lost-response lookup return one receipt; changed command, session or person cannot reuse it', options, async () => {

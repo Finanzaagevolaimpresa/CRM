@@ -6,6 +6,8 @@ import { prepareTechnicalAssignmentDecision, readTechnicalAssignmentDecisionOutc
 import { createTechnicalAssignmentPreview, type TechnicalAssignmentPreviewAdmission } from '../src/lib/technical-assignment-preview';
 import { readRetainedTechnicalAssignmentJournal } from '../src/lib/technical-assignment-journal';
 import { decodeTechnicalAssignmentRecord, type StoredTechnicalAssignment } from '../src/lib/technical-assignment-record';
+import { TechnicalAssignmentPreparationError } from '../src/lib/technical-assignment-errors';
+import { technicalAssignmentFailure } from '../src/lib/technical-assignment-failure';
 
 const key = { version: 1, secret: 'isolated-assignment-decision-test-key' };
 const now = new Date('2026-10-23T06:00:00Z');
@@ -80,7 +82,13 @@ test('the preview cannot be reused after editing reason, fields, recipient, acti
     { ...command, selection: { ...command.selection, expiresAt: '2026-10-25T06:00:00Z' } }]) {
     assert.throws(() => prepareTechnicalAssignmentDecision({ ...firstArgs, raw }));
   }
-  assert.throws(() => prepareTechnicalAssignmentDecision({ ...firstArgs, now: new Date(now.getTime() + 300_000) }));
+  assert.throws(() => prepareTechnicalAssignmentDecision({ ...firstArgs, now: new Date(now.getTime() + 300_000) }),
+    error => {
+      assert(error instanceof TechnicalAssignmentPreparationError);
+      assert.equal(error.code, 'STALE');
+      assert.equal(technicalAssignmentFailure(error).rejectedBeforeWrite, true);
+      return true;
+    });
 });
 
 test('concurrent current-state changes and missing retained evidence prevent replacement', () => {
