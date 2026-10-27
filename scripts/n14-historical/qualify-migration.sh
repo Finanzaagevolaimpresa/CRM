@@ -25,6 +25,7 @@ constraint() { psql "$db" -Atc "SELECT pg_get_constraintdef(oid) FROM pg_constra
 footprint "$evidence/before.txt"
 constraint > "$evidence/constraint-before.txt"
 python3 -B scripts/n14-historical/release-observer/qualify_snapshot.py capture69
+python3 -B scripts/n14-historical/release-observer/qualify_complete_snapshot.py capture69
 sed 's/^COMMIT;$/SELECT 1\/0;\nCOMMIT;/' "$ddl" > "$evidence/fault.sql"
 if psql "$db" -v ON_ERROR_STOP=1 -f "$evidence/fault.sql" > "$evidence/fault.log" 2>&1; then exit 1; fi
 grep -Fq 'division by zero' "$evidence/fault.log"
@@ -64,5 +65,7 @@ JS
 printf '{"synthetic":true,"before":69,"after":70,"prefix69Unchanged":true,"allPriorRowsAndRelationsPreserved":true,"previousResponsesAndSlaPreserved":true,"newTablesEmpty":true,"atomicFailureRolledBackAllObjects":true,"previousSlaConstraintRestoredOnFailure":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"
 cat "$evidence/proof.json"
 python3 -B scripts/n14-historical/release-observer/qualify_snapshot.py initialization
+python3 -B scripts/n14-historical/release-observer/qualify_complete_snapshot.py initialization
 node --import tsx tests/n14-historical-contact/release-state.ts
 python3 -B scripts/n14-historical/release-observer/qualify_snapshot.py populated
+python3 -B scripts/n14-historical/release-observer/qualify_complete_snapshot.py populated
