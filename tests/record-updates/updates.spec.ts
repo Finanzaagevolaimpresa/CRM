@@ -56,6 +56,68 @@ async function confirm(page: Page) {
 test.beforeAll(async () => { await assertAiOrchestratorEphemeralDatabaseIdentity(db); expect(f.synthetic).toBe(true); });
 test.afterAll(async () => db.$disconnect());
 
+test('Admin opens the project editor, saves parameters and expenses atomically and reopens them on desktop/mobile', async ({ browser }) => {
+  const row = await fixture('PROJECT'), context = await browser.newContext(), page = await context.newPage();
+  await db.projectExpense.create({ data: { projectId: row.id, category: 'software', description: 'Spesa precedente', amount: '100', estimated: true, eligibilityNotes: 'Conserva valutazione' } });
+  await login(page, f.emails.admin, true);
+  await page.goto('/projects/' + row.id);
+  await page.getByRole('link', { name: 'Modifica progetto e chi aggiornare', exact: true }).click();
+  await expect(page.getByTestId('record-update-form')).toHaveAttribute('data-interactive-ready', 'true');
+  await page.getByLabel('Titolo', { exact: true }).fill(row.label + ' aggiornato');
+  await page.getByLabel('Descrizione del progetto', { exact: true }).fill('Descrizione riservata del progetto sintetico');
+  await page.getByLabel('Investimento totale (€)', { exact: true }).fill('1250.25');
+  await page.getByLabel('Importo richiesto (€)', { exact: true }).fill('1000.50');
+  await page.getByRole('group', { name: 'Spesa 1', exact: true }).getByLabel('Importo spesa (€)', { exact: true }).fill('200.75');
+  await page.getByRole('button', { name: 'Aggiungi spesa', exact: true }).click();
+  const second = page.getByRole('group', { name: 'Spesa 2 · nuova', exact: true });
+  await second.getByLabel('Categoria', { exact: true }).selectOption('formazione');
+  await second.getByLabel('Descrizione spesa', { exact: true }).fill('Corso sintetico');
+  await second.getByLabel('Importo spesa (€)', { exact: true }).fill('300.25');
+  await page.getByRole('checkbox', { name: new RegExp(f.readerName) }).check();
+  await page.getByRole('button', { name: 'Controlla destinatari e modifiche' }).click();
+  await expect(page.getByRole('region', { name: 'Riepilogo aggiornamento' })).toContainText('Dati del record');
+  expect(await db.projectExpense.count({ where: { projectId: row.id } })).toBe(1);
+  for (const [name, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: path.join(evidence, 'project-parameters-' + name + '.png'), fullPage: true });
+  }
+  await page.getByRole('checkbox', { name: /^Confermo questa operazione, i destinatari ammessi e la modalità/ }).check();
+  await confirm(page);
+  expect(await db.projectExpense.count({ where: { projectId: row.id } })).toBe(2);
+  const work = await db.recordUpdateDelivery.findMany({ where: { event: { recordId: row.id } } });
+  expect(work).toHaveLength(1); expect(work[0].recipientId).toBe(f.readerId);
+  await page.getByRole('link', { name: 'Torna alla scheda aggiornata', exact: true }).click();
+  await expect(page.getByText('Descrizione riservata del progetto sintetico', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Modifica progetto e chi aggiornare', exact: true }).click();
+  await expect(page.getByLabel('Investimento totale (€)', { exact: true })).toHaveValue('1250.25');
+  await expect(page.getByLabel('Importo richiesto (€)', { exact: true })).toHaveValue('1000.5');
+  await expect(page.getByLabel('Descrizione spesa', { exact: true })).toHaveCount(2);
+  const denied = await browser.newContext(), commercial = await denied.newPage();
+  await login(commercial, f.emails.commercial);
+  const response = await denied.request.get('/record-updates/PROJECT/' + row.id);
+  expect(response.status()).toBe(404); expect(await response.text()).not.toContain('Descrizione riservata del progetto sintetico');
+  await denied.close(); await context.close();
+});
+
+test('native project preview detects concurrent expense change without overwriting it or generating notices', async ({ browser }) => {
+  const row = await fixture('PROJECT'), context = await browser.newContext(), page = await context.newPage();
+  const expense = await db.projectExpense.create({ data: { projectId: row.id, category: 'software', description: 'Spesa concorrente', amount: '100' } });
+  await login(page, f.emails.admin, true); await open(page, row);
+  await page.getByLabel('Descrizione del progetto', { exact: true }).fill('Modifica che deve essere rifiutata');
+  await page.getByRole('checkbox', { name: new RegExp(f.readerName) }).check();
+  await page.getByRole('button', { name: 'Controlla destinatari e modifiche' }).click();
+  await expect(page.getByRole('region', { name: 'Riepilogo aggiornamento' })).toBeVisible();
+  await db.projectExpense.update({ where: { id: expense.id }, data: { amount: '999' } });
+  await page.getByRole('checkbox', { name: /^Confermo questa operazione, i destinatari ammessi e la modalità/ }).check();
+  await page.getByRole('button', { name: 'Salva e aggiorna', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('La scheda o le autorizzazioni sono cambiate');
+  expect((await db.project.findUniqueOrThrow({ where: { id: row.id } })).description).toBeNull();
+  expect((await db.projectExpense.findUniqueOrThrow({ where: { id: expense.id } })).amount.toString()).toBe('999');
+  expect(await db.recordUpdateDelivery.count({ where: { event: { recordId: row.id } } })).toBe(0);
+  await context.close();
+});
+
 test('native four-context save, persistent rule and revocation; only selected current recipients see notices, desktop/mobile fit', async ({ browser }) => {
   const ac = await browser.newContext(), rc = await browser.newContext(), oc = await browser.newContext();
   const admin = await ac.newPage(), reader = await rc.newPage(), other = await oc.newPage();
