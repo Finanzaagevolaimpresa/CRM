@@ -20,7 +20,8 @@ test('historical contact and conversion survive exact-image restart without SLA 
     await login(page, email);
     await page.goto(origin + contactPath);
     await expect(page.getByRole('heading', { name: permitted ? 'Contatto registrato' : 'Contatto precedente non disponibile', exact: true })).toBeVisible();
-    if (permitted) await expect(page.getByText('SYNTHETIC_HISTORICAL_RECOVERY_REFERENCE', { exact: true })).toBeVisible();
+    if (permitted) await expect(page.getByRole('region', { name: 'Ricevuta contatto precedente', exact: true })
+      .getByText('Riferimento: SYNTHETIC_HISTORICAL_RECOVERY_REFERENCE', { exact: true })).toBeVisible();
     else expect(await page.content()).not.toContain('SYNTHETIC_HISTORICAL_RECOVERY_REFERENCE');
     await page.goto(origin + convertedPath);
     await expect(page.getByRole('heading', { name: permitted ? 'Cliente registrato' : 'Conversione storica non disponibile', exact: true })).toBeVisible();
