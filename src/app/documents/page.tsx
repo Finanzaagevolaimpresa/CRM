@@ -24,7 +24,7 @@ export default async function Page({ searchParams }: { searchParams?: Promise<{ 
     prisma.clientService.findMany({ where: { deletedAt: null } }),
     prisma.serviceCatalog.findMany(),
     prisma.user.findMany({ where: { active: true } }),
-    prisma.documentChecklistItem.findMany({ where: { deletedAt: null, active: true }, orderBy: { updatedAt: 'desc' } }),
+    prisma.documentChecklistItem.findMany({ where: { technicalPrivate: false, deletedAt: null, active: true }, orderBy: { updatedAt: 'desc' } }),
   ]);
   const clientById = new Map(clientRows.map((c) => [c.id, c]));
   const projectById = new Map(projectRows.map((p) => [p.id, { ...p, client: clientById.get(p.clientId) }]));

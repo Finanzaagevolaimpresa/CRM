@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
-test('schema68 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
+test('schema69 restart retains technical work, exact documents, revoked assignments and indirect denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; clientId: string; projectId: string; practiceId: string; otherProjectId: string;
-    liveEmail: string; revokedEmail: string; salesEmail: string; receiptId: string; itemReceiptId: string; taskId: string; title: string; progress: string;
+    liveEmail: string; revokedEmail: string; salesEmail: string; receiptId: string; itemReceiptId: string; taskId: string; privateChecklistId: string; title: string; progress: string;
     documents: { fileId: string; bytes: string }[]; excluded: string[];
   };
   expect(f.synthetic).toBe(true);
@@ -38,6 +38,14 @@ test('schema68 restart retains technical work, exact documents, revoked assignme
   await expect(page.getByRole('combobox', { name: 'Priorità', exact: true })).toHaveValue('urgente');
   for (const value of f.excluded) expect(await page.content()).not.toContain(value);
   expect((await revoked.request.get(itemUrl)).status()).toBe(404); expect((await sales.request.get(itemUrl)).status()).toBe(404);
+  for (const context of [live, revoked, sales]) {
+    expect((await context.request.get(url + '/items/ChecklistItem/' + f.privateChecklistId)).status()).toBe(404);
+    for (const ordinary of ['/tasks', '/clients/' + f.clientId, '/documents', '/search?q=Recovery']) {
+      const response = await context.request.get(origin + ordinary); expect(response.status()).toBeLessThan(500);
+      const body = await response.text(); expect(body).not.toContain('Recovery selected technical task');
+      expect(body).not.toContain('Recovery private unassigned checklist'); expect(body).not.toContain('RECOVERY_PRIVATE_CHECKLIST_NOTE');
+    }
+  }
   await page.goto(itemUrl + '?itemDecision=' + f.itemReceiptId);
   await page.getByRole('button', { name: 'Verifica esito del salvataggio', exact: true }).click();
   await expect(page.getByText('Modifica già registrata. Non ripetere il salvataggio.', { exact: true })).toHaveCount(0);

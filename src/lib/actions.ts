@@ -929,7 +929,7 @@ export async function createStandardDocumentChecklist(form: FormData) {
   const clientServiceId = String(form.get('clientServiceId') || '') || undefined;
   const projectId = String(form.get('projectId') || '') || undefined;
   await assertChecklistContext(s, clientId, clientServiceId, projectId);
-  const existing = await prisma.documentChecklistItem.findMany({ where: { clientId, clientServiceId: clientServiceId ?? null, deletedAt: null }, select: { title: true } });
+  const existing = await prisma.documentChecklistItem.findMany({ where: { technicalPrivate: false, clientId, clientServiceId: clientServiceId ?? null, deletedAt: null }, select: { title: true } });
   const existingTitles = new Set(existing.map((item) => item.title.toLowerCase()));
   const toCreate = standardChecklistTitles.filter((title) => !existingTitles.has(title.toLowerCase()));
   if (toCreate.length === 0) return [];
@@ -1060,7 +1060,7 @@ async function buildClientDossierContent(session: AuthSession, clientId: string,
     prisma.clientService.findMany({ where: { clientId, ...(clientServiceId ? { id: clientServiceId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
     prisma.serviceCatalog.findMany(),
     prisma.project.findMany({ where: { clientId, ...(projectId ? { id: projectId } : {}), deletedAt: null }, orderBy: { updatedAt: 'desc' } }),
-    prisma.documentChecklistItem.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
+    prisma.documentChecklistItem.findMany({ where: { technicalPrivate: false, clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), active: true, deletedAt: null }, orderBy: { createdAt: 'asc' } }),
     prisma.document.findMany({ where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), deletedAt: null }, select: { id: true, clientId: true, projectId: true, clientServiceId: true, uploadedById: true, title: true, documentCategory: true, type: true, status: true, containsSensitiveData: true, visibilityLevel: true, createdAt: true }, orderBy: { createdAt: 'desc' } }),
     listAccessibleTasks(session, { where: { clientId, ...(clientServiceId ? { clientServiceId } : {}), ...(projectId ? { projectId } : {}), status: { in: ['aperta','in_lavorazione'] }, deletedAt: null }, orderBy: [{ dueAt: 'asc' }, { updatedAt: 'desc' }] }),
   ]);
@@ -1644,7 +1644,7 @@ export async function runClientAiAgent(form: FormData) {
         })
       : Promise.resolve([]),
     prisma.documentChecklistItem.findMany({
-      where: { clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null, active: true },
+      where: { technicalPrivate: false, clientId: data.clientId, clientServiceId: data.clientServiceId || undefined, projectId: data.projectId || undefined, deletedAt: null, active: true },
       select: { clientId: true, projectId: true, clientServiceId: true, createdById: true, updatedById: true, title: true, status: true, documentId: true },
       orderBy: { updatedAt: 'desc' },
       take: 50,

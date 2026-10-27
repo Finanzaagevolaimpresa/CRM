@@ -61,6 +61,19 @@ const document = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+test('private technical markers deny ordinary direct reads and edits even to creator, assignee and global roles', () => {
+  const task = { id: 'private-task', clientId: 'client-1', assignedToId: 'user-1', createdById: 'user-1', client: client('client-1', 'user-1', 'user-1') };
+  const checklist = { id: 'private-check', clientId: 'client-1', createdById: 'user-1', updatedById: 'user-1', client: task.client };
+  assert.equal(canViewTask(actor('admin'), task), true);
+  assert.equal(canViewChecklistItem(actor('admin'), checklist), true);
+  for (const role of ['admin', 'direzione', 'commerciale', 'consulente', 'amministrazione', 'backoffice', 'revisore', 'collaboratore_limitato'] satisfies RoleCode[]) {
+    assert.equal(canViewTask(actor(role), { ...task, technicalPrivate: true }), false, role);
+    assert.equal(canEditTask(actor(role), { ...task, technicalPrivate: true }), false, role);
+    assert.equal(canViewChecklistItem(actor(role), { ...checklist, technicalPrivate: true }), false, role);
+    assert.equal(canEditChecklistItem(actor(role), { ...checklist, technicalPrivate: true }), false, role);
+  }
+});
+
 test('admin e direzione mantengono accesso globale soltanto su contesti coerenti', () => {
   for (const role of ['admin', 'direzione'] satisfies RoleCode[]) {
     const user = actor(role);

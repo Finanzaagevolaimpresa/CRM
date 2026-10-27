@@ -144,14 +144,14 @@ test('N07 core pages push visibility and limits into Prisma before rendering', (
 test('N07 access helpers apply candidate limits at the database boundary and safe defaults afterwards', () => {
   assert.match(readAccess, /aiOutput\.findMany\(\{[\s\S]*take: candidateLimit/);
   assert.match(readAccess, /aiRun\.findMany\(\{[\s\S]*take: candidateLimit/);
-  assert.match(readAccess, /task\.findMany\(\{ \.\.\.candidateArgs, take: candidateLimit \}\)/);
+  assert.match(readAccess, /task\.findMany\(\{ \.\.\.candidateArgs, where: \{ AND: \[candidateArgs\.where \?\? \{\}, \{ technicalPrivate: false \}\] \}, take: candidateLimit \}\)/);
   assert.match(readAccess, /slice\(0, limit\)/);
   assert.doesNotMatch(readAccess, /slice\(0, take\)/);
 });
 
 test('N07 migration 36 is additive, transactional and index-only', () => {
   const names = readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).sort();
-  assert.equal(names.length, 68);
+  assert.equal(names.length, 69);
   assert.equal(names[35], '20260818120000_core_query_index_pagination_hardening_v1');
   assert.match(migration, /^BEGIN;/);
   assert.match(migration, /COMMIT;\s*$/);

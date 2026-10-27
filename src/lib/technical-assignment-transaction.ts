@@ -6,7 +6,8 @@ import { loadActivePrivilegedStepUpKey, lockRegisteredPrivilegedStepUpKey } from
 import { privilegedAccessMode } from './application-security-policy';
 import { lockCommunicationDirectory } from './communication-directory-lock';
 import { lockAuthoritativeInternalSession, lockInternalUser, tokenDigestFromCookie } from './internal-session-registry';
-import { verifyPrivilegedStepUpToken, type PrivilegedStepUpKey } from './privileged-step-up-token';
+import { verifiedPrivilegedStepUpExpiry, type PrivilegedStepUpKey } from './privileged-step-up-token';
+import { hasPermission } from './permission-evaluator';
 import { internalSessionMode } from './session';
 import { withSerializableTransaction } from './serializable';
 import { loadPersonalSelectiveProjectScope, loadSelectiveProjectScope, loadTechnicalAssignmentIndependentScope } from './selective-project-scope';
@@ -38,6 +39,7 @@ export type TechnicalAssignmentTransaction = {
   current:CurrentSession; key:PrivilegedStepUpKey; authority:Authority;
   author:Awaited<ReturnType<typeof user>>; actor:Awaited<ReturnType<typeof user>>;
   recipient:Awaited<ReturnType<typeof user>>|null;
+  personalProofExpiresAt?:number;
 };
 async function assertSessionTime(tx:Tx,current:CurrentSession) {
   const now=await technicalAssignmentClock(tx);
@@ -49,10 +51,12 @@ async function assertPersonal(tx:Tx,current:CurrentSession,proof:TechnicalAssign
   const now=await assertSessionTime(tx,current);
   const session=await tx.internalSession.findUnique({where:{id:current.sessionId!},select:{tokenDigest:true}});
   const digest=await tokenDigestFromCookie(proof.sessionToken);
-  if(privilegedAccessMode()!=='enforced' || !session || !digest || digest.length!==session.tokenDigest.length
-    || !timingSafeEqual(digest,session.tokenDigest) || !verifyPrivilegedStepUpToken({
+  const proofExpiresAt=verifiedPrivilegedStepUpExpiry({
       key:proof.key,expectedUserId:current.userId,sessionToken:proof.sessionToken,token:proof.stepUpToken,
-      nowSeconds:Math.floor(now.getTime()/1000) })) deny();
+      nowSeconds:Math.floor(now.getTime()/1000) });
+  if(privilegedAccessMode()!=='enforced' || !session || !digest || digest.length!==session.tokenDigest.length
+    || !timingSafeEqual(digest,session.tokenDigest) || !proofExpiresAt) deny();
+  return proofExpiresAt;
 }
 
 /** Shared current admission for management and assigned work routes.
@@ -96,8 +100,8 @@ async function withTransaction<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
     if(recipient && !inactiveRecipientForRevocation && (!recipient.active || recipient.deletedAt
       || recipient.id===authority.userId || !admitsTechnicalRolePermission(recipient,kind))) deny();
     await assertSessionTime(tx,current);
-    if(proof) await assertPersonal(tx,current,proof);
-    const result=await work(tx,{current,key,authority,author,actor,recipient});
+    const personalProofExpiresAt=proof ? await assertPersonal(tx,current,proof) : undefined;
+    const result=await work(tx,{current,key,authority,author,actor,recipient,personalProofExpiresAt});
     await assertSessionTime(tx,current);
     if(proof) await assertPersonal(tx,current,proof);
     return result;
@@ -118,4 +122,16 @@ export function withTechnicalAssignmentDecision<T>(db:PrismaClient,claimed:AuthS
 export function withTechnicalAssignmentRecipient<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
   work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
   return withTransaction(db,claimed,kind,claimed.userId,'RECIPIENT',null,work);
+}
+
+/** Private creation has no recipient and creates no assignment. It still uses
+ * the existing personal authority, current step-up, directory/session locks and
+ * the additional service.write ceiling. */
+export function withTechnicalPrivateItemDecision<T>(db:PrismaClient,claimed:AuthSession,kind:Kind,
+  proof:TechnicalAssignmentPersonalProof,work:(tx:Tx,state:TechnicalAssignmentTransaction)=>Promise<T>) {
+  return withTransaction(db,claimed,kind,null,'PERSONAL_DECISION',proof,async(tx,state)=>{
+    if(state.recipient || !hasPermission(state.current,'service.write')
+      || state.current.permissionOverrides.some(p=>p.permission==='service.write' && !p.allowed)) deny();
+    return work(tx,state);
+  });
 }

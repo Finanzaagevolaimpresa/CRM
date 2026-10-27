@@ -31,7 +31,7 @@ export async function loadAssignmentExceptions(
   const practiceWhere = { ...active, OR: [{ commercialOwnerId: { in: invalidIds } }, { technicalOwnerId: { in: invalidIds } }],
     AND: [contextOutsideSelection(scope), practiceOutsideSelection(scope),
       { selectivePracticeGrants: { none: { recipientId: actor.userId } } }, { clientId: { notIn: [...scope.selectiveClientIds] } }] };
-  const taskWhere = { ...ownerWhere, AND: [contextOutsideSelection(scope), companyClientContextOutsideSelection(scope)] };
+  const taskWhere = { ...ownerWhere, technicalPrivate: false, AND: [contextOutsideSelection(scope), companyClientContextOutsideSelection(scope)] };
   const serviceWhere = { ...ownerWhere, AND: [serviceOutsideSelection(scope)] };
   const values = await Promise.all([
     tx.lead.count({ where: leadWhere }), tx.client.count({ where: clientWhere }),

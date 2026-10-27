@@ -199,7 +199,7 @@ export async function requireDocumentEditAccess(session: AuthSession, documentId
 
 export async function requireChecklistEditAccess(session: AuthSession, itemId: string) {
   const item = await prisma.documentChecklistItem.findFirst({
-    where: { id: itemId, active: true, deletedAt: null },
+    where: { technicalPrivate: false, id: itemId, active: true, deletedAt: null },
   });
   if (!item) denyWriteAccess();
   const [client, project, clientService, document] = await Promise.all([
@@ -219,7 +219,7 @@ export async function requireChecklistEditAccess(session: AuthSession, itemId: s
 }
 
 export async function requireTaskEditAccess(session: AuthSession, taskId: string) {
-  const task = await prisma.task.findFirst({ where: { id: taskId, deletedAt: null } });
+  const task = await prisma.task.findFirst({ where: { technicalPrivate: false, id: taskId, deletedAt: null } });
   if (!task?.clientId) denyWriteAccess();
   const [client, company, project, clientService] = await Promise.all([
     prisma.client.findFirst({ where: { id: task.clientId, deletedAt: null }, select: clientSelect }),
