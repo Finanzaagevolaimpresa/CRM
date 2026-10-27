@@ -50,7 +50,7 @@ test('staging image admission drains the producer and rejects mismatch or inspec
 });
 
 test('N05 stays migration-free and introduces the complete release-safety surface', () => {
-  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 69);
+  assert.equal(readdirSync('prisma/migrations').filter((name) => /^\d/.test(name)).length, 70);
   const expected = [
     '.env.staging.example',
     'docker-compose.prod.legacy-resources.yml',

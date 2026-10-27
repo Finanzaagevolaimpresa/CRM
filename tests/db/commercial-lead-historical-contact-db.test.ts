@@ -18,7 +18,7 @@ import { assertAiOrchestratorEphemeralDatabaseIdentity,
   assertAiOrchestratorEphemeralDbTestConfiguration } from './ai-orchestrator-db-test-guard';
 
 // Preparation is qualified only by an isolated CI job. Never start a local DB
-// or install this draft table into the production migration chain.
+// or contact production. The candidate migration is tested only in this isolated DB.
 const enabled = assertAiOrchestratorEphemeralDbTestConfiguration({
   requested: process.env.RUN_DB_TESTS === '1',
   destructiveConfirmed: process.env.AI_ORCHESTRATOR_DB_TESTS_CONFIRMED === '1',
@@ -46,8 +46,6 @@ test.before(async () => {
   const options = { env: { ...process.env, DATABASE_URL: url.toString() }, stdio: 'pipe' as const, timeout: 240_000 };
   const prisma = resolve('node_modules/prisma/build/index.js');
   execFileSync(process.execPath, [prisma, 'migrate', 'deploy', '--schema', 'prisma/schema.prisma'], options);
-  execFileSync(process.execPath, [prisma, 'db', 'execute', '--file', 'ops/n14-historical-contact-schema.draft.sql', '--schema', 'prisma/schema.prisma'], options);
-  execFileSync(process.execPath, [prisma, 'db', 'execute', '--file', 'ops/n14-historical-conversion-schema.draft.sql', '--schema', 'prisma/schema.prisma'], options);
   db = new PrismaClient({ datasources: { db: { url: url.toString() } } });
   process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
   process.env.INTERNAL_SESSION_MODE = 'registry';
@@ -595,4 +593,15 @@ test('numeric conversion command fragments reconcile without weakening privacy o
   assert.equal((await readHistoricalLeadConversionOutcome(client(), f.owner, { leadId: f.lead.id, commandId })).clientId, result.id);
   assert.equal((await convertCommercialLeadInboxItem(client(), conversion)).id, result.id);
   assert.deepEqual(await state(f), observed);
+});
+
+test('historical audit cannot be changed or deleted after either committed decision', options, async () => {
+  const f = await conversionFixture();
+  await convertCommercialLeadInboxItem(client(), f.conversion);
+  const before = await state(f);
+  for (const row of [...before.audits, ...before.conversionAudits]) {
+    await assert.rejects(client().auditLog.update({ where: { id: row.id }, data: { event: 'altered_synthetic_event' } }), /N14_HISTORICAL_CONTACT_APPEND_ONLY/u);
+    await assert.rejects(client().auditLog.delete({ where: { id: row.id } }));
+  }
+  assert.deepEqual(await state(f), before);
 });

@@ -39,7 +39,10 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM information_schema.columns WHERE t
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fai_technical_private_%'")" = 0
 footprint "$evidence/after-fault.txt"
 cmp "$evidence/before.txt" "$evidence/after-fault.txt"
-npx prisma migrate deploy
+historical69="$evidence/historical69"
+mkdir -p "$historical69"
+git archive e8104aa0f2ceea2f44d5da51b8f4ff7c2e1f6adf prisma | tar -x -C "$historical69"
+npx prisma migrate deploy --schema "$historical69/prisma/schema.prisma"
 python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py initialization
 test "$(psql "$db" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
 psql "$db" -Atc "SELECT migration_name,checksum FROM \"_prisma_migrations\" WHERE migration_name<'20261027010000_technical_private_items_v1' ORDER BY migration_name" > "$evidence/prefix68-after.txt"
@@ -52,7 +55,7 @@ test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal 
 test "$(psql "$db" -Atc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgdeferrable AND tginitdeferred AND tgname IN ('task_private_origin_required','checklist_private_origin_required','technical_private_creation_atomic')")" = 3
 if psql "$db" -v ON_ERROR_STOP=1 -f "$ddl" > "$evidence/replay.log" 2>&1; then exit 1; fi
 grep -Fq TECHNICAL_PRIVATE_ITEM_SCHEMA68_REQUIRED "$evidence/replay.log"
-npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --script > "$evidence/drift-after.sql"
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel "$historical69/prisma/schema.prisma" --script > "$evidence/drift-after.sql"
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"

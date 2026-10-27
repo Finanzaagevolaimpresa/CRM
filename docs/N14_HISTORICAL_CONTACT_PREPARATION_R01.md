@@ -1,6 +1,6 @@
 # Contatto antecedente all’ingresso nel CRM — candidato
 
-Questo ramo dipende da PR232 e completa l’intake di un cliente contattato prima della creazione del lead. La catena Prisma resta a schema69: le due DDL in `ops/n14-historical-*-schema.draft.sql` sono ammesse soltanto nel database sintetico con sentinel. Non sono migration produttive e il ramo non è distribuito.
+Questo ramo dipende da PR232 e completa l’intake di un cliente contattato prima della creazione del lead. La migration candidata `20261027220000_historical_lead_contact_v1` porta la catena Prisma da 69 a 70: aggiunge due registri inizialmente vuoti e conserva i record precedenti. Lo schema69 resta la baseline produttiva; il ramo non è distribuito e SQL70 richiede un piano riesaminato e un’autorità specifica. Le precedenti DDL in `ops/` restano soltanto riferimenti storici di preparazione sintetica.
 
 ## Percorso e autorità
 
@@ -26,8 +26,10 @@ Scheda lead e inbox mostrano «Contatto precedente al CRM · SLA non misurato».
 
 ## Prove e limiti attuali
 
-Il precedente candidato `8715410e61abe06894412c8e6a34ca9f435f50b6` ha superato 42 prove PostgreSQL (run `40580424133`, job `122458006030`) e 4 prove browser native (run `40580424154`, job `122458006477`). Quelle prove qualificano la registrazione del contatto e la conversione transazionale allora presenti, senza la nuova pagina di conversione.
+Il candidato `6cf295462ddae42582c0c388139aa3f42fb0bc38` ha superato 48 prove PostgreSQL (run `40582723602`, job `122466108232`) e 7 prove browser native (run `40582723504`, job `122466106694`), senza errori o prove saltate. Qualificano registrazione, riepiloghi, conversione, riconciliazione e dinieghi sulle DDL sintetiche precedenti; non sono prove della nuova migration né delle modifiche successive.
 
-Il delta attuale aggiunge la pagina e le action di conversione, la firma del contenuto esatto, la riconciliazione nativa e l’indicazione SLA. Sono predisposte 48 prove PostgreSQL e 7 browser complessive: percorso positivo, contenuto cambiato, revoca, attore estraneo, concorrenza, audit atomico, chiave ritirata, risposta persa, ricaricamento e assenza di un secondo cliente. Devono passare sul nuovo commit; i risultati precedenti non si trasferiscono. Le prove usano soltanto dati sintetici e nessun provider.
+Il candidato SQL70 aggiunge il vincolo di immutabilità dell’audit storico e lo integra nella catena Prisma, nei controlli di attivazione email e nelle qualifiche dell’immagine. Sono predisposte 49 prove PostgreSQL e 7 browser sul nuovo commit. La qualifica SQL69→70 confronta tutte le righe precedenti, le prime risposte e gli SLA, verifica il fallimento atomico della migration e conserva i checksum storici. La qualifica PR140 ripopola contatto e conversione sintetici e ne verifica lettura, dinieghi e impronte prima e dopo il riavvio della stessa immagine. Nessuna di queste prove è dichiarata passata prima dell’esito CI sull’HEAD esatto.
 
-Restano da completare: modello e migration produttivi, compatibilità con i percorsi esistenti, regressioni complete e build, ispezione delle schermate desktop/mobile, pacchetto e riesame indipendente, piano con SQL/hash/target/impatti/recuperabilità e autorità specifica per la produzione. Nessuna conversione, contatto, concessione o comunicazione reale è eseguita.
+La migration richiede esattamente 69 migrazioni completate e nessuna precedente in esito ambiguo. Non modifica dati precedenti, non crea contatti, clienti, incarichi o invii reali. Aggiorna il vincolo SLA mantenendo tutte le condizioni ordinarie: il nuovo esito storico richiede una ricevuta della stessa transazione. Il recupero usa esclusivamente codice compatibile con schema70; nessun down-migrate o ripristino DB è qualificato.
+
+Restano regressioni complete e build, ispezione delle schermate desktop/mobile, pacchetto e riesame indipendente, piano con SQL/hash/target/impatti/recuperabilità e autorità specifica per la produzione. Nessuna conversione, contatto, concessione o comunicazione reale è eseguita.

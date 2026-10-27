@@ -191,6 +191,10 @@ async function main() {
       leadLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'lead_lifecycle_changed' }, orderBy: { id: 'asc' } }),
       leadInboxItems: await db.commercialLeadInboxItem.findMany({ orderBy: { id: 'asc' } }),
       leadSlaCycles: await db.commercialLeadSlaCycle.findMany({ orderBy: { id: 'asc' } }),
+      historicalContacts: await db.$queryRaw<Array<{ id: string }>>`SELECT * FROM "CommercialLeadHistoricalContact" ORDER BY id`,
+      historicalConversions: await db.$queryRaw<Array<{ id: string }>>`SELECT * FROM "CommercialLeadHistoricalConversion" ORDER BY id`,
+      historicalAudits: await db.auditLog.findMany({ where: { event: { in: ['commercial_lead_historical_contact_recorded', 'commercial_lead_historical_conversion_recorded'] } }, orderBy: { id: 'asc' } }),
+
       projectLifecycleReceipts: await db.auditLog.findMany({ where: { event: 'project_lifecycle_changed' }, orderBy: { id: 'asc' } }),
       selectiveAuthorities: await db.selectiveAccessAuthority.findMany({ orderBy: { id: 'asc' } }),
       selectiveGrants: await db.selectiveProjectGrant.findMany({ orderBy: { id: 'asc' } }),
@@ -243,8 +247,12 @@ async function main() {
     };
     assert.ok(data.dossiers.length >= 3 && data.versions.length >= 3 && data.reviews.length >= 3);
     assert.ok(data.exports.length >= 3 && data.authorizations.length >= 3 && data.receipts.length >= 3);
-    assert.equal(data.ledger.length, 69);
-    assert.equal(data.ledger.at(-1)?.migration_name, '20261027010000_technical_private_items_v1');
+    assert.equal(data.ledger.length, 70);
+    assert.equal(data.historicalContacts.length, 2); assert.equal(data.historicalConversions.length, 1);
+    assert.equal(data.historicalAudits.length, 3);
+    assert.equal(data.leadSlaCycles.filter(row => row.outcome === 'HISTORICAL_CONTACT_BEFORE_CRM' && row.firstResponseAt === null).length, 1);
+
+    assert.equal(data.ledger.at(-1)?.migration_name, '20261027220000_historical_lead_contact_v1');
     assert.equal(data.privateItemOrigins.length, 2); assert.equal(data.privateItemAudit.length, 2);
     assert.equal(data.tasks.filter(row => row.technicalPrivate).length, 1); assert.equal(data.privateChecklists.length, 1);
     assert.equal(data.uploadSubmissions.length, 4); assert.equal(data.uploadReviews.length, 2);

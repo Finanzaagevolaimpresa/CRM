@@ -11,7 +11,7 @@ tree="$(git rev-parse HEAD^{tree})"
 recovery_head="$head"
 recovery_tree="$tree"
 [[ "$(git rev-parse "$recovery_head^{tree}")" == "$recovery_tree" ]]
-# Schema66 also retains exact item selections, source generations and command receipts. Qualify only
+# Schema70 also retains historical contact/conversion journals without manufactured SLA responses. Qualify only
 # a restart of this exact candidate; an older binary is never a safe rollback.
 node scripts/m4/verify-schema.mjs
 git diff --exit-code "$recovery_head" -- $(git ls-tree -r --name-only "$recovery_head" -- prisma/migrations)
@@ -104,6 +104,7 @@ export R05_PRACTICE_RECOVERY_FIXTURE="$evidence/practice-fixture.json"
 export R05_TECHNICAL_RECOVERY_FIXTURE="$evidence/technical-fixture.json"
 export R05_ADMIN_REQUEST_RECOVERY_FIXTURE="$evidence/admin-request-fixture.json"
 export R05_UPLOAD_RECOVERY_FIXTURE="$evidence/upload-fixture.json"
+export R05_HISTORICAL_RECOVERY_FIXTURE="$evidence/historical-fixture.json"
 [[ ! -e "$LOCAL_DOCUMENT_STORAGE_ROOT" && ! -e "$R05_M1_RECOVERY_FIXTURE" ]] || exit 1
 mkdir -p "$PRACTICE_READINESS_BROWSER_EVIDENCE_DIR"
 npm run prisma:migrate:deploy
@@ -122,7 +123,7 @@ start_app() {
     -e INTERNAL_ENGAGEMENT_MODE="$engagement_mode" -e PRACTICE_READINESS_MODE="$feature_mode" -e CONTROLLED_INTAKE_MODE="$feature_mode" \
     -e LOGIN_THROTTLE_MODE=disabled -e PRIVILEGED_ACCESS_MODE=enforced -e SECURITY_HEADERS_MODE=report-only \
     -e PRIVILEGED_STEP_UP_SECRET="$PRIVILEGED_STEP_UP_SECRET" -e PRIVILEGED_STEP_UP_KEY_VERSION=1 \
-    -e COMMERCIAL_LEAD_INBOX_MODE=disabled -e WEBSITE_LEAD_MODE=disabled \
+    -e COMMERCIAL_LEAD_INBOX_MODE=enforced -e WEBSITE_LEAD_MODE=disabled \
     -e FEATURE_INTEGRATIONS_ENABLED=false -e FEATURE_AI_WORKER_ENABLED=false -e FEATURE_AI_DISPATCH_ENABLED=false \
     -e FEATURE_AI_EGRESS_ENABLED=false -e AI_EXTERNAL_PROVIDERS_ENABLED=false -e AI_ORCHESTRATOR_WORKER_ENABLED=0 -e AI_PROVIDER=mock \
     -e TZ=UTC "$image" >/dev/null
@@ -197,6 +198,7 @@ node --import tsx tests/pr140-release/video-state.ts
 node --import tsx tests/pr140-release/technical-state.ts
 node --import tsx tests/pr140-release/admin-request-state.ts
 node --import tsx tests/pr140-release/upload-state.ts
+node --import tsx tests/pr140-release/historical-state.ts
 tar -C "$LOCAL_DOCUMENT_STORAGE_ROOT" -cf - . | docker exec -i "$app" tar -xpf - -C /var/lib/fai-crm/documents
 run_browser candidate-context tests/pr140-release/playwright.config.ts context-recovery.spec.ts 1
 run_browser candidate-updates tests/pr140-release/playwright.config.ts updates-recovery.spec.ts 1
@@ -204,6 +206,7 @@ run_browser candidate-videos tests/pr140-release/playwright.config.ts video-reco
 run_browser candidate-technical tests/pr140-release/playwright.config.ts technical-recovery.spec.ts 1
 run_browser candidate-admin-requests tests/pr140-release/playwright.config.ts admin-request-recovery.spec.ts 1
 run_browser candidate-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
+run_browser candidate-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/before-recovery.json"
 node --import tsx tests/pr140-release/state.ts epochs "$evidence/before-recovery-epochs.json"
 # Explicit synthetic application failure; PostgreSQL and documents remain running/intact.
@@ -234,6 +237,7 @@ run_browser restart-videos tests/pr140-release/playwright.config.ts video-recove
 run_browser restart-technical tests/pr140-release/playwright.config.ts technical-recovery.spec.ts 1
 run_browser restart-admin-requests tests/pr140-release/playwright.config.ts admin-request-recovery.spec.ts 1
 run_browser restart-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
+run_browser restart-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-recovery.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-recovery.json"
 [[ "$(docker exec "$app" sha256sum /var/lib/fai-crm/documents/r05-synthetic.txt | cut -d ' ' -f1)" == "$document_before" ]]
@@ -261,11 +265,12 @@ run_browser resume-videos tests/pr140-release/playwright.config.ts video-recover
 run_browser resume-technical tests/pr140-release/playwright.config.ts technical-recovery.spec.ts 1
 run_browser resume-admin-requests tests/pr140-release/playwright.config.ts admin-request-recovery.spec.ts 1
 run_browser resume-uploads tests/pr140-release/playwright.config.ts upload-recovery.spec.ts 1
+run_browser resume-historical tests/pr140-release/playwright.config.ts historical-recovery.spec.ts 1
 node --import tsx tests/pr140-release/state.ts footprint "$evidence/after-resume.json"
 cmp "$evidence/before-recovery.json" "$evidence/after-resume.json"
 [[ "$(docker inspect -f '{{.State.StartedAt}}' "$pg")" == "$pg_started" ]]
 docker save "$candidate_image" "$recovery_image" | gzip -1 > "$evidence/release-images.tar.gz"
 bundle_sha="$(sha256sum "$evidence/release-images.tar.gz" | cut -d ' ' -f1)"
-printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA69_PRIVATE_ITEMS_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":69,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"productionAdmitted":false}\n' \
+printf '{"protocol":"PR140_RELEASE_R05","status":"CI_SCHEMA70_HISTORICAL_CONTACT_COMPATIBLE_RESTART_PASS","synthetic":true,"candidateCommit":"%s","candidateTree":"%s","candidateImageId":"%s","recoveryCommit":"%s","recoveryTree":"%s","recoveryImageId":"%s","imageArchiveSha256":"%s","schema":70,"practiceReadGrantsPreserved":true,"recoveryEnforcesPracticePerimeters":true,"clientReadGrantsPreserved":true,"recoveryEnforcesClientPerimeters":true,"m1HistoryAndDocumentAccessVerified":true,"legacyRecoveryAdmitted":false,"databaseNotRestarted":true,"documentSha256":"%s","footprintUnchanged":true,"failedCandidateDetected":true,"liveSessionRestartDenied":true,"explicitSyntheticRevocationRequired":true,"resumeQualified":true,"databaseRestoreQualified":false,"m4HistoryPreserved":true,"m4AvailableDuringM1Return":true,"selectivePerimetersPreserved":true,"sameCandidateRestartOnly":true,"ordinaryAttemptsCursorsConflictsPreserved":true,"contextMessagesFilesParticipantsPreserved":true,"selectedUpdateRulesWorkReadStateAndEpochsPreserved":true,"privateVideoFilesHistoryAudienceQuotaAndRevocationPreserved":true,"derivedEmailProvenanceDraftsUnsavedWorkAndRevocationsPreserved":true,"selectiveLeadFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectiveLeadEditAuthorityCapabilitiesCommandsReceiptsAndRevocationPreserved":true,"selectiveClientFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"selectedCompanyFieldsGenerationsAndRevocationPreserved":true,"selectedPersonMembershipFieldsGenerationsAndRevocationPreserved":true,"selectedDocumentVersionsBytesEpochsViewDownloadAndRevocationPreserved":true,"selectivePracticeFieldsHistoryReceiptsEpochsAndRevocationPreserved":true,"technicalAssignmentsHistoryExactWorkDocumentsAndRevocationsPreserved":true,"selectedTechnicalItemsGenerationsCommandsAndRevocationsPreserved":true,"adminRequestEventsAuditExactDraftsAndOriginRevocationsPreserved":true,"privateUploadFilesQuotaReceiptsReviewAndRevocationsPreserved":true,"privateCanonicalAcquisitionsProvenanceBytesAndDenialsPreserved":true,"privateItemsMarkersOriginsAuditAndExactAssignmentsPreserved":true,"historicalContactConversionAuditAndSlaPreserved":true,"historicalOwnerIsolationPreserved":true,"productionAdmitted":false}\n' \
  "$head" "$tree" "$candidate_id" "$recovery_head" "$recovery_tree" "$recovery_id" "$bundle_sha" "$document_before" > "$evidence/release-receipt.json"
 cat "$evidence/release-receipt.json"
