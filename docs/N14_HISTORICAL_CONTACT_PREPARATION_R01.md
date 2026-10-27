@@ -1,6 +1,10 @@
 # Contatto antecedente all’ingresso nel CRM — preparazione
 
-Questo ramo dipende dal candidato PR232. Contiene il contratto puro, il modulo candidato di persistenza non collegato e prove locali. Non introduce route, action, migration della catena Prisma, attivazioni o invii; la persistenza resta da qualificare su PostgreSQL prima di qualsiasi integrazione.
+Questo ramo dipende dal candidato PR232. Contiene contratto, persistenza, conversione e anteprima candidati, oltre a un componente non ancora montato in una pagina. Non introduce route, action, migration della catena Prisma, attivazioni o invii. La catena produttiva resta a schema69.
+
+Stato corrente del 27/10: registrazione e conversione sono qualificate con 34/34 prove PostgreSQL sul commit `b78e465f997a447f6f3b4b94a34d393753367de2`, run `40564986437`, job `122403764954`. Il successivo delta di anteprima aggiunge sei scenari database, da qualificare sul proprio nuovo commit: non eredita quel PASS. Le sezioni preparatorie più sotto sono conservate come cronologia.
+
+Il nuovo riepilogo firmato scade entro cinque minuti o prima, se scade la sessione. Vincola evento, fonte, riferimento, comando, attore, sessione, inbox, ciclo, versione e accettazione del referente; il salvataggio ricontrolla il registro della chiave esistente, i permessi e la scadenza nella stessa transazione. Nessuna nuova credenziale o autorità Admin è creata. Il componente distingue data effettiva e data del salvataggio, richiede il fuso dell’evento e conserva nell’URL il solo comando prima dell’invio: dopo risposta persa rimane disponibile soltanto la verifica dell’esito. La fonte resta una dichiarazione, non una prova automaticamente verificata. Il componente e le nuove sei prove devono ancora superare la qualifica nativa: non sono un flusso produttivo completato.
 
 Aggiornamento del 27/10: la sola registrazione e riconciliazione del contatto è qualificata con 14/14 prove PostgreSQL sul commit `36498187c62452f778874ab333f3ebfce3a43b92`, run `40562224791`. Le sezioni successive descrivono anche le fasi preparatorie conservate. La nuova conversione descritta in fondo richiede una qualifica sul proprio commit; non eredita quel PASS.
 

@@ -7,7 +7,9 @@ import { PrismaClient, type RoleCode } from '@prisma/client';
 import { assignCommercialLeadInboxItem, initializeCommercialLeadInboxItem,
   recordCommercialLeadFirstResponse, convertCommercialLeadInboxItem, type CommercialLeadFaultPoint } from '../../src/lib/commercial-lead-inbox';
 import { recordHistoricalLeadContact, readHistoricalLeadContactOutcome,
-  readHistoricalLeadConversionOutcome } from '../../src/lib/commercial-lead-historical-contact-storage';
+  readHistoricalLeadConversionOutcome, previewHistoricalLeadContact, confirmHistoricalLeadContact } from '../../src/lib/commercial-lead-historical-contact-storage';
+import { privilegedStepUpKeyDigest } from '../../src/lib/privileged-step-up-token';
+import { canonicalJson } from '../../src/lib/canonical-json';
 import { acceptResponsibility, readResponsibility } from '../../src/lib/responsibility';
 import { withSerializableTransaction } from '../../src/lib/serializable';
 import { assertAiOrchestratorEphemeralDatabaseIdentity,
@@ -28,6 +30,7 @@ const root = enabled ? new PrismaClient() : null;
 const schema = `n14_history_${randomUUID().replaceAll('-', '')}`;
 let db: PrismaClient | null = null, schemaCreated = false;
 const previous = { inbox: process.env.COMMERCIAL_LEAD_INBOX_MODE, session: process.env.INTERNAL_SESSION_MODE };
+const previewKey = { version: 1, secret: randomBytes(32).toString('hex') };
 const client = () => { assert.ok(db); return db; };
 
 test.before(async () => {
@@ -47,6 +50,8 @@ test.before(async () => {
   process.env.COMMERCIAL_LEAD_INBOX_MODE = 'enforced';
   process.env.INTERNAL_SESSION_MODE = 'registry';
   const admin = await actor('admin');
+  await client().applicationKeyVersion.create({ data: { purpose: 'PRIVILEGED_STEP_UP', version: previewKey.version,
+    keyDigest: privilegedStepUpKeyDigest(previewKey.secret), status: 'ACTIVE', activatedAt: new Date(), createdById: admin.userId } });
   await client().commercialLeadSlaPolicyVersion.create({ data: {
     policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: 1, status: 'ACTIVE',
     calendarCode: 'CONTINUOUS_24X7', timezoneCode: 'UTC', responseTargetSeconds: 3600,
@@ -439,5 +444,62 @@ test('conversion journal transaction fault is surfaced before success and rolls 
     await client().$executeRawUnsafe('DROP TRIGGER historical_conversion_fault ON "CommercialLeadHistoricalConversion"');
     await client().$executeRawUnsafe('DROP FUNCTION historical_conversion_fault()');
   }
+  assert.deepEqual(await state(f), before);
+});
+
+test('signed preview is read-only and confirmation records the exact event without an SLA rewrite', options, async () => {
+  const f = await fixture(), before = await state(f);
+  const preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey);
+  assert.deepEqual(await state(f), before);
+  const saved = await confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true);
+  assert.equal(saved.state, 'RECORDED'); assert.equal(saved.receipt.input.evidenceReference, f.input.evidenceReference);
+  assert.equal(saved.receipt.input.occurredAt, f.input.occurredAt);
+  assert.ok(Date.parse(saved.receipt.recordedAt) >= Date.parse(preview.previewedAt));
+  assert.deepEqual((await state(f)).cycle, before.cycle);
+  assert.equal((await state(f)).records.length, 1);
+});
+
+test('missing personal confirmation and a modified preview cannot write or manufacture a receipt', options, async () => {
+  const f = await fixture(), before = await state(f);
+  const preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey);
+  await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, false));
+  const value = JSON.parse(Buffer.from(preview.token, 'base64url').toString('utf8'));
+  value.payload.input.evidenceReference = 'Altered synthetic reference';
+  await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, Buffer.from(canonicalJson(value)).toString('base64url'), true));
+  assert.deepEqual(await state(f), before);
+});
+
+test('a current first response between preview and confirmation invalidates the historical preview', options, async () => {
+  const f = await fixture();
+  const preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey);
+  await recordCommercialLeadFirstResponse(client(), { leadId: f.lead.id, actor: f.owner, expectedInboxVersion: f.item.version });
+  const afterResponse = await state(f);
+  await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true));
+  assert.deepEqual(await state(f), afterResponse);
+});
+
+test('an open preview does not survive permission revocation', options, async () => {
+  const f = await fixture(), preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey);
+  await client().userPermissionOverride.create({ data: { userId: f.owner.userId, permission: 'lead.write', allowed: false } });
+  const before = await state(f);
+  await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true));
+  assert.deepEqual(await state(f), before);
+});
+
+test('a preview is bound to the original live session even for the same owner', options, async () => {
+  const f = await fixture(), preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey);
+  const session = await client().internalSession.create({ data: { userId: f.owner.userId, tokenDigest: randomBytes(32),
+    expiresAt: new Date('2099-01-01T00:00:00.000Z') } });
+  const before = await state(f);
+  await assert.rejects(confirmHistoricalLeadContact(client(), { ...f.owner, sessionId: session.id }, previewKey, preview.token, true));
+  assert.deepEqual(await state(f), before);
+});
+
+test('the preview key must remain active in the registry at confirmation', options, async () => {
+  const f = await fixture(), preview = await previewHistoricalLeadContact(client(), f.owner, f.input, previewKey), before = await state(f);
+  const where = { purpose_version: { purpose: 'PRIVILEGED_STEP_UP', version: previewKey.version } };
+  await client().applicationKeyVersion.update({ where, data: { status: 'RETIRED', retiredAt: new Date() } });
+  try { await assert.rejects(confirmHistoricalLeadContact(client(), f.owner, previewKey, preview.token, true)); }
+  finally { await client().applicationKeyVersion.update({ where, data: { status: 'ACTIVE', retiredAt: null } }); }
   assert.deepEqual(await state(f), before);
 });

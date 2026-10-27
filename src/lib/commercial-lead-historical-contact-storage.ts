@@ -12,6 +12,10 @@ import { responsibilityAcceptance } from './responsibility-contract';
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
 import { internalSessionMode } from './session';
 import { SerializableConflictError, withSerializableTransaction } from './serializable';
+import { canonicalJson } from './canonical-json';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import type { PrivilegedStepUpKey } from './privileged-step-up-token';
+import { createHistoricalContactPreview, readHistoricalContactPreview } from './commercial-lead-historical-preview';
 
 // Preparation only. No route/action imports this module. Its draft DDL is only
 // for an isolated database; no production schema or activation is implied.
@@ -94,7 +98,28 @@ async function lockContext(tx: Tx, actor: Actor, leadId: string) {
     cycleSequence: cycles[0].sequence, firstResponseAt: null, historicalContactExists: false,
     initializedAt: item.initializedAt.toISOString(), recordedAt: times[0].now.toISOString(),
   };
-  return { context, item, cycle: cycles[0], canCreateClient: hasPermission(session, 'client.write') };
+  return { context, item, cycle: cycles[0], sessionExpiresAt: session.expiresAt.getTime(),
+    canCreateClient: hasPermission(session, 'client.write') };
+}
+
+function previewAdmission(actor: Actor, scope: Awaited<ReturnType<typeof lockContext>>) {
+  return { sessionId: actor.sessionId, sessionExpiresAt: scope.sessionExpiresAt,
+    inboxItemId: scope.item.id, cycleId: scope.cycle.id, context: scope.context };
+}
+
+/** Candidate read-only preview. Lock the existing key before actor/context,
+ * consistently with native key rotation. No new key or personal authority. */
+export async function previewHistoricalLeadContact(db: PrismaClient, actor: Actor, requested: unknown, key: PrivilegedStepUpKey) {
+  const input = historicalContactInput(requested);
+  return withSerializableTransaction(db, async tx => {
+    if (!await lockRegisteredPrivilegedStepUpKey(tx, key)) return unavailable();
+    const scope = await lockContext(tx, actor, input.leadId);
+    const existing = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "CommercialLeadHistoricalContact"
+      WHERE id=${input.commandId}::uuid OR ("inboxItemId"=${scope.item.id}::uuid AND "assignmentId"=${input.expectedAssignmentId}) FOR SHARE`;
+    if (existing.length) throw new HistoricalContactError('ALREADY_RECORDED');
+    return createHistoricalContactPreview(key, requested, previewAdmission(actor, scope));
+  });
 }
 
 async function loadRecord(tx: Tx, commandId: string) {
@@ -130,10 +155,13 @@ async function verifyJournal(tx: Tx, row: HistoricalContactRecord, scope: Awaite
 /** Candidate persistence only. Replays return the same durable receipt after
  * current authorization; a missing receipt is never turned into permission to
  * submit a fresh command. No SLA date/outcome or client is changed here. */
-export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor, requested: unknown) {
+async function writeHistoricalLeadContact(db: PrismaClient, actor: Actor, requested: unknown,
+  preview?: { token: string; key: PrivilegedStepUpKey }) {
   const input = historicalContactInput(requested);
   try { return await withSerializableTransaction(db, async tx => {
+    if (preview && !await lockRegisteredPrivilegedStepUpKey(tx, preview.key)) return unavailable();
     const scope = await lockContext(tx, actor, input.leadId);
+    if (preview && canonicalJson(readHistoricalContactPreview(preview.key, preview.token, previewAdmission(actor, scope))) !== canonicalJson(input)) return unavailable();
     const existing = await loadRecord(tx, input.commandId);
     if (existing) {
       if (JSON.stringify(existing.input) !== JSON.stringify(input)) return unavailable();
@@ -165,6 +193,11 @@ export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor
     await authorize(tx, actor);
     const result = await verifyJournal(tx, row, { ...scope,
       context: { ...scope.context, inboxVersion: versions[0].version } });
+    if (preview) {
+      const times = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp()::timestamptz(3) AS now`;
+      if (!times[0] || !readHistoricalContactPreview(preview.key, preview.token,
+        previewAdmission(actor, { ...scope, context: { ...scope.context, recordedAt: times[0].now.toISOString() } }))) return unavailable();
+    }
     return { state: 'RECORDED' as const, replay: false, receipt: result };
   }); } catch (error) {
     if (!(error instanceof SerializableConflictError)) throw error;
@@ -174,6 +207,31 @@ export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor
     if (outcome.state !== 'RECORDED' || JSON.stringify(outcome.receipt.input) !== JSON.stringify(input)) return unavailable();
     return { state: 'RECORDED' as const, replay: true, receipt: outcome.receipt };
   }
+}
+
+/** Isolated persistence entry used by the storage qualification. Production
+ * actions must use confirmHistoricalLeadContact with an exact signed preview. */
+export async function recordHistoricalLeadContact(db: PrismaClient, actor: Actor, requested: unknown) {
+  return writeHistoricalLeadContact(db, actor, requested);
+}
+
+/** No route supplies this yet. The untrusted body identifies the rows to lock;
+ * only the fully verified token inside that transaction authorizes writing. */
+export async function confirmHistoricalLeadContact(db: PrismaClient, actor: Actor, key: PrivilegedStepUpKey,
+  token: string, confirmed: boolean) {
+  if (confirmed !== true || typeof token !== 'string' || token.length > 16_000 || !/^[A-Za-z0-9_-]+$/u.test(token)) return unavailable();
+  let input: HistoricalContactInput;
+  try {
+    const value = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as unknown;
+    const parsed = z.object({ payload: z.object({ input: z.unknown() }) }).parse(value);
+    if (!parsed.payload.input || typeof parsed.payload.input !== 'object' || Array.isArray(parsed.payload.input)) return unavailable();
+    const { protocol, ...raw } = parsed.payload.input as Record<string, unknown>;
+    if (protocol !== 'N14_HISTORICAL_CONTACT_V1') return unavailable();
+    input = historicalContactInput(raw);
+  } catch { return unavailable(); }
+  const { protocol: _protocol, ...raw } = input;
+  void _protocol;
+  return writeHistoricalLeadContact(db, actor, raw, { token, key });
 }
 
 /** Read-only with row locks, suitable for a future explicit outcome query. An
