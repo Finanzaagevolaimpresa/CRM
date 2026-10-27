@@ -11,6 +11,17 @@ const f = JSON.parse(readFileSync(path.join(evidence, 'fixture.json'), 'utf8')) 
 };
 let other: { id: string; email: string };
 type Captured = { url: string; headers: Record<string, string>; body: Buffer };
+function trackHydrationErrors(pages: Page[]) {
+  const errors: string[] = [];
+  const record = (message: string) => {
+    if (/hydration|cannot contain a nested|cannot be a descendant/i.test(message)) errors.push(message);
+  };
+  for (const page of pages) {
+    page.on('pageerror', error => record(error.message));
+    page.on('console', message => { if (message.type() === 'error') record(message.text()); });
+  }
+  return () => expect(errors, 'Native pages must hydrate without invalid HTML or a mismatched server tree').toEqual([]);
+}
 async function login(page: Page, email = f.emails.admin) {
   await page.goto('/login'); await page.locator('[data-interactive-ready="true"]').waitFor({ state: 'attached' });
   await page.getByLabel('Email', { exact: true }).fill(email);
@@ -62,10 +73,14 @@ test.afterAll(async () => db.$disconnect());
 test('manual unassigned intake uses native identity confirmation, explicit owner, acceptance and real-time response before one conversion', async ({ browser }) => {
   const ac = await browser.newContext(), cc = await browser.newContext(), oc = await browser.newContext();
   const admin = await ac.newPage(), owner = await cc.newPage(), excluded = await oc.newPage();
+  const assertRendering = trackHydrationErrors([admin, owner, excluded]);
   await login(admin); const row = await manual(admin);
   await admin.goto(`/leads/${row.lead.id}`);
   await expect(admin.getByText('Assegna prima il referente commerciale', { exact: true })).toBeVisible();
+  await screen(admin, 'lead-unassigned', 1440); await screen(admin, 'lead-unassigned', 390);
   await admin.getByRole('link', { name: 'Apri coda e assegnazione del referente', exact: true }).click();
+  await expect(admin).toHaveURL(/\/leads\/inbox\?lead=/);
+  await expect(admin.getByRole('heading', { name: 'Assegnazione del referente commerciale', exact: true })).toBeVisible();
   await expect(admin.getByRole('button', { name: 'Assegna', exact: true })).toHaveCount(0);
   await screen(admin, 'assignment-required', 1440); await screen(admin, 'assignment-required', 390);
   await stepUp(admin); await admin.goto(`/leads/inbox?lead=${row.lead.id}`);
@@ -98,11 +113,13 @@ test('manual unassigned intake uses native identity confirmation, explicit owner
   expect(await db.client.count({ where: { id: converted.clientId! } })).toBe(1);
   expect(await db.commercialLeadActivity.count({ where: { inboxItemId: row.item.id, activityType: 'FIRST_RESPONSE_RECORDED' } })).toBe(1);
   expect(await db.technicalPractice.count({ where: { clientId: converted.clientId! } })).toBe(0);
+  assertRendering();
   await ac.close(); await cc.close(); await oc.close();
 });
 
 test('lost assignment response and stale native command cannot create a second assignment or a fabricated first response', async ({ browser }) => {
-  const context = await browser.newContext(), page = await context.newPage(); await login(page); const row = await manual(page);
+  const context = await browser.newContext(), page = await context.newPage();
+  const assertRendering = trackHydrationErrors([page]); await login(page); const row = await manual(page);
   await page.goto(`/leads/inbox?lead=${row.lead.id}`); await stepUp(page); await page.goto(`/leads/inbox?lead=${row.lead.id}`);
   await page.getByLabel('Referente commerciale', { exact: true }).selectOption(f.commercialId);
   let command: Captured | undefined;
@@ -119,11 +136,13 @@ test('lost assignment response and stale native command cannot create a second a
   expect(await db.commercialLeadActivity.count({ where: { inboxItemId: row.item.id, activityType: 'ASSIGNED' } })).toBe(1);
   expect((await db.commercialLeadSlaCycle.findUniqueOrThrow({ where: { id: row.cycle.id } })).firstResponseAt).toBeNull();
   expect((await db.lead.findUniqueOrThrow({ where: { id: row.lead.id } })).clientId).toBeNull();
+  assertRendering();
   await context.close();
 });
 
 test('revoked identity confirmation rejects a previously rendered assignment and historical-contact guidance does not manufacture an event', async ({ browser }) => {
-  const context = await browser.newContext(), page = await context.newPage(); await login(page); const row = await manual(page);
+  const context = await browser.newContext(), page = await context.newPage();
+  const assertRendering = trackHydrationErrors([page]); await login(page); const row = await manual(page);
   await page.goto(`/leads/inbox?lead=${row.lead.id}`); await stepUp(page); await page.goto(`/leads/inbox?lead=${row.lead.id}`);
   await expect(page.getByText(/non usare questo comando per simulare un nuovo contatto/)).toBeVisible();
   await page.getByLabel('Referente commerciale', { exact: true }).selectOption(f.commercialId);
@@ -137,5 +156,6 @@ test('revoked identity confirmation rejects a previously rendered assignment and
   await page.goto(`/leads/inbox?lead=${row.lead.id}`);
   await expect(page.getByRole('link', { name: 'Conferma identità per assegnare', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Assegna', exact: true })).toHaveCount(0);
+  assertRendering();
   await context.close();
 });
