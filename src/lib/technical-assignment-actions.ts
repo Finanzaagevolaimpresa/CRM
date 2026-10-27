@@ -15,6 +15,7 @@ import { TechnicalAssignmentError } from './technical-assignment-transaction';
 import { technicalManagementPath } from './technical-assignment-display';
 import { readTechnicalAssignmentManagement } from './technical-assignment-management';
 import { technicalWorkItemCatalogueQuery, type TechnicalWorkItemCatalogue } from './technical-work-item-catalog';
+import { technicalDocumentCatalogueQuery, type TechnicalDocumentCatalogue } from './technical-document-catalog';
 
 function failure(error: unknown): TechnicalAssignmentManagementState {
   if (error instanceof ZodError || error instanceof SyntaxError) return { ok: false,
@@ -52,6 +53,24 @@ export async function searchTechnicalWorkItemCatalogue(raw: unknown): Promise<{
       || data.recipient?.epoch !== request.recipientEpoch) throw new TechnicalAssignmentError('STALE');
     return { ok: true, message: 'Catalogo aggiornato. Le scelte già effettuate sono conservate.', catalogue: data.workItemCatalogue };
   } catch { return { ok: false, message: 'Catalogo non disponibile con lo stato o i permessi correnti. Ricarica per verificare le scelte.' }; }
+}
+
+/** A catalogue search is a current read, never a document grant or a download. */
+export async function searchTechnicalDocumentCatalogue(raw: unknown): Promise<{
+  ok: boolean; message: string; catalogue?: TechnicalDocumentCatalogue }> {
+  try {
+    const session = await requireSession();
+    await origin();
+    const request = z.object({ reference: technicalAssignmentReference,
+      contextSha256: z.string().regex(/^[a-f0-9]{64}$/), recipientEpoch: z.number().int().positive(),
+      query: technicalDocumentCatalogueQuery }).strict().parse(raw);
+    const data = await readTechnicalAssignmentManagement(prisma, session,
+      { kind: request.reference.kind, targetId: request.reference.targetId }, request.reference.recipientId,
+      technicalWorkItemCatalogueQuery.parse({}), request.query);
+    if (!data.documentCatalogueAvailable || !data.recipientEligible || data.contextSha256 !== request.contextSha256
+      || data.recipient?.epoch !== request.recipientEpoch) throw new TechnicalAssignmentError('STALE');
+    return { ok: true, message: 'Catalogo aggiornato. Le versioni già scelte conservano la selezione originale.', catalogue: data.documentCatalogue };
+  } catch { return { ok: false, message: 'Catalogo documenti non disponibile con lo stato o i permessi correnti. Ricarica per verificare le scelte.' }; }
 }
 export async function prepareTechnicalAssignment(_state: TechnicalAssignmentManagementState, form: FormData): Promise<TechnicalAssignmentManagementState> {
   const session = await requireSession();
