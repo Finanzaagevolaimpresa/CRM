@@ -1,4 +1,5 @@
 'use server';
+import { assertPracticeCreationSlot } from './practice-creation-slot';
 import { assertLeadOperational, lockLeadActor, lockLeadWriteActor, lockLeadForMutation, assertLeadActorLive, LeadLifecycleError } from './lead-lifecycle-lock';
 import { withSerializableTransaction } from './serializable';
 import { assertClientOperational, assertTechnicalPracticeOperational } from './client-operational-hold';
@@ -1978,6 +1979,8 @@ export async function createTechnicalPractice(form: FormData) {
     await assertNoSelectiveClientMutation(tx, s.userId, data.clientId);
     await assertNoSelectiveProjectMutation(tx, s.userId, data.projectId, data.clientServiceId);
     await assertTechnicalPracticeOperational(tx, [data.clientId], data.status);
+    await requireClientContextWriteAccess(s, data, tx);
+    await assertPracticeCreationSlot(tx, data.projectId, data.clientServiceId);
     const practice = await tx.technicalPractice.create({ data: { ...data, createdById: s.userId } as never });
     await audit(s.userId, 'technical_practice_create', 'TechnicalPractice', practice.id, practice, tx);
     await appendResponsibilityDecision(tx, { kind: 'TechnicalPractice', id: practice.id, actorId: s.userId, allowed: assignmentRequested, reason: 'Apertura pratica: responsabilità iniziali, presa in carico non registrata', state: { clientId: practice.clientId, projectId: practice.projectId, clientServiceId: practice.clientServiceId, commercialOwnerId: practice.commercialOwnerId, technicalOwnerId: practice.technicalOwnerId } });
