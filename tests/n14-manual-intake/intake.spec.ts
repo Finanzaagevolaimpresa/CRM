@@ -54,7 +54,9 @@ async function stepUp(page: Page) {
 async function screen(page: Page, name: string, width: number) {
   await page.setViewportSize({ width, height: 950 }); await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: path.join(evidence, `${name}-${width}.png`), fullPage: true });
+  // The default caret hiding adds inline styles to every input, including
+  // streamed forms still hydrating. Capture without mutating their attributes.
+  await page.screenshot({ path: path.join(evidence, `${name}-${width}.png`), fullPage: true, caret: 'initial' });
 }
 async function replay(page: Page, command: Captured) {
   const headers = { ...command.headers }; delete headers.cookie; delete headers['content-length'];
