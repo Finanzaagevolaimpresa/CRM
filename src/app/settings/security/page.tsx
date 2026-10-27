@@ -8,6 +8,8 @@ import {
 } from '@/lib/privileged-access-actions';
 import { privilegedAccessReadiness } from '@/lib/privileged-access';
 import { privilegedAccessPermissions } from '@/lib/privileged-access-contract';
+import { securityReturnPath } from '@/lib/security-return-path';
+import { SecondaryLink } from '@/components/actions';
 
 const messages: Record<string, string> = {
   active: 'Conferma privilegiata attiva per cinque minuti e vincolata alla sessione corrente.',
@@ -21,11 +23,12 @@ const messages: Record<string, string> = {
 export default async function SecurityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; returnTo?: string }>;
 }) {
   const session = await requireAnyPermission([...privilegedAccessPermissions]);
   const readiness = await privilegedAccessReadiness(session);
-  const { status } = await searchParams;
+  const { status, returnTo } = await searchParams;
+  const returnPath = securityReturnPath(returnTo);
 
   return (
     <div className="crm-space-y-6">
@@ -33,6 +36,7 @@ export default async function SecurityPage({
         title="Sicurezza operazioni privilegiate"
         description="Conferma breve della password per operazioni amministrative su utenti, permessi e controlli AI. Il token è HttpOnly, dura cinque minuti ed è valido soltanto con la sessione corrente."
       />
+      {returnPath && <SecondaryLink href={returnPath}>Torna alla coda lead</SecondaryLink>}
 
       {status && messages[status] ? (
         <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-700">
@@ -57,6 +61,8 @@ export default async function SecurityPage({
       {readiness.mode === 'enforced' && readiness.keyReady ? (
         <Card title="Conferma identità amministrativa">
           <form action={establishPrivilegedStepUpAction} className="max-w-lg crm-space-y-4">
+            {returnPath && <input type="hidden" name="returnTo" value="lead-inbox" />}
+            {returnPath && <p>La conferma ti riporta alla coda lead. Poi scegli personalmente il referente e premi Assegna.</p>}
             <label className="block text-sm font-bold text-fai-navy">
               Password corrente
               <input

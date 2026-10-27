@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { requireAnyPermission } from './auth';
 import { privilegedAccessPermissions } from './privileged-access-contract';
+import { securityReturnPath } from './security-return-path';
 import {
   clearPrivilegedStepUpCookie,
   establishPrivilegedStepUp,
@@ -11,12 +12,14 @@ import {
 export async function establishPrivilegedStepUpAction(formData: FormData) {
   const session = await requireAnyPermission([...privilegedAccessPermissions]);
   const password = String(formData.get('password') ?? '');
+  const returnPath = securityReturnPath(formData.get('returnTo'));
+  const returnQuery = returnPath ? '&returnTo=lead-inbox' : '';
   let result: 'DISABLED' | 'DENIED' | 'UNAVAILABLE' | 'ESTABLISHED' = 'UNAVAILABLE';
   try { result = await establishPrivilegedStepUp(session, password); } catch { result = 'UNAVAILABLE'; }
-  if (result === 'ESTABLISHED') redirect('/settings/security?status=active');
-  if (result === 'DISABLED') redirect('/settings/security?status=disabled');
-  if (result === 'DENIED') redirect('/settings/security?status=denied');
-  redirect('/settings/security?status=unavailable');
+  if (result === 'ESTABLISHED') redirect(returnPath ?? '/settings/security?status=active');
+  if (result === 'DISABLED') redirect(`/settings/security?status=disabled${returnQuery}`);
+  if (result === 'DENIED') redirect(`/settings/security?status=denied${returnQuery}`);
+  redirect(`/settings/security?status=unavailable${returnQuery}`);
 }
 
 export async function clearPrivilegedStepUpAction() {

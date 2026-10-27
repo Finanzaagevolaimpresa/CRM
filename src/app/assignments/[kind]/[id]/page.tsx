@@ -45,6 +45,7 @@ export default async function Page({ params, searchParams }: {
   const choices = [...new Map([...named.filter(user => [currentState?.commercialOwnerId, currentState?.technicalOwnerId].includes(user.id)).map(user => ({ ...user, name: nameOf(user.id) })), ...candidates.slice(0, 25)].map(user => [user.id, user])).values()];
   return <div className="crm-space-y-6"><PageHeader title="Responsabilità e presa in carico" description="La decisione dell’amministratore e la conferma personale del referente sono registrazioni distinte." />
     <div className="flex gap-4"><Link href={source}>Torna alla scheda</Link><Link href="/assignments">Le mie assegnazioni</Link></div>
+    {kind === 'Lead' && session.role === 'admin' && hasPermission(session, 'lead.inbox.assign') && <Link href={`/leads/inbox?lead=${encodeURIComponent(id)}`}>Apri coda e assegnazione del referente</Link>}
     <Card title="Decisione corrente">
       <p>Commerciale: {nameOf(currentState?.commercialOwnerId)}</p>
       {kind === 'TechnicalPractice' && <><p>Reparto tecnico: {data.current?.decision.departmentCode ?? 'Non indicato'}</p><p>Referente tecnico: {nameOf(currentState?.technicalOwnerId)}</p>
