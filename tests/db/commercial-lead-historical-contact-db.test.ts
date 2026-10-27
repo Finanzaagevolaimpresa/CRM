@@ -126,8 +126,8 @@ test('historical occurrence and DB registration are distinct; SLA, lead and N14 
   assert.deepEqual(after.item, { ...before.item, version: before.item.version + 1, updatedAt: new Date(result.receipt.recordedAt) });
   assert.equal(after.records.length, 1); assert.equal(after.audits.length, 1);
   assert.deepEqual(after.audits[0].after, {
-    protocol: 'N14_HISTORICAL_CONTACT_V1', recordId: f.input.commandId,
-    inboxVersionBefore: f.item.version, inboxVersionAfter: f.item.version + 1, slaEffect: 'NO_REWRITE',
+    type: 'N14_HISTORICAL_CONTACT_V1', recordId: f.input.commandId,
+    beforeVersion: f.item.version, afterVersion: f.item.version + 1, outcome: 'NO_REWRITE',
   });
   assert.equal(JSON.stringify(after.audits).includes(f.input.evidenceReference), false);
 });
@@ -174,7 +174,7 @@ test('failure while writing the audit rolls back the inbox version and entire co
   await client().$executeRawUnsafe(`CREATE FUNCTION historical_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN IF NEW.event='commercial_lead_historical_contact_recorded' THEN RAISE EXCEPTION 'SYNTHETIC_AUDIT_FAULT'; END IF; RETURN NEW; END $$`);
   await client().$executeRawUnsafe('CREATE TRIGGER historical_audit_fault BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION historical_audit_fault()');
-  try { await assert.rejects(recordHistoricalLeadContact(client(), f.owner, f.input)); }
+  try { await assert.rejects(recordHistoricalLeadContact(client(), f.owner, f.input), /SYNTHETIC_AUDIT_FAULT/u); }
   finally {
     await client().$executeRawUnsafe('DROP TRIGGER historical_audit_fault ON "AuditLog"');
     await client().$executeRawUnsafe('DROP FUNCTION historical_audit_fault()');
@@ -244,7 +244,7 @@ test('deferred transaction linkage rejects a receipt even when its content and a
   await client().$executeRawUnsafe(`CREATE FUNCTION historical_transaction_fault() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN NEW."transactionId" := txid_current()+1; RETURN NEW; END $$`);
   await client().$executeRawUnsafe('CREATE TRIGGER historical_transaction_fault BEFORE INSERT ON "CommercialLeadHistoricalContact" FOR EACH ROW EXECUTE FUNCTION historical_transaction_fault()');
-  try { await assert.rejects(recordHistoricalLeadContact(client(), f.owner, f.input)); }
+  try { await assert.rejects(recordHistoricalLeadContact(client(), f.owner, f.input), /N14_HISTORICAL_CONTACT_CONTRACT_INVALID/u); }
   finally {
     await client().$executeRawUnsafe('DROP TRIGGER historical_transaction_fault ON "CommercialLeadHistoricalContact"');
     await client().$executeRawUnsafe('DROP FUNCTION historical_transaction_fault()');

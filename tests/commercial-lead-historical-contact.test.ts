@@ -89,7 +89,7 @@ test('normalized equivalent references keep the same digest', () => {
 test('audit omits the source reference, dates, contact details and raw payload', () => {
   const prepared = prepareHistoricalContact(historicalContactInput(form()), context());
   assert.deepEqual(historicalContactAudit('synthetic-receipt', prepared), {
-    protocol: 'N14_HISTORICAL_CONTACT_V1', recordId: 'synthetic-receipt', inboxVersionBefore: 2, inboxVersionAfter: 3, slaEffect: 'NO_REWRITE',
+    type: 'N14_HISTORICAL_CONTACT_V1', recordId: 'synthetic-receipt', beforeVersion: 2, afterVersion: 3, outcome: 'NO_REWRITE',
   });
 });
 

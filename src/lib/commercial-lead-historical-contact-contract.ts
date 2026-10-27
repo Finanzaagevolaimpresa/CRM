@@ -149,9 +149,9 @@ export function prepareHistoricalConversion(receipt: HistoricalContactReceipt, c
 
 export function historicalContactAudit(recordId: string, prepared: PreparedHistoricalContact) {
   return Object.freeze({
-    protocol: HISTORICAL_CONTACT_PROTOCOL, recordId: identifier(recordId),
-    inboxVersionBefore: prepared.expectedInboxVersion,
-    inboxVersionAfter: prepared.expectedInboxVersion + 1,
-    slaEffect: 'NO_REWRITE' as const,
+    type: HISTORICAL_CONTACT_PROTOCOL, recordId: identifier(recordId),
+    beforeVersion: prepared.expectedInboxVersion,
+    afterVersion: prepared.expectedInboxVersion + 1,
+    outcome: 'NO_REWRITE' as const,
   });
 }
