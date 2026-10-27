@@ -616,7 +616,7 @@ export default async function Dashboard({ searchParams }: { searchParams?: Promi
       "Pratiche tecniche attive",
       activeTechnicalPracticesCount,
       "Stati operativi ancora aperti",
-      "/technical-office/practices",
+      dashboardDestinations.pratiche,
       "green",
     ],
     [

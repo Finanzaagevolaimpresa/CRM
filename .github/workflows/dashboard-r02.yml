@@ -91,7 +91,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$DASHBOARD_EVIDENCE/playwright.json" npx playwright test --config tests/dashboard-browser/playwright.config.ts --reporter=line,json | tee "$DASHBOARD_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.DASHBOARD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
+          node -e 'const r=require(process.env.DASHBOARD_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0) process.exit(1)'
       - name: Bind result to candidate and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$DASHBOARD_EVIDENCE/source.txt"

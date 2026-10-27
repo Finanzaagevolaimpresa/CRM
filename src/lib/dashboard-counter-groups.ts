@@ -81,7 +81,7 @@ const groups: GroupDefinition[] = [
     description: "Pratiche e comunicazioni da seguire.",
     tone: "green",
     counters: [
-      { count: "activeTechnicalPracticesCount", permission: "canReadTechnical", label: "Pratiche tecniche attive", description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices" },
+      { count: "activeTechnicalPracticesCount", permission: "canReadTechnical", label: "Pratiche tecniche attive", description: "Pratiche accessibili in stato operativo", href: "/technical-office/practices?dashboard=attive" },
       { count: "overdueClientUpdates", permission: "canReadTechnical", label: "Aggiornamenti cliente scaduti", description: "Pratiche visibili con aggiornamento oltre data", href: "/technical-office/practices" },
       { count: "commsToReview", permission: "canReviewPracticeCommunications", destinationPermission: "canReadTechnical", label: "Comunicazioni da revisionare", description: "Bozze in attesa di revisione", href: "/technical-office/practices" },
       { count: "approvedUnusedComms", permission: "canReadPracticeCommunications", destinationPermission: "canReadTechnical", label: "Approvate non utilizzate", description: "Comunicazioni approvate, senza utilizzo registrato", href: "/technical-office/practices" },
