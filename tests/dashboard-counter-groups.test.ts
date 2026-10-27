@@ -80,7 +80,7 @@ test("technical access permits communication destinations without changing their
   }, counts);
   assert.equal(result.length, 1);
   assert.deepEqual(result[0].counters.map(({ value, href }) => [value, href]), [
-    [21, "/technical-office/practices"],
+    [21, "/technical-office/practices?dashboard=attive"],
     [22, "/technical-office/practices"],
     [23, "/technical-office/practices"],
     [24, "/technical-office/practices"],
