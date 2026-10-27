@@ -17,6 +17,7 @@ import { projectRecordChange } from './record-update-projection';
 import { recordUpdateContext, currentRecordUpdateUser, recordUpdatePermission, recordWritePermissions } from './record-update-context';
 import { mapSerializableConflict } from './serializable';
 import { recordUpdateEmailAuthority } from './record-update-email-authority';
+import { assertProjectParametersCurrent } from './project-parameters-state';
 
 type Tx = Prisma.TransactionClient;
 export type UpdateCredentials = { key: PrivilegedStepUpKey; sessionToken: string; stepUpToken: string };
@@ -69,6 +70,10 @@ async function proposal(tx: Tx, claimed: AuthSession, input: UpdateCommand, proo
   const context = await recordUpdateContext(tx, input.kind, input.recordId, Boolean(proof));
   if (!context.canRead(auth.actor)) deny();
   if (context.version.toISOString() !== input.expectedVersion) stale();
+  if (input.patch?.kind === 'PROJECT' && input.patch.parameters) {
+    if (context.patch.kind !== 'PROJECT' || !context.patch.parameters) deny();
+    assertProjectParametersCurrent(input.patch.parameters, context.patch.parameters);
+  }
   const rule = await tx.recordUpdateRule.findUnique({ where: { kind_recordId: { kind: input.kind, recordId: input.recordId } } });
   if ((rule?.version ?? 0) !== input.ruleVersion) stale();
   const now = await clock(tx);
@@ -164,9 +169,24 @@ export async function confirmRecordUpdate(db: PrismaClient, claimed: AuthSession
         case 'CLIENT':
           await tx.client.update({ where, data: { displayName: patch.displayName, type: patch.type, updatedAt } });
           break;
-        case 'PROJECT':
-          await tx.project.update({ where, data: { title: patch.title, status: patch.status, updatedAt } });
+        case 'PROJECT': {
+          const parameters = patch.parameters;
+          if (parameters) for (const row of parameters.expenses) {
+            const data = { category: row.category, description: row.description, amount: new Prisma.Decimal(row.amount), estimated: row.estimated };
+            if (row.id) await tx.projectExpense.update({ where: { id: row.id, projectId: input.recordId }, data });
+            else await tx.projectExpense.create({ data: { ...data, projectId: input.recordId } });
+          }
+          await tx.project.update({ where, data: { title: patch.title, status: patch.status, updatedAt,
+            ...(parameters ? { description: parameters.description || null,
+              totalInvestment: parameters.totalInvestment ? new Prisma.Decimal(parameters.totalInvestment) : null,
+              requestedAmount: parameters.requestedAmount ? new Prisma.Decimal(parameters.requestedAmount) : null } : {}) } });
+          // Native title/status triggers already record those events. A parameters-only
+          // change uses the same queue/function, without financial values or free text.
+          if (parameters && p.context.patch.kind === 'PROJECT' && patch.title === p.context.patch.title
+            && p.summaries.some(summary => summary.event === 'RECORD_CHANGED' && summary.changed.includes('profile')))
+            await tx.$executeRaw`SELECT fai_record_update_record('PROJECT',${input.recordId},'RECORD_CHANGED','["profile"]'::jsonb,${'project-parameters:' + input.commandId})`;
           break;
+        }
         case 'PRACTICE':
           await assertTechnicalPracticeOperational(tx, [p.context.clientId!], patch.status);
           await tx.technicalPractice.update({ where, data: { status: patch.status, clientVisibleStatus: patch.clientVisibleStatus || null,

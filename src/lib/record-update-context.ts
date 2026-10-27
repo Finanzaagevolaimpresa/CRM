@@ -7,6 +7,7 @@ import { loadSelectiveProjectScope } from './selective-project-scope';
 import { canonicalSha256 } from './canonical-json';
 import { RecordUpdateError, type RecordUpdateKind } from './record-update-contract';
 import type { UpdatePatch } from './record-update-input';
+import { projectExpenseVersion } from './project-parameters-state';
 
 type Tx = Prisma.TransactionClient;
 export function recordUpdatePermission(actor: Pick<AuthSession, 'active' | 'role' | 'permissionOverrides'>, permission: Permission) {
@@ -59,8 +60,11 @@ export async function recordUpdateContext(tx: Tx, kind: RecordUpdateKind, id: st
       await rowLock(tx, 'Project', id, write);
       const project = await tx.project.findUnique({ where: { id } });
       if (!project || project.clientId !== client.id || project.deletedAt || project.status === 'archiviato') denied();
+      const expenses = await tx.projectExpense.findMany({ where: { projectId: id }, orderBy: { id: 'asc' } });
       context = { kind, id, label: project.title, href: `/projects/${id}`, version: project.updatedAt, clientId: client.id,
-        patch: { kind, title: project.title, status: project.status as Extract<UpdatePatch, { kind: 'PROJECT' }>['status'] },
+        patch: { kind, title: project.title, status: project.status as Extract<UpdatePatch, { kind: 'PROJECT' }>['status'],
+          ...(expenses.length <= 100 ? { parameters: { description: project.description ?? '', totalInvestment: project.totalInvestment?.toString() ?? '', requestedAmount: project.requestedAmount?.toString() ?? '',
+            expenseVersion: projectExpenseVersion(expenses), expenses: expenses.map(row => ({ id: row.id, category: row.category, description: row.description, amount: row.amount.toString(), estimated: row.estimated })) } } : {}) },
         canRead: user => recordUpdatePermission(user, 'project.read') && canViewProject(user, { ...project, client }) };
     } else {
       await rowLock(tx, 'TechnicalPractice', id, write);

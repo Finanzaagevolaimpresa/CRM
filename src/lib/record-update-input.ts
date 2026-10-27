@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recordUpdateEvents, recordUpdateKinds, recordUpdateModes } from './record-update-labels';
+import { projectParametersSchema } from './project-parameters-input';
 
 const date = z.union([z.string().datetime(), z.literal('')]);
 export const updatePatchSchema = z.discriminatedUnion('kind', [
@@ -7,6 +8,7 @@ export const updatePatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('CLIENT'), displayName: z.string().trim().min(1).max(200),
     type: z.enum(['persona_fisica', 'ditta_individuale', 'societa', 'professionista', 'soggetto_da_costituire', 'associazione', 'altro']) }).strict(),
   z.object({ kind: z.literal('PROJECT'), title: z.string().trim().min(1).max(200),
+    parameters: projectParametersSchema.optional(),
     status: z.enum(['idea', 'raccolta_dati', 'in_analisi', 'preanalisi_pronta', 'dossier_pronto', 'contratto_in_attesa', 'pratica_attiva', 'chiuso']) }).strict(),
   z.object({ kind: z.literal('PRACTICE'), status: z.enum(['da_progettare', 'in_progettazione', 'documenti_richiesti', 'documenti_completi', 'pronta_presentazione', 'presentata', 'in_istruttoria', 'integrazione_richiesta', 'approvata', 'respinta']),
     clientVisibleStatus: z.string().trim().max(500), dueDate: date, nextClientUpdateAt: date }).strict(),

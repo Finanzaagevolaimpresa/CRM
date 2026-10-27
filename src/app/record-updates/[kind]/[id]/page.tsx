@@ -14,6 +14,6 @@ export default async function Page({ params }: { params: Promise<{ kind: string;
   let setup;
   try { setup = await readRecordUpdateSetup(prisma, session, kind as RecordUpdateKind, id); }
   catch (error) { if (error instanceof RecordUpdateError) notFound(); throw error; }
-  return <div className="crm-space-y-6"><PageHeader title="Chi aggiornare" description="Scegli chi avvisare per questa scheda, una volta o con una regola esplicita." />
+  return <div className="crm-space-y-6"><PageHeader title={kind === 'PROJECT' ? 'Modifica progetto e chi aggiornare' : 'Chi aggiornare'} description="Scegli chi avvisare per questa scheda, una volta o con una regola esplicita." />
     <SecondaryLink href={setup.href}>← Torna alla scheda</SecondaryLink><Card title={setup.label}><RecordUpdateForm setup={setup}/></Card></div>;
 }
