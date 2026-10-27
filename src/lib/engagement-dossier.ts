@@ -95,7 +95,7 @@ async function assertMaterialAccess(tx: Prisma.TransactionClient, current: AuthS
   for (const row of parsed.data) {
     const [evidence, item, version] = await Promise.all([
       tx.practiceMaterialEvidence.findUnique({ where: { id: row.evidenceId } }),
-      tx.documentChecklistItem.findFirst({ where: { id: row.checklistItemId, deletedAt: null } }),
+      tx.documentChecklistItem.findFirst({ where: { technicalPrivate: false, id: row.checklistItemId, deletedAt: null } }),
       row.documentVersionId ? tx.documentVersion.findUnique({ where: { id: row.documentVersionId } }) : null,
     ]);
     if (!evidence || evidence.practiceId !== context.practiceId || evidence.checklistItemId !== row.checklistItemId

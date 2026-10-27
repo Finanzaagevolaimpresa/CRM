@@ -400,7 +400,7 @@ export async function listAccessibleTasks(
   const { take, ...candidateArgs } = args;
   const limit = normalizeCoreQueryLimit(take);
   const candidateLimit = coreQueryCandidateLimit(limit);
-  const tasks = await prisma.task.findMany({ ...candidateArgs, take: candidateLimit });
+  const tasks = await prisma.task.findMany({ ...candidateArgs, where: { AND: [candidateArgs.where ?? {}, { technicalPrivate: false }] }, take: candidateLimit });
   return (await filterAccessibleTasks(session, tasks)).slice(0, limit);
 }
 
@@ -437,7 +437,7 @@ export async function getAccessibleDashboardTaskCounts(
     let afterId: string | undefined;
     while (true) {
       const candidates = await tx.task.findMany({
-        where: {
+        where: { technicalPrivate: false,
           deletedAt: null,
           status: { in: ['aperta', 'in_lavorazione'] },
           ...(afterId === undefined ? {} : { id: { gt: afterId } }),

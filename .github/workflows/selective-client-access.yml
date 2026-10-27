@@ -74,6 +74,13 @@ jobs:
           bash scripts/selective-client-people/qualify-migration.sh
           bash scripts/selective-lead-edit/qualify-migration.sh
           bash scripts/technical-assignments/qualify-migration.sh
+      - name: Align isolated application regressions with the exact candidate schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx prisma migrate deploy
+          expected=$(node -e 'process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.env.SELECTIVE_CLIENT_EVIDENCE+"/schema-binding.json","utf8")).migrations))')
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = "$expected"
       - name: PostgreSQL personal authority, exact projection, concurrent changes and atomic audit
         if: matrix.target == 'postgresql'
         shell: bash

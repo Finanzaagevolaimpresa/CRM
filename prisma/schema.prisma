@@ -383,6 +383,7 @@ model User {
   technicalUploadSubmissions TechnicalUploadSubmission[]
   technicalUploadReviews TechnicalUploadReview[]
   technicalDocumentAcquisitions TechnicalDocumentAcquisition[]
+  technicalPrivateItems TechnicalPrivateItemOrigin[]
   selectivePracticeEpoch Int @default(1)
   selectivePracticeAuthority SelectivePracticeAuthority?
   selectivePracticeGrants SelectivePracticeGrant[]
@@ -1219,6 +1220,7 @@ model Document {
 
 model DocumentChecklistItem {
   id              String              @id @default(cuid())
+  technicalPrivate Boolean            @default(false)
   clientId        String
   clientServiceId String?
   projectId       String?
@@ -1485,6 +1487,7 @@ model Payment {
 
 model Task {
   id              String       @id @default(cuid())
+  technicalPrivate Boolean     @default(false)
   clientId        String?
   companyId       String?
   projectId       String?
@@ -3966,6 +3969,25 @@ model TechnicalDocumentAcquisition {
   document Document @relation(fields: [documentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   version DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+model TechnicalPrivateItemOrigin {
+  kind String
+  itemId String
+  commandId String @unique @db.Uuid
+  actorId String
+  sessionId String @db.Uuid
+  command Json
+  admission Json
+  origin Json
+  originProof String
+  receipt Json
+  receiptProof String
+  createdAt DateTime @db.Timestamp(3)
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@id([kind, itemId])
+  @@index([actorId, createdAt], map: "TechnicalPrivateItemOrigin_actor_created_idx")
 }
 
 model TechnicalUploadReview {
