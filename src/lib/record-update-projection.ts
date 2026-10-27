@@ -22,7 +22,8 @@ const fields: Record<RecordUpdateKind, ReadonlyArray<{ field: string; event: Rec
     { field: 'dueDate', event: 'DEADLINE', label: 'dueDate' },
     { field: 'nextClientUpdateAt', event: 'NEXT_ACTION', label: 'nextActionDate' }],
   PROJECT: [{ field: 'status', event: 'STATE_CHANGED', label: 'status' },
-    { field: 'title', event: 'RECORD_CHANGED', label: 'displayName' }],
+    { field: 'title', event: 'RECORD_CHANGED', label: 'displayName' },
+    { field: 'parameters', event: 'RECORD_CHANGED', label: 'profile' }],
 };
 const securityFields: Record<RecordUpdateKind, readonly string[]> = {
   LEAD: ['assignedToId', 'clientId', 'deletedAt'],
@@ -44,6 +45,7 @@ export function projectRecordChange(kind: RecordUpdateKind, before: Snapshot, af
   }
   const byEvent = new Map<RecordUpdateSummary['event'], string[]>();
   for (const change of fields[kind]) {
+    if (kind === 'PROJECT' && change.field === 'parameters' && after.parameters === undefined) continue;
     if (different(before, after, change.field)) byEvent.set(change.event, [...(byEvent.get(change.event) ?? []), change.label]);
   }
   return { invalidate: false, summaries: [...byEvent].map(([event, changed]) => recordUpdateSummary(event, changed)) };

@@ -60,6 +60,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     {session.role === 'admin' && <SecondaryLink href={`/projects/${id}/assignments`}>Gestisci incarichi tecnici e perimetri</SecondaryLink>}
     {session.role === 'admin' && hasPermission(session, 'technical.write') && <SecondaryLink href={`/projects/${id}/technical-handoff`}>Passaggio all’Ufficio Tecnico</SecondaryLink>}
     {hasPermission(session, 'project.write') && canEditProject(session, project) && <Card title="Gestisci progetto">
+      {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Modifica progetto e chi aggiornare</SecondaryLink>}
       <ProjectLifecycleControls id={project.id} updatedAt={project.updatedAt.toISOString()} state="active" />
     </Card>}
     {session.role === 'admin' && <Card title="Responsabile del progetto"><ManualAssignmentForm kind="project" id={project.id} updatedAt={project.updatedAt.toISOString()} technicalOwnerId={project.consultantId} users={assignmentUsers} /></Card>}
