@@ -97,13 +97,22 @@ test('Admin creates then explicitly assigns different items to two technicians; 
   await expect(a.getByText('Modifica registrata con ricevuta. Nessun messaggio è stato inviato.', { exact: true })).toBeVisible();
   await screenshot(a, 'private-task-assigned-work');
   await b.goto(workItem(row, 'ChecklistItem', check.itemId)); await b.locator('[data-technical-item-ready="true"]').waitFor();
-  await expect(b.getByText('TESTO_PRIVATO_NON_SCELTO', { exact: true })).toBeVisible();
+  await expect(b.getByRole('definition').filter({ hasText: /^TESTO_PRIVATO_NON_SCELTO$/ })).toBeVisible();
+  await expect(b.getByRole('textbox', { name: 'Note tecniche', exact: true })).toHaveValue('TESTO_PRIVATO_NON_SCELTO');
+  await b.getByLabel('Modifica note tecniche', { exact: true }).check();
+  await b.getByRole('textbox', { name: 'Note tecniche', exact: true }).fill('Preparazione tecnica verificata da B');
+  await b.getByRole('button', { name: 'Prepara riepilogo dell’attività', exact: true }).click();
+  await b.getByLabel('Confermo soltanto le modifiche riepilogate.', { exact: true }).check();
+  await b.getByRole('button', { name: 'Conferma modifica dell’attività', exact: true }).click();
+  await expect(b.getByText('Modifica registrata con ricevuta. Nessun messaggio è stato inviato.', { exact: true })).toBeVisible();
+  await screenshot(b, 'private-checklist-assigned-work');
   expect((await a.request.get(workItem(row, 'ChecklistItem', check.itemId))).status()).toBe(404);
   expect((await b.request.get(workItem(row, 'Task', task.itemId))).status()).toBe(404);
   for (const person of [row.salesA, row.salesB]) { const sc = await browser.newContext(), s = await sc.newPage(); await login(s, person.email);
     for (const url of [creation(row), workItem(row, 'Task', task.itemId), workItem(row, 'ChecklistItem', check.itemId)]) expect((await s.request.get(url)).status()).toBe(404);
     await sc.close(); }
   expect((await db.task.findUniqueOrThrow({ where: { id: task.itemId } })).priority).toBe('urgente');
+  expect((await db.documentChecklistItem.findUniqueOrThrow({ where: { id: check.itemId } })).notes).toBe('Preparazione tecnica verificata da B');
   await ac.close(); await tc.close(); await bc.close();
 });
 test('lost native response recovers the single creation receipt without another write', async ({ page }) => {

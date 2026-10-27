@@ -54,4 +54,27 @@ npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/
 cmp "$evidence/drift-before.sql" "$evidence/drift-after.sql"
 node scripts/verify-dossier-foreign-keys.mjs "$evidence/drift-after.sql"
 sha256sum "$ddl" > "$evidence/ddl-sha256.txt"
+psql "$db" -X -At -v ON_ERROR_STOP=1 -f scripts/technical-private-items/schema69-structure.sql > "$evidence/structure.json"
+node --input-type=module - "$evidence/structure.json" <<'JS'
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const s = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+assert.equal(s.tables.length, 1);
+assert.equal(s.tables[0].ownerMatches, true);
+assert.equal(s.tables[0].kind, 'r');
+assert.equal(s.columns.length, 15);
+for (const table of ['Task', 'DocumentChecklistItem']) {
+ const marker = s.columns.find(c => c.table === table && c.name === 'technicalPrivate');
+ assert.equal(marker?.type, 'boolean'); assert.equal(marker.nullable, 'NO'); assert.equal(marker.default, 'false');
+}
+assert.equal(s.triggers.length, 8);
+assert.ok(s.triggers.every(t => t.enabled === 'O' && t.functionSchema === 'public'));
+assert.equal(s.triggers.filter(t => t.deferrable && t.initiallyDeferred).length, 3);
+assert.equal(s.functions.length, 3);
+assert.ok(s.functions.every(f => f.ownerMatches && !f.securityDefiner && f.language === 'plpgsql' && /^[a-f0-9]{64}$/.test(f.bodySha256)));
+assert.ok(s.constraints.every(c => c.validated));
+assert.equal(s.constraints.filter(c => c.type === 'f').length, 1);
+assert.equal(s.indexes.length, 3);
+console.log('SCHEMA69_STRUCTURE_JSON=' + JSON.stringify(s));
+JS
 printf '{"synthetic":true,"before":68,"after":69,"prefix68Unchanged":true,"previousFieldsAndRelationsPreserved":true,"allExistingMarkersFalse":true,"newTableEmpty":true,"atomicFailureRolledBackAllObjects":true,"replayDenied":true,"datamodelDriftUnchanged":true,"productionContact":false}\n' > "$evidence/proof.json"

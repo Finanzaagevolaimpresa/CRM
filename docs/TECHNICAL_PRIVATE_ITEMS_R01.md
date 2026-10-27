@@ -26,6 +26,7 @@ Preparazione e prove sono isolate. SQL69, merge e produzione non sono autorizzat
 - CI PostgreSQL: 13 scenari su creazione senza effetti impliciti, due tecnici e due commerciali, incarico successivo esplicito e modifica reale sintetica, doppio clic, risposta persa, revoche, cambio concorrente del contesto, diniego SQL e rollback dell'audit.
 - CI browser nativo: 5 scenari sul modulo effettivo, riepilogo, conferma, assegnazione distinta, lavoro tecnico, revoca a sessione aperta e recupero della risposta persa; schermate desktop/mobile. Solo la perdita di risposta è simulata a livello di trasporto.
 - Migration: base errata e replay rifiutati, errore iniettato con rollback di tutti gli oggetti, 68 checksum invariati, confronto di tutti i campi precedenti e drift Prisma invariato.
+- Struttura SQL69: osservatore di sola lettura sui metadati, con colonne, indici, vincoli, otto trigger e hash delle tre funzioni. La CI conserva la struttura effettiva da confrontare nel piano di rilascio; non legge contenuti cliente.
 - Regressioni: catena completa, accessi/ricerca/report, email, condivisioni e PR140. Le prove sono evidenza solo per l'HEAD su cui vengono eseguite. La presenza del codice di test non equivale a un PASS; gli esiti correnti sono riportati nella PR.
 
 Questo incremento dipende dal catalogo documentale PR226 e conserva il suo perimetro. Non chiude i residui su rendicontazioni, enti/portali, integrazioni esterne o collaudo umano di un incarico reale.
