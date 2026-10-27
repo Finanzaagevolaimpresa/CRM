@@ -13,6 +13,9 @@ import { readTechnicalWorkItem, previewTechnicalWorkItem, confirmTechnicalWorkIt
 import { technicalWorkItemGrant } from '../../src/lib/technical-work-item-grant';
 import { localPathFromStoragePath } from '../../src/lib/storage';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from '../db/ai-orchestrator-db-test-guard';
+import { leadProof } from '../selective-leads/fixtures';
+import { loadTechnicalPrivateItemCreationContext, previewPrivateTechnicalItem, confirmPrivateTechnicalItem } from '../../src/lib/technical-private-item-service';
+import type { TechnicalPrivateItemCommand } from '../../src/lib/technical-private-item-contract';
 const db = new PrismaClient();
 async function main() {
   assert.equal(process.env.CI, 'true');
@@ -30,8 +33,19 @@ async function main() {
   const previous = process.env.PRIVILEGED_ACCESS_MODE; process.env.PRIVILEGED_ACCESS_MODE = 'enforced';
   try {
     const target = technicalTarget(f), project = technicalTarget(f, 'Project');
-    const task = await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id, assignedToId: f.techA.user.id,
-      title: 'Recovery selected technical task', description: 'RECOVERY_ITEM_UNSELECTED_DESCRIPTION', priority: 'alta' } });
+    const creationContext = await loadTechnicalPrivateItemCreationContext(db, admin.session, target);
+    const creationProof = leadProof(admin);
+    const taskCommand: TechnicalPrivateItemCommand = { commandId: randomUUID(), itemId: randomUUID(), kind: 'Task', target,
+      expectedContextSha256: creationContext.contextSha256, values: { title: 'Recovery selected technical task',
+        description: 'RECOVERY_ITEM_UNSELECTED_DESCRIPTION', priority: 'alta', dueAt: null } };
+    const creationPreview = await previewPrivateTechnicalItem(db, admin.session, creationProof, taskCommand);
+    await confirmPrivateTechnicalItem(db, admin.session, creationProof, taskCommand, creationPreview.token, true);
+    const checkCommand: TechnicalPrivateItemCommand = { commandId: randomUUID(), itemId: randomUUID(), kind: 'ChecklistItem', target,
+      expectedContextSha256: creationContext.contextSha256, values: { title: 'Recovery private unassigned checklist', notes: 'RECOVERY_PRIVATE_CHECKLIST_NOTE' } };
+    const checkPreview = await previewPrivateTechnicalItem(db, admin.session, creationProof, checkCommand);
+    await confirmPrivateTechnicalItem(db, admin.session, creationProof, checkCommand, checkPreview.token, true);
+    const task = await db.task.findUniqueOrThrow({ where: { id: taskCommand.itemId } });
+    assert(task.technicalPrivate); assert.equal(task.assignedToId, null);
     const setup = await readTechnicalAssignmentManagement(db, admin.session, target, f.techA.user.id);
     const option = setup.workItemOptions.find(item => item.itemId === task.id); assert(option);
     const choice = technicalWorkItemGrant.parse({ kind: option.kind, itemId: option.itemId, generation: option.generation,
@@ -55,7 +69,8 @@ async function main() {
     await writeFile(process.env.R05_TECHNICAL_RECOVERY_FIXTURE!, JSON.stringify({ synthetic: true,
       clientId: f.client.id, projectId: f.project.id, practiceId: f.practice.id, otherProjectId: f.otherProject.id,
       liveEmail: f.techA.user.email, revokedEmail: f.techB.user.email, salesEmail: f.salesA.user.email,
-      receiptId: receipt.commandId, itemReceiptId: itemReceipt.commandId, taskId: task.id, title: f.practice.title, progress: 'RECOVERY_TECHNICAL_PROGRESS_SAVED',
+      receiptId: receipt.commandId, itemReceiptId: itemReceipt.commandId, taskId: task.id, privateChecklistId: checkCommand.itemId,
+      title: f.practice.title, progress: 'RECOVERY_TECHNICAL_PROGRESS_SAVED',
       documents: f.documents.map(row => ({ fileId: row.version.id, bytes: row.bytes.toString() })),
       excluded: [task.description, f.practice.internalNotes, f.project.scenarioA, f.contract.serviceName, f.payment.notes] }) + '\n');
   } finally { if (previous === undefined) delete process.env.PRIVILEGED_ACCESS_MODE; else process.env.PRIVILEGED_ACCESS_MODE = previous; }

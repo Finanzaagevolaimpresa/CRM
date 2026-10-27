@@ -127,7 +127,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     canViewDossiers ? prisma.clientDossier.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canReadSensitive ? prisma.bankabilityAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canReadSensitive ? prisma.corporateFinancingAssessment.findMany({ where: { clientId: id }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
-    canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : Promise.resolve([]),
+    canViewDocuments ? prisma.documentChecklistItem.findMany({ where: { technicalPrivate: false, clientId: id, deletedAt: null, active: true }, orderBy: [{ clientServiceId: 'asc' }, { createdAt: 'asc' }] }) : Promise.resolve([]),
     canRequestAi ? prisma.aiAgent.findMany({ where: { active: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
     canViewTechnical ? prisma.technicalPractice.findMany({ where: { clientId: id, deletedAt: null }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),
     canViewCommunications ? prisma.practiceCommunication.findMany({ where: { clientId: id, deletedAt: null, OR: [{ status: { in: ['approvata','usata_inviata'] } }, { type: { in: ['commerciale','interna'] } }] }, orderBy: { updatedAt: 'desc' } }) : Promise.resolve([]),

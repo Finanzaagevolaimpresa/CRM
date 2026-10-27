@@ -132,7 +132,7 @@ export async function buildOperationalReportMarkdown(
       orderBy: { createdAt: "desc" },
     }) : Promise.resolve([]),
     hasPermission(session, "document.download") ? prisma.documentChecklistItem.findMany({
-      where: { active: true, deletedAt: null, ...scopeWhere },
+      where: { technicalPrivate: false, active: true, deletedAt: null, ...scopeWhere },
       orderBy: { updatedAt: "desc" },
     }) : Promise.resolve([]),
     hasPermission(session, "service.read") ? listAccessibleTasks(session, {
