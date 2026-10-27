@@ -190,8 +190,11 @@ test('invalid or repeated practice filters show no records, and current permissi
   await db.userPermissionOverride.create({ data: { userId: admin.id, permission: 'technical.read', allowed: false } });
   try {
     await page.reload();
-    await expect(page.getByRole('table')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByRole('heading', { name: 'Pratiche tecniche', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /^Pratica sintetica/ })).toHaveCount(0);
     const response = await page.request.get('/technical-office/practices?status=in_progettazione');
+    expect(new URL(response.url()).pathname).toBe('/dashboard');
     expect(await response.text()).not.toContain('Pratica sintetica');
     await page.goto('/dashboard'); await expect(kpi(page, 'pratiche')).toHaveCount(0);
   } finally { await db.userPermissionOverride.deleteMany({ where: { userId: admin.id, permission: 'technical.read' } }); }
