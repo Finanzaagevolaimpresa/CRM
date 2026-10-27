@@ -36,7 +36,7 @@ async function context(tx: Tx, claimed: AuthSession, projectId: string, write: b
   if (practices.some(row => row.clientId !== client.id)) deny();
   const people = await tx.user.findMany({ where: { active: true, deletedAt: null, role: { in: [...new Set([...commercialRoles, ...technicalRoles])] } },
     orderBy: [{ name: 'asc' }, { id: 'asc' }], select: { id: true, name: true, role: true, recordUpdateEpoch: true } });
-  const expectedHash = canonicalSha256({ scope: scope.scopeDigest, projectVersion: project.updatedAt, clientVersion: client.updatedAt,
+  const expectedHash = canonicalSha256({ scope: scope.scopeDigest, projectVersion: project.updatedAt.toISOString(), clientVersion: client.updatedAt.toISOString(),
     commercialOwnerId: client.salesOwnerId, technicalOwnerId: project.consultantId,
     people: people.map(p => [p.id, p.role, p.recordUpdateEpoch]) });
   await auth.finish();
