@@ -178,7 +178,7 @@ test('N14 migration 42 is transactional, additive and business-empty by construc
   assert.doesNotMatch(sql, /CommercialLeadInboxItem_projectionLedgerId_fkey/u);
 });
 
-test('current fresh46 catalog preserves N14 and contains zero policy, item, cycle or activity rows', {
+test('current schema70 catalog preserves N14 and initializes historical contact journals empty', {
   skip: !runDbTests,
   timeout: 240_000,
 }, async () => {
@@ -209,27 +209,61 @@ test('current fresh46 catalog preserves N14 and contains zero policy, item, cycl
       WHERE routine_schema = ${schema} AND routine_name LIKE 'n14_%'
       ORDER BY routine_name
     `),
-    client().$queryRaw<Array<{ policies: bigint; items: bigint; cycles: bigint; activities: bigint }>>`
+    client().$queryRaw<Array<{
+      policies: bigint; items: bigint; cycles: bigint; activities: bigint;
+      contacts: bigint; conversions: bigint; historicalAudit: bigint;
+    }>>`
       SELECT
         (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaPolicyVersion") AS policies,
         (SELECT COUNT(*)::bigint FROM "CommercialLeadInboxItem") AS items,
         (SELECT COUNT(*)::bigint FROM "CommercialLeadSlaCycle") AS cycles,
-        (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadActivity") AS activities,
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadHistoricalContact") AS contacts,
+        (SELECT COUNT(*)::bigint FROM "CommercialLeadHistoricalConversion") AS conversions,
+        (SELECT COUNT(*)::bigint FROM "AuditLog" WHERE event IN (
+          'commercial_lead_historical_contact_recorded',
+          'commercial_lead_historical_conversion_recorded'
+        )) AS "historicalAudit"
     `,
   ]);
   assert.equal(Number(migrationRows[0]?.count), 70);
   assert.deepEqual(catalogRows.map(({ name }) => name), [
     'CommercialLeadActivity',
+    'CommercialLeadHistoricalContact',
+    'CommercialLeadHistoricalConversion',
     'CommercialLeadInboxItem',
     'CommercialLeadSlaCycle',
     'CommercialLeadSlaPolicyVersion',
   ]);
-  assert.equal(indexRows.length, 25);
-  assert.equal(triggerRows.length, 11);
+  const historicalIndexes = indexRows.filter(({ name }) => name.startsWith('CommercialLeadHistorical'));
+  assert.equal(indexRows.length - historicalIndexes.length, 25);
+  assert.equal(historicalIndexes.length, 10);
+  const historicalTriggers = triggerRows.filter(({ name }) => name.startsWith('CommercialLeadHistorical')
+    || name === 'CommercialLeadSlaCycle_historical_basis');
+  assert.equal(triggerRows.length - historicalTriggers.length, 11);
+  assert.deepEqual(historicalTriggers.map(({ name }) => name), [
+    'CommercialLeadHistoricalContact_immutable',
+    'CommercialLeadHistoricalContact_journal',
+    'CommercialLeadHistoricalContact_no_truncate',
+    'CommercialLeadHistoricalConversion_immutable',
+    'CommercialLeadHistoricalConversion_journal',
+    'CommercialLeadHistoricalConversion_no_truncate',
+    'CommercialLeadSlaCycle_historical_basis',
+  ]);
   assert.deepEqual(triggerRows.filter(({ name }) => name.startsWith('record_update_')).map(({ name }) => name),
     ['record_update_capture_Lead', 'record_update_epoch_Lead']);
-  assert.equal(functionRows.length, 5);
-  assert.deepEqual(businessRows[0], { policies: 0n, items: 0n, cycles: 0n, activities: 0n });
+  const historicalFunctions = functionRows.filter(({ name }) => name.startsWith('n14_historical_'));
+  assert.equal(functionRows.length - historicalFunctions.length, 5);
+  assert.deepEqual(historicalFunctions.map(({ name }) => name), [
+    'n14_historical_contact_immutable',
+    'n14_historical_contact_journal',
+    'n14_historical_conversion_journal',
+    'n14_historical_cycle_basis',
+  ]);
+  assert.deepEqual(businessRows[0], {
+    policies: 0n, items: 0n, cycles: 0n, activities: 0n,
+    contacts: 0n, conversions: 0n, historicalAudit: 0n,
+  });
 });
 
 test('N15 qualified synthetic profile composes one held aggregate from the real self-claim cause', {
