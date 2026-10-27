@@ -83,10 +83,10 @@ export function CommercialLeadHistoricalContact({ context, initialReceipt = null
     {!preview && !recover && <form action={prepare} className="space-y-4">
       <label className="block">Data e ora effettive dell’evento<input className={control} type="datetime-local" required
         value={date} onChange={e => setDate(e.target.value)} disabled={busy} /></label>
-      <label className="block">Fuso orario dell’evento<select className={control} required value={offset} onChange={e => setOffset(e.target.value)} disabled={busy}>
+      <label className="block">Fuso orario dell’evento<select aria-label="Fuso orario dell’evento" className={control} required value={offset} onChange={e => setOffset(e.target.value)} disabled={busy}>
         <option value="">Scegli il fuso dell’evento</option>{Object.entries(historicalOffsetLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
-      <label className="block">Fonte<select className={control} required value={source} onChange={e => setSource(e.target.value)} disabled={busy}>
+      <label className="block">Fonte<select aria-label="Fonte" className={control} required value={source} onChange={e => setSource(e.target.value)} disabled={busy}>
         <option value="">Seleziona una fonte</option>{Object.entries(historicalSourceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>
       <label className="block">Riferimento della prova<input className={control} required minLength={3} maxLength={500}
