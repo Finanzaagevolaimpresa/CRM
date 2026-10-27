@@ -24,7 +24,12 @@ async function main() {
   const ownerActor = { userId: owner.user.id, sessionId: owner.session.sessionId };
   phase = 'policy';
   if (!await db.commercialLeadSlaPolicyVersion.findFirst({ where: { status: 'ACTIVE', policyCode: 'COMMERCIAL_FIRST_RESPONSE' } })) {
-    await db.commercialLeadSlaPolicyVersion.create({ data: { policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: 1, status: 'ACTIVE',
+    // Earlier recovery fixtures retain a staged policy and cycles bound to it.
+    // Add a distinct active synthetic version; never rewrite their SLA history.
+    const previous = await db.commercialLeadSlaPolicyVersion.findFirst({
+      where: { policyCode: 'COMMERCIAL_FIRST_RESPONSE' }, orderBy: { version: 'desc' }, select: { version: true },
+    });
+    await db.commercialLeadSlaPolicyVersion.create({ data: { policyCode: 'COMMERCIAL_FIRST_RESPONSE', version: (previous?.version ?? 0) + 1, status: 'ACTIVE',
       calendarCode: 'CONTINUOUS_24X7', timezoneCode: 'UTC', responseTargetSeconds: 3600, createdById: adminUser.id } });
   }
   const records: Record<string, { leadId: string; contactId: string; conversionId?: string; clientId?: string }> = {};
