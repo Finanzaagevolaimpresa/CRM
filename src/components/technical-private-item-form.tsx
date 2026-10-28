@@ -3,6 +3,8 @@ import { startTransition, useActionState, useState, useSyncExternalStore } from 
 import { technicalManagementPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
 import type { TechnicalPrivateItemCommand } from '@/lib/technical-private-item-contract';
 import type { TechnicalPrivateItemAction, TechnicalPrivateItemState } from '@/lib/technical-private-item-ui-state';
+import { RomeDateTimeInput } from './rome-date-time-input';
+import { operationalRomeTime } from '@/lib/operational-time';
 
 const initial: TechnicalPrivateItemState = { ok: false, message: '' };
 const subscribe = () => () => {}, client = () => true, server = () => false;
@@ -28,7 +30,7 @@ function Confirm({ preview, action, recovery, edit }: { preview: NonNullable<Tec
     <dl className="min-w-0 space-y-2"><dt className="font-semibold">Tipo</dt><dd>{c.kind === 'Task' ? 'Attività' : 'Voce checklist'}</dd>
       <dt className="font-semibold">Titolo</dt><dd className="whitespace-pre-wrap break-words">{c.values.title}</dd>
       <dt className="font-semibold">{c.kind === 'Task' ? 'Descrizione' : 'Note'}</dt><dd className="whitespace-pre-wrap break-words">{(c.kind === 'Task' ? c.values.description : c.values.notes) || '—'}</dd>
-      {c.kind === 'Task' && <><dt className="font-semibold">Priorità</dt><dd>{c.values.priority}</dd><dt className="font-semibold">Scadenza</dt><dd>{c.values.dueAt ? new Date(c.values.dueAt).toLocaleString('it-IT') : 'Non impostata'}</dd></>}
+      {c.kind === 'Task' && <><dt className="font-semibold">Priorità</dt><dd>{c.values.priority}</dd><dt className="font-semibold">Scadenza</dt><dd>{operationalRomeTime(c.values.dueAt)}</dd></>}
     </dl><p>L’elemento appartiene solo a questo progetto o pratica. La scelta di persone e permessi avviene separatamente.</p>
     <button type="button" disabled={locked} className="font-semibold underline disabled:opacity-50" onClick={edit}>Rivedi il contenuto</button>
     <form action={submit} className="space-y-3" onSubmit={() => { const url = new URL(window.location.href);
@@ -62,7 +64,7 @@ export function TechnicalPrivateItemForm({ target, contextSha256, initialCommand
       <label className="block space-y-2">{kind === 'Task' ? 'Descrizione' : 'Note'}<textarea className={control} value={text} rows={4} maxLength={5000} disabled={locked} onChange={e => setText(e.target.value)} /></label>
       {kind === 'Task' && <div className="grid min-w-0 gap-4 sm:grid-cols-2"><label className="block space-y-2">Priorità<select aria-label="Priorità" className={control} disabled={locked} value={priority}
         onChange={e => setPriority(e.target.value as typeof priority)}>{['bassa', 'media', 'alta', 'urgente'].map(p => <option key={p} value={p}>{p}</option>)}</select></label>
-        <label className="block space-y-2">Scadenza facoltativa<input type="datetime-local" className={control} value={dueAt} disabled={locked} onChange={e => setDueAt(e.target.value)} /></label></div>}
+        <RomeDateTimeInput label="Scadenza facoltativa" className={control} value={dueAt} disabled={locked} onChange={setDueAt} /></div>}
       <button className={button} disabled={locked || !title.trim() || (kind === 'Task' && invalidDate)}>Prepara riepilogo</button><p role="status">{state.message}</p>
     </form>{preview && <Confirm key={preview.token} preview={preview} action={confirmAction} recovery={receiptAction}
       edit={() => setIdentity({ commandId: crypto.randomUUID(), itemId: crypto.randomUUID() })} />}

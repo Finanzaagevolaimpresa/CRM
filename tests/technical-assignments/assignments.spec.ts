@@ -1,3 +1,4 @@
+import { romeDateTimeInput } from '../../src/lib/rome-date-time';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
@@ -49,7 +50,7 @@ async function coldEditor(page: Page, url: string, marker: string, control: stri
   await expect(page.getByRole('combobox', { name: control, exact: true })).toBeEnabled();
   await page.unrouteAll({ behavior: 'wait' });
 }
-async function prepareAssignment(page: Page, row: Row, person: Row['techA'], project = false) {
+async function prepareAssignment(page: Page, row: Row, person: Row['techA'], project = false, dates = false) {
   await page.goto(management(row, project));
   await page.getByRole('combobox', { name: 'Persona da incaricare', exact: true }).selectOption(person.id);
   await page.getByRole('button', { name: 'Apri scelte per la persona', exact: true }).click();
@@ -60,11 +61,15 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   for (const name of ['Titolo', 'Stato', project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente']) await page.getByLabel(name, { exact: true }).check();
   const field = page.getByLabel(project ? 'Descrizione tecnica' : 'Avanzamento comunicabile al cliente', { exact: true }).locator('..').locator('..');
   await field.getByLabel('Consenti la modifica', { exact: true }).check();
+  if (dates) {
+    const dateField = page.getByLabel('Prossimo aggiornamento', { exact: true });
+    await dateField.check(); await dateField.locator('..').locator('..').getByLabel('Consenti la modifica', { exact: true }).check();
+  }
   await page.getByLabel(new RegExp(row.documents[0].title + ' ·')).check();
   const downloadable = page.getByLabel(new RegExp(row.documents[1].title + ' ·'));
   await downloadable.check(); await downloadable.locator('..').locator('..').getByLabel('Consenti anche il download', { exact: true }).check();
   await expect(page.getByText(row.documents[2].title, { exact: false })).toHaveCount(0);
-  await page.getByLabel('Scadenza, entro 90 giorni', { exact: true }).fill(new Date(Date.now() + 3600_000).toISOString().slice(0, 16));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Incarico sintetico qualificazione browser');
   await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
   expect(JSON.parse(await page.locator('input[name="command"]').first().inputValue()).selection.responsibility).toBe('co_responsabile');
@@ -127,6 +132,59 @@ async function ordinaryPageDenied(page: Page, url: string, heading: string, row:
 }
 test.beforeAll(async () => { expect(process.env.CI).toBe('true'); expect(f.synthetic).toBe(true); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
 test.afterAll(async () => db.$disconnect());
+
+test('Rome wall input persists the right instant from foreign browser zones and refuses DST gaps and unresolved overlaps', async ({ browser }) => {
+  const row = f.rows[7], ac = await browser.newContext({ timezoneId: 'America/New_York' }), tc = await browser.newContext({ timezoneId: 'Asia/Tokyo' });
+  const admin = await ac.newPage(), tech = await tc.newPage();
+  await login(admin, f.adminEmail, true); await login(tech, row.techA.email);
+  await prepareAssignment(admin, row, row.techA, false, true);
+  const command = JSON.parse(await admin.locator('input[name="command"]').first().inputValue());
+  const expiry = Date.parse(command.selection.expiresAt);
+  expect(expiry - Date.now()).toBeGreaterThan(3_000_000); expect(expiry - Date.now()).toBeLessThan(3_610_000);
+  await expect(admin.getByRole('region', { name: 'Riepilogo incarico' })).toContainText('Europe/Rome');
+  await admin.getByRole('button', { name: 'Conferma incarico tecnico', exact: true }).click();
+  await expect.poll(() => assignments(row)).toBe(1);
+  await tech.goto(work(row)); await tech.getByLabel('Modifica prossimo aggiornamento', { exact: true }).check();
+  const date = tech.getByLabel('Prossimo aggiornamento · Europe/Rome', { exact: true });
+  await date.fill('2027-03-28T02:30:00');
+  await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
+  await expect(tech.getByRole('alert')).toContainText('inesistente'); expect(await count(row)).toBe(0);
+  await expect(tech.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toHaveCount(0);
+  await date.fill('2027-10-31T02:30:00');
+  await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
+  await expect(tech.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toHaveCount(0);
+  await tech.getByRole('combobox', { name: 'Prossimo aggiornamento: occorrenza', exact: true }).selectOption('2027-10-31T01:30:00.000Z');
+  await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
+  await expect(tech.getByRole('region', { name: 'Riepilogo modifica tecnica', exact: true })).toContainText('31/10/27, 02:30 · Europe/Rome');
+  await screenshot(tech, 'rome-time-explicit-overlap');
+  await tech.getByLabel('Confermo soltanto le modifiche riepilogate.').check();
+  await tech.getByRole('button', { name: 'Conferma modifica tecnica', exact: true }).click();
+  await expect.poll(() => count(row)).toBe(1);
+  expect((await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).nextClientUpdateAt?.toISOString()).toBe('2027-10-31T01:30:00.000Z');
+  await tech.goto(work(row)); await expect(date).toHaveValue('2027-10-31T02:30');
+  await expect(tech.getByRole('combobox', { name: 'Prossimo aggiornamento: occorrenza', exact: true })).toHaveValue('2027-10-31T01:30:00.000Z');
+  expect(await count(row)).toBe(1);
+  const unchanged = new Date('2026-11-26T17:11:12.123Z');
+  await db.technicalPractice.update({ where: { id: row.practiceId }, data: { dueDate: unchanged } });
+  await admin.goto('/technical-office/practices/' + row.practiceId);
+  const ordinary = admin.getByRole('button', { name: 'Salva dati', exact: true }).locator('..');
+  await expect(ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true })).toHaveValue('2026-11-26T18:11:12');
+  const auditBefore = await db.auditLog.count();
+  await ordinary.locator('input[name=title]').fill('Pratica con istante intatto');
+  await ordinary.getByRole('button', { name: 'Salva dati', exact: true }).click();
+  await expect.poll(async () => (await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).title).toBe('Pratica con istante intatto');
+  expect((await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).dueDate?.toISOString()).toBe(unchanged.toISOString());
+  expect(await db.auditLog.count()).toBe(auditBefore + 1);
+  await admin.reload();
+  await ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true }).fill('2027-07-10T18:00:00');
+  await ordinary.getByRole('button', { name: 'Salva dati', exact: true }).click();
+  await expect.poll(async () => (await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).dueDate?.toISOString()).toBe('2027-07-10T16:00:00.000Z');
+  await admin.reload();
+  await expect(ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true })).toHaveValue('2027-07-10T18:00');
+  await screenshot(admin, 'rome-time-ordinary-round-trip');
+  expect(await db.auditLog.count()).toBe(auditBefore + 2);
+  await ac.close(); await tc.close();
+});
 
 test('two technicians use exact personal assignments, private preview/download and real native updates on desktop/mobile', async ({ browser }) => {
   const row = f.rows[0], ac = await browser.newContext(), tc = await browser.newContext(), bc = await browser.newContext();

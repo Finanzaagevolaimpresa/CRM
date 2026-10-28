@@ -4,6 +4,8 @@ import { startTransition, useActionState, useState, useSyncExternalStore } from 
 import type { readTechnicalWork } from '@/lib/technical-assignment-access';
 import type { previewTechnicalWork, readTechnicalWorkOutcome } from '@/lib/technical-work-service';
 import { technicalWorkPath, type TechnicalTargetReference } from '@/lib/technical-assignment-display';
+import { RomeDateTimeInput } from './rome-date-time-input';
+import { operationalRomeTime } from '@/lib/operational-time';
 
 type Data = Awaited<ReturnType<typeof readTechnicalWork>>;
 export type TechnicalWorkState = { ok: boolean; message: string; uncertain?: boolean;
@@ -38,8 +40,8 @@ function Confirmation({ preview, action, recovery, edit }: { preview: NonNullabl
   return <section className="space-y-4 rounded-xl border border-blue-400 bg-blue-50 p-4" aria-label="Riepilogo modifica tecnica">
     <h3 className="text-lg font-bold">Riepilogo della modifica</h3>
     <div className="grid min-w-0 gap-3 sm:grid-cols-2">{preview.fields.map(field => <div key={field.key} className="min-w-0 rounded-xl bg-white p-3">
-      <strong>{field.label}</strong><p className="whitespace-pre-wrap break-words">Prima: {preview.before.find(row => row.key === field.key)?.value ?? '—'}</p>
-      <p className="whitespace-pre-wrap break-words">Dopo: {field.value ?? '—'}</p></div>)}</div>
+      <strong>{field.label}</strong><p className="whitespace-pre-wrap break-words">Prima: {dateFields.has(field.key) ? operationalRomeTime(preview.before.find(row => row.key === field.key)?.value) : preview.before.find(row => row.key === field.key)?.value ?? '—'}</p>
+      <p className="whitespace-pre-wrap break-words">Dopo: {dateFields.has(field.key) ? operationalRomeTime(field.value) : field.value ?? '—'}</p></div>)}</div>
     <p>Il salvataggio mantiene il referente commerciale e gli altri incarichi. Eventuali regole di aggiornamento già abilitate dall’Admin restano soggette ai loro permessi; nessuna email viene inviata da questo comando.</p>
     <button type="button" className="font-semibold underline disabled:opacity-50" disabled={locked} onClick={edit}>Rivedi le modifiche prima della conferma</button>
     <form action={submit} onSubmit={() => {
@@ -94,9 +96,8 @@ export function TechnicalWorkForm({ data, commandId: initialId, previewAction, c
             onChange={event => { setSelected(event.target.checked ? [...selected, field.key] : selected.filter(key => key !== field.key)); changed(); }} />Modifica {field.label.toLocaleLowerCase('it-IT')}</label>
           {field.key === 'priority' ? <select aria-label={field.label} className={control} disabled={locked || !selected.includes(field.key)} value={values[field.key]}
             onChange={event => { setValues({ ...values, [field.key]: event.target.value }); changed(); }}>{['bassa', 'media', 'alta', 'urgente'].map(value => <option key={value} value={value}>{value}</option>)}</select>
-            : dateFields.has(field.key) ? <input aria-label={field.label} type="datetime-local" className={control} disabled={locked || !selected.includes(field.key)}
-              value={values[field.key] ? new Date(new Date(values[field.key]).getTime() - new Date(values[field.key]).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''}
-              onChange={event => { setValues({ ...values, [field.key]: event.target.value ? new Date(event.target.value).toISOString() : '' }); changed(); }} />
+            : dateFields.has(field.key) ? <RomeDateTimeInput label={field.label} className={control} disabled={locked || !selected.includes(field.key)}
+              value={values[field.key]} onChange={instant => { setValues({ ...values, [field.key]: instant }); changed(); }} />
               : <textarea aria-label={field.label} rows={3} maxLength={5000} className={control} disabled={locked || !selected.includes(field.key)}
                 value={values[field.key]} onChange={event => { setValues({ ...values, [field.key]: event.target.value }); changed(); }} />}
         </div>)}</div>}

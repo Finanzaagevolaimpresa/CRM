@@ -1,7 +1,7 @@
 name: Technical assignments
 on:
   pull_request:
-    paths: ['src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'ops/technical-assignment-authority-enrollment.sql', 'scripts/technical-assignments/**', 'src/lib/technical-*', 'src/lib/selective-*.ts', 'src/lib/privileged-access.ts', 'src/components/technical-*', 'src/app/technical-work/**', 'src/app/technical-office/**', 'src/app/projects/**', 'src/app/search/**', 'tests/technical-assignment*', 'tests/technical-assignments/**', 'tests/technical-work*', 'docs/TECHNICAL_ASSIGNMENTS*', '.github/workflows/technical-assignments.yml']
+    paths: ['src/lib/rome-date-time.ts', 'src/lib/operational-time.ts', 'src/components/rome-date-time-input.tsx', 'src/components/ui.tsx', 'tests/rome-date-time.test.ts', 'src/components/user-removal-form.tsx', 'tests/user-account-browser/**', 'package.json', 'package-lock.json', 'prisma/**', 'ops/technical-assignment-authority-enrollment.sql', 'scripts/technical-assignments/**', 'src/lib/technical-*', 'src/lib/selective-*.ts', 'src/lib/privileged-access.ts', 'src/components/technical-*', 'src/app/technical-work/**', 'src/app/technical-office/**', 'src/app/projects/**', 'src/app/search/**', 'tests/technical-assignment*', 'tests/technical-assignments/**', 'tests/technical-work*', 'docs/TECHNICAL_ASSIGNMENTS*', '.github/workflows/technical-assignments.yml']
 permissions: { contents: read }
 concurrency:
   group: technical-assignments-${{ github.event.pull_request.number }}
@@ -89,6 +89,7 @@ jobs:
         if: matrix.target == 'browser'
         run: |
           npx playwright install --with-deps chromium
+          node --import tsx --test tests/rome-date-time.test.ts
           node --import tsx tests/technical-assignments/provision-browser.ts
       - name: Native multiple assignments, work, private documents, uncertain results and revocation
         if: matrix.target == 'browser'
@@ -106,7 +107,7 @@ jobs:
           done
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_EVIDENCE/playwright.json" npx playwright test --config tests/technical-assignments/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_EVIDENCE/browser.log"
-          node -e 'const r=require(process.env.TECHNICAL_EVIDENCE+"/playwright.json"); if(r.stats.expected!==7 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
+          node -e 'const r=require(process.env.TECHNICAL_EVIDENCE+"/playwright.json"); if(r.stats.expected!==8 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Bind final source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_EVIDENCE/source.txt"
