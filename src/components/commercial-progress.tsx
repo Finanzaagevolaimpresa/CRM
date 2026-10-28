@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { readCommercialProgress } from '@/lib/commercial-progress';
-import { Card, EmptyState, formatDateTime } from './ui';
+import { Card, EmptyState } from './ui';
+import { operationalRomeTime as formatDateTime } from '@/lib/operational-time';
 
 type Progress = Awaited<ReturnType<typeof readCommercialProgress>>;
 export function CommercialProgress({ result, query }: { result: Progress; query: { client?: string; q?: string } }) {

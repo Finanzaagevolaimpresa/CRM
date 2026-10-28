@@ -10,14 +10,7 @@ import { technicalResponsibilityLabels } from '@/lib/technical-assignment-displa
 import type { TechnicalTargetReference } from '@/lib/technical-assignment-display';
 import { notFound } from 'next/navigation';
 import { hasPermission } from '@/lib/permission-evaluator';
-
-export function operationalRomeTime(value: string | null) {
-  if (!value) return 'Non disponibile';
-  const instant = new Date(value);
-  return Number.isFinite(instant.getTime()) ? new Intl.DateTimeFormat('it-IT', {
-    timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short',
-  }).format(instant) + ' · Europe/Rome' : 'Non disponibile';
-}
+import { operationalRomeTime } from '@/lib/operational-time';
 export function OperationalWorkRows({ records }: { records: OperationalWorkRow[] }) {
   return <div className="grid gap-3">{records.map(row => <article key={row.kind + row.id}
     data-operational-record={row.id} className="min-w-0 space-y-2 rounded-xl border p-4">

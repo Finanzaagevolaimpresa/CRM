@@ -3,7 +3,9 @@ import { filterFinancialDocuments } from '@/lib/financial-document-access';
 import Link from 'next/link';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
 import { PracticeCommunicationTemplates } from '@/components/practice-communication-templates';
-import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta, formatDateTime } from '@/components/ui';
+import { ActivityTimeline, Card, EmptyState, PageHeader, StatusBadge, Table, TimestampMeta } from '@/components/ui';
+import { operationalRomeTime as formatDateTime } from '@/lib/operational-time';
+import { DocumentFileLinks } from '@/components/document-file-links';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { canViewChecklistItem, canViewDocument, canViewTask, canViewTechnicalPractice, isSensitiveDocument } from '@/lib/access-control';
@@ -160,7 +162,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
     </Card>
     {canCommRead ? <Card title="Template comunicazioni" id="template-comunicazioni"><PracticeCommunicationTemplates templates={practiceCommunicationTemplates} technicalPracticeId={practice.id} canCreateDraft={false} placeholderContext={templatePlaceholderContext} /></Card> : null}
 
-    <Card title="Documenti collegati / fascicolo">{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Documento privato']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <Link key="c" className="font-bold text-fai-blue underline" href={`/documents/${d.id}/download`}>Scarica documento</Link>])} />}</Card>
+    <Card title="Documenti collegati / fascicolo"><p className="mb-3 text-sm">Sono disponibili i documenti ammessi dai tuoi permessi sul documento e sul contesto. Non serve una seconda concessione per quelli già accessibili. Un incarico selettivo, invece, ammette solo le versioni scelte dall’Admin.</p>{documents.length === 0 ? <EmptyState title="Nessun documento collegato" /> : <Table headers={['Documento','Categoria','Stato','Caricato il','Documento privato']} rows={documents.map(d => [d.title, d.documentCategory, <StatusBadge key="s" status={d.status}/>, formatDateTime(d.createdAt), <DocumentFileLinks key="c" id={d.id} />])} />}</Card>
     <Card title="Task e scadenze">{tasks.length === 0 ? <EmptyState title="Nessun task collegato" /> : <Table headers={['Task','Stato','Priorità','Scadenza','Assegnatario']} rows={tasks.map(t => [t.title, <StatusBadge key="s" status={t.status}/>, <StatusBadge key="p" status={t.priority}/>, formatDateTime(t.dueAt), userOf(t.assignedToId)])} />}</Card>
     <Card title="Timeline operativa" action={<div className="flex flex-wrap gap-2">{timelineFilters.map(([value, label]) => <Link key={value} className={`rounded-full px-3 py-1 text-xs font-black ring-1 ${activeTimelineFilter === value ? 'bg-fai-blue text-white ring-fai-blue' : 'bg-white text-fai-blue ring-fai-blue/15'}`} href={`/technical-office/practices/${practice.id}?timelineFilter=${value}`}>{label}</Link>)}</div>}><p className="mb-4 rounded-2xl bg-fai-blue/5 p-3 text-xs font-bold text-fai-blue">Aggrega eventi già presenti nel CRM per questa pratica: stati, comunicazioni, documenti, task/scadenze e audit log autorizzati.</p><ActivityTimeline events={timeline} /></Card>
   </div>;

@@ -11,7 +11,9 @@ import { readTechnicalWork } from '@/lib/technical-assignment-access';
 import { prepareTechnicalWork, saveTechnicalWork, checkTechnicalWork } from '@/lib/technical-work-actions';
 import { technicalResponsibilityLabels, technicalTargetReference, technicalWorkPath } from '@/lib/technical-assignment-display';
 import { technicalUploadPath } from '@/lib/technical-upload-display';
+import { operationalRomeTime } from '@/lib/operational-time';
 export const dynamic = 'force-dynamic';
+const dateFields = new Set(['dueDate', 'submittedAt', 'nextClientUpdateAt']);
 export default async function Page({ params, searchParams }: { params: Promise<{ kind: string; id: string }>;
   searchParams: Promise<{ workDecision?: string }> }) {
   const session = await requireSession(), p = await params;
@@ -27,12 +29,12 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   if (!data) notFound();
   const items = data.workItems;
   return <div className="min-w-0 space-y-6"><PageHeader title={data.fields.find(field => field.key === 'title')?.value ?? 'Incarico tecnico'}
-    description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza ${new Date(data.expiresAt).toLocaleString('it-IT')}`} />
+    description={`${technicalResponsibilityLabels[data.responsibility]} · scadenza dell’accesso ${operationalRomeTime(data.expiresAt)}`} />
     <SecondaryLink href={`/technical-work?kind=${target.data.kind}`}>Torna ai miei incarichi</SecondaryLink>
     {data.actions.includes('upload_document') && <SecondaryLink href={technicalUploadPath(target.data)}>Deposita un documento per l’Admin</SecondaryLink>}
     {data.actions.includes('request_admin') && <SecondaryLink href={`/admin-requests/new?kind=${target.data.kind}&id=${encodeURIComponent(target.data.targetId)}`}>Richiedi documento o integrazione all’Admin</SecondaryLink>}
     <Card title="Informazioni disponibili"><dl className="grid min-w-0 gap-4 sm:grid-cols-2">{data.fields.map(field => <div key={field.key} className="min-w-0">
-      <dt className="font-semibold">{field.label}</dt><dd className="whitespace-pre-wrap break-words">{field.value ?? '—'}</dd></div>)}</dl></Card>
+      <dt className="font-semibold">{field.label}</dt><dd className="whitespace-pre-wrap break-words">{field.value && dateFields.has(field.key) ? operationalRomeTime(field.value) : field.value ?? '—'}</dd></div>)}</dl></Card>
     <Card title="Documenti tecnici assegnati">{!data.documents.length ? <p>Nessuna versione documentale assegnata.</p>
       : <ul className="space-y-4">{data.documents.map(doc => <li className="min-w-0 space-y-2" key={doc.fileId}>
         <p className="break-words font-semibold">{doc.title} · versione {doc.version}</p><div className="flex flex-wrap gap-3">
@@ -43,7 +45,7 @@ export default async function Page({ params, searchParams }: { params: Promise<{
       {!items.length ? <p>Nessun elemento attualmente disponibile nel tuo perimetro.</p> : <ul className="space-y-3">{items.map(item => <li key={`${item.kind}:${item.itemId}`}>
         <a className="break-words font-semibold underline" href={`${technicalWorkPath(target.data)}/items/${item.kind}/${item.itemId}`}>
           {item.fields.title ?? (item.kind === 'Task' ? 'Attività assegnata' : 'Elemento checklist assegnato')}</a>
-        {Object.hasOwn(item.fields, 'dueAt') && <p>Scadenza: {item.fields.dueAt ? new Date(item.fields.dueAt).toLocaleString('it-IT') : 'Non indicata'}</p>}</li>)}</ul>}</Card>}
+        {Object.hasOwn(item.fields, 'dueAt') && <p>Scadenza: {item.fields.dueAt ? operationalRomeTime(item.fields.dueAt) : 'Non indicata'}</p>}</li>)}</ul>}</Card>}
     {data.actions.some(action => action === 'update_fields' || action === 'update_status') && <Card title="Operazioni assegnate"><TechnicalWorkForm data={data} commandId={randomUUID()}
       previewAction={prepareTechnicalWork} confirmAction={saveTechnicalWork} receiptAction={checkTechnicalWork} /></Card>}
   </div>;

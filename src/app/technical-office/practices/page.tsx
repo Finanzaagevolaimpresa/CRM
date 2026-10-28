@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { technicalPracticeListFilter, technicalPracticeStatuses as statuses, technicalPracticePriorities as priorities } from '@/lib/technical-practice-list-filter';
 import { PrimaryButton, SecondaryLink } from '@/components/actions';
-import { Card, EmptyState, PageHeader, StatusBadge, Table, formatDateTime } from '@/components/ui';
+import { Card, EmptyState, PageHeader, StatusBadge, Table } from '@/components/ui';
+import { operationalRomeTime as formatDateTime } from '@/lib/operational-time';
 import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { createTechnicalPracticeAndRedirect } from '@/lib/form-actions';
