@@ -86,11 +86,11 @@ test('pagination and totals are computed after current admission and filtering',
 test('disabled personal capability preserves ordinary work without disclosing a revoked selective fallback', options, async () => {
   const f = await technicalFixture(db, admin), o = await ordinary(f.techA);
   await assignTechnical(db, admin, technicalTarget(f), f.techA);
-  await db.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=false WHERE id='technical-assignment'`;
+  await db.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=false, revision=revision+1 WHERE id='technical-assignment'`;
   try {
     const data = await readOperationalWork(db, f.techA.session, 'TechnicalPractice');
     assert.equal(data.selectiveAvailable, false); assert.deepEqual(data.records.map(row => row.id), [o.practice.id]);
-  } finally { await db.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=true WHERE id='technical-assignment'`; }
+  } finally { await db.$executeRaw`UPDATE "TechnicalAssignmentAuthority" SET enabled=true, revision=revision+1 WHERE id='technical-assignment'`; }
 });
 test('stale role, permission or revoked session denies both sources', options, async () => {
   const f = await technicalFixture(db, admin);

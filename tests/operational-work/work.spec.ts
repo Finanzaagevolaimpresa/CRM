@@ -63,6 +63,7 @@ test('ordinary and exact selective documents remain usable while unselected and 
   await expect(link).toBeVisible();
   const url = await link.getAttribute('href'); assert(url);
   expect((await page.request.get(url)).status()).toBe(200);
+  expect([403, 404]).toContain((await page.request.get(url + '?download=1')).status());
   expect(await page.content()).not.toContain(f.selective.financialDocumentId);
   for (const id of [f.selective.deniedDocumentId, f.selective.financialDocumentId]) {
     expect([403, 404]).toContain((await page.request.get('/documents/' + id + '/download')).status());

@@ -16,11 +16,23 @@ export async function OperationalTechnicalDashboard({ session, view }: { session
     hasPermission(session, 'service.read') ? listDashboardTodayTasks(session, now) : [],
   ]);
   const practices = practiceCatalogue ? selectOperationalWork(practiceCatalogue.records, { active: true }) : null;
-  const projects = projectCatalogue ? selectOperationalWork(projectCatalogue.records) : null;
+  const projects = projectCatalogue ? selectOperationalWork(projectCatalogue.records, { active: true }) : null;
   const unknown = practiceCatalogue ? selectOperationalWork(practiceCatalogue.records).hiddenStatus : 0;
   return <div className="crm-space-y-6"><DashboardOverview greeting="Il tuo lavoro tecnico" userName={user?.name ?? ''}
     summary="Responsabilità ordinarie e incarichi personali correnti, senza duplicati." showPipeline={false} pipeline={[]}
     priorities={[]} priorityLinks={[]}
+    counterGroups={[
+      ...(practices ? [{ id: 'ufficio-tecnico', title: 'Ufficio Tecnico', tone: 'green' as const,
+        description: 'Pratiche correnti nel tuo perimetro, senza duplicati.', counters: [{
+          label: 'Pratiche tecniche attive', value: practices.total,
+          description: 'Pratiche autorizzate con stato operativo leggibile.', href: '/technical-office/practices?dashboard=attive',
+        }] }] : []),
+      ...(projects ? [{ id: 'clienti-servizi', title: 'Progetti', tone: 'green' as const,
+        description: 'Progetti accessibili nel tuo perimetro corrente.', counters: [{
+          label: 'Progetti attivi', value: projects.total,
+          description: 'Progetti autorizzati non chiusi o archiviati, con stato leggibile.', href: '/projects?dashboard=attive',
+        }] }] : []),
+    ]}
     kpis={[...(practices ? [{ id: 'pratiche' as const, label: 'Pratiche attive', value: practices.total,
       description: 'Stati operativi leggibili: escluse approvate, respinte e archiviate.',
       href: '/technical-office/practices?dashboard=attive', tone: 'green' as const }] : []),
@@ -33,7 +45,7 @@ export async function OperationalTechnicalDashboard({ session, view }: { session
     })) ?? []}
     shortcuts={[
       ...(practices ? [{ label: 'Ufficio tecnico', description: 'Pratiche e scadenze nel tuo perimetro', href: '/technical-office', icon: 'gear', tone: 'green' }] : []),
-      ...(projects ? [{ label: 'Progetti', description: projects.total + ' progetti autorizzati', href: '/projects', icon: 'folder', tone: 'blue' }] : []),
+      ...(projects ? [{ label: 'Progetti', description: 'Progetti autorizzati e perimetri personali', href: '/projects', icon: 'folder', tone: 'blue' }] : []),
       { label: 'I miei incarichi tecnici', description: 'Schede ordinarie e perimetri personali', href: '/technical-work', icon: 'folder', tone: 'green' },
       { label: 'Richieste all’Admin', description: 'Segui le richieste pertinenti', href: '/admin-requests', icon: 'mail', tone: 'purple' },
       { label: 'Attività e scadenze', description: 'Le attività autorizzate', href: '/tasks', icon: 'calendar', tone: 'orange' },

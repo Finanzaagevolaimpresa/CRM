@@ -26,7 +26,7 @@ export function selectOperationalWork(rows: readonly OperationalWorkRow[], query
   const admitted = [...unique.values()].sort((a, b) => a.id.localeCompare(b.id));
   const filtered = admitted.filter(row => (!q || (row.title !== null && row.title.toLocaleLowerCase('it-IT').includes(q)))
     && (!query.status || row.status === query.status)
-    && (!query.active || (row.status !== null && !['approvata', 'respinta', 'archiviata', 'archiviato'].includes(row.status)))
+    && (!query.active || (row.status !== null && !['approvata', 'respinta', 'archiviata', 'archiviato', 'chiuso'].includes(row.status)))
     && (!query.priority || row.priority === query.priority)
     && (!query.clientId || row.client?.id === query.clientId)
     && (!query.technicalOwnerId || row.technicalOwner?.id === query.technicalOwnerId)
