@@ -19,6 +19,7 @@ import { cancelRecordReminder, readRecordReminderCancellation } from '../src/lib
 import { listSelectedRecordNotices, readSelectedRecordNotice } from '../src/lib/record-reminder-notifications';
 import { readRecordUpdateSetup, previewRecordUpdate, confirmRecordUpdate } from '../src/lib/record-updates';
 import type { UpdateCommand } from '../src/lib/record-update-input';
+import { readRecordReminderSetup, readRecordReminderManagement, listRecordReminderManagement } from '../src/lib/record-reminder-management';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_REMINDER_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -475,7 +476,7 @@ test('future cancelled and revoked work is excluded before the visible result li
   await grant(f, f.techA); await grant(other, f.techA);
   const good = await scheduleForRead(f);
   const removed = await scheduleForRead(f), revoked = await scheduleForRead(other, [f.techA]);
-  await scheduleForRead(f, [f.techA], { remindAt: future(60) });
+  await scheduleForRead(f, [f.techA], { remindAt: future(1) });
   await cancel(cancellationInput(removed.raw.commandId));
   await revokeTechnical(db, admin, other.target, f.techA);
   await revoked.wait(); const before = await counts();
@@ -541,10 +542,99 @@ test('an absent or unregistered key never falls back to ordinary admission for a
 test('current session revocation closes both the selected list and its retained detail URL', options, async () => {
   const f = await fixture(); await grant(f, f.techA);
   const s = await scheduleForRead(f); await s.wait(); assert.equal((await selectedNotices(f.techA)).length, 1);
-  await db.internalSession.update({ where: { id: f.techA.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'synthetic-list-revocation' } });
+  await db.internalSession.update({ where: { id: f.techA.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE' } });
   const before = await counts();
   await assert.rejects(selectedNotices(f.techA));
   await assert.rejects(selectedNotice(f.techA, s.deliveries[0].id));
+  assert.deepEqual(await counts(), before);
+});
+
+test('the Admin catalogue filters real source access before pagination and never includes financial or foreign activities', options, async () => {
+  const f = await fixture(), target = { kind: 'PRACTICE', recordId: f.practice.id };
+  await db.task.update({ where: { id: f.taskId }, data: { title: 'Catalogue accepted original' } });
+  for (let n = 0; n < 26; n++) await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    title: `Catalogue accepted ${n}`, dueAt: new Date(future(1440)), createdById: admin.user.id } });
+  await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id,
+    title: 'Catalogue pagamento contratto', dueAt: new Date(future(1440)), createdById: admin.user.id } });
+  await db.task.create({ data: { clientId: f.otherClient.id,
+    title: 'Catalogue foreign', dueAt: new Date(future(1440)), createdById: admin.user.id } });
+  const before = await counts(), key = leadProof(admin).key;
+  const first = await readRecordReminderSetup(db, admin.session, key, target, { query: 'Catalogue', page: 1 });
+  const second = await readRecordReminderSetup(db, admin.session, key, target, { query: 'Catalogue', page: 2 });
+  assert.equal(first.tasks.length, 25); assert.equal(first.hasNext, true);
+  assert.equal(second.tasks.length, 2); assert.equal(second.hasNext, false);
+  assert.equal(new Set([...first.tasks, ...second.tasks].map(row => row.id)).size, 27);
+  assert.doesNotMatch(JSON.stringify([...first.tasks, ...second.tasks]), /foreign|pagamento|contratto/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('catalogue direct reads enforce Admin and private technical authority without broadening client scope', options, async () => {
+  const f = await fixture(true), other = await syntheticPerson(db, 'Other catalogue Admin', 'admin');
+  const target = { kind: 'PRACTICE', recordId: f.practice.id }, key = leadProof(admin).key, before = await counts();
+  assert((await readRecordReminderSetup(db, admin.session, key, target)).tasks.some(row => row.id === f.taskId));
+  assert(!(await readRecordReminderSetup(db, other.session, key, target)).tasks.some(row => row.id === f.taskId));
+  assert(!(await readRecordReminderSetup(db, admin.session, key, { kind: 'CLIENT', recordId: f.client.id })).tasks.some(row => row.id === f.taskId));
+  for (const person of [f.techA, f.techB, f.salesA, f.salesB]) await assert.rejects(readRecordReminderSetup(db, person.session, key, target));
+  for (const query of [{ page: 0 }, { page: 101 }, { query: 'x'.repeat(121) }, { arbitrary: true }])
+    await assert.rejects(readRecordReminderSetup(db, admin.session, key, target, query));
+  assert.deepEqual(await counts(), before);
+});
+
+test('management distinguishes scheduled available read and canceled without claiming an email or writing from GET', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]), key = leadProof(admin).key;
+  const before = await counts(), scheduled = await readRecordReminderManagement(db, admin.session, key, s.raw.commandId);
+  assert(scheduled); assert(scheduled.recipients.every(row => row.state === 'SCHEDULED'));
+  assert.equal(scheduled.emailSent, false); assert(scheduled.taskTitle); assert.deepEqual(await counts(), before);
+  await s.wait();
+  const delivery = s.deliveries.find(row => row.recipientId === f.techA.user.id)!;
+  await selectedNotice(f.techA, delivery.id, true);
+  const current = await readRecordReminderManagement(db, admin.session, key, s.raw.commandId);
+  assert(current); assert.deepEqual(current.recipients.map(row => row.state).sort(), ['AVAILABLE', 'READ']);
+  assert((await listRecordReminderManagement(db, admin.session, key)).rows.some(row => row.commandId === s.raw.commandId));
+  await cancel(cancellationInput(s.raw.commandId));
+  const canceled = await readRecordReminderManagement(db, admin.session, key, s.raw.commandId);
+  assert(canceled?.canceledAt); assert(canceled.recipients.every(row => row.state === 'CANCELED'));
+  assert.equal(canceled.recipients.filter(row => row.readAt).length, 1);
+});
+
+test('the retained management URL belongs only to its current Admin author', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), other = await syntheticPerson(db, 'Other history Admin', 'admin');
+  const before = await counts(), key = leadProof(admin).key;
+  assert.equal(await readRecordReminderManagement(db, other.session, key, s.raw.commandId), null);
+  assert.deepEqual((await listRecordReminderManagement(db, other.session, key)).rows, []);
+  for (const person of [f.techA, f.salesA]) {
+    await assert.rejects(readRecordReminderManagement(db, person.session, key, s.raw.commandId));
+    await assert.rejects(listRecordReminderManagement(db, person.session, key));
+  }
+  assert.deepEqual(await counts(), before);
+});
+
+test('management hides source and person labels after source trash while retaining cancellation and receipts', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA);
+  const s = await scheduleForRead(f), key = leadProof(admin).key;
+  await db.project.update({ where: { id: f.project.id }, data: { deletedAt: new Date() } });
+  const before = await counts(), status = await readRecordReminderManagement(db, admin.session, key, s.raw.commandId);
+  assert(status); assert.equal(status.taskTitle, null); assert.equal(status.recordHref, null); assert.equal(status.dueAt, null);
+  assert(status.recipients.every(row => row.state === 'SUPPRESSED' && row.name === null));
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_TITLE|PRIVATE_DESCRIPTION/);
+  assert.deepEqual(await counts(), before);
+  await cancel(cancellationInput(s.raw.commandId));
+  assert((await readRecordReminderManagement(db, admin.session, key, s.raw.commandId))?.canceledAt);
+});
+
+test('management observes changed permission and genuine session revocation on an already retained URL', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]), key = leadProof(admin).key;
+  await revokeTechnical(db, admin, f.target, f.techA);
+  const status = await readRecordReminderManagement(db, admin.session, key, s.raw.commandId);
+  assert(status?.recipients.some(row => row.state === 'SUPPRESSED'));
+  const fresh = { user: admin.user, ...await syntheticSession(db, admin.user) };
+  await db.internalSession.update({ where: { id: fresh.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'INTERNAL_SINGLE' } });
+  const before = await counts();
+  await assert.rejects(readRecordReminderManagement(db, fresh.session, key, s.raw.commandId));
+  await assert.rejects(readRecordReminderSetup(db, fresh.session, key, { kind: 'PRACTICE', recordId: f.practice.id }));
   assert.deepEqual(await counts(), before);
 });
 

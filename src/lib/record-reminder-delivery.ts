@@ -18,7 +18,7 @@ import { mapSerializableConflict } from './serializable';
 type Tx = Prisma.TransactionClient;
 type JournalRow = { journal: unknown; proof: string; eventId: string; taskId: string;
   availableAt: Date; confirmedAt: Date; keyVersion: number };
-async function journalFor(tx: Tx, key: PrivilegedStepUpKey, work: RecordUpdateWork) {
+export async function readRecordReminderWorkJournal(tx: Tx, key: PrivilegedStepUpKey, work: RecordUpdateWork) {
   const rows = await tx.$queryRaw<JournalRow[]>`SELECT journal,proof,"eventId","taskId","availableAt","confirmedAt","keyVersion"
     FROM "RecordUpdateReminder" WHERE "commandId"=${work.commandId}::uuid`;
   if (rows.length !== 1) return null;
@@ -55,7 +55,7 @@ async function readNotice(db: PrismaClient, claimed: AuthSession, key: Privilege
     // The immutable queue/journal identify the lock set, without exposing their
     // contents. Authenticate the actual recipient after sorted principal locks.
     const work = await tx.recordUpdateDelivery.findFirst({ where: { id, recipientId: claimed.userId }, include: recordUpdateWorkInclude });
-    const journal = work?.command?.operation === 'REMINDER' ? await journalFor(tx, key, work) : null;
+    const journal = work?.command?.operation === 'REMINDER' ? await readRecordReminderWorkJournal(tx, key, work) : null;
     if (!work || !journal) { const auth = await updateActor(tx, claimed); await auth.finish(); return null; }
     const p = journal.prepared;
     const principals = await lockReminderPrincipals(tx, p.authorId, p.recipients.map(person => person.id));

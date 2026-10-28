@@ -56,6 +56,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     <PageHeader title={`Progetto — ${project.title}`} description="Scheda progetto nel perimetro cliente autorizzato, con importi, stato e voci di spesa." />
     <SecondaryLink href="/projects">← Torna alla lista</SecondaryLink>
     {session.role === 'admin' && <SecondaryLink href={`/record-updates/PROJECT/${project.id}`}>Chi aggiornare</SecondaryLink>}
+    {session.role === 'admin' && <SecondaryLink href={`/record-reminders/PROJECT/${project.id}`}>Programma promemoria CRM</SecondaryLink>}
     {canShare && <SecondaryLink href={`/projects/${id}/share`}>Condividi accesso</SecondaryLink>}
     {session.role === 'admin' && <SecondaryLink href={`/projects/${id}/assignments`}>Gestisci incarichi tecnici e perimetri</SecondaryLink>}
     {session.role === 'admin' && hasPermission(session, 'technical.write') && <SecondaryLink href={`/projects/${id}/technical-handoff`}>Passaggio all’Ufficio Tecnico</SecondaryLink>}

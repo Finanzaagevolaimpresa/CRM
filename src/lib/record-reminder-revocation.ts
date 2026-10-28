@@ -52,7 +52,7 @@ async function owned(tx: Tx, claimed: AuthSession, credentials: UpdateCredential
   return { auth, journal, original };
 }
 
-async function retained(tx: Tx, credentials: UpdateCredentials, reminderCommandId: string) {
+export async function readRetainedReminderCancellation(tx: Tx, key: UpdateCredentials['key'], reminderCommandId: string) {
   const rows = await tx.$queryRaw<Array<{ commandId: string; auditId: string; journal: unknown; proof: string; canceledAt: Date }>>`
     SELECT "commandId","auditId",journal,proof,"canceledAt" FROM "RecordUpdateReminderCancellation"
     WHERE "reminderCommandId"=${reminderCommandId}::uuid`;
@@ -61,7 +61,7 @@ async function retained(tx: Tx, credentials: UpdateCredentials, reminderCommandI
   const row = rows[0], parsed = cancellation.safeParse(row.journal);
   if (!parsed.success || !hex.safeParse(row.proof).success) throw new RecordUpdateError('DENIED');
   const value = parsed.data;
-  if (!timingSafeEqual(Buffer.from(row.proof, 'hex'), Buffer.from(signature(credentials.key, value), 'hex'))
+  if (!timingSafeEqual(Buffer.from(row.proof, 'hex'), Buffer.from(signature(key, value), 'hex'))
     || canonicalJson(value) !== canonicalJson(row.journal) || value.reminderCommandId !== reminderCommandId
     || row.commandId !== value.commandId || row.auditId !== value.auditId
     || row.canceledAt.toISOString() !== value.canceledAt) throw new RecordUpdateError('DENIED');
@@ -83,7 +83,7 @@ export async function cancelRecordReminder(db: PrismaClient, claimed: AuthSessio
   try { return await db.$transaction(async tx => {
     const target = await owned(tx, claimed, credentials, input.reminderCommandId);
     if (!target) throw new RecordUpdateError('DENIED');
-    const { auth, original } = target, old = await retained(tx, credentials, input.reminderCommandId);
+    const { auth, original } = target, old = await readRetainedReminderCancellation(tx, credentials.key, input.reminderCommandId);
     if (old) {
       if (old.commandId !== input.commandId || old.actorId !== auth.actor.id
         || old.reminderDigest !== original.digest) throw new RecordUpdateError('STALE');
@@ -121,7 +121,7 @@ export async function readRecordReminderCancellation(db: PrismaClient, claimed: 
   return confirmedReadRetry(() => db.$transaction(async tx => {
     const target = await owned(tx, claimed, credentials, input.reminderCommandId);
     if (!target) return { ...input, canceled: false };
-    const value = await retained(tx, credentials, input.reminderCommandId);
+    const value = await readRetainedReminderCancellation(tx, credentials.key, input.reminderCommandId);
     await target.auth.finish();
     return value && value.commandId === input.commandId && value.actorId === target.auth.actor.id
       && value.reminderDigest === target.original.digest

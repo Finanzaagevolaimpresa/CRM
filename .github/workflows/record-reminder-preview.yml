@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/record-reminder-preparation-r01]
   pull_request:
-    paths: ['src/lib/record-reminder-*', 'src/lib/internal-notifications.ts', 'src/lib/record-update-actions.ts', 'src/app/notifications/**', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
+    paths: ['src/lib/record-reminder-*', 'src/lib/internal-notifications.ts', 'src/lib/record-update-actions.ts', 'src/app/notifications/**', 'src/app/record-reminders/**', 'src/components/record-reminder-form.tsx', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
 permissions:
   contents: read
 concurrency:
@@ -11,8 +11,13 @@ concurrency:
   cancel-in-progress: true
 jobs:
   qualify:
+    name: Record reminders ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [postgresql, browser]
     services:
       postgres:
         image: postgres:16
@@ -42,6 +47,8 @@ jobs:
       LOGIN_THROTTLE_MODE: disabled
       SECURITY_HEADERS_MODE: report-only
       APP_ORIGIN: http://127.0.0.1:3057
+      RECORD_REMINDER_BROWSER_CONFIRMED: '1'
+      RECORD_REMINDER_BROWSER_PASSWORD: synthetic-reminder-browser-password-0000000000
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
@@ -55,6 +62,7 @@ jobs:
           test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
           node scripts/m4/verify-schema.mjs
           mkdir -p "$RUNNER_TEMP/reminder-preview"
+          echo "RECORD_REMINDER_EVIDENCE=$RUNNER_TEMP/reminder-preview" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 70
@@ -62,26 +70,52 @@ jobs:
       - name: Typecheck and pure contracts
         run: |
           npx tsc --noEmit
-          npx eslint src/lib/record-reminder-*.ts tests/record-reminder*.test.ts src/lib/technical-work-item-source.ts src/lib/technical-assignment-documents.ts src/lib/internal-notifications.ts src/lib/record-update-actions.ts src/app/notifications/updates/page.tsx 'src/app/notifications/updates/[id]/page.tsx' --max-warnings 0
+          npx eslint src/lib/record-reminder-*.ts tests/record-reminder*.test.ts tests/record-reminders/*.ts src/components/record-reminder-form.tsx src/app/record-reminders src/app/notifications/reminders src/lib/technical-work-item-source.ts src/lib/technical-assignment-documents.ts src/lib/internal-notifications.ts src/lib/record-update-actions.ts src/app/notifications/updates/page.tsx 'src/app/notifications/updates/[id]/page.tsx' --max-warnings 0
           node --import tsx --test tests/record-reminder-contract.test.ts tests/record-reminder-technical-policy.test.ts tests/record-reminder-preview-token.test.ts
       - name: Current PostgreSQL source and exact principal admission
+        if: matrix.target == 'postgresql'
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-reminder-preview-db.test.ts | tee "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# tests 55' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# pass 55' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# tests 61' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# pass 61' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+      - name: Prepare isolated native browser actors and private tasks
+        if: matrix.target == 'browser'
+        run: |
+          npx playwright install --with-deps chromium
+          node --import tsx tests/record-reminders/provision-browser.ts
+      - name: Native preview, actual availability, receipt, revocation and lost-response recovery
+        if: matrix.target == 'browser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run dev -- --hostname 127.0.0.1 --port 3057 > "$RECORD_REMINDER_EVIDENCE/app.log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:3057/api/health >/dev/null; then ready=1; break; fi
+            kill -0 "$app_pid"
+            sleep 1
+          done
+          test "$ready" = 1
+          PLAYWRIGHT_JSON_OUTPUT_NAME="$RECORD_REMINDER_EVIDENCE/playwright.json" npx playwright test --config tests/record-reminders/playwright.config.ts --reporter=line,json | tee "$RECORD_REMINDER_EVIDENCE/browser.log"
+          node -e 'const r=require(process.env.RECORD_REMINDER_EVIDENCE+"/playwright.json"); if(r.stats.expected!==6 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.stats.flaky!==0 || r.errors.length!==0) process.exit(1)'
       - name: Confirm source unchanged
         run: |
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/reminder-preview/source.txt"
-          git diff --exit-code
+          node -e 'const fs=require("node:fs"), assert=require("node:assert/strict"), cp=require("node:child_process"); const original=cp.execFileSync("git",["show","HEAD:next-env.d.ts"],{encoding:"utf8"}); assert([original,original.replaceAll("./.next/types/","./.next/dev/types/")].includes(fs.readFileSync("next-env.d.ts","utf8")))'
+          git diff --exit-code -- . ':(exclude)next-env.d.ts'
           git diff --cached --exit-code
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: record-reminder-preview-${{ github.sha }}
-          path: ${{ runner.temp }}/reminder-preview
+          name: record-reminder-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/reminder-preview
+            test-results
           if-no-files-found: error
           retention-days: 14

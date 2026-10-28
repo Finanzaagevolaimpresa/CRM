@@ -22,6 +22,7 @@ export default async function NotificationsPage() {
         description="Priorità operative, aggiornamenti selezionati dall’Admin e richieste AI, con accesso verificato per ogni scheda."
       />
       <Link href="/notifications/updates" className="inline-block font-bold text-fai-blue underline">Aggiornamenti selezionati e stato di lettura</Link>
+      {session.role === 'admin' && <Link href="/notifications/reminders" className="block font-bold text-fai-blue underline">I miei promemoria programmati</Link>}
 
       <Card
         title="Notifiche attive"
