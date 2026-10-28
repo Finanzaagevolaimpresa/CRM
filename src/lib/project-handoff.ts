@@ -45,7 +45,7 @@ async function context(tx: Tx, claimed: AuthSession, projectId: string, write: b
 export async function readProjectHandoff(db: PrismaClient, claimed: AuthSession, projectId: string) {
   return withSerializableTransaction(db, async tx => {
     const c = await context(tx, claimed, projectId, false);
-    return { projectId, projectTitle: c.project.title, clientName: c.client.displayName, expectedHash: c.expectedHash,
+    return { projectId, projectTitle: c.project.title, clientId: c.client.id, clientName: c.client.displayName, expectedHash: c.expectedHash,
       practices: c.practices.map(p => ({ id: p.id, title: p.title, status: p.status, available: !p.deletedAt && p.status !== 'archiviata' })),
       commercialPeople: c.people.filter(p => commercialRoles.includes(p.role)).map(p => ({ id: p.id, name: p.name })),
       technicalPeople: c.people.filter(p => technicalRoles.includes(p.role)).map(p => ({ id: p.id, name: p.name })),
