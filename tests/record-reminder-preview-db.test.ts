@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test, { before, after } from 'node:test';
-import { PrismaClient } from '@prisma/client';
+import { setTimeout as pause } from 'node:timers/promises';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { assertAiOrchestratorEphemeralDatabaseIdentity } from './db/ai-orchestrator-db-test-guard';
 import { syntheticAuthority, syntheticPerson, syntheticSession } from './selective-sharing/fixtures';
 import { leadProof, type Person } from './selective-leads/fixtures';
@@ -189,4 +190,63 @@ test('new group membership changes the signed recipient selection and never sile
   assert.throws(() => assertRecordReminderPreview(old.prepared.digest, current.prepared), /STALE/);
   assert.deepEqual(current.prepared.recipients.map(row => row.id).sort(), [f.techA.user.id, f.techB.user.id].sort());
   assert(current.prepared.excluded.length >= 2);
+});
+
+async function concurrentPreview(mutate: (tx: Prisma.TransactionClient) => Promise<unknown>, raw: unknown) {
+  const application = `reminder_race_${randomUUID()}`, url = new URL(process.env.DATABASE_URL!);
+  url.searchParams.set('application_name', application);
+  const viewer = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const writer = db.$transaction(async tx => { await mutate(tx); entered(); await gate; }, { timeout: 15_000 });
+  const writerResult = writer.then(() => null, error => error as Error);
+  let reading: ReturnType<typeof previewRecordReminder> | undefined;
+  try {
+    await Promise.race([ready, writerResult.then(error => { throw error ?? new Error('WRITER_ENDED_BEFORE_GATE'); })]);
+    reading = previewRecordReminder(viewer, admin.session, leadProof(admin), raw);
+    // Observe an actual PostgreSQL lock wait, rather than assuming concurrency
+    // from a delay or from a mocked service call.
+    const outcome = reading.then(value => ({ value, error: null }), error => ({ value: null, error }));
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`SELECT EXISTS(
+        SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+        AND application_name=${application} AND wait_event_type='Lock') AS blocked`;
+      if (row.blocked) { blocked = true; break; }
+      await pause(25);
+    }
+    assert(blocked, 'the preview must actually wait for the current writer');
+    release(); await writer;
+    const result = await outcome;
+    if (result.error) {
+      assert(result.error instanceof Prisma.PrismaClientKnownRequestError && result.error.code === 'P2034',
+        'only a serialization abort is an admissible concurrency outcome');
+      return null;
+    }
+    return result.value;
+  } finally {
+    release(); await writerResult; await reading?.catch(() => undefined); await viewer.$disconnect();
+  }
+}
+
+test('a deadline writer blocks preview; release yields current generation or a serialization abort', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), old = await preview(raw), changed = new Date(future(2880));
+  const result = await concurrentPreview(tx => tx.task.update({ where: { id: f.taskId }, data: { dueAt: changed } }), raw);
+  if (result) {
+    assert.equal(result.prepared.source.dueAt, changed.toISOString());
+    assert(result.prepared.source.generation > old.prepared.source.generation);
+    assert.notEqual(result.prepared.digest, old.prepared.digest);
+  }
+});
+
+test('a permission writer blocks preview; no old recipient survives its committed revocation', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const result = await concurrentPreview(tx => tx.userPermissionOverride.create({
+    data: { userId: f.techA.user.id, permission: 'service.write', allowed: false },
+  }), input(f, [f.techA, f.techB]));
+  if (result) assert.deepEqual(result.prepared.recipients.map(row => row.id), [f.techB.user.id]);
+  const current = await preview(input(f, [f.techA, f.techB]));
+  assert.deepEqual(current.prepared.recipients.map(row => row.id), [f.techB.user.id]);
 });
