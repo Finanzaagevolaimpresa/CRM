@@ -35,7 +35,9 @@ async function login(page: Page, person = f.admin, stepUp = person.id === f.admi
 async function screen(page: Page, label: string, width: number) {
   await page.setViewportSize({ width, height: 950 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: path.join(evidence, `${label}-${width}.png`), fullPage: true });
+  // Hiding the caret mutates every input, including hidden server-action inputs,
+  // and can race with hydration. Keep the live DOM unchanged while capturing it.
+  await page.screenshot({ path: path.join(evidence, `${label}-${width}.png`), fullPage: true, caret: 'initial' });
 }
 async function open(page: Page, row: Row) {
   await page.goto(setupPath(row));
@@ -77,7 +79,12 @@ async function syntheticActor(person: Person) {
 }
 async function close(...contexts: BrowserContext[]) { for (const context of contexts) await context.close(); }
 test.beforeAll(async () => { expect(f.synthetic).toBe(true); await assertAiOrchestratorEphemeralDatabaseIdentity(db); });
-test.afterAll(async () => db.$disconnect());
+test.afterAll(async () => {
+  try {
+    expect(readFileSync(path.join(evidence, 'app.log'), 'utf8'), 'Native pages must remain free of hydration mismatches')
+      .not.toMatch(/A tree hydrated but some attributes|Hydration failed because/);
+  } finally { await db.$disconnect(); }
+});
 
 test('two technicians receive only the selected deadline at its real time; current revocation and cancellation preserve the actual read receipt', async ({ browser }) => {
   const ac = await browser.newContext(), bc = await browser.newContext(), cc = await browser.newContext();
