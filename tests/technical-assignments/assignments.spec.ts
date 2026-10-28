@@ -150,7 +150,8 @@ test('Rome wall input persists the right instant from foreign browser zones and 
   // the exact native value before dispatching input/change events.
   await date.fill('2027-03-28T02:30');
   await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
-  await expect(tech.getByRole('alert')).toContainText('inesistente'); expect(await count(row)).toBe(0);
+  await expect(date.locator('..').getByRole('alert')).toHaveText('Orario non valido o inesistente per il cambio d’ora. Scegli un altro orario.');
+  expect(await count(row)).toBe(0);
   await expect(tech.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toHaveCount(0);
   await date.fill('2027-10-31T02:30');
   await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
