@@ -33,7 +33,7 @@ let admin: Person, root: string;
 before(async () => { if (!enabled) return;
   assert.equal(process.env.CI, 'true'); assert.equal(process.env.GITHUB_ACTIONS, 'true');
   await assertAiOrchestratorEphemeralDatabaseIdentity(db);
-  assert.equal((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count, 70n);
+  assert.equal((await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`)[0].count, 71n);
   // Storage configuration is captured by imported modules. The workflow must
   // provision this isolated root before Node starts, never after module import.
   assert.equal(process.env.STORAGE_PROVIDER, 'local');

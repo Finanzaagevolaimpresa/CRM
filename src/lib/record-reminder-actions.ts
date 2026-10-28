@@ -1,6 +1,5 @@
 'use server';
 import { cookies, headers } from 'next/headers';
-import { revalidatePath } from 'next/cache';
 import { ZodError } from 'zod';
 import { requireSession } from './auth';
 import { prisma } from './prisma';
@@ -29,9 +28,10 @@ function failure(error: unknown) {
     ? 'Operazione non registrata: controlla conferma personale, scadenza, persone e permessi correnti. Prepara un nuovo riepilogo.'
     : 'Esito non confermato. Usa «Verifica esito» e conserva il riferimento; non ripetere il salvataggio.' };
 }
-function refresh() {
-  for (const path of ['/notifications', '/notifications/updates', '/notifications/reminders']) revalidatePath(path);
-}
+// These pages are force-dynamic and admit the current source on each request.
+// Do not re-render the submitting page before its action result is delivered:
+// the retained decision in its URL would replace the live form with recovery
+// and discard a confirmed result. Explicit navigation reads the current state.
 export async function previewRecordReminderAction(raw: unknown) {
   const session = await requireSession();
   try { return { ok: true as const, preview: await previewRecordReminder(prisma, session, await credentials(), raw) }; }
@@ -43,7 +43,7 @@ export async function confirmRecordReminderAction(raw: unknown,
   await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE');
   try {
     const result = await confirmRecordReminder(prisma, session, await credentials(), raw, token, confirmed);
-    refresh(); return { ok: true as const, result };
+    return { ok: true as const, result };
   } catch (error) { return failure(error); }
 }
 export async function verifyRecordReminderAction(commandId: string) {
@@ -56,7 +56,7 @@ export async function cancelRecordReminderAction(raw: unknown, confirmed: boolea
   await requireEnforcedPrivilegedMutation(session, 'RECORD_UPDATE_MANAGE');
   try {
     const result = await cancelRecordReminder(prisma, session, await credentials(), raw, confirmed);
-    refresh(); return { ok: true as const, result };
+    return { ok: true as const, result };
   } catch (error) { return failure(error); }
 }
 export async function verifyRecordReminderCancellationAction(raw: unknown) {

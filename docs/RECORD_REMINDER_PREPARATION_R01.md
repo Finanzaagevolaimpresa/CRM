@@ -1,6 +1,6 @@
 # Promemoria CRM su una scadenza esistente
 
-Stato: preparazione su base PR233 `f1818bde23496b310a297b4f0ed3260bdce85e33`, schema70. Il nuovo candidato R12 aggiunge gestione Admin e browser nativo; la sua qualifica è ancora da eseguire. Nessuna migration o funzione produttiva dei promemoria è stata attivata.
+Stato: candidato su base PR233 `f1818bde23496b310a297b4f0ed3260bdce85e33`, schema70. R13 aggiunge SQL71 e la qualifica di conservazione e riavvio; i relativi risultati devono essere acquisiti sull'HEAD esatto. Nessuna migration o funzione produttiva dei promemoria è stata attivata.
 
 ## Flusso
 
@@ -24,11 +24,13 @@ Prima della mutazione il browser conserva l'identificativo del comando nell'URL.
 
 - R10, commit `9d5821be39b29bf2baacf9cda118b5861616a9e2`, run `40726929245`: 41 prove pure e 49 PostgreSQL passate, limitate a quell'HEAD.
 - R11, commit `b876e723412c615acae07adfc2fe6dda4f4f9e17`, run `40732569787`: 41 pure e 53/55 PostgreSQL passate. Due fixture non valide sono corrette nel nuovo candidato: istante oltre la scadenza del permesso e motivo di revoca sessione estraneo all'enum. Nessun controllo applicativo è indebolito.
-- R12 prepara 61 scenari DB e 6 browser nativi: due commerciali e due tecnici, accessi positivi e dinieghi, orologio reale, gruppi, gestione Admin, revoca, ricevuta, annullamento, risposta persa, replay, origine della richiesta e viste desktop/mobile. Questi risultati non sono ancora qualificati.
-- `tests/record-reminders/synthetic-extension.sql` è protetto dal nome e sentinel del database effimero, fuori da Prisma/migrations. Non è un piano produttivo e non riserva un numero di schema.
+- R12, commit `71ce54a3933d053e356866a778212a555fae4826`, run `40737633368`: 61/61 PostgreSQL e 5/6 browser passati. La conferma riuscita veniva sostituita dalla pagina di riconciliazione per la revalidazione del percorso. R13 conserva l'identificativo prima della POST e corregge la consegna del risultato; le asserzioni browser restano invariate.
+- Le prove native coprono due commerciali e due tecnici, accessi positivi e dinieghi, orologio reale, gruppi, gestione Admin, revoca, ricevuta, annullamento, risposta persa, replay, origine della richiesta e viste desktop/mobile.
+- SQL71 `20261028180000_record_deadline_reminders_v1` aggiunge due tabelle vuote e vincoli atomici, immutabili e restrittivi, riusando RecordUpdateCommand/Event/Delivery. Estende la catena verificata senza cambiare SQL precedenti. `tests/record-reminders/synthetic-extension.sql` resta soltanto evidenza storica della preparazione R12; il candidato corrente usa la migration effettiva.
+- La qualifica dedicata confronta tutte le righe precedenti, lo storico degli aggiornamenti e le letture, verifica rollback transazionale di un guasto sintetico, replay negato e struttura metadata. PR140 verifica gli stati Programmato, Disponibile, Letto, Annullato e Sospeso prima e dopo il riavvio della stessa immagine, con il gate sulle sessioni esistente.
 - Si riusano coda e orologio delle letture: nessun nuovo scheduler o worker. AVAILABLE e READ non attestano push o email. L'email richiede la separata bozza e approvazione della versione esatta.
 - Nessun task reale, promemoria corso, avviso o invio è stato creato. Il cron INBOX rimane distinto.
 
 ## Lavoro residuo
 
-Qualificare l'HEAD corrente e ispezionare le schermate native; preparare migration additiva, compatibilità, recuperabilità, regressione completa e immagine; consegnare diff e piano all'unico revisore. SQL, merge e rilascio richiedono l'autorità pertinente sul candidato e target concreti. Non distribuire codice che interroga le nuove strutture prima della loro migration qualificata.
+Qualificare l'HEAD corrente, SQL71 e il riavvio; ispezionare le schermate native; completare piano, regressione completa e immagine; consegnare diff e piano all'unico revisore. SQL, merge e rilascio richiedono l'autorità pertinente sul candidato e target concreti. Non distribuire codice che interroga le nuove strutture prima della loro migration qualificata. Nessun recupero con codice schema70 dopo SQL71 e nessun down-migrate.

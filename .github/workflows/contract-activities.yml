@@ -48,7 +48,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Exact source, preserved prefix69 and bound schema70
+      - name: Exact source, preserved prefix69 and bound schema71
         shell: bash
         run: |
           set -euo pipefail

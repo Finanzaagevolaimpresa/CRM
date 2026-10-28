@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/record-reminder-preparation-r01]
   pull_request:
-    paths: ['src/lib/record-reminder-*', 'src/lib/internal-notifications.ts', 'src/lib/record-update-actions.ts', 'src/app/notifications/**', 'src/app/record-reminders/**', 'src/components/record-reminder-form.tsx', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
+    paths: ['src/lib/record-reminder-*', 'src/lib/internal-notifications.ts', 'src/lib/record-update-actions.ts', 'src/app/notifications/**', 'src/app/record-reminders/**', 'src/components/record-reminder-form.tsx', 'tests/record-reminder*', 'tests/record-reminders/**', 'scripts/record-reminders/**', 'prisma/**', '.github/workflows/record-reminder-preview.yml']
 permissions:
   contents: read
 concurrency:
@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [postgresql, browser]
+        target: [postgresql, browser, migration]
     services:
       postgres:
         image: postgres:16
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind source and prepare only the isolated schema70 database
+      - name: Bind source and prepare only the isolated schema71 database
         shell: bash
         run: |
           set -euo pipefail
@@ -64,9 +64,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/reminder-preview"
           echo "RECORD_REMINDER_EVIDENCE=$RUNNER_TEMP/reminder-preview" >> "$GITHUB_ENV"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
-          npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 70
-          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f tests/record-reminders/synthetic-extension.sql
+          if [[ '${{ matrix.target }}' == migration ]]; then
+            RECORD_REMINDER_EVIDENCE="$RUNNER_TEMP/reminder-preview" bash scripts/record-reminders/qualify-migration.sh
+          else
+            npm run prisma:migrate:deploy
+          fi
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
       - name: Typecheck and pure contracts
         run: |
           npx tsc --noEmit
