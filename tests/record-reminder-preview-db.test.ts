@@ -373,8 +373,9 @@ for (const fault of ['throw', 'omit-journal', 'recipient', 'audit'] as const) {
   test(`a ${fault} fault rolls back command, event, deliveries, journal and audit together`, options, async () => {
     const f = await fixture(); await grant(f, f.techA);
     const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
-    await assert.rejects(confirm(raw, proposed.signed, faultDatabase(fault, f.salesB.user.id)),
-      fault === 'throw' ? /SYNTHETIC_FAILURE/ : /RECORD_REMINDER/);
+    const reason = { throw: /SYNTHETIC_FAILURE/, 'omit-journal': /RECORD_REMINDER_JOURNAL_REQUIRED/,
+      recipient: /RECORD_REMINDER_DELIVERIES_MISMATCH/, audit: /RECORD_REMINDER_ATOMIC_EVIDENCE_REQUIRED/ }[fault];
+    await assert.rejects(confirm(raw, proposed.signed, faultDatabase(fault, f.salesB.user.id)), reason);
     assert.deepEqual(await counts(), before);
     assert.equal((await readRecordReminderReceipt(db, admin.session, leadProof(admin), raw.commandId)).confirmed, false);
   });

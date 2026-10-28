@@ -62,6 +62,12 @@ export async function confirmRecordReminder(db: PrismaClient, claimed: AuthSessi
     await tx.$executeRaw`INSERT INTO "RecordUpdateReminder"("commandId","eventId","auditId","taskId","availableAt","confirmedAt","keyVersion",journal,proof)
       VALUES(${input.commandId}::uuid,${eventId}::uuid,${auditId},${input.taskId},${new Date(input.remindAt)},${p.now},${credentials.key.version},
         ${canonicalJson(sealed.value)}::jsonb,${sealed.proof})`;
+    // Surface deferred journal failures inside the callback. In the qualified
+    // driver path a PostgreSQL COMMIT rejection can otherwise resolve without
+    // its error reaching the caller, falsely reporting a saved reminder.
+    await tx.$executeRaw`SET CONSTRAINTS record_reminder_command_deferred,
+      record_reminder_event_deferred, record_reminder_delivery_deferred,
+      record_reminder_journal_deferred IMMEDIATE`;
     const finishedAt = await p.auth.finish();
     assertRecordReminderSignedPreview(credentials.key, token, p.prepared, finishedAt);
     return { commandId: input.commandId, confirmed: true, replayed: false, eventId };
