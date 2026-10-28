@@ -98,7 +98,20 @@ test('two technicians receive only the selected deadline at its real time; curre
   expect(await readOnlyCounts()).toEqual(beforeRead);
   await waitAvailable(at);
   await techA.goto('/notifications/updates'); await expect(techA.locator(`a[href="${noticePath(a.id)}"]`)).toBeVisible();
-  await techA.locator(`a[href="${noticePath(a.id)}"]`).click();
+  const romeDisplay = (instant: Date | number) => new Intl.DateTimeFormat('it-IT', {
+    timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' }).format(instant);
+  const dueAt = (await db.task.findUniqueOrThrow({ where: { id: row.taskId } })).dueAt!;
+  const noticeCard = techA.locator('article').filter({ has: techA.locator(`a[href="${noticePath(a.id)}"]`) });
+  await expect(noticeCard).toContainText(romeDisplay(at));
+  await expect(noticeCard).toContainText('Scadenza dell’attività: ' + romeDisplay(dueAt));
+  await expect(techA.getByText(/Orari Europe\/Rome/)).toBeVisible();
+  await techA.goto('/notifications');
+  const activeCard = techA.locator('article').filter({ has: techA.locator(`a[href="${noticePath(a.id)}"]`) });
+  await expect(activeCard).toContainText(romeDisplay(at));
+  await activeCard.getByRole('link', { name: 'Apri', exact: true }).click();
+  await expect(techA.getByText(romeDisplay(at), { exact: true })).toBeVisible();
+  await expect(techA.getByText('Scadenza dell’attività: ' + romeDisplay(dueAt), { exact: true })).toBeVisible();
+  await expect(techA.getByText('Orari Europe/Rome.', { exact: true })).toBeVisible();
   await expect(techA.getByText('Scadenza dell’attività:', { exact: false })).toBeVisible();
   expect(await techA.locator('body').innerText()).not.toMatch(/DESCRIZIONE_PRIVATA|Scadenza riservata sintetica|CONTRATTO_PRIVATO|PAGAMENTO_PRIVATO/);
   await screen(techA, 'deadline-notice', 1440); await screen(techA, 'deadline-notice', 390);
@@ -106,6 +119,7 @@ test('two technicians receive only the selected deadline at its real time; curre
   await techA.getByRole('button', { name: 'Segna come letto', exact: true }).click();
   await expect(techA.getByText(/Segnato come letto il/)).toBeVisible();
   const readAt = (await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: a.id } })).readAt; expect(readAt).not.toBeNull();
+  await expect(techA.getByText('Segnato come letto il ' + romeDisplay(readAt!) + '.', { exact: true })).toBeVisible();
   await techB.goto(noticePath(b.id)); await expect(techB.getByRole('button', { name: 'Segna come letto', exact: true })).toBeVisible();
   await revokeTechnical(db, await syntheticActor(f.admin), { kind: 'TechnicalPractice', targetId: row.practiceId }, await syntheticActor(f.techB));
   expect((await techB.reload())?.status()).toBe(404);

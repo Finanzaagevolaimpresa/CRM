@@ -1,7 +1,8 @@
+import { formatRecordNoticeTime } from '@/lib/record-notice-time';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { z } from 'zod';
-import { PageHeader, Card, formatDateTime } from '@/components/ui';
+import { PageHeader, Card } from '@/components/ui';
 import { PrimaryButton } from '@/components/actions';
 import { requireSession } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
@@ -17,12 +18,13 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   if (!row) notFound();
   return <div className="crm-space-y-6"><PageHeader title={row.title} description={row.related} />
     <Link className="font-bold underline" href="/notifications/updates">← Aggiornamenti selezionati</Link>
-    <Card title="Aggiornamento disponibile"><p>{formatDateTime(row.date)}</p>
-      {row.noticeKind === 'REMINDER' && <p>Scadenza dell’attività: {formatDateTime(row.dueAt)}</p>}
+    <p className="text-sm">Orari Europe/Rome.</p>
+    <Card title="Aggiornamento disponibile"><p>{formatRecordNoticeTime(row.date)}</p>
+      {row.noticeKind === 'REMINDER' && <p>Scadenza dell’attività: {formatRecordNoticeTime(row.dueAt)}</p>}
       <p className="my-3">Campi interessati: {row.changed.map(field => recordUpdateChangedLabels[field]).join(', ')}.</p>
       <p className="text-sm">I dettagli sono consultabili nella scheda secondo i tuoi permessi attuali.</p>
       <Link className="my-3 inline-block font-bold underline" href={row.recordHref}>Apri scheda</Link>
-      {row.readAt ? <p>Segnato come letto il {formatDateTime(row.readAt)}.</p> : <form action={markRecordUpdateReadAction}>
+      {row.readAt ? <p>Segnato come letto il {formatRecordNoticeTime(row.readAt)}.</p> : <form action={markRecordUpdateReadAction}>
         <input type="hidden" name="id" value={row.id}/><PrimaryButton type="submit">Segna come letto</PrimaryButton>
       </form>}
     </Card></div>;
