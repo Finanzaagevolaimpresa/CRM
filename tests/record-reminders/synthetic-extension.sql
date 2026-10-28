@@ -1,5 +1,5 @@
 -- Synthetic proposal only. Not a Prisma migration and never applied to production.
--- The runner must first assert the ephemeral database identity and schema69.
+-- The runner must first assert the ephemeral database identity and schema70.
 BEGIN;
 DO $$ BEGIN
  IF current_database()<>'fai_crm_test' OR
@@ -24,6 +24,7 @@ CREATE TABLE "RecordUpdateReminder" (
  CHECK("availableAt">"confirmedAt")
 );
 CREATE INDEX "RecordUpdateReminder_taskId_confirmedAt_idx" ON "RecordUpdateReminder"("taskId","confirmedAt");
+CREATE INDEX "RecordUpdateReminder_availableAt_commandId_idx" ON "RecordUpdateReminder"("availableAt" DESC,"commandId" DESC);
 CREATE TRIGGER record_reminder_immutable BEFORE UPDATE OR DELETE ON "RecordUpdateReminder"
  FOR EACH ROW EXECUTE FUNCTION fai_record_update_immutable();
 CREATE TRIGGER record_reminder_no_truncate BEFORE TRUNCATE ON "RecordUpdateReminder"

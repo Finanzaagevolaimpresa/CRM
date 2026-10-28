@@ -371,6 +371,8 @@ enum ServiceCatalogRevisionStatus {
 }
 
 model User {
+  historicalLeadContacts CommercialLeadHistoricalContact[] @relation("HistoricalContactActor")
+  historicalLeadConversions CommercialLeadHistoricalConversion[] @relation("HistoricalConversionActor")
   adminRequests AdminRequest[] @relation("AdminRequestAuthor")
   adminRequestEvents AdminRequestEvent[] @relation("AdminRequestEventActor")
   adminRequestDrafts AdminRequestDraft[] @relation("AdminRequestDraftActor")
@@ -461,6 +463,8 @@ model User {
 }
 
 model InternalSession {
+  historicalLeadContacts CommercialLeadHistoricalContact[]
+  historicalLeadConversions CommercialLeadHistoricalConversion[]
   ordinaryEmailDecisions OrdinaryEmailDecision[]
   id                       String                   @id @default(uuid()) @db.Uuid
   userId                   String
@@ -683,6 +687,7 @@ model CommercialOffer {
 }
 
 model Client {
+  historicalLeadConversion CommercialLeadHistoricalConversion?
   adminRequests AdminRequest[]
   selectiveGrants SelectiveClientGrant[]
   selectiveCommands SelectiveClientCommand[]
@@ -2510,6 +2515,9 @@ model ActivityLog {
 }
 
 model AuditLog {
+  historicalContactAssignments CommercialLeadHistoricalContact[] @relation("HistoricalContactAssignment")
+  historicalContactAudit CommercialLeadHistoricalContact? @relation("HistoricalContactAudit")
+  historicalConversionAudit CommercialLeadHistoricalConversion? @relation("HistoricalConversionAudit")
   id         String   @id @default(cuid())
   actorId    String?
   event      String
@@ -2714,6 +2722,8 @@ model LeadProjectionLedger {
 }
 
 model CommercialLeadInboxItem {
+  historicalContacts CommercialLeadHistoricalContact[]
+  historicalConversion CommercialLeadHistoricalConversion?
   id                       String                   @id @default(uuid()) @db.Uuid
   leadId                   String                   @unique(map: "CommercialLeadInboxItem_leadId_key")
   originKind               String                   @db.VarChar(32)
@@ -2765,6 +2775,8 @@ model CommercialLeadSlaPolicyVersion {
 }
 
 model CommercialLeadSlaCycle {
+  historicalContacts CommercialLeadHistoricalContact[]
+  historicalConversion CommercialLeadHistoricalConversion?
   id                     String                         @id @default(uuid()) @db.Uuid
   inboxItemId            String                         @db.Uuid
   sequence               Int
@@ -4003,4 +4015,56 @@ model TechnicalUploadReview {
   transactionId BigInt @default(dbgenerated("txid_current()"))
   submission TechnicalUploadSubmission @relation(fields: [submissionCommandId], references: [commandId], onDelete: Restrict, onUpdate: Restrict)
   actor User @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+}
+
+
+// Historical occurrence is distinct from CRM registration and ordinary SLA.
+// All references are retained; the SQL journals additionally enforce atomic audit.
+model CommercialLeadHistoricalContact {
+  id String @id @db.Uuid
+  input Json
+  actorId String
+  sessionId String @db.Uuid
+  inboxItemId String @db.Uuid
+  cycleId String @db.Uuid
+  assignmentId String
+  recordedAt DateTime @db.Timestamptz(3)
+  inboxVersionBefore Int
+  inboxVersionAfter Int
+  payloadHash String @db.Char(64)
+  auditId String @unique
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation("HistoricalContactActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  inboxItem CommercialLeadInboxItem @relation(fields: [inboxItemId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cycle CommercialLeadSlaCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignment AuditLog @relation("HistoricalContactAssignment", fields: [assignmentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  audit AuditLog @relation("HistoricalContactAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  conversion CommercialLeadHistoricalConversion?
+  @@unique([inboxItemId, assignmentId])
+  @@index([actorId, recordedAt, id], map: "CommercialLeadHistoricalContact_actor_idx")
+}
+
+model CommercialLeadHistoricalConversion {
+  id String @id @db.Uuid
+  input Json
+  actorId String
+  sessionId String @db.Uuid
+  inboxItemId String @unique @db.Uuid
+  cycleId String @unique @db.Uuid
+  contactId String @unique @db.Uuid
+  clientId String @unique
+  recordedAt DateTime @db.Timestamptz(3)
+  inboxVersionBefore Int
+  inboxVersionAfter Int
+  payloadHash String @db.Char(64)
+  auditId String @unique
+  transactionId BigInt @default(dbgenerated("txid_current()"))
+  actor User @relation("HistoricalConversionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  session InternalSession @relation(fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  inboxItem CommercialLeadInboxItem @relation(fields: [inboxItemId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cycle CommercialLeadSlaCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  contact CommercialLeadHistoricalContact @relation(fields: [contactId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  audit AuditLog @relation("HistoricalConversionAudit", fields: [auditId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 }

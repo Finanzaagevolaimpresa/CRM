@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/record-reminder-preparation-r01]
   pull_request:
-    paths: ['src/lib/record-reminder-*', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
+    paths: ['src/lib/record-reminder-*', 'src/lib/internal-notifications.ts', 'src/lib/record-update-actions.ts', 'src/app/notifications/**', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
 permissions:
   contents: read
 concurrency:
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Bind source and prepare only the isolated schema69 database
+      - name: Bind source and prepare only the isolated schema70 database
         shell: bash
         run: |
           set -euo pipefail
@@ -57,20 +57,20 @@ jobs:
           mkdir -p "$RUNNER_TEMP/reminder-preview"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
-          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 70
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f tests/record-reminders/synthetic-extension.sql
       - name: Typecheck and pure contracts
         run: |
           npx tsc --noEmit
-          npx eslint src/lib/record-reminder-*.ts tests/record-reminder*.test.ts src/lib/technical-work-item-source.ts src/lib/technical-assignment-documents.ts --max-warnings 0
+          npx eslint src/lib/record-reminder-*.ts tests/record-reminder*.test.ts src/lib/technical-work-item-source.ts src/lib/technical-assignment-documents.ts src/lib/internal-notifications.ts src/lib/record-update-actions.ts src/app/notifications/updates/page.tsx 'src/app/notifications/updates/[id]/page.tsx' --max-warnings 0
           node --import tsx --test tests/record-reminder-contract.test.ts tests/record-reminder-technical-policy.test.ts tests/record-reminder-preview-token.test.ts
       - name: Current PostgreSQL source and exact principal admission
         shell: bash
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-reminder-preview-db.test.ts | tee "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# tests 49' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# pass 49' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# tests 55' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# pass 55' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
       - name: Confirm source unchanged

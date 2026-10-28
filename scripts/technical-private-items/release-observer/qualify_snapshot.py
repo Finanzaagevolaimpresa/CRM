@@ -54,8 +54,12 @@ SELECT jsonb_build_object(
 
 
 def manifest():
+    # This observer qualifies only the immutable 68 -> 69 transition and a
+    # populated schema69 database. Later candidate SQL belongs to its own
+    # observer; ledger_binding still rejects any extra database migration.
     return {p.parent.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted((ROOT / "prisma/migrations").glob("*/migration.sql"))}
+            for p in sorted((ROOT / "prisma/migrations").glob("*/migration.sql"))
+            if p.parent.name <= g.MIGRATION}
 
 
 def bind(result, schema, source_manifest, raw):

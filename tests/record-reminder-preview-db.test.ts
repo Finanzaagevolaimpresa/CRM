@@ -16,6 +16,9 @@ import { assertRecordReminderPreview } from '../src/lib/record-reminder-contract
 import { confirmRecordReminder, readRecordReminderReceipt } from '../src/lib/record-reminder-confirmation';
 import { readRecordReminderNotice } from '../src/lib/record-reminder-delivery';
 import { cancelRecordReminder, readRecordReminderCancellation } from '../src/lib/record-reminder-revocation';
+import { listSelectedRecordNotices, readSelectedRecordNotice } from '../src/lib/record-reminder-notifications';
+import { readRecordUpdateSetup, previewRecordUpdate, confirmRecordUpdate } from '../src/lib/record-updates';
+import type { UpdateCommand } from '../src/lib/record-update-input';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_REMINDER_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -424,6 +427,10 @@ async function scheduleForRead(f: Fixture, recipients = [f.techA], overrides: Re
 }
 const notice = (person: Person, id: string, markRead = false) =>
   readRecordReminderNotice(db, person.session, leadProof(admin).key, id, markRead);
+const selectedNotices = (person: Person, limit = 100, unreadOnly = true) =>
+  listSelectedRecordNotices(db, person.session, leadProof(admin).key, limit, unreadOnly);
+const selectedNotice = (person: Person, id: string, markRead = false) =>
+  readSelectedRecordNotice(db, person.session, leadProof(admin).key, id, markRead);
 
 test('the real database clock makes only selected notices available and GET never marks them read', options, async () => {
   const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
@@ -443,6 +450,102 @@ test('the real database clock makes only selected notices available and GET neve
   assert.deepEqual(await counts(), before);
   assert(s.deliveries.every(row => !row.readAt));
   assert.equal(await db.recordUpdateDelivery.count({ where: { commandId: s.raw.commandId, readAt: { not: null } } }), 0);
+});
+
+test('the existing notification surface lists only due personal notices without exposing technical private labels', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]), before = await counts();
+  assert.deepEqual(await selectedNotices(f.techA), []);
+  assert.deepEqual(await selectedNotices(f.techB), []);
+  await s.wait();
+  for (const person of [f.techA, f.techB]) {
+    const rows = await selectedNotices(person), own = s.deliveries.find(row => row.recipientId === person.user.id)!;
+    assert.equal(rows.length, 1); assert.equal(rows[0].id, own.id);
+    assert.equal(rows[0].href, `/notifications/updates/${own.id}`);
+    assert.equal(rows[0].readAt, null);
+    assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_TITLE|PRIVATE_DESCRIPTION|SCENARIO_PRIVATO|NOTA_INTERNA|CONTRATTO_PRIVATO|PAGAMENTO_PRIVATO|accessUntil/);
+  }
+  assert.deepEqual(await selectedNotices(f.salesA), []);
+  assert.deepEqual(await selectedNotices(f.salesB), []);
+  assert.deepEqual(await counts(), before);
+});
+
+test('future cancelled and revoked work is excluded before the visible result limit', options, async () => {
+  const f = await fixture(), other = await fixture();
+  await grant(f, f.techA); await grant(other, f.techA);
+  const good = await scheduleForRead(f);
+  const removed = await scheduleForRead(f), revoked = await scheduleForRead(other, [f.techA]);
+  await scheduleForRead(f, [f.techA], { remindAt: future(60) });
+  await cancel(cancellationInput(removed.raw.commandId));
+  await revokeTechnical(db, admin, other.target, f.techA);
+  await revoked.wait(); const before = await counts();
+  const rows = await selectedNotices(f.techA, 1);
+  assert.deepEqual(rows.map(row => row.id), [good.deliveries[0].id]);
+  assert.equal(await selectedNotice(f.techA, removed.deliveries[0].id), null);
+  assert.equal(await selectedNotice(f.techA, revoked.deliveries[0].id), null);
+  assert.deepEqual(await counts(), before);
+});
+
+test('explicit read through the existing detail removes only the unread notice and preserves its first receipt', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f); await s.wait(); const id = s.deliveries[0].id;
+  assert.equal((await selectedNotices(f.techA)).length, 1);
+  const before = await counts(), first = await selectedNotice(f.techA, id, true); assert(first?.readAt);
+  assert.deepEqual(await selectedNotices(f.techA), []);
+  const retained = await selectedNotices(f.techA, 100, false);
+  assert.equal(retained.length, 1); assert.equal(retained[0].readAt?.toISOString(), first.readAt.toISOString());
+  const repeated = await selectedNotice(f.techA, id, true);
+  assert.equal(repeated?.readAt?.toISOString(), first.readAt.toISOString());
+  await cancel(cancellationInput(s.raw.commandId));
+  assert.deepEqual(await selectedNotices(f.techA, 100, false), []);
+  assert.equal(await selectedNotice(f.techA, id), null);
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id } })).readAt?.toISOString(), first.readAt.toISOString());
+  assertOneCanceled(before, await counts());
+});
+
+test('ordinary record updates and reminders share one selected queue without changing commercial separation', options, async () => {
+  const f = await fixture();
+  const setup = await readRecordUpdateSetup(db, admin.session, 'CLIENT', f.client.id);
+  assert.equal(setup.patch.kind, 'CLIENT');
+  const raw: UpdateCommand = { commandId: randomUUID(), kind: 'CLIENT', recordId: f.client.id, operation: 'UPDATE',
+    expectedVersion: setup.expectedVersion, ruleVersion: setup.rule?.version ?? 0,
+    selection: { people: [f.salesA.user.id], groups: [] }, events: ['RECORD_CHANGED'], persistent: false, expiresAt: null,
+    patch: { ...setup.patch, kind: 'CLIENT', displayName: 'Synthetic updated client', type: 'societa' } };
+  const proposed = await previewRecordUpdate(db, admin.session, raw);
+  await confirmRecordUpdate(db, admin.session, raw, proposed.digest, leadProof(admin));
+  const task = await db.task.create({ data: { clientId: f.client.id, title: 'CLIENT_PRIVATE_TITLE',
+    dueAt: new Date(future(1440)), assignedToId: f.salesA.user.id, createdById: admin.user.id } });
+  const s = await scheduleForRead(f, [f.salesA, f.salesB], { kind: 'CLIENT', recordId: f.client.id, taskId: task.id });
+  await s.wait(); const before = await counts(), rows = await selectedNotices(f.salesA);
+  assert.equal(rows.length, 2); assert.equal(new Set(rows.map(row => row.id)).size, 2);
+  assert(rows.some(row => row.category === 'Aggiornamento scelto dall’Admin'));
+  assert(rows.some(row => row.category === 'Promemoria scelto dall’Admin'));
+  assert.deepEqual(await selectedNotices(f.salesB), []);
+  for (const row of rows) { assert(await selectedNotice(f.salesA, row.id)); assert.equal(await selectedNotice(f.salesB, row.id), null); }
+  assert.doesNotMatch(JSON.stringify(rows), /CLIENT_PRIVATE_TITLE|SCENARIO_PRIVATO|NOTA_INTERNA|CONTRATTO_PRIVATO|PAGAMENTO_PRIVATO/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('an absent or unregistered key never falls back to ordinary admission for a scheduled notice', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f); await s.wait(); const before = await counts(), id = s.deliveries[0].id;
+  assert.deepEqual(await listSelectedRecordNotices(db, f.techA.session, null), []);
+  assert.equal(await readSelectedRecordNotice(db, f.techA.session, null, id), null);
+  const bad = { ...leadProof(admin).key, secret: 'synthetic-unregistered-key' };
+  await assert.rejects(listSelectedRecordNotices(db, f.techA.session, bad));
+  await assert.rejects(readSelectedRecordNotice(db, f.techA.session, bad, id));
+  for (const limit of [0, -1, 501, 1.5, NaN]) await assert.rejects(selectedNotices(f.techA, limit));
+  assert.deepEqual(await counts(), before);
+});
+
+test('current session revocation closes both the selected list and its retained detail URL', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f); await s.wait(); assert.equal((await selectedNotices(f.techA)).length, 1);
+  await db.internalSession.update({ where: { id: f.techA.session.sessionId! }, data: { revokedAt: new Date(), revokedReason: 'synthetic-list-revocation' } });
+  const before = await counts();
+  await assert.rejects(selectedNotices(f.techA));
+  await assert.rejects(selectedNotice(f.techA, s.deliveries[0].id));
+  assert.deepEqual(await counts(), before);
 });
 
 test('only an explicit recipient command marks read, and a repeated command preserves the first read time', options, async () => {

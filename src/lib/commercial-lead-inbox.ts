@@ -1,4 +1,9 @@
 import { assertNoSelectiveLeadMutation } from './selective-lead-scope';
+import { historicalConversionInput } from './commercial-lead-historical-contact-contract';
+import { appendHistoricalLeadConversion, prepareHistoricalLeadConversion,
+  readHistoricalConversionInTransaction, assertHistoricalConversionPreview } from './commercial-lead-historical-contact-storage';
+import { lockRegisteredPrivilegedStepUpKey } from './application-key-registry';
+import type { PrivilegedStepUpKey } from './privileged-step-up-token';
 import { appendResponsibilityDecision } from './responsibility';
 import { randomUUID } from 'node:crypto';
 import { Prisma, type ClientType, type PrismaClient } from '@prisma/client';
@@ -676,13 +681,33 @@ export async function convertCommercialLeadInboxItem(
     actor: CommercialLeadActor;
     expectedInboxVersion: number;
     clientType: ClientType;
+    // Historical UI supplies an exact preview. Isolated storage qualification
+    // may call the transaction directly; no public action accepts a raw basis.
+    historicalContact?: Readonly<{ commandId: string; contactId: string; expectedAssignmentId: string }>;
+    historicalPreview?: Readonly<{ key: PrivilegedStepUpKey; token: string }>;
     faultAt?: CommercialLeadFaultPoint;
   }>,
 ) {
   requireEnforcedMode();
+  const historical = input.historicalContact === undefined ? null : historicalConversionInput({
+    ...input.historicalContact, leadId: input.leadId, expectedInboxVersion: input.expectedInboxVersion,
+    clientType: input.clientType,
+  });
+  if (input.historicalPreview && !historical) fail('N14_VERSION_CONFLICT');
   return transaction(db, async (tx, commandNow) => {
+    if (input.historicalPreview && !await lockRegisteredPrivilegedStepUpKey(tx, input.historicalPreview.key)) fail('N14_PERMISSION_DENIED');
     await authorizeActor(tx, input.actor, 'WORK');
     await assertNoSelectiveLeadMutation(tx, input.actor.userId, input.leadId);
+    if (historical) {
+      const replay = await readHistoricalConversionInTransaction(tx, input.actor,
+        { leadId: input.leadId, commandId: historical.commandId }, historical);
+      // An expired preview cannot cause another mutation. Explicit outcome
+      // reads reconcile committed UI commands without requiring a new save.
+      if (replay) {
+        if (input.historicalPreview) fail('N14_VERSION_CONFLICT');
+        return replay.client;
+      }
+    }
     const lead = await lockLead(tx, input.leadId);
     const item = await lockItem(tx, input.leadId);
     if (!item) fail('N14_ITEM_NOT_FOUND');
@@ -692,7 +717,9 @@ export async function convertCommercialLeadInboxItem(
     if (lead.clientId) fail('N14_VERSION_CONFLICT');
     const cycle = await lockOpenCycle(tx, item.id);
     if (!cycle) fail('N14_VERSION_CONFLICT');
-    if (!cycle.firstResponseAt || !cycle.outcome) fail('N14_FIRST_RESPONSE_REQUIRED');
+    const historicalBasis = historical ? await prepareHistoricalLeadConversion(tx, input.actor, historical) : null;
+    if (historicalBasis && input.historicalPreview) await assertHistoricalConversionPreview(tx, input.actor, historicalBasis, input.historicalPreview);
+    if (!historicalBasis && (!cycle.firstResponseAt || !cycle.outcome)) fail('N14_FIRST_RESPONSE_REQUIRED');
 
     const displayName = lead.companyName || `${lead.firstName} ${lead.lastName}`.trim();
     const client = await tx.client.create({ data: {
@@ -714,6 +741,7 @@ export async function convertCommercialLeadInboxItem(
       closedAt: commandNow,
       version: cycle.version + 1,
       updatedAt: commandNow,
+      ...(historicalBasis ? { outcome: historicalBasis.basis.basis } : {}),
     } });
     inject(input.faultAt, 'AFTER_CYCLE');
     const updated = await tx.commercialLeadInboxItem.update({ where: { id: item.id }, data: {
@@ -744,7 +772,9 @@ export async function convertCommercialLeadInboxItem(
       entityId: lead.id,
       after: { fromStatus: lead.status, toStatus: 'vinto', reasonCode: 'CONVERTED' },
     } });
+    if (historicalBasis) await appendHistoricalLeadConversion(tx, input.actor, historicalBasis, client.id, commandNow);
     inject(input.faultAt, 'AFTER_AUDIT');
+    if (historicalBasis && input.historicalPreview) await assertHistoricalConversionPreview(tx, input.actor, historicalBasis, input.historicalPreview);
     return client;
   });
 }

@@ -1,0 +1,655 @@
+{
+  "columns": [
+    {
+      "default": null,
+      "name": "id",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "input",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "jsonb",
+      "udt": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "actorId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "inboxItemId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "cycleId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "assignmentId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": null,
+      "name": "recordedAt",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "timestamp with time zone",
+      "udt": "timestamptz"
+    },
+    {
+      "default": null,
+      "name": "inboxVersionBefore",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "integer",
+      "udt": "int4"
+    },
+    {
+      "default": null,
+      "name": "inboxVersionAfter",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "integer",
+      "udt": "int4"
+    },
+    {
+      "default": null,
+      "name": "payloadHash",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "character",
+      "udt": "bpchar"
+    },
+    {
+      "default": null,
+      "name": "auditId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": "txid_current()",
+      "name": "transactionId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalContact",
+      "type": "bigint",
+      "udt": "int8"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "input",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "jsonb",
+      "udt": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "actorId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "inboxItemId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "cycleId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "contactId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "uuid",
+      "udt": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": null,
+      "name": "recordedAt",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "timestamp with time zone",
+      "udt": "timestamptz"
+    },
+    {
+      "default": null,
+      "name": "inboxVersionBefore",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "integer",
+      "udt": "int4"
+    },
+    {
+      "default": null,
+      "name": "inboxVersionAfter",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "integer",
+      "udt": "int4"
+    },
+    {
+      "default": null,
+      "name": "payloadHash",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "character",
+      "udt": "bpchar"
+    },
+    {
+      "default": null,
+      "name": "auditId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "text",
+      "udt": "text"
+    },
+    {
+      "default": "txid_current()",
+      "name": "transactionId",
+      "nullable": "NO",
+      "table": "CommercialLeadHistoricalConversion",
+      "type": "bigint",
+      "udt": "int8"
+    }
+  ],
+  "constraints": [
+    {
+      "definition": "FOREIGN KEY (\"actorId\") REFERENCES \"User\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_actorId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"assignmentId\") REFERENCES \"AuditLog\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_assignmentId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"auditId\") REFERENCES \"AuditLog\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_auditId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"auditId\")",
+      "name": "CommercialLeadHistoricalContact_auditId_key",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"inboxVersionAfter\" = (\"inboxVersionBefore\" + 1)))",
+      "name": "CommercialLeadHistoricalContact_check",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "CHECK (((jsonb_typeof(input) = 'object'::text) AND ((input ->> 'protocol'::text) = 'N14_HISTORICAL_CONTACT_V1'::text) AND ((input ->> 'commandId'::text) = (id)::text) AND ((input ->> 'expectedAssignmentId'::text) = \"assignmentId\") AND (((input ->> 'expectedInboxVersion'::text))::integer = \"inboxVersionBefore\") AND ((input -> 'attested'::text) = 'true'::jsonb) AND ((input ->> 'source'::text) = ANY (ARRAY['EMAIL'::text, 'PHONE'::text, 'MEETING'::text, 'EXISTING_DOCUMENT'::text])) AND ((length((input ->> 'evidenceReference'::text)) >= 3) AND (length((input ->> 'evidenceReference'::text)) <= 500))))",
+      "name": "CommercialLeadHistoricalContact_check1",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"cycleId\") REFERENCES \"CommercialLeadSlaCycle\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_cycleId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"inboxItemId\", \"assignmentId\")",
+      "name": "CommercialLeadHistoricalContact_inboxItemId_assignmentId_key",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"inboxItemId\") REFERENCES \"CommercialLeadInboxItem\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_inboxItemId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"inboxVersionBefore\" > 0))",
+      "name": "CommercialLeadHistoricalContact_inboxVersionBefore_check",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      "name": "CommercialLeadHistoricalContact_journal",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "t",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"payloadHash\" ~ '^[0-9a-f]{64}$'::text))",
+      "name": "CommercialLeadHistoricalContact_payloadHash_check",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "CommercialLeadHistoricalContact_pkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "p",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES \"InternalSession\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalContact_sessionId_fkey",
+      "table": "\"CommercialLeadHistoricalContact\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"actorId\") REFERENCES \"User\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_actorId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"auditId\") REFERENCES \"AuditLog\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_auditId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"auditId\")",
+      "name": "CommercialLeadHistoricalConversion_auditId_key",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"inboxVersionAfter\" = (\"inboxVersionBefore\" + 1)))",
+      "name": "CommercialLeadHistoricalConversion_check",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "CHECK (((jsonb_typeof(input) = 'object'::text) AND ((input ->> 'protocol'::text) = 'N14_HISTORICAL_CONVERSION_V1'::text) AND ((input ->> 'commandId'::text) = (id)::text) AND ((input ->> 'contactId'::text) = (\"contactId\")::text) AND (((input ->> 'expectedInboxVersion'::text))::integer = \"inboxVersionBefore\")))",
+      "name": "CommercialLeadHistoricalConversion_check1",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES \"Client\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_clientId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"clientId\")",
+      "name": "CommercialLeadHistoricalConversion_clientId_key",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"contactId\") REFERENCES \"CommercialLeadHistoricalContact\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_contactId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"contactId\")",
+      "name": "CommercialLeadHistoricalConversion_contactId_key",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"cycleId\") REFERENCES \"CommercialLeadSlaCycle\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_cycleId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"cycleId\")",
+      "name": "CommercialLeadHistoricalConversion_cycleId_key",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"inboxItemId\") REFERENCES \"CommercialLeadInboxItem\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_inboxItemId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "UNIQUE (\"inboxItemId\")",
+      "name": "CommercialLeadHistoricalConversion_inboxItemId_key",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "u",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"inboxVersionBefore\" > 1))",
+      "name": "CommercialLeadHistoricalConversion_inboxVersionBefore_check",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+      "name": "CommercialLeadHistoricalConversion_journal",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "t",
+      "validated": true
+    },
+    {
+      "definition": "CHECK ((\"payloadHash\" ~ '^[0-9a-f]{64}$'::text))",
+      "name": "CommercialLeadHistoricalConversion_payloadHash_check",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "c",
+      "validated": true
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "CommercialLeadHistoricalConversion_pkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "p",
+      "validated": true
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES \"InternalSession\"(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+      "name": "CommercialLeadHistoricalConversion_sessionId_fkey",
+      "table": "\"CommercialLeadHistoricalConversion\"",
+      "type": "f",
+      "validated": true
+    },
+    {
+      "definition": "CHECK (((sequence > 0) AND (version > 0) AND (\"dueAt\" > \"availableAt\") AND ((\"firstResponseAt\" IS NULL) OR (\"firstResponseAt\" >= \"availableAt\")) AND ((\"closedAt\" IS NULL) OR (\"closedAt\" >= \"availableAt\")) AND (((outcome IS NULL) AND (\"firstResponseAt\" IS NULL) AND (\"closedAt\" IS NULL)) OR (((outcome)::text = ANY ((ARRAY['MET'::character varying, 'BREACHED'::character varying])::text[])) AND (\"firstResponseAt\" IS NOT NULL)) OR (((outcome)::text = 'CLOSED_WITHOUT_RESPONSE'::text) AND (\"firstResponseAt\" IS NULL) AND (\"closedAt\" IS NOT NULL)) OR (((outcome)::text = 'HISTORICAL_CONTACT_BEFORE_CRM'::text) AND (\"firstResponseAt\" IS NULL) AND (\"closedAt\" IS NOT NULL) AND (sequence = 1))) AND ((\"retentionPolicyVersion\")::text = 'N21_UNASSIGNED'::text) AND (\"retentionEligibleAt\" IS NULL)))",
+      "name": "CommercialLeadSlaCycle_contract_check",
+      "table": "\"CommercialLeadSlaCycle\"",
+      "type": "c",
+      "validated": true
+    }
+  ],
+  "functions": [
+    {
+      "arguments": "",
+      "bodySha256": "849713a79a47d1218a4767ff985dbbdeb4ac3d883a18b66afcd76b9e0be55785",
+      "configuration": null,
+      "language": "plpgsql",
+      "name": "n14_historical_contact_immutable",
+      "ownerMatches": true,
+      "returns": "trigger",
+      "schema": "public",
+      "securityDefiner": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "",
+      "bodySha256": "e4eaebd67e379b10c641ffd3c040f7afdb07765e6420940800e5baa19904f6d2",
+      "configuration": null,
+      "language": "plpgsql",
+      "name": "n14_historical_contact_journal",
+      "ownerMatches": true,
+      "returns": "trigger",
+      "schema": "public",
+      "securityDefiner": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "",
+      "bodySha256": "eebc07c586143e2468a81eb6489575066f4903b6e42dd89d841312d9056e12bf",
+      "configuration": null,
+      "language": "plpgsql",
+      "name": "n14_historical_conversion_journal",
+      "ownerMatches": true,
+      "returns": "trigger",
+      "schema": "public",
+      "securityDefiner": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "",
+      "bodySha256": "b9636061b20d0997074316a2a50f9f167caf5ec8bb9220cf2af42e7e8500a09b",
+      "configuration": null,
+      "language": "plpgsql",
+      "name": "n14_historical_cycle_basis",
+      "ownerMatches": true,
+      "returns": "trigger",
+      "schema": "public",
+      "securityDefiner": false,
+      "volatility": "v"
+    }
+  ],
+  "indexes": [
+    {
+      "definition": "CREATE INDEX \"CommercialLeadHistoricalContact_actor_idx\" ON public.\"CommercialLeadHistoricalContact\" USING btree (\"actorId\", \"recordedAt\", id)",
+      "name": "CommercialLeadHistoricalContact_actor_idx",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalContact_auditId_key\" ON public.\"CommercialLeadHistoricalContact\" USING btree (\"auditId\")",
+      "name": "CommercialLeadHistoricalContact_auditId_key",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalContact_inboxItemId_assignmentId_key\" ON public.\"CommercialLeadHistoricalContact\" USING btree (\"inboxItemId\", \"assignmentId\")",
+      "name": "CommercialLeadHistoricalContact_inboxItemId_assignmentId_key",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalContact_pkey\" ON public.\"CommercialLeadHistoricalContact\" USING btree (id)",
+      "name": "CommercialLeadHistoricalContact_pkey",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_auditId_key\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (\"auditId\")",
+      "name": "CommercialLeadHistoricalConversion_auditId_key",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_clientId_key\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (\"clientId\")",
+      "name": "CommercialLeadHistoricalConversion_clientId_key",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_contactId_key\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (\"contactId\")",
+      "name": "CommercialLeadHistoricalConversion_contactId_key",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_cycleId_key\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (\"cycleId\")",
+      "name": "CommercialLeadHistoricalConversion_cycleId_key",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_inboxItemId_key\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (\"inboxItemId\")",
+      "name": "CommercialLeadHistoricalConversion_inboxItemId_key",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"CommercialLeadHistoricalConversion_pkey\" ON public.\"CommercialLeadHistoricalConversion\" USING btree (id)",
+      "name": "CommercialLeadHistoricalConversion_pkey",
+      "table": "CommercialLeadHistoricalConversion"
+    }
+  ],
+  "tables": [
+    {
+      "forcedRowSecurity": false,
+      "kind": "r",
+      "name": "CommercialLeadHistoricalContact",
+      "ownerMatches": true,
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forcedRowSecurity": false,
+      "kind": "r",
+      "name": "CommercialLeadHistoricalConversion",
+      "ownerMatches": true,
+      "persistence": "p",
+      "rowSecurity": false
+    }
+  ],
+  "triggers": [
+    {
+      "deferrable": false,
+      "definition": "CREATE TRIGGER \"CommercialLeadHistoricalContact_immutable\" BEFORE DELETE OR UPDATE ON public.\"CommercialLeadHistoricalContact\" FOR EACH ROW EXECUTE FUNCTION n14_historical_contact_immutable()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_immutable",
+      "functionSchema": "public",
+      "initiallyDeferred": false,
+      "name": "CommercialLeadHistoricalContact_immutable",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "deferrable": true,
+      "definition": "CREATE CONSTRAINT TRIGGER \"CommercialLeadHistoricalContact_journal\" AFTER INSERT ON public.\"CommercialLeadHistoricalContact\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION n14_historical_contact_journal()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_journal",
+      "functionSchema": "public",
+      "initiallyDeferred": true,
+      "name": "CommercialLeadHistoricalContact_journal",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "deferrable": false,
+      "definition": "CREATE TRIGGER \"CommercialLeadHistoricalContact_no_truncate\" BEFORE TRUNCATE ON public.\"CommercialLeadHistoricalContact\" FOR EACH STATEMENT EXECUTE FUNCTION n14_historical_contact_immutable()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_immutable",
+      "functionSchema": "public",
+      "initiallyDeferred": false,
+      "name": "CommercialLeadHistoricalContact_no_truncate",
+      "table": "CommercialLeadHistoricalContact"
+    },
+    {
+      "deferrable": false,
+      "definition": "CREATE TRIGGER \"CommercialLeadHistoricalConversion_immutable\" BEFORE DELETE OR UPDATE ON public.\"CommercialLeadHistoricalConversion\" FOR EACH ROW EXECUTE FUNCTION n14_historical_contact_immutable()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_immutable",
+      "functionSchema": "public",
+      "initiallyDeferred": false,
+      "name": "CommercialLeadHistoricalConversion_immutable",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "deferrable": true,
+      "definition": "CREATE CONSTRAINT TRIGGER \"CommercialLeadHistoricalConversion_journal\" AFTER INSERT ON public.\"CommercialLeadHistoricalConversion\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION n14_historical_conversion_journal()",
+      "enabled": "O",
+      "functionName": "n14_historical_conversion_journal",
+      "functionSchema": "public",
+      "initiallyDeferred": true,
+      "name": "CommercialLeadHistoricalConversion_journal",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "deferrable": false,
+      "definition": "CREATE TRIGGER \"CommercialLeadHistoricalConversion_no_truncate\" BEFORE TRUNCATE ON public.\"CommercialLeadHistoricalConversion\" FOR EACH STATEMENT EXECUTE FUNCTION n14_historical_contact_immutable()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_immutable",
+      "functionSchema": "public",
+      "initiallyDeferred": false,
+      "name": "CommercialLeadHistoricalConversion_no_truncate",
+      "table": "CommercialLeadHistoricalConversion"
+    },
+    {
+      "deferrable": true,
+      "definition": "CREATE CONSTRAINT TRIGGER \"CommercialLeadSlaCycle_historical_basis\" AFTER INSERT OR UPDATE ON public.\"CommercialLeadSlaCycle\" DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (((new.outcome)::text = 'HISTORICAL_CONTACT_BEFORE_CRM'::text)) EXECUTE FUNCTION n14_historical_cycle_basis()",
+      "enabled": "O",
+      "functionName": "n14_historical_cycle_basis",
+      "functionSchema": "public",
+      "initiallyDeferred": true,
+      "name": "CommercialLeadSlaCycle_historical_basis",
+      "table": "CommercialLeadSlaCycle"
+    },
+    {
+      "deferrable": false,
+      "definition": "CREATE TRIGGER n14_historical_audit_retained BEFORE DELETE OR UPDATE ON public.\"AuditLog\" FOR EACH ROW WHEN ((old.event = ANY (ARRAY['commercial_lead_historical_contact_recorded'::text, 'commercial_lead_historical_conversion_recorded'::text]))) EXECUTE FUNCTION n14_historical_contact_immutable()",
+      "enabled": "O",
+      "functionName": "n14_historical_contact_immutable",
+      "functionSchema": "public",
+      "initiallyDeferred": false,
+      "name": "n14_historical_audit_retained",
+      "table": "AuditLog"
+    }
+  ]
+}

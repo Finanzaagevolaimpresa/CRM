@@ -5,7 +5,8 @@ import { leadVisibilityWhere } from "./core-query-policy";
 import { buildNotificationAccess } from "./internal-notification-policy";
 import { contextOutsideSelection } from './selective-project-policy';
 import { companyClientContextOutsideSelection } from './selective-client-policy';
-import { listRecordUpdates } from './record-update-delivery';
+import { listSelectedRecordNotices } from './record-reminder-notifications';
+import { loadActivePrivilegedStepUpKey } from './application-key-registry';
 import { internalSessionMode } from './session';
 
 export type InternalNotification = {
@@ -152,7 +153,7 @@ export async function getInternalNotifications(session: AuthSession, options?: {
 
   const priorityOrder = { alta: 0, media: 1, bassa: 2 };
   if (internalSessionMode() === 'registry' && session.sessionId) {
-    const updates = await listRecordUpdates(prisma, session, limit);
+    const updates = await listSelectedRecordNotices(prisma, session, await loadActivePrivilegedStepUpKey(prisma), limit);
     notifications.push(...updates.map(row => ({ id: `record-update-${row.id}`, title: row.title,
       category: row.category, related: row.related, date: row.date, priority: row.priority, href: row.href })));
   }
