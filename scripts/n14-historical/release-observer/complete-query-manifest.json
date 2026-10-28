@@ -1,0 +1,23 @@
+{
+  "purpose": "Isolated PostgreSQL qualification of complete read-only SQL70 snapshot query shape and preservation; production admission remains separately gated.",
+  "synthetic": true,
+  "productionContact": false,
+  "queries": [
+    {
+      "schema": 69,
+      "file": "complete-snapshot69.sql",
+      "sha256": "f0dc1820b27dccfb76451f2225e58cae6308760b7559f01164e02e6e747d18d2",
+      "onlySyntheticScalarIdentitiesAndExpiryReplaced": true,
+      "addedReadOnlyIdentityProbe": true,
+      "allPreviousExpressionsPreserved": true
+    },
+    {
+      "schema": 70,
+      "file": "complete-snapshot70.sql",
+      "sha256": "a1a8323117496f677219b300ff6925a2bc1e380b7d68c8b59ee22bd8824fcb45",
+      "onlySyntheticScalarIdentitiesAndExpiryReplaced": true,
+      "addedReadOnlyIdentityProbe": true,
+      "allPreviousExpressionsPreserved": true
+    }
+  ]
+}

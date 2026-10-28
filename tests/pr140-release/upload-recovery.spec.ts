@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { test, expect, type Page, type BrowserContext } from '@playwright/test';
-test('schema69 restart preserves private upload bytes, pending and final reviews and current denials', async ({ browser }) => {
+test('schema70 restart preserves private upload bytes, pending and final reviews and current denials', async ({ browser }) => {
   const f = JSON.parse(readFileSync(process.env.R05_UPLOAD_RECOVERY_FIXTURE!, 'utf8')) as {
     synthetic: boolean; practiceId: string; adminEmail: string; liveEmail: string; revokedEmail: string;
     liveId: string; revokedId: string; salesEmails: string[];

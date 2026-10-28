@@ -1,0 +1,16 @@
+{
+  "columns": [],
+  "constraints": [
+    {
+      "definition": "CHECK (((sequence > 0) AND (version > 0) AND (\"dueAt\" > \"availableAt\") AND ((\"firstResponseAt\" IS NULL) OR (\"firstResponseAt\" >= \"availableAt\")) AND ((\"closedAt\" IS NULL) OR (\"closedAt\" >= \"availableAt\")) AND (((outcome IS NULL) AND (\"firstResponseAt\" IS NULL) AND (\"closedAt\" IS NULL)) OR (((outcome)::text = ANY ((ARRAY['MET'::character varying, 'BREACHED'::character varying])::text[])) AND (\"firstResponseAt\" IS NOT NULL)) OR (((outcome)::text = 'CLOSED_WITHOUT_RESPONSE'::text) AND (\"firstResponseAt\" IS NULL) AND (\"closedAt\" IS NOT NULL))) AND ((\"retentionPolicyVersion\")::text = 'N21_UNASSIGNED'::text) AND (\"retentionEligibleAt\" IS NULL)))",
+      "name": "CommercialLeadSlaCycle_contract_check",
+      "table": "\"CommercialLeadSlaCycle\"",
+      "type": "c",
+      "validated": true
+    }
+  ],
+  "functions": [],
+  "indexes": [],
+  "tables": [],
+  "triggers": []
+}

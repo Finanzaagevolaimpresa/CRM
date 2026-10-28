@@ -35,9 +35,9 @@ const fault={ $transaction: (work:(tx:Prisma.TransactionClient)=>Promise<unknown
 },opts)} as unknown as PrismaClient;
 function latch(){let done!:()=>void;const promise=new Promise<void>(r=>done=r);return {promise,done};}
 
-test('schema69 is exact, historical v1 payload retained and all context FKs restrict deletion',options,async()=>{
+test('schema70 is exact, historical v1 payload retained and all context FKs restrict deletion',options,async()=>{
   const [row]=await db.$queryRaw<Array<{count:number}>>`SELECT count(*)::integer AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`;
-  assert.equal(row.count,69);
+  assert.equal(row.count,70);
   const columns=await db.$queryRaw<Array<{conname:string;confdeltype:string}>>`SELECT conname,confdeltype FROM pg_constraint WHERE contype='f' AND conrelid IN ('"InternalCommunicationThread"'::regclass,'"InternalCommunicationParticipant"'::regclass,'"CommunicationContextFile"'::regclass)`;
   assert.equal(columns.length,9);assert.ok(columns.every(c=>c.confdeltype==='r'));
   const old=await db.approvedCommunication.findUniqueOrThrow({where:{id:'22222222-5252-4252-8252-222222222222'},include:{versions:true}});

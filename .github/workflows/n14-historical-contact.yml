@@ -1,0 +1,89 @@
+name: N14 historical contact isolated preparation
+on:
+  push:
+    branches: [codex/n14-historical-contact-r01]
+  pull_request:
+    paths:
+      - '.github/workflows/n14-historical-contact.yml'
+      - 'src/lib/**'
+      - 'src/components/commercial-lead-historical-contact.tsx'
+      - 'tests/db/commercial-lead-historical-contact-db.test.ts'
+      - 'tests/commercial-lead-historical-contact*.test.ts'
+      - 'tests/commercial-lead-historical-preview.test.ts'
+      - 'ops/n14-historical-*-schema.draft.sql'
+      - 'prisma/**'
+      - 'scripts/n14-historical/**'
+      - 'tests/n14-historical-contact/*.ts'
+      - 'package*.json'
+permissions:
+  contents: read
+concurrency:
+  group: n14-historical-contact-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  persistence:
+    name: N14 historical contact isolated PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-n14-history-only
+          POSTGRES_DB: fai_crm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-n14-history-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      COMMERCIAL_LEAD_INBOX_MODE: enforced
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '${{ github.event.pull_request.head.sha || github.sha }}'
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - run: npm run prisma:generate
+      - name: Verify read-only observer boundaries without database access
+        run: python3 -B -m unittest discover -s scripts/n14-historical/release-observer -p 'test_*.py' -v
+      - name: Bind exact candidate and isolated database
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          node scripts/m4/verify-schema.mjs
+          evidence="$RUNNER_TEMP/n14-history-evidence"
+          mkdir -p "$evidence"
+          echo "HISTORY_EVIDENCE=$evidence" >> "$GITHUB_ENV"
+          git rev-parse HEAD HEAD^{tree} > "$evidence/source.txt"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+      - name: Qualify SQL70 preservation and atomic failure
+        run: bash scripts/n14-historical/qualify-migration.sh
+      - name: Qualify historical contact and exact conversion persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/db/commercial-lead-historical-contact-db.test.ts | tee "$HISTORY_EVIDENCE/postgresql.tap"
+          node -e 'const fs=require("node:fs"),assert=require("node:assert/strict"),t=fs.readFileSync(process.env.HISTORY_EVIDENCE+"/postgresql.tap","utf8"); for(const [key,n] of Object.entries({tests:49,pass:49,fail:0,cancelled:0,skipped:0,todo:0})){assert.match(t,new RegExp("^# "+key+" "+n+"$","m"));}'
+      - name: Preserve source identity
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: n14-historical-contact-postgresql-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/n14-history-evidence
+          if-no-files-found: error
+          retention-days: 14
