@@ -1,0 +1,86 @@
+name: Record reminder preview admission
+on:
+  push:
+    branches: [codex/record-reminder-preparation-r01]
+  pull_request:
+    paths: ['src/lib/record-reminder-*', 'tests/record-reminder*', '.github/workflows/record-reminder-preview.yml']
+permissions:
+  contents: read
+concurrency:
+  group: record-reminder-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic-reminder-preview-only
+          POSTGRES_DB: fai_crm_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres -d fai_crm_test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-reminder-preview-only@127.0.0.1:5432/fai_crm_test?schema=public
+      APP_ENV: test
+      NODE_ENV: development
+      RUN_DB_TESTS: '1'
+      RECORD_REMINDER_DB_TESTS: '1'
+      AI_ORCHESTRATOR_DB_TESTS_CONFIRMED: '1'
+      AI_ORCHESTRATOR_DB_TEST_SENTINEL: FAI_CRM_EPHEMERAL_TEST_ONLY_V1
+      INTERNAL_SESSION_MODE: registry
+      AUTH_SECRET: synthetic-reminder-preview-auth-only-00000
+      AUTH_COOKIE_NAME: fai_reminder_preview_test_session
+      PRIVILEGED_ACCESS_MODE: enforced
+      PRIVILEGED_STEP_UP_KEY_VERSION: '1'
+      PRIVILEGED_STEP_UP_SECRET: synthetic-reminder-preview-step-up-00000
+      COMMERCIAL_LEAD_INBOX_MODE: disabled
+      LOGIN_THROTTLE_MODE: disabled
+      SECURITY_HEADERS_MODE: report-only
+      APP_ORIGIN: http://127.0.0.1:3057
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}', fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: npm }
+      - run: npm ci
+      - name: Bind source and prepare only the isolated schema69 database
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha || github.sha }}'
+          node scripts/m4/verify-schema.mjs
+          mkdir -p "$RUNNER_TEMP/reminder-preview"
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+          npm run prisma:migrate:deploy
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
+      - name: Typecheck and pure contracts
+        run: |
+          npx tsc --noEmit
+          npx eslint src/lib/record-reminder-*.ts tests/record-reminder*.test.ts src/lib/technical-work-item-source.ts src/lib/technical-assignment-documents.ts --max-warnings 0
+          node --import tsx --test tests/record-reminder-contract.test.ts tests/record-reminder-technical-policy.test.ts tests/record-reminder-preview-token.test.ts
+      - name: Current PostgreSQL source and exact principal admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test --test-reporter=tap tests/record-reminder-preview-db.test.ts | tee "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# tests 14' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# pass 14' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# fail 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# skipped 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+      - name: Confirm source unchanged
+        run: |
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/reminder-preview/source.txt"
+          git diff --exit-code
+          git diff --cached --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: record-reminder-preview-${{ github.sha }}
+          path: ${{ runner.temp }}/reminder-preview
+          if-no-files-found: error
+          retention-days: 14
