@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareRecordReminder } from '../src/lib/record-reminder-contract';
 import { signRecordReminderPreview, assertRecordReminderSignedPreview } from '../src/lib/record-reminder-preview-token';
+import { canonicalSha256 } from '../src/lib/canonical-json';
+import { sealRecordReminderJournal, readRecordReminderJournal, reminderCommandDigest } from '../src/lib/record-reminder-journal';
 
 const key = { version: 1, secret: 'synthetic-reminder-key-never-production-'.repeat(2) };
 const now = new Date('2030-10-27T09:00:00.000Z');
@@ -60,4 +62,40 @@ test('a retained digest cannot sign or confirm changed recipients or a different
     assert.throws(() => signRecordReminderPreview(key, altered, now, Infinity), /STALE/);
     assert.throws(() => assertRecordReminderSignedPreview(key, token, altered, now), /STALE/);
   }
+});
+
+const metadata = { eventId: '00000000-0000-4000-8000-000000000002', auditId: '00000000-0000-4000-8000-000000000003',
+  confirmedAt: now, transactionId: 42n };
+test('a retained journal authenticates the complete original schedule and atomic receipt identifiers', () => {
+  const prepared = fixture(), journal = sealRecordReminderJournal(key, prepared, metadata);
+  assert.deepEqual(readRecordReminderJournal(key, JSON.parse(JSON.stringify(journal.value)), journal.proof), journal.value);
+  assert.equal(journal.value.transactionId, '42');
+  assert.equal(journal.value.prepared.input.remindAt, '2030-10-28T09:00:00.000Z');
+  assert.throws(() => sealRecordReminderJournal(key, prepared, { ...metadata, confirmedAt: new Date(prepared.input.remindAt) }), /STALE/);
+});
+test('recomputing public hashes cannot forge a different recipient or deadline in the retained journal', () => {
+  const prepared = fixture(), journal = sealRecordReminderJournal(key, prepared, metadata);
+  for (const change of [{ recipients: [{ ...prepared.recipients[0], id: 'synthetic-sales-b' }] },
+    { source: { ...prepared.source, dueAt: '2030-11-27T17:00:00.000Z' } }]) {
+    const { digest: ignored, ...unsigned } = { ...prepared, ...change }; void ignored;
+    const altered = { ...unsigned, digest: canonicalSha256(unsigned) };
+    assert.equal(readRecordReminderJournal(key, { ...journal.value, prepared: altered,
+      commandDigest: reminderCommandDigest(altered) }, journal.proof), null);
+  }
+});
+test('changing event, audit, transaction, time or protocol cannot move a journal to another operation', () => {
+  const journal = sealRecordReminderJournal(key, fixture(), metadata);
+  for (const change of [{ eventId: '00000000-0000-4000-8000-000000000004' }, { auditId: metadata.eventId },
+    { transactionId: '43' }, { confirmedAt: '2030-10-27T09:00:01.000Z' }, { protocol: 'OTHER' }]) {
+    assert.equal(readRecordReminderJournal(key, { ...journal.value, ...change }, journal.proof), null);
+  }
+  for (const raw of [null, [], {}, { ...journal.value, ignoredField: true }]) assert.equal(readRecordReminderJournal(key, raw, journal.proof), null);
+});
+test('a different key, key generation or preview proof cannot authenticate a retained schedule', () => {
+  const prepared = fixture(), journal = sealRecordReminderJournal(key, prepared, metadata);
+  const preview = signRecordReminderPreview(key, prepared, now, Infinity);
+  assert.equal(readRecordReminderJournal(key, journal.value, preview.proof), null);
+  assert.equal(readRecordReminderJournal({ ...key, version: 2 }, journal.value, journal.proof), null);
+  assert.equal(readRecordReminderJournal({ ...key, secret: 'other-synthetic-key-'.repeat(3) }, journal.value, journal.proof), null);
+  for (const proof of ['', 'a'.repeat(63), 'z'.repeat(64), 'a'.repeat(64)]) assert.equal(readRecordReminderJournal(key, journal.value, proof), null);
 });

@@ -13,6 +13,7 @@ import type { TechnicalPrivateItemCommand } from '../src/lib/technical-private-i
 import type { TechnicalWorkItemGrant } from '../src/lib/technical-work-item-grant';
 import { previewRecordReminder } from '../src/lib/record-reminder-preview';
 import { assertRecordReminderPreview } from '../src/lib/record-reminder-contract';
+import { confirmRecordReminder, readRecordReminderReceipt } from '../src/lib/record-reminder-confirmation';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_REMINDER_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -59,10 +60,18 @@ function input(f: Fixture, recipients: Person[] = [f.techA, f.techB, f.salesA, f
 }
 const preview = (raw: unknown, actor = admin) => previewRecordReminder(db, actor.session, leadProof(actor), raw);
 async function counts() {
+  const [scheduled] = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "RecordUpdateReminder"`;
   return { tasks: await db.task.count(), origins: await db.technicalPrivateItemOrigin.count(),
     commands: await db.recordUpdateCommand.count(), events: await db.recordUpdateEvent.count(),
     deliveries: await db.recordUpdateDelivery.count(), audits: await db.auditLog.count(),
-    grants: await db.technicalAssignment.count(), mail: await db.approvedCommunication.count() };
+    grants: await db.technicalAssignment.count(), mail: await db.approvedCommunication.count(), reminders: Number(scheduled.count) };
+}
+
+const confirm = (raw: unknown, token: Awaited<ReturnType<typeof preview>>['signed'], client = db, actor = admin) =>
+  confirmRecordReminder(client, actor.session, leadProof(actor), raw, token, true);
+function assertOneScheduled(before: Awaited<ReturnType<typeof counts>>, after: Awaited<ReturnType<typeof counts>>, recipients = 1) {
+  assert.deepEqual(after, { ...before, commands: before.commands + 1, events: before.events + 1,
+    deliveries: before.deliveries + recipients, audits: before.audits + 1, reminders: before.reminders + 1 });
 }
 
 test('current two-technician deadline preview is read-only and does not widen either commercial scope', options, async () => {
@@ -250,4 +259,150 @@ test('a permission writer blocks preview; no old recipient survives its committe
   assert.deepEqual(result.prepared.recipients.map(row => row.id), [f.techB.user.id]);
   const current = await preview(input(f, [f.techA, f.techB]));
   assert.deepEqual(current.prepared.recipients.map(row => row.id), [f.techB.user.id]);
+});
+
+test('confirmation atomically records only the selected current technicians in the existing CRM queue', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
+  const raw = input(f), proposed = await preview(raw), before = await counts();
+  const task = await db.task.findUniqueOrThrow({ where: { id: f.taskId } });
+  const result = await confirm(raw, proposed.signed);
+  assert.equal(result.confirmed, true); assert.equal(result.replayed, false);
+  assertOneScheduled(before, await counts(), 2);
+  assert.deepEqual(await db.task.findUniqueOrThrow({ where: { id: f.taskId } }), task);
+  const event = await db.recordUpdateEvent.findUniqueOrThrow({ where: { id: result.eventId } });
+  assert.equal(event.sourceKey, `record-reminder:${raw.commandId}`);
+  assert.equal(event.event, 'DEADLINE'); assert.deepEqual(event.changed, ['dueDate']);
+  assert(event.occurredAt < new Date(raw.remindAt), 'registration is not the future delivery instant');
+  const deliveries = await db.recordUpdateDelivery.findMany({ where: { commandId: raw.commandId }, orderBy: { recipientId: 'asc' } });
+  assert.deepEqual(deliveries.map(row => row.recipientId), [f.techA.user.id, f.techB.user.id].sort());
+  assert(deliveries.every(row => row.mode === 'CRM' && !row.readAt && !row.ruleId));
+  const audit = await db.auditLog.findFirstOrThrow({ where: { entityId: raw.commandId, event: 'record_reminder_scheduled' } });
+  assert.doesNotMatch(JSON.stringify({ event, deliveries, audit }), /PRIVATE_TITLE|PRIVATE_DESCRIPTION|NOTA_INTERNA|SCENARIO_PRIVATO/);
+});
+
+test('a repeated confirmed command retains one event and one immutable receipt', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
+  const first = await confirm(raw, proposed.signed), second = await confirm(raw, proposed.signed);
+  assert.equal(second.replayed, true); assert.equal(second.eventId, first.eventId);
+  assertOneScheduled(before, await counts());
+});
+
+test('concurrent double confirmation cannot create a second event or recipient delivery', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
+  const results = await Promise.allSettled([confirm(raw, proposed.signed), confirm(raw, proposed.signed)]);
+  assert(results.some(row => row.status === 'fulfilled'));
+  assertOneScheduled(before, await counts());
+  const receipt = await readRecordReminderReceipt(db, admin.session, leadProof(admin), raw.commandId);
+  assert.equal(receipt.confirmed, true);
+});
+
+test('changing and restoring the deadline rejects the retained confirmation without partial work', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw);
+  const task = await db.task.findUniqueOrThrow({ where: { id: f.taskId } });
+  await db.task.update({ where: { id: task.id }, data: { dueAt: new Date(future(2880)) } });
+  await db.task.update({ where: { id: task.id }, data: { dueAt: task.dueAt } });
+  const before = await counts(); await assert.rejects(confirm(raw, proposed.signed), /STALE/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('revocation between preview and confirmation cannot silently save the smaller recipient list', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const raw = input(f, [f.techA, f.techB]), proposed = await preview(raw);
+  await revokeTechnical(db, admin, f.target, f.techA);
+  const before = await counts(); await assert.rejects(confirm(raw, proposed.signed), /STALE/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('changed time, recipients, key or an absent explicit confirmation cannot persist a schedule', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
+  await assert.rejects(confirm({ ...raw, remindAt: future(15) }, proposed.signed));
+  await assert.rejects(confirm({ ...raw, selection: { people: [f.techB.user.id], groups: [] } }, proposed.signed));
+  await assert.rejects(confirm(raw, { ...proposed.signed, proof: '0'.repeat(64) }));
+  await assert.rejects(confirmRecordReminder(db, admin.session, leadProof(admin), raw, proposed.signed, false));
+  assert.deepEqual(await counts(), before);
+});
+
+test('another Admin session, a technician and a revoked session cannot confirm the signed decision', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw);
+  const other = await syntheticPerson(db, 'Unrelated reminder Admin', 'admin');
+  const fresh = { user: admin.user, ...await syntheticSession(db, admin.user) }, before = await counts();
+  await assert.rejects(confirm(raw, proposed.signed, db, other));
+  await assert.rejects(confirm(raw, proposed.signed, db, f.techA));
+  await assert.rejects(confirm(raw, proposed.signed, db, fresh));
+  await db.internalSession.update({ where: { id: fresh.session.sessionId! }, data: { revokedAt: new Date() } });
+  await assert.rejects(confirm(raw, proposed.signed, db, fresh));
+  assert.deepEqual(await counts(), before);
+});
+
+// Inject transport/application faults inside a real Prisma transaction, after
+// preceding inserts have reached PostgreSQL. No mocked database or fake commit.
+function faultDatabase(fault: 'throw' | 'omit-journal' | 'recipient' | 'audit', substitute = ''): PrismaClient {
+  return new Proxy(db, { get(target, property) {
+    if (property !== '$transaction') return Reflect.get(target, property);
+    return (callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+      config: { maxWait?: number; timeout?: number; isolationLevel?: Prisma.TransactionIsolationLevel }) =>
+      db.$transaction(async tx => callback(new Proxy(tx, { get(client, member) {
+        if (member === '$executeRaw' && ['throw', 'omit-journal'].includes(fault)) {
+          return async (query: TemplateStringsArray, ...values: unknown[]) => {
+            if (query.join('').includes('INSERT INTO "RecordUpdateReminder"')) {
+              if (fault === 'throw') throw new Error('SYNTHETIC_FAILURE_BEFORE_REMINDER_JOURNAL');
+              return 1;
+            }
+            return client.$executeRaw(query, ...values);
+          };
+        }
+        if (member === 'recordUpdateDelivery' && fault === 'recipient') return { ...client.recordUpdateDelivery,
+          create: (args: Prisma.RecordUpdateDeliveryCreateArgs) => {
+            assert('eventId' in args.data && typeof args.data.eventId === 'string');
+            return client.recordUpdateDelivery.create({ ...args,
+              data: { ...(args.data as Prisma.RecordUpdateDeliveryUncheckedCreateInput), recipientId: substitute } });
+          } };
+        if (member === 'auditLog' && fault === 'audit') return { ...client.auditLog,
+          create: (args: Prisma.AuditLogCreateArgs) => client.auditLog.create({ ...args, data: { ...args.data, event: 'wrong_synthetic_event' } }) };
+        const value = Reflect.get(client, member); return typeof value === 'function' ? value.bind(client) : value;
+      } })), config);
+  } });
+}
+
+for (const fault of ['throw', 'omit-journal', 'recipient', 'audit'] as const) {
+  test(`a ${fault} fault rolls back command, event, deliveries, journal and audit together`, options, async () => {
+    const f = await fixture(); await grant(f, f.techA);
+    const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
+    await assert.rejects(confirm(raw, proposed.signed, faultDatabase(fault, f.salesB.user.id)),
+      fault === 'throw' ? /SYNTHETIC_FAILURE/ : /RECORD_REMINDER/);
+    assert.deepEqual(await counts(), before);
+    assert.equal((await readRecordReminderReceipt(db, admin.session, leadProof(admin), raw.commandId)).confirmed, false);
+  });
+}
+
+test('journal and audit are retained and a future reminder cannot acquire an early read receipt', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw);
+  await confirm(raw, proposed.signed); const before = await counts();
+  await assert.rejects(db.$executeRaw`UPDATE "RecordUpdateReminder" SET proof=${'f'.repeat(64)} WHERE "commandId"=${raw.commandId}::uuid`, /IMMUTABLE/);
+  await assert.rejects(db.$executeRaw`DELETE FROM "RecordUpdateReminder" WHERE "commandId"=${raw.commandId}::uuid`, /IMMUTABLE/);
+  await assert.rejects(db.auditLog.updateMany({ where: { entityId: raw.commandId }, data: { event: 'changed' } }), /IMMUTABLE/);
+  await assert.rejects(db.recordUpdateDelivery.updateMany({ where: { commandId: raw.commandId }, data: { readAt: new Date() } }), /NOT_AVAILABLE/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('a lost response is reconciled by a read-only receipt and never fabricates availability or email delivery', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const raw = input(f, [f.techA]), proposed = await preview(raw), before = await counts();
+  await assert.rejects((async () => { await confirm(raw, proposed.signed); throw new Error('SYNTHETIC_RESPONSE_LOST'); })(), /RESPONSE_LOST/);
+  const receipt = await readRecordReminderReceipt(db, admin.session, leadProof(admin), raw.commandId);
+  assert.equal(receipt.confirmed, true);
+  assert.deepEqual(Object.keys(receipt).sort(), ['commandId', 'confirmed', 'eventId', 'registeredAt']);
+  assertOneScheduled(before, await counts());
+  const after = await counts();
+  await readRecordReminderReceipt(db, admin.session, leadProof(admin), raw.commandId);
+  const other = await syntheticPerson(db, 'Unrelated receipt Admin', 'admin');
+  const hidden = await readRecordReminderReceipt(db, other.session, leadProof(other), raw.commandId);
+  assert.deepEqual(hidden, { commandId: raw.commandId, confirmed: false });
+  assert.deepEqual(await counts(), after);
 });

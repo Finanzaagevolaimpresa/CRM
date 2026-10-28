@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/record-reminder-preparation-r01]
   pull_request:
-    paths: ['src/lib/record-reminder-*', 'tests/record-reminder*', '.github/workflows/record-reminder-preview.yml']
+    paths: ['src/lib/record-reminder-*', 'tests/record-reminder*', 'tests/record-reminders/**', '.github/workflows/record-reminder-preview.yml']
 permissions:
   contents: read
 concurrency:
@@ -58,6 +58,7 @@ jobs:
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
           npm run prisma:migrate:deploy
           test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 69
+          psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -f tests/record-reminders/synthetic-extension.sql
       - name: Typecheck and pure contracts
         run: |
           npx tsc --noEmit
@@ -68,8 +69,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-reminder-preview-db.test.ts | tee "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# tests 16' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# pass 16' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# tests 29' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# pass 29' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
       - name: Confirm source unchanged

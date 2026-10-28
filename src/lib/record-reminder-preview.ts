@@ -10,11 +10,11 @@ import { lockRecordReminderSource } from './record-reminder-source';
 import { lockReminderPrincipals, reminderAuthorAdmission, ordinaryReminderAdmission, technicalReminderAdmission } from './record-reminder-principal';
 import { confirmedReadRetry } from './confirmed-read-retry';
 
-/** Read-only, personally authenticated preview. No Task, record-update event,
- * delivery, receipt, audit, scheduler or grant is written by this service. */
-export async function previewRecordReminder(db: PrismaClient, claimed: AuthSession, credentials: UpdateCredentials, raw: unknown) {
-  const input = parseRecordReminder(raw);
-  return confirmedReadRetry(() => db.$transaction(async tx => {
+/** Common locked proposal for preview and later atomic confirmation. The caller
+ * owns the serializable transaction; this function performs no mutation. */
+export async function lockedRecordReminderProposal(tx: Prisma.TransactionClient, claimed: AuthSession,
+  credentials: UpdateCredentials, raw: unknown) {
+    const input = parseRecordReminder(raw);
     if (!await lockRegisteredPrivilegedStepUpKey(tx, credentials.key)) throw new RecordUpdateError('DENIED');
     await lockCommunicationDirectory(tx);
     const directory = await updateDirectory(tx), resolved = resolveUpdateSelection(input.selection, directory);
@@ -44,9 +44,17 @@ export async function previewRecordReminder(db: PrismaClient, claimed: AuthSessi
     const finishedAt = await auth.finish();
     const accessUntil = Math.min(claimed.expiresAt * 1000, auth.registry.expiresAt.getTime(),
       ...prepared.recipients.flatMap(person => person.accessUntil ? [Date.parse(person.accessUntil)] : []));
-    return { prepared, signed: signRecordReminderPreview(credentials.key, prepared, finishedAt, accessUntil),
+    return { auth, now: finishedAt, prepared, signed: signRecordReminderPreview(credentials.key, prepared, finishedAt, accessUntil),
       recipients: resolved.people.map(person => ({ id: person.id, name: person.name,
         admitted: prepared.recipients.some(row => row.id === person.id),
         reason: prepared.excluded.find(row => row.id === person.id)?.reason ?? null })) };
+}
+
+/** Read-only, personally authenticated preview. No Task, record-update event,
+ * delivery, receipt, audit, scheduler or grant is written by this service. */
+export async function previewRecordReminder(db: PrismaClient, claimed: AuthSession, credentials: UpdateCredentials, raw: unknown) {
+  return confirmedReadRetry(() => db.$transaction(async tx => {
+    const { prepared, signed, recipients } = await lockedRecordReminderProposal(tx, claimed, credentials, raw);
+    return { prepared, signed, recipients };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }));
 }
