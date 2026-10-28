@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix: { target: [postgresql, browser] }
+      matrix: { target: [historical-observer, postgresql, browser] }
     services:
       postgres:
         image: postgres:16
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .nvmrc, cache: npm }
       - run: npm ci
-      - name: Qualify SQL69 from immutable schema68 and reject wrong bases
+      - name: Bind exact source and isolated evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -59,6 +59,12 @@ jobs:
           echo "TECHNICAL_PRIVATE_ITEM_EVIDENCE=$evidence" >> "$GITHUB_ENV"
           node scripts/m4/verify-schema.mjs > "$evidence/schema-binding.json"
           psql "${DATABASE_URL%%\?*}" -v ON_ERROR_STOP=1 -c "COMMENT ON DATABASE fai_crm_test IS 'FAI_CRM_EPHEMERAL_TEST_ONLY_V1'"
+      - name: Qualify SQL69 from immutable schema68 and reject wrong bases
+        if: matrix.target == 'historical-observer'
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$TECHNICAL_PRIVATE_ITEM_EVIDENCE"
           historical="$RUNNER_TEMP/private-items-schema68"
           mkdir -p "$historical"
           git archive 5acb9e9e0f87d14fa3075b2f6dfe307352f9ffa7 prisma | tar -x -C "$historical"
@@ -68,6 +74,13 @@ jobs:
           git archive 8dc6a994f0e0ccb8169b1d0b959ddb822b4dac09 prisma | tar -x -C "$historical"
           npx prisma migrate deploy --schema "$historical/prisma/schema.prisma"
           bash scripts/technical-private-items/qualify-migration.sh
+          node --import tsx tests/technical-private-items/historical-observer-state.ts
+          python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py populated
+      - name: Qualify current operations on the full schema71
+        if: matrix.target != 'historical-observer'
+        run: |
+          npm run prisma:migrate:deploy
+          test "$(psql "${DATABASE_URL%%\?*}" -Atc 'SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')" = 71
       - name: Read-only observer boundary tests
         run: python3 -B -m unittest discover -s scripts/technical-private-items/release-observer -p "test_*.py" -v
       - name: Pure admission and retained receipt contracts
@@ -104,8 +117,6 @@ jobs:
           test "$ready" = 1
           PLAYWRIGHT_JSON_OUTPUT_NAME="$TECHNICAL_PRIVATE_ITEM_EVIDENCE/playwright.json" npx playwright test --config tests/technical-private-items/playwright.config.ts --reporter=line,json | tee "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/browser.log"
           node -e 'const r=require(process.env.TECHNICAL_PRIVATE_ITEM_EVIDENCE+"/playwright.json"); if(r.stats.expected!==5 || r.stats.unexpected!==0 || r.stats.skipped!==0 || r.errors.length!==0) process.exit(1)'
-      - name: Preserve populated SQL69 state with the release observer
-        run: python3 -B scripts/technical-private-items/release-observer/qualify_snapshot.py populated
       - name: Bind exact source and tree
         run: |
           git rev-parse HEAD HEAD^{tree} > "$TECHNICAL_PRIVATE_ITEM_EVIDENCE/source.txt"
