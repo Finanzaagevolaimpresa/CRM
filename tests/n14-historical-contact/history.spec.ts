@@ -97,6 +97,9 @@ test('native assignment and personal acceptance lead to an exact historical prev
   const x = await ownedLead(browser), checkHydration = hydration(x.owner);
   await x.owner.goto(`/leads/${x.lead.id}`);
   await x.owner.getByRole('link', { name: 'Registra contatto precedente al CRM', exact: true }).click();
+  await expect(x.owner).toHaveURL(x.route);
+  await x.owner.locator('section[aria-label="Contatto precedente al CRM"][data-interactive-ready="true"]').waitFor();
+  await expect(x.owner.getByLabel('Data e ora effettive dell’evento', { exact: true })).toBeEnabled();
   await screen(x.owner, 'historical-form', 1440); await screen(x.owner, 'historical-form', 390);
   await preview(x.owner); expect(await rowCount(x.lead.id)).toBe(0);
   await screen(x.owner, 'historical-preview', 1440); await screen(x.owner, 'historical-preview', 390);
@@ -140,6 +143,8 @@ test('lost native response retains the command and permits only reconciliation w
   await screen(x.owner, 'historical-uncertain', 390);
   await x.owner.getByRole('button', { name: 'Verifica esito del contatto', exact: true }).click();
   await expect(x.owner.getByRole('heading', { name: 'Contatto registrato', exact: true })).toBeVisible();
+  await expect(x.owner.getByRole('status')).toHaveText('Registrazione verificata.');
+  await expect(x.owner.getByRole('button', { name: 'Verifica esito del contatto', exact: true })).toHaveCount(0);
   const headers = { ...command!.headers }; delete headers.cookie; delete headers['content-length'];
   await x.owner.request.post(command!.url, { headers, data: command!.body, maxRedirects: 0 });
   expect(await rowCount(x.lead.id)).toBe(1);
@@ -193,6 +198,8 @@ test('native historical conversion survives a lost response and reload without a
   await screen(x.owner, 'conversion-uncertain', 390);
   await x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true }).click();
   await expect(x.owner.getByRole('heading', { name: 'Cliente registrato', exact: true })).toBeVisible();
+  await expect(x.owner.getByRole('status')).toHaveText('Conversione verificata.');
+  await expect(x.owner.getByRole('button', { name: 'Verifica esito della conversione', exact: true })).toHaveCount(0);
   await screen(x.owner, 'conversion-receipt', 390); await x.owner.reload();
   await expect(x.owner.getByRole('heading', { name: 'Cliente registrato', exact: true })).toBeVisible();
   const headers = { ...command!.headers }; delete headers.cookie; delete headers['content-length'];

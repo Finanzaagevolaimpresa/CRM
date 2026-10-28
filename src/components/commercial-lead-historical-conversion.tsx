@@ -47,8 +47,9 @@ export function CommercialLeadHistoricalConversion({ context, ...actions }: { co
     flight.current = true; setPending(true); setRecover(preview.input.commandId);
     try {
       const result = await actions.confirmAction({ token: preview.token, confirmed: true });
-      if (result.state === 'CONVERTED' && result.receipt.commandId === preview.input.commandId) setReceipt(result.receipt);
-      else setMessage('Esito da verificare. Non ripetere la conversione.');
+      if (result.state === 'CONVERTED' && result.receipt.commandId === preview.input.commandId) {
+        setReceipt(result.receipt); setMessage('Cliente registrato.');
+      } else setMessage('Esito da verificare. Non ripetere la conversione.');
     } catch { setMessage('Risposta non disponibile. Verifica l’esito senza ripetere la conversione.'); }
     finally { flight.current = false; setPending(false); }
   }
@@ -57,8 +58,9 @@ export function CommercialLeadHistoricalConversion({ context, ...actions }: { co
     flight.current = true; setPending(true);
     try {
       const result = await actions.outcomeAction({ leadId: context.leadId, commandId: recover });
-      if (result.state === 'CONVERTED' && result.receipt.commandId === recover) setReceipt(result.receipt);
-      else setMessage('Decisione non osservata o non consultabile. Non ripetere finché l’esito non è riconciliato.');
+      if (result.state === 'CONVERTED' && result.receipt.commandId === recover) {
+        setReceipt(result.receipt); setMessage('Conversione verificata.');
+      } else setMessage('Decisione non osservata o non consultabile. Non ripetere finché l’esito non è riconciliato.');
     } catch { setMessage('Verifica non disponibile. La conversione rimane bloccata.'); }
     finally { flight.current = false; setPending(false); }
   }
