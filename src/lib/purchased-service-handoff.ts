@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { lockPracticeCreationProject } from './practice-creation-slot';
 import { isSelectivePractice } from './selective-practice-policy';
 import { assertNoSelectivePracticeMutation } from './selective-practice-scope';
 import { assertNoSelectiveProjectMutation, loadSelectiveProjectScope } from './selective-project-scope';
@@ -95,6 +96,7 @@ export async function handoffPurchasedService(tx: Prisma.TransactionClient, acto
   await authorizeManualAssignment(tx, actor, [{ userId: input.technicalOwnerId, roles: technicalRoles }]);
   await tx.$queryRaw`SELECT "id" FROM "ClientService" WHERE "id"=${input.serviceId} FOR UPDATE`;
   const selectedService = await tx.clientService.findUnique({ where: { id: input.serviceId }, select: { projectId: true, contractId: true } });
+  await lockPracticeCreationProject(tx, selectedService?.projectId);
   await assertNoSelectiveProjectMutation(tx, actor.userId, selectedService?.projectId, input.serviceId);
   const fingerprint = canonicalSha256(input), existing = await getHandoffReceipt(tx, input.serviceId);
   const scope = await loadSelectiveProjectScope(tx, actor.userId);
