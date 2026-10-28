@@ -30,7 +30,7 @@ async function assign(page: Page, r: Row, person = r.techA, extension = '.txt') 
   await page.getByLabel('Scopo del caricamento', { exact: true }).fill('Elaborati da revisionare'); await page.getByLabel(extension, { exact: true }).check();
   await page.getByLabel('Dimensione massima per file (MiB)', { exact: true }).fill('1'); await page.getByLabel('Numero massimo di file', { exact: true }).fill('2');
   await page.getByLabel('Spazio totale massimo (MiB)', { exact: true }).fill('2');
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Deposito sintetico personale');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Deposito privato da revisionare', exact: true })).toBeVisible();
@@ -176,7 +176,7 @@ test('native private acquisition, exact technical version selection, positive by
   await a.getByLabel('Titolo', { exact: true }).check();
   await a.getByLabel('Chiedere un intervento all’Admin', { exact: true }).check();
   await a.getByLabel('Documento acquisito sintetico · Relazione.txt · versione 1', { exact: true }).check();
-  await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Mostra soltanto la versione acquisita');
   await expect(a.getByLabel('Caricare documenti tecnici', { exact: true })).not.toBeChecked();
   await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
@@ -251,7 +251,7 @@ test('native Office acquisition stays private; metadata-only, explicit download 
     await a.getByLabel('Documento acquisito sintetico · Relazione.docx · versione 1', { exact: true }).check();
     const permission = a.getByLabel('Consenti il download (necessario per aprire il file)', { exact: true });
     await expect(permission).not.toBeChecked(); if (allowDownload) await permission.check();
-    await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+    await a.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
     await a.getByLabel('Motivo dell’incarico', { exact: true }).fill('Decisione esplicita sul file Office sintetico');
     await a.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
     await expect(a.getByRole('region', { name: 'Riepilogo incarico' })).toContainText(allowDownload

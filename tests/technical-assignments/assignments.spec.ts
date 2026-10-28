@@ -69,7 +69,7 @@ async function prepareAssignment(page: Page, row: Row, person: Row['techA'], pro
   const downloadable = page.getByLabel(new RegExp(row.documents[1].title + ' ·'));
   await downloadable.check(); await downloadable.locator('..').locator('..').getByLabel('Consenti anche il download', { exact: true }).check();
   await expect(page.getByText(row.documents[2].title, { exact: false })).toHaveCount(0);
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Incarico sintetico qualificazione browser');
   await expect(page.getByRole('combobox', { name: 'Responsabilità', exact: true })).toHaveValue('co_responsabile');
   expect(JSON.parse(await page.locator('input[name="command"]').first().inputValue()).selection.responsibility).toBe('co_responsabile');
@@ -146,11 +146,13 @@ test('Rome wall input persists the right instant from foreign browser zones and 
   await expect.poll(() => assignments(row)).toBe(1);
   await tech.goto(work(row)); await tech.getByLabel('Modifica prossimo aggiornamento', { exact: true }).check();
   const date = tech.getByLabel('Prossimo aggiornamento · Europe/Rome', { exact: true });
-  await date.fill('2027-03-28T02:30:00');
+  // Native datetime-local canonicalizes zero seconds away; Playwright fill checks
+  // the exact native value before dispatching input/change events.
+  await date.fill('2027-03-28T02:30');
   await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
   await expect(tech.getByRole('alert')).toContainText('inesistente'); expect(await count(row)).toBe(0);
   await expect(tech.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toHaveCount(0);
-  await date.fill('2027-10-31T02:30:00');
+  await date.fill('2027-10-31T02:30');
   await tech.getByRole('button', { name: 'Prepara riepilogo della modifica', exact: true }).click();
   await expect(tech.getByRole('heading', { name: 'Riepilogo della modifica', exact: true })).toHaveCount(0);
   await tech.getByRole('combobox', { name: 'Prossimo aggiornamento: occorrenza', exact: true }).selectOption('2027-10-31T01:30:00.000Z');
@@ -176,7 +178,7 @@ test('Rome wall input persists the right instant from foreign browser zones and 
   expect((await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).dueDate?.toISOString()).toBe(unchanged.toISOString());
   expect(await db.auditLog.count()).toBe(auditBefore + 1);
   await admin.reload();
-  await ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true }).fill('2027-07-10T18:00:00');
+  await ordinary.getByLabel('Scadenza operativa · Europe/Rome', { exact: true }).fill('2027-07-10T18:00');
   await ordinary.getByRole('button', { name: 'Salva dati', exact: true }).click();
   await expect.poll(async () => (await db.technicalPractice.findUniqueOrThrow({ where: { id: row.practiceId } })).dueDate?.toISOString()).toBe('2027-07-10T16:00:00.000Z');
   await admin.reload();

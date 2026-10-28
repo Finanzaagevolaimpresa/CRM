@@ -34,7 +34,7 @@ async function assign(page: Page, row: Row, person: Row['techA'], checklist = fa
   for (const name of checklist ? ['Titolo', 'Note tecniche', 'Stato'] : ['Titolo', 'Priorità', 'Scadenza']) await card.getByLabel(name, { exact: true }).check();
   await card.getByLabel(checklist ? 'Consenti modifica note tecniche' : 'Consenti modifica priorità', { exact: true }).check();
   await expect(page.getByText('Checklist finanziaria esclusa', { exact: false })).toHaveCount(0);
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Selezione sintetica di elementi e campi');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
@@ -124,7 +124,7 @@ async function openCatalogue(page: Page, row: Row) {
   await page.locator('[data-technical-editor-ready="true"]').waitFor();
   await page.getByLabel('Gestire le attività e le scadenze', { exact: true }).check();
   await page.getByLabel('Titolo', { exact: true }).check();
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Scelte sintetiche conservate fra pagine');
   await page.getByLabel('Cerca attività e checklist', { exact: true }).fill('Catalogo sintetico');
   await page.getByLabel('Tipo di elemento', { exact: true }).selectOption('Task');
@@ -203,7 +203,7 @@ async function openDocuments(page: Page, row: Row) {
   await page.locator('[data-technical-editor-ready="true"]').waitFor();
   await page.getByLabel('Aggiornare lo stato', { exact: true }).check();
   await page.getByLabel('Stato', { exact: true }).check(); await page.getByLabel('Titolo', { exact: true }).check();
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Scelta sintetica di versioni e download');
   await searchDocuments(page, 'Catalogo documentale sintetico');
 }

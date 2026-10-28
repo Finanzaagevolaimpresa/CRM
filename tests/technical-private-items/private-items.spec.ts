@@ -51,7 +51,7 @@ async function assign(page: Page, row: Row, person: Person, title: string, kind:
   await selected.check(); const card = selected.locator('..').locator('..');
   for (const field of kind === 'Task' ? ['Titolo', 'Priorità'] : ['Titolo', 'Note tecniche']) await card.getByLabel(field, { exact: true }).check();
   await card.getByLabel(kind === 'Task' ? 'Consenti modifica priorità' : 'Consenti modifica note tecniche', { exact: true }).check();
-  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)));
+  await page.getByLabel('Scadenza, entro 90 giorni · Europe/Rome', { exact: true }).fill(romeDateTimeInput(new Date(Date.now() + 3600000)).replace(/:00$/, ''));
   await page.getByLabel('Motivo dell’incarico', { exact: true }).fill('Decisione sintetica separata dalla creazione');
   await page.getByRole('button', { name: 'Anteprima dell’incarico', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Conferma incarico e perimetro', exact: true })).toBeVisible();
