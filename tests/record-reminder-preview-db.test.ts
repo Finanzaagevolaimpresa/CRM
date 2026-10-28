@@ -37,8 +37,11 @@ async function fixture(privateTask = false) {
     const command: TechnicalPrivateItemCommand = { commandId: randomUUID(), itemId: randomUUID(), target,
       expectedContextSha256: context.contextSha256, kind: 'Task', values: { title: 'PRIVATE_TITLE_NOT_IN_PREVIEW',
         description: 'PRIVATE_DESCRIPTION_NOT_IN_PREVIEW', priority: 'media', dueAt: future(1440) } };
-    const preview = await previewPrivateTechnicalItem(db, admin.session, leadProof(admin), command);
-    await confirmPrivateTechnicalItem(db, admin.session, leadProof(admin), command, preview.token, true);
+    // Preserve the same personal confirmation throughout this UI-equivalent
+    // fixture. Reissuing it can change its signed expiry across a second.
+    const proof = leadProof(admin);
+    const preview = await previewPrivateTechnicalItem(db, admin.session, proof, command);
+    await confirmPrivateTechnicalItem(db, admin.session, proof, command, preview.token, true);
     taskId = command.itemId;
   } else taskId = (await db.task.create({ data: { clientId: f.client.id, projectId: f.project.id,
     title: 'PRIVATE_TITLE_NOT_IN_PREVIEW', description: 'PRIVATE_DESCRIPTION_NOT_IN_PREVIEW',
