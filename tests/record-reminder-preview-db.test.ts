@@ -14,6 +14,7 @@ import type { TechnicalWorkItemGrant } from '../src/lib/technical-work-item-gran
 import { previewRecordReminder } from '../src/lib/record-reminder-preview';
 import { assertRecordReminderPreview } from '../src/lib/record-reminder-contract';
 import { confirmRecordReminder, readRecordReminderReceipt } from '../src/lib/record-reminder-confirmation';
+import { readRecordReminderNotice } from '../src/lib/record-reminder-delivery';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_REMINDER_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -406,4 +407,128 @@ test('a lost response is reconciled by a read-only receipt and never fabricates 
   const hidden = await readRecordReminderReceipt(db, other.session, leadProof(other), raw.commandId);
   assert.deepEqual(hidden, { commandId: raw.commandId, confirmed: false });
   assert.deepEqual(await counts(), after);
+});
+
+async function scheduleForRead(f: Fixture, recipients = [f.techA], overrides: Record<string, unknown> = {}) {
+  const raw = { ...input(f, recipients), remindAt: new Date(Date.now() + 6000).toISOString(), ...overrides };
+  const proposed = await preview(raw);
+  await confirm(raw, proposed.signed);
+  const deliveries = await db.recordUpdateDelivery.findMany({ where: { commandId: raw.commandId } });
+  return { raw, deliveries, wait: () => pause(Math.max(0, Date.parse(raw.remindAt) - Date.now() + 30)) };
+}
+const notice = (person: Person, id: string, markRead = false) =>
+  readRecordReminderNotice(db, person.session, leadProof(admin).key, id, markRead);
+
+test('the real database clock makes only selected notices available and GET never marks them read', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]), before = await counts();
+  const a = s.deliveries.find(row => row.recipientId === f.techA.user.id)!, b = s.deliveries.find(row => row.recipientId === f.techB.user.id)!;
+  assert.equal(await notice(f.techA, a.id), null);
+  assert.equal(await notice(f.techA, a.id, true), null);
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: a.id } })).readAt, null);
+  await s.wait();
+  const shown = await notice(f.techA, a.id); assert(shown);
+  assert.equal(shown.state, 'AVAILABLE'); assert.equal(shown.emailSent, false); assert.equal(shown.readAt, null);
+  assert.equal(shown.recordHref, `/technical-work/practices/${f.practice.id}/items/Task/${f.taskId}`);
+  assert.equal(shown.availableAt, s.raw.remindAt);
+  assert.doesNotMatch(JSON.stringify(shown), /PRIVATE_TITLE|PRIVATE_DESCRIPTION|SCENARIO_PRIVATO|NOTA_INTERNA|CONTRATTO_PRIVATO|PAGAMENTO_PRIVATO/);
+  assert(await notice(f.techB, b.id));
+  assert.equal(await notice(f.techB, a.id), null); assert.equal(await notice(f.salesA, a.id), null); assert.equal(await notice(admin, a.id), null);
+  assert.deepEqual(await counts(), before);
+  assert(s.deliveries.every(row => !row.readAt));
+  assert.equal(await db.recordUpdateDelivery.count({ where: { commandId: s.raw.commandId, readAt: { not: null } } }), 0);
+});
+
+test('only an explicit recipient command marks read, and a repeated command preserves the first read time', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait();
+  const before = await counts(), first = await notice(f.techA, id, true); assert(first?.readAt);
+  assert(first.readAt >= new Date(s.raw.remindAt)); assert.equal(first.state, 'READ');
+  const again = await notice(f.techA, id, true); assert(again?.readAt);
+  assert.equal(again.readAt.toISOString(), first.readAt.toISOString());
+  assert.equal((await notice(f.techA, id))?.state, 'READ');
+  assert.deepEqual(await counts(), before);
+});
+
+test('a lost mark-read response is reconciled by GET without another write or a fabricated email receipt', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait();
+  await assert.rejects((async () => { await notice(f.techA, id, true); throw new Error('SYNTHETIC_READ_RESPONSE_LOST'); })(), /RESPONSE_LOST/);
+  const stored = await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id } }); assert(stored.readAt);
+  const before = await counts(), observed = await notice(f.techA, id);
+  assert.equal(observed?.readAt?.toISOString(), stored.readAt.toISOString()); assert.equal(observed?.emailSent, false);
+  assert.deepEqual(await counts(), before);
+});
+
+test('revoking an open assignment blocks its retained notice while the second technician remains authorized', options, async () => {
+  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]); await s.wait();
+  const a = s.deliveries.find(row => row.recipientId === f.techA.user.id)!, b = s.deliveries.find(row => row.recipientId === f.techB.user.id)!;
+  assert(await notice(f.techA, a.id)); await revokeTechnical(db, admin, f.target, f.techA);
+  assert.equal(await notice(f.techA, a.id), null); assert.equal(await notice(f.techA, a.id, true), null);
+  assert(await notice(f.techB, b.id));
+  await grant(f, f.techA); assert.equal(await notice(f.techA, a.id), null, 'a new assignment is not the former signed recipient decision');
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id: a.id } })).readAt, null);
+});
+
+test('changing and restoring a deadline suppresses the retained notice rather than restoring old source authority', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait();
+  assert(await notice(f.techA, id));
+  const task = await db.task.findUniqueOrThrow({ where: { id: f.taskId } });
+  await db.task.update({ where: { id: task.id }, data: { dueAt: new Date(future(2880)) } });
+  await db.task.update({ where: { id: task.id }, data: { dueAt: task.dueAt } });
+  assert.equal(await notice(f.techA, id), null);
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id } })).readAt, null);
+});
+
+test('a revoked current recipient session cannot read a notice even with its previously valid user and key', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait();
+  assert(await notice(f.techA, id));
+  await db.internalSession.update({ where: { id: f.techA.session.sessionId! }, data: { revokedAt: new Date() } });
+  await assert.rejects(notice(f.techA, id), /DENIED/);
+  await assert.rejects(notice(f.techA, id, true), /DENIED/);
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id } })).readAt, null);
+});
+
+test('a group membership change suppresses the earlier decision without notifying the new group member', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA);
+  const s = await scheduleForRead(f, [f.techA], { selection: { people: [f.techA.user.id], groups: ['amministrazione'] } });
+  await s.wait(); const id = s.deliveries[0].id; assert(await notice(f.techA, id));
+  const additional = await syntheticPerson(db, 'New isolated reminder group member', 'amministrazione');
+  assert.equal(await notice(f.techA, id), null); assert.equal(await notice(additional, id), null);
+  assert.equal(await db.recordUpdateDelivery.count({ where: { commandId: s.raw.commandId } }), 1);
+});
+
+test('the two commercial accounts retain their client-only isolation after a reminder becomes available', options, async () => {
+  const f = await fixture();
+  const task = await db.task.create({ data: { clientId: f.client.id, title: 'CLIENT_PRIVATE_TITLE',
+    dueAt: new Date(future(1440)), assignedToId: f.salesA.user.id, createdById: admin.user.id } });
+  const s = await scheduleForRead(f, [f.salesA, f.salesB], { kind: 'CLIENT', recordId: f.client.id, taskId: task.id });
+  await s.wait(); const id = s.deliveries[0].id;
+  assert.equal(s.deliveries.length, 1); assert.equal(s.deliveries[0].recipientId, f.salesA.user.id);
+  const visible = await notice(f.salesA, id); assert(visible);
+  assert.equal(visible.recordHref, `/clients/${f.client.id}`); assert.doesNotMatch(JSON.stringify(visible), /CLIENT_PRIVATE_TITLE/);
+  assert.equal(await notice(f.salesB, id), null);
+  await db.client.update({ where: { id: f.client.id }, data: { salesOwnerId: f.salesB.user.id } });
+  assert.equal(await notice(f.salesA, id), null); assert.equal(await notice(f.salesB, id), null);
+});
+
+test('a selected linked document becoming unavailable closes the alternate reminder entry point', options, async () => {
+  const f = await fixture(); await grant(f, f.techA, true, undefined, true);
+  const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait(); assert(await notice(f.techA, id));
+  await db.document.update({ where: { id: f.documents[0].doc.id }, data: { deletedAt: new Date() } });
+  assert.equal(await notice(f.techA, id), null);
+});
+
+test('source completion and parent trash remove available notices without deleting their retained history', options, async () => {
+  for (const change of ['complete', 'trash']) {
+    const f = await fixture(); await grant(f, f.techA);
+    const s = await scheduleForRead(f), id = s.deliveries[0].id; await s.wait(); assert(await notice(f.techA, id));
+    if (change === 'complete') await db.task.update({ where: { id: f.taskId }, data: { status: 'completata' } });
+    else await db.project.update({ where: { id: f.project.id }, data: { deletedAt: new Date() } });
+    const before = await counts(); assert.equal(await notice(f.techA, id), null); assert.deepEqual(await counts(), before);
+    assert.equal((await readRecordReminderReceipt(db, admin.session, leadProof(admin), s.raw.commandId)).confirmed, true);
+  }
 });
