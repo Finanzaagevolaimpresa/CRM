@@ -19,10 +19,13 @@ import { buildDashboardCounterGroups } from "@/lib/dashboard-counter-groups";
 import { operationalDashboardView, operationalNavigationAllows } from "@/lib/operational-role-view";
 import { dashboardDestinations, dashboardTodayWindow, selectDashboardView, type DashboardView } from "@/lib/dashboard-selection";
 import { loadDashboardLeadDetail, loadDashboardReviewDetail, loadDashboardTodayDetail } from "@/lib/dashboard-detail";
+import { isOperationalTechnician } from '@/lib/operational-work';
+import { OperationalTechnicalDashboard } from '@/components/operational-technical-dashboard';
 export const dynamic = "force-dynamic";
 export default async function Dashboard({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams ?? {};
   const session = await requireSession();
+  if (isOperationalTechnician(session.role)) return <OperationalTechnicalDashboard session={session} view={typeof params.vista === 'string' ? params.vista : undefined} />;
   const dashboardUser = await prisma.user.findUnique({
     where: { id: session.userId },
     select: { name: true },

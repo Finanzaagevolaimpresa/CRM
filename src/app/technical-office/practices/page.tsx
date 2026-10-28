@@ -6,12 +6,16 @@ import { hasPermission, requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { createTechnicalPracticeAndRedirect } from '@/lib/form-actions';
 import { canViewClient, canViewProject, canViewService, canViewTechnicalPractice } from '@/lib/access-control';
+import { OperationalWorkList } from '@/components/operational-work-list';
+import { isOperationalTechnician } from '@/lib/operational-work';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Page({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await requirePermission('technical.read');
   const rawQuery = await searchParams ?? {};
+  if (isOperationalTechnician(session.role) && rawQuery.new !== '1') return <OperationalWorkList session={session}
+    kind="TechnicalPractice" title="Pratiche tecniche" path="/technical-office/practices" query={rawQuery} />;
   const filter = technicalPracticeListFilter(rawQuery);
   const q = Object.fromEntries(Object.entries(rawQuery).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   const [clients, users, projects, services, practices] = await Promise.all([

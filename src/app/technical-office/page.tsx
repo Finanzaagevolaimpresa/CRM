@@ -4,6 +4,8 @@ import { Card, EmptyState, PageHeader, Stat, StatusBadge, Table, formatDateTime 
 import { requirePermission } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { canViewTechnicalPractice } from '@/lib/access-control';
+import { OperationalTechnicalHome } from '@/components/operational-work-list';
+import { isOperationalTechnician } from '@/lib/operational-work';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +23,7 @@ const buckets = [
 
 export default async function Page() {
   const session = await requirePermission('technical.read');
+  if (isOperationalTechnician(session.role)) return <OperationalTechnicalHome session={session} />;
   const [practices, clients, projects, services, users] = await Promise.all([
     prisma.technicalPractice.findMany({ where: { deletedAt: null } }),
     prisma.client.findMany({ where: { deletedAt: null } }),

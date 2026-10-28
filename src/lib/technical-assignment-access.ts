@@ -42,6 +42,32 @@ export async function readTechnicalWork(db: PrismaClient, claimed: AuthSession, 
   return withTechnicalAssignmentRecipient(db, claimed, target.kind, (tx, state) => projection(tx, state, target));
 }
 
+/** Complete admitted set for shared operational views. It must be called inside
+ * the existing recipient transaction. The result contains only projected fields;
+ * omitted title/status cannot influence counters, filters or pagination. */
+export async function technicalWorkCatalogueInTransaction(tx: Tx, state: TechnicalAssignmentTransaction,
+  kind: TechnicalTargetReference['kind']) {
+  const rows = await tx.$queryRaw<Array<{ targetId: string }>>`SELECT COALESCE("projectId","practiceId") AS "targetId"
+    FROM "TechnicalAssignment" WHERE "recipientId"=${state.current.userId} AND kind=${kind}
+    ORDER BY id LIMIT 6001`;
+  if (rows.length > 6000) throw new TechnicalAssignmentError('UNAVAILABLE');
+  const records = [];
+  let validUntil = Infinity;
+  for (const row of rows) {
+    try {
+      const item = await projection(tx, state, { kind, targetId: row.targetId });
+      validUntil = Math.min(validUntil, new Date(item.expiresAt).getTime());
+      records.push({ target: item.target, fields: item.fields,
+        responsibility: item.responsibility, expiresAt: item.expiresAt });
+    } catch (error) {
+      if (!(error instanceof TechnicalAssignmentError && ['DENIED', 'STALE'].includes(error.code))
+        && !(error instanceof Error && ['SELECTIVE_CLIENT_DOCUMENT_UNAVAILABLE', 'SELECTIVE_PRACTICE_DOCUMENT_UNAVAILABLE'].includes(error.message))) throw error;
+    }
+  }
+  if (validUntil <= (await technicalAssignmentClock(tx)).getTime()) deny();
+  return records;
+}
+
 export async function listTechnicalWork(db: PrismaClient, claimed: AuthSession, kind: TechnicalTargetReference['kind'], page = 1, query = '') {
   z.enum(['Project', 'TechnicalPractice']).parse(kind);
   const term = z.string().trim().max(200).parse(query).toLocaleLowerCase('it-IT');
