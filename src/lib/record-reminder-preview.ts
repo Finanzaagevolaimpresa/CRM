@@ -8,12 +8,13 @@ import { parseRecordReminder, prepareRecordReminder } from './record-reminder-co
 import { updateActor, updateDirectory, type UpdateCredentials } from './record-updates';
 import { lockRecordReminderSource } from './record-reminder-source';
 import { lockReminderPrincipals, reminderAuthorAdmission, ordinaryReminderAdmission, technicalReminderAdmission } from './record-reminder-principal';
+import { confirmedReadRetry } from './confirmed-read-retry';
 
 /** Read-only, personally authenticated preview. No Task, record-update event,
  * delivery, receipt, audit, scheduler or grant is written by this service. */
 export async function previewRecordReminder(db: PrismaClient, claimed: AuthSession, credentials: UpdateCredentials, raw: unknown) {
   const input = parseRecordReminder(raw);
-  return db.$transaction(async tx => {
+  return confirmedReadRetry(() => db.$transaction(async tx => {
     if (!await lockRegisteredPrivilegedStepUpKey(tx, credentials.key)) throw new RecordUpdateError('DENIED');
     await lockCommunicationDirectory(tx);
     const directory = await updateDirectory(tx), resolved = resolveUpdateSelection(input.selection, directory);
@@ -47,5 +48,5 @@ export async function previewRecordReminder(db: PrismaClient, claimed: AuthSessi
       recipients: resolved.people.map(person => ({ id: person.id, name: person.name,
         admitted: prepared.recipients.some(row => row.id === person.id),
         reason: prepared.excluded.find(row => row.id === person.id)?.reason ?? null })) };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 }));
 }

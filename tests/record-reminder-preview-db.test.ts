@@ -220,8 +220,9 @@ async function concurrentPreview(mutate: (tx: Prisma.TransactionClient) => Promi
     release(); await writer;
     const result = await outcome;
     if (result.error) {
-      assert(result.error instanceof Prisma.PrismaClientKnownRequestError && result.error.code === 'P2034',
-        'only a serialization abort is an admissible concurrency outcome');
+      assert(result.error instanceof Prisma.PrismaClientKnownRequestError && (result.error.code === 'P2034'
+        || (result.error.code === 'P2010' && ['40001', '40P01'].includes(String(result.error.meta?.code)))),
+      `unexpected concurrency outcome: ${String(result.error?.code)} / ${String(result.error?.meta?.code)}`);
       return null;
     }
     return result.value;
@@ -230,15 +231,14 @@ async function concurrentPreview(mutate: (tx: Prisma.TransactionClient) => Promi
   }
 }
 
-test('a deadline writer blocks preview; release yields current generation or a serialization abort', options, async () => {
+test('a deadline writer blocks preview; confirmed read-only retry yields the current generation', options, async () => {
   const f = await fixture(); await grant(f, f.techA);
   const raw = input(f, [f.techA]), old = await preview(raw), changed = new Date(future(2880));
   const result = await concurrentPreview(tx => tx.task.update({ where: { id: f.taskId }, data: { dueAt: changed } }), raw);
-  if (result) {
-    assert.equal(result.prepared.source.dueAt, changed.toISOString());
-    assert(result.prepared.source.generation > old.prepared.source.generation);
-    assert.notEqual(result.prepared.digest, old.prepared.digest);
-  }
+  assert(result, 'the bounded read-only retry must complete after this single committed writer');
+  assert.equal(result.prepared.source.dueAt, changed.toISOString());
+  assert(result.prepared.source.generation > old.prepared.source.generation);
+  assert.notEqual(result.prepared.digest, old.prepared.digest);
 });
 
 test('a permission writer blocks preview; no old recipient survives its committed revocation', options, async () => {
@@ -246,7 +246,8 @@ test('a permission writer blocks preview; no old recipient survives its committe
   const result = await concurrentPreview(tx => tx.userPermissionOverride.create({
     data: { userId: f.techA.user.id, permission: 'service.write', allowed: false },
   }), input(f, [f.techA, f.techB]));
-  if (result) assert.deepEqual(result.prepared.recipients.map(row => row.id), [f.techB.user.id]);
+  assert(result, 'the bounded read-only retry must complete after this single committed writer');
+  assert.deepEqual(result.prepared.recipients.map(row => row.id), [f.techB.user.id]);
   const current = await preview(input(f, [f.techA, f.techB]));
   assert.deepEqual(current.prepared.recipients.map(row => row.id), [f.techB.user.id]);
 });
