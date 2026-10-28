@@ -69,7 +69,10 @@ test('current two-technician deadline preview is read-only and does not widen ei
   const before = await counts(), result = await preview(input(f));
   assert(result.prepared.recipients.some(row => row.id === f.techA.user.id));
   assert(result.prepared.recipients.some(row => row.id === f.techB.user.id));
-  assert(result.prepared.recipients.some(row => row.id === f.salesA.user.id));
+  // PR212's commercial progress projection does not grant the technical Task
+  // deadline. Client-only reminders below exercise positive commercial access.
+  assert(!result.prepared.recipients.some(row => row.id === f.salesA.user.id));
+  assert(result.prepared.excluded.some(row => row.id === f.salesA.user.id && row.reason === 'NO_CURRENT_ACCESS'));
   assert(!result.prepared.recipients.some(row => row.id === f.salesB.user.id));
   assert.deepEqual(await counts(), before);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_TITLE|PRIVATE_DESCRIPTION|SCENARIO_PRIVATO|NOTA_INTERNA|CONTRATTO_PRIVATO|PAGAMENTO_PRIVATO/);
@@ -175,10 +178,15 @@ test('a financial task is unavailable even if its parent and recipients would be
 });
 
 test('new group membership changes the signed recipient selection and never silently reuses its proof', options, async () => {
-  const f = await fixture(); await grant(f, f.techA); await grant(f, f.techB);
-  const raw = { ...input(f), selection: { people: [], groups: ['tecnico'] } }, old = await preview(raw);
-  await syntheticPerson(db, 'New synthetic technician without grant', 'consulente');
+  const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
+  // This group has its own isolated members; preceding technical fixtures must
+  // not turn this membership-change scenario into the separate recipient cap.
+  await syntheticPerson(db, 'Initial synthetic administrative member', 'amministrazione');
+  const raw = { ...input(f), selection: { people: [f.techA.user.id, f.techB.user.id], groups: ['amministrazione'] } };
+  const old = await preview(raw);
+  await syntheticPerson(db, 'New synthetic administrative member without grant', 'amministrazione');
   const current = await preview(raw);
   assert.throws(() => assertRecordReminderPreview(old.prepared.digest, current.prepared), /STALE/);
-  assert(current.prepared.recipients.every(row => old.prepared.recipients.some(previous => previous.id === row.id)));
+  assert.deepEqual(current.prepared.recipients.map(row => row.id).sort(), [f.techA.user.id, f.techB.user.id].sort());
+  assert(current.prepared.excluded.length >= 2);
 });
