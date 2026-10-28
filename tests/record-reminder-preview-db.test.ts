@@ -15,6 +15,7 @@ import { previewRecordReminder } from '../src/lib/record-reminder-preview';
 import { assertRecordReminderPreview } from '../src/lib/record-reminder-contract';
 import { confirmRecordReminder, readRecordReminderReceipt } from '../src/lib/record-reminder-confirmation';
 import { readRecordReminderNotice } from '../src/lib/record-reminder-delivery';
+import { cancelRecordReminder, readRecordReminderCancellation } from '../src/lib/record-reminder-revocation';
 
 const enabled = process.env.RUN_DB_TESTS === '1' && process.env.RECORD_REMINDER_DB_TESTS === '1';
 const options = { skip: !enabled }, db = new PrismaClient();
@@ -65,10 +66,12 @@ function input(f: Fixture, recipients: Person[] = [f.techA, f.techB, f.salesA, f
 const preview = (raw: unknown, actor = admin) => previewRecordReminder(db, actor.session, leadProof(actor), raw);
 async function counts() {
   const [scheduled] = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "RecordUpdateReminder"`;
+  const [canceled] = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM "RecordUpdateReminderCancellation"`;
   return { tasks: await db.task.count(), origins: await db.technicalPrivateItemOrigin.count(),
     commands: await db.recordUpdateCommand.count(), events: await db.recordUpdateEvent.count(),
     deliveries: await db.recordUpdateDelivery.count(), audits: await db.auditLog.count(),
-    grants: await db.technicalAssignment.count(), mail: await db.approvedCommunication.count(), reminders: Number(scheduled.count) };
+    grants: await db.technicalAssignment.count(), mail: await db.approvedCommunication.count(),
+    reminders: Number(scheduled.count), cancellations: Number(canceled.count) };
 }
 
 const confirm = (raw: unknown, token: Awaited<ReturnType<typeof preview>>['signed'], client = db, actor = admin) =>
@@ -534,4 +537,124 @@ test('source completion and parent trash remove available notices without deleti
     const before = await counts(); assert.equal(await notice(f.techA, id), null); assert.deepEqual(await counts(), before);
     assert.equal((await readRecordReminderReceipt(db, admin.session, leadProof(admin), s.raw.commandId)).confirmed, true);
   }
+});
+
+const cancellationInput = (reminderCommandId: string) => ({ commandId: randomUUID(), reminderCommandId });
+const cancel = (raw: ReturnType<typeof cancellationInput>, client = db, actor = admin) =>
+  cancelRecordReminder(client, actor.session, leadProof(actor), raw, true);
+const cancellationReceipt = (raw: ReturnType<typeof cancellationInput>, actor = admin) =>
+  readRecordReminderCancellation(db, actor.session, leadProof(actor), raw);
+function assertOneCanceled(before: Awaited<ReturnType<typeof counts>>, after: Awaited<ReturnType<typeof counts>>) {
+  assert.deepEqual(after, { ...before, commands: before.commands + 1, audits: before.audits + 1, cancellations: before.cancellations + 1 });
+}
+
+test('personal cancellation before availability preserves the schedule and prevents both selected notices', options, async () => {
+  const f = await fixture(true); await grant(f, f.techA); await grant(f, f.techB);
+  const s = await scheduleForRead(f, [f.techA, f.techB]), command = cancellationInput(s.raw.commandId);
+  const before = await counts(), old = await readRecordReminderReceipt(db, admin.session, leadProof(admin), s.raw.commandId);
+  const result = await cancel(command); assert(result.canceled); assert.equal(result.replayed, false);
+  assertOneCanceled(before, await counts()); await s.wait();
+  for (const row of s.deliveries) {
+    const person = row.recipientId === f.techA.user.id ? f.techA : f.techB;
+    assert.equal(await notice(person, row.id), null); assert.equal(await notice(person, row.id, true), null);
+  }
+  assert.deepEqual(await readRecordReminderReceipt(db, admin.session, leadProof(admin), s.raw.commandId), old);
+  assert.equal(await db.recordUpdateDelivery.count({ where: { commandId: s.raw.commandId, readAt: { not: null } } }), 0);
+});
+
+test('cancellation after an explicit read hides the notice but preserves its actual read receipt', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f); await s.wait();
+  const id = s.deliveries[0].id, first = await notice(f.techA, id, true); assert(first?.readAt);
+  const before = await counts(); await cancel(cancellationInput(s.raw.commandId)); assertOneCanceled(before, await counts());
+  assert.equal(await notice(f.techA, id), null);
+  assert.equal((await db.recordUpdateDelivery.findUniqueOrThrow({ where: { id } })).readAt?.toISOString(), first.readAt.toISOString());
+});
+
+test('a recipient, another Admin, an invalid personal proof or an unconfirmed request cannot cancel', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), command = cancellationInput(s.raw.commandId);
+  const other = await syntheticPerson(db, 'Unrelated cancellation Admin', 'admin'), before = await counts();
+  for (const actor of [f.techA, f.salesA, other]) await assert.rejects(cancel(command, db, actor));
+  await assert.rejects(cancelRecordReminder(db, admin.session, { ...leadProof(admin), stepUpToken: 'invalid' }, command, true));
+  await assert.rejects(cancelRecordReminder(db, admin.session, leadProof(admin), command, false));
+  assert.deepEqual(await cancellationReceipt(command, other), { ...command, canceled: false });
+  assert.deepEqual(await counts(), before);
+});
+
+test('repeated cancellation retains one receipt and an existing command cannot target a different reminder', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const a = await scheduleForRead(f), b = await scheduleForRead(f), command = cancellationInput(a.raw.commandId);
+  const first = await cancel(command), before = await counts(), second = await cancel(command);
+  assert.equal(second.replayed, true); assert.equal(second.canceledAt, first.canceledAt);
+  await assert.rejects(cancel({ ...command, reminderCommandId: b.raw.commandId }), /STALE/);
+  assert.deepEqual(await counts(), before);
+});
+
+test('two concurrent cancellation commands commit exactly one terminal decision without duplicate audit', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), commands = [cancellationInput(s.raw.commandId), cancellationInput(s.raw.commandId)];
+  const before = await counts(), outcomes = await Promise.allSettled(commands.map(command => cancel(command)));
+  assert.equal(outcomes.filter(row => row.status === 'fulfilled').length, 1);
+  assertOneCanceled(before, await counts());
+  const receipts = await Promise.all(commands.map(command => cancellationReceipt(command)));
+  assert.equal(receipts.filter(row => row.canceled).length, 1);
+});
+
+test('a lost cancellation response is reconciled by its own read-only receipt without repeating a mutation', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), command = cancellationInput(s.raw.commandId);
+  await assert.rejects((async () => { await cancel(command); throw new Error('SYNTHETIC_CANCEL_RESPONSE_LOST'); })(), /RESPONSE_LOST/);
+  const before = await counts(), receipt = await cancellationReceipt(command);
+  assert.equal(receipt.canceled, true); assert('canceledAt' in receipt);
+  assert.deepEqual(await cancellationReceipt(command), receipt); assert.deepEqual(await counts(), before);
+  assert.doesNotMatch(JSON.stringify(receipt), /PRIVATE_TITLE|PRIVATE_DESCRIPTION|SCENARIO_PRIVATO|CONTRATTO_PRIVATO/);
+});
+
+test('the current personal author can cancel after the source is trashed without reading or restoring it', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f), command = cancellationInput(s.raw.commandId);
+  await db.project.update({ where: { id: f.project.id }, data: { deletedAt: new Date() } });
+  const before = await counts(); assert.equal((await cancel(command)).canceled, true);
+  assertOneCanceled(before, await counts());
+  assert((await db.project.findUniqueOrThrow({ where: { id: f.project.id } })).deletedAt);
+  assert.equal(await notice(f.techA, s.deliveries[0].id), null);
+});
+
+function faultyCancellationDb(fault: 'omit-cancellation' | 'audit') {
+  return new Proxy(db, { get(target, property) {
+    if (property !== '$transaction') { const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value; }
+    return (action: (tx: Prisma.TransactionClient) => Promise<unknown>, config: object) => db.$transaction(client => action(new Proxy(client, {
+      get(tx, member) {
+        if (member === '$executeRaw' && fault === 'omit-cancellation') return (query: TemplateStringsArray, ...values: unknown[]) =>
+          query.join('').includes('INSERT INTO "RecordUpdateReminderCancellation"') ? Promise.resolve(0) : tx.$executeRaw(query, ...values);
+        if (member === 'auditLog' && fault === 'audit') return { ...tx.auditLog,
+          create: (args: Prisma.AuditLogCreateArgs) => tx.auditLog.create({ ...args, data: { ...args.data, event: 'wrong_synthetic_cancel_event' } }) };
+        const value = Reflect.get(tx, member); return typeof value === 'function' ? value.bind(tx) : value;
+      }
+    })), config);
+  } });
+}
+
+for (const fault of ['omit-cancellation', 'audit'] as const) {
+  test(`a cancellation ${fault} fault rolls back its command and audit and leaves the original schedule intact`, options, async () => {
+    const f = await fixture(); await grant(f, f.techA);
+    const s = await scheduleForRead(f), command = cancellationInput(s.raw.commandId), before = await counts();
+    await assert.rejects(cancel(command, faultyCancellationDb(fault)),
+      fault === 'audit' ? /RECORD_REMINDER_CANCEL_ATOMIC_EVIDENCE_REQUIRED/ : /RECORD_REMINDER_CANCEL_JOURNAL_REQUIRED/);
+    assert.deepEqual(await counts(), before); assert.equal((await cancellationReceipt(command)).canceled, false);
+    assert.equal((await readRecordReminderReceipt(db, admin.session, leadProof(admin), s.raw.commandId)).confirmed, true);
+  });
+}
+
+test('cancellation and its audit cannot be rewritten or removed, and an old open form cannot mark read afterward', options, async () => {
+  const f = await fixture(); await grant(f, f.techA);
+  const s = await scheduleForRead(f); await s.wait(); const command = cancellationInput(s.raw.commandId);
+  assert(await notice(f.techA, s.deliveries[0].id)); await cancel(command); const before = await counts();
+  await assert.rejects(db.$executeRaw`UPDATE "RecordUpdateReminderCancellation" SET proof=${'f'.repeat(64)} WHERE "commandId"=${command.commandId}::uuid`, /IMMUTABLE/);
+  await assert.rejects(db.$executeRaw`DELETE FROM "RecordUpdateReminderCancellation" WHERE "commandId"=${command.commandId}::uuid`, /IMMUTABLE/);
+  await assert.rejects(db.auditLog.updateMany({ where: { entityId: command.commandId }, data: { event: 'rewritten' } }), /IMMUTABLE/);
+  await assert.rejects(db.recordUpdateDelivery.updateMany({ where: { commandId: s.raw.commandId }, data: { readAt: new Date() } }), /CANCELED/);
+  assert.equal(await notice(f.techA, s.deliveries[0].id, true), null);
+  assert.deepEqual(await counts(), before);
 });

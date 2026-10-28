@@ -62,6 +62,9 @@ export async function readRecordReminderNotice(db: PrismaClient, claimed: AuthSe
     const auth = await updateActor(tx, claimed), author = principals.principals.get(p.authorId);
     const person = principals.principals.get(auth.actor.id);
     if (!author || !person || auth.actor.recordUpdateEpoch !== work.recipientEpoch) return null;
+    const cancellations = await tx.$queryRaw<Array<{ commandId: string }>>`SELECT "commandId"
+      FROM "RecordUpdateReminderCancellation" WHERE "reminderCommandId"=${journal.commandId}::uuid`;
+    if (cancellations.length) { await auth.finish(); return null; }
     try {
       const source = await lockRecordReminderSource(tx, { key, recipient: author.raw }, p.input);
       const authorAccess = reminderAuthorAdmission(principals, source);

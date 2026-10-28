@@ -69,8 +69,8 @@ jobs:
         run: |
           set -euo pipefail
           node --import tsx --test --test-reporter=tap tests/record-reminder-preview-db.test.ts | tee "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# tests 39' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
-          grep -Fx '# pass 39' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# tests 49' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
+          grep -Fx '# pass 49' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# fail 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
           grep -Fx '# skipped 0' "$RUNNER_TEMP/reminder-preview/postgresql.tap"
       - name: Confirm source unchanged

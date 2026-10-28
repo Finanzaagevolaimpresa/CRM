@@ -10,7 +10,7 @@ DO $$ BEGIN
 END $$;
 ALTER TABLE "RecordUpdateCommand" DROP CONSTRAINT "RecordUpdateCommand_operation_check";
 ALTER TABLE "RecordUpdateCommand" ADD CONSTRAINT "RecordUpdateCommand_operation_check"
- CHECK(operation IN ('UPDATE','RULE','REVOKE','REMINDER'));
+ CHECK(operation IN ('UPDATE','RULE','REVOKE','REMINDER','REMINDER_REVOKE'));
 CREATE TABLE "RecordUpdateReminder" (
  "commandId" UUID PRIMARY KEY REFERENCES "RecordUpdateCommand"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
  "eventId" UUID NOT NULL UNIQUE REFERENCES "RecordUpdateEvent"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -27,6 +27,19 @@ CREATE INDEX "RecordUpdateReminder_taskId_confirmedAt_idx" ON "RecordUpdateRemin
 CREATE TRIGGER record_reminder_immutable BEFORE UPDATE OR DELETE ON "RecordUpdateReminder"
  FOR EACH ROW EXECUTE FUNCTION fai_record_update_immutable();
 CREATE TRIGGER record_reminder_no_truncate BEFORE TRUNCATE ON "RecordUpdateReminder"
+ FOR EACH STATEMENT EXECUTE FUNCTION fai_record_update_immutable();
+CREATE TABLE "RecordUpdateReminderCancellation" (
+ "commandId" UUID PRIMARY KEY REFERENCES "RecordUpdateCommand"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "reminderCommandId" UUID NOT NULL UNIQUE REFERENCES "RecordUpdateReminder"("commandId") ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "auditId" TEXT NOT NULL UNIQUE REFERENCES "AuditLog"(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+ "canceledAt" TIMESTAMPTZ(3) NOT NULL,
+ journal JSONB NOT NULL CHECK(jsonb_typeof(journal)='object'),
+ proof CHAR(64) NOT NULL CHECK(proof ~ '^[a-f0-9]{64}$'),
+ CHECK("commandId"<>"reminderCommandId")
+);
+CREATE TRIGGER record_reminder_cancellation_immutable BEFORE UPDATE OR DELETE ON "RecordUpdateReminderCancellation"
+ FOR EACH ROW EXECUTE FUNCTION fai_record_update_immutable();
+CREATE TRIGGER record_reminder_cancellation_no_truncate BEFORE TRUNCATE ON "RecordUpdateReminderCancellation"
  FOR EACH STATEMENT EXECUTE FUNCTION fai_record_update_immutable();
 
 CREATE FUNCTION fai_record_reminder_deferred_guard() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -113,10 +126,61 @@ CREATE CONSTRAINT TRIGGER record_reminder_delivery_deferred AFTER INSERT ON "Rec
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_record_reminder_deferred_guard();
 CREATE CONSTRAINT TRIGGER record_reminder_journal_deferred AFTER INSERT ON "RecordUpdateReminder"
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_record_reminder_deferred_guard();
+CREATE FUNCTION fai_record_reminder_cancellation_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE command_id uuid; r "RecordUpdateReminderCancellation"%ROWTYPE;
+ c "RecordUpdateCommand"%ROWTYPE; original "RecordUpdateCommand"%ROWTYPE;
+ reminder "RecordUpdateReminder"%ROWTYPE; a "AuditLog"%ROWTYPE; j jsonb;
+BEGIN
+ IF TG_TABLE_NAME='RecordUpdateCommand' THEN
+  IF NEW.operation<>'REMINDER_REVOKE' THEN RETURN NEW; END IF;
+  command_id:=NEW.id;
+ ELSE command_id:=NEW."commandId"; END IF;
+ SELECT * INTO c FROM "RecordUpdateCommand" WHERE id=command_id;
+ IF c.operation IS DISTINCT FROM 'REMINDER_REVOKE' THEN
+  IF TG_TABLE_NAME='RecordUpdateDelivery' THEN RETURN NEW; END IF;
+  RAISE EXCEPTION 'RECORD_REMINDER_CANCEL_COMMAND_REQUIRED';
+ END IF;
+ SELECT * INTO r FROM "RecordUpdateReminderCancellation" WHERE "commandId"=command_id;
+ IF NOT FOUND THEN RAISE EXCEPTION 'RECORD_REMINDER_CANCEL_JOURNAL_REQUIRED'; END IF;
+ SELECT * INTO reminder FROM "RecordUpdateReminder" WHERE "commandId"=r."reminderCommandId";
+ SELECT * INTO original FROM "RecordUpdateCommand" WHERE id=r."reminderCommandId";
+ SELECT * INTO a FROM "AuditLog" WHERE id=r."auditId";
+ j:=r.journal;
+ IF original.operation IS DISTINCT FROM 'REMINDER' OR c."actorId" IS DISTINCT FROM original."actorId"
+  OR c.kind IS DISTINCT FROM original.kind OR c."recordId" IS DISTINCT FROM original."recordId"
+  OR c.mode IS DISTINCT FROM 'CRM' OR c."emailAuthorityRevision" IS NOT NULL
+  OR c.scope IS DISTINCT FROM jsonb_build_object('reminderCommandId',original.id::text,'reminderDigest',original.digest::text)
+  OR c.selection IS DISTINCT FROM '{"people":[],"groups":[]}'::jsonb OR c.recipients IS DISTINCT FROM '[]'::jsonb
+  OR c."directoryBinding" IS DISTINCT FROM original."directoryBinding"
+  OR c."transactionId"<>txid_current() OR c."createdAt"<>r."canceledAt" OR r."canceledAt"<reminder."confirmedAt"
+  OR j->>'protocol' IS DISTINCT FROM 'FAI_RECORD_REMINDER_CANCEL_V1'
+  OR j->>'commandId' IS DISTINCT FROM command_id::text
+  OR j->>'reminderCommandId' IS DISTINCT FROM original.id::text
+  OR j->>'reminderDigest' IS DISTINCT FROM original.digest::text
+  OR j->>'actorId' IS DISTINCT FROM c."actorId" OR (j->>'actorEpoch')::int IS DISTINCT FROM c."actorEpoch"
+  OR j->>'auditId' IS DISTINCT FROM r."auditId" OR (j->>'transactionId')::bigint IS DISTINCT FROM txid_current()
+  OR (j->>'canceledAt')::timestamptz IS DISTINCT FROM r."canceledAt"
+  OR a."actorId" IS DISTINCT FROM c."actorId" OR a.event IS DISTINCT FROM 'record_reminder_canceled'
+  OR a."entityType" IS DISTINCT FROM 'RecordUpdateCommand' OR a."entityId" IS DISTINCT FROM command_id::text
+  OR (a."createdAt" AT TIME ZONE 'UTC') IS DISTINCT FROM r."canceledAt" OR a."before" IS NOT NULL
+  OR a."after" IS DISTINCT FROM audit_sanitize_json_n04_v1(jsonb_build_object('type','RECORD_REMINDER_CANCEL_V1','recordId',original.id::text))
+  OR NOT EXISTS(SELECT 1 FROM "AuditLog" x WHERE x.id=a.id AND x.xmin::text::bigint=(txid_current()%4294967296))
+  OR NOT EXISTS(SELECT 1 FROM "RecordUpdateCommand" x WHERE x.id=c.id AND x.xmin::text::bigint=(txid_current()%4294967296))
+  OR EXISTS(SELECT 1 FROM "RecordUpdateDelivery" WHERE "commandId"=command_id)
+ THEN RAISE EXCEPTION 'RECORD_REMINDER_CANCEL_ATOMIC_EVIDENCE_REQUIRED'; END IF;
+ RETURN NEW;
+END $$;
+CREATE CONSTRAINT TRIGGER record_reminder_cancel_command_deferred AFTER INSERT ON "RecordUpdateCommand"
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_record_reminder_cancellation_guard();
+CREATE CONSTRAINT TRIGGER record_reminder_cancel_journal_deferred AFTER INSERT ON "RecordUpdateReminderCancellation"
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_record_reminder_cancellation_guard();
+CREATE CONSTRAINT TRIGGER record_reminder_cancel_delivery_deferred AFTER INSERT ON "RecordUpdateDelivery"
+ DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fai_record_reminder_cancellation_guard();
 CREATE FUNCTION fai_record_reminder_retention_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF TG_TABLE_NAME='AuditLog' THEN
-  IF EXISTS(SELECT 1 FROM "RecordUpdateReminder" WHERE "auditId"=OLD.id) THEN
+  IF EXISTS(SELECT 1 FROM "RecordUpdateReminder" WHERE "auditId"=OLD.id)
+   OR EXISTS(SELECT 1 FROM "RecordUpdateReminderCancellation" WHERE "auditId"=OLD.id) THEN
    RAISE EXCEPTION 'RECORD_REMINDER_AUDIT_IMMUTABLE';
   END IF;
   IF TG_OP='DELETE' THEN RETURN OLD; END IF;
@@ -125,6 +189,10 @@ BEGIN
  IF TG_OP='UPDATE' AND NEW."readAt" IS NOT NULL AND EXISTS(SELECT 1 FROM "RecordUpdateReminder" r
    WHERE r."commandId"=OLD."commandId" AND NEW."readAt"<r."availableAt") THEN
   RAISE EXCEPTION 'RECORD_REMINDER_NOT_AVAILABLE';
+ END IF;
+ IF TG_OP='UPDATE' AND NEW."readAt" IS DISTINCT FROM OLD."readAt"
+  AND EXISTS(SELECT 1 FROM "RecordUpdateReminderCancellation" WHERE "reminderCommandId"=OLD."commandId") THEN
+  RAISE EXCEPTION 'RECORD_REMINDER_CANCELED';
  END IF;
  RETURN NEW;
 END $$;
