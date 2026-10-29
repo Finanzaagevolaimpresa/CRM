@@ -22,7 +22,7 @@ async function stepUp(page: Page) {
   await page.getByRole('button', { name: /Conferma per (5|30) minuti/ }).click();
   expect((await submitted).status()).toBeLessThan(400);
   await expect(page).toHaveURL(/status=active/);
-  await expect(page.getByText('Conferma privilegiata attiva per cinque minuti e vincolata alla sessione corrente.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Conferma privilegiata attiva e vincolata alla sessione corrente.', { exact: true })).toBeVisible();
 }
 
 test('native preview and refusal bind the exact version, personal authority, current session and uncertain response', async ({ browser }) => {
